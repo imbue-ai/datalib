@@ -1,4 +1,5 @@
-//! Port of `_notion_rows` from `src/ingest/grid_rows.py`. Emits:
+//! `grid_rows` for the notion provider: one row per page, plus one
+//! thread row and one comment row per discussion.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -10,7 +11,7 @@ use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 use serde_json::Value;
 
-use super::parse::ParsedNotionOfficial;
+use super::parse::ParsedNotion;
 use super::render::{notion_thread_url, notion_url, page_qmd_path_rel, thread_qmd_path_rel};
 
 pub const RENDER_VERSION: u32 = 1;
@@ -55,121 +56,53 @@ fn comment_text_plain(c: &Value) -> String {
     rich_text_plain(c.get("rich_text"))
 }
 
-fn build_page_titles(pages: &[Value], blocks: &[Value]) -> HashMap<String, String> {
+fn build_page_titles(pages: &[Value]) -> HashMap<String, String> {
     let mut out: HashMap<String, String> = HashMap::new();
     for p in pages {
-        let id = p
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if !id.is_empty() {
-            out.insert(id, page_title_from(p));
-        }
-    }
-    for b in blocks {
-        if b.get("type").and_then(|v| v.as_str()) != Some("child_page") {
-            continue;
-        }
-        let id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        if id.is_empty() {
-            continue;
-        }
-        let title = b
-            .get("child_page")
-            .and_then(|v| v.get("title"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        out.entry(id.into()).or_insert(title);
-    }
-    out
-}
-
-fn block_to_page_id(blocks: &[Value]) -> HashMap<String, String> {
-    let mut out: HashMap<String, String> = HashMap::new();
-    for b in blocks {
-        let parent = b.get("parent");
-        if parent.and_then(|v| v.get("type")).and_then(|v| v.as_str()) == Some("page_id") {
-            let bid = b
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let pid = parent
-                .and_then(|v| v.get("page_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if !bid.is_empty() && !pid.is_empty() {
-                out.insert(bid, pid);
-            }
+        if let Some(id) = p.get("id").and_then(|v| v.as_str()) {
+            out.insert(id.to_string(), page_title_from(p));
         }
     }
     out
 }
 
-fn resolve_comment_page_id(
-    comment: &Value,
-    blocks: &[Value],
-    block_owning_page: &HashMap<String, String>,
-) -> Option<String> {
-    let parent = comment.get("parent")?;
-    let ptype = parent.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    if ptype == "page_id" {
-        return parent
-            .get("page_id")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+/// A comment's author name.
+///
+/// Notion resolves this for us: every comment carries
+/// `display_name.resolved_name`. Falling back to a truncated user id
+/// is what the previous implementation did for *every* comment,
+/// because the name lookup it relied on was never populated.
+fn comment_author(c: &Value) -> Option<String> {
+    let name = c
+        .get("display_name")
+        .and_then(|d| d.get("resolved_name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !name.is_empty() {
+        return Some(name.to_string());
     }
-    if ptype == "block_id" {
-        let bid = parent.get("block_id").and_then(|v| v.as_str())?;
-        let mut block_parent: HashMap<String, String> = HashMap::new();
-        for b in blocks {
-            let par = b.get("parent");
-            if par.and_then(|v| v.get("type")).and_then(|v| v.as_str()) == Some("block_id") {
-                let id = b
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let pp = par
-                    .and_then(|v| v.get("block_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if !id.is_empty() && !pp.is_empty() {
-                    block_parent.insert(id, pp);
-                }
-            }
-        }
-        let mut cur = Some(bid.to_string());
-        let mut seen = std::collections::HashSet::new();
-        while let Some(c) = cur {
-            if !seen.insert(c.clone()) {
-                break;
-            }
-            if let Some(p) = block_owning_page.get(&c) {
-                return Some(p.clone());
-            }
-            cur = block_parent.get(&c).cloned();
-        }
-    }
-    None
+    let uid = c
+        .get("created_by")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    short_id_author(uid)
 }
 
-fn short_author(uid: &str, user_names: &HashMap<String, String>) -> Option<String> {
-    if let Some(name) = user_names.get(uid) {
-        if !name.is_empty() {
-            return Some(name.clone());
-        }
+/// A page author. Unlike a comment, a page object carries only
+/// `created_by.id`, so this needs the `users` table the download side
+/// fills one id at a time.
+fn resolved_author(uid: &str, user_names: &HashMap<String, String>) -> Option<String> {
+    match user_names.get(uid) {
+        Some(n) if !n.is_empty() => Some(n.clone()),
+        _ => short_id_author(uid),
     }
+}
+
+/// Last resort when nothing named the user: the id's leading octet.
+fn short_id_author(uid: &str) -> Option<String> {
     let s: String = uid.chars().take(8).collect();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    (!s.is_empty()).then_some(s)
 }
 
 fn page_row(
@@ -201,7 +134,7 @@ fn page_row(
         .kind("Notion Page")
         .source_label("Notion")
         .when_ts(when_ts)
-        .author(short_author(author_id, user_names))
+        .author(resolved_author(author_id, user_names))
         .conversation_name(Some(title.to_string()))
         .conversation_uuid(pid.clone())
         .entire_chat(format!("/notion/page/{pid}"))
@@ -221,7 +154,7 @@ fn thread_rows(
     page_title: &str,
     stanza: &str,
     parent_block_id: Option<&str>,
-    user_names: &HashMap<String, String>,
+    anchor: Option<&str>,
     problems: &mut Vec<RenderProblemRow>,
 ) -> Vec<GridRow> {
     if members_sorted.is_empty() {
@@ -231,17 +164,18 @@ fn thread_rows(
     let thread_url = notion_thread_url(page_id, Some(disc_id), parent_block_id);
     let mut rows: Vec<GridRow> = Vec::new();
     let first = &members_sorted[0];
-    let first_author_id = first
-        .get("created_by")
-        .and_then(|v| v.get("id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let aggregated_text: String = members_sorted
+    let mut aggregated_text: String = members_sorted
         .iter()
         .map(comment_text_plain)
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
+    // The quoted text leads the thread's searchable body: a comment
+    // means little without what it is about, and Notion does not put
+    // the two together anywhere.
+    if let Some(a) = anchor.filter(|a| !a.is_empty()) {
+        aggregated_text = format!("{a}\n{aggregated_text}");
+    }
     rows.extend(
         GridRow::builder()
             .uuid(disc_id)
@@ -254,7 +188,7 @@ fn thread_rows(
                     .and_then(|v| v.as_str())
                     .map(str::to_string),
             )
-            .author(short_author(first_author_id, user_names))
+            .author(comment_author(first))
             .conversation_name(Some(page_title.to_string()))
             .conversation_uuid(disc_id)
             .entire_chat(format!("/notion/thread/{disc_id}"))
@@ -267,11 +201,6 @@ fn thread_rows(
             .build_or_record(stanza, disc_id, RENDER_VERSION, problems),
     );
     for (idx, c) in members_sorted.iter().enumerate() {
-        let author_id = c
-            .get("created_by")
-            .and_then(|v| v.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
         rows.extend(
             GridRow::builder()
                 .uuid(c.get("id").and_then(|v| v.as_str()).unwrap_or(""))
@@ -283,7 +212,7 @@ fn thread_rows(
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
                 )
-                .author(short_author(author_id, user_names))
+                .author(comment_author(c))
                 .conversation_name(Some(page_title.to_string()))
                 .conversation_uuid(disc_id)
                 .message_index(Some(idx as i64))
@@ -320,18 +249,17 @@ fn canonicalize(v: &Value) -> Value {
     }
 }
 
-fn fingerprint_for_page(
-    page: &Value,
-    blocks_sorted: &[&Value],
-    comments_sorted: &[&Value],
-) -> String {
+/// A page's fingerprint: its own payload plus its body plus its
+/// comments. The body is included directly rather than via its blocks,
+/// which is only sound because the stored markdown is stable for an
+/// unchanged page — signed attachment URLs are reduced to slots before
+/// storage (`download::slots`). Were they left signed, every page with
+/// an image would re-render on every run.
+fn fingerprint_for_page(page: &Value, markdown: &str, comments: &[&Value]) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    RENDER_VERSION.hash(&mut h);
     canonical_json(page).hash(&mut h);
-    for b in blocks_sorted {
-        canonical_json(b).hash(&mut h);
-    }
-    for c in comments_sorted {
+    markdown.hash(&mut h);
+    for c in comments {
         canonical_json(c).hash(&mut h);
     }
     format!("{:016x}", h.finish())
@@ -339,7 +267,6 @@ fn fingerprint_for_page(
 
 fn fingerprint_for_discussion(comments_sorted: &[&Value]) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    RENDER_VERSION.hash(&mut h);
     for c in comments_sorted {
         canonical_json(c).hash(&mut h);
     }
@@ -368,309 +295,137 @@ pub struct ThreadDocument {
     pub discussion_uuid: String,
     pub page_uuid: String,
     pub page_title: String,
+    /// The block this thread hangs off, when it hangs off one. Render
+    /// resolves it to the quoted text via `ParsedNotion::anchor_text`.
+    pub anchor_block_uuid: Option<String>,
     pub rows: Vec<GridRow>,
     pub source_fingerprint: String,
     /// See [`PageDocument::problems`].
     pub problems: Vec<RenderProblemRow>,
 }
 
-pub fn gather_documents(parsed: &ParsedNotionOfficial, stanza: &str) -> Result<DocumentRows> {
-    // Phase-by-phase timing for `notion_unittests`'s
-    // `gather_documents_is_linear_in_blocks` regression test (and any
-    // real sync where this function appears in a flame graph). Each
-    // phase emits a single `tracing::debug!` event with the elapsed
-    // wall time. Production sync runs with the default INFO filter
-    // see nothing; the unit test enables a stderr subscriber so the
-    // breakdown shows up alongside the assertion.
-    let total_start = Instant::now();
-    let phase_start = Instant::now();
+pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentRows> {
+    let t0 = Instant::now();
+    let page_titles = build_page_titles(&parsed.pages);
 
-    let page_titles = build_page_titles(&parsed.pages, &parsed.blocks);
-    tracing::debug!(
-        event = "notion_gather_documents_phase",
-        phase = "build_page_titles",
-        pages = parsed.pages.len(),
-        blocks = parsed.blocks.len(),
-        elapsed_ms = phase_start.elapsed().as_millis() as u64,
-    );
-
-    let mut pages: Vec<PageDocument> = Vec::new();
-
-    // Group blocks by their owning page (for fingerprint stability — we
-    // include every block whose tree roots at this page).
-    let phase_start = Instant::now();
-    let block_owning_page = block_to_page_id(&parsed.blocks);
-    tracing::debug!(
-        event = "notion_gather_documents_phase",
-        phase = "block_to_page_id",
-        blocks = parsed.blocks.len(),
-        elapsed_ms = phase_start.elapsed().as_millis() as u64,
-    );
-
-    // Build the block→parent-block index once; the previous version
-    // rebuilt this map inside the outer loop, making the whole pass
-    // O(N²) over `parsed.blocks` and pegging a core on real notion
-    // sources (~10K blocks).
-    let phase_start = Instant::now();
-    let mut block_parent: HashMap<String, String> = HashMap::new();
-    for bb in &parsed.blocks {
-        let par = bb.get("parent");
-        if par.and_then(|v| v.get("type")).and_then(|v| v.as_str()) == Some("block_id") {
-            let id = bb
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let pp = par
-                .and_then(|v| v.get("block_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if !id.is_empty() && !pp.is_empty() {
-                block_parent.insert(id, pp);
-            }
-        }
-    }
-    tracing::debug!(
-        event = "notion_gather_documents_phase",
-        phase = "build_block_parent",
-        blocks = parsed.blocks.len(),
-        parent_edges = block_parent.len(),
-        elapsed_ms = phase_start.elapsed().as_millis() as u64,
-    );
-
-    // Owner-walk: for each block, follow parent pointers up to the
-    // page. Memoized: as soon as we know any block's owner, we record
-    // it; subsequent walks short-circuit when they hit a memoized
-    // ancestor. Without the memo the pass is O(N · avg_depth) — on the
-    // regression-test fixture (a 4000-deep linear parent chain) that's
-    // ~8M HashMap lookups (6s in debug). With the memo it's amortized
-    // O(N) regardless of tree shape; the same fixture finishes in
-    // <50ms. Real notion trees are depth ~10 so the memo doesn't help
-    // production much in walltime, but it removes a quadratic cliff
-    // that was easy to fall off (a 10K-block source with a
-    // pathological subtree could repeat the regression).
-    let phase_start = Instant::now();
-    let mut blocks_by_page: HashMap<String, Vec<&Value>> = HashMap::new();
-    let mut block_owner_memo: HashMap<String, String> = HashMap::new();
-    let max_walk = parsed.blocks.len() + 1; // cycle safeguard
-    for b in &parsed.blocks {
-        let bid = b
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if bid.is_empty() {
-            continue;
-        }
-        let mut path: Vec<String> = Vec::new();
-        let mut cur: Option<String> = Some(bid);
-        let mut owner: Option<String> = None;
-        while let Some(c) = cur {
-            // Check the direct block→page index, then the memoized
-            // resolution. Either path terminates the walk.
-            if let Some(p) = block_owning_page.get(&c) {
-                owner = Some(p.clone());
-                break;
-            }
-            if let Some(p) = block_owner_memo.get(&c) {
-                owner = Some(p.clone());
-                break;
-            }
-            path.push(c.clone());
-            if path.len() > max_walk {
-                // Cycle in the parent graph — give up rather than
-                // loop forever. Cleaner than the old HashSet-per-walk
-                // and just as safe given the bounded blocks count.
-                break;
-            }
-            cur = block_parent.get(&c).cloned();
-        }
-        if let Some(o) = owner {
-            // Memoize every block we walked through so any future
-            // block whose chain passes through here terminates in O(1).
-            for p in path {
-                block_owner_memo.insert(p, o.clone());
-            }
-            blocks_by_page.entry(o).or_default().push(b);
-        }
-    }
-    tracing::debug!(
-        event = "notion_gather_documents_phase",
-        phase = "walk_blocks_to_owner",
-        blocks = parsed.blocks.len(),
-        pages_with_blocks = blocks_by_page.len(),
-        elapsed_ms = phase_start.elapsed().as_millis() as u64,
-    );
-
-    let phase_start = Instant::now();
-    for vec in blocks_by_page.values_mut() {
-        vec.sort_by(|a, b| {
-            let ai = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let bi = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            ai.cmp(bi)
-        });
-    }
-
-    tracing::debug!(
-        event = "notion_gather_documents_phase",
-        phase = "sort_blocks_per_page",
-        pages_with_blocks = blocks_by_page.len(),
-        elapsed_ms = phase_start.elapsed().as_millis() as u64,
-    );
-
-    // Group comments by owning page (for fingerprint stability).
-    let phase_start = Instant::now();
+    // Comments carry their owning page id from the download side, so
+    // there is nothing to resolve here. Mapping a comment back to its
+    // page used to need a walk up the block tree — that is why this
+    // function once had to be checked for linearity in the block count.
     let mut comments_by_page: HashMap<String, Vec<&Value>> = HashMap::new();
+    let mut comments_by_discussion: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
     for c in &parsed.comments {
-        if let Some(pid) = resolve_comment_page_id(c, &parsed.blocks, &block_owning_page) {
-            comments_by_page.entry(pid).or_default().push(c);
+        if let Some(pid) = c.get("page_id").and_then(|v| v.as_str()) {
+            comments_by_page.entry(pid.to_string()).or_default().push(c);
+        }
+        if let Some(did) = c.get("discussion_id").and_then(|v| v.as_str()) {
+            if !did.is_empty() {
+                comments_by_discussion
+                    .entry(did.to_string())
+                    .or_default()
+                    .push(c);
+            }
         }
     }
-    tracing::debug!(
-        event = "notion_gather_documents_phase",
-        phase = "comments_by_page",
-        comments = parsed.comments.len(),
-        elapsed_ms = phase_start.elapsed().as_millis() as u64,
-    );
-    let phase_start = Instant::now();
-    for vec in comments_by_page.values_mut() {
-        vec.sort_by(|a, b| {
-            let ai = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let bi = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            ai.cmp(bi)
-        });
+    let by_created = |a: &&Value, b: &&Value| {
+        let k = |v: &Value| {
+            v.get("created_time")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        k(a).cmp(&k(b))
+    };
+    for v in comments_by_page.values_mut() {
+        v.sort_by(by_created);
+    }
+    for v in comments_by_discussion.values_mut() {
+        v.sort_by(by_created);
     }
 
-    tracing::debug!(
-        event = "notion_gather_documents_phase",
-        phase = "sort_comments_per_page",
-        elapsed_ms = phase_start.elapsed().as_millis() as u64,
-    );
-
-    let phase_start = Instant::now();
+    // ── page documents ───────────────────────────────────────────────
+    let mut pages: Vec<PageDocument> = Vec::with_capacity(parsed.pages.len());
+    let empty: Vec<&Value> = Vec::new();
     for page in &parsed.pages {
-        let pid = page
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if pid.is_empty() {
+        let Some(pid) = page.get("id").and_then(|v| v.as_str()).map(String::from) else {
             continue;
-        }
-        let title = page_titles
+        };
+        let title = page_titles.get(&pid).cloned().unwrap_or_default();
+        let markdown = parsed
+            .markdown_by_page
             .get(&pid)
-            .cloned()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "(untitled)".into());
-        let mut problems: Vec<RenderProblemRow> = Vec::new();
-        let row = page_row(page, &title, stanza, &parsed.user_names, &mut problems);
-        let empty: Vec<&Value> = Vec::new();
-        let blocks = blocks_by_page.get(&pid).unwrap_or(&empty);
+            .map(String::as_str)
+            .unwrap_or("");
         let comments = comments_by_page.get(&pid).unwrap_or(&empty);
-        let fp = fingerprint_for_page(page, blocks, comments);
+        let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let mut rows: Vec<GridRow> = Vec::new();
+        if let Some(r) = page_row(page, &title, stanza, &parsed.user_names, &mut problems) {
+            rows.push(r);
+        }
         pages.push(PageDocument {
+            source_fingerprint: fingerprint_for_page(page, markdown, comments),
             page_uuid: pid,
             page_title: title,
-            rows: row.into_iter().collect(),
-            source_fingerprint: fp,
+            rows,
             problems,
         });
     }
-    tracing::debug!(
-        event = "notion_gather_documents_phase",
-        phase = "page_documents",
-        pages = pages.len(),
-        elapsed_ms = phase_start.elapsed().as_millis() as u64,
-    );
 
-    // Discussions.
-    let phase_start = Instant::now();
-    let mut by_disc: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    for c in &parsed.comments {
-        let did = c
-            .get("discussion_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if did.is_empty() {
-            continue;
-        }
-        by_disc.entry(did.into()).or_default().push(c.clone());
-    }
+    // ── thread documents ─────────────────────────────────────────────
     let mut threads: Vec<ThreadDocument> = Vec::new();
-    for (disc_id, mut members) in by_disc {
-        members.sort_by(|a, b| {
-            let aa = a.get("created_time").and_then(|v| v.as_str()).unwrap_or("");
-            let bb = b.get("created_time").and_then(|v| v.as_str()).unwrap_or("");
-            let ai = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let bi = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            aa.cmp(bb).then(ai.cmp(bi))
-        });
-        let first = &members[0];
-        let Some(page_id) = resolve_comment_page_id(first, &parsed.blocks, &block_owning_page)
+    for (disc_id, members) in &comments_by_discussion {
+        let first = members[0];
+        let Some(page_id) = first
+            .get("page_id")
+            .and_then(|v| v.as_str())
+            .map(String::from)
         else {
             continue;
         };
-        let page_title = page_titles
+        let title = page_titles
             .get(&page_id)
             .cloned()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "(untitled)".into());
-        let parent = first.get("parent").cloned().unwrap_or(Value::Null);
-        let parent_block_id = if parent.get("type").and_then(|v| v.as_str()) == Some("block_id") {
-            parent
-                .get("block_id")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-        } else {
-            None
-        };
+        let parent_block_id = first
+            .get("parent")
+            .filter(|p| p.get("type").and_then(|v| v.as_str()) == Some("block_id"))
+            .and_then(|p| p.get("block_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let owned: Vec<Value> = members.iter().map(|v| (*v).clone()).collect();
         let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let anchor = parent_block_id
+            .as_deref()
+            .and_then(|b| parsed.anchor_text.get(b))
+            .map(String::as_str);
         let rows = thread_rows(
-            &disc_id,
-            &members,
+            disc_id,
+            &owned,
             &page_id,
-            &page_title,
+            &title,
             stanza,
             parent_block_id.as_deref(),
-            &parsed.user_names,
+            anchor,
             &mut problems,
         );
-        // Fingerprint over sorted-by-id comments for stability.
-        let mut for_fp: Vec<&Value> = members.iter().collect();
-        for_fp.sort_by(|a, b| {
-            let ai = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let bi = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            ai.cmp(bi)
-        });
-        let fp = fingerprint_for_discussion(&for_fp);
         threads.push(ThreadDocument {
-            discussion_uuid: disc_id,
+            source_fingerprint: fingerprint_for_discussion(members),
+            discussion_uuid: disc_id.clone(),
             page_uuid: page_id,
-            page_title,
+            page_title: title,
+            anchor_block_uuid: parent_block_id.clone(),
             rows,
-            source_fingerprint: fp,
             problems,
         });
     }
 
     tracing::debug!(
-        event = "notion_gather_documents_phase",
-        phase = "thread_documents",
+        event = "notion_gather_documents",
+        pages = pages.len(),
         threads = threads.len(),
-        elapsed_ms = phase_start.elapsed().as_millis() as u64,
+        elapsed_ms = t0.elapsed().as_millis() as u64,
     );
-
-    tracing::debug!(
-        event = "notion_gather_documents_total",
-        pages_in = parsed.pages.len(),
-        blocks_in = parsed.blocks.len(),
-        comments_in = parsed.comments.len(),
-        pages_out = pages.len(),
-        threads_out = threads.len(),
-        elapsed_ms = total_start.elapsed().as_millis() as u64,
-    );
-
     Ok(DocumentRows { pages, threads })
 }
 
@@ -678,87 +433,161 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial, stanza: &str) -> Result<D
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::Once;
-    use std::time::Duration;
 
-    // Diagnostic output: when this test ever blows its time budget (or
-    // anyone wonders why `notion_unittests` takes >5s wall), running
-    // with `--test-output=streamed` shows the per-phase breakdown
-    // emitted by `gather_documents`. The slowest test in this file
-    // dominates the binary's wall time — see the comment block on
-    // `gather_documents_is_linear_in_blocks` below.
-    static INIT_TRACING: Once = Once::new();
-    fn init_tracing() {
-        INIT_TRACING.call_once(|| {
-            // Best-effort — if a global subscriber is already set, do
-            // nothing (avoids the "panic" on double-set when an
-            // outer test harness already initialized one).
-            let _ = tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::DEBUG)
-                .with_writer(std::io::stderr)
-                .try_init();
-        });
+    fn page(id: &str, title: &str) -> Value {
+        json!({
+            "id": id,
+            "object": "page",
+            "last_edited_time": "2026-01-01T00:00:00.000Z",
+            "properties": {"title": {"type": "title", "title": [{"plain_text": title}]}},
+        })
     }
 
-    // Regression test for a quadratic blow-up in `gather_documents`.
-    // History:
-    #[test]
-    fn gather_documents_is_linear_in_blocks() {
-        init_tracing();
-        const N: usize = 4_000;
-        let page_id = "page-1";
-        let pages = vec![json!({"id": page_id, "object": "page"})];
-        let mut blocks = Vec::with_capacity(N);
-        // First block parents directly to the page; each subsequent
-        // block parents to the previous block. With the quadratic bug,
-        // the inner loop builds an N-entry HashMap N times.
-        blocks.push(json!({
-            "id": "block-000000",
-            "object": "block",
-            "type": "paragraph",
-            "parent": {"type": "page_id", "page_id": page_id},
+    fn comment(id: &str, page_id: &str, disc: &str, who: &str, when: &str) -> Value {
+        json!({
+            "id": id,
+            "object": "comment",
             "page_id": page_id,
-        }));
-        for i in 1..N {
-            blocks.push(json!({
-                "id": format!("block-{i:06}"),
-                "object": "block",
-                "type": "paragraph",
-                "parent": {"type": "block_id", "block_id": format!("block-{:06}", i - 1)},
-                "page_id": page_id,
-            }));
-        }
-        let parsed = ParsedNotionOfficial {
-            pages,
-            blocks,
-            ..ParsedNotionOfficial::default()
+            "discussion_id": disc,
+            "created_time": when,
+            "created_by": {"id": "47b71049-b1e7-4fc2-9d1e-4528dd803a62"},
+            "display_name": {"type": "user", "resolved_name": who},
+            "rich_text": [{"plain_text": "hello"}],
+            "parent": {"type": "block_id", "block_id": "b-1"},
+        })
+    }
+
+    /// A comment now carries its owning page id, so grouping needs no
+    /// block walk. This is what let ~250 lines of block-tree traversal
+    /// go, and with it the linearity regression test that guarded it.
+    #[test]
+    fn comments_group_into_threads_by_their_recorded_page() {
+        let parsed = ParsedNotion {
+            pages: vec![page("p1", "Standup Notes")],
+            markdown_by_page: [("p1".to_string(), "# Notes\n".to_string())]
+                .into_iter()
+                .collect(),
+            comments: vec![
+                comment("c2", "p1", "d1", "Cathy Zhao", "2026-01-02T00:00:00.000Z"),
+                comment("c1", "p1", "d1", "Cathy Zhao", "2026-01-01T00:00:00.000Z"),
+            ],
+            ..Default::default()
         };
-
-        let start = Instant::now();
-        let docs = gather_documents(&parsed, "notion").expect("valid notion grid rows");
-        let elapsed = start.elapsed();
-        // Surface the wall time on stderr so `bazel test
-        // --test_output=streamed` shows it next to the
-        // `notion_gather_documents_phase` events from inside the
-        // function — at a glance you can tell which phase grew when
-        // the binary's total wall time creeps up.
-        tracing::info!(
-            event = "gather_documents_is_linear_in_blocks",
-            n = N,
-            elapsed_ms = elapsed.as_millis() as u64,
-            "smoke regression for the quadratic block_parent rebuild",
-        );
-
+        let docs = gather_documents(&parsed, "notion").unwrap();
         assert_eq!(docs.pages.len(), 1);
-        // 1s budget: a healthy run finishes in ~50ms (memoized walk),
-        // so 1s gives ~20× headroom for CI core contention while still
-        // catching a regression to the v1/v2 cliffs (6s or
-        // never-finishes) long before they reach production.
-        assert!(
-            elapsed < Duration::from_secs(1),
-            "gather_documents took {elapsed:?} for {N} blocks — likely a regression \
-             in the memoized owner-walk; run `bazel test … --test_output=streamed \
-             --cache_test_results=no` and look at notion_gather_documents_phase events",
+        assert_eq!(docs.threads.len(), 1);
+        let t = &docs.threads[0];
+        assert_eq!(t.page_uuid, "p1");
+        assert_eq!(t.page_title, "Standup Notes");
+        // thread row + one row per comment, oldest first
+        assert_eq!(t.rows.len(), 3);
+        assert_eq!(t.rows[1].uuid, "c1");
+        assert_eq!(t.rows[2].uuid, "c2");
+    }
+
+    /// A page object carries only `created_by.id`, so a page author
+    /// needs the `users` table. Before that table existed every Notion
+    /// page in the grid showed a truncated uuid as its author.
+    #[test]
+    fn page_authors_use_the_resolved_user_name() {
+        let mut p = page("p1", "Handbook");
+        p["created_by"] = json!({"object": "user", "id": "47b71049-b1e7-4fc2-9d1e-4528dd803a62"});
+        let names: HashMap<String, String> = [(
+            "47b71049-b1e7-4fc2-9d1e-4528dd803a62".to_string(),
+            "Nayana Bannur".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let parsed = ParsedNotion {
+            pages: vec![p],
+            user_names: names,
+            ..Default::default()
+        };
+        let docs = gather_documents(&parsed, "notion").unwrap();
+        assert_eq!(
+            docs.pages[0].rows[0].author.as_deref(),
+            Some("Nayana Bannur")
         );
+    }
+
+    /// An unresolved id still has to render something, and must not
+    /// block the page.
+    #[test]
+    fn an_unresolved_page_author_falls_back_to_an_id_prefix() {
+        let mut p = page("p1", "Handbook");
+        p["created_by"] = json!({"id": "47b71049-b1e7-4fc2-9d1e-4528dd803a62"});
+        let parsed = ParsedNotion {
+            pages: vec![p],
+            ..Default::default()
+        };
+        let docs = gather_documents(&parsed, "notion").unwrap();
+        assert_eq!(docs.pages[0].rows[0].author.as_deref(), Some("47b71049"));
+    }
+
+    /// A thread's searchable text has to include what the comment is
+    /// about. Notion puts the comment and the commented-on block in
+    /// different places and never joins them.
+    #[test]
+    fn a_thread_row_carries_its_anchor_text() {
+        let parsed = ParsedNotion {
+            pages: vec![page("p1", "Handbook")],
+            comments: vec![comment(
+                "c1",
+                "p1",
+                "d1",
+                "Data",
+                "2026-01-01T00:00:00.000Z",
+            )],
+            anchor_text: [("b-1".to_string(), "Warp core alignment".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let docs = gather_documents(&parsed, "notion").unwrap();
+        let thread = &docs.threads[0];
+        assert_eq!(thread.anchor_block_uuid.as_deref(), Some("b-1"));
+        assert!(
+            thread.rows[0].text.contains("Warp core alignment"),
+            "thread text should lead with the anchor: {:?}",
+            thread.rows[0].text
+        );
+    }
+
+    /// Notion resolves comment authors for us via
+    /// `display_name.resolved_name`. The previous implementation
+    /// threaded a name map that was never populated, so every author
+    /// rendered as a truncated uuid.
+    #[test]
+    fn comment_authors_use_the_name_notion_resolved() {
+        let c = comment("c1", "p1", "d1", "Cathy Zhao", "2026-01-01T00:00:00.000Z");
+        assert_eq!(comment_author(&c).as_deref(), Some("Cathy Zhao"));
+        let mut anon = c.clone();
+        anon["display_name"] = json!({"type": "user"});
+        assert_eq!(comment_author(&anon).as_deref(), Some("47b71049"));
+    }
+
+    /// The fingerprint has to move when the body moves — that is what
+    /// makes an edited page re-render — and stay put otherwise.
+    #[test]
+    fn the_page_fingerprint_tracks_the_body() {
+        let p = page("p1", "A");
+        let a = fingerprint_for_page(&p, "# one\n", &[]);
+        let b = fingerprint_for_page(&p, "# one\n", &[]);
+        let c = fingerprint_for_page(&p, "# two\n", &[]);
+        assert_eq!(a, b, "same input must fingerprint identically");
+        assert_ne!(a, c, "a changed body must change the fingerprint");
+    }
+
+    /// A database row has no body. It still needs a page document, or
+    /// most of a real workspace never reaches the grid.
+    #[test]
+    fn a_body_less_page_still_produces_a_document() {
+        let parsed = ParsedNotion {
+            pages: vec![page("row1", "A row")],
+            ..Default::default()
+        };
+        let docs = gather_documents(&parsed, "notion").unwrap();
+        assert_eq!(docs.pages.len(), 1);
+        assert_eq!(docs.pages[0].rows.len(), 1);
     }
 }

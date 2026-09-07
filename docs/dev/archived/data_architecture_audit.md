@@ -1341,7 +1341,7 @@ P2: They are slightly different though, because beeper and signal need to group 
 
 * **Pre-seed pattern not implemented** — Per doc principle "Pre-seed before fetch" (port guide §6, doc §446-461), rows should exist with `payload=NULL` before fetch attempts. YoLink only writes on success; a mid-fetch crash on a partially-loaded device leaves no evidence of which windows were attempted. See `extract.rs:256-353` (`fetch_device`) — no pre-seed call before `curl`.
 
-* **No explicit timestamp or fingerprint in raw schema** — `yolink_readings` lacks `fetched_at` or source-wire-payload hash. The doc principle (port guide §6.4) says bookkeeping lives on the sidecar, but there's no timestamp for "when was this window last pulled" to support resume-from-watermark correctly. The `last_ts_ms` in `yolink_devices` is a cursor (max of readings), not a fetch timestamp. See `extract.rs:133-139`.
+* **No explicit timestamp or fingerprint in raw schema** — `yolink_readings` lacks `fetched_at` or source-wire-payload hash. The doc principle (port guide §6.4) says bookkeeping lives on the sidecar, but there's no timestamp for "when was this window last pulled" to support resume-from-cursor correctly. The `last_ts_ms` in `yolink_devices` is a cursor (max of readings), not a fetch timestamp. See `extract.rs:133-139`.
 
 * **No translated schema / GridRow projection** — Extract-only, no translate phase (doc §2240-2247 in sync/main.rs notes "yolink: skipped (extract-only, no render path)"). The doc explicitly calls out time-series data (doc §669) as a family planned for Garmin / IQAir that should eventually share a common `GridRow` schema. YoLink today skips this; readings sit in raw doltlite only, bypassing the sidecar / grid_rows pipeline. No schema unification as other providers do.
 
@@ -1349,7 +1349,7 @@ P2: They are slightly different though, because beeper and signal need to group 
 
 * **No window-level commit grain** — The comment in `extract.rs:1-4` says "one `dolt_commit` per window so re-fetches that change historical values land as auditable diffs in `dolt_log`", but that's misleading. The orchestrator still wraps everything in a single commit at sync-exit (per doc principle §294-312). A fetch that touches N windows produces one dolt_commit, not N. The comment contradicts the principle.
 
-* **Hard cursor mutation without watermark isolation** — `last_ts_ms` is the only resume state, computed post-hoc from `MAX(ts_ms)` in readings (line 344-350). If a partial window succeeded (some readings written) then crashed before finishing the next window, the cursor advances to the max of *all* readings so far, risking gaps on resume. The window-stride cursor pattern (doc §314-327) should walk `[start, now]` in fixed windows; instead, YoLink computes a global watermark that can skip partial-window gaps. The design comment at lines 34-38 says devices are aligned across runs, but the cursor logic (lines 286-288) re-adjusts per-device after every fetch.
+* **Hard cursor mutation without resume-cursor isolation** — `last_ts_ms` is the only resume state, computed post-hoc from `MAX(ts_ms)` in readings (line 344-350). If a partial window succeeded (some readings written) then crashed before finishing the next window, the cursor advances to the max of *all* readings so far, risking gaps on resume. The window-stride cursor pattern (doc §314-327) should walk `[start, now]` in fixed windows; instead, YoLink computes a global resume cursor that can skip partial-window gaps. The design comment at lines 34-38 says devices are aligned across runs, but the cursor logic (lines 286-288) re-adjusts per-device after every fetch.
 
 ### Dead / cargo-culted patterns
 
@@ -1487,9 +1487,9 @@ P2: Let's save the rendering concerns for later.
 
 ### Time-series family unification (YoLink / planned Garmin / IQAir)
 - **Providers**: YoLink today; Garmin, IQAir planned
-- **Concern**: YoLink is the only time-series provider and has hardcoded everything: window-stride cursor, CSV-format-versioning, signing scheme, table DDL, `CONSECUTIVE_FAILURE_BUDGET` const. No translate phase, no GridRow projection, no sidecar — breaks the universal raw→translate→load contract. Cursor watermarking via `MAX(ts_ms)` is gap-prone.
+- **Concern**: YoLink is the only time-series provider and has hardcoded everything: window-stride cursor, CSV-format-versioning, signing scheme, table DDL, `CONSECUTIVE_FAILURE_BUDGET` const. No translate phase, no GridRow projection, no sidecar — breaks the universal raw→translate→load contract. Deriving the resume cursor from `MAX(ts_ms)` is gap-prone.
 - **Proposed shape**:
-  - `datalib_etl::time_window` module with `WindowStrideCursor { stride, overlap, start, now }` iterator (per-window, not global-MAX watermark).
+  - `datalib_etl::time_window` module with `WindowStrideCursor { stride, overlap, start, now }` iterator (per-window, not a global-MAX resume cursor).
   - `DeviceAuth` trait for per-device signed-URL schemes.
   - Shared `sensor_readings` raw-table template: `(device_name, ts_ms, metric, value, id_composite_pk)`.
   - Shared time-series `GridRow.kind` taxonomy (`Temperature | Humidity | Heart Rate | PM2.5 | ...`) and a `datalib_etl::time_series::translate` projecting all three providers.

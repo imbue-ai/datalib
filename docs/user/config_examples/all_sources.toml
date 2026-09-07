@@ -253,8 +253,17 @@ inputs = ["gitlab/raw"]
 
 # --- Notion -------------------------------------------------------------
 
-# Notion mirror. Credentials via latchkey. At least one of `inbox`
-# (enabled) or `subtrees.pages` must be present.
+# Notion mirror. Credentials via latchkey — the stored credential must
+# carry BOTH the bearer token and the `Notion-Version` header, because a
+# second `Notion-Version` on the wire concatenates with the stored one
+# and Notion rejects the pair:
+#
+#   latchkey auth set notion \
+#     -H "Authorization: Bearer ntn_..." \
+#     -H "Notion-Version: 2026-03-11"
+#
+# A personal access token sees whatever its creator can see, so an empty
+# `sync` mirrors the whole workspace and needs no starting point.
 [[steps]]
 id = "notion/raw"
 command = "datalib-step download notion_api"
@@ -262,15 +271,21 @@ command = "datalib-step download notion_api"
 [steps.params.sync]
 refresh_window_days = 7
 
-[steps.params.sync.inbox]
-enabled = true
-mirror_referenced_pages = true
-
-[steps.params.sync.subtrees]
-max_pages = 200
-pages = [
+# Optional allowlist: mirror only these pages and everything under them
+# (child pages, and the rows of databases embedded in them). Accepts a
+# bare page id or a paste-able browser URL. Omit for the whole
+# workspace.
+roots = [
   "https://www.notion.so/myworkspace/Project-Wiki-0123456789abcdef0123456789abcdef",
 ]
+
+# Guard against a mis-scoped run. Omit for no limit.
+# max_pages = 200
+
+# All default to true.
+# comments = true
+# attachments = true
+# databases = true
 
 [[steps]]
 id = "notion/rendered_md"

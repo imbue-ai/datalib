@@ -7,66 +7,47 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::Value;
 
-#[cfg(test)]
-use crate::download::db::BlockUpsert;
 use crate::download::db::{block_on_load_all, db_path_for, LoadedRaw};
 
-pub const ENTITY_PAGE: &str = "notion_official_page";
-pub const ENTITY_BLOCK: &str = "notion_official_block";
-pub const ENTITY_COMMENT: &str = "notion_official_comment";
-
 #[derive(Clone, Default)]
-pub struct ParsedNotionOfficial {
+pub struct ParsedNotion {
     pub pages: Vec<Value>,
-    /// Blocks in BFS / insertion order, matching how the downloader
-    /// discovered them (download/mod.rs::walk_page_blocks). The render
-    /// step relies on this order for section / toggle layout.
-    pub blocks: Vec<Value>,
+    /// Page bodies as Notion rendered them, keyed by page id. Attachment
+    /// URLs are already slots, not signed links.
+    pub markdown_by_page: HashMap<String, String>,
     pub comments: Vec<Value>,
+    /// `user_id -> display name`. Notion resolves comment authors on
+    /// the comment itself, so this is for the places it does not: a
+    /// page's `created_by` / `last_edited_by`, and people properties.
     pub user_names: HashMap<String, String>,
-    pub media_urls: HashMap<String, String>,
-    pub bookmark_titles: HashMap<String, String>,
-    /// Per-page bag of image attachment bytes pre-loaded from the
-    /// sibling CAS via `BlobBundle::load` against
-    /// `notion_image_attachments`. Mirrors slack / whatsapp /
-    /// email's per-bucket BlobBundle shape — render calls
-    /// `bundle.materialize_to_dir(<page_dir>/blobs)` once per page
-    /// and walks blocks to set image `src`s from
-    /// `bundle.filename_for(ref_id)`. Pages without image blocks have
-    /// no entry; render falls through to the upstream-URL
-    /// placeholder.
+    /// `block_id -> the text a comment on that block is anchored to`.
+    /// A comment names its block and carries no quote, so without this
+    /// a thread's anchor is an opaque uuid.
+    pub anchor_text: HashMap<String, String>,
+    /// Attachment bytes per page, pre-loaded from the sibling CAS.
+    /// Render calls `bundle.materialize_to_dir(<page_dir>/blobs)` once
+    /// per page and resolves each slot with `bundle.filename_for`.
     pub blobs_by_page: HashMap<String, datalib_etl::blob_cas::BlobBundle>,
 }
 
 /// Read raw payloads out of the doltlite DB. The `page_id` column of
-/// each block/comment is injected back into the JSON value under the
-/// `page_id` key so downstream consumers that grew up on the JSONL
-/// shape — where this field rode alongside `raw` — keep working.
-pub fn parse_api_dir(path: &Path) -> Result<ParsedNotionOfficial> {
+/// each comment is injected back into the JSON value so downstream
+/// consumers can group without a second lookup.
+pub fn parse_api_dir(path: &Path) -> Result<ParsedNotion> {
     let db_path = db_path_for(path);
     if !db_path.exists() {
-        return Ok(ParsedNotionOfficial::default());
+        return Ok(ParsedNotion::default());
     }
     let LoadedRaw {
         pages,
-        blocks,
+        page_markdown,
         comments,
+        user_names,
+        comment_anchors,
         blobs_by_page,
     } = block_on_load_all(&db_path)?;
 
-    // Inject page_id into block/comment values so existing readers
-    // (notion/render/render.rs, synthesize) that expect the wrapper
-    // shape don't need a parallel API.
-    let blocks_v: Vec<Value> = blocks
-        .into_iter()
-        .map(|(mut v, pid)| {
-            if let (Some(obj), Some(pid)) = (v.as_object_mut(), pid) {
-                obj.entry("page_id").or_insert(Value::String(pid));
-            }
-            v
-        })
-        .collect();
-    let comments_v: Vec<Value> = comments
+    let comments: Vec<Value> = comments
         .into_iter()
         .map(|(mut v, pid)| {
             if let (Some(obj), Some(pid)) = (v.as_object_mut(), pid) {
@@ -76,13 +57,12 @@ pub fn parse_api_dir(path: &Path) -> Result<ParsedNotionOfficial> {
         })
         .collect();
 
-    Ok(ParsedNotionOfficial {
+    Ok(ParsedNotion {
         pages,
-        blocks: blocks_v,
-        comments: comments_v,
-        user_names: HashMap::new(),
-        media_urls: HashMap::new(),
-        bookmark_titles: HashMap::new(),
+        markdown_by_page: page_markdown.into_iter().collect(),
+        comments,
+        user_names,
+        anchor_text: comment_anchors,
         blobs_by_page,
     })
 }
@@ -90,31 +70,27 @@ pub fn parse_api_dir(path: &Path) -> Result<ParsedNotionOfficial> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::download::db::{PageMarkdownUpsert, PageUpsert};
     use crate::download::RawDb;
     use serde_json::json;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn parse_round_trips_pages_and_blocks() {
+    async fn parse_round_trips_pages_and_bodies() {
         let dir = tempfile::tempdir().unwrap();
         let db_file = dir.path().join("notion-api.doltlite_db");
         let db = RawDb::open(&db_file).await.unwrap();
-        db.upsert_pages(&[(
-            "p1".into(),
-            None,
-            Some("2026-05-21T19:37:00Z".into()),
-            Some(serde_json::to_string(&json!({"id": "p1", "object": "page"})).unwrap()),
-        )])
+        db.upsert_pages(&[PageUpsert {
+            id: "p1".into(),
+            last_edited_time: Some("2026-05-21T19:37:00Z".into()),
+            payload: Some(serde_json::to_string(&json!({"id": "p1", "object": "page"})).unwrap()),
+            ..Default::default()
+        }])
         .await
         .unwrap();
-        db.upsert_blocks(&[BlockUpsert {
-            id: "b1".into(),
-            parent_id: Some("p1".into()),
-            page_id: Some("p1".into()),
-            page_order: Some(0),
-            last_edited_time: None,
-            payload: Some(
-                serde_json::to_string(&json!({"id": "b1", "type": "paragraph"})).unwrap(),
-            ),
+        db.upsert_page_markdown(&[PageMarkdownUpsert {
+            id: "p1".into(),
+            markdown: "# Hello\n".into(),
+            ..Default::default()
         }])
         .await
         .unwrap();
@@ -124,44 +100,29 @@ mod tests {
         let parsed = parse_api_dir(&db_file).unwrap();
         assert_eq!(parsed.pages.len(), 1);
         assert_eq!(parsed.pages[0]["id"], "p1");
-        assert_eq!(parsed.blocks.len(), 1);
-        assert_eq!(parsed.blocks[0]["page_id"], "p1");
+        assert_eq!(parsed.markdown_by_page.get("p1").unwrap(), "# Hello\n");
     }
 
+    /// A database row usually has no body at all — 71% of pages in a
+    /// measured workspace. That must round-trip as a page with no
+    /// markdown, not as a missing page.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn block_load_preserves_page_order() {
-        // BFS discovery order has to survive a round-trip even when
-        // block ids sort differently. The old JSONL implementation
-        // keyed by uuid in a BTreeMap and lost order — render came
-        // out scrambled. We now persist `page_order` and `ORDER BY
-        // (page_id, page_order)` in load_blocks.
+    async fn a_page_with_no_body_still_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let db_file = dir.path().join("notion-api.doltlite_db");
         let db = RawDb::open(&db_file).await.unwrap();
-        // ids whose lex order is "aaaa-2" < "mmmm-3" < "zzzz-1" but
-        // whose discovery order is the reverse — proves page_order
-        // wins over lex(id).
-        let inputs = [("zzzz-1", 0_i64), ("aaaa-2", 1), ("mmmm-3", 2)];
-        for (id, order) in &inputs {
-            db.upsert_blocks(&[BlockUpsert {
-                id: (*id).into(),
-                parent_id: None,
-                page_id: Some("p1".into()),
-                page_order: Some(*order),
-                last_edited_time: None,
-                payload: Some(serde_json::to_string(&json!({"id": id})).unwrap()),
-            }])
-            .await
-            .unwrap();
-        }
+        db.upsert_pages(&[PageUpsert {
+            id: "row1".into(),
+            parent_type: Some("data_source_id".into()),
+            payload: Some(serde_json::to_string(&json!({"id": "row1"})).unwrap()),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
         // Closed, not dropped: `parse_api_dir` reopens this store.
         db.close().await;
         let parsed = parse_api_dir(&db_file).unwrap();
-        let got: Vec<&str> = parsed
-            .blocks
-            .iter()
-            .map(|b| b["id"].as_str().unwrap())
-            .collect();
-        assert_eq!(got, vec!["zzzz-1", "aaaa-2", "mmmm-3"]);
+        assert_eq!(parsed.pages.len(), 1);
+        assert!(parsed.markdown_by_page.is_empty());
     }
 }

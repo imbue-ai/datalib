@@ -445,18 +445,13 @@ def _source_config(
     """The provider config subtree (step `params:`) for one fixture source.
 
     Mirrors the knobs the old sync YAML carried, minus the `type:` tag
-    (the command's subcommand names the provider now). Notion needs a non-empty
-    sync block to pass validation — `notion_seed` anchors a
-    `subtrees.pages` entry (extract additionally derives BFS seeds
-    from the playback responses, so the seed needn't be reachable on
-    its own).
+    (the command's subcommand names the provider now).
     """
     source: dict = {"common": {"input_path": str(input_path)}}
     if type_str == "notion_api":
-        if notion_seed:
-            source["sync"] = {"subtrees": {"pages": [notion_seed]}}
-        else:
-            source["sync"] = {"inbox": {"enabled": True}}
+        # `roots` narrows the mirror; an empty sync block would mirror
+        # the whole workspace, which in playback is the fixture tree.
+        source["sync"] = {"roots": [notion_seed]} if notion_seed else {}
     elif type_str == "slack_api":
         # Disable media so extract doesn't fall back to the direct
         # `latchkey curl -v` path for file downloads (not on PATH in
@@ -610,10 +605,10 @@ def _load_sql(sql_path: Path, db_path: Path) -> None:
 
 
 def _first_notion_page_id(notion_fx: Path) -> str | None:
-    """Pick any page id from the notion fixture tree to anchor the
-    config's required `subtrees.pages` entry. BFS in extract derives
-    the actual fetched set from playback fixtures, so this seed only
-    needs to satisfy validation."""
+    """Pick any page id from the notion fixture tree to seed `roots`.
+
+    The walk derives the actual fetched set from the playback fixtures,
+    so this only has to name a page that exists."""
     candidate = notion_fx / "notion_official_page" / "created" / "events.jsonl"
     if not candidate.exists():
         return None
