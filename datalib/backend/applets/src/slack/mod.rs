@@ -447,6 +447,7 @@ fn query_param(query: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_schema::providers::Provider;
 
     fn write_thread(dir: &Path, md: &str, channel: &str, when: &str, msgs: &[(&str, &str)]) {
         use datalib_etl::grid_index::RenderedMarkdown;
@@ -456,7 +457,7 @@ mod tests {
         let row = |uuid: &str, index: Option<i64>, author: &str, text: &str| {
             GridRow::builder()
                 .uuid(uuid)
-                .provider("slack")
+                .provider(Provider::Slack)
                 .kind(if index.is_some() {
                     "Slack Message"
                 } else {
@@ -512,7 +513,7 @@ mod tests {
             .map(|(index, author, text, when)| {
                 GridRow::builder()
                     .uuid(format!("{md}-m{index}"))
-                    .provider("slack")
+                    .provider(Provider::Slack)
                     .kind("Slack Message")
                     .source_label("Slack")
                     .channel(Some(channel.to_string()))

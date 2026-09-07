@@ -81,10 +81,10 @@ rust_library(
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:shlex",
+        "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower-http",
-        "@datalib_crates//:uuid",
-    ],
+        "@datalib_crates//:uuid",    ],
 )
 
 rust_test(

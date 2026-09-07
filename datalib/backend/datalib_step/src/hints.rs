@@ -2,10 +2,16 @@
 
 use anyhow::Result;
 use datalib_dag::events::Event;
+use datalib_dag::FailureKind;
+
+use crate::source_type::SourceType;
 
 use crate::events::{Emitter, OutputClaim};
 
-pub fn classify(e: &anyhow::Error) -> &'static str {
+/// Which [`FailureKind`] a failure is, from the text of its cause
+/// chain. The scheduler's retry policy keys off the answer, so this is
+/// the runner's vocabulary rather than a label of our own.
+pub fn classify(e: &anyhow::Error) -> FailureKind {
     let s: String = e
         .chain()
         .map(|c| c.to_string())
@@ -21,17 +27,17 @@ pub fn classify(e: &anyhow::Error) -> &'static str {
         // latchkey's error for a service that was never registered.
         || s.contains("No service matches URL")
     {
-        "auth"
+        FailureKind::Auth
     } else if s.contains("HTTP 429") || s.contains("rate limit") || s.contains("rate-limit") {
-        "rate_limited"
+        FailureKind::RateLimited
     } else if s.contains("timed out")
         || s.contains("connection reset")
         || s.contains("connection refused")
         || s.contains("dns error")
     {
-        "transient"
+        FailureKind::Transient
     } else {
-        "data"
+        FailureKind::Data
     }
 }
 
@@ -40,34 +46,18 @@ pub fn classify(e: &anyhow::Error) -> &'static str {
 /// will emit).
 pub fn emit_auth_hint_on_failure(
     emitter: &Emitter,
-    provider_type: &str,
+    source_type: SourceType,
     res: &Result<Vec<OutputClaim>>,
 ) {
     if let Err(e) = res {
-        if classify(e) == "auth" {
+        if classify(e) == FailureKind::Auth {
             emitter.event(&Event::Hint {
                 step: String::new(), // re-tagged by the runner
-                msg: auth_hint_for(provider_type),
+                msg: auth_hint_for(source_type),
             });
         }
     }
 }
-
-/// Source types whose downloader authenticates through latchkey, and so
-/// accept a `latchkey_settings.account` naming which stored identity to
-/// mirror. The list exists to decide whether [`MULTI_ACCOUNT_NOTE`]
-/// applies; the schema itself is enforced by which provider config crates
-/// compose `LatchkeySettings` at all.
-const LATCHKEY_ACCOUNT_SOURCE_TYPES: &[&str] = &[
-    "carddav",
-    "chatgpt_api",
-    "claude_api",
-    "email",
-    "github_api",
-    "gitlab_api",
-    "notion_api",
-    "slack_api",
-];
 
 /// Appended to every per-provider hint whose service can hold more than
 /// one stored account, so the multi-account case is answered where the
@@ -98,8 +88,8 @@ set $DATALIB_CURL_DISPATCH / $LATCHKEY_CURL explicitly, and that \
 /// the app-bundled `latchkey` launcher when running from the packaged
 /// app, else `npx -y latchkey@<pin>`, so the printed commands are
 /// copy-pasteable as-is in both worlds.
-pub fn auth_hint_for(provider: &str) -> String {
-    let template: &str = match provider {
+pub fn auth_hint_for(source_type: SourceType) -> String {
+    let template: &str = match source_type.as_str() {
         // All hints route the secret through the macOS clipboard so it
         // never lands in shell history: a one-liner copies the token to
         // the pasteboard, then the printed `… auth set …` command
@@ -263,7 +253,7 @@ See datalib/backend/etl/providers/beeper/DOWNLOAD.md for details."
     };
     // The multi-account note only makes sense where latchkey holds the
     // credential; `beeper` reads an on-disk SQLite and has no service.
-    let hint = if LATCHKEY_ACCOUNT_SOURCE_TYPES.contains(&provider) {
+    let hint = if source_type.uses_latchkey_account() {
         format!("{template}{MULTI_ACCOUNT_NOTE}")
     } else {
         template.to_string()
@@ -278,21 +268,21 @@ mod tests {
     #[test]
     fn classify_maps_common_failures() {
         let auth = anyhow::anyhow!("HTTP 403 Forbidden").context("fetch /me");
-        assert_eq!(classify(&auth), "auth");
+        assert_eq!(classify(&auth), FailureKind::Auth);
         let rl = anyhow::anyhow!("HTTP 429 too many requests");
-        assert_eq!(classify(&rl), "rate_limited");
+        assert_eq!(classify(&rl), FailureKind::RateLimited);
         let tr = anyhow::anyhow!("connection reset by peer");
-        assert_eq!(classify(&tr), "transient");
+        assert_eq!(classify(&tr), FailureKind::Transient);
         let other = anyhow::anyhow!("unparseable row 17");
-        assert_eq!(classify(&other), "data");
+        assert_eq!(classify(&other), FailureKind::Data);
     }
 
     #[test]
     fn auth_hint_resolves_latchkey_placeholder() {
-        let hint = auth_hint_for("slack_api");
+        let hint = auth_hint_for(SourceType::SlackApi);
         assert!(!hint.contains("{LK}"), "placeholder must be substituted");
         assert!(hint.contains("auth set slack"));
-        // Unknown providers get the generic text.
-        assert!(auth_hint_for("carrier_pigeon").contains("latchkey credentials"));
+        // A type with no hint of its own gets the generic text.
+        assert!(auth_hint_for(SourceType::Perseus).contains("latchkey credentials"));
     }
 }

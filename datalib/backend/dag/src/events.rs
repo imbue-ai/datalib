@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::step::StepId;
+use crate::run_state::RunState;
+use crate::step::{FailureKind, StepId};
 
 /// One event on the stream. `step` tags every event so a single
 /// multiplexed stream (the orchestrator's view) stays attributable.
@@ -23,11 +24,10 @@ pub enum Event {
         step: StepId,
         attempt: u32,
     },
-    /// Terminal state for the step this run. `status` is the
-    /// serialized [`crate::scheduler::StepStatus`] discriminant.
+    /// Terminal state for the step this run.
     StepFinish {
         step: StepId,
-        status: String,
+        status: RunState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -70,12 +70,10 @@ pub enum Event {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepSummary {
     pub step: StepId,
-    /// `succeeded` | `skipped_up_to_date` | `blocked` | `failed`.
-    pub status: String,
-    /// Failure kind when `status == "failed"` (wire values of
-    /// `FailureKind`).
+    pub status: RunState,
+    /// Set when `status` is [`RunState::Failed`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure: Option<String>,
+    pub failure: Option<FailureKind>,
     /// Invocations this run (0 when skipped/blocked).
     pub attempts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]

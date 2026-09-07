@@ -15,7 +15,7 @@
 //! this does is notice the stray `config.yaml` and say so.
 
 use app_schema::feedback::FeedbackRow;
-use app_schema::sync_jobs::SyncJobRow;
+use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -1301,18 +1301,18 @@ async fn sync_enqueue(
     Json(req): Json<EnqueueJobRequest>,
 ) -> Result<Json<SyncJobRow>, StatusCode> {
     // Validate the discriminator server-side; the DB column is a
-    // VARCHAR with no enum constraint so we'd otherwise accept anything.
-    // `all` (one DAG run, `source_name` optionally selecting a subset)
-    // is the only live kind — the legacy `download`/`ingest`/`render`
-    // kinds died with the fixed-phase orchestrator and are rejected;
+    // VARCHAR with no enum constraint so we'd otherwise accept
+    // anything. `All` (one DAG run, `source_name` optionally selecting
+    // a subset) is the only live kind — the legacy fixed-phase kinds
+    // died with the fixed-phase orchestrator and are rejected, though
     // historical rows keep whatever kind they were written with.
-    match req.kind.as_str() {
-        "all" => {}
-        _ => return Err(StatusCode::BAD_REQUEST),
+    let kind = JobKind::parse(&req.kind).ok_or(StatusCode::BAD_REQUEST)?;
+    if kind != JobKind::All {
+        return Err(StatusCode::BAD_REQUEST);
     }
     let row = s
         .app
-        .enqueue_job(&req.kind, req.source_name.as_deref())
+        .enqueue_job(kind, req.source_name.as_deref())
         .await
         .map_err(repo_err_to_status)?;
     // Push the new (pending) job so SSE clients show it immediately,
@@ -1321,7 +1321,7 @@ async fn sync_enqueue(
         id: row.id.clone(),
         kind: row.kind.clone(),
         source_name: row.source_name.clone(),
-        state: row.state.clone(),
+        state: row.job_state().unwrap_or(JobState::Pending),
         progress_pct: row.progress_pct,
         progress_msg: row.progress_msg.clone(),
         tasks: None,
@@ -1382,7 +1382,7 @@ async fn sync_job_cancel(
         id,
         kind: String::new(),
         source_name: None,
-        state: "canceled".to_string(),
+        state: JobState::Canceled,
         progress_pct: None,
         progress_msg: None,
         tasks: None,

@@ -9,6 +9,7 @@ mod probe;
 mod qmd_index;
 mod render;
 mod source;
+mod source_type;
 mod synth;
 
 use std::path::{Path, PathBuf};
@@ -18,6 +19,7 @@ use clap::{Parser, Subcommand};
 use datalib_dag::subprocess::{
     ENV_DATA_ROOT, ENV_NOW, ENV_REFETCH_BLOBS, ENV_RESET_AND_REDOWNLOAD, ENV_STEP,
 };
+use datalib_dag::FailureKind;
 
 use crate::events::Emitter;
 
@@ -174,7 +176,7 @@ async fn main() {
                     }
                 }
             }
-            sig_emitter.outcome(&[], Some("cancelled"));
+            sig_emitter.outcome(&[], Some(FailureKind::Cancelled));
             std::process::exit(130);
         }
     });
@@ -248,7 +250,7 @@ async fn run(
                 data_root,
             )?;
             let res = download::run(&planned, data_root, now, control, emitter).await;
-            hints::emit_auth_hint_on_failure(emitter, planned.type_str, &res);
+            hints::emit_auth_hint_on_failure(emitter, planned.source_type, &res);
             res
         }
         Cmd::Render { source_type } => {
@@ -262,9 +264,9 @@ async fn run(
                 params,
                 data_root,
             )?;
-            let type_str = planned.type_str;
+            let source_type = planned.source_type;
             let res = render::run(planned, data_root, now, emitter).await;
-            hints::emit_auth_hint_on_failure(emitter, type_str, &res);
+            hints::emit_auth_hint_on_failure(emitter, source_type, &res);
             res
         }
         // Handled in `main` before the step machinery starts; see

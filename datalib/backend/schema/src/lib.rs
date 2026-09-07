@@ -10,6 +10,10 @@ extern crate self as datalib_schema;
 
 pub mod bulk;
 
+pub mod providers {
+    include!("providers.rs");
+}
+
 pub mod grid_rows {
     include!("grid_rows.rs");
     // Hand-written validating builder for the `GridRow` struct above.
