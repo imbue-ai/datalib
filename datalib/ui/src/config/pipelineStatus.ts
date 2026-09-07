@@ -1,7 +1,16 @@
 // What a pipeline row's Status column says, and why.
 
 import type { ConfiguredStep } from "@/config/sourceSteps";
-import type { DagRun, DagStep, DagStepProgress, Diagnostic, SyncJob, SyncTask } from "@/api";
+import type {
+  DagRun,
+  DagRunState,
+  DagStep,
+  DagStepProgress,
+  Diagnostic,
+  SyncJob,
+  SyncTask,
+  SyncTaskState,
+} from "@/api";
 import { formatStamp } from "@/config/timeFormat";
 
 /// What the pushed task board contributes to a row.
@@ -10,13 +19,32 @@ import { formatStamp } from "@/config/timeFormat";
 /// timestamp nor the error the row has to show, so a step going terminal is a
 /// signal to refetch rather than something to paint from here.
 export type Overlay = {
-  current_state: string | null;
+  current_state: DagRunState | null;
   progress: DagStepProgress | null;
 };
 
 /// Board states that mean "this step is finished, one way or another".
-/// Mirrors `task_state_for` in the backend's worker.
-const TERMINAL_BOARD = new Set(["done", "skipped", "not_selected", "failed", "blocked"]);
+/// Mirrors `TaskState::is_terminal` in the backend's worker.
+const TERMINAL_BOARD = new Set<SyncTaskState>([
+  "done",
+  "skipped",
+  "not_selected",
+  "failed",
+  "blocked",
+]);
+
+/// The board's word for a step, back in the runner's vocabulary — the
+/// inverse of `TaskState::for_run_state`. `todo` has no run state: it
+/// means the scheduler has not reached the step.
+const BOARD_TO_RUN_STATE: Record<SyncTaskState, DagRunState | null> = {
+  todo: null,
+  running: "running",
+  done: "succeeded",
+  skipped: "skipped_up_to_date",
+  not_selected: "not_selected",
+  failed: "failed",
+  blocked: "blocked",
+};
 
 /// Fold one pushed task board into per-step overlays.
 ///
@@ -34,7 +62,7 @@ export function pushedOverlay(
     if (TERMINAL_BOARD.has(t.state)) {
       // No progress: a finished step's last progress line is not news,
       // and `withOverlay` keeps whatever the fetch had.
-      out[t.id] = { current_state: t.state, progress: null };
+      out[t.id] = { current_state: BOARD_TO_RUN_STATE[t.state], progress: null };
       continue;
     }
     if (t.state !== "running") continue;

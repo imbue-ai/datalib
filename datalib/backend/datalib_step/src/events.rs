@@ -6,6 +6,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use datalib_dag::events::{Event, LogLevel};
+use datalib_dag::FailureKind;
 use datalib_etl::progress::{Progress, ProgressSink};
 
 /// What this step claims about one of its outputs: its content version
@@ -45,7 +46,11 @@ impl Emitter {
         }
     }
 
-    pub fn outcome(&self, outputs: &[OutputClaim], failure: Option<&str>) {
+    /// The final stdout line. `failure` classifies a non-zero exit;
+    /// the runner deserializes it straight back into a
+    /// [`FailureKind`], which is why it is that type here rather than a
+    /// word we spell ourselves.
+    pub fn outcome(&self, outputs: &[OutputClaim], failure: Option<FailureKind>) {
         let outs: Vec<serde_json::Value> = outputs
             .iter()
             .map(|o| {
@@ -59,7 +64,7 @@ impl Emitter {
         m.insert("event".into(), "outcome".into());
         m.insert("outputs".into(), outs.into());
         if let Some(f) = failure {
-            m.insert("failure".into(), f.into());
+            m.insert("failure".into(), f.as_str().into());
         }
         self.line(&serde_json::Value::Object(m));
     }

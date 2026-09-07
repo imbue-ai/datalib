@@ -16,6 +16,7 @@ use datalib_etl::layout::rendered_md_root;
 use datalib_etl::progress::Progress;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 
 use super::super::{
@@ -451,7 +452,7 @@ fn book_grid_row(
 ) -> Option<GridRow> {
     GridRow::builder()
         .uuid(bk_uuid.to_string())
-        .provider("perseus")
+        .provider(Provider::Perseus)
         .kind("Book")
         .source_label("Perseus")
         .when_ts(Some(synth_when_ts(&book.n, 0)))
@@ -492,7 +493,7 @@ fn chapter_grid_row(
     let ci_u: u32 = ci as u32;
     GridRow::builder()
         .uuid(ch_uuid.to_string())
-        .provider("perseus")
+        .provider(Provider::Perseus)
         .kind(format!("Chapter ({})", edition.id))
         .source_label("Perseus")
         .when_ts(Some(synth_when_ts(&book.n, ci)))
@@ -540,7 +541,7 @@ fn section_grid_row(
     };
     GridRow::builder()
         .uuid(sec_uuid.to_string())
-        .provider("perseus")
+        .provider(Provider::Perseus)
         .kind(format!("Section ({})", edition.id))
         .source_label("Perseus")
         .when_ts(Some(when_ts))

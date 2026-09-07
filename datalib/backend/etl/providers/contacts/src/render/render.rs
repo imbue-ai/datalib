@@ -15,6 +15,7 @@ use datalib_etl_contact_common::{
 
 use super::parse::{ParsedContact, ParsedContacts};
 use super::{addressbook_uuid, contact_uuid};
+use datalib_schema::providers::Provider;
 
 /// Bump when the rendered layout changes enough that every existing
 /// contact doc needs re-rendering. Bumped to 2 when contacts adopted the
@@ -35,7 +36,7 @@ pub fn render_all(
     seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderSummary> {
     let profile = ContactRenderProfile {
-        provider: "contacts",
+        provider: Provider::Contacts,
         source_label: humanize_source_label(source_name),
         contact_kind: "Contact".to_string(),
         render_version: RENDER_VERSION,

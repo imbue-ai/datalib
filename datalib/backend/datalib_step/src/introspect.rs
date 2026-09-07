@@ -39,12 +39,7 @@ use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_id::{entity_id_str, Scope};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
-
-/// The `grid_rows.provider` tag every measurement row carries. These
-/// rows are datalib talking about a source, not the upstream provider
-/// talking about its own data, and tagging them `slack` would put them
-/// in the same bucket as real Slack messages.
-pub const PROVIDER: &str = "datalib";
+use datalib_schema::providers::Provider;
 
 /// The `grid_rows.source_label` — the grid's Source column, and what
 /// `source:` filters on. One label for every source's measurements, so
@@ -75,7 +70,7 @@ pub struct Subject {
 impl Subject {
     fn uuid(&self, source_name: &str) -> String {
         entity_id_str(
-            PROVIDER,
+            Provider::Datalib.as_str(),
             Scope::SourceInstance(source_name),
             self.kind.as_str(),
             &self.path,
@@ -426,7 +421,7 @@ pub fn plan(
         rows.push(
             GridRow::builder()
                 .uuid(uuid.clone())
-                .provider(PROVIDER)
+                .provider(Provider::Datalib)
                 .kind(s.kind.label())
                 .source_label(SOURCE_LABEL)
                 .when_ts(Some(now.to_string()))

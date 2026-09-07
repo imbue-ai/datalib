@@ -4,8 +4,20 @@ use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
 /// What happened to the record this row is about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum Outcome {
     /// The record did not reach the index at all.
     Dropped,
@@ -18,17 +30,25 @@ pub enum Outcome {
 
 impl Outcome {
     pub fn as_str(self) -> &'static str {
-        match self {
-            Outcome::Dropped => "dropped",
-            Outcome::Nulled => "nulled",
-            Outcome::Ok => "ok",
-        }
+        self.into()
     }
 }
 
 /// Why one field or record is being reported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum Reason {
     /// The stored payload would not deserialize. → drop the record.
     Undeserializable,
@@ -50,14 +70,59 @@ pub enum Reason {
 
 impl Reason {
     pub fn as_str(self) -> &'static str {
-        match self {
-            Reason::Undeserializable => "undeserializable",
-            Reason::NoIdentity => "no_identity",
-            Reason::CoercionFailed => "coercion_failed",
-            Reason::UncoveredType => "uncovered_type",
-            Reason::DeliberateLoss => "deliberate_loss",
-            Reason::Noted => "noted",
-        }
+        self.into()
+    }
+}
+
+/// Which of the two things [`RenderProblemRow::scope_key`] holds — the
+/// sweep key's type, and so which `DELETE … WHERE scope_kind = ?` clears
+/// this row when its owner is reprocessed.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, strum::VariantArray,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum ScopeKind {
+    /// `scope_key` is the `markdown_uuid` of the document the record
+    /// belongs to. The usual case.
+    Markdown,
+    /// `scope_key` is the raw-store entity id, because the failure
+    /// happened before we knew which document the record was for.
+    Entity,
+}
+
+impl ScopeKind {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn parse(s: &str) -> Option<ScopeKind> {
+        s.parse().ok()
+    }
+}
+
+/// Which half of the projection noticed the problem. Distinguishes "the
+/// stored payload would not deserialize" from "the row would not
+/// validate", which are fixed in different places.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, strum::VariantArray,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum Stage {
+    /// Deserializing the stored payload.
+    Parse,
+    /// Projecting it to markdown.
+    Render,
+    /// Building the `grid_rows` row.
+    GridRow,
+}
+
+impl Stage {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn parse_str(s: &str) -> Option<Stage> {
+        s.parse().ok()
     }
 }
 
@@ -150,15 +215,14 @@ pub struct RenderProblemRow {
     /// id. This is the sweep key.
     #[col(sql = "VARCHAR(96)")]
     pub scope_key: String,
-    /// `markdown` or `entity`, saying which of the two `scope_key` is.
+    /// A [`ScopeKind`], as its `as_str`, saying which of the two
+    /// `scope_key` is.
     #[col(sql = "VARCHAR(16)")]
     pub scope_kind: String,
     /// The source that produced this, matching `markdowns.source_name`.
     #[col(sql = "VARCHAR(64)")]
     pub source_name: String,
-    /// `parse`, `render`, or `grid_row` — which half of the projection
-    /// noticed. Distinguishes "the payload would not deserialize" from
-    /// "the row would not validate".
+    /// A [`Stage`], as its `as_str`.
     #[col(sql = "VARCHAR(16)")]
     pub stage: String,
     /// [`Outcome`], as its `as_str`.
@@ -186,6 +250,7 @@ pub struct RenderProblemRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strum::VariantArray;
 
     #[test]
     fn sample_truncates_on_a_char_boundary_and_marks_the_cut() {
@@ -211,6 +276,28 @@ mod tests {
             "absent options stay out of the blob: {j}"
         );
         assert!(!j.contains("rule"), "{j}");
+    }
+
+    /// `Outcome` and `Reason` are written to SQL and to the problems
+    /// blob through two independent derives — strum's `as_str` and
+    /// serde. Two spellings of one value would make a sweep miss the
+    /// rows it is supposed to clear.
+    #[test]
+    fn as_str_matches_the_serde_spelling() {
+        for &v in Outcome::VARIANTS {
+            let json = serde_json::to_string(&v).unwrap();
+            assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
+        }
+        for &v in Reason::VARIANTS {
+            let json = serde_json::to_string(&v).unwrap();
+            assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
+        }
+        for &v in ScopeKind::VARIANTS {
+            assert_eq!(ScopeKind::parse(v.as_str()), Some(v));
+        }
+        for &v in Stage::VARIANTS {
+            assert_eq!(Stage::parse_str(v.as_str()), Some(v));
+        }
     }
 
     #[test]

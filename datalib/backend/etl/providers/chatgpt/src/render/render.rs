@@ -20,6 +20,7 @@ use super::ids;
 use super::parse::{
     shred, OAAttachmentRef, OAContentPartRow, OAMessageRow, ParsedChatGPTApi, ShreddedConversation,
 };
+use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v4: render via chat-common.
@@ -37,7 +38,7 @@ pub const RENDER_VERSION: u32 = 6;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "openai",
+        provider: Provider::Chatgpt,
         source_label: "ChatGPT".to_string(),
         chat_kind: "Chat".to_string(),
         // Per-message kind is always set via `kind_label`; this is only a

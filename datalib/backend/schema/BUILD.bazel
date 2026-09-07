@@ -10,6 +10,7 @@ rust_library(
         "src/grid_rows_builder.rs",
         "src/edges.rs",
         "src/markdowns.rs",
+        "src/providers.rs",
         "src/render_problems.rs",
         "src/source_cursors.rs",
         "src/measurements.rs",
@@ -26,6 +27,7 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
     ],
 )
 

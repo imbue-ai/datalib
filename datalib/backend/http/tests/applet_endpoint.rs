@@ -10,6 +10,7 @@ use datalib_http::frontend::frontend_dir;
 use datalib_http::sha256_hex;
 use datalib_http::ApiToken;
 use datalib_http::{router, AppState};
+use datalib_schema::providers::Provider;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -31,7 +32,7 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
     let mk = |uuid: String, index: Option<i64>, author: Option<&str>, text: &str, when: &str| {
         GridRow::builder()
             .uuid(uuid)
-            .provider("slack")
+            .provider(Provider::Slack)
             .kind(if index.is_some() {
                 "Slack Message"
             } else {

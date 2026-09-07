@@ -100,12 +100,14 @@ fn stable_source_url(v: Option<String>) -> Option<String> {
 /// stable and is most of what this golden is pinning. Same spirit as
 /// [`stable_source_url`]: keep the row, drop the part the environment
 /// decides.
-/// The `grid_rows.provider` the storage reports carry. Kept beside the
-/// two helpers that key off it rather than spelled out at each use.
-const PROVIDER_DATALIB: &str = "datalib";
+/// The `grid_rows.provider` the storage reports carry, from the enum
+/// that owns the spelling rather than repeated as a literal.
+fn provider_datalib() -> &'static str {
+    datalib_schema::providers::Provider::Datalib.as_str()
+}
 
 fn stable_text(provider: Option<&str>, text: &str) -> String {
-    if provider != Some(PROVIDER_DATALIB) {
+    if provider != Some(provider_datalib()) {
         return text.to_string();
     }
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -268,7 +270,7 @@ async fn snapshot_grid_rows_and_documents() {
     // carries the count.
     let (storage, grid_rows): (Vec<_>, Vec<_>) = grid_rows
         .into_iter()
-        .partition(|r| r["provider"] == json!(PROVIDER_DATALIB));
+        .partition(|r| r["provider"] == json!(provider_datalib()));
     let mut by_source_kind: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for r in &storage {
         let key = (

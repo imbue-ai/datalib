@@ -434,10 +434,9 @@ export type DagStep = {
   // runner's own state — so a run started from a terminal shows up here
   // exactly like one the app kicked off. Null when never reached.
   last_run: DagStepRun | null;
-  // What it is doing in the run currently in flight: "running",
-  // "succeeded", "blocked", … Null means the scheduler hasn't reached
-  // it, which reads as queued.
-  current_state: string | null;
+  // What it is doing in the run currently in flight. Null means the
+  // scheduler hasn't reached it, which reads as queued.
+  current_state: DagRunState | null;
   // How far into the current run, from the progress bus
   // (system/progress.sqlite). Null when the step has reported nothing —
   // which is not zero, and should read as a spinner rather than an
@@ -454,12 +453,26 @@ export type DagStepProgress = {
   updated_at: string;
 };
 
+// What a step is doing, or did, in one run — the runner's own
+// vocabulary (`RunState` in datalib/backend/dag/src/run_state.rs).
+// Keep the two in step: the backend writes these words into
+// system/dag_state.json and the UI switches on them.
+export type DagRunState =
+  | "running"
+  | "succeeded"
+  // Checked, and already up to date.
+  | "skipped_up_to_date"
+  // Outside this run's subgraph, so it was never considered.
+  | "not_selected"
+  // Something upstream failed, so this was not invoked.
+  | "blocked"
+  | "failed";
+
 export type DagStepRun = {
   started_at: string;
   finished_at: string | null;
-  // `succeeded` | `skipped_up_to_date` | `blocked` | `failed` |
-  // `not_selected`. Empty while running.
-  status: string;
+  // Empty while the step is still running.
+  status: DagRunState | "";
   attempts: number;
   error: string | null;
 };
@@ -605,14 +618,29 @@ export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
   return getJson<SyncSource[]>("/api/sync/sources", signal);
 }
 
-// One DAG task's state on a job's task board. `state` is one of
-// todo / running / done / skipped / not_selected / failed / blocked.
-// `skipped` = checked, already up to date. `not_selected` = outside
-// this run's subgraph, so it was never considered (a per-source sync
-// leaves most of the graph there).
+// One DAG task's state on a job's task board: the runner's
+// `DagRunState` with `todo` added for a step the scheduler has not
+// reached, and shorter words for two of the outcomes. The translation
+// lives in `TaskState::for_run_state`
+// (datalib/backend/http/src/worker.rs); keep this union in step with it.
+export type SyncTaskState =
+  // In the plan, not yet reached.
+  | "todo"
+  | "running"
+  // Ran to completion.
+  | "done"
+  // Checked, and already up to date.
+  | "skipped"
+  // Outside this run's subgraph, so it was never considered (a
+  // per-source sync leaves most of the graph here).
+  | "not_selected"
+  | "failed"
+  // Something upstream failed, so this was not invoked.
+  | "blocked";
+
 export type SyncTask = {
   id: string;
-  state: string;
+  state: SyncTaskState;
   detail?: string | null;
 };
 
@@ -828,10 +856,13 @@ export type ProbeReport = {
   notes: string[];
 };
 
+/// How one browser-login attempt is going. Mirrors `ConnectState` in
+/// datalib/backend/http/src/connect.rs.
+export type ConnectState = "running" | "ok" | "failed";
+
 export type ConnectAttempt = {
   id: string;
-  /// `running`, `ok`, `failed`.
-  status: string;
+  status: ConnectState;
   output: string;
 };
 

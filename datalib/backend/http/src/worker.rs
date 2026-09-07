@@ -8,8 +8,9 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use app_schema::sync_jobs::SyncJobRow;
+use app_schema::sync_jobs::{JobState, SyncJobRow};
 use datalib_core::repo::DynAppRepo;
+use datalib_dag::RunState;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -23,23 +24,67 @@ pub struct ProgressEvent {
     pub id: String,
     pub kind: String,
     pub source_name: Option<String>,
-    pub state: String,
+    pub state: JobState,
     pub progress_pct: Option<f64>,
     pub progress_msg: Option<String>,
     /// Per-task board, in plan order. `None` until the runner has
     /// announced its plan.
-    pub tasks: Option<Vec<TaskState>>,
+    pub tasks: Option<Vec<Task>>,
 }
 
-/// One DAG task's state as shown to the UI. `state` is one of
-/// `todo` / `running` / `done` / `skipped` / `not_selected` / `failed`
-/// / `blocked`. `skipped` means "checked, and already up to date";
-/// `not_selected` means "outside this run's subgraph, never
-/// considered" — a per-source sync leaves most of the graph there.
+/// One DAG task's state as shown to the UI: the runner's [`RunState`]
+/// with `todo` added for a task the scheduler has not reached, and with
+/// `succeeded` / `skipped_up_to_date` renamed to the shorter words the
+/// board displays. The board is the only place these two vocabularies
+/// meet, so [`TaskState::for_run_state`] is the only translation.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::IntoStaticStr, strum::VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum TaskState {
+    /// In the plan, not yet reached.
+    Todo,
+    Running,
+    /// Ran to completion.
+    Done,
+    /// Checked, and already up to date.
+    Skipped,
+    /// Outside this run's subgraph, so it was never considered — a
+    /// per-source sync leaves most of the graph here.
+    NotSelected,
+    Failed,
+    /// Something upstream failed, so this was not invoked.
+    Blocked,
+}
+
+impl TaskState {
+    /// How the board shows a step the runner reported. A status this
+    /// build cannot name is shown as `Failed`: the run said something
+    /// happened and we would rather flag it than quietly drop it.
+    fn for_run_state(status: Option<RunState>) -> TaskState {
+        match status {
+            Some(RunState::Running) => TaskState::Running,
+            Some(RunState::Succeeded) => TaskState::Done,
+            Some(RunState::SkippedUpToDate) => TaskState::Skipped,
+            Some(RunState::NotSelected) => TaskState::NotSelected,
+            Some(RunState::Blocked) => TaskState::Blocked,
+            Some(RunState::Failed) | None => TaskState::Failed,
+        }
+    }
+
+    /// Whether the task is finished, for the fraction the progress bar
+    /// draws.
+    const fn is_terminal(self) -> bool {
+        !matches!(self, TaskState::Todo | TaskState::Running)
+    }
+}
+
+/// One row of the task board the UI draws.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct TaskState {
+pub struct Task {
     pub id: String,
-    pub state: String,
+    pub state: TaskState,
     /// Live sub-progress for running tasks ("123/456 fetching …");
     /// empty otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,21 +107,8 @@ struct TaskBoard {
     tasks: HashMap<String, TaskEntry>,
 }
 
-fn task_state_for(status: &str) -> &'static str {
-    match status {
-        "succeeded" => "done",
-        "skipped_up_to_date" => "skipped",
-        "not_selected" => "not_selected",
-        "blocked" => "blocked",
-        _ => "failed",
-    }
-}
-
-#[derive(Default)]
 struct TaskEntry {
-    /// `todo` / `running` / `done` / `skipped` / `not_selected` /
-    /// `failed` / `blocked`.
-    state: String,
+    state: TaskState,
     total: Option<u64>,
     pos: u64,
     msg: Option<String>,
@@ -89,8 +121,10 @@ impl TaskBoard {
             self.tasks.insert(
                 id.to_string(),
                 TaskEntry {
-                    state: "todo".into(),
-                    ..Default::default()
+                    state: TaskState::Todo,
+                    total: None,
+                    pos: 0,
+                    msg: None,
                 },
             );
         }
@@ -117,12 +151,15 @@ impl TaskBoard {
             }
             ("step_start", Some(id)) => {
                 let e = self.entry(id);
-                e.state = "running".into();
+                e.state = TaskState::Running;
             }
             ("step_finish", Some(id)) => {
-                let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                let status = v
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .and_then(RunState::parse);
                 let e = self.entry(id);
-                e.state = task_state_for(status).into();
+                e.state = TaskState::for_run_state(status);
                 e.msg = None;
             }
             ("progress_length", Some(id)) => {
@@ -152,7 +189,7 @@ impl TaskBoard {
                             continue;
                         };
                         let e = self.entry(id);
-                        e.state = task_state_for(status).into();
+                        e.state = TaskState::for_run_state(RunState::parse(status));
                     }
                 }
             }
@@ -160,12 +197,12 @@ impl TaskBoard {
         }
     }
 
-    fn snapshot(&self) -> Vec<TaskState> {
+    fn snapshot(&self) -> Vec<Task> {
         self.order
             .iter()
             .filter_map(|id| {
                 let e = self.tasks.get(id)?;
-                let detail = if e.state == "running" {
+                let detail = if e.state == TaskState::Running {
                     let counts = e.total.map(|t| format!("{}/{}", e.pos, t));
                     match (counts, &e.msg) {
                         (Some(c), Some(m)) => Some(format!("{c} {m}")),
@@ -176,9 +213,9 @@ impl TaskBoard {
                 } else {
                     None
                 };
-                Some(TaskState {
+                Some(Task {
                     id: id.clone(),
-                    state: e.state.clone(),
+                    state: e.state,
                     detail,
                 })
             })
@@ -191,20 +228,12 @@ impl TaskBoard {
     /// so the row alone can rebuild the cell bar after a refetch.
     /// `(None, None, [])` until the plan is known, so the UI shows an
     /// indeterminate bar meanwhile.
-    fn render(&self) -> (Option<f64>, Option<String>, Vec<TaskState>) {
+    fn render(&self) -> (Option<f64>, Option<String>, Vec<Task>) {
         let tasks = self.snapshot();
         if tasks.is_empty() {
             return (None, None, tasks);
         }
-        let terminal = tasks
-            .iter()
-            .filter(|t| {
-                matches!(
-                    t.state.as_str(),
-                    "done" | "skipped" | "not_selected" | "failed" | "blocked"
-                )
-            })
-            .count();
+        let terminal = tasks.iter().filter(|t| t.state.is_terminal()).count();
         let pct = terminal as f64 / tasks.len() as f64;
         let msg = serde_json::json!({"v": 1, "tasks": tasks}).to_string();
         (Some(pct), Some(msg), tasks)
@@ -213,7 +242,11 @@ impl TaskBoard {
     fn failed_ids(&self) -> Vec<String> {
         self.order
             .iter()
-            .filter(|id| self.tasks.get(*id).is_some_and(|e| e.state == "failed"))
+            .filter(|id| {
+                self.tasks
+                    .get(*id)
+                    .is_some_and(|e| e.state == TaskState::Failed)
+            })
             .cloned()
             .collect()
     }
@@ -339,14 +372,14 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
                 if let Err(e) = run_job(&repo, &cfg, job).await {
                     eprintln!("worker: job {id} errored: {e:#}");
                     let msg = format!("{e:#}");
-                    let _ = repo.finish_job(&id, "failed", Some(&msg)).await;
+                    let _ = repo.finish_job(&id, JobState::Failed, Some(&msg)).await;
                     // Minimal terminal event so the UI stops showing it as
                     // active; it'll refetch the row for the full error.
                     let _ = cfg.progress_tx.send(ProgressEvent {
                         id,
                         kind: String::new(),
                         source_name: None,
-                        state: "failed".to_string(),
+                        state: JobState::Failed,
                         progress_pct: None,
                         progress_msg: Some(msg),
                         tasks: None,
@@ -365,16 +398,16 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
 fn emit(
     tx: &ProgressTx,
     job: &SyncJobRow,
-    state: &str,
+    state: JobState,
     pct: Option<f64>,
     msg: Option<&str>,
-    tasks: Option<Vec<TaskState>>,
+    tasks: Option<Vec<Task>>,
 ) {
     let _ = tx.send(ProgressEvent {
         id: job.id.clone(),
         kind: job.kind.clone(),
         source_name: job.source_name.clone(),
-        state: state.to_string(),
+        state,
         progress_pct: pct,
         progress_msg: msg.map(str::to_string),
         tasks,
@@ -454,7 +487,7 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
     emit(
         &cfg.progress_tx,
         &job,
-        "running",
+        JobState::Running,
         None,
         Some(&starting),
         None,
@@ -503,7 +536,7 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
             emit(
                 &cfg.progress_tx,
                 &job,
-                "running",
+                JobState::Running,
                 pct,
                 msg.as_deref(),
                 Some(tasks),
@@ -516,7 +549,7 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
         match term_sent {
             None => {
                 if let Ok(Some(row)) = repo.get_job(&job.id).await {
-                    if row.state == "canceled" {
+                    if row.job_state() == Some(JobState::Canceled) {
                         terminate(pid);
                         term_sent = Some(Instant::now());
                     }
@@ -544,12 +577,12 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
         repo.update_job_progress(&job.id, pct, msg.as_deref())
             .await
             .ok();
-        repo.finish_job(&job.id, "canceled", Some("canceled by user"))
+        repo.finish_job(&job.id, JobState::Canceled, Some("canceled by user"))
             .await?;
         emit(
             &cfg.progress_tx,
             &job,
-            "canceled",
+            JobState::Canceled,
             pct,
             Some("canceled by user"),
             Some(tasks),
@@ -560,11 +593,11 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
         repo.update_job_progress(&job.id, Some(1.0), msg.as_deref())
             .await
             .ok();
-        repo.finish_job(&job.id, "done", None).await?;
+        repo.finish_job(&job.id, JobState::Done, None).await?;
         emit(
             &cfg.progress_tx,
             &job,
-            "done",
+            JobState::Done,
             Some(1.0),
             msg.as_deref(),
             Some(tasks),
@@ -587,11 +620,12 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
         repo.update_job_progress(&job.id, pct, msg.as_deref())
             .await
             .ok();
-        repo.finish_job(&job.id, "failed", Some(&summary)).await?;
+        repo.finish_job(&job.id, JobState::Failed, Some(&summary))
+            .await?;
         emit(
             &cfg.progress_tx,
             &job,
-            "failed",
+            JobState::Failed,
             pct,
             Some(&summary),
             Some(tasks),
@@ -641,6 +675,7 @@ fn flush_segment(seg: &[u8], log: &Mutex<File>, board: &Mutex<TaskBoard>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strum::VariantArray;
 
     fn feed(board: &mut TaskBoard, lines: &[&str]) {
         for l in lines {
@@ -666,9 +701,9 @@ mod tests {
         let (pct, msg, tasks) = b.render();
         assert_eq!(pct, Some(0.0));
         assert_eq!(tasks.len(), 3);
-        assert_eq!(tasks[0].state, "running");
+        assert_eq!(tasks[0].state, TaskState::Running);
         assert_eq!(tasks[0].detail.as_deref(), Some("3/10 conversations.list"));
-        assert_eq!(tasks[1].state, "todo");
+        assert_eq!(tasks[1].state, TaskState::Todo);
         // The stored msg is self-contained JSON the UI can rebuild from.
         let v: serde_json::Value = serde_json::from_str(&msg.unwrap()).unwrap();
         assert_eq!(v["v"], 1);
@@ -685,10 +720,10 @@ mod tests {
         );
         let (pct, _, tasks) = b.render();
         assert_eq!(pct, Some(1.0));
-        assert_eq!(tasks[0].state, "done");
+        assert_eq!(tasks[0].state, TaskState::Done);
         assert_eq!(tasks[0].detail, None, "terminal tasks carry no detail");
-        assert_eq!(tasks[1].state, "failed");
-        assert_eq!(tasks[2].state, "blocked");
+        assert_eq!(tasks[1].state, TaskState::Failed);
+        assert_eq!(tasks[2].state, TaskState::Blocked);
         assert_eq!(b.failed_ids(), vec!["slack.render".to_string()]);
     }
 
@@ -713,8 +748,8 @@ mod tests {
             ],
         );
         let tasks = b.snapshot();
-        assert_eq!(tasks[0].state, "failed");
-        assert_eq!(tasks[1].state, "skipped");
+        assert_eq!(tasks[0].state, TaskState::Failed);
+        assert_eq!(tasks[1].state, TaskState::Skipped);
     }
 
     /// `not_selected` (a step outside a `--sync` run's subgraph) must
@@ -730,12 +765,47 @@ mod tests {
             feed(&mut b, &[r#"{"event":"run_plan","steps":["a"]}"#, line]);
             assert_eq!(
                 b.snapshot()[0].state,
-                "not_selected",
-                "unmapped status reads as failed: {line}"
+                TaskState::NotSelected,
+                "an unmapped status reads as failed: {line}"
             );
         }
         // And it counts as terminal, so a sync of one source doesn't
         // sit at "in progress" forever because of the steps it skipped.
-        assert_eq!(task_state_for("not_selected"), "not_selected");
+        assert!(TaskState::NotSelected.is_terminal());
+    }
+
+    /// Every task state the board can produce has to serialize as the
+    /// word the UI switches on. serde and strum spell these
+    /// independently, so this is a real check, not a tautology.
+    #[test]
+    fn task_state_serializes_as_the_word_the_ui_switches_on() {
+        for &v in TaskState::VARIANTS {
+            let json = serde_json::to_string(&v).unwrap();
+            let strum: &'static str = v.into();
+            assert_eq!(json, format!("\"{strum}\""), "{v:?}");
+        }
+    }
+
+    /// The runner's vocabulary and the board's are different words for
+    /// the same six facts, and every one of them must map to a state
+    /// that is not `Failed` unless the run actually failed.
+    #[test]
+    fn every_run_state_maps_to_a_distinct_task_state() {
+        let mapped: Vec<TaskState> = RunState::VARIANTS
+            .iter()
+            .map(|&s| TaskState::for_run_state(Some(s)))
+            .collect();
+        assert_eq!(
+            mapped,
+            vec![
+                TaskState::Running,
+                TaskState::Done,
+                TaskState::Skipped,
+                TaskState::NotSelected,
+                TaskState::Blocked,
+                TaskState::Failed,
+            ]
+        );
+        assert_eq!(TaskState::for_run_state(None), TaskState::Failed);
     }
 }

@@ -17,6 +17,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::section::msg_div_open;
 use datalib_etl::title::Title;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 use sha2::{Digest, Sha256};
 
@@ -30,7 +31,7 @@ use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 pub struct RenderProfile {
     /// On-disk subdir under `rendered_md/<provider>/<source_name>/…`
     /// and the value of the markdown's `provider:` frontmatter key.
-    pub provider: &'static str,
+    pub provider: Provider,
     /// The `source_label` column on every grid_row this provider
     /// emits. Beeper sets this to a composite like `"Beeper:Signal"`;
     /// Signal/WhatsApp set it to plain `"Signal"` / `"WhatsApp"`.
@@ -940,7 +941,7 @@ mod tests {
     #[test]
     fn renders_basic_text_item_with_reaction() {
         let profile = RenderProfile {
-            provider: "test",
+            provider: Provider::Test,
             source_label: "Test".to_string(),
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
@@ -979,7 +980,7 @@ mod tests {
             ..chat.buckets[0].items[0].clone()
         };
         let profile = RenderProfile {
-            provider: "test",
+            provider: Provider::Test,
             source_label: "Test".to_string(),
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
@@ -995,7 +996,7 @@ mod tests {
     #[test]
     fn chat_source_url_surfaces_in_title_and_chat_grid_row() {
         let profile = RenderProfile {
-            provider: "test",
+            provider: Provider::Test,
             source_label: "Test".to_string(),
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
@@ -1044,7 +1045,7 @@ mod tests {
     #[test]
     fn title_override_replaces_derived_heading() {
         let profile = RenderProfile {
-            provider: "test",
+            provider: Provider::Test,
             source_label: "Test".to_string(),
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
@@ -1075,7 +1076,7 @@ mod tests {
     #[test]
     fn per_message_source_url_surfaces_in_header_and_grid_row() {
         let profile = RenderProfile {
-            provider: "test",
+            provider: Provider::Test,
             source_label: "Test".to_string(),
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
@@ -1115,7 +1116,7 @@ mod tests {
     #[test]
     fn kind_label_overrides_message_kind_in_grid_row() {
         let profile = RenderProfile {
-            provider: "test",
+            provider: Provider::Test,
             source_label: "Test".to_string(),
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
@@ -1141,7 +1142,7 @@ mod tests {
 
     fn test_profile() -> RenderProfile {
         RenderProfile {
-            provider: "test",
+            provider: Provider::Test,
             source_label: "Test".to_string(),
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),
@@ -1242,7 +1243,7 @@ mod tests {
     #[test]
     fn org_columns_populate_every_grid_row() {
         let profile = RenderProfile {
-            provider: "test",
+            provider: Provider::Test,
             source_label: "Test".to_string(),
             chat_kind: "Test Chat".to_string(),
             message_kind: "Test Message".to_string(),

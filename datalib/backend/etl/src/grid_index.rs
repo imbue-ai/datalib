@@ -1071,6 +1071,7 @@ mod insert_round_trip_tests {
     //! column gets a distinct sentinel and nothing may read back NULL.
     use super::*;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::providers::Provider;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::{Column, Row, ValueRef};
     use std::str::FromStr;
@@ -1081,7 +1082,7 @@ mod insert_round_trip_tests {
     fn fully_populated_row() -> GridRow {
         GridRow {
             uuid: "row-everything".into(),
-            provider: "claude".into(),
+            provider: Provider::Claude.as_str().into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
             // Offset-bearing and parseable, so the two `#[derived]` columns
@@ -1211,11 +1212,12 @@ mod id_claim_tests {
     //! the batch up with an error naming neither source. These pin both.
     use super::*;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::providers::Provider;
 
     fn row(uuid: &str, markdown_uuid: &str) -> GridRow {
         GridRow {
             uuid: uuid.into(),
-            provider: "claude".into(),
+            provider: Provider::Claude.as_str().into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
             when_ts: None,
@@ -1334,6 +1336,7 @@ mod write_lock_tests {
     //! from the same code path production uses.
     use super::*;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::providers::Provider;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
     use std::sync::Arc as StdArc;
@@ -1345,7 +1348,7 @@ mod write_lock_tests {
         // the DELETE + insert path. We don't care about content.
         let row = GridRow {
             uuid: uuid.clone(),
-            provider: "claude".into(),
+            provider: Provider::Claude.as_str().into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
             when_ts: Some("2026-06-02T20:00:00+00:00".into()),
@@ -1779,6 +1782,7 @@ mod source_cursor_tests {
     use crate::grid_index::{build_grid_index, init_schema, load_source_cursors, RenderedMarkdown};
     use crate::indexed_markdown::IndexedMarkdownStore;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::providers::Provider;
 
     async fn index_pool(root: &Path) -> SqlitePool {
         let db = root.join("unified_index/grid/db.doltlite_db");
@@ -1799,7 +1803,7 @@ mod source_cursor_tests {
     fn doc(root: &Path, source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
         let row = GridRow::builder()
             .uuid(uuid)
-            .provider("test")
+            .provider(Provider::Test)
             .kind("Test")
             .source_label("Test")
             .conversation_uuid(uuid)

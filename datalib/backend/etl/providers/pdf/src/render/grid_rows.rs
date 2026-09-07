@@ -3,9 +3,10 @@
 use std::path::Path;
 
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::providers::Provider;
 use uuid::Uuid;
 
-pub const PROVIDER: &str = "pdf";
+pub const PROVIDER: Provider = Provider::Pdf;
 pub const SOURCE_LABEL: &str = "PDF";
 pub const KIND_DOCUMENT: &str = "PDF Document";
 pub const KIND_PAGE: &str = "PDF Page";
@@ -114,7 +115,7 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
 
     rows.push(GridRow {
         uuid: doc_uuid.clone(),
-        provider: PROVIDER.into(),
+        provider: PROVIDER.as_str().into(),
         kind: KIND_DOCUMENT.into(),
         source_label: SOURCE_LABEL.into(),
         when_ts: when.map(str::to_string),
@@ -158,7 +159,7 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         let uuid = page_uuid(meta.blake3, *number);
         rows.push(GridRow {
             uuid: uuid.clone(),
-            provider: PROVIDER.into(),
+            provider: PROVIDER.as_str().into(),
             kind: KIND_PAGE.into(),
             source_label: SOURCE_LABEL.into(),
             when_ts: when.map(str::to_string),

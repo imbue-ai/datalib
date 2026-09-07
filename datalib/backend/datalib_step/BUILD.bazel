@@ -72,10 +72,10 @@ rust_binary(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
-        "@datalib_crates//:walkdir",
-    ],
+        "@datalib_crates//:walkdir",    ],
 )
 
 rust_test(

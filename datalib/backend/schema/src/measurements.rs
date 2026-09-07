@@ -24,8 +24,20 @@ pub const DOC_KIND: &str = "storage";
 /// This is the `upstream_entity_kind` component of the measurement row's
 /// id, so the strings are load-bearing: renaming a variant's `as_str`
 /// re-keys every row it ever produced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum MeasurementKind {
     /// The source's whole output tree — every byte under `<name>/`,
     /// including stores, rendered markdown and anything else that
@@ -44,11 +56,13 @@ pub enum MeasurementKind {
 
 impl MeasurementKind {
     pub fn as_str(self) -> &'static str {
-        match self {
-            MeasurementKind::Tree => "tree",
-            MeasurementKind::Store => "store",
-            MeasurementKind::Table => "table",
-        }
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know — a row written
+    /// by a newer one.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
     }
 
     /// The `grid_rows.kind` display label — what the grid's Type column
@@ -110,12 +124,29 @@ mod tests {
 
     /// The id-bearing string and the display label are allowed to
     /// differ, and one of them is allowed to change. Pin the one that
-    /// is not: `as_str` is a component of every measurement row's uuid.
+    /// is not: `as_str` is a component of every measurement row's uuid,
+    /// so a rename here silently re-keys every row it ever produced.
     #[test]
     fn the_id_bearing_names_are_pinned() {
         assert_eq!(MeasurementKind::Tree.as_str(), "tree");
         assert_eq!(MeasurementKind::Store.as_str(), "store");
         assert_eq!(MeasurementKind::Table.as_str(), "table");
+    }
+
+    /// strum and serde are independent derives producing independent
+    /// strings, so their agreeing is a real check rather than a
+    /// tautology — see AGENTS.md, "Name a closed set of strings".
+    #[test]
+    fn strum_and_serde_agree_on_every_variant() {
+        for &k in <MeasurementKind as strum::VariantArray>::VARIANTS {
+            let via_serde = serde_json::to_string(&k).expect("serialize");
+            assert_eq!(
+                via_serde.trim_matches('"'),
+                k.as_str(),
+                "serde and strum disagree about {k:?}"
+            );
+            assert_eq!(MeasurementKind::parse(k.as_str()), Some(k));
+        }
     }
 
     #[test]
