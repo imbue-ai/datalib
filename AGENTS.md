@@ -34,6 +34,13 @@ are relative to the repo root.
   doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
+- [`docs/dev/streaming_steps_plan.md`](docs/dev/streaming_steps_plan.md)
+  — *plan*, nothing built: how to build the above, measured against
+  the tree. Read it before touching how any consumer reads a store —
+  its §"The hazard" is the one to know, because the cursor scans are
+  already safe under a live writer and every *content* read is not.
+  It also inventories what already exists (more than the proposal
+  above implies) and overturns two of that proposal's conclusions.
 - [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs)
   — **read before changing how a config is validated**: why the loader
   returns a list of diagnostics rather than an `Err`, and what
