@@ -13,6 +13,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::download::db::{block_on_load_all, db_path_for, LoadedRaw};
+use crate::download::schema_raw::mr_pk_recipe;
 
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_MR: &str = "merge_request";
@@ -96,11 +97,33 @@ pub struct NoteRow {
 #[derive(Debug, Default, Clone)]
 pub struct ParsedGitlabApi {
     pub self_identity: Option<GitlabSelfIdentity>,
+    /// The MRs to render this pass — narrowed to the buckets the diff
+    /// named, or every MR on a cold start.
     pub merge_requests: Vec<MergeRequestRow>,
     pub notes: Vec<NoteRow>,
+    /// MRs the diff reported unchanged, so this run skipped them.
+    pub docs_skipped: usize,
+    pub scan: ScanResult,
+    /// Buckets the diff named whose `merge_requests` row is gone. Empty on
+    /// a cold start, which looks at every bucket and so has nothing to
+    /// compare against.
+    pub vanished_buckets: Vec<String>,
 }
 
-pub fn parse_api_dir(path: &Path) -> Result<ParsedGitlabApi> {
+/// Result of the `dolt_diff` scan, carried alongside the parsed bag so
+/// render can advance the cursor and log the timing.
+#[derive(Debug, Clone, Default)]
+pub struct ScanResult {
+    /// `Some(set)` → render only these `"{project}!{iid}"` buckets.
+    /// `None` → cold start: render everything.
+    pub changed_buckets: Option<std::collections::HashSet<String>>,
+    pub new_head: Option<String>,
+    pub scan_elapsed: Option<std::time::Duration>,
+}
+
+/// Parse for render, narrowed by `dolt_diff` when a render cursor says
+/// where the last run got to. `None` renders everything.
+pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedGitlabApi> {
     let db_path = db_path_for(path);
     if !db_path.exists() {
         // No store: this source has never been downloaded. That is
@@ -112,8 +135,102 @@ pub fn parse_api_dir(path: &Path) -> Result<ParsedGitlabApi> {
     }
     let raw = block_on_load_all(&db_path)
         .with_context(|| format!("load gitlab db {}", db_path.display()))?;
-    Ok(parse_loaded(raw))
+    let mut parsed = parse_loaded(raw);
+
+    let scan = block_on_scan(&db_path, last_render_hash)?;
+    if let Some(changed) = scan.changed_buckets.as_ref() {
+        let before = parsed.merge_requests.len();
+        parsed
+            .merge_requests
+            .retain(|mr| changed.contains(&mr_pk_recipe(&mr.project_full_path, mr.mr_iid)));
+        parsed.docs_skipped = before.saturating_sub(parsed.merge_requests.len());
+        // Notes follow their MR: one left attached to an MR this pass is
+        // not rendering would be grouped into a document nobody emits.
+        parsed
+            .notes
+            .retain(|n| changed.contains(&mr_pk_recipe(&n.project_full_path, n.mr_iid)));
+        parsed.vanished_buckets = block_on_vanished(&db_path, changed)?;
+    }
+    parsed.scan = scan;
+    Ok(parsed)
 }
+
+fn block_on_scan(db_path: &Path, last_render_hash: Option<&str>) -> Result<ScanResult> {
+    let path = db_path.to_path_buf();
+    let last = last_render_hash.map(str::to_string);
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            let pool = open_ro(&path).await?;
+            let scan = datalib_etl::doltlite_raw::scan_buckets(
+                &pool,
+                last.as_deref(),
+                &datalib_etl::doltlite_raw::DiffScanSpec {
+                    // `self_identity` is not read by render, so a change to
+                    // it fans out to nothing.
+                    global_fanout_tables: &[],
+                    bucket_query: BUCKET_QUERY,
+                },
+            )
+            .await?;
+            pool.close().await;
+            Ok::<_, anyhow::Error>(ScanResult {
+                changed_buckets: scan.changed_buckets,
+                new_head: scan.new_head,
+                scan_elapsed: scan.scan_elapsed,
+            })
+        })
+    })
+}
+
+fn block_on_vanished(
+    db_path: &Path,
+    changed: &std::collections::HashSet<String>,
+) -> Result<Vec<String>> {
+    let path = db_path.to_path_buf();
+    let changed = changed.clone();
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            let pool = open_ro(&path).await?;
+            let gone = datalib_etl::doltlite_raw::buckets_without_rows(
+                &pool,
+                &changed,
+                &[("merge_requests", "id")],
+            )
+            .await?;
+            pool.close().await;
+            Ok::<_, anyhow::Error>(gone)
+        })
+    })
+}
+
+async fn open_ro(db_path: &Path) -> Result<sqlx::SqlitePool> {
+    use std::str::FromStr;
+    let opts =
+        sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+            .read_only(true);
+    sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .with_context(|| format!("open gitlab doltlite for render {}", db_path.display()))
+}
+
+/// An MR's document is its own row plus its discussions, so either moving
+/// re-renders it. `discussions` carries `(project_full_path, mr_iid)`,
+/// which composes the same key `merge_requests.id` already holds.
+const BUCKET_QUERY: &str = "
+    SELECT DISTINCT bucket FROM (
+        SELECT coalesce(to_id, from_id) AS bucket
+          FROM dolt_diff_merge_requests
+         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+        UNION
+        SELECT coalesce(to_project_full_path, from_project_full_path) || '!' ||
+               coalesce(to_mr_iid, from_mr_iid)
+          FROM dolt_diff_discussions
+         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+    )
+    WHERE bucket IS NOT NULL
+";
 
 pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
     let mut out = ParsedGitlabApi::default();
@@ -294,7 +411,7 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse_api_dir(Path::new("/this/does/not/exist")).unwrap();
+        let parsed = parse_api_dir(Path::new("/this/does/not/exist"), None).unwrap();
         assert!(parsed.merge_requests.is_empty());
         assert!(parsed.notes.is_empty());
         assert!(parsed.self_identity.is_none());
