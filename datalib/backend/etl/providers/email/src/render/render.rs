@@ -27,7 +27,7 @@ use datalib_schema::providers::Provider;
 ///     `docs/dev/data_architecture_parse_and_render.md` §6. Malformed
 ///     `Date` headers are common in real mail, so this changes real
 ///     output and stale docs must be re-rendered.
-pub const RENDER_VERSION: u32 = 4;
+pub const RENDER_VERSION: u32 = 5;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the

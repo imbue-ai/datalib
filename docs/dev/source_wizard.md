@@ -668,7 +668,7 @@ Two things I had wrong. First, **latchkey picks the service by matching
 the request URL against the service's `baseApiUrls`** — not by any name
 we pass it. `etl/src/http.rs` shells out to `latchkey curl <url>` and
 latchkey resolves from there; the string providers pass to
-`HttpRequest::get("jmap", …)` is our own tag for logging and
+`HttpRequest::get(HttpService::Jmap, …)` is our own tag for logging and
 impersonation routing, nothing more. The email provider's Gmail module
 says so in its header: *"it routes by URL host"*.
 

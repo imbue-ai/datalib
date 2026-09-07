@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{cas_path_for, BlobCas};
-use datalib_etl::http::{latchkey_curl, HttpRequest};
+use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService};
 use datalib_etl::progress::Progress;
 use serde::Serialize;
 use serde_json::Value;
@@ -30,7 +30,7 @@ const PHOTO_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
 /// browser User-Agent. Both download and [`crate::synthesize`] build
 /// requests through this so playback keys match.
 pub fn photo_request(url: &str) -> HttpRequest {
-    HttpRequest::get("linkedin", url)
+    HttpRequest::get(HttpService::Linkedin, url)
         .plain()
         .header("User-Agent", PHOTO_UA)
 }

@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, LatchkeySettings};
+use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const BASE: &str = "https://www.notion.so/api/v3";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(180);
@@ -66,7 +66,7 @@ impl NotionUnofficialClient {
         // 429 / 5xx retry (with `Retry-After` / backoff) is handled centrally
         // in `latchkey_curl`; this issues the request once and parses the
         // definitive response.
-        let req = HttpRequest::post_json("notion_unofficial", &url, payload)
+        let req = HttpRequest::post_json(HttpService::NotionUnofficial, &url, payload)
             .header("Accept", "application/json")
             .latchkey(self.latchkey.clone())
             .timeout(LATCHKEY_TIMEOUT);

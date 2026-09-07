@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use datalib_etl::event_store::load_latest_by_key;
-use datalib_etl::http::HttpRequest;
+use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
@@ -27,7 +27,7 @@ impl GithubSynth {
 }
 
 fn req_get(url: &str) -> HttpRequest {
-    HttpRequest::get("github", url)
+    HttpRequest::get(HttpService::Github, url)
 }
 
 fn pr_repo_num(rec: &Value) -> Option<(String, u64)> {
