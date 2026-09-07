@@ -11,7 +11,7 @@ use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::events;
 use datalib_etl::http::{
     default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
-    HttpResponse, LatchkeySettings, Retryability, IMPERSONATE_MARKER_HEADER,
+    HttpResponse, HttpService, LatchkeySettings, Retryability, IMPERSONATE_MARKER_HEADER,
 };
 use datalib_etl::latchkey::latchkey_curl_command;
 
@@ -81,7 +81,7 @@ async fn call_slack_once(
     latchkey: &LatchkeySettings,
 ) -> Result<Value, SlackError> {
     let url = build_url(method, params);
-    let req = HttpRequest::get("slack", &url)
+    let req = HttpRequest::get(HttpService::Slack, &url)
         .latchkey(latchkey.clone())
         .timeout(LATCHKEY_TIMEOUT);
     // Rate-limit (429 + the HTTP-200 `ratelimited` body) and transient

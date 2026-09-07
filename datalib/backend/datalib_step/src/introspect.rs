@@ -36,7 +36,7 @@ use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 
 use datalib_etl::grid_index::RenderedMarkdown;
-use datalib_id::{entity_id_str, Scope};
+use datalib_id::{entity_id_str, IdNamespace, Scope};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
 use datalib_schema::providers::Provider;
@@ -70,7 +70,7 @@ pub struct Subject {
 impl Subject {
     fn uuid(&self, source_name: &str) -> String {
         entity_id_str(
-            Provider::Datalib.as_str(),
+            IdNamespace::Datalib,
             Scope::SourceInstance(source_name),
             self.kind.as_str(),
             &self.path,
@@ -528,8 +528,16 @@ mod tests {
             .unwrap()
             .expect("a measured source");
         let row = &m.doc.rows[0];
+        // The stored `provider` tag is parsed back into the namespace
+        // rather than assumed: that the two spell the same thing is
+        // part of what makes the backpointer usable, and it would
+        // otherwise be an unchecked coincidence between two enums.
+        let namespace: IdNamespace = row
+            .provider
+            .parse()
+            .expect("the stored provider tag names an id namespace");
         let recomputed = entity_id_str(
-            &row.provider,
+            namespace,
             Scope::SourceInstance(row.upstream_scope.as_deref().unwrap()),
             row.upstream_entity_kind.as_deref().unwrap(),
             row.upstream_id.as_deref().unwrap(),

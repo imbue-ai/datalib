@@ -9,4 +9,5 @@ name = "datalib_id"
 path = "src/lib.rs"
 
 [dependencies]
+strum = { workspace = true }
 uuid = { workspace = true }

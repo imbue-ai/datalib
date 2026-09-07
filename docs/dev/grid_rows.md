@@ -117,13 +117,19 @@ code is right and this table is stale.
 Minted by `datalib_id::entity_id` for ported providers; the others pass an
 upstream id through directly.
 
+Table names below are the **raw-store** tables, which are unprefixed:
+each provider writes its own `<name>/raw/entities.doltlite_db`, so there
+is no `claude_`/`slack_` prefix to disambiguate. Only the CAS edge
+tables carry one (`claude_attachments`, `slack_attachments`), because
+they sit beside the shared blob store.
+
 | provider.kind | value |
 |---|---|
-| claude.chat | `claude_conversations.conversation_uuid` |
-| claude.message | `claude_messages.message_uuid` |
+| claude.chat | `conversations.id` |
+| claude.message | `conversations.payload.chat_messages[*].uuid` |
 | claude.block | `{message_uuid}:{block_index}` |
-| openai.chat | `openai_conversations.conversation_id` |
-| openai.message | `openai_messages.message_id` |
+| chatgpt.chat | `conversations.id` |
+| chatgpt.message | `conversations.payload.mapping[*]` |
 | slack.thread | `uuidv5(SLACK_NS, 'slack:{team}:{channel}:{thread_ts}')` |
 | slack.message | `uuidv5(SLACK_NS, 'slack:{team}:{channel}:{ts}')` |
 | github.pr | `uuidv5(GITHUB_NS, 'github:{repo}:pr:{number}')` |
@@ -141,14 +147,14 @@ upstream id through directly.
 
 | provider.kind | label |
 |---|---|
-| claude.chat, openai.chat | `Chat` |
-| claude.message.human, openai.message.user | `User Input` |
+| claude.chat, chatgpt.chat | `Chat` |
+| claude.message.human, chatgpt.message.user | `User Input` |
 | claude.message.assistant | `LLM Response` |
 | claude.block.thinking | `LLM Thinking` |
 | claude.block.tool_* | `Tool Call` |
-| openai.message.assistant.thoughts / reasoning_recap | `LLM Thinking` |
-| openai.message.assistant.* | `LLM Response` |
-| openai.message.system / other | `Tool Call` |
+| chatgpt.message.assistant.thoughts / reasoning_recap | `LLM Thinking` |
+| chatgpt.message.assistant.* | `LLM Response` |
+| chatgpt.message.system / other | `Tool Call` |
 | slack.thread / slack.message | `Slack Thread` / `Slack Message` |
 | github.pr | `GitHub PR` |
 | github.issue_comment | `GitHub PR Comment` |
@@ -170,9 +176,9 @@ upstream id through directly.
 | claude.chat | `IFNULL(created_at, updated_at)` |
 | claude.message | `messages.created_at` |
 | claude.block | `blocks.start_timestamp`, else `bump_micros(parent.created_at, block_index+1)` |
-| openai.chat | `IFNULL(create_time, update_time)` |
-| openai.message | `messages.create_time`, else `bump_micros(parent.create_time, msg_idx+1)` |
-| slack.message | `slack_messages.ts`, formatted ISO-8601 UTC |
+| chatgpt.chat | `IFNULL(create_time, update_time)` |
+| chatgpt.message | `messages.create_time`, else `bump_micros(parent.create_time, msg_idx+1)` |
+| slack.message | `messages.ts`, formatted ISO-8601 UTC |
 | github.pr | `pull_request.updated_at`, else `created_at` |
 | github.comment | `comment.created_at` |
 | gitlab.mr | `merge_request.updated_at`, else `created_at` |
@@ -189,8 +195,8 @@ upstream id through directly.
 | claude.chat | `''` |
 | claude.message.human | `account_uuid` |
 | claude.message.assistant | `conversation.raw_json.model`, else `sender` |
-| openai.message.user | `account_id` |
-| openai.message.assistant | `model_slug`, else `role` |
+| chatgpt.message.user | `account_id` |
+| chatgpt.message.assistant | `model_slug`, else `role` |
 | slack.message | `users.real_name`, else `users.name` |
 | github | `comment.user.login`, else `pull_request.user.login` |
 | gitlab | `note.author.username`, else `merge_request.author.username` |
@@ -202,9 +208,9 @@ upstream id through directly.
 
 | provider | account | project | channel |
 |---|---|---|---|
-| claude | `claude_conversations.account_uuid` | the `projects.name` of the conversation's project (bare UUID when projects aren't mirrored) | — |
-| openai | `openai_conversations.account_id` | — | — |
-| slack | `slack_workspaces.team_id` | — | `slack_channels.channel_name` |
+| claude | `conversations.payload.creator.uuid` | the `projects.name` of the conversation's project (bare UUID when projects aren't mirrored) | — |
+| chatgpt | `me.id` | — | — |
+| slack | `workspaces.id` | — | `channels.name` |
 | github | `self_identity.viewer.login` | `pull_request.base.repo.full_name` | — |
 | gitlab | `self_identity.current_user.username` | `merge_request.references.full`, else `project_path` | — |
 | notion | `notion_space.name` | — | — |
@@ -212,21 +218,21 @@ upstream id through directly.
 | signal | — | — | `recipients.display_name`, else phone number |
 
 `org_uuid` / `org_name` are Claude-only, from
-`claude_conversations._source`.
+`conversations._source`.
 
 ### `conversation_name`, `conversation_uuid`, `text`
 
 `conversation_uuid` is the row's own `uuid` for thread-level rows
-(claude.chat, openai.chat, slack.thread, github.pr, gitlab.mr, notion.page,
+(claude.chat, chatgpt.chat, slack.thread, github.pr, gitlab.mr, notion.page,
 notion.thread) and the parent's for everything below them.
 
 | provider.kind | conversation_name | text |
 |---|---|---|
-| claude.chat | `claude_conversations.name` | `summary`, else `name` |
+| claude.chat | `conversations.name` | `summary`, else `name` |
 | claude.message | (parent's) | `messages.text` |
 | claude.block | (parent's) | `blocks.text`, else `raw_json.thinking`, else `type` |
-| openai.chat | `openai_conversations.title` | `title` |
-| openai.message | (parent's) | `messages.text` |
+| chatgpt.chat | `conversations.title` | `title` |
+| chatgpt.message | (parent's) | `messages.text` |
 | slack.thread | `channel_name` + root snippet | root message text |
 | slack.message | (parent's) | `messages.text`, mentions and emoji rendered |
 | github.pr | `pull_request.title` | `title` + `body` |
@@ -268,7 +274,7 @@ is the config step's name. Verified against the TNG fixture:
 
 ```text
 claude   claude-api/rendered_md/{conversation_uuid}/all.md
-openai   chatgpt-api/rendered_md/{conversation_id}/all.md
+chatgpt  chatgpt-api/rendered_md/{conversation_id}/all.md
 slack    slack/rendered_md/{thread_uuid}/all.md
 beeper   beeper/rendered_md/{network}/{chat_uuid}/{YYYY-MM}.md
 github   github/rendered_md/{owner}/{repo}/pr-{number}/index.md

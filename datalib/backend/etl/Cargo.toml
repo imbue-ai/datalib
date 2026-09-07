@@ -71,6 +71,7 @@ indicatif = "0.18"
 # consumers don't want the boring-ssl build cost.
 wreq = { version = "=6.0.0-rc.28", default-features = false, features = ["webpki-roots"] }
 wreq-util = "=3.0.0-rc.11"
+strum = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

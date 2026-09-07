@@ -55,9 +55,9 @@ EV_SIGNAL_ALREADY_INGESTED = "signal_snapshot_already_ingested"
 # Providers that must appear in `grid_rows` after a full fixture run.
 #
 # These are `grid_rows.provider` values, which are provider *types* and
-# so don't always match the DAG step names (chatgpt-api reports
-# `openai`, the carddav source reports `contacts`, the mbox source
-# reports `jmap`).
+# so don't always match the DAG step names (the carddav source reports
+# `contacts`, and every email mode — JMAP, Gmail API, mbox — reports
+# `email`).
 #
 # Keep this exhaustive over the sources run_sync_pipeline.py
 # configures. The first draft had to omit `gitlab`, which turned out to
@@ -68,11 +68,11 @@ EV_SIGNAL_ALREADY_INGESTED = "signal_snapshot_already_ingested"
 # not disappear quietly.
 # Providers still minting `grid_rows.uuid` values that are not UUIDs.
 #
-# Empty, and it must stay that way. It held `claude` and `openai`,
+# Empty, and it must stay that way. It held `claude` and `chatgpt`,
 # the two that passed an upstream id through verbatim (or lightly
 # prefixed) instead of deriving a v5: claude emitted
 # `tu-{tool_use_id}` / `tr-{tool_use_id}` / `th-{msg_uuid}-{idx}` /
-# `pdesc-{project_uuid}` for its structural blocks, and openai used
+# `pdesc-{project_uuid}` for its structural blocks, and chatgpt used
 # ChatGPT's `conversation_id` / `message_id` directly. Both now mint
 # through `datalib_id::entity_id`.
 #
@@ -111,7 +111,7 @@ ID_SEP = "\x1f"
 # that from being silent.
 SCOPE_TAG_BY_PROVIDER = {
     "claude": ("pg", ""),
-    "openai": ("pg", ""),
+    "chatgpt": ("pg", ""),
     # Slack scopes on `team_id`, which the row carries in `account`.
     # Resolved per-row rather than from a constant here — see
     # `_roundtrip_failures`.
@@ -121,12 +121,17 @@ SCOPE_TAG_BY_PROVIDER = {
 # Providers whose rows MUST round-trip. Separate from the table above so
 # a typo in a provider name shows up as "no rows checked" rather than as
 # a silent pass.
-PORTED_PROVIDERS = frozenset({"claude", "openai", "slack"})
+PORTED_PROVIDERS = frozenset({"claude", "chatgpt", "slack"})
 
 
-def datalib_entity_id(provider, scope_tag, scope_val, entity_kind, natural_key):
-    """UUIDv5 over the five-component recipe, joined with \x1f."""
-    name = ID_SEP.join([provider, scope_tag, scope_val, entity_kind, natural_key])
+def datalib_entity_id(namespace, scope_tag, scope_val, entity_kind, natural_key):
+    """UUIDv5 over the five-component recipe, joined with \x1f.
+
+    `namespace` is `IdNamespace::as_str`, which for every ported
+    provider happens to equal its `grid_rows.provider` tag — they are
+    still two vocabularies, and a provider ported later may well differ.
+    """
+    name = ID_SEP.join([namespace, scope_tag, scope_val, entity_kind, natural_key])
     return str(uuidlib.uuid5(DATALIB_ID_NS, name))
 
 
@@ -150,10 +155,10 @@ EXPECTED_PROVIDERS = frozenset(
         "github",
         "gitlab",
         "google_takeout",
-        "jmap",
+        "email",
         "linkedin",
         "notion",
-        "openai",
+        "chatgpt",
         # The only file-backed source in this fixture that renders.
         # fsindex and lightroom scan trees too but produce no rows;
         # `pdf` converts what it scans, so it must show up here.

@@ -10,9 +10,7 @@
 /// per-provider table holds its raw payload.
 ///
 /// Names follow AGENTS.md's "Claude, not Anthropic" rule: the product a
-/// person recognizes, never the vendor or the protocol behind it. Two
-/// variants are named the wrong way and are stuck that way — see their
-/// notes.
+/// person recognizes, never the vendor or the protocol behind it.
 #[derive(
     Debug,
     Clone,
@@ -30,6 +28,7 @@
 #[strum(serialize_all = "snake_case")]
 pub enum Provider {
     Beeper,
+    Chatgpt,
     /// Both `claude_api` and `claude_export`: one raw store, one tag.
     Claude,
     /// CardDAV address books.
@@ -40,21 +39,13 @@ pub enum Provider {
     /// the same bucket as the data it measures.
     /// See `datalib_step::introspect`.
     Datalib,
+    /// All three download modes — JMAP, Gmail API, mbox — write this
+    /// one tag. Named for the thing, not for whichever protocol a
+    /// particular mirror happens to use.
+    Email,
     Github,
     Gitlab,
     GoogleTakeout,
-    /// ChatGPT. Spelled `openai` on disk, which is the vendor rather
-    /// than the product — the one place the naming rule is broken.
-    /// Fixing it means re-rendering and re-indexing every ChatGPT row,
-    /// so the wrong name stays until something else forces that.
-    #[strum(serialize = "openai")]
-    Chatgpt,
-    /// Email. Spelled `jmap` on disk, after the protocol the first
-    /// download mode used — but the source has three modes now (JMAP,
-    /// Gmail API, mbox) and they all write this tag. Same story as
-    /// [`Provider::Chatgpt`]: wrong, and pinned by stored data.
-    #[strum(serialize = "jmap")]
-    Email,
     Linkedin,
     Notion,
     Pdf,
@@ -101,11 +92,11 @@ mod tests {
         }
     }
 
-    /// These two are wrong on purpose and pinned by stored data. The
-    /// test is here so a well-meaning rename has to argue with it.
+    /// The two that used to be named for a vendor and a protocol. A
+    /// rename back would need another re-render, so pin them.
     #[test]
-    fn the_two_misnamed_tags_keep_their_stored_spelling() {
-        assert_eq!(Provider::Chatgpt.as_str(), "openai");
-        assert_eq!(Provider::Email.as_str(), "jmap");
+    fn the_two_renamed_tags_are_named_for_the_thing() {
+        assert_eq!(Provider::Chatgpt.as_str(), "chatgpt");
+        assert_eq!(Provider::Email.as_str(), "email");
     }
 }

@@ -15,6 +15,55 @@ pub const DATALIB_ID_NS: Uuid = Uuid::from_bytes([
     0x64, 0x61, 0x74, 0x61, 0x6c, 0x69, 0x62, 0x2d, 0x69, 0x64, 0x2d, 0x6e, 0x73, 0x2d, 0x76, 0x31,
 ]);
 
+/// The provider half of the recipe: the space one provider's natural
+/// keys are unique within, so two providers that happen to mint the
+/// same key never collide.
+///
+/// **These values are frozen.** Each one is hashed into every id that
+/// provider has ever minted, so changing one re-keys every
+/// `grid_rows.uuid`, `markdown_uuid` and `data-section-uuid` it
+/// produced, and orphans every `feedback.target_uuids` pointing at
+/// them. The only supported way to change one is to bump that
+/// provider's `RENDER_VERSION` in the same commit, which makes the
+/// next run discard its rendered tree and re-render from the raw
+/// store — see `datalib_step::render`.
+///
+/// Only the providers ported to this recipe appear here;
+/// `docs/dev/entity_ids.md` tracks the rest. [`IdNamespace::Datalib`]
+/// is the one entry that is not a provider at all.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+    strum::Display,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum IdNamespace {
+    /// Both `claude_api` and `claude_export` — one raw store, one
+    /// keyspace, so an export-seeded mirror kept fresh by the API does
+    /// not mint two ids for one conversation.
+    Claude,
+    Chatgpt,
+    Slack,
+    /// Not a provider: datalib's own measurements of a source's mirror,
+    /// which are minted by this recipe like anything else. Kept in its
+    /// own namespace so a storage row can never collide with a row from
+    /// the source it measures. See `datalib_step::introspect`.
+    Datalib,
+}
+
+impl IdNamespace {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
 /// The space an entity id is unique within.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope<'a> {
@@ -65,10 +114,16 @@ impl Scope<'_> {
 /// **Feed the same `natural_key` string to `grid_rows.upstream_id`.** Using
 /// one spelling to derive the id and storing another produces a backpointer
 /// that looks plausible and regenerates nothing.
-pub fn entity_id(provider: &str, scope: Scope<'_>, entity_kind: &str, natural_key: &str) -> Uuid {
+pub fn entity_id(
+    namespace: IdNamespace,
+    scope: Scope<'_>,
+    entity_kind: &str,
+    natural_key: &str,
+) -> Uuid {
     let (scope_tag, scope_val) = scope.tag();
+    let namespace = namespace.as_str();
     let recipe = format!(
-        "{provider}\u{1f}{scope_tag}\u{1f}{scope_val}\u{1f}{entity_kind}\u{1f}{natural_key}"
+        "{namespace}\u{1f}{scope_tag}\u{1f}{scope_val}\u{1f}{entity_kind}\u{1f}{natural_key}"
     );
     Uuid::new_v5(&DATALIB_ID_NS, recipe.as_bytes())
 }
@@ -89,12 +144,12 @@ pub fn composite_key(parts: &[&str]) -> String {
 }
 
 pub fn entity_id_str(
-    provider: &str,
+    namespace: IdNamespace,
     scope: Scope<'_>,
     entity_kind: &str,
     natural_key: &str,
 ) -> String {
-    entity_id(provider, scope, entity_kind, natural_key)
+    entity_id(namespace, scope, entity_kind, natural_key)
         .as_hyphenated()
         .to_string()
 }
@@ -129,14 +184,29 @@ mod tests {
 
     #[test]
     fn is_deterministic() {
-        let a = entity_id("slack", Scope::Upstream("T123"), "message", "C1:170.5");
-        let b = entity_id("slack", Scope::Upstream("T123"), "message", "C1:170.5");
+        let a = entity_id(
+            IdNamespace::Slack,
+            Scope::Upstream("T123"),
+            "message",
+            "C1:170.5",
+        );
+        let b = entity_id(
+            IdNamespace::Slack,
+            Scope::Upstream("T123"),
+            "message",
+            "C1:170.5",
+        );
         assert_eq!(a, b, "ids must be a pure function of their inputs");
     }
 
     #[test]
     fn is_a_v5_uuid() {
-        let id = entity_id("slack", Scope::Upstream("T123"), "message", "C1:170.5");
+        let id = entity_id(
+            IdNamespace::Slack,
+            Scope::Upstream("T123"),
+            "message",
+            "C1:170.5",
+        );
         assert_eq!(id.get_version_num(), 5);
         // The shape `ingested_tng_test` asserts on.
         let s = id.as_hyphenated().to_string();
@@ -144,12 +214,21 @@ mod tests {
         assert!(s.chars().all(|c| c.is_ascii_hexdigit() || c == '-'), "{s}");
     }
 
+    /// Two providers that mint the same natural key must not collide.
+    /// Asserted across every pair, so adding a namespace that
+    /// duplicates an existing spelling fails here.
     #[test]
-    fn provider_separates() {
-        assert_ne!(
-            entity_id("slack", Scope::ProviderGlobal, "chat", "X"),
-            entity_id("notion", Scope::ProviderGlobal, "chat", "X"),
-        );
+    fn namespaces_separate() {
+        use strum::VariantArray;
+        for (i, &a) in IdNamespace::VARIANTS.iter().enumerate() {
+            for &b in &IdNamespace::VARIANTS[i + 1..] {
+                assert_ne!(
+                    entity_id(a, Scope::ProviderGlobal, "chat", "X"),
+                    entity_id(b, Scope::ProviderGlobal, "chat", "X"),
+                    "{a} and {b} mint the same id",
+                );
+            }
+        }
     }
 
     #[test]
@@ -158,8 +237,8 @@ mod tests {
         // Signal's `chat_id` is an autoincrement local to a backup
         // file, so two accounts really do both have chat `1`.
         assert_ne!(
-            entity_id("signal", Scope::Upstream("acct-a"), "chat", "1"),
-            entity_id("signal", Scope::Upstream("acct-b"), "chat", "1"),
+            entity_id(IdNamespace::Slack, Scope::Upstream("acct-a"), "chat", "1"),
+            entity_id(IdNamespace::Slack, Scope::Upstream("acct-b"), "chat", "1"),
         );
     }
 
@@ -170,8 +249,8 @@ mod tests {
     fn entity_kind_separates_thread_root_from_its_message() {
         let key = "C1\u{1f}1700000000.000100";
         assert_ne!(
-            entity_id("slack", Scope::Upstream("T1"), "thread", key),
-            entity_id("slack", Scope::Upstream("T1"), "message", key),
+            entity_id(IdNamespace::Slack, Scope::Upstream("T1"), "thread", key),
+            entity_id(IdNamespace::Slack, Scope::Upstream("T1"), "message", key),
         );
     }
 
@@ -182,24 +261,29 @@ mod tests {
     #[test]
     fn component_boundaries_are_unambiguous() {
         assert_ne!(
-            entity_id("p", Scope::ProviderGlobal, "a:b", "c"),
-            entity_id("p", Scope::ProviderGlobal, "a", "b:c"),
+            entity_id(IdNamespace::Chatgpt, Scope::ProviderGlobal, "a:b", "c"),
+            entity_id(IdNamespace::Chatgpt, Scope::ProviderGlobal, "a", "b:c"),
         );
         assert_ne!(
-            entity_id("p", Scope::ProviderGlobal, "a-b", "c"),
-            entity_id("p", Scope::ProviderGlobal, "a", "b-c"),
+            entity_id(IdNamespace::Chatgpt, Scope::ProviderGlobal, "a-b", "c"),
+            entity_id(IdNamespace::Chatgpt, Scope::ProviderGlobal, "a", "b-c"),
         );
         // The concrete case: `th-{msg_uuid}-{block_index}` is
         // ambiguous between message `M` block `0` and a message
         // literally named `M-0`.
         assert_ne!(
             entity_id(
-                "claude",
+                IdNamespace::Claude,
                 Scope::ProviderGlobal,
                 "thinking_block",
                 "M\u{1f}0"
             ),
-            entity_id("claude", Scope::ProviderGlobal, "thinking_block", "M-0"),
+            entity_id(
+                IdNamespace::Claude,
+                Scope::ProviderGlobal,
+                "thinking_block",
+                "M-0"
+            ),
         );
     }
 
@@ -213,14 +297,14 @@ mod tests {
     fn source_instance_separates_two_configured_sources() {
         assert_ne!(
             entity_id(
-                "yolink",
-                Scope::SourceInstance("home-yolink"),
+                IdNamespace::Slack,
+                Scope::SourceInstance("home-slack"),
                 "page",
                 "timeseries"
             ),
             entity_id(
-                "yolink",
-                Scope::SourceInstance("cabin-yolink"),
+                IdNamespace::Slack,
+                Scope::SourceInstance("work-slack"),
                 "page",
                 "timeseries"
             ),
@@ -230,18 +314,28 @@ mod tests {
     #[test]
     fn scope_variants_do_not_alias() {
         assert_ne!(
-            entity_id("pdf", Scope::Content, "document", "abc"),
-            entity_id("pdf", Scope::ProviderGlobal, "document", "abc"),
+            entity_id(IdNamespace::Chatgpt, Scope::Content, "document", "abc"),
+            entity_id(
+                IdNamespace::Chatgpt,
+                Scope::ProviderGlobal,
+                "document",
+                "abc"
+            ),
         );
         assert_ne!(
-            entity_id("pdf", Scope::Upstream(""), "document", "abc"),
-            entity_id("pdf", Scope::ProviderGlobal, "document", "abc"),
+            entity_id(IdNamespace::Chatgpt, Scope::Upstream(""), "document", "abc"),
+            entity_id(
+                IdNamespace::Chatgpt,
+                Scope::ProviderGlobal,
+                "document",
+                "abc"
+            ),
         );
         // An upstream account id and a step id are different spaces
         // even when they spell the same thing.
         assert_ne!(
-            entity_id("p", Scope::Upstream("x"), "k", "n"),
-            entity_id("p", Scope::SourceInstance("x"), "k", "n"),
+            entity_id(IdNamespace::Chatgpt, Scope::Upstream("x"), "k", "n"),
+            entity_id(IdNamespace::Chatgpt, Scope::SourceInstance("x"), "k", "n"),
         );
     }
 
@@ -254,8 +348,13 @@ mod tests {
         let key = composite_key(&["msg-1", "toolu_9"]);
         assert_eq!(key, "msg-1#toolu_9");
         assert_eq!(
-            entity_id_str("claude", Scope::ProviderGlobal, "tool_use", &key),
-            entity_id_str("claude", Scope::ProviderGlobal, "tool_use", "msg-1#toolu_9"),
+            entity_id_str(IdNamespace::Claude, Scope::ProviderGlobal, "tool_use", &key),
+            entity_id_str(
+                IdNamespace::Claude,
+                Scope::ProviderGlobal,
+                "tool_use",
+                "msg-1#toolu_9"
+            ),
         );
     }
 

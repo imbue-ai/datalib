@@ -1,8 +1,8 @@
 //! Claude entity ids.
 
-use datalib_id::{composite_key, entity_id_str, Scope};
+use datalib_id::{composite_key, entity_id_str, IdNamespace, Scope};
 
-pub const PROVIDER: &str = "claude";
+pub const ID_NAMESPACE: IdNamespace = IdNamespace::Claude;
 
 // Entity kinds — the `entity_kind` recipe component, and the value
 // stamped into `grid_rows.upstream_entity_kind`. Distinct from the
@@ -30,7 +30,12 @@ pub struct Identity {
 
 fn identity(entity_kind: &'static str, natural_key: String) -> Identity {
     Identity {
-        uuid: entity_id_str(PROVIDER, Scope::ProviderGlobal, entity_kind, &natural_key),
+        uuid: entity_id_str(
+            ID_NAMESPACE,
+            Scope::ProviderGlobal,
+            entity_kind,
+            &natural_key,
+        ),
         natural_key,
         entity_kind,
     }
@@ -140,7 +145,7 @@ mod tests {
             assert_eq!(
                 got.uuid,
                 entity_id_str(
-                    PROVIDER,
+                    ID_NAMESPACE,
                     Scope::ProviderGlobal,
                     got.entity_kind,
                     &got.natural_key
