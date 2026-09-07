@@ -20,6 +20,7 @@ use super::ids;
 use super::parse::{
     shred, OAAttachmentRef, OAContentPartRow, OAMessageRow, ParsedChatGPTApi, ShreddedConversation,
 };
+use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v4: render via chat-common.
@@ -33,11 +34,11 @@ use super::parse::{
 ///     inherit from — gets a null `when_ts` instead of a real-looking
 ///     `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
-pub const RENDER_VERSION: u32 = 6;
+pub const RENDER_VERSION: u32 = 7;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "openai",
+        provider: Provider::Chatgpt,
         source_label: "ChatGPT".to_string(),
         chat_kind: "Chat".to_string(),
         // Per-message kind is always set via `kind_label`; this is only a

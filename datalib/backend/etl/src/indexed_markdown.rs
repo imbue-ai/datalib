@@ -15,7 +15,7 @@ use sqlx::Row;
 use datalib_schema::edges::DDL as EDGES_DDL;
 use datalib_schema::grid_rows::DDL as GRID_ROWS_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
-use datalib_schema::render_problems::{RenderProblemRow, DDL as RENDER_PROBLEMS_DDL};
+use datalib_schema::render_problems::{RenderProblemRow, ScopeKind, DDL as RENDER_PROBLEMS_DDL};
 
 use crate::bulk::BulkUpsertable;
 use crate::grid_index::{RenderedMarkdown, WriteLock};
@@ -161,7 +161,6 @@ impl IndexedMarkdownStore {
                 "DELETE FROM grid_rows WHERE markdown_uuid = ?",
                 "DELETE FROM edges WHERE src_markdown_uuid = ?",
                 "DELETE FROM markdowns WHERE markdown_uuid = ?",
-                "DELETE FROM render_problems WHERE scope_kind = 'markdown' AND scope_key = ?",
             ] {
                 sqlx::query(sql)
                     .bind(markdown_uuid)
@@ -169,6 +168,12 @@ impl IndexedMarkdownStore {
                     .await
                     .with_context(|| format!("remove {markdown_uuid} from the store"))?;
             }
+            sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
+                .bind(ScopeKind::Markdown.as_str())
+                .bind(markdown_uuid)
+                .execute(&mut **conn)
+                .await
+                .with_context(|| format!("remove {markdown_uuid} from the store"))?;
             drop(guard);
             if let Some(rel) = md_path {
                 unlink_rendered(out_dir, &rel);
@@ -258,8 +263,9 @@ impl IndexedMarkdownStore {
         // been broken since Tuesday" would be unanswerable.
         let seen: HashMap<String, String> = sqlx::query(
             "SELECT uuid, first_seen_at FROM render_problems \
-             WHERE scope_kind = 'markdown' AND scope_key = ?",
+             WHERE scope_kind = ? AND scope_key = ?",
         )
+        .bind(ScopeKind::Markdown.as_str())
         .bind(markdown_uuid)
         .fetch_all(&mut **conn)
         .await
@@ -267,7 +273,8 @@ impl IndexedMarkdownStore {
         .into_iter()
         .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
         .collect::<Result<_>>()?;
-        sqlx::query("DELETE FROM render_problems WHERE scope_kind = 'markdown' AND scope_key = ?")
+        sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
+            .bind(ScopeKind::Markdown.as_str())
             .bind(markdown_uuid)
             .execute(&mut **conn)
             .await
@@ -322,8 +329,9 @@ impl IndexedMarkdownStore {
             let conn = guard.conn();
             let seen: HashMap<String, String> = sqlx::query(
                 "SELECT uuid, first_seen_at FROM render_problems \
-                 WHERE scope_kind = 'entity' AND scope_key = ?",
+                 WHERE scope_kind = ? AND scope_key = ?",
             )
+            .bind(ScopeKind::Entity.as_str())
             .bind(entity_id)
             .fetch_all(&mut **conn)
             .await
@@ -331,13 +339,12 @@ impl IndexedMarkdownStore {
             .into_iter()
             .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
             .collect::<Result<_>>()?;
-            sqlx::query(
-                "DELETE FROM render_problems WHERE scope_kind = 'entity' AND scope_key = ?",
-            )
-            .bind(entity_id)
-            .execute(&mut **conn)
-            .await
-            .context("clear prior problems for this entity")?;
+            sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
+                .bind(ScopeKind::Entity.as_str())
+                .bind(entity_id)
+                .execute(&mut **conn)
+                .await
+                .context("clear prior problems for this entity")?;
             self.insert_problems(conn, problems, &seen).await
         })
     }
@@ -472,6 +479,8 @@ impl IndexedMarkdownStore {
 mod tests {
     use super::*;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::providers::Provider;
+    use datalib_schema::render_problems::Stage;
     use datalib_schema::render_problems::{Outcome, Problem, Reason};
 
     fn store(dir: &Path) -> IndexedMarkdownStore {
@@ -481,7 +490,7 @@ mod tests {
     fn row(uuid: &str, markdown_uuid: &str) -> GridRow {
         GridRow::builder()
             .uuid(uuid)
-            .provider("test")
+            .provider(Provider::Test)
             .kind("Test")
             .source_label("Test")
             .conversation_uuid(markdown_uuid)
@@ -520,9 +529,9 @@ mod tests {
         RenderProblemRow {
             uuid: uuid.into(),
             scope_key: scope.into(),
-            scope_kind: "markdown".into(),
+            scope_kind: ScopeKind::Markdown.as_str().into(),
             source_name: "src".into(),
-            stage: "grid_row".into(),
+            stage: Stage::GridRow.as_str().into(),
             outcome: Outcome::Nulled.as_str().into(),
             problems: serde_json::to_string(&vec![Problem::field(
                 "when_ts",

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use app_schema::disk_usage::DiskUsageRow;
 use app_schema::feedback::FeedbackRow;
-use app_schema::sync_jobs::SyncJobRow;
+use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepoError {
@@ -31,8 +31,8 @@ pub trait AppRepo: Send + Sync {
     }
 
     /// List `sync_jobs` rows. When `only_active` is true, returns only
-    /// rows in `pending` or `running` state — used by the UI's polling
-    /// chrome. Otherwise returns the most recent `limit` rows newest-first.
+    /// the rows whose [`JobState`] is not terminal — used by the UI's
+    /// polling chrome. Otherwise returns the most recent `limit` rows newest-first.
     /// Default impl returns [`RepoError::ReadOnly`].
     async fn list_jobs(
         &self,
@@ -47,12 +47,12 @@ pub trait AppRepo: Send + Sync {
         Err(RepoError::ReadOnly)
     }
 
-    /// Enqueue a new `pending` sync job. Implementations stamp the id
-    /// (UUIDv4) and `created_at` themselves so callers don't have to.
-    /// The new row is returned as written.
+    /// Enqueue a new [`JobState::Pending`] sync job. Implementations
+    /// stamp the id (UUIDv4) and `created_at` themselves so callers
+    /// don't have to. The new row is returned as written.
     async fn enqueue_job(
         &self,
-        _kind: &str,
+        _kind: JobKind,
         _source_name: Option<&str>,
     ) -> Result<SyncJobRow, RepoError> {
         Err(RepoError::ReadOnly)
@@ -64,8 +64,9 @@ pub trait AppRepo: Send + Sync {
 
     // --- Worker-side job lifecycle ------------------------------------
 
-    /// Atomically claim the oldest `pending` job: flip it to `running`,
-    /// stamp `started_at`, and return the updated row. Returns `Ok(None)`
+    /// Atomically claim the oldest [`JobState::Pending`] job: flip it
+    /// to [`JobState::Running`], stamp `started_at`, and return the
+    /// updated row. Returns `Ok(None)`
     /// when the queue is empty. Single-worker by construction, so the
     /// SELECT-then-UPDATE needs no extra locking beyond SQLite's
     /// single-writer guarantee.
@@ -89,10 +90,11 @@ pub trait AppRepo: Send + Sync {
         Err(RepoError::ReadOnly)
     }
 
+    /// Record a terminal [`JobState`] for a job.
     async fn finish_job(
         &self,
         _job_id: &str,
-        _state: &str,
+        _state: JobState,
         _error: Option<&str>,
     ) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)

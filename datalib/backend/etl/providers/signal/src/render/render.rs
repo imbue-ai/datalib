@@ -11,6 +11,7 @@ use datalib_etl::render_cursor;
 use datalib_etl::section::section_attrs;
 use datalib_etl::title::Title;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 
 use super::parse::{DocBucket, ParsedChat, ParsedChatItem, ParsedSignal};
@@ -21,7 +22,7 @@ use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
 pub const RENDER_VERSION: u32 = 4;
 
 const SOURCE_LABEL: &str = "Signal";
-const PROVIDER: &str = "signal";
+const PROVIDER: Provider = Provider::Signal;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {

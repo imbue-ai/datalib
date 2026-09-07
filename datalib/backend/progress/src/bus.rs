@@ -9,7 +9,7 @@ use std::time::Duration;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
-use crate::{progress_path, ProgressRow, SCHEMA};
+use crate::{is_terminal, progress_path, ProgressRow, SCHEMA};
 
 /// How often the writer thread flushes. 200ms is under the threshold
 /// where a progress bar reads as laggy, and far above the cost of the
@@ -188,10 +188,6 @@ impl Drop for ProgressWriter {
         // flush landed before the process reports the run as finished.
         self.finish();
     }
-}
-
-fn is_terminal(state: &str) -> bool {
-    !matches!(state, "pending" | "running")
 }
 
 fn writer_loop(path: PathBuf, run_id: String, pending: Pending, stop: mpsc::Receiver<()>) {

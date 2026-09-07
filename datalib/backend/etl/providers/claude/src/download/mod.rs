@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::{latchkey_curl, HttpRequest, LatchkeySettings};
+use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -1187,7 +1187,7 @@ async fn download_one_file(file_obj: &Value) -> Result<Option<(Vec<u8>, Option<S
         .and_then(|v| v.as_str())
         .or_else(|| file_obj.get("mime_type").and_then(|v| v.as_str()));
 
-    let req = HttpRequest::get("claude", &url).timeout(ATTACH_FILE_TIMEOUT);
+    let req = HttpRequest::get(HttpService::Claude, &url).timeout(ATTACH_FILE_TIMEOUT);
     match latchkey_curl(&req).await {
         Ok(resp) if (200..300).contains(&resp.status) => {
             let header_mime = resp.header("content-type").map(String::from);

@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 use serde_json::Value;
 
@@ -131,7 +132,7 @@ pub fn rows_for_mr(
     rows.extend(
         GridRow::builder()
             .uuid(mr.uuid.clone())
-            .provider("gitlab")
+            .provider(Provider::Gitlab)
             .kind("GitLab MR")
             .source_label("GitLab")
             .when_ts(mr.updated_at.clone().or_else(|| mr.created_at.clone()))
@@ -158,7 +159,7 @@ pub fn rows_for_mr(
         rows.extend(
             GridRow::builder()
                 .uuid(n.uuid.clone())
-                .provider("gitlab")
+                .provider(Provider::Gitlab)
                 .kind(n.kind)
                 .source_label("GitLab")
                 .when_ts(Some(n.created_at.clone()))

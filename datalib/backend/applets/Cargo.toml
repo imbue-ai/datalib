@@ -9,6 +9,7 @@ name = "datalib-applet"
 path = "src/main.rs"
 
 [dependencies]
+datalib-schema = { path = "../schema" }
 datalib-core = { path = "../core" }
 datalib-qmd-indexer = { path = "../qmd_indexer" }
 datalib-unified-index = { path = "../unified_index" }

@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use datalib_progress::{ProgressRow, ProgressWriter};
+use datalib_progress::{LiveState, ProgressRow, ProgressWriter};
 
 use crate::events::{Event, EventSink};
 use crate::step::StepId;
@@ -68,7 +68,7 @@ impl EventSink for ProgressBusSink {
             // row, pending ones included, before anything has started.
             Event::RunPlan { steps } => {
                 for step in steps {
-                    self.update(step, |a| a.state = "pending".into());
+                    self.update(step, |a| a.state = LiveState::Pending.as_str().into());
                 }
             }
             // A retry re-runs the step from zero, so the counters reset
@@ -76,12 +76,12 @@ impl EventSink for ProgressBusSink {
             // wherever attempt 1 died.
             Event::StepStart { step, .. } => self.update(step, |a| {
                 *a = Acc {
-                    state: "running".into(),
+                    state: LiveState::Running.as_str().into(),
                     ..Default::default()
                 }
             }),
             Event::StepFinish { step, status, .. } => {
-                self.update(step, |a| a.state.clone_from(status))
+                self.update(step, |a| a.state = status.as_str().into())
             }
             Event::ProgressLength { step, total } => self.update(step, |a| a.total = *total),
             Event::ProgressInc { step, delta } => {
@@ -100,6 +100,7 @@ impl EventSink for ProgressBusSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::run_state::RunState;
     use datalib_progress::snapshot;
 
     async fn run(events: &[Event]) -> Vec<datalib_progress::ProgressRow> {
@@ -142,7 +143,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].done, Some(6), "1 + 3 + 2, not the last delta");
         assert_eq!(rows[0].total, Some(9));
-        assert_eq!(rows[0].state, "running");
+        assert_eq!(rows[0].state, LiveState::Running.as_str());
     }
 
     /// A retry re-runs the step from the beginning, so the count has to
@@ -182,7 +183,7 @@ mod tests {
         .await;
 
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|r| r.state == "pending"));
+        assert!(rows.iter().all(|r| r.state == LiveState::Pending.as_str()));
         assert!(
             rows.iter().all(|r| r.done.is_none()),
             "a step that has reported nothing has no position — a bar \
@@ -204,13 +205,13 @@ mod tests {
             },
             Event::StepFinish {
                 step: "slack/raw".into(),
-                status: "succeeded".into(),
+                status: RunState::Succeeded,
                 error: None,
             },
         ])
         .await;
 
-        assert_eq!(rows[0].state, "succeeded");
+        assert_eq!(rows[0].state, RunState::Succeeded.as_str());
         assert_eq!(rows[0].msg.as_deref(), Some("conversations.list"));
     }
 

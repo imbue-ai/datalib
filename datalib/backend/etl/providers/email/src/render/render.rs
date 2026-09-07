@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use super::parse::ParsedEmail;
 use crate::download::db::{LoadedAttachment, LoadedEmail};
+use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v3: render via chat-common (+ quoted-text folding, label chips).
@@ -26,7 +27,7 @@ use crate::download::db::{LoadedAttachment, LoadedEmail};
 ///     `docs/dev/data_architecture_parse_and_render.md` §6. Malformed
 ///     `Date` headers are common in real mail, so this changes real
 ///     output and stale docs must be re-rendered.
-pub const RENDER_VERSION: u32 = 4;
+pub const RENDER_VERSION: u32 = 5;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -98,7 +99,7 @@ fn percent_encode(s: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "jmap",
+        provider: Provider::Email,
         source_label: "Mail".to_string(),
         chat_kind: "Email Thread".to_string(),
         message_kind: "Email".to_string(),

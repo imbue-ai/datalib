@@ -32,6 +32,7 @@ walkdir = { workspace = true }
 # transitively.
 libc = "0.2"
 datalib-time = { path = "../time" }
+strum = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

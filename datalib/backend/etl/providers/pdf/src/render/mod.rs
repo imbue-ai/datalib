@@ -161,7 +161,7 @@ fn render_one(
 
     let mut body = String::new();
     body.push_str("---\n");
-    body.push_str("provider: pdf\n");
+    body.push_str(&format!("provider: {}\n", grid_rows::PROVIDER));
     body.push_str(&format!("blake3: {}\n", yaml_str(&t.blake3)));
     body.push_str(&format!("title: {}\n", yaml_str(&title)));
     if let Some(a) = &t.author {

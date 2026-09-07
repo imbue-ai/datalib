@@ -21,7 +21,7 @@ pub async fn run(
         "source {:?} (type={}) has no download work — it needs a `sync:` block \
          (or a staged input_path for file-backed sources)",
         planned.name,
-        planned.type_str
+        planned.source_type
     );
 
     let progress = emitter.progress();
