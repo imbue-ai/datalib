@@ -118,9 +118,20 @@ impl DataProcessor for ChatgptRender {
             cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
         )
         .with_context(|| format!("chatgpt parse {}", self.raw_path.display()))?;
+        // Conversations ChatGPT no longer has: drop their pages before
+        // rendering, so an interrupted run has already let them go rather
+        // than leaving a document whose source is gone.
+        let mut dropped = 0usize;
+        for conv_id in &parsed.vanished_buckets {
+            dropped += ctx.remove_conversation(&crate::render::ids::conversation(conv_id).uuid)?;
+        }
         let mut on_doc = |md| ctx.emit_doc(md);
         render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("chatgpt render_all")?;
-        Ok("rendered".into())
+        Ok(if dropped == 0 {
+            "rendered".into()
+        } else {
+            format!("rendered, {dropped} document(s) gone upstream")
+        })
     }
 }

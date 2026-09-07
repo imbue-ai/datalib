@@ -121,7 +121,13 @@ impl DataProcessor for WhatsappRender {
         let period = Period::from_config(None).context("default whatsapp period")?;
         let parsed = parse(&self.raw_path, period, &self.name)
             .with_context(|| format!("whatsapp parse {}", self.raw_path.display()))?;
+        let mut dropped = 0usize;
         let mut on_doc = |md| ctx.emit_doc(md);
+        let mut on_chat_gone = |chat_jid: &str| -> Result<()> {
+            dropped +=
+                ctx.remove_conversation(&crate::render::whatsapp_chat_uuid(&self.name, chat_jid))?;
+            Ok(())
+        };
         render_all(
             &parsed.chats,
             &parsed.blobs_by_chat,
@@ -131,8 +137,13 @@ impl DataProcessor for WhatsappRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
+            &mut on_chat_gone,
         )
         .context("whatsapp render_all")?;
-        Ok("rendered".into())
+        Ok(if dropped == 0 {
+            "rendered".into()
+        } else {
+            format!("rendered, {dropped} document(s) gone upstream")
+        })
     }
 }

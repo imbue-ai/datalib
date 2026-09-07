@@ -50,6 +50,21 @@ pub struct SourceCommon {
     /// `None` = no limit. Consumed only by providers that download attachments.
     #[serde(default)]
     pub blob_size_limit_bytes: Option<u64>,
+    /// Wipe this source's entity tables and resume cursors before every
+    /// ingest, so the run rewrites them from what the input holds now and
+    /// anything the input has dropped falls out. Set it for a source whose
+    /// input is a *complete* snapshot (a Takeout export, a phone backup, a
+    /// `.vcf` directory) — that is the only case where absence means
+    /// deletion. Leave it off for an input that is itself a partial or
+    /// evicting cache, where absence means "not cached here" and a wipe
+    /// would destroy real history.
+    ///
+    /// Only entity tables go; the blob CAS keeps its bytes (a re-ingest
+    /// re-registers the ones still referenced, and the rest await a
+    /// collector we have not built). The old rows stay in doltlite history,
+    /// so `dolt_diff` still says what the input lost.
+    #[serde(default)]
+    pub always_clear_before_ingest: bool,
     /// Rate-limit give-up bounds for this source's download step.
     #[serde(default, alias = "extract_params")]
     pub download_params: DownloadParams,

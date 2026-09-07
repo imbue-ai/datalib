@@ -170,6 +170,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 &Progress::noop(),
                 &HashMap::new(),
                 &mut on_doc,
+                &mut std::collections::HashSet::new(),
             )
             .context("render")?;
         }
@@ -196,6 +197,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 &Progress::noop(),
                 &HashMap::new(),
                 &mut on_doc,
+                &mut std::collections::HashSet::new(),
             )
             .context("render_posts")?;
         }
@@ -306,6 +308,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 &Progress::noop(),
                 &HashMap::new(),
                 &mut on_doc,
+                &mut std::collections::HashSet::new(),
             )
             .context("render_connections")?;
         }
@@ -371,6 +374,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 &Progress::noop(),
                 &HashMap::new(),
                 &mut on_doc,
+                &mut std::collections::HashSet::new(),
             )
             .context("render_connections with photo")?;
         }

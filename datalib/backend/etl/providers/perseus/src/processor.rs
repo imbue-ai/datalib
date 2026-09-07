@@ -119,6 +119,10 @@ impl DataProcessor for PerseusRender {
         let alignments = tokio::runtime::Handle::current()
             .block_on(align::align_all(&parsed, &self.pairs))
             .context("perseus align_all")?;
+        // This renderer walks the whole raw store every run, so the set it
+        // considered is the complete one: anything else the render store
+        // holds is a document whose source is gone. The driver sweeps.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
         render::render_all(
             &parsed,
@@ -128,8 +132,10 @@ impl DataProcessor for PerseusRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
+            &mut seen,
         )
         .context("perseus render_all")?;
+        ctx.retain_documents(&seen);
         Ok("rendered".into())
     }
 }

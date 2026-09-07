@@ -64,6 +64,10 @@ pub fn render(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Every document this render considered, skipped ones included — the
+    // caller hands it to `RunCtx::retain_documents`, which drops whatever
+    // the store holds and this does not name.
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
@@ -83,7 +87,7 @@ pub fn render(
         return Ok(());
     }
     let chats = build_chats(&messages, &calls);
-    cc_render_all(
+    let s = cc_render_all(
         &profile(),
         &chats,
         out_root,
@@ -93,6 +97,7 @@ pub fn render(
         prior_fingerprints,
         on_doc_complete,
     )?;
+    seen.extend(s.documents);
     Ok(())
 }
 

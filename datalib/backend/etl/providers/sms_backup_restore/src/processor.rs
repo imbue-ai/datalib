@@ -94,6 +94,10 @@ impl DataProcessor for SmsRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        // This renderer walks the whole raw store every run, so the set it
+        // considered is the complete one: anything else the render store
+        // holds is a document whose source is gone. The driver sweeps.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
         crate::render::render(
             &self.raw_path,
@@ -102,8 +106,10 @@ impl DataProcessor for SmsRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
+            &mut seen,
         )
         .context("sms_backup_restore render")?;
+        ctx.retain_documents(&seen);
         Ok("rendered".into())
     }
 }
