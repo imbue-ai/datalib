@@ -87,6 +87,8 @@ pub struct FetchSummary {
     /// the per-source one-liner can show how much work the resume cursor
     /// + per-MR skip actually saved.
     pub skipped_unchanged_mrs: usize,
+    /// Discussion threads GitLab no longer lists — deleted on their MR.
+    pub pruned: usize,
     pub requests: u64,
 }
 
@@ -248,11 +250,27 @@ async fn fetch_one_mr(
     db.upsert_merge_request(proj, iid, &mr_data).await?;
     summary.new_mrs += 1;
 
+    // The endpoint returns this MR's *whole* discussion list, so a
+    // discussion we hold that it did not mention was deleted on GitLab.
+    // Only true when the walk succeeded: `unwrap_or_default` would turn a
+    // failed request into an empty list, which is indistinguishable from
+    // "every thread was deleted" and would wipe the MR's whole history.
     let disc_url =
         format!("{BASE}/projects/{pid}/merge_requests/{iid}/discussions?per_page={PER_PAGE}");
-    let discussions = client.paginate(&disc_url).await.unwrap_or_default();
+    let discussions = match client.paginate(&disc_url).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(
+                event = "gitlab_discussion_list_failed",
+                proj, iid, error = %e,
+                "could not list this MR's discussions; leaving what we already hold alone",
+            );
+            return Ok(());
+        }
+    };
     db.upsert_discussions(proj, iid, &discussions).await?;
     summary.new_discussions += discussions.len();
+    summary.pruned += db.prune_mr_discussions(proj, iid, &discussions).await?;
     Ok(())
 }
 

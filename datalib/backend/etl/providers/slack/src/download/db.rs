@@ -1,6 +1,6 @@
 //! Doltlite-backed raw store for the Slack provider.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -438,6 +438,104 @@ impl RawDb {
             .map(|p| (p.row.id_and_payload.id.as_str(), p.payload))
             .collect();
         bulk_upsert_with_tape(&self.pool, self.tape_ref(), &rows, &tape_pairs).await
+    }
+
+    /// Delete this channel's stored messages inside a **fully re-walked**
+    /// `ts` range that the walk did not return — messages deleted on Slack.
+    ///
+    /// Slack has no changes cursor and no tombstones: a deleted message
+    /// simply stops appearing in `conversations.history`. The only way to
+    /// see that is to re-walk a range and compare, which the trailing
+    /// `refresh_window_days` pass already does for its own reasons. This
+    /// turns that walk's by-product into the answer.
+    ///
+    /// Both bounds are inclusive and must be the exact bounds the walk
+    /// used. A range wider than what was walked deletes messages that were
+    /// never looked at.
+    pub async fn prune_history_window(
+        &self,
+        channel_id: &str,
+        oldest_ts: &str,
+        latest_ts: &str,
+        seen_ts: &HashSet<String>,
+    ) -> Result<usize> {
+        let stored: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, ts FROM messages \
+             WHERE channel_id = ? AND ts >= ? AND ts <= ?",
+        )
+        .bind(channel_id)
+        .bind(oldest_ts)
+        .bind(latest_ts)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("list stored messages in {channel_id} window"))?;
+
+        let gone: Vec<String> = stored
+            .iter()
+            .filter(|(_, ts)| !seen_ts.contains(ts))
+            .map(|(id, _)| id.clone())
+            .collect();
+        if gone.is_empty() {
+            return Ok(0);
+        }
+        self.delete_messages(&gone).await?;
+        datalib_etl::prune::record(
+            &format!("slack channel {channel_id} history window"),
+            stored.len(),
+            gone.len(),
+        );
+        Ok(gone.len())
+    }
+
+    /// The same, for one thread: `conversations.replies` returns a thread
+    /// whole, so a stored reply it did not return was deleted.
+    pub async fn prune_thread_replies(
+        &self,
+        thread_root_uuid: &str,
+        seen_ids: &HashSet<String>,
+    ) -> Result<usize> {
+        let gone = datalib_etl::prune::prune_scope(
+            &self.pool,
+            "messages",
+            &[("thread_root_uuid", thread_root_uuid)],
+            seen_ids,
+        )
+        .await?;
+        if !gone.is_empty() {
+            tracing::info!(
+                event = "slack_replies_pruned",
+                thread = %thread_root_uuid,
+                removed = gone.len(),
+                "these replies are gone from the thread Slack just returned whole",
+            );
+        }
+        Ok(gone.len())
+    }
+
+    /// Delete messages by id, and their attachment edges and sidecars.
+    /// `cas_objects` is untouched: the bytes may be referenced elsewhere,
+    /// and orphans there are a garbage-collection problem, not this one.
+    async fn delete_messages(&self, ids: &[String]) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin delete messages")?;
+        for chunk in ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
+            let mut placeholders = String::new();
+            datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
+            for sql in [
+                format!("DELETE FROM slack_attachments WHERE message_uuid IN ({placeholders})"),
+                format!("DELETE FROM messages WHERE id IN ({placeholders})"),
+                format!("DELETE FROM messages_bookkeeping WHERE id IN ({placeholders})"),
+            ] {
+                // Audited: static table names; the IN-list is a `?,?,?` run
+                // sized from the chunk and every id is bound.
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+                for id in chunk {
+                    q = q.bind(id.clone());
+                }
+                q.execute(&mut *tx).await.context("delete slack messages")?;
+            }
+        }
+        tx.commit().await.context("commit delete messages")?;
+        Ok(())
     }
 
     pub async fn load_messages(&self) -> Result<Vec<LoadedMessage>> {

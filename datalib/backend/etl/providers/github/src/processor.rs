@@ -98,8 +98,9 @@ impl DataProcessor for GithubDownload {
         })
         .await?;
         let summary = format!(
-            "prs(new={}) issue_comments(new={}) reviews(new={}) review_comments(new={})",
-            s.new_prs, s.new_issue_comments, s.new_reviews, s.new_review_comments,
+            "prs(new={}) issue_comments(new={}) reviews(new={}) review_comments(new={}) \
+             pruned={}",
+            s.new_prs, s.new_issue_comments, s.new_reviews, s.new_review_comments, s.pruned,
         );
         Ok(session.finish(ctx, summary).await)
     }

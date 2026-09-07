@@ -84,6 +84,9 @@ pub struct FetchSummary {
     pub out_of_scope: usize,
     pub errors: usize,
     pub listing: usize,
+    /// Conversations a *complete* listing did not name — deleted upstream.
+    /// Always 0 when the listing walk stopped early.
+    pub pruned: usize,
     pub new_blobs: usize,
     pub skipped_blobs: usize,
     pub failed_blobs: usize,
@@ -207,12 +210,34 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
 
         opts.progress.set_message("listing conversations");
-        let listing =
-            list_all_conversations(&mut client, opts.max_pages, since_secs, &opts.progress)
-                .instrument(info_span!("chatgpt_list"))
-                .await?;
-        info!(event = "chatgpt_listing", convs = listing.len());
+        let Listing {
+            items: listing,
+            complete: listing_complete,
+        } = list_all_conversations(&mut client, opts.max_pages, since_secs, &opts.progress)
+            .instrument(info_span!("chatgpt_list"))
+            .await?;
+        info!(
+            event = "chatgpt_listing",
+            convs = listing.len(),
+            complete = listing_complete
+        );
         summary.listing = listing.len();
+
+        // A complete walk is an authoritative census of the account, so a
+        // conversation we hold that it did not name has been deleted on
+        // chatgpt.com. An incomplete one says nothing: the pages it never
+        // asked for are full of conversations that still exist, which is
+        // why this is gated rather than always-on. With `since` configured
+        // most runs stop early and prune nothing, which is the conservative
+        // side to err on.
+        if listing_complete {
+            let keep: std::collections::HashSet<String> = listing
+                .iter()
+                .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
+                .map(String::from)
+                .collect();
+            summary.pruned = db.prune_conversations(&keep).await?;
+        }
 
         // Skip-check: bulk-read existing `(id, update_time)` for every
         // listed id, then compare to the listing's update_time. Rows
@@ -660,16 +685,31 @@ async fn download_one_file(
     Ok(Some((bytes, mime.map(String::from))))
 }
 
+/// A conversation listing, and whether it is the *whole* listing.
+///
+/// The distinction is the only thing that makes pruning safe here. The walk
+/// stops early for two ordinary reasons — a `since` cutoff, a `max_pages`
+/// cap — and in both cases the pages it never asked for hold conversations
+/// that still exist. Deleting on that reading would remove most of the
+/// archive on the first `since`-scoped run.
+struct Listing {
+    items: Vec<Value>,
+    /// True only when the walk ran out of conversations rather than out of
+    /// permission to look: it reached `total`, or a page came back empty.
+    complete: bool,
+}
+
 #[instrument(skip(client))]
 async fn list_all_conversations(
     client: &mut ChatGPTClient,
     max_pages: Option<usize>,
     since_secs: Option<i64>,
     progress: &datalib_etl::progress::Progress,
-) -> Result<Vec<Value>> {
+) -> Result<Listing> {
     let mut items: Vec<Value> = Vec::new();
     let mut offset = 0usize;
     let mut pages = 0usize;
+    let mut complete = false;
     loop {
         let page = client
             .list_conversations_page(offset, PAGE_SIZE)
@@ -706,6 +746,7 @@ async fn list_all_conversations(
         pages += 1;
         progress.set_message(&format!("listing page {pages}, {} convs", items.len()));
         if got == 0 {
+            complete = true;
             break;
         }
         if page_ends_before_since {
@@ -714,6 +755,7 @@ async fn list_all_conversations(
         }
         if let Some(t) = total {
             if offset as u64 >= t {
+                complete = true;
                 break;
             }
         }
@@ -725,7 +767,7 @@ async fn list_all_conversations(
         }
         sleep(SLEEP_BETWEEN).await;
     }
-    Ok(items)
+    Ok(Listing { items, complete })
 }
 
 /// Parse a `since` config value — full RFC 3339 or bare `YYYY-MM-DD`

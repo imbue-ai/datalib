@@ -90,6 +90,8 @@ pub struct FetchSummary {
     pub new_issue_comments: usize,
     pub new_reviews: usize,
     pub new_review_comments: usize,
+    /// PR children GitHub no longer lists — deleted comments and reviews.
+    pub pruned: usize,
     pub requests: u64,
 }
 
@@ -210,24 +212,82 @@ async fn fetch_one_pr(
     db.upsert_pull_request(repo, num, &pr_data).await?;
     summary.new_prs += 1;
 
+    // Each of these three endpoints returns the PR's *whole* child list, so
+    // a child we hold that the list did not mention was deleted on GitHub —
+    // a resolved review thread, a comment its author removed. That is only
+    // true when the walk actually succeeded, which is why the error is
+    // handled here rather than swallowed by `unwrap_or_default`: an empty
+    // list from a failed request is indistinguishable from "all deleted",
+    // and acting on it would wipe every comment on the PR.
     let ic_url = format!("{BASE}/repos/{repo}/issues/{num}/comments?per_page={PER_PAGE}");
-    for c in client.paginate(&ic_url).await.unwrap_or_default() {
-        db.upsert_issue_comment(repo, num, &c).await?;
-        summary.new_issue_comments += 1;
+    if let Some(ids) = walk_children(client, &ic_url, repo, num, "issue comments").await {
+        for c in &ids.payloads {
+            db.upsert_issue_comment(repo, num, c).await?;
+            summary.new_issue_comments += 1;
+        }
+        summary.pruned += db
+            .prune_pr_children("issue_comments", repo, num, &ids.ids)
+            .await?;
     }
 
     let r_url = format!("{BASE}/repos/{repo}/pulls/{num}/reviews?per_page={PER_PAGE}");
-    for r in client.paginate(&r_url).await.unwrap_or_default() {
-        db.upsert_pr_review(repo, num, &r).await?;
-        summary.new_reviews += 1;
+    if let Some(ids) = walk_children(client, &r_url, repo, num, "reviews").await {
+        for r in &ids.payloads {
+            db.upsert_pr_review(repo, num, r).await?;
+            summary.new_reviews += 1;
+        }
+        summary.pruned += db
+            .prune_pr_children("pr_reviews", repo, num, &ids.ids)
+            .await?;
     }
 
     let rc_url = format!("{BASE}/repos/{repo}/pulls/{num}/comments?per_page={PER_PAGE}");
-    for c in client.paginate(&rc_url).await.unwrap_or_default() {
-        db.upsert_pr_review_comment(repo, num, &c).await?;
-        summary.new_review_comments += 1;
+    if let Some(ids) = walk_children(client, &rc_url, repo, num, "review comments").await {
+        for c in &ids.payloads {
+            db.upsert_pr_review_comment(repo, num, c).await?;
+            summary.new_review_comments += 1;
+        }
+        summary.pruned += db
+            .prune_pr_children("pr_review_comments", repo, num, &ids.ids)
+            .await?;
     }
     Ok(())
+}
+
+/// One PR child list, and the ids it contained.
+struct ChildListing {
+    payloads: Vec<Value>,
+    ids: std::collections::HashSet<String>,
+}
+
+/// Walk a PR's child endpoint. `None` means the walk failed and this run
+/// learned nothing about that list — the caller must neither prune nor
+/// treat the absence as meaningful.
+async fn walk_children(
+    client: &GitHubClient,
+    url: &str,
+    repo: &str,
+    num: u32,
+    what: &str,
+) -> Option<ChildListing> {
+    match client.paginate(url).await {
+        Ok(payloads) => {
+            let ids = payloads
+                .iter()
+                .filter_map(|v| v.get("id").and_then(|i| i.as_i64()))
+                .map(|n| n.to_string())
+                .collect();
+            Some(ChildListing { payloads, ids })
+        }
+        Err(e) => {
+            tracing::warn!(
+                event = "github_child_list_failed",
+                repo, num, list = what, error = %e,
+                "could not list this PR's {what}; leaving what we already hold alone",
+            );
+            None
+        }
+    }
 }
 
 /// Scope key for this provider's [`datalib_etl::scope_config`] blob.
