@@ -1,5 +1,16 @@
 //! Snapshot of the TNG fixture's `backend_index.doltlite_db` contents.
+//!
+//! One row per source is a storage report (`provider: "datalib"`,
+//! `kind: "Source Size"`), and its `text` carries the measured size of
+//! that source's raw store. **A doltlite store's size is not stable
+//! across rebuilds of identical data** — measured over this fixture,
+//! five of its sixteen sources moved by 1-22 bytes on a re-bake of the
+//! same inputs. So the byte figure is scrubbed out of `text` before it
+//! is digested, the way `stable_source_url` scrubs a sandbox path.
+//! Everything else about the row — its path, its counts, its ids —
+//! stays pinned.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -81,6 +92,41 @@ fn stable_source_url(v: Option<String>) -> Option<String> {
     Some(format!("file://…/{tail}"))
 }
 
+/// A storage row's text with the measured size scrubbed out.
+///
+/// `slack/raw — 292.2 KiB, 8 files` becomes
+/// `slack/raw — <size>, 8 files`. Only a byte-unit token is taken: a
+/// table row reads `…#messages — 14 rows` and keeps its count, which is
+/// stable and is most of what this golden is pinning. Same spirit as
+/// [`stable_source_url`]: keep the row, drop the part the environment
+/// decides.
+/// The `grid_rows.provider` the storage reports carry. Kept beside the
+/// two helpers that key off it rather than spelled out at each use.
+const PROVIDER_DATALIB: &str = "datalib";
+
+fn stable_text(provider: Option<&str>, text: &str) -> String {
+    if provider != Some(PROVIDER_DATALIB) {
+        return text.to_string();
+    }
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let looks_like_a_size = |tok: &str| match tok.rsplit_once(' ') {
+        Some((n, unit)) => {
+            UNITS.contains(&unit)
+                && !n.is_empty()
+                && n.chars().all(|c| c.is_ascii_digit() || c == '.')
+        }
+        None => false,
+    };
+    text.split(", ")
+        .map(|part| match part.split_once(" — ") {
+            Some((head, tail)) if looks_like_a_size(tail) => format!("{head} — <size>"),
+            _ if looks_like_a_size(part) => "<size>".to_string(),
+            _ => part.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn stable_row_set_hash(provider: Option<&str>, v: Option<String>) -> Option<String> {
     match provider {
         Some("pdf") => Some("<machine-specific: rows embed an absolute path>".to_string()),
@@ -110,7 +156,11 @@ async fn snapshot_grid_rows_and_documents() {
     let grid_rows: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            let text: String = r.try_get("text").unwrap_or_default();
+            let provider: Option<String> = r.try_get("provider").ok();
+            let text = stable_text(
+                provider.as_deref(),
+                &r.try_get::<String, _>("text").unwrap_or_default(),
+            );
             let entire_chat: String = r.try_get("entire_chat").unwrap_or_default();
             json!({
                 "uuid": r.try_get::<String, _>("uuid").ok(),
@@ -205,19 +255,108 @@ async fn snapshot_grid_rows_and_documents() {
         .map(|r| json!({"message": r.try_get::<String, _>("message").ok()}))
         .collect();
 
+    // Storage rows are summarized rather than enumerated. They are 43%
+    // of the rows and none of this golden's purpose — it exists to
+    // catch *provider render* regressions, and a measurement row's
+    // per-field detail is pinned by `datalib_step::introspect`'s own
+    // tests. Listing them in full added 4,458 lines here, so every
+    // future churn of this file would carry them too.
+    //
+    // The digest keeps the coverage that belongs at this level: a row
+    // added, removed, re-keyed, or whose count moved all change it,
+    // because it is taken over each row's `(uuid, text)` and the text
+    // carries the count.
+    let (storage, grid_rows): (Vec<_>, Vec<_>) = grid_rows
+        .into_iter()
+        .partition(|r| r["provider"] == json!(PROVIDER_DATALIB));
+    let mut by_source_kind: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for r in &storage {
+        let key = (
+            r["account"].as_str().unwrap_or_default().to_string(),
+            r["kind"].as_str().unwrap_or_default().to_string(),
+        );
+        by_source_kind.entry(key).or_default().push(format!(
+            "{}\t{}",
+            r["uuid"].as_str().unwrap_or_default(),
+            r["text_sha"].as_str().unwrap_or_default(),
+        ));
+    }
+    let storage_rows: Vec<serde_json::Value> = by_source_kind
+        .into_iter()
+        .map(|((source, kind), mut members)| {
+            members.sort();
+            json!({
+                "source": source,
+                "kind": kind,
+                "rows": members.len(),
+                "members_sha": digest(&members.join("\n")),
+            })
+        })
+        .collect();
+
     let bundle = json!({
         "summary": {
             "grid_rows_count": grid_rows.len(),
+            "storage_rows_count": storage.len(),
             "documents_count": documents.len(),
             "dolt_log_count": dolt_log.len(),
         },
         "grid_rows": grid_rows,
+        "storage_rows": storage_rows,
         "documents": documents,
         "dolt_log": dolt_log,
     });
 
     // Pretty-printed JSON is the most diff-friendly representation —
     // one field per line, sorted keys, no insta-yaml quoting surprises.
+    // Measured against the alternatives on this same data: JSON Lines
+    // is 340 lines to this one's 6,971 and CSV is 341, but CSV has no
+    // native null and this golden turns on null != "" (see `when_ts`
+    // above), and neither shows you *which* field moved. The size
+    // problem was the storage rows, and it is fixed above.
     let snapshot = serde_json::to_string_pretty(&bundle).expect("serialize");
     insta::assert_snapshot!("fixture_backend_index", snapshot);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stable_text;
+
+    /// The scrub takes the size and nothing else: the path and the
+    /// counts are stable and are what this golden is for.
+    #[test]
+    fn only_the_measured_size_is_scrubbed() {
+        assert_eq!(
+            stable_text(Some("datalib"), "slack/raw — 292.2 KiB, 8 files"),
+            "slack/raw — <size>, 8 files"
+        );
+        assert_eq!(
+            stable_text(Some("datalib"), "slack/raw/e.doltlite_db — 280.2 KiB"),
+            "slack/raw/e.doltlite_db — <size>"
+        );
+        // A table row has no size to begin with, so its count must
+        // survive: it is stable, and it is the half of a Table row this
+        // golden exists to pin.
+        assert_eq!(
+            stable_text(
+                Some("datalib"),
+                "slack/raw/e.doltlite_db#messages — 14 rows"
+            ),
+            "slack/raw/e.doltlite_db#messages — 14 rows"
+        );
+        // A tree keeps its file count while losing its size.
+        assert_eq!(
+            stable_text(Some("datalib"), "s/raw — 1.0 KiB, 1 file"),
+            "s/raw — <size>, 1 file"
+        );
+    }
+
+    /// Every other provider's text is left exactly as it is — an em
+    /// dash in a chat message must not be treated as a measurement.
+    #[test]
+    fn other_providers_are_untouched() {
+        let body = "Tea — Earl Grey — hot, 3 of them";
+        assert_eq!(stable_text(Some("slack"), body), body);
+        assert_eq!(stable_text(None, body), body);
+    }
 }

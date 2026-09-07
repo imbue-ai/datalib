@@ -58,6 +58,12 @@ export type SearchRow = {
   // Empty when unset. Disambiguates `upstream_id`, whose numeric
   // ids overlap across a provider's API namespaces.
   upstream_entity_kind: string;
+  // Bytes on disk for what this row describes (a measured file or
+  // store, a sized artifact). Null for rows with no meaningful size.
+  byte_size: number | null;
+  // How many things this row counts (rows in a measured table, pages in
+  // a PDF). Null for rows that are a single thing.
+  item_count: number | null;
   // QMD rank score. Present when the row came from a qmd-routed search;
   // omitted (undefined) for pure structured queries and the LIKE fallback.
   score?: number;

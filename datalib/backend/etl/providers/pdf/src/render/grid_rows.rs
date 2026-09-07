@@ -150,6 +150,8 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         notion_page_uuid: None,
         notion_block_uuid: None,
         markdown_uuid: Some(doc_uuid.clone()),
+        byte_size: None,
+        item_count: Some(pages.len() as i64),
     });
 
     for (number, text) in pages {
@@ -184,6 +186,8 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             notion_page_uuid: None,
             notion_block_uuid: None,
             markdown_uuid: Some(doc_uuid.clone()),
+            byte_size: None,
+            item_count: None,
         });
     }
     rows

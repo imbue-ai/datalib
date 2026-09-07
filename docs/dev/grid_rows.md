@@ -58,7 +58,7 @@ each changed document's row set, and stamps the corresponding
 `markdowns` row with the `row_set_hash` used to skip unchanged
 re-renders next time.
 
-## Consumer side: `datalib/backend/core/src/dolt_repo.rs`
+## Consumer side: `datalib/backend/unified_index/src/dolt_repo.rs`
 
 `DoltRepo::search` builds a `WHERE` clause from `ParsedQuery`
 (account/project/before/after/free-text) plus a kind clause from
@@ -75,10 +75,13 @@ ahead of their messages. The row mapper translates each row into a
    future-you knows where the value comes from.
 2. Add the column to each per-provider `render/grid_rows.rs`
    `GridRow` builder.
-3. Update `dolt_repo.rs`'s `SELECT`, the destructured row, and
-   `SearchRow` in `search.rs` if the column should reach the API.
-4. Add it to the column manifest in `datalib/backend/http/src/lib.rs`
-   if the grid should display it.
+3. Update `unified_index/src/dolt_repo.rs` — both the
+   `SEARCH_ROW_COLUMNS` constant and `search_row_from` — and `SearchRow`
+   in `unified_index/src/search.rs` if the column should reach the API.
+4. If the grid should display it, add it to `default_columns()` in
+   `datalib/backend/applets/src/unified_index/mod.rs` (the applet's wire
+   contract; a test counts the entries) and to the `SearchRow` type in
+   `datalib/ui/src/api.ts`.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## Adding a provider
@@ -279,3 +282,119 @@ that markdown's `markdowns.md_path` — `GridIndex` keys rows by this path to
 resolve qmd search hits, and a row whose path doesn't match what qmd
 reports is silently dropped from free-text results.
 `//tests/fixtures:ingested_tng_test` asserts it across providers.
+
+### `byte_size`, `item_count`
+
+Two nullable measurements, both NULL on most rows.
+
+| provider.kind | `byte_size` | `item_count` |
+|---|---|---|
+| datalib.Source Size | bytes under `<name>/raw` | files under it |
+| datalib.Store | the `.doltlite_db` file's size | — |
+| datalib.Table | — (see below) | rows in the table |
+| pdf.document | — | pages in the document |
+
+On a `datalib.*` row, `byte_size` is bytes on disk **as of the last
+render that rewrote the row** — see "Storage rows" below for why that
+is not "now". Everywhere else it is bytes on disk, and never a logical
+sum of field lengths.
+The two disagree, and a column that quietly mixes them is worse than one
+that is absent — a producer that can only compute a logical size leaves
+it NULL and says so in `text`.
+
+`item_count` is deliberately unitless. What is being counted is `kind`'s
+job to say: a Table counts rows, a Source Size counts files, a PDF
+document counts pages.
+
+## Storage rows: what a source weighs
+
+Every source's render wave ends by measuring its own raw store and
+emitting a handful of rows tagged `provider = "datalib"`, `source_label
+= "Storage"`. That is what gives a download-only source — `fsindex`,
+`media` — a place in the grid at all: they render no documents, so
+without this they appear nowhere. `source:Storage` is "show me what
+everything weighs"; `source_name:<name>` narrows to one source, since
+the rows live under that source's `rendered_md/`.
+
+The code is `datalib/backend/datalib_step/src/introspect.rs`, and three
+of its decisions are worth knowing before changing it.
+
+**The grid holds the current value; the history lives elsewhere.** Each
+measurement is one row, keyed on `(source, kind, measured path)` and
+nothing else, so a re-render overwrites it and `dolt_diff` over the
+store reads as "these numbers moved". The series behind it accumulates
+in `source_measurements`, a table in the same per-source
+`indexed_markdown.doltlite_db` that `render_problems` lives in, keyed
+`(subject, measured_at)`.
+
+Putting the series in `grid_rows` instead was considered and rejected
+for four reasons, each specific to that table: `when_ts` is the global
+sort key, so every run would bury the user's real data under a few
+hundred fresh measurement rows; `grid_rows.uuid` is contracted to be
+deterministic from the entity, and a series row's id must carry a
+timestamp; the query path has no notion of "latest only", so search and
+filters would return N historical copies of every file; and pruning the
+grid's hot table is a bad trade for a sparkline.
+
+**A `Table` row carries no byte size.** doltlite is a content-addressed
+chunk store with no page layout — `dbstat` refuses outright, with
+"content-addressed chunk store has no page layout" — and chunks are
+shared between tables and between commits, so no honest per-table number
+exists. Row counts are exact and cheap; file sizes are exact and free.
+Those are what this emits. The internals to do better are in the
+amalgamation (`doltlite_chunk_walk.c` enumerates a catalog's per-table
+prolly roots, and `ChunkIndexEntry` carries each chunk's size), but none
+of it is exposed to SQL or declared in the public header.
+
+**A doltlite store's size is not reproducible.** Rebuilding the TNG
+fixture from byte-identical inputs moves six of its sixteen sources by
+1-22 bytes, in a different direction each time. That is a stronger
+property than "changes on every fetch" — it is the same input giving a
+different number — and it is why `byte_size` is kept out of *both*
+hashes that decide staleness: the storage report's own fingerprint and
+`compute_row_set_hash`, the markdown cache key. Hashing it re-renders
+documents nothing touched and churns every golden carrying a
+`row_set_hash` on any backend change. `fixture_db_snapshot.rs` scrubs
+the byte figure out of the text it digests for the same reason.
+
+This is the download side's *volatile field* idea arriving somewhere
+else. The mechanism does not apply — `split_volatile` operates on JSONB
+wire payloads and nothing here writes one — but the shape is identical,
+with one difference worth naming. For an unordered bag the rule is
+"sort; don't declare it volatile", because the contents are signal.
+Here the bytes are signal too — a user wants to see how big a source
+is — so we neither sort nor drop them. We **report but don't hash**.
+
+**Scope is `<name>/raw`, not the whole tree.** `<name>/rendered_md` is
+datalib's own output, `system/usage.doltlite_db` already tracks it per
+step, and measuring it from inside the thing that writes it is a
+ratchet: every run finds a bigger tree, writes a bigger number, and
+commits — growing the store it just measured, forever, on a pipeline
+where nothing upstream changed.
+
+**What re-renders the report is a count, never a byte.** This is the
+same hazard one level down, and it is the one that actually shipped
+broken: `ingested_tng_test` asserts that a second run over unchanged
+data leaves `grid_index` with nothing to read, and the first version of
+this failed it. Two numbers move without the data moving — a doltlite
+store grows on any run that touches it (a bookkeeping
+`last_attempt_at` mutation rewrites chunks with no row added), and
+`sync_runs` gains a row per run. So:
+
+- byte sizes are **reported but not fingerprinted**; and
+- `sync_runs`, `sync_scope_state`, `sync_scope_config` and every
+  `<table>_bookkeeping` sidecar are left out of the report entirely.
+  They are not the source's data — `doltlite_raw`'s own words for the
+  first two are "audit log and resume cursor, not content" — and a
+  sidecar holds one row per row of the table it shadows, so counting it
+  doubles every number for nothing.
+
+So read `byte_size` on a storage row as **how big the raw store was
+the last time this source's contents changed**, not as how big it is
+now. The two only coincide on a source that just changed. On one that
+has gone quiet the number goes quiet with it, no matter how many times
+the pipeline runs afterwards — which is the honest thing for a
+content-addressed row to say, since that is the last moment the row was
+written. For bytes on their own cadence, `system/usage.doltlite_db`
+keeps a per-step series and commits nothing, which is exactly what lets
+it sample freely.

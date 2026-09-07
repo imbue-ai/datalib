@@ -899,7 +899,45 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     hide: true,
     tooltipField: "org_uuid",
   },
+  // Both null on most rows — they carry a value on the storage rows
+  // every source emits, and wherever a provider has a real size or
+  // count to report (a PDF's page count).
+  {
+    field: "byte_size",
+    headerName: "Size",
+    width: 110,
+    hide: true,
+    // Binary units, matching what the storage report's text says, so
+    // the column and the preview pane never disagree.
+    valueFormatter: (p) => formatBytes(p.value),
+    cellStyle: { "text-align": "right" } as Record<string, string>,
+  },
+  {
+    field: "item_count",
+    headerName: "Items",
+    width: 90,
+    hide: true,
+    headerTooltip:
+      "What is being counted depends on the row's Type: rows for a Table, " +
+      "files for a Source Size, pages for a PDF.",
+    valueFormatter: (p) =>
+      typeof p.value === "number" ? p.value.toLocaleString() : "",
+    cellStyle: { "text-align": "right" } as Record<string, string>,
+  },
 ]);
+
+const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"];
+
+function formatBytes(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "";
+  let v = value;
+  let u = 0;
+  while (v >= 1024 && u + 1 < BYTE_UNITS.length) {
+    v /= 1024;
+    u += 1;
+  }
+  return u === 0 ? `${value} B` : `${v.toFixed(1)} ${BYTE_UNITS[u]}`;
+}
 
 const defaultColDef: ColDef = {
   resizable: true,

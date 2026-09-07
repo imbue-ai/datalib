@@ -15,6 +15,7 @@ use sqlx::Row;
 use datalib_schema::edges::DDL as EDGES_DDL;
 use datalib_schema::grid_rows::DDL as GRID_ROWS_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
+use datalib_schema::measurements::{SourceMeasurementRow, DDL as MEASUREMENTS_DDL};
 use datalib_schema::render_problems::{RenderProblemRow, DDL as RENDER_PROBLEMS_DDL};
 
 use crate::bulk::BulkUpsertable;
@@ -37,6 +38,7 @@ fn store_ddl() -> Vec<&'static str> {
         .chain(MARKDOWNS_DDL.iter())
         .chain(EDGES_DDL.iter())
         .chain(RENDER_PROBLEMS_DDL.iter())
+        .chain(MEASUREMENTS_DDL.iter())
         .map(|(_table, ddl)| *ddl)
         .collect()
 }
@@ -111,12 +113,20 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// The renderer versions the provider's own documents carry.
+    ///
+    /// The storage report is excluded: datalib renders it, not any of
+    /// the source's processors, so measuring its version against what
+    /// they declare would fail every source — and counting it as
+    /// "declared" would blunt the check for the documents it exists to
+    /// guard.
     pub fn render_versions(&self) -> Result<BTreeSet<u32>> {
         blocking(async {
             let rows = sqlx::query(
                 "SELECT DISTINCT renderer_version FROM markdowns \
-                 WHERE renderer_version IS NOT NULL",
+                 WHERE renderer_version IS NOT NULL AND kind <> ?",
             )
+            .bind(datalib_schema::measurements::DOC_KIND)
             .fetch_all(&self.pool)
             .await
             .context("read renderer versions")?;
@@ -223,6 +233,50 @@ impl IndexedMarkdownStore {
                 .with_context(|| format!("insert render_problem {}", p.uuid))?;
         }
         Ok(())
+    }
+
+    /// Append one run's measurements to the source's series.
+    ///
+    /// Append, not upsert: this table is the history behind the
+    /// sparkline, and the current value already lives in `grid_rows`.
+    ///
+    /// `INSERT OR REPLACE`, because the key is `(subject, measured_at)`
+    /// and a run stamps one pinned instant across every row it writes —
+    /// so a re-run under the same `--now` should restate the series
+    /// rather than fail the whole render on a duplicate carrying the
+    /// same numbers.
+    ///
+    /// Hand-written rather than through `bulk::insert_sql`: the
+    /// `PortableTable` derive emits no write path for a composite
+    /// primary key, since `BulkUpsertable` assumes one `id` column.
+    pub fn put_measurements(&self, samples: &[SourceMeasurementRow]) -> Result<()> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let conn = guard.conn();
+            for sample in samples {
+                sqlx::query(
+                    "INSERT OR REPLACE INTO source_measurements \
+                     (subject, kind, measured_at, bytes, items) VALUES (?, ?, ?, ?, ?)",
+                )
+                .bind(&sample.subject)
+                .bind(&sample.kind)
+                .bind(&sample.measured_at)
+                .bind(sample.bytes)
+                .bind(sample.items)
+                .execute(&mut **conn)
+                .await
+                .with_context(|| {
+                    format!(
+                        "insert measurement {} at {}",
+                        sample.subject, sample.measured_at
+                    )
+                })?;
+            }
+            Ok(())
+        })
     }
 
     /// Problems not attached to any document — a payload that would not
@@ -431,6 +485,172 @@ mod tests {
             edges: Vec::new(),
             problems,
         }
+    }
+
+    /// The storage report is rendered by datalib, not by any of the
+    /// source's processors, so its version must stay out of
+    /// `render_versions` — the set the render step checks against what
+    /// those processors declare.
+    ///
+    /// Getting this wrong is not subtle and not local: every source in
+    /// the pipeline failed its render with "carry render_version [1],
+    /// which none of its processors declare", and a download-only
+    /// source (whose only document *is* the report) failed with
+    /// "none of its processors implement render_version".
+    #[test]
+    fn the_storage_report_is_not_counted_as_a_provider_render_version() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+
+        let mut report = doc(td.path(), "storage-doc", "fp-1");
+        report.render_version = 1;
+        report.rows = vec![GridRow::builder()
+            .uuid("storage-doc")
+            .provider("datalib")
+            .kind("Source Size")
+            .source_label("Storage")
+            .conversation_uuid("storage-doc")
+            .entire_chat("/chat/storage-doc")
+            .text("src/raw — 1.0 KiB")
+            .markdown_uuid(Some("storage-doc".to_string()))
+            .byte_size(Some(1024))
+            .build()
+            .expect("row")];
+        st.put_document(td.path(), &report).expect("store report");
+
+        assert!(
+            st.render_versions().expect("versions").is_empty(),
+            "a source whose only document is the storage report must \
+             report no provider render versions at all"
+        );
+
+        // A real provider document alongside it is still counted.
+        st.put_document(td.path(), &doc(td.path(), "real-doc", "fp-2"))
+            .expect("store provider doc");
+        assert_eq!(
+            st.render_versions().expect("versions"),
+            BTreeSet::from([7]),
+            "the provider's version is reported; the report's is not"
+        );
+    }
+
+    fn sample(
+        subject: &str,
+        at: &str,
+        bytes: Option<i64>,
+        items: Option<i64>,
+    ) -> SourceMeasurementRow {
+        SourceMeasurementRow {
+            subject: subject.into(),
+            kind: "tree".into(),
+            measured_at: at.into(),
+            bytes,
+            items,
+        }
+    }
+
+    /// The whole point of the second table: a later run adds to the
+    /// series rather than replacing it. If this ever upserts on
+    /// `subject` alone there is no history left to draw, and nothing
+    /// downstream would report an error — the newest number would still
+    /// be right.
+    #[test]
+    fn a_second_run_appends_to_the_series_instead_of_replacing_it() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+
+        st.put_measurements(&[
+            sample("src/raw", "2026-09-01T10:00:00-07:00", Some(100), Some(1)),
+            sample(
+                "src/raw/a.doltlite_db",
+                "2026-09-01T10:00:00-07:00",
+                Some(90),
+                None,
+            ),
+        ])
+        .expect("first run");
+        st.put_measurements(&[sample(
+            "src/raw",
+            "2026-09-02T10:00:00-07:00",
+            Some(250),
+            Some(2),
+        )])
+        .expect("second run");
+
+        let series: Vec<(String, Option<i64>)> = blocking(async {
+            sqlx::query(
+                "SELECT measured_at, bytes FROM source_measurements \
+                 WHERE subject = 'src/raw' ORDER BY measured_at",
+            )
+            .fetch_all(&st.pool)
+            .await
+            .expect("read the series")
+            .into_iter()
+            .map(|r| {
+                (
+                    r.try_get::<String, _>(0).unwrap(),
+                    r.try_get::<Option<i64>, _>(1).unwrap(),
+                )
+            })
+            .collect()
+        });
+        assert_eq!(
+            series,
+            vec![
+                ("2026-09-01T10:00:00-07:00".to_string(), Some(100)),
+                ("2026-09-02T10:00:00-07:00".to_string(), Some(250)),
+            ],
+            "both runs must survive"
+        );
+    }
+
+    /// A NULL byte count is a real value — every table row carries one,
+    /// because a content-addressed store has no per-table byte layout.
+    /// It must round-trip as NULL rather than as 0.
+    #[test]
+    fn an_absent_byte_count_round_trips_as_null() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        st.put_measurements(&[sample(
+            "src/raw#t",
+            "2026-09-01T10:00:00-07:00",
+            None,
+            Some(5),
+        )])
+        .expect("write");
+
+        let (bytes, items): (Option<i64>, Option<i64>) = blocking(async {
+            let r = sqlx::query("SELECT bytes, items FROM source_measurements")
+                .fetch_one(&st.pool)
+                .await
+                .expect("read back");
+            (r.try_get(0).unwrap(), r.try_get(1).unwrap())
+        });
+        assert_eq!(bytes, None);
+        assert_eq!(items, Some(5));
+    }
+
+    /// A re-run under the same pinned `--now` restates the series
+    /// rather than failing the whole render on a duplicate key.
+    #[test]
+    fn re_measuring_at_the_same_instant_restates_rather_than_fails() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        let at = "2026-09-01T10:00:00-07:00";
+        st.put_measurements(&[sample("src/raw", at, Some(100), Some(1))])
+            .expect("first");
+        st.put_measurements(&[sample("src/raw", at, Some(140), Some(2))])
+            .expect("same instant again must not fail");
+
+        let (n, bytes): (i64, Option<i64>) = blocking(async {
+            let r = sqlx::query("SELECT COUNT(*), MAX(bytes) FROM source_measurements")
+                .fetch_one(&st.pool)
+                .await
+                .expect("read back");
+            (r.try_get(0).unwrap(), r.try_get(1).unwrap())
+        });
+        assert_eq!(n, 1, "one instant is one sample");
+        assert_eq!(bytes, Some(140), "the later write wins");
     }
 
     fn problem(uuid: &str, scope: &str) -> RenderProblemRow {

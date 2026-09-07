@@ -12,6 +12,7 @@ rust_library(
         "src/markdowns.rs",
         "src/render_problems.rs",
         "src/source_cursors.rs",
+        "src/measurements.rs",
         "src/bulk.rs",
     ],
     crate_name = "datalib_schema",

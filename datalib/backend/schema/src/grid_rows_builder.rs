@@ -105,6 +105,8 @@ pub struct GridRowBuilder {
     notion_page_uuid: Option<String>,
     notion_block_uuid: Option<String>,
     markdown_uuid: Option<String>,
+    byte_size: Option<i64>,
+    item_count: Option<i64>,
 }
 
 /// Generate a required-field setter (`impl Into<String>`).
@@ -161,6 +163,16 @@ impl GridRowBuilder {
 
     pub fn message_index(mut self, v: impl Into<Option<i64>>) -> Self {
         self.message_index = v.into();
+        self
+    }
+
+    pub fn byte_size(mut self, v: impl Into<Option<i64>>) -> Self {
+        self.byte_size = v.into();
+        self
+    }
+
+    pub fn item_count(mut self, v: impl Into<Option<i64>>) -> Self {
+        self.item_count = v.into();
         self
     }
 
@@ -280,6 +292,8 @@ impl GridRowBuilder {
             notion_page_uuid: self.notion_page_uuid,
             notion_block_uuid: self.notion_block_uuid,
             markdown_uuid: self.markdown_uuid,
+            byte_size: self.byte_size,
+            item_count: self.item_count,
         })
     }
 }

@@ -457,6 +457,9 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
         "PDF Document" => "document",
         // Likewise a Claude Project: written context, not a conversation.
         "Project" => "document",
+        // The per-source storage report: datalib describing a mirror,
+        // not anything the upstream authored.
+        "Source Size" => datalib_schema::measurements::DOC_KIND,
         _ => "chat",
     }
 }
@@ -505,6 +508,16 @@ pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
         push(&mut h, r.upstream_scope.as_deref());
         push(&mut h, r.notion_page_uuid.as_deref());
         push(&mut h, r.notion_block_uuid.as_deref());
+        // `item_count` but deliberately NOT `byte_size`. This hash is a
+        // staleness decision — it is the markdown cache key — and a
+        // doltlite store's size is not stable across rebuilds of
+        // identical data: measured over the TNG fixture, five of its
+        // sixteen sources moved by 1–22 bytes on a re-bake of the same
+        // inputs. Hashing that would churn the goldens on every backend
+        // change and re-render documents nothing touched. Same rule as
+        // the storage report's own fingerprint: bytes are reported,
+        // never used to decide whether something changed.
+        push_i(&mut h, r.item_count);
     }
     let digest = h.finalize();
     let mut s = String::with_capacity(64);
@@ -1095,7 +1108,38 @@ mod insert_round_trip_tests {
             notion_page_uuid: Some("notion-page-1701".into()),
             notion_block_uuid: Some("notion-block-1701".into()),
             markdown_uuid: Some("md-1701".into()),
+            byte_size: Some(4_096),
+            item_count: Some(17),
         }
+    }
+
+    /// `byte_size` must not reach the markdown cache key, and
+    /// `item_count` must. A doltlite store's size is not stable across
+    /// rebuilds of identical data, so hashing it re-renders documents
+    /// nothing touched and churns every golden that carries a
+    /// `row_set_hash`.
+    #[test]
+    fn the_row_set_hash_ignores_bytes_and_notices_counts() {
+        let base = fully_populated_row();
+        let bigger = GridRow {
+            byte_size: base.byte_size.map(|n| n + 22),
+            ..base.clone()
+        };
+        let more = GridRow {
+            item_count: base.item_count.map(|n| n + 1),
+            ..base.clone()
+        };
+        let rows = std::slice::from_ref(&base);
+        assert_eq!(
+            compute_row_set_hash(rows),
+            compute_row_set_hash(std::slice::from_ref(&bigger)),
+            "a store that only grew must not invalidate the document"
+        );
+        assert_ne!(
+            compute_row_set_hash(rows),
+            compute_row_set_hash(std::slice::from_ref(&more)),
+            "a row appearing in a measured table must invalidate it"
+        );
     }
 
     #[tokio::test]
@@ -1196,6 +1240,8 @@ mod id_claim_tests {
             notion_page_uuid: None,
             notion_block_uuid: None,
             markdown_uuid: Some(markdown_uuid.into()),
+            byte_size: None,
+            item_count: None,
         }
     }
 
@@ -1324,6 +1370,8 @@ mod write_lock_tests {
             notion_page_uuid: None,
             notion_block_uuid: None,
             markdown_uuid: Some(uuid.clone()),
+            byte_size: None,
+            item_count: None,
         };
         RenderedMarkdown {
             markdown_uuid: uuid.clone(),

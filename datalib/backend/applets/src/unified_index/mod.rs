@@ -567,6 +567,8 @@ fn default_columns() -> Vec<ColumnSpec> {
         col("conversation_name", "Conversation Name", false),
         col("project", "Project", false),
         col("entire_chat", "Entire Chat", false),
+        col("byte_size", "Size", false),
+        col("item_count", "Items", false),
     ]
 }
 
@@ -587,7 +589,7 @@ mod tests {
     /// disappearing is a blank column in the app rather than an error.
     #[test]
     fn default_columns_listed() {
-        assert_eq!(default_columns().len(), 11);
+        assert_eq!(default_columns().len(), 13);
     }
 
     /// Frontmatter trimming is text handling, not parsing — a body

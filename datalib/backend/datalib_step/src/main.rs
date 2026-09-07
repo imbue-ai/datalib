@@ -5,6 +5,7 @@ mod download;
 mod events;
 mod grid_index;
 mod hints;
+mod introspect;
 mod probe;
 mod qmd_index;
 mod render;

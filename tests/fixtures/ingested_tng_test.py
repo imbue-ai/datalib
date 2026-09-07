@@ -142,6 +142,11 @@ EXPECTED_PROVIDERS = frozenset(
         "claude",
         "beeper",
         "contacts",
+        # Not a source: the per-source storage report every render wave
+        # emits (what the mirror weighs, and the row counts inside it).
+        # It is the only provider here that appears for *every* source
+        # rather than for one — see docs/dev/grid_rows.md.
+        "datalib",
         "github",
         "gitlab",
         "google_takeout",

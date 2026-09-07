@@ -32,6 +32,10 @@ pub mod source_cursors {
     include!("source_cursors.rs");
 }
 
+pub mod measurements {
+    include!("measurements.rs");
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
