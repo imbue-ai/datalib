@@ -160,6 +160,13 @@ lofty = "0.25"
 # format we index.
 kamadak-exif = "0.6"
 async-trait = "0.1"
+# `StrEnum` for Rust: the derives that turn a unit-only enum into its
+# wire spelling and back — `IntoStaticStr` (as_str), `EnumString`
+# (parse), `Display`, and `VariantArray` (VARIANTS, so nothing has to
+# re-list the values). Every string vocabulary this tree mints goes
+# through one of these enums; see AGENTS.md's "Name a closed set of
+# strings".
+strum = { version = "0.28", features = ["derive"] }
 # Prost runtime. Codegen is driven by Bazel's `rust_prost_library`
 # (see //tools/prost_toolchain), so we don't depend on `prost-build`
 # here — only the runtime. `protoc-gen-prost` is pulled in via the

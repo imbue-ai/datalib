@@ -12,6 +12,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::section::{msg_div_open, section_attrs};
 use datalib_etl::title::Title;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 
 use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Room};
@@ -277,7 +278,7 @@ fn render_markdown(
         // highlight (or even scroll to) the message a clicked row
         // points at, and the row looks like data loss. The grid row
         // uuid is `m.event_uuid` (see `rows_for_doc`); same here.
-        out.push_str(&msg_div_open(&m.event_uuid, "beeper"));
+        out.push_str(&msg_div_open(&m.event_uuid, Provider::Beeper));
         out.push_str("\n\n");
 
         // HIDDEN events are surfaced as a single italic line — the
@@ -597,7 +598,7 @@ fn build_grid_rows(
     rows.extend(
         GridRow::builder()
             .uuid(markdown_uuid.to_string())
-            .provider("beeper")
+            .provider(Provider::Beeper)
             .kind(kind_for_conversation(&room.network))
             .source_label(source_label.clone())
             .when_ts(iso_from_ms(doc.first_ms))
@@ -630,7 +631,7 @@ fn build_grid_rows(
         rows.extend(
             GridRow::builder()
                 .uuid(m.event_uuid.clone())
-                .provider("beeper")
+                .provider(Provider::Beeper)
                 .kind(kind_for_message(&room.network, &m.event_type))
                 .source_label(source_label.clone())
                 .when_ts(iso_from_ms(m.timestamp_ms))
@@ -662,7 +663,7 @@ fn build_grid_rows(
             rows.extend(
                 GridRow::builder()
                     .uuid(r.event_uuid.clone())
-                    .provider("beeper")
+                    .provider(Provider::Beeper)
                     .kind(format!("{} Reaction", network_label(&room.network)))
                     .source_label(source_label.clone())
                     .when_ts(iso_from_ms(r.timestamp_ms))

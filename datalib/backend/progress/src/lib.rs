@@ -13,11 +13,43 @@ pub fn progress_path(data_root: &Path) -> PathBuf {
     data_root.join(PROGRESS_REL_PATH)
 }
 
+/// The two states the bus itself names. Every other value of
+/// [`ProgressRow::state`] is a terminal status minted by whoever writes
+/// the bus — the DAG runner's `RunState`, today — which this crate
+/// deliberately does not enumerate: it is a leaf with no datalib
+/// dependencies, and the scheduler's vocabulary is not its business.
+/// "Not one of these two" is the whole of what the bus needs to know.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, strum::VariantArray,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum LiveState {
+    /// In the plan, not yet reached.
+    Pending,
+    /// Invoked, and still going.
+    Running,
+}
+
+impl LiveState {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn parse(s: &str) -> Option<LiveState> {
+        s.parse().ok()
+    }
+}
+
+/// Whether a [`ProgressRow::state`] means the step is finished.
+pub fn is_terminal(state: &str) -> bool {
+    LiveState::parse(state).is_none()
+}
+
 /// One step's live state, as a reader sees it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgressRow {
     pub step: String,
-    /// `pending` | `running` | the terminal status the scheduler gave it.
+    /// A [`LiveState`], or the terminal status the scheduler gave it.
     pub state: String,
     /// Work units done, when the step reports any.
     pub done: Option<i64>,

@@ -7,7 +7,10 @@
 
 use datalib_time::validate_iso_offset;
 
-use crate::render_problems::{sample_of, Outcome, Problem, Reason, RenderProblemRow};
+use crate::providers::Provider;
+use crate::render_problems::{
+    sample_of, Outcome, Problem, Reason, RenderProblemRow, ScopeKind, Stage,
+};
 
 fn blake3_hex(s: &str) -> String {
     use std::hash::{Hash, Hasher};
@@ -133,12 +136,19 @@ macro_rules! opt_setter {
 
 impl GridRowBuilder {
     req_setter!(uuid);
-    req_setter!(provider);
     req_setter!(kind);
     req_setter!(source_label);
     req_setter!(conversation_uuid);
     req_setter!(entire_chat);
     req_setter!(text);
+
+    /// Set the required `provider` column. Typed, unlike its
+    /// neighbours: the tag is a closed set, and it is on disk in the
+    /// column, the frontmatter and the rendered-tree path.
+    pub fn provider(mut self, v: Provider) -> Self {
+        self.provider = v.as_str().to_string();
+        self
+    }
 
     opt_setter!(when_ts);
     opt_setter!(author);
@@ -213,9 +223,9 @@ impl GridRowBuilder {
                 problems.push(RenderProblemRow {
                     uuid: key,
                     scope_key: scope_key.to_string(),
-                    scope_kind: "markdown".to_string(),
+                    scope_kind: ScopeKind::Markdown.as_str().to_string(),
                     source_name: source_name.to_string(),
-                    stage: "grid_row".to_string(),
+                    stage: Stage::GridRow.as_str().to_string(),
                     outcome: Outcome::Dropped.as_str().to_string(),
                     problems: serde_json::to_string(&vec![problem]).unwrap_or_else(|_| "[]".into()),
                     // Left for the store to stamp; it is the only
@@ -291,7 +301,7 @@ mod builder_tests {
     fn ok_builder() -> GridRowBuilder {
         GridRow::builder()
             .uuid("u-1")
-            .provider("linkedin")
+            .provider(Provider::Linkedin)
             .kind("Contact")
             .source_label("LinkedIn")
             .conversation_uuid("c-1")

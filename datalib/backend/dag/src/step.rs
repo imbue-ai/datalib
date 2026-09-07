@@ -200,8 +200,20 @@ pub struct StepOutcome {
 /// Failure classification — the part of a failure the scheduler acts
 /// on. The mapping to a retry policy lives in the scheduler; the step
 /// only says *which kind* this is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum FailureKind {
     /// Try again soon (network blips, lock contention).
     Transient,
@@ -214,6 +226,19 @@ pub enum FailureKind {
     Data,
     /// The run was cancelled from outside.
     Cancelled,
+}
+
+impl FailureKind {
+    /// The wire spelling a step writes on its `outcome` line, and the
+    /// one `RunSummary` reports.
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<FailureKind> {
+        s.parse().ok()
+    }
 }
 
 /// A step failure. Because steps are incremental, a failed step may

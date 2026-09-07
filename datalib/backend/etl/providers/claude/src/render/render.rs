@@ -24,6 +24,7 @@ use super::parse::{
     shred, AttachmentRow, ContentBlockRow, MessageRow, ParsedExport, ProjectRow,
     ShreddedConversation,
 };
+use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v3: render via chat-common (block-explosion).
@@ -43,7 +44,7 @@ pub const RENDER_VERSION: u32 = 6;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "claude",
+        provider: Provider::Claude,
         source_label: "Claude".to_string(),
         chat_kind: "Chat".to_string(),
         // Per-item kind is always set via `kind_label`; nominal fallback.
@@ -62,7 +63,7 @@ fn profile() -> RenderProfile {
 /// for why those anchors are load-bearing.
 fn project_profile() -> RenderProfile {
     RenderProfile {
-        provider: "claude",
+        provider: Provider::Claude,
         source_label: "Claude".to_string(),
         chat_kind: "Project".to_string(),
         message_kind: "Project Knowledge".to_string(),
