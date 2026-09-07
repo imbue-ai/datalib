@@ -86,7 +86,7 @@ pub fn render(
     }
     let (messages, groups, voice_messages, voice_blobs) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open(&db_path).await?;
+            let db = RawDb::open_reader(&db_path).await?;
             let loaded = async {
                 let messages = db.load_payloads("chat_messages").await?;
                 // (dir name, group_info payload) — the directory name

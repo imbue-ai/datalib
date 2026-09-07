@@ -146,7 +146,7 @@ async fn widened_since_backfills_below_oldest_stored_message() {
         json!([msg(TS_NEW, "new")]),
     );
     // Run 2, `since: 2023-01-01`. Two calls are expected:
-    //   - the forward walk, resuming at the stored watermark (exclusive)
+    //   - the forward walk, resuming at the stored resume cursor (exclusive)
     //   - the backfill, `[2023-01-01, oldest_stored]` inclusive
     write_history(&api, "run-2", TS_NEW, None, false, json!([]));
     write_history(

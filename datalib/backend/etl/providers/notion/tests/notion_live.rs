@@ -36,21 +36,21 @@ async fn notion_live_single_page_snapshot() {
     assert_eq!(parsed.pages.len(), 1, "expected exactly one page");
 
     let p = &parsed.pages[0];
-    let mut block_kinds: Vec<String> = parsed
-        .blocks
-        .iter()
-        .filter_map(|b| b.get("type").and_then(|v| v.as_str()).map(String::from))
-        .collect();
-    block_kinds.sort();
-    block_kinds.dedup();
+    let pid = p.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+    let body = parsed.markdown_by_page.get(pid);
+    // Deliberately *not* snapshotting the markdown itself or its
+    // length: this runs against a live page whose text changes. What
+    // must hold is that a body was stored at all, and — the property
+    // the whole design rests on — that no signed URL survived into it.
     let view = json!({
         "object": p.get("object"),
-        "has_id": p.get("id").and_then(|v| v.as_str()).is_some(),
+        "has_id": !pid.is_empty(),
         "parent_kind": p.get("parent").and_then(|v| v.get("type")),
-        "archived": p.get("archived"),
-        "block_count": parsed.blocks.len(),
-        "block_kinds": block_kinds,
-        "comment_count": parsed.comments.len(),
+        "in_trash": p.get("in_trash"),
+        "has_markdown": body.is_some(),
+        "markdown_carries_no_signature": body
+            .map(|m| !m.contains("X-Amz-Signature"))
+            .unwrap_or(true),
     });
 
     insta::with_settings!({ sort_maps => true }, {

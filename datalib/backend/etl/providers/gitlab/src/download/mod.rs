@@ -84,7 +84,7 @@ pub struct FetchSummary {
     pub new_discussions: usize,
     /// MRs whose listing `updated_at` matched the local copy — the
     /// detail + discussions fetch was skipped. Counted separately so
-    /// the per-source one-liner can show how much work the watermark
+    /// the per-source one-liner can show how much work the resume cursor
     /// + per-MR skip actually saved.
     pub skipped_unchanged_mrs: usize,
     /// Discussion threads GitLab no longer lists — deleted on their MR.

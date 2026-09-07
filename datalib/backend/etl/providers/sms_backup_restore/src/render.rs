@@ -73,7 +73,7 @@ pub fn render(
     }
     let (messages, calls, blobs, scan) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open(&db_path).await?;
+            let db = RawDb::open_reader(&db_path).await?;
             let loaded = async {
                 let messages = db.load_payloads("sms_messages").await?;
                 let calls = db.load_payloads("sms_calls").await?;

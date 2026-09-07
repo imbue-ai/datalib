@@ -260,7 +260,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .set_length(Some(opts.sync.devices.len() as u64));
     let now_ms = Utc::now().timestamp_millis();
     // Diff the per-device `start` dates against the ones that produced
-    // the stored watermarks. `None` (fresh store, or one written before
+    // the stored resume cursors. `None` (fresh store, or one written before
     // `sync_scope_config` existed) plans no backfill.
     let prior_scope_cfg =
         datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
@@ -300,16 +300,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 /// What the resume decision did, for the caller to log.
 #[derive(Debug, PartialEq, Eq)]
 enum CursorNote {
-    /// Resumed from the watermark (clamped forward to `start`, which is
+    /// Resumed from the resume cursor (clamped forward to `start`, which is
     /// a floor). The ordinary case.
     Normal,
-    /// `start` moved earlier than the run that produced the watermark,
+    /// `start` moved earlier than the run that produced the resume cursor,
     /// so the range below the old start was never walked. Reset to the
     /// new start; windows are UPSERT-deduped, so re-walking the overlap
     /// costs requests, not correctness.
     Backfill,
-    /// `start` moved later, past the watermark. The clamp jumps the
-    /// cursor forward and `[watermark, start]` is never fetched. That is
+    /// `start` moved later, past the resume cursor. The clamp jumps the
+    /// cursor forward and `[resume cursor, start]` is never fetched. That is
     /// what `start` literally asks for, so it's preserved — but said out
     /// loud rather than done silently.
     SkipsAhead,
@@ -320,13 +320,13 @@ enum CursorNote {
 /// Pure so the config-change branches are testable without a transport;
 /// `fetch_device` shells out to curl.
 fn resume_cursor(
-    watermark: Option<i64>,
+    stored_ms: Option<i64>,
     start_ms: i64,
     overlap_ms: i64,
     start_widened: bool,
     start_narrowed: bool,
 ) -> (i64, CursorNote) {
-    match watermark {
+    match stored_ms {
         _ if start_widened => (start_ms, CursorNote::Backfill),
         None => (start_ms, CursorNote::Normal),
         Some(w) => {
@@ -368,13 +368,13 @@ async fn fetch_device(
     bulk_upsert_in_tx(&mut tx, &[device_row], &now).await?;
     tx.commit().await?;
 
-    let watermark: Option<i64> =
+    let stored_ms: Option<i64> =
         sqlx::query_scalar("SELECT last_ts_ms FROM yolink_devices WHERE id = ?")
             .bind(&dev.name)
             .fetch_one(db.pool())
             .await?;
 
-    // Only a *recorded* move counts. Comparing `start` to the watermark
+    // Only a *recorded* move counts. Comparing `start` to the resume cursor
     // alone would fire on every run of any store whose configured start
     // simply sits ahead of its data. `YYYY-MM-DD` sorts lexicographically
     // as it does chronologically (validated at config load).
@@ -382,7 +382,7 @@ async fn fetch_device(
     let start_narrowed = prior_start.is_some_and(|p| dev.start.as_str() > p);
 
     let (cursor_start, note) = resume_cursor(
-        watermark,
+        stored_ms,
         start_ms,
         overlap_ms,
         start_widened,
@@ -401,7 +401,7 @@ async fn fetch_device(
             device = %dev.name,
             from = prior_start.unwrap_or_default(),
             to = %dev.start,
-            "start moved past the stored watermark; the range between \
+            "start moved past the stored resume cursor; the range between \
              them will not be fetched",
         ),
         CursorNote::Normal => {}
@@ -684,7 +684,7 @@ mod scope_config_tests {
         assert_eq!(prior_start_for(Some(&json!({})), "freezer"), None);
     }
 
-    // ── resume_cursor ────────────────────────────────────────────────
+    // ── resume cursor ────────────────────────────────────────────────
 
     const HOUR: i64 = 3_600_000;
 
@@ -697,9 +697,9 @@ mod scope_config_tests {
     }
 
     #[test]
-    fn watermark_resumes_with_overlap() {
+    fn resume_cursor_resumes_with_overlap() {
         let (c, note) = resume_cursor(Some(100 * HOUR), HOUR, HOUR, false, false);
-        assert_eq!(c, 99 * HOUR, "one overlap back from the watermark");
+        assert_eq!(c, 99 * HOUR, "one overlap back from the resume cursor");
         assert_eq!(note, CursorNote::Normal);
     }
 
@@ -714,7 +714,7 @@ mod scope_config_tests {
 
     #[test]
     fn widened_start_resets_the_cursor() {
-        // The whole point: a watermark far ahead does not suppress the
+        // The whole point: a resume cursor far ahead does not suppress the
         // backfill when `start` moved earlier.
         let (c, note) = resume_cursor(Some(100 * HOUR), 2 * HOUR, HOUR, true, false);
         assert_eq!(c, 2 * HOUR);
@@ -722,7 +722,7 @@ mod scope_config_tests {
     }
 
     #[test]
-    fn narrowed_start_past_the_watermark_is_flagged() {
+    fn narrowed_start_past_the_resume_cursor_is_flagged() {
         let (c, note) = resume_cursor(Some(10 * HOUR), 50 * HOUR, HOUR, false, true);
         assert_eq!(c, 50 * HOUR, "start wins; the gap is what it asks for");
         assert_eq!(note, CursorNote::SkipsAhead);
@@ -731,7 +731,7 @@ mod scope_config_tests {
     #[test]
     fn stable_config_never_reports_skips_ahead() {
         // Without a recorded move, a start that simply sits ahead of the
-        // watermark must not warn on every single run.
+        // resume cursor must not warn on every single run.
         let (_, note) = resume_cursor(Some(10 * HOUR), 50 * HOUR, HOUR, false, false);
         assert_eq!(note, CursorNote::Normal);
     }

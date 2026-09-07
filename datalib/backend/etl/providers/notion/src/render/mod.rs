@@ -1,6 +1,5 @@
-//! Render stage: read the event-store JSONL written by
-//! [`crate::download`] and emit one markdown + one `.grid_rows.json`
-//! row set per Notion page.
+//! Render stage: read the raw store written by [`crate::download`] and
+//! emit one document per Notion page, plus one per comment thread.
 
 pub mod grid_rows;
 pub mod parse;
@@ -13,4 +12,4 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 
-pub use parse::{parse_api_dir, ParsedNotionOfficial};
+pub use parse::{parse_api_dir, ParsedNotion};

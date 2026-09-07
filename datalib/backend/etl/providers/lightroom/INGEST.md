@@ -40,7 +40,7 @@ all** — verified against a real catalog and asserted by
 was watched failing against a deliberately broken build before being
 believed.
 
-It also means the ingester needs no cursor, no watermark and no
+It also means the ingester needs no resume cursor and no
 change-tracking of its own. It never has to know how Lightroom marks
 rows dirty. Whatever the catalog says today becomes HEAD; history
 accumulates behind it.

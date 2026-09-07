@@ -759,14 +759,12 @@ media_visual
     audio_codec
 
 == notion/raw ==
-blocks
+comment_anchors
     id
-    parent_id
     page_id
-    page_order
-    last_edited_time
-    payload
-blocks_bookkeeping
+    block_type
+    plain_text
+comment_anchors_bookkeeping
     id
     fetched_at
     attempt_count
@@ -775,8 +773,12 @@ blocks_bookkeeping
     volatile_payload
 comments
     id
+    discussion_id
+    parent_type
     parent_id
     page_id
+    created_time
+    last_edited_time
     payload
 comments_bookkeeping
     id
@@ -785,24 +787,25 @@ comments_bookkeeping
     last_attempt_at
     last_error
     volatile_payload
-databases
+notion_attachments
     id
-    parent_id
-    last_edited_time
-    payload
-databases_bookkeeping
+    page_id
+    ref_id
+    blake3
+notion_attachments_bookkeeping
     id
     fetched_at
     attempt_count
     last_attempt_at
     last_error
     volatile_payload
-notion_image_attachments
+page_markdown
     id
-    block_id
-    ref_id
-    blake3
-notion_image_attachments_bookkeeping
+    markdown
+    truncated
+    unresolved_block_ids
+    source_last_edited_time
+page_markdown_bookkeeping
     id
     fetched_at
     attempt_count
@@ -811,8 +814,12 @@ notion_image_attachments_bookkeeping
     volatile_payload
 pages
     id
+    parent_type
     parent_id
+    in_trash
+    created_time
     last_edited_time
+    url
     payload
 pages_bookkeeping
     id
@@ -823,6 +830,7 @@ pages_bookkeeping
     volatile_payload
 users
     id
+    name
     payload
 users_bookkeeping
     id

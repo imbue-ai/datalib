@@ -93,6 +93,18 @@ impl BlobCas {
         Ok(Self { pool })
     }
 
+    /// Open the CAS to *read* it, for a render pass.
+    ///
+    /// Read-only and no DDL, for the reasons on
+    /// [`crate::doltlite_raw::open_reader`]: the download step owns this file,
+    /// and a reader that creates or commits into it is writing to something it
+    /// does not own.
+    pub async fn open_reader(cas_path: &Path) -> Result<Self> {
+        Ok(Self {
+            pool: crate::doltlite_raw::open_reader(cas_path).await?,
+        })
+    }
+
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }

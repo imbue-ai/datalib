@@ -21,4 +21,5 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_notion_config",
     edition = "2021",
+    deps = ["@datalib_crates//:serde_json"],
 )

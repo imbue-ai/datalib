@@ -545,7 +545,7 @@ fn materialize_blobs(raw_db_path: &Path, doc: &DocBucket, blobs_dir: &Path) -> R
     let cas_path = datalib_etl::blob_cas::cas_path_for(raw_db_path);
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let cas = datalib_etl::blob_cas::BlobCas::open(&cas_path)
+            let cas = datalib_etl::blob_cas::BlobCas::open_reader(&cas_path)
                 .await
                 .with_context(|| format!("open CAS at {}", cas_path.display()))?;
             let mut written = 0usize;

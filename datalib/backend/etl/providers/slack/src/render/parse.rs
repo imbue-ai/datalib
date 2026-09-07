@@ -4,13 +4,12 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use serde_json::Value;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::download::db::db_path_for;
@@ -101,24 +100,14 @@ async fn parse_doltlite_async(
     db_path: &Path,
     last_render_hash: Option<&str>,
 ) -> Result<ParsedSlack> {
-    let opts =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_secs(60))
-        .connect_with(opts)
+    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open slack doltlite for render {}", db_path.display()))?;
 
     let cas_path = blob_cas::cas_path_for(db_path);
     let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
-            .read_only(true);
         Some(
-            SqlitePoolOptions::new()
-                .max_connections(1)
-                .acquire_timeout(Duration::from_secs(60))
-                .connect_with(cas_opts)
+            datalib_etl::doltlite_raw::open_reader(&cas_path)
                 .await
                 .with_context(|| format!("open slack CAS for render {}", cas_path.display()))?,
         )
@@ -226,12 +215,12 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                 SELECT DISTINCT thread_root_uuid FROM (
                     SELECT coalesce(to_thread_root_uuid, from_thread_root_uuid) AS thread_root_uuid
                       FROM dolt_diff_messages
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT m.thread_root_uuid
                       FROM dolt_diff_slack_attachments d
                       JOIN messages m ON m.id = coalesce(d.to_message_uuid, d.from_message_uuid)
-                     WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+                     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                 )
                 WHERE thread_root_uuid IS NOT NULL
             ",
@@ -763,6 +752,10 @@ mod no_data_tests {
 #[cfg(test)]
 mod legacy_schema_tests {
     use super::*;
+    // A deliberately *writable* pool: this test builds the legacy store it
+    // then reads, so it cannot go through `open_reader`.
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
 
     /// Render must survive a raw store written before the DM columns
     /// existed.

@@ -2,10 +2,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 
 use super::Period;
@@ -127,11 +125,7 @@ pub fn parse(input: &Path, period: Period) -> Result<ParsedBeeper> {
 }
 
 async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
-    let opts =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(opts)
+    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?;
 
@@ -200,11 +194,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
     .context("read beeper_media_attachments")?;
     let cas_path = datalib_etl::blob_cas::cas_path_for(db_path);
     let cas_meta: HashMap<String, (Option<String>, Option<i64>)> = if cas_path.is_file() {
-        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
-            .read_only(true);
-        let cas_pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(cas_opts)
+        let cas_pool = datalib_etl::doltlite_raw::open_reader(&cas_path)
             .await
             .with_context(|| format!("open CAS for render at {}", cas_path.display()))?;
         let rows = sqlx::query("SELECT blake3, content_type, byte_len FROM cas_objects")

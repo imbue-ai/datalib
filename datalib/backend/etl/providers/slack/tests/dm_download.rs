@@ -305,7 +305,7 @@ async fn turning_dms_off_stops_walking_them_without_deleting() {
         json!([{"id": "C1", "name": "bridge", "is_member": true, "is_archived": false}]),
     );
     write_all_histories(&api);
-    // Run 2 resumes C1 at its watermark (exclusive), which is a
+    // Run 2 resumes C1 at its resume cursor (exclusive), which is a
     // different param set and so needs its own fixture.
     write_envelope(
         &api.join("raw_api/conversations.history/C1-resume.jsonl"),

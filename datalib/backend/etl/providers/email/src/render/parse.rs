@@ -2,13 +2,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use serde_json::Value;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::download::db::{db_path_for, EmailJoins, LoadedEmail};
@@ -91,22 +90,14 @@ pub fn parse(input: &Path, last_render_hash: Option<&str>) -> Result<ParsedEmail
 }
 
 async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<ParsedEmail> {
-    let opts =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(opts)
+    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?;
 
     let cas_path = blob_cas::cas_path_for(db_path);
     let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
-            .read_only(true);
         Some(
-            SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(cas_opts)
+            datalib_etl::doltlite_raw::open_reader(&cas_path)
                 .await
                 .with_context(|| format!("open CAS for render at {}", cas_path.display()))?,
         )
@@ -309,27 +300,27 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                 SELECT DISTINCT account_id || '|' || thread_id AS bucket_key FROM (
                     SELECT to_account_id  AS account_id, to_thread_id  AS thread_id
                       FROM dolt_diff_emails
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT from_account_id, from_thread_id
                       FROM dolt_diff_emails
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT emails.account_id, emails.thread_id
                       FROM dolt_diff_email_mailboxes d
                       JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
-                     WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+                     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                     UNION
                     SELECT emails.account_id, emails.thread_id
                       FROM dolt_diff_email_keywords d
                       JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
-                     WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+                     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                     UNION
                     SELECT t.account_id,
                            coalesce(dt.to_id, dt.from_id) AS thread_id
                       FROM dolt_diff_threads dt
                       JOIN threads t ON t.id = coalesce(dt.to_id, dt.from_id)
-                     WHERE dt.from_ref = ?1 AND dt.to_ref = 'HEAD' AND dt.diff_type != 'unchanged'
+                     WHERE dt.from_ref = ?1 AND dt.to_ref = ?2 AND dt.diff_type != 'unchanged'
                 )
                 WHERE account_id IS NOT NULL AND thread_id IS NOT NULL
             ",

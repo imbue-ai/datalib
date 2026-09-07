@@ -14,6 +14,8 @@ instead from `bazel run //:precommit` and as a plain step in
      silently and CI aborts on it.
   4. Render code must not read a doltlite content table unpinned, since
      an unpinned read returns uncommitted rows once producers stream.
+  5. Render code must not open a doltlite store writably: `open` writes on
+     the way in, and the render step does not own the store it reads.
 
 Check 1: why it exists
 ----------------------
@@ -296,7 +298,49 @@ def main() -> int:
     rc |= _check_python_coverage(root)
     rc |= _check_module_lock_committed(root)
     rc |= _check_unpinned_render_reads(root)
+    rc |= _check_render_opens_read_only(root)
     return rc
+
+
+# --- Check 5: render must not open a store writably ------------------
+#
+# `doltlite_raw::open` is not a read: it seals a dirty working tree into a
+# rescue commit, reconciles the schema, and commits with `-Am`, which takes
+# whatever else was dirty with it. The download step owns the raw store and
+# wants all three. Render only reads it, and once downloads commit
+# incrementally, a render that opens this way seals the downloader's
+# half-written batch on its behalf -- which pinning cannot protect against,
+# because the torn rows are then genuinely committed.
+#
+# `open_reader` is the read path. This keeps render on it.
+_WRITABLE_OPEN = re.compile(
+    r"\b(?:RawDb|BlobCas|dr|doltlite_raw|datalib_etl::doltlite_raw)::open\("
+)
+
+
+def _check_render_opens_read_only(root: Path) -> int:
+    bad: list[str] = []
+    for rel in _render_sources(root):
+        text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        # Test modules build the stores they then read, so they need `open`.
+        body = text.split("#[cfg(test)]")[0]
+        for lineno, line in enumerate(body.splitlines(), 1):
+            if _WRITABLE_OPEN.search(line):
+                bad.append(f"{rel}:{lineno}: {line.strip()}")
+    if not bad:
+        print("OK: no render path opens a doltlite store writably.")
+        return 0
+    print("ERROR: render code opens a doltlite store writably:", file=sys.stderr)
+    for b in bad:
+        print(f"  - {b}", file=sys.stderr)
+    print(
+        "\n`open` rescue-commits, reconciles the schema and commits with -Am --\n"
+        "three writes to a store the render step does not own. Use the\n"
+        "read-only path instead: `open_reader`.\n"
+        "See docs/dev/streaming_steps_plan.md.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 # --- Check 4: unpinned content reads in render code ------------------

@@ -7,14 +7,13 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use serde_json::{Map, Value};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use super::sentinels::clean_text;
@@ -474,24 +473,14 @@ async fn parse_doltlite_async(
     db_path: &Path,
     last_render_hash: Option<&str>,
 ) -> Result<ParsedChatGPTApi> {
-    let opts =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_secs(60))
-        .connect_with(opts)
+    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open chatgpt doltlite for render {}", db_path.display()))?;
 
     let cas_path = blob_cas::cas_path_for(db_path);
     let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
-            .read_only(true);
         Some(
-            SqlitePoolOptions::new()
-                .max_connections(1)
-                .acquire_timeout(Duration::from_secs(60))
-                .connect_with(cas_opts)
+            datalib_etl::doltlite_raw::open_reader(&cas_path)
                 .await
                 .with_context(|| format!("open chatgpt CAS for render {}", cas_path.display()))?,
         )
@@ -670,11 +659,11 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                 SELECT DISTINCT conversation_id FROM (
                     SELECT coalesce(to_id, from_id) AS conversation_id
                       FROM dolt_diff_conversations
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_conversation_id, from_conversation_id)
                       FROM dolt_diff_chatgpt_attachments
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
                 WHERE conversation_id IS NOT NULL
             ",

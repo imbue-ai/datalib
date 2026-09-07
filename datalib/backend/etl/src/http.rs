@@ -87,10 +87,11 @@ pub enum HttpService {
     /// A JMAP server (Fastmail and friends), another `email` mode.
     Jmap,
     Linkedin,
+    /// The official `api.notion.com` REST API. Does **not** impersonate:
+    /// the Cloudflare-fronted host was `www.notion.so`, reached only by
+    /// the retired unofficial client. `api.notion.com` accepts a vanilla
+    /// curl TLS fingerprint, confirmed against a live workspace.
     Notion,
-    /// Notion's unofficial web API, used only where the official one
-    /// cannot answer — see `notion/src/download/unofficial.rs`.
-    NotionUnofficial,
     Slack,
     /// Fixture-synthesis tests only.
     #[strum(serialize = "test_provider")]
@@ -117,8 +118,6 @@ impl HttpService {
                 | HttpService::Slack
                 | HttpService::Github
                 | HttpService::Gitlab
-                | HttpService::Notion
-                | HttpService::NotionUnofficial
         )
     }
 }

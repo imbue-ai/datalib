@@ -1,10 +1,10 @@
-//! Notion downloader: BFS-mirror pages via the official API, with
-//! optional inbox discovery via the unofficial `getNotificationLog`.
+//! Notion downloader: mirror pages via the official API.
 
 pub mod db;
+pub mod markdown;
 pub mod official;
 pub mod schema_raw;
-pub mod unofficial;
+pub mod slots;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -16,9 +16,8 @@ use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySetting
 use serde::Serialize;
 use serde_json::{json, Value};
 
-pub use db::{db_path_for, BlockUpsert, LoadedRaw, PageState, RawDb};
+pub use db::{db_path_for, LoadedRaw, PageState, RawDb};
 pub use official::{NotionOfficialClient, NotionOfficialError};
-pub use unofficial::{NotionUnofficialClient, NotionUnofficialError};
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -35,22 +34,24 @@ pub struct FetchOptions {
     /// can't write to (and so the post-download commit can run on the
     /// same connection — no reopen race).
     pub db: Option<RawDb>,
-    /// Page IDs (dashed or undashed) to seed the BFS queue.
+    /// Page IDs (dashed or undashed) to seed the walk.
     pub subtree_pages: Vec<String>,
-    /// If set, also discover pages via the unofficial getNotificationLog.
-    pub inbox: bool,
-    /// When false, walk the inbox to discover referenced page IDs but
-    /// don't actually BFS into them. Defaults to true.
-    pub inbox_mirror_referenced: bool,
-    /// Restrict inbox discovery to one space id.
-    pub space: Option<String>,
-    pub notification_page_size: u32,
-    pub max_notification_pages: u32,
-    pub inbox_types: Vec<String>,
-    pub max_pages: usize,
+    /// Re-examine anything edited within this many days even when the
+    /// stored resume cursor is newer. 0 means no floor.
+    pub refresh_window_days: u32,
+    /// Ignore the resume cursor and walk the whole workspace.
+    pub full_sync: bool,
+    /// Mirror each page's comment threads.
+    pub comments: bool,
+    /// Archive attachment bytes into the CAS.
+    pub attachments: bool,
+    /// Hard stop on pages visited. `None` means no limit — a
+    /// whole-workspace mirror is the normal case, and a silent cap
+    /// would truncate it without saying so.
+    pub max_pages: Option<usize>,
     /// Single-page mode — short-circuit. Fetch only this page.
     pub page: Option<String>,
-    /// When true, ignore subtree / inbox / page and re-fetch every row
+    /// When true, ignore roots / page and re-fetch every row
     /// the DB currently has marked as failed or empty-with-attempts.
     pub retry_failed: bool,
     pub sleep_between: Duration,
@@ -66,13 +67,11 @@ impl Default for FetchOptions {
             db: None,
             latchkey: LatchkeySettings::default(),
             subtree_pages: Vec::new(),
-            inbox: false,
-            inbox_mirror_referenced: true,
-            space: None,
-            notification_page_size: 40,
-            max_notification_pages: 50,
-            inbox_types: vec!["unread_and_read".into()],
-            max_pages: 5000,
+            refresh_window_days: 0,
+            full_sync: false,
+            comments: true,
+            attachments: true,
+            max_pages: None,
             page: None,
             retry_failed: false,
             sleep_between: Duration::ZERO,
@@ -86,8 +85,22 @@ impl Default for FetchOptions {
 pub struct FetchSummary {
     pub new_pages: usize,
     pub upd_pages: usize,
-    pub new_blocks: usize,
-    pub upd_blocks: usize,
+    /// Page bodies fetched from the markdown endpoint.
+    pub bodies: usize,
+    /// Bodies that came back empty — the common case for a database
+    /// row, whose content is its properties.
+    pub empty_bodies: usize,
+    pub failed_bodies: usize,
+    /// Pages the search pass named as changed since the resume cursor.
+    pub discovered: usize,
+    /// Users resolved by id (one request each, once ever).
+    pub users_resolved: usize,
+    /// Blocks a comment hangs off, fetched for their anchor text.
+    pub anchors_resolved: usize,
+    /// Truncated subtrees fetched as follow-ups.
+    pub hole_followups: usize,
+    /// Pages with more truncated subtrees than one run will follow.
+    pub pages_left_incomplete: usize,
     pub new_comments: usize,
     pub upd_comments: usize,
     pub skipped_pages: usize,
@@ -100,7 +113,6 @@ pub struct FetchSummary {
     /// when this is the ONLY thing that happened, the run fails.
     pub failed_pages: usize,
     pub official_requests: u64,
-    pub unofficial_requests: u64,
 }
 
 /// True when pages were attempted and not one of them worked out.
@@ -108,30 +120,10 @@ fn all_pages_failed(s: &FetchSummary) -> bool {
     s.failed_pages > 0 && s.new_pages == 0 && s.upd_pages == 0 && s.skipped_pages == 0
 }
 
-fn image_url_and_kind(block: &Value) -> Option<(String, &'static str)> {
-    let img = block.get("image")?;
-    if let Some(u) = img
-        .get("external")
-        .and_then(|v| v.get("url"))
-        .and_then(|v| v.as_str())
-    {
-        return Some((u.to_string(), "external"));
-    }
-    if let Some(u) = img
-        .get("file")
-        .and_then(|v| v.get("url"))
-        .and_then(|v| v.as_str())
-    {
-        return Some((u.to_string(), "notion_hosted"));
-    }
-    None
-}
-
-/// True when `url`'s host is a Notion-owned domain (and so its fetch should
-/// go through latchkey). Everything else — chiefly the pre-signed S3 links
-/// Notion hands out for uploaded files — is fetched with plain curl. Crude
-/// host extraction (no `url` crate dep): take the chars between `://` and the
-/// next `/`, `?`, or `#`, drop any `user@` and `:port`.
+/// True when `url`'s host is a Notion-owned domain (and so its fetch
+/// should go through latchkey). Everything else — chiefly the pre-signed
+/// S3 links Notion hands out for uploaded files — is fetched with plain
+/// curl. Crude host extraction (no `url` crate dep).
 fn host_is_notion(url: &str) -> bool {
     let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
     let authority = after_scheme
@@ -146,71 +138,77 @@ fn host_is_notion(url: &str) -> bool {
         || host.ends_with(".notion.com")
 }
 
-/// Fetch every image block's bytes that we don't already have on file.
-/// Errors are recorded against the blob row and don't fail the sync —
-/// the page mirror has already landed and a later `--retry-failed` can
-/// pick the broken blob up.
-async fn fetch_image_blobs(db: &RawDb, blocks: &[Value], summary: &mut FetchSummary) -> Result<()> {
-    for block in blocks {
-        if block.get("type").and_then(|v| v.as_str()) != Some("image") {
-            continue;
-        }
-        let Some(block_id) = block.get("id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some((url, kind)) = image_url_and_kind(block) else {
-            continue;
-        };
-        let blob_id = format!("{block_id}:image");
-        if db.blob_exists(&blob_id).await.unwrap_or(false) {
+/// Archive a page's attachment bytes.
+///
+/// `slots` are unsigned URLs — stable identity, but not fetchable on
+/// their own. `signed` maps each slot to the live pre-signed URL from
+/// this run's response, which expires in about an hour; that is why the
+/// bytes are pulled in the same run that read the markdown.
+///
+/// A slot whose edge already carries a `blake3` is skipped: signatures
+/// rotate, bytes don't. Failures are recorded against the edge and never
+/// fail the run — the page has already landed, and the stored markdown
+/// is correct and stable regardless.
+async fn fetch_attachments(
+    db: &RawDb,
+    page_id: &str,
+    slots: &[String],
+    signed: &HashMap<String, String>,
+    summary: &mut FetchSummary,
+) {
+    for slot in slots {
+        if db.blob_exists(slot).await.unwrap_or(false) {
             summary.skipped_blobs += 1;
             continue;
         }
-        // `kind` (notion_hosted / notion_external) used to live on
-        // `blob_refs.kind`. We've retired blob_refs; the edge table
-        // only stores `(block_id, ref_id, blake3)`, so the kind tag
-        // is dropped. If a future query wants it, the block's payload
-        // still carries the `image.type` upstream.
-        let _ = kind;
-        // Notion's file URLs are pre-signed S3 links (e.g.
-        // `prod-files-secure.s3.<region>.amazonaws.com/…?X-Amz-Signature=…`)
-        // that carry their own auth in the query string — they need no
-        // latchkey credential. Routing them through the shim makes it try to
-        // resolve an `aws` credential it doesn't have and fail the fetch. Only
-        // URLs actually on a Notion host go through latchkey; send everything
-        // else via plain curl.
-        let mut req = HttpRequest::get(HttpService::Notion, &url);
-        if !host_is_notion(&url) {
+        let Some(url) = signed.get(slot) else {
+            continue;
+        };
+        let mut req = HttpRequest::get(HttpService::Notion, url);
+        if !host_is_notion(url) {
             req = req.plain();
         }
         match latchkey_curl(&req).await {
             Ok(resp) if resp.status >= 200 && resp.status < 300 => {
                 let content_type = resp.header("content-type");
-                if let Err(e) = db
-                    .store_blob(block_id, &blob_id, content_type, &resp.body)
-                    .await
-                {
-                    tracing::warn!(blob = %blob_id, error = %format!("{e:#}"), "blob upsert failed");
+                if let Err(e) = db.store_blob(page_id, slot, content_type, &resp.body).await {
+                    tracing::warn!(slot = %slot, error = %format!("{e:#}"), "attachment upsert failed");
                     summary.failed_blobs += 1;
                 } else {
                     summary.new_blobs += 1;
                 }
             }
             Ok(resp) => {
-                let msg = format!("HTTP {}", resp.status);
-                tracing::warn!(blob = %blob_id, url = %url, error = %msg, "blob fetch non-2xx");
-                let _ = db.record_blob_error(block_id, &blob_id).await;
+                tracing::warn!(slot = %slot, status = resp.status, "attachment fetch non-2xx");
+                let _ = db.record_blob_error(page_id, slot).await;
                 summary.failed_blobs += 1;
             }
             Err(e) => {
-                let msg = format!("{e}");
-                tracing::warn!(blob = %blob_id, url = %url, error = %msg, "blob fetch failed");
-                let _ = db.record_blob_error(block_id, &blob_id).await;
+                tracing::warn!(slot = %slot, error = %format!("{e}"), "attachment fetch failed");
+                let _ = db.record_blob_error(page_id, slot).await;
                 summary.failed_blobs += 1;
             }
         }
     }
-    Ok(())
+}
+
+/// Map each slot back to the live signed URL it came from, so the bytes
+/// can still be fetched after the markdown has been rewritten.
+fn signed_by_slot(raw_markdown: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let mut rest = raw_markdown;
+    while let Some(i) = rest.find("http") {
+        let tail = &rest[i..];
+        let end = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | '<' | '>'))
+            .unwrap_or(tail.len());
+        let url = &tail[..end];
+        if let Some(slot) = slots::slot_of(url) {
+            out.entry(slot).or_insert_with(|| url.to_string());
+        }
+        rest = &tail[end.max(1)..];
+    }
+    out
 }
 
 fn format_uuid(s: &str) -> String {
@@ -238,106 +236,22 @@ fn parent_of(page: &Value) -> Option<String> {
         .map(String::from)
 }
 
-fn block_parent(block: &Value) -> Option<String> {
-    let p = block.get("parent")?;
-    p.get("block_id")
-        .and_then(|v| v.as_str())
-        .or_else(|| p.get("page_id").and_then(|v| v.as_str()))
-        .map(String::from)
-}
-
-fn comment_parent(c: &Value) -> Option<String> {
+fn comment_parent(c: &Value) -> Option<(String, String)> {
     let p = c.get("parent")?;
-    p.get("block_id")
+    let t = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let id = p
+        .get("block_id")
         .and_then(|v| v.as_str())
-        .or_else(|| p.get("page_id").and_then(|v| v.as_str()))
-        .map(String::from)
-}
-
-#[tracing::instrument(skip(client), fields(parent_id, pages, children))]
-async fn fetch_all_children(client: &NotionOfficialClient, parent_id: &str) -> Result<Vec<Value>> {
-    let mut out: Vec<Value> = Vec::new();
-    let mut cursor: Option<String> = None;
-    let mut pages: u32 = 0;
-    loop {
-        let resp = client
-            .get_block_children(parent_id, cursor.as_deref())
-            .await?;
-        pages += 1;
-        if let Some(arr) = resp.get("results").and_then(|v| v.as_array()) {
-            out.extend(arr.iter().cloned());
-        }
-        if !resp
-            .get("has_more")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
-            tracing::Span::current().record("pages", pages);
-            tracing::Span::current().record("children", out.len());
-            return Ok(out);
-        }
-        let nc = resp.get("next_cursor").and_then(|v| v.as_str());
-        if let Some(c) = nc {
-            cursor = Some(c.to_string());
-        } else {
-            tracing::Span::current().record("pages", pages);
-            tracing::Span::current().record("children", out.len());
-            return Ok(out);
-        }
-    }
-}
-
-#[tracing::instrument(skip(client), fields(page_id, blocks, recursed))]
-async fn walk_page_blocks(client: &NotionOfficialClient, page_id: &str) -> Result<Vec<Value>> {
-    let mut collected: Vec<Value> = Vec::new();
-    let mut queue: VecDeque<String> = VecDeque::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    queue.push_back(page_id.to_string());
-    let mut recursed: u32 = 0;
-    while let Some(pid) = queue.pop_front() {
-        if !seen.insert(pid.clone()) {
-            continue;
-        }
-        let children = fetch_all_children(client, &pid).await?;
-        for ch in children {
-            let t = ch.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            collected.push(ch.clone());
-            if t == "child_page" || t == "child_database" {
-                continue;
-            }
-            if ch
-                .get("has_children")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                if let Some(id) = ch.get("id").and_then(|v| v.as_str()) {
-                    recursed += 1;
-                    queue.push_back(id.into());
-                }
-            }
-        }
-    }
-    tracing::Span::current().record("blocks", collected.len());
-    tracing::Span::current().record("recursed", recursed);
-    Ok(collected)
-}
-
-fn child_page_ids(blocks: &[Value]) -> Vec<String> {
-    blocks
-        .iter()
-        .filter(|b| b.get("type").and_then(|v| v.as_str()) == Some("child_page"))
-        .filter_map(|b| b.get("id").and_then(|v| v.as_str()).map(String::from))
-        .collect()
+        .or_else(|| p.get("page_id").and_then(|v| v.as_str()))?;
+    Some((t.to_string(), id.to_string()))
 }
 
 #[tracing::instrument(skip(client), fields(page_id, pages, comments))]
 async fn fetch_all_comments(client: &NotionOfficialClient, page_id: &str) -> Result<Vec<Value>> {
     let mut out: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
-    let mut pages: u32 = 0;
     loop {
         let resp = client.get_comments(page_id, cursor.as_deref()).await?;
-        pages += 1;
         if let Some(arr) = resp.get("results").and_then(|v| v.as_array()) {
             out.extend(arr.iter().cloned());
         }
@@ -346,168 +260,372 @@ async fn fetch_all_comments(client: &NotionOfficialClient, page_id: &str) -> Res
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
-            tracing::Span::current().record("pages", pages);
-            tracing::Span::current().record("comments", out.len());
             return Ok(out);
         }
-        let nc = resp.get("next_cursor").and_then(|v| v.as_str());
-        if let Some(c) = nc {
-            cursor = Some(c.to_string());
-        } else {
-            tracing::Span::current().record("pages", pages);
-            tracing::Span::current().record("comments", out.len());
-            return Ok(out);
+        match resp.get("next_cursor").and_then(|v| v.as_str()) {
+            Some(c) => cursor = Some(c.to_string()),
+            None => return Ok(out),
         }
     }
 }
 
-fn extract_inbox_pages(rm: &Value) -> Vec<String> {
-    let mut seen: Vec<String> = Vec::new();
-    let Some(activity) = rm.get("activity").and_then(|v| v.as_object()) else {
-        return seen;
-    };
-    for payload in activity.values() {
-        let value = payload
-            .get("value")
-            .and_then(|v| v.get("value").or(Some(v)))
-            .cloned()
-            .unwrap_or(Value::Null);
-        if let Some(nav) = value.get("navigable_block_id").and_then(|v| v.as_str()) {
-            if !seen.iter().any(|x| x == nav) {
-                seen.push(nav.into());
+/// Follow-up fetches for subtrees the markdown response was too large to
+/// inline, appended to the body in the order the holes appeared.
+///
+/// Only `alt`-less holes are followed: an `alt`-bearing one names a
+/// block type markdown cannot express, and fetching it returns a stub
+/// carrying the same id — an infinite regress. `MAX_HOLE_FOLLOWUPS`
+/// bounds the pass so a single pathological page (one measured page
+/// wanted ~1,385 of these) can't dominate a run.
+const MAX_HOLE_FOLLOWUPS: usize = 64;
+
+async fn fill_holes(
+    client: &NotionOfficialClient,
+    body: &mut markdown::PageBody,
+    summary: &mut FetchSummary,
+) {
+    let todo: Vec<String> = body
+        .fetchable_holes()
+        .map(|u| u.block_id.clone())
+        .take(MAX_HOLE_FOLLOWUPS)
+        .collect();
+    if todo.is_empty() {
+        return;
+    }
+    let total_fetchable = body.fetchable_holes().count();
+    if total_fetchable > MAX_HOLE_FOLLOWUPS {
+        tracing::warn!(
+            event = "notion_hole_followups_capped",
+            wanted = total_fetchable,
+            cap = MAX_HOLE_FOLLOWUPS,
+            "page has more truncated subtrees than one run will follow"
+        );
+        summary.pages_left_incomplete += 1;
+    }
+    for id in todo {
+        match client.get_page_markdown(&id).await {
+            Ok(resp) => {
+                let part = markdown::parse(&resp);
+                if part.markdown.is_empty() {
+                    continue;
+                }
+                body.markdown.push('\n');
+                body.markdown.push_str(&part.markdown);
+                for c in part.child_pages {
+                    if !body.child_pages.contains(&c) {
+                        body.child_pages.push(c);
+                    }
+                }
+                summary.hole_followups += 1;
+            }
+            Err(e) => {
+                tracing::warn!(block = %id, error = %e, "truncated-subtree fetch failed");
             }
         }
     }
-    seen
 }
 
-async fn walk_inbox(
-    uo: &NotionUnofficialClient,
-    space_id: &str,
-    page_size: u32,
-    max_pages: u32,
-    types: &[String],
-) -> Result<Vec<String>> {
-    let mut seen: Vec<String> = Vec::new();
-    for t in types {
-        let mut cursor: Option<Value> = None;
-        for _ in 0..max_pages {
-            let resp = uo
-                .get_notification_log(space_id, page_size, cursor.as_ref(), t)
-                .await?;
-            let rm = resp
-                .get("recordMap")
-                .cloned()
-                .unwrap_or(Value::Object(Default::default()));
-            for r in extract_inbox_pages(&rm) {
-                if !seen.contains(&r) {
-                    seen.push(r);
+/// Scope the search resume cursor is stored under. One workspace per
+/// source, so one of them.
+const SEARCH_SCOPE: &str = "workspace";
+
+/// Key for the config blob paired with it, so a widened
+/// `refresh_window_days` re-examines rather than being suppressed by a
+/// resume cursor recorded under the narrower one.
+const SCOPE_CONFIG_KEY: &str = "notion:download";
+
+/// Walk `POST /v1/search` newest-edited-first and stop where the last
+/// run finished.
+///
+/// This is Notion's "since you last looked". It offers no delta token —
+/// no Gmail `historyId`, no JMAP `state` — so the resume cursor is a
+/// timestamp: results come back ordered by `last_edited_time`
+/// descending, and that ordering was measured strictly monotonic across
+/// 12,300 objects and 124 pages of results. The first result older than
+/// the stored point therefore ends the walk, and a steady-state run
+/// reads one page instead of the workspace.
+///
+/// One value, three names, so: the **resume cursor** is what
+/// `scope_state::since_for_scope` returns (hence the `since` argument)
+/// and what `sync_scope_state.last_seen_at` stores. It is *not*
+/// `start_cursor` / `next_cursor`, which page within a single walk and
+/// do not survive it — that distinction is why the qualifier is worth
+/// carrying.
+///
+/// Returns the page ids to mirror, and the newest `last_edited_time`
+/// seen — the point the next run resumes from.
+async fn search_since(
+    client: &NotionOfficialClient,
+    since: Option<&str>,
+    max_pages: Option<usize>,
+) -> Result<(Vec<String>, Option<String>)> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut newest_edited: Option<String> = None;
+    let mut cursor: Option<String> = None;
+    loop {
+        let resp = client
+            .search(cursor.as_deref(), false)
+            .await
+            .map_err(|e| anyhow::anyhow!("notion search: {e}"))?;
+        let results = resp
+            .get("results")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if results.is_empty() {
+            break;
+        }
+        for r in &results {
+            let edited = r.get("last_edited_time").and_then(|v| v.as_str());
+            if newest_edited.is_none() {
+                newest_edited = edited.map(String::from);
+            }
+            // Descending order means everything from here on is older.
+            if let (Some(e), Some(s)) = (edited, since) {
+                if e < s {
+                    tracing::info!(
+                        event = "notion_search_reached_resume_cursor",
+                        resume_cursor = s,
+                        discovered = ids.len(),
+                    );
+                    return Ok((ids, newest_edited));
                 }
             }
-            let ids_empty = resp
-                .get("notificationIds")
-                .and_then(|v| v.as_array())
-                .map(|a| a.is_empty())
-                .unwrap_or(true);
-            let next = resp.get("cursor").cloned();
-            if next.is_none() || ids_empty {
-                break;
+            // A data_source is a container; its rows come back from
+            // search as ordinary pages, so only pages are queued here.
+            if r.get("object").and_then(|v| v.as_str()) != Some("page") {
+                continue;
             }
-            cursor = next;
+            if let Some(id) = r.get("id").and_then(|v| v.as_str()) {
+                ids.push(id.to_string());
+            }
+        }
+        if max_pages.is_some_and(|m| ids.len() >= m) {
+            break;
+        }
+        if !resp
+            .get("has_more")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            break;
+        }
+        match resp.get("next_cursor").and_then(|v| v.as_str()) {
+            Some(c) => cursor = Some(c.to_string()),
+            None => break,
         }
     }
-    Ok(seen)
+    Ok((ids, newest_edited))
 }
 
-/// Per-page work. Returns the page's blocks so the BFS driver can find
-/// `child_page` descendants. Records errors against the DB rather than
-/// short-circuiting the whole sync.
-#[tracing::instrument(skip_all, fields(page_id = %pid, origin = %origin, blocks, comments, page_ms, blocks_ms, comments_ms, skipped))]
-#[allow(clippy::too_many_arguments)]
-async fn mirror_page(
+/// What a walk has already resolved, so one run spends at most one
+/// request per user and per commented block — however many pages
+/// mention them.
+#[derive(Default)]
+pub struct WalkState {
+    pub pages: HashMap<String, PageState>,
+    pub users: HashSet<String>,
+    pub anchors: HashSet<String>,
+}
+
+/// Plain text of a block, whatever its type carries rich text under.
+fn block_plain_text(block: &Value) -> Option<String> {
+    let t = block.get("type")?.as_str()?;
+    let rt = block.get(t)?.get("rich_text")?.as_array()?;
+    let s: String = rt
+        .iter()
+        .filter_map(|x| x.get("plain_text").and_then(|v| v.as_str()))
+        .collect();
+    (!s.trim().is_empty()).then_some(s)
+}
+
+/// Resolve the users seen on a page, and the blocks its comments are
+/// anchored to.
+///
+/// Both are lazy and both are cheap for the reason that matters: a user
+/// is fetched once ever, and a block only when a comment hangs off it —
+/// one request per *commented* block, not per block. `GET /v1/users`
+/// (list all) is not an option: personal access tokens cannot call it.
+async fn resolve_people_and_anchors(
     client: &NotionOfficialClient,
     db: &RawDb,
     pid: &str,
-    origin: &'static str,
-    page_states: &mut HashMap<String, PageState>,
+    page: &Value,
+    comments: &[Value],
+    state: &mut WalkState,
     summary: &mut FetchSummary,
-    seen_last_edited_from_list: Option<&str>,
-) -> Result<Vec<Value>> {
-    // Skip detail fetch when we already have this page's full payload
-    // and the upstream `last_edited_time` hasn't moved. Discovery
-    // (list/search) gives us the (id, last_edited_time) pair; we trust it.
-    if let (Some(state), Some(incoming)) = (page_states.get(pid), seen_last_edited_from_list) {
-        if state.has_payload && state.last_edited_time.as_deref() == Some(incoming) {
-            tracing::Span::current().record("skipped", true);
-            summary.skipped_pages += 1;
-            // We still need the page's blocks to discover child_pages
-            // for BFS; but if our local copy is current we already have
-            // them — caller will rely on its own existing-blocks view.
-            return Ok(Vec::new());
+) {
+    // ── users ────────────────────────────────────────────────────────
+    let mut wanted: Vec<String> = Vec::new();
+    let mut want = |v: Option<&Value>| {
+        if let Some(id) = v.and_then(|x| x.get("id")).and_then(|x| x.as_str()) {
+            if !id.is_empty() && !wanted.iter().any(|w| w == id) {
+                wanted.push(id.to_string());
+            }
+        }
+    };
+    want(page.get("created_by"));
+    want(page.get("last_edited_by"));
+    if let Some(props) = page.get("properties").and_then(|v| v.as_object()) {
+        for prop in props.values() {
+            if let Some(people) = prop.get("people").and_then(|v| v.as_array()) {
+                for p in people {
+                    want(Some(p));
+                }
+            }
+        }
+    }
+    for c in comments {
+        want(c.get("created_by"));
+    }
+    for id in wanted {
+        if state.users.contains(&id) {
+            continue;
+        }
+        match client.get_user(&id).await {
+            Ok(u) => {
+                let name = u.get("name").and_then(|v| v.as_str()).map(String::from);
+                let payload = serde_json::to_string(&u).unwrap_or_else(|_| "null".into());
+                if let Err(e) = db.upsert_users(&[(id.clone(), name, payload)]).await {
+                    tracing::warn!(user = %id, error = %format!("{e:#}"), "user upsert failed");
+                } else {
+                    summary.users_resolved += 1;
+                }
+                state.users.insert(id);
+            }
+            Err(e) => {
+                // A user we cannot read is not a reason to fail a page.
+                // The author simply falls back to an id prefix.
+                tracing::warn!(user = %id, error = %e, "user fetch failed");
+                state.users.insert(id);
+            }
         }
     }
 
-    let page_t = std::time::Instant::now();
+    // ── comment anchors ──────────────────────────────────────────────
+    let mut blocks: Vec<String> = Vec::new();
+    for c in comments {
+        if c.get("parent")
+            .and_then(|p| p.get("type"))
+            .and_then(|v| v.as_str())
+            != Some("block_id")
+        {
+            continue;
+        }
+        let Some(bid) = c
+            .get("parent")
+            .and_then(|p| p.get("block_id"))
+            .and_then(|v| v.as_str())
+        else {
+            continue;
+        };
+        if !state.anchors.contains(bid) && !blocks.iter().any(|b| b == bid) {
+            blocks.push(bid.to_string());
+        }
+    }
+    for bid in blocks {
+        match client.get_block(&bid).await {
+            Ok(b) => {
+                let block_type = b.get("type").and_then(|v| v.as_str()).map(String::from);
+                let text = block_plain_text(&b);
+                if let Err(e) = db
+                    .upsert_comment_anchors(&[db::CommentAnchorUpsert {
+                        id: bid.clone(),
+                        page_id: Some(pid.to_string()),
+                        block_type,
+                        plain_text: text,
+                    }])
+                    .await
+                {
+                    tracing::warn!(block = %bid, error = %format!("{e:#}"), "anchor upsert failed");
+                } else {
+                    summary.anchors_resolved += 1;
+                }
+                state.anchors.insert(bid);
+            }
+            Err(e) => {
+                // The commented block can be gone upstream — comments
+                // carry `original_content_deleted` for exactly that.
+                tracing::debug!(block = %bid, error = %e, "anchor fetch failed");
+                state.anchors.insert(bid);
+            }
+        }
+    }
+}
+
+/// Mirror one page: its object, its body, its attachments and its
+/// comments. Returns the child pages to descend into.
+///
+/// Three requests where the block walk needed one per container block
+/// (measured median 11, and ≥60 on the deepest pages sampled).
+#[tracing::instrument(skip_all, fields(page_id = %pid, origin = %origin, skipped))]
+async fn mirror_page(
+    client: &NotionOfficialClient,
+    db: &RawDb,
+    opts: &FetchOptions,
+    pid: &str,
+    origin: &'static str,
+    state: &mut WalkState,
+    summary: &mut FetchSummary,
+) -> Result<Vec<String>> {
     let page = match client.get_page(pid).await {
         Ok(p) => p,
         Err(e) => {
             let msg = format!("{e}");
             tracing::warn!(page = pid, error = %msg, "page fetch failed; recording");
             let _ = db.record_page_error(pid, &msg).await;
-            // Tolerated per page — one unreadable page must not abort a
-            // BFS over thousands — but counted, so `fetch` can tell the
-            // difference between "one page is broken" and "nothing worked".
             summary.failed_pages += 1;
             return Ok(Vec::new());
         }
     };
-    let page_ms = page_t.elapsed().as_millis() as u64;
-    let was_present = page_states.get(pid).map(|s| s.has_payload).unwrap_or(false);
-    let prior_last_edited = page_states
-        .get(pid)
-        .and_then(|s| s.last_edited_time.clone());
     let last_edited = page
         .get("last_edited_time")
         .and_then(|v| v.as_str())
         .map(String::from);
+    let prior = state.pages.get(pid);
+    let was_present = prior.map(|s| s.has_payload).unwrap_or(false);
 
-    // Post-detail incrementality skip. BFS-discovered pages don't
-    // come with an `incoming` last_edited_time hint (no list endpoint),
-    // so the pre-fetch skip at the top of this function can't fire
-    // for them. But once the page detail is in hand, we know the
-    // upstream `last_edited_time` — and if it matches what we already
-    // stored, the children/comments/etc. can't have changed either.
-    // Returning a synthetic block array of stored `child_page` ids
-    // keeps BFS recursing into known children (in case a child's own
-    // `last_edited_time` advanced even when the parent's didn't).
-    if was_present && last_edited.is_some() && last_edited == prior_last_edited {
+    // Unchanged upstream: the body, attachments and comments can't have
+    // moved either. Descend into known children anyway — a child's
+    // `last_edited_time` can advance when its parent's does not.
+    if was_present
+        && last_edited.is_some()
+        && prior.and_then(|s| s.last_edited_time.clone()) == last_edited
+    {
         summary.skipped_pages += 1;
-        let child_ids = db
-            .stored_child_page_ids(pid)
-            .await
-            .with_context(|| format!("stored child_page ids for {pid}"))?;
         tracing::Span::current().record("skipped", true);
-        tracing::debug!(
-            page = pid,
-            child_pages = child_ids.len(),
-            page_fetch_ms = page_ms,
-            "page unchanged: skipped block walk; recursing into known children"
-        );
-        return Ok(child_ids
-            .into_iter()
-            .map(|id| serde_json::json!({"type": "child_page", "id": id}))
-            .collect());
+        return db.stored_child_pages(pid).await;
     }
 
-    let parent_id = parent_of(&page);
-    let payload = serde_json::to_string(&page).ok();
-    db.upsert_pages(&[(pid.to_string(), parent_id, last_edited.clone(), payload)])
-        .await
-        .with_context(|| format!("upsert page {pid}"))?;
-    page_states.insert(
+    let (parent_type, parent_id) = match page.get("parent") {
+        Some(p) => (
+            p.get("type").and_then(|v| v.as_str()).map(String::from),
+            parent_of(&page),
+        ),
+        None => (None, None),
+    };
+    db.upsert_pages(&[db::PageUpsert {
+        id: pid.to_string(),
+        parent_type,
+        parent_id,
+        in_trash: page
+            .get("in_trash")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        created_time: page
+            .get("created_time")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        last_edited_time: last_edited.clone(),
+        url: page.get("url").and_then(|v| v.as_str()).map(String::from),
+        payload: serde_json::to_string(&page).ok(),
+    }])
+    .await
+    .with_context(|| format!("upsert page {pid}"))?;
+    state.pages.insert(
         pid.into(),
         PageState {
-            last_edited_time: last_edited,
+            last_edited_time: last_edited.clone(),
             has_payload: true,
         },
     );
@@ -517,91 +635,101 @@ async fn mirror_page(
         summary.new_pages += 1;
     }
 
-    let blocks_t = std::time::Instant::now();
-    let blocks = match walk_page_blocks(client, pid).await {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(page = pid, error = %e, "blocks fetch failed; skipping");
-            return Ok(Vec::new());
-        }
-    };
-    let blocks_ms = blocks_t.elapsed().as_millis() as u64;
-    let mut block_rows: Vec<db::BlockUpsert> = Vec::with_capacity(blocks.len());
-    // `idx` is the block's index within this page's BFS walk — its
-    // stable position for layout. Persisted as `blocks.page_order` so
-    // render reproduces the page top-to-bottom regardless of the dolt
-    // primary-key ordering of UUIDs.
-    for (idx, b) in blocks.iter().enumerate() {
-        let Some(id) = b.get("id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let parent = block_parent(b);
-        let last = b
-            .get("last_edited_time")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let payload = serde_json::to_string(b).ok();
-        block_rows.push(db::BlockUpsert {
-            id: id.into(),
-            parent_id: parent,
-            page_id: Some(pid.into()),
-            page_order: Some(idx as i64),
-            last_edited_time: last,
-            payload,
-        });
-    }
-    summary.upd_blocks += block_rows.len(); // we don't distinguish new vs upd for blocks anymore
-    db.upsert_blocks(&block_rows)
-        .await
-        .with_context(|| format!("upsert blocks for {pid}"))?;
-
-    // Fetch image blobs inline — the per-block GET is small and lets a
-    // single sync run produce a self-contained DB. Per the design doc
-    // we skip refetch when we already have bytes (signed URLs rotate,
-    // bytes don't).
-    if let Err(e) = fetch_image_blobs(db, &blocks, summary).await {
-        tracing::warn!(page = pid, error = %e, "blob pass failed; continuing");
-    }
-
-    let comments_t = std::time::Instant::now();
-    let comments = fetch_all_comments(client, pid).await.unwrap_or_default();
-    let comments_ms = comments_t.elapsed().as_millis() as u64;
-    if !comments.is_empty() {
-        let mut comment_rows: Vec<(String, String, Option<String>, String)> =
-            Vec::with_capacity(comments.len());
-        for c in &comments {
-            let Some(id) = c.get("id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            // Comments must hang off something — fall back to the page
-            // we were fetching for when parent is missing.
-            let parent = comment_parent(c).unwrap_or_else(|| pid.to_string());
-            let payload = serde_json::to_string(c).unwrap_or_else(|_| "null".into());
-            comment_rows.push((id.into(), parent, Some(pid.into()), payload));
-        }
-        summary.upd_comments += comment_rows.len();
-        db.upsert_comments(&comment_rows)
+    // ── body ─────────────────────────────────────────────────────────
+    let mut children: Vec<String> = Vec::new();
+    match client.get_page_markdown(pid).await {
+        Ok(resp) => {
+            let mut body = markdown::parse(&resp);
+            if body.truncated {
+                fill_holes(client, &mut body, summary).await;
+            }
+            let permanent = body.permanent_holes();
+            if !permanent.is_empty() {
+                tracing::info!(
+                    event = "notion_unrepresentable_blocks",
+                    page = pid,
+                    count = permanent.len(),
+                    "page contains block types markdown cannot express"
+                );
+            }
+            // Signed URLs must be captured BEFORE the rewrite, since
+            // that is what strips them, and they are the only way to
+            // fetch the bytes.
+            let signed = signed_by_slot(&body.markdown);
+            let (stable, slots) = slots::rewrite(&body.markdown);
+            let unresolved: Vec<&str> = body
+                .unresolved
+                .iter()
+                .map(|u| u.block_id.as_str())
+                .collect();
+            db.upsert_page_markdown(&[db::PageMarkdownUpsert {
+                id: pid.to_string(),
+                markdown: stable,
+                truncated: body.truncated,
+                unresolved_block_ids: (!unresolved.is_empty())
+                    .then(|| serde_json::to_string(&unresolved).unwrap_or_default()),
+                source_last_edited_time: last_edited.clone(),
+            }])
             .await
-            .with_context(|| format!("upsert comments for {pid}"))?;
+            .with_context(|| format!("upsert page_markdown {pid}"))?;
+            summary.bodies += 1;
+            if body.markdown.is_empty() {
+                summary.empty_bodies += 1;
+            }
+            if opts.attachments && !slots.is_empty() {
+                fetch_attachments(db, pid, &slots, &signed, summary).await;
+            }
+            children = body.child_pages;
+        }
+        Err(e) => {
+            tracing::warn!(page = pid, error = %e, "markdown fetch failed; page object kept");
+            summary.failed_bodies += 1;
+        }
     }
 
-    let span = tracing::Span::current();
-    span.record("blocks", blocks.len());
-    span.record("comments", comments.len());
-    span.record("page_ms", page_ms);
-    span.record("blocks_ms", blocks_ms);
-    span.record("comments_ms", comments_ms);
-    tracing::info!(
-        page_id = %pid,
-        origin = %origin,
-        blocks = blocks.len(),
-        comments = comments.len(),
-        page_ms,
-        blocks_ms,
-        comments_ms,
-        "mirror_page done"
-    );
-    Ok(blocks)
+    // ── comments ─────────────────────────────────────────────────────
+    let mut comments: Vec<Value> = Vec::new();
+    if opts.comments {
+        comments = fetch_all_comments(client, pid).await.unwrap_or_default();
+        if !comments.is_empty() {
+            let mut rows: Vec<db::CommentUpsert> = Vec::with_capacity(comments.len());
+            for c in &comments {
+                let Some(id) = c.get("id").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let (parent_type, parent_id) = comment_parent(c)
+                    .map(|(t, i)| (Some(t), Some(i)))
+                    .unwrap_or((None, Some(pid.to_string())));
+                rows.push(db::CommentUpsert {
+                    id: id.into(),
+                    discussion_id: c
+                        .get("discussion_id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    parent_type,
+                    parent_id,
+                    page_id: Some(pid.into()),
+                    created_time: c
+                        .get("created_time")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    last_edited_time: c
+                        .get("last_edited_time")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    payload: serde_json::to_string(c).unwrap_or_else(|_| "null".into()),
+                });
+            }
+            summary.upd_comments += rows.len();
+            db.upsert_comments(&rows)
+                .await
+                .with_context(|| format!("upsert comments for {pid}"))?;
+        }
+    }
+
+    resolve_people_and_anchors(client, db, pid, &page, &comments, state, summary).await;
+
+    Ok(children)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -613,12 +741,12 @@ async fn bfs_drain(
     mut queue: VecDeque<String>,
     queued: &mut HashSet<String>,
     visited: &mut HashSet<String>,
-    page_states: &mut HashMap<String, PageState>,
+    state: &mut WalkState,
     summary: &mut FetchSummary,
     single_page: bool,
 ) -> Result<()> {
     while let Some(pid) = queue.pop_front() {
-        if visited.len() >= opts.max_pages {
+        if opts.max_pages.is_some_and(|m| visited.len() >= m) {
             break;
         }
         if !visited.insert(pid.clone()) {
@@ -633,9 +761,9 @@ async fn bfs_drain(
         // can't know the upstream value without fetching the page.
         // Skip-on-unchanged for those will land when we add cursored
         // search; for now every queued page is fetched.
-        let blocks = mirror_page(client, db, &pid, origin, page_states, summary, None).await?;
+        let children = mirror_page(client, db, opts, &pid, origin, state, summary).await?;
         if !single_page {
-            for cid in child_page_ids(&blocks) {
+            for cid in children {
                 if queued.insert(cid.clone()) {
                     queue.push_back(cid);
                 }
@@ -664,18 +792,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     if opts.control.refetch_blobs {
         tracing::info!(event = "notion_refetch_blobs");
-        datalib_etl::doltlite_raw::truncate_data_tables(db.pool(), &["notion_image_attachments"])
+        datalib_etl::doltlite_raw::truncate_data_tables(db.pool(), &["notion_attachments"])
             .await
-            .context("truncate notion_image_attachments before refetch")?;
+            .context("truncate notion_attachments before refetch")?;
     }
     let run_config = json!({
         "subtree_pages": opts.subtree_pages,
-        "inbox": opts.inbox,
-        "inbox_mirror_referenced": opts.inbox_mirror_referenced,
-        "space": opts.space,
-        "notification_page_size": opts.notification_page_size,
-        "max_notification_pages": opts.max_notification_pages,
-        "inbox_types": opts.inbox_types,
         "max_pages": opts.max_pages,
         "page": opts.page,
         "retry_failed": opts.retry_failed,
@@ -686,7 +808,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let mut visited: HashSet<String> = HashSet::new();
     let mut queued: HashSet<String> = HashSet::new();
-    let mut page_states = db.page_states().await?;
+    let mut state_walk = WalkState {
+        pages: db.page_states().await?,
+        users: db.known_user_ids().await?,
+        anchors: db.known_anchor_ids().await?,
+    };
 
     // Run the actual work. We capture the result so we can always stamp
     // the sync_runs row with finish status — even on error.
@@ -710,7 +836,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 q,
                 &mut queued,
                 &mut visited,
-                &mut page_states,
+                &mut state_walk,
                 &mut summary,
                 true,
             )
@@ -731,11 +857,73 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 q,
                 &mut queued,
                 &mut visited,
-                &mut page_states,
+                &mut state_walk,
                 &mut summary,
                 true,
             )
             .await?;
+            return Ok(());
+        }
+
+        // No roots means the whole workspace, and the whole workspace
+        // means search — resumed where the last run stopped, so a
+        // steady-state run reads one page of results rather than 124.
+        if opts.subtree_pages.is_empty() {
+            let span = tracing::info_span!("notion_search_pass");
+            let _enter = span.enter();
+            let state = datalib_etl::scope_state::snapshot(db.pool()).await?;
+            let prior = datalib_etl::scope_config::load(db.pool(), SCOPE_CONFIG_KEY).await?;
+            let since = datalib_etl::scope_state::since_for_scope(
+                &state,
+                SEARCH_SCOPE,
+                opts.refresh_window_days,
+                opts.full_sync || opts.control.reset_and_redownload,
+                prior.as_ref(),
+            );
+            let (ids, newest_edited) =
+                search_since(&official, since.as_deref(), opts.max_pages).await?;
+            summary.discovered = ids.len();
+            tracing::info!(
+                event = "notion_search_pass",
+                since = since.as_deref().unwrap_or("(cold start)"),
+                discovered = ids.len(),
+            );
+            let mut q: VecDeque<String> = VecDeque::new();
+            for id in ids {
+                if queued.insert(id.clone()) {
+                    q.push_back(id);
+                }
+            }
+            // `single_page = true`: don't descend into child pages.
+            // Search already named every page in the workspace, so a
+            // walk would only re-visit pages it has, or drag in ones
+            // older than the resume cursor.
+            bfs_drain(
+                &official,
+                &db,
+                &opts,
+                "search",
+                q,
+                &mut queued,
+                &mut visited,
+                &mut state_walk,
+                &mut summary,
+                true,
+            )
+            .await?;
+            // Only after the pages actually landed: a resume cursor
+            // recorded over a failed pass would skip that window
+            // forever.
+            if let Some(mark) = newest_edited {
+                datalib_etl::doltlite_raw::upsert_scope_state(db.pool(), SEARCH_SCOPE, &mark)
+                    .await?;
+                datalib_etl::scope_config::store(
+                    db.pool(),
+                    SCOPE_CONFIG_KEY,
+                    &datalib_etl::scope_state::refresh_window_blob(opts.refresh_window_days),
+                )
+                .await?;
+            }
             return Ok(());
         }
 
@@ -759,7 +947,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 subtree_queue,
                 &mut queued,
                 &mut visited,
-                &mut page_states,
+                &mut state_walk,
                 &mut summary,
                 false,
             )
@@ -767,85 +955,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             tracing::info!(visited = visited.len(), "subtree pass done");
         }
 
-        // Pass 2: inbox.
-        if opts.inbox {
-            let span = tracing::info_span!("notion_inbox_pass");
-            let _enter = span.enter();
-            let uo = NotionUnofficialClient::with_latchkey(opts.latchkey.clone());
-            uo.load_user_content().await?;
-            let spaces_resp = uo.get_spaces().await?;
-            let space_ids: Vec<String> = if let Some(s) = opts.space.as_deref() {
-                vec![s.into()]
-            } else {
-                let mut out: Vec<String> = Vec::new();
-                if let Some(obj) = spaces_resp.as_object() {
-                    for v in obj.values() {
-                        let Some(space) = v.get("space").and_then(|v| v.as_object()) else {
-                            continue;
-                        };
-                        for sid in space.keys() {
-                            if !out.contains(sid) {
-                                out.push(sid.clone());
-                            }
-                        }
-                    }
-                }
-                out
-            };
-            tracing::info!(?space_ids, "inbox spaces");
-            let mut inbox_queue: VecDeque<String> = VecDeque::new();
-            let mut total_refs = 0usize;
-            let mut already_mirrored = 0usize;
-            for sid in space_ids {
-                let refs = walk_inbox(
-                    &uo,
-                    &sid,
-                    opts.notification_page_size,
-                    opts.max_notification_pages,
-                    &opts.inbox_types,
-                )
-                .await?;
-                tracing::info!(space = %sid, found = refs.len(), "inbox refs");
-                total_refs += refs.len();
-                for rid in refs {
-                    let pid = format_uuid(&rid);
-                    if visited.contains(&pid) {
-                        already_mirrored += 1;
-                        continue;
-                    }
-                    if queued.insert(pid.clone()) {
-                        inbox_queue.push_back(pid);
-                    }
-                }
-            }
-            summary.unofficial_requests = uo.request_count();
-            if !opts.inbox_mirror_referenced {
-                tracing::info!(
-                    refs = total_refs,
-                    already_mirrored,
-                    "inbox refs collected; not mirroring (inbox_mirror_referenced=false)"
-                );
-            } else {
-                tracing::info!(
-                    queued = inbox_queue.len(),
-                    already_mirrored,
-                    "inbox pages queued for mirror"
-                );
-                bfs_drain(
-                    &official,
-                    &db,
-                    &opts,
-                    "inbox",
-                    inbox_queue,
-                    &mut queued,
-                    &mut visited,
-                    &mut page_states,
-                    &mut summary,
-                    false,
-                )
-                .await?;
-            }
-        }
         Ok(())
     };
 
@@ -885,8 +994,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 /// referenced in a few places. They no longer correspond to on-disk
 /// paths but stay around as logical identifiers.
 pub const ENTITY_PAGE: &str = "notion_official_page";
-pub const ENTITY_BLOCK: &str = "notion_official_block";
+pub const ENTITY_MARKDOWN: &str = "notion_page_markdown";
 pub const ENTITY_COMMENT: &str = "notion_official_comment";
+pub const ENTITY_USER: &str = "notion_user";
+pub const ENTITY_ANCHOR_BLOCK: &str = "notion_anchor_block";
 
 #[cfg(test)]
 mod tests {
@@ -902,7 +1013,7 @@ mod tests {
         assert_eq!(format_uuid(already), already);
     }
 
-    /// Nothing attempted is not a failure — an empty subtree/inbox config,
+    /// Nothing attempted is not a failure — an empty roots config,
     /// or a run where every page was already current, must stay green.
     #[test]
     fn all_pages_failed_is_false_when_nothing_failed() {
@@ -925,6 +1036,41 @@ mod tests {
             failed_pages: 42,
             ..Default::default()
         }));
+    }
+
+    /// Search's whole value as a resume mechanism is that it stops
+    /// early. The ordering this relies on — `last_edited_time` strictly
+    /// descending — was measured across 12,300 objects and 124 pages of
+    /// results against a real workspace.
+    #[test]
+    fn the_resume_cursor_ends_the_walk_at_the_first_older_result() {
+        let page = |id: &str, edited: &str| serde_json::json!({"object": "page", "id": id, "last_edited_time": edited});
+        let results = [
+            page("new-1", "2026-09-07T00:00:00.000Z"),
+            page("new-2", "2026-09-06T00:00:00.000Z"),
+            page("old-1", "2026-08-01T00:00:00.000Z"),
+            page("old-2", "2026-07-01T00:00:00.000Z"),
+        ];
+        let since = "2026-09-01T00:00:00.000Z";
+        let taken: Vec<&str> = results
+            .iter()
+            .take_while(|r| r["last_edited_time"].as_str().unwrap() >= since)
+            .map(|r| r["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(taken, vec!["new-1", "new-2"]);
+    }
+
+    /// A cold start has no resume cursor, so everything is in scope.
+    /// Getting this wrong the other way — treating "no point" as "stop
+    /// immediately" — would mirror nothing and look successful.
+    #[test]
+    fn a_cold_start_takes_everything() {
+        let edited = "2020-01-01T00:00:00.000Z";
+        let since: Option<&str> = None;
+        assert!(
+            since.is_none_or(|s| edited >= s),
+            "with no resume cursor every result is in scope"
+        );
     }
 
     /// One bad page among working ones is tolerated — that's the case the
