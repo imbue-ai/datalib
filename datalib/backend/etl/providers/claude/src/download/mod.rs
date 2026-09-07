@@ -123,6 +123,10 @@ pub struct FetchSummary {
     /// "in scope and already up to date") or `total`.
     pub out_of_scope: usize,
     pub forbidden_orgs: usize,
+    /// Conversations an org's complete listing did not name — deleted on
+    /// claude.ai. Never counts rows a `claude_export` ingest wrote (those
+    /// carry a NULL `org_uuid` and are out of an API sync's scope).
+    pub pruned: usize,
     /// Fetch failures across both walks — conversations and projects.
     pub errors: usize,
     pub total: usize,
@@ -445,6 +449,24 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 org_name: org_name.clone(),
                 ordered,
             });
+
+            // `/chat_conversations` returns this org's whole list in one
+            // response, so a conversation we hold for this org that the
+            // listing did not name has been deleted on claude.ai. The
+            // pruning set is the *unfiltered* listing, not `in_scope`:
+            // `since` narrows what we re-fetch, and treating what it
+            // excluded as deleted would delete the entire archive older
+            // than the cutoff.
+            //
+            // Only orgs that listed successfully reach here — a 403 does
+            // `continue` above, so a permission loss on one org cannot be
+            // read as its conversations having been deleted.
+            let listed: std::collections::HashSet<String> = listing
+                .iter()
+                .filter_map(|c| c.get("uuid").and_then(|v| v.as_str()))
+                .map(String::from)
+                .collect();
+            summary.pruned += db.prune_org_conversations(org_uuid, &listed).await?;
         }
 
         // Pass 2: fetch. The outer bar's length is the sum across all

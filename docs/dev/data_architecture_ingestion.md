@@ -322,17 +322,9 @@ use it. A partial export of a normally-complete source is the same trap.
 
 ### What limits it
 
-**Detection needs a re-enumeration.** A downloader that walks forward
-from a cursor never asks about rows it already has, so a deletion never
-enters the diff. You need a periodic full listing or tombstones from the
-API. Verified to notice today: `email` (JMAP `Email/changes` `destroyed`
-and the Gmail path's `deleted`, both into `db.delete_emails`), `media`
-and `fsindex` (truncate-and-refill, asserted by `media`'s
-`deletions_are_reconciled_without_a_clock`), `claude_export`
-(`prune_to`), and every source carrying
-[`always_clear_before_ingest`](#snapshot-inputs-always_clear_before_ingest).
-The rest is an unwritten per-provider audit; assume a cursor-driven
-walker's deletions are invisible until someone checks.
+**Detection needs a re-enumeration**, and the per-provider audit that
+sentence used to defer is now done. What each source re-enumerates, and
+therefore what it can see:
 
 **A deletion the download notices now reaches the grid.** That used to
 be a second gap and is not any more — see
@@ -342,11 +334,62 @@ keeping the two apart when reading a bug report: "we never noticed"
 (this section) and "we noticed and the grid still shows it" (that one)
 look identical from the UI.
 
-**The two lists barely overlap**, which is the awkward part. `media` and
-`fsindex` detect deletions structurally and record no deltas; most of
-the eight that record deltas are cursor-driven API walkers that may not
-detect deletions at all. Only `email` and `claude_export` currently sit
-in both.
+| source | re-enumeration | prunes |
+| --- | --- | --- |
+| `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
+| `email` (Gmail) | `history.list` deletions; a full walk when the cursor ages out | emails, via the same cascade |
+| `carddav` | RFC 6578 sync-collection `404`/`410` | contacts |
+| `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | messages inside the walked range; replies on a re-fetched thread |
+| `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
+| `claude_api` | `/chat_conversations`, one org at a time | that org's conversations |
+| `chatgpt_api` | `/conversations`, when the walk reached `total` | conversations |
+| `media`, `fsindex`, `pdf` | truncate-and-refill | structurally |
+| `claude_export`, and every source carrying [`always_clear_before_ingest`](#snapshot-inputs-always_clear_before_ingest) | the snapshot is the enumeration | structurally |
+| `yolink` | — | nothing; append-only telemetry |
+| `notion`, `beeper` | — | not wired (rework; poorly supported) |
+
+**The hard part is not the deletion, it is establishing the
+enumeration was complete.** Every gate above exists because some
+ordinary condition makes absence meaningless: a `since` cutoff or page
+cap that stopped the walk early, a label filter narrowing it
+server-side, an org whose listing `403`'d, a request that simply
+failed. That last one is the sharpest — a failed list request yields an
+empty list, which is byte-identical to "everything was deleted", so
+`unwrap_or_default` on a listing is now a correctness bug rather than a
+convenience.
+
+**The gate is the whole safety story; nothing second-guesses how much a
+prune deletes.** There was briefly a blast-radius veto here — refuse a
+prune taking most of a collection, on the theory that our enumeration
+narrowing is as likely an explanation as a real mass delete. The premise
+holds and the conclusion did not. A prune is a commit, so the previous
+commit still has the rows: `dolt_diff_<table>` names them and
+`dolt_at_<table>('HEAD^1')` reads them back
+([`doltlite.md`](doltlite.md)). Nothing is lost, so there was nothing to
+protect. Refusing was worse than acting, too — it left the store holding
+rows upstream no longer had with nothing recording the divergence, and
+its remedy was a full re-download.
+
+This is the concrete payoff of a version-controlled raw store, and it is
+worth naming because it changes what "careful" means: we can act on our
+best reading of an ambiguous signal and let the history be the safety
+net, where a plain mirror would have to choose between guessing and
+freezing. What remains is `prune::record`, which WARNs on an unusually
+large prune — a signal to investigate, not a veto.
+
+**A deletion the download notices now reaches the grid.** That used to
+be a second gap and is not any more — see
+[parse and render](data_architecture_parse_and_render.md), "Two
+mechanisms, because there are two kinds of renderer". It is worth
+keeping the two apart when reading a bug report: "we never noticed"
+(this section) and "we noticed and the grid still shows it" (that one)
+look identical from the UI.
+
+**The two lists no longer barely overlap**, which they did when this
+section was written: every provider that records deltas can now also
+detect a deletion, and `media` / `fsindex` / `pdf` still detect
+structurally while recording none. The remaining mismatch is only that
+the structural detectors write no `sync_runs` row.
 
 **`deleted_upstream_at` is specified but not built.** [Transient vs
 non-transient](#transient-vs-non-transient) below says a confirmed 404

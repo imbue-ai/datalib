@@ -136,6 +136,20 @@ rust_test(
 )
 
 rust_test(
+    name = "slack_history_prune",
+    srcs = ["tests/history_prune.rs"],
+    crate_root = "tests/history_prune.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_slack",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
     name = "slack_dm_download",
     srcs = ["tests/dm_download.rs"],
     crate_root = "tests/dm_download.rs",
