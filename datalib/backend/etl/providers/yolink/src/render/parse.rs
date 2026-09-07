@@ -3,11 +3,10 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::download::db_path_for;
@@ -116,12 +115,7 @@ pub fn parse(raw_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> 
 }
 
 async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> {
-    let opts =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_secs(60))
-        .connect_with(opts)
+    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open yolink doltlite for render {}", db_path.display()))?;
 

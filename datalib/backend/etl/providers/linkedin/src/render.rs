@@ -60,7 +60,7 @@ pub fn render(
     // later `dolt_commit` fail.
     let by_table = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open(&db_path).await?;
+            let db = RawDb::open_reader(&db_path).await?;
             let mut loaded = Vec::new();
             for table in message_tables() {
                 // A feed the user didn't export has no table; treat a
