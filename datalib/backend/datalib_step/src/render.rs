@@ -52,12 +52,14 @@ pub async fn run(
     );
 
     let docs = Arc::new(AtomicUsize::new(0));
+    let removed = Arc::new(AtomicUsize::new(0));
     let out_rel = format!("{}/rendered_md", planned.name);
     // `planned` moves into the render task below; the post-render check
     // still needs the source's name for its message.
     let source_name = planned.name.clone();
     let data_root = data_root.to_path_buf();
     let docs_in = docs.clone();
+    let removed_in = removed.clone();
     // `Progress` is a cheap clone; the render task takes one and this
     // one stays behind to report the problem counts afterwards.
     let progress_after = progress.clone();
@@ -87,6 +89,37 @@ pub async fn run(
                 docs_in.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             };
+            // The other half of the sink: a conversation the raw store no
+            // longer has takes its rendered documents with it. Without this
+            // the deletion stops at the raw store — the `.md` stays on disk
+            // and `grid_index`, which only ever learns of a removal from
+            // this store's own diff, never hears about it.
+            let mut on_remove = |conversation_uuid: &str| -> Result<usize> {
+                let gone = store.documents_for_conversation(conversation_uuid)?;
+                for uuid in &gone {
+                    store
+                        .remove_document(&data_root, uuid)
+                        .with_context(|| format!("remove document {uuid}"))?;
+                }
+                if !gone.is_empty() {
+                    removed_in.fetch_add(gone.len(), Ordering::SeqCst);
+                    tracing::info!(
+                        conversation = conversation_uuid,
+                        documents = gone.len(),
+                        "render: conversation is gone from the raw store; dropped its documents",
+                    );
+                }
+                Ok(gone.len())
+            };
+            // A whole-store renderer declares the complete document set
+            // instead of naming vanished ids: `retained` accumulates across
+            // this source's processors and the sweep runs once, below.
+            let mut retained: Option<BTreeSet<String>> = None;
+            let mut on_retain = |seen: &std::collections::HashSet<String>| {
+                retained
+                    .get_or_insert_with(BTreeSet::new)
+                    .extend(seen.iter().cloned());
+            };
             for proc in &planned.processors {
                 let ctx = RunCtx::for_render(
                     &planned.name,
@@ -97,17 +130,48 @@ pub async fn run(
                     &prior,
                     &checkpoints,
                     &mut on_doc,
+                    &mut on_remove,
+                    &mut on_retain,
                 );
                 futures::executor::block_on(proc.run(&ctx))
                     .with_context(|| format!("processor {}", proc.id()))?;
             }
+            // The retain sweep, after every processor has had its say and
+            // only on a run that got through them all: a render that failed
+            // partway named a fraction of what it holds, and sweeping on
+            // that would delete the rest. `?` above already returned.
+            if let Some(keep) = retained {
+                for uuid in store.all_document_uuids()? {
+                    if keep.contains(&uuid) {
+                        continue;
+                    }
+                    store
+                        .remove_document(&data_root, &uuid)
+                        .with_context(|| format!("remove document {uuid}"))?;
+                    removed_in.fetch_add(1, Ordering::SeqCst);
+                    tracing::info!(
+                        document = %uuid,
+                        "render: this source no longer produces this document; dropped it",
+                    );
+                }
+            }
+
             // One commit for the whole render. Per-document commits would
             // put thousands of entries in `dolt_log` per run; committing
             // once is also what makes `dolt_diff` over this store answer
             // "what did this render change?".
             let stored = docs_in.load(Ordering::SeqCst);
+            let dropped = removed_in.load(Ordering::SeqCst);
+            let msg = if dropped == 0 {
+                format!("render {}: {stored} document(s)", planned.name)
+            } else {
+                format!(
+                    "render {}: {stored} document(s), {dropped} removed upstream",
+                    planned.name
+                )
+            };
             store
-                .commit(&format!("render {}: {stored} document(s)", planned.name))
+                .commit(&msg)
                 .with_context(|| format!("commit render store for {}", planned.name))?;
             // The versions the tree now carries, read back from the store
             // that just wrote them — the post-render check needs them, and
@@ -123,7 +187,13 @@ pub async fn run(
 
     let (versions_on_disk, problem_counts) = versions_after;
     let docs = docs.load(Ordering::SeqCst);
-    tracing::info!(docs, "render: docs (re)rendered");
+    let removed = removed.load(Ordering::SeqCst);
+    tracing::info!(docs, removed, "render: docs (re)rendered");
+    if removed > 0 {
+        progress_after.set_message(&format!(
+            "{removed} document(s) dropped — their source is gone upstream"
+        ));
+    }
     // Say out loud what the sink holds. A problem store nothing ever
     // reads is indistinguishable from one that is empty because
     // everything is fine — and the more dangerous of those two reads as

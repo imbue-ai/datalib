@@ -54,6 +54,10 @@ pub fn render_all(
     progress: &Progress,
     _prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Chat JIDs the diff named that no `wa_chat` row still carries. The
+    // scan happens in here rather than in `parse`, so the caller learns
+    // about them the same way it learns about documents.
+    on_chat_gone: &mut dyn FnMut(&str) -> Result<()>,
 ) -> Result<RenderSummary> {
     // Incremental gate: if a render cursor exists at the root of this
     // source's render directory, ask doltlite which chats changed
@@ -96,6 +100,25 @@ pub fn render_all(
             cold_start = changed.is_none(),
             "[render] whatsapp dolt_diff scan"
         );
+        // Every backup is a full snapshot (the ingest truncates first), so
+        // a chat the diff named that `wa_chat` no longer carries is one the
+        // phone deleted.
+        if let Some(set) = changed.as_ref() {
+            let pool = tokio::task::block_in_place(|| {
+                let h = tokio::runtime::Handle::current();
+                h.block_on(open_ro_pool(&db_path))
+            })?;
+            let gone = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(doltlite_raw::buckets_without_rows(
+                    &pool,
+                    set,
+                    &[("wa_chat", "chat_jid")],
+                ))
+            })?;
+            for jid in &gone {
+                on_chat_gone(jid)?;
+            }
+        }
         (filtered, head, elapsed)
     } else {
         (None, None, None)
@@ -379,6 +402,7 @@ mod tests {
                 emitted.push(md.markdown_uuid);
                 Ok(())
             };
+            let mut on_chat_gone = |_: &str| -> Result<()> { Ok(()) };
             render_all(
                 &parsed.chats,
                 &parsed.blobs_by_chat,
@@ -388,6 +412,7 @@ mod tests {
                 &progress,
                 &prior,
                 &mut on_complete,
+                &mut on_chat_gone,
             )
             .expect("render_all");
             emitted

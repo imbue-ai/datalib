@@ -62,6 +62,14 @@ pub struct RenderSummary {
     pub docs_skipped: usize,
     pub items_rendered: usize,
     pub reactions_rendered: usize,
+    /// Every document this call *considered*, rendered and skipped alike.
+    ///
+    /// Skipped ones belong here and that is the whole point: a caller uses
+    /// this to tell "still there, unchanged" from "gone", and one that saw
+    /// only re-rendered documents would read its own steady state as a
+    /// mass deletion. Meaningful only to a caller that handed over every
+    /// chat its store holds — see `RunCtx::retain_documents`.
+    pub documents: Vec<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -95,6 +103,7 @@ pub fn render_all(
                 prior_fingerprints,
                 on_doc_complete,
             )?;
+            summary.documents.push(doc.markdown_uuid.clone());
             match outcome {
                 Outcome::Rendered { items, reactions } => {
                     summary.docs_rendered += 1;

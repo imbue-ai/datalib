@@ -127,6 +127,10 @@ impl DataProcessor for GitlabRender {
         use crate::render::{parse_api_dir, render_gitlab};
         let parsed = parse_api_dir(&self.raw_path)
             .with_context(|| format!("gitlab parse {}", self.raw_path.display()))?;
+        // This renderer walks the whole raw store every run, so the set it
+        // considered is the complete one: anything else the render store
+        // holds is a document whose source is gone. The driver sweeps.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
         render_gitlab(
             &parsed,
@@ -135,8 +139,10 @@ impl DataProcessor for GitlabRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
+            &mut seen,
         )
         .context("render_gitlab")?;
+        ctx.retain_documents(&seen);
         Ok("rendered".into())
     }
 }

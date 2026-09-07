@@ -62,6 +62,10 @@ pub struct ParsedSignal {
     /// Scan diagnostics propagated up to render so it can write the
     /// cursor + log elapsed_ms.
     pub scan: ScanResult,
+    /// Bucket keys the diff named that the raw store no longer has a row
+    /// for. Empty on a cold start, which looks at every bucket and so has
+    /// nothing to compare against.
+    pub vanished_buckets: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -230,12 +234,23 @@ async fn parse_async(
         }
     }
 
+    // A chat the diff named whose `chats` row is gone: Signal's newest
+    // backup no longer carries it.
+    let vanished_buckets = match scan.changed_chats.as_ref() {
+        Some(changed) => {
+            datalib_etl::doltlite_raw::buckets_without_rows(&pool, changed, &[("chats", "id")])
+                .await?
+        }
+        None => Vec::new(),
+    };
+
     Ok(ParsedSignal {
         recipients,
         chats,
         docs,
         docs_skipped,
         scan,
+        vanished_buckets,
     })
 }
 

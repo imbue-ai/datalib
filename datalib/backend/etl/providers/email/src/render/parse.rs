@@ -55,6 +55,11 @@ pub struct ParsedEmail {
     /// into the render summary.
     pub docs_skipped: usize,
     pub scan: ScanResult,
+    /// `(account_id, thread_id)` pairs the diff named that no email or
+    /// thread row still carries — threads the mailbox lost. Empty on a cold
+    /// start, which looks at every thread and so has nothing to compare
+    /// against.
+    pub vanished_threads: Vec<(String, String)>,
 }
 
 /// One rendered-markdown bucket: every email in a single JMAP Thread
@@ -164,6 +169,35 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         }
     }
 
+    // Threads the diff named that nothing in the store still carries.
+    // Checked on `thread_id` alone rather than the `(account, thread)`
+    // pair the bucket is keyed by: a thread id that survives under a
+    // different account reads as present, so the error runs toward
+    // missing a deletion rather than inventing one.
+    let vanished_threads = match scan.changed_threads.as_ref() {
+        Some(changed) => {
+            let ids: std::collections::HashSet<String> =
+                changed.iter().map(|(_, t)| t.clone()).collect();
+            let gone: std::collections::HashSet<String> =
+                datalib_etl::doltlite_raw::buckets_without_rows(
+                    &pool,
+                    &ids,
+                    &[("threads", "id"), ("emails", "thread_id")],
+                )
+                .await?
+                .into_iter()
+                .collect();
+            let mut out: Vec<(String, String)> = changed
+                .iter()
+                .filter(|(_, t)| gone.contains(t))
+                .cloned()
+                .collect();
+            out.sort();
+            out
+        }
+        None => Vec::new(),
+    };
+
     Ok(ParsedEmail {
         accounts,
         mailboxes,
@@ -171,6 +205,7 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         docs,
         docs_skipped,
         scan,
+        vanished_threads,
     })
 }
 
