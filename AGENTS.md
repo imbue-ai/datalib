@@ -34,6 +34,13 @@ are relative to the repo root.
   doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
+- [`docs/dev/streaming_steps_plan.md`](docs/dev/streaming_steps_plan.md)
+  — *plan*, nothing built: how to build the above, measured against
+  the tree. Read it before touching how any consumer reads a store —
+  its §"The hazard" is the one to know, because the cursor scans are
+  already safe under a live writer and every *content* read is not.
+  It also inventories what already exists (more than the proposal
+  above implies) and overturns two of that proposal's conclusions.
 - [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs)
   — **read before changing how a config is validated**: why the loader
   returns a list of diagnostics rather than an `Err`, and what
@@ -110,7 +117,13 @@ are relative to the repo root.
   what keeps them writing one deduped schema, and why an IMAP mode was
   built and removed.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows`
-  union table behind the grid UI.
+  union table behind the grid UI. Its per-provider mapping tables name
+  raw-store tables and columns; check those against the
+  `schema_inventory` golden
+  (`datalib/backend/schema_inventory/`), which is generated from the
+  DDL and so is the one list that cannot be stale. Prose here has been
+  wrong before — it named `openai_conversations`, `claude_conversations`
+  and `slack_workspaces`, none of which have ever existed.
 - [`docs/dev/edges.md`](docs/dev/edges.md) — the cross-document `edges`
   table.
 - [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — **read before

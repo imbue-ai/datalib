@@ -24,6 +24,7 @@ pub mod indicatif_progress;
 pub mod latchkey;
 pub mod layout;
 pub mod periodize;
+pub mod pin;
 pub mod processor;
 pub mod progress;
 pub mod raw_layout;
