@@ -30,14 +30,35 @@ tells you.
 
 ## What a run does
 
-**Discovery.** `POST /v1/search`, sorted `last_edited_time` descending,
-100 at a time, stopping at the first result older than the stored
-watermark. Results are page and data_source objects. Page objects come
-back **complete**, properties included — so for a database row with no
-body, that single response is the entire record.
+**Discovery.** Two modes.
 
-`sync.roots` narrows this to named pages and everything under them.
-Empty means the whole workspace.
+With `sync.roots` empty — the default — the mirror is the whole
+workspace, discovered through `POST /v1/search` sorted
+`last_edited_time` descending, 100 at a time, **stopping at the first
+result older than where the last run finished**. Page objects come back
+complete, properties included, so for a database row with no body that
+single response is the entire record.
+
+That stopping point is Notion's answer to "since you last looked". The
+API offers no delta token — no Gmail `historyId`, no JMAP `state` — so
+the resume cursor is a timestamp, and it works only because the ordering
+is trustworthy: `last_edited_time` descending was measured strictly
+monotonic across 12,300 objects and 124 pages of results, with no
+duplicate ids. A steady-state run therefore reads **one page of results**
+rather than the workspace.
+
+It is stored per source as `sync_scope_state.last_seen_at`, alongside a
+config blob, so widening `refresh_window_days` re-examines that window
+instead of being suppressed by a point recorded under the narrower
+setting. It is written only after the pages land — a point recorded over
+a failed pass would skip that window forever.
+
+Do not confuse it with `start_cursor` / `next_cursor`, which page
+*within* one walk and do not survive it.
+
+With `sync.roots` set, the mirror is those pages and everything under
+them, walked through the `<page>` and `<database>` links in each body.
+No search, and no resume cursor: the walk is the enumeration.
 
 **Per page**, two requests where the block walk needed one per container
 block:
@@ -153,11 +174,28 @@ thread file opens with it as a blockquote, and it leads the thread row's
 searchable text. When `original_content_deleted` is set, the thread says
 so instead of quoting something that no longer exists.
 
+## Deletions
+
+Render walks the whole raw store every run and hands the driver every
+document it considered — skipped ones included — through
+`RunCtx::retain_documents`. Anything the render store holds and that set
+does not name is a document whose source is gone, and the driver sweeps
+it.
+
+This is the stronger of the two mechanisms the tree offers: it needs no
+`dolt_diff` (which notion is not on yet) and cannot miss a deletion a
+diff failed to mention. The cost is that render re-reads the local store
+each run — no API requests, but real work, and porting notion to
+incremental render is the follow-up.
+
 ## Not built yet
 
-- Deletion pass (`filter: {in_trash: true}`), data-source row
-  enumeration, and the `entity_id_str` port (see
+- A trash pass (`filter: {in_trash: true}`) — deletions are currently
+  noticed by absence from the render sweep rather than by asking Notion
+  what it trashed.
+- Data-source schema, and the `entity_id_str` port (see
   `docs/dev/entity_ids.md`, which still lists notion as pending).
+- Incremental render (`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`).
 
 The design and the measurements behind it are in
 [`docs/dev/notion_redesign.md`](../../../../../docs/dev/notion_redesign.md).

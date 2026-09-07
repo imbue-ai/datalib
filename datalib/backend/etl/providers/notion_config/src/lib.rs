@@ -45,7 +45,7 @@ impl NotionConfig {
 #[serde(deny_unknown_fields)]
 pub struct NotionSync {
     /// Re-examine anything edited within this many days even when the
-    /// stored watermark is newer. Zero (or absent) means no floor.
+    /// stored resume cursor is newer. Zero (or absent) means no floor.
     #[serde(default)]
     pub refresh_window_days: Option<u32>,
     /// Optional allowlist. Each entry is a page id or a paste-able

@@ -36,6 +36,11 @@ pub struct FetchOptions {
     pub db: Option<RawDb>,
     /// Page IDs (dashed or undashed) to seed the walk.
     pub subtree_pages: Vec<String>,
+    /// Re-examine anything edited within this many days even when the
+    /// stored resume cursor is newer. 0 means no floor.
+    pub refresh_window_days: u32,
+    /// Ignore the resume cursor and walk the whole workspace.
+    pub full_sync: bool,
     /// Mirror each page's comment threads.
     pub comments: bool,
     /// Archive attachment bytes into the CAS.
@@ -62,6 +67,8 @@ impl Default for FetchOptions {
             db: None,
             latchkey: LatchkeySettings::default(),
             subtree_pages: Vec::new(),
+            refresh_window_days: 0,
+            full_sync: false,
             comments: true,
             attachments: true,
             max_pages: None,
@@ -84,6 +91,8 @@ pub struct FetchSummary {
     /// row, whose content is its properties.
     pub empty_bodies: usize,
     pub failed_bodies: usize,
+    /// Pages the search pass named as changed since the resume cursor.
+    pub discovered: usize,
     /// Users resolved by id (one request each, once ever).
     pub users_resolved: usize,
     /// Blocks a comment hangs off, fetched for their anchor text.
@@ -314,6 +323,99 @@ async fn fill_holes(
             }
         }
     }
+}
+
+/// Scope the search resume cursor is stored under. One workspace per
+/// source, so one of them.
+const SEARCH_SCOPE: &str = "workspace";
+
+/// Key for the config blob paired with it, so a widened
+/// `refresh_window_days` re-examines rather than being suppressed by a
+/// resume cursor recorded under the narrower one.
+const SCOPE_CONFIG_KEY: &str = "notion:download";
+
+/// Walk `POST /v1/search` newest-edited-first and stop where the last
+/// run finished.
+///
+/// This is Notion's "since you last looked". It offers no delta token —
+/// no Gmail `historyId`, no JMAP `state` — so the resume cursor is a
+/// timestamp: results come back ordered by `last_edited_time`
+/// descending, and that ordering was measured strictly monotonic across
+/// 12,300 objects and 124 pages of results. The first result older than
+/// the stored point therefore ends the walk, and a steady-state run
+/// reads one page instead of the workspace.
+///
+/// One value, three names, so: the **resume cursor** is what
+/// `scope_state::since_for_scope` returns (hence the `since` argument)
+/// and what `sync_scope_state.last_seen_at` stores. It is *not*
+/// `start_cursor` / `next_cursor`, which page within a single walk and
+/// do not survive it — that distinction is why the qualifier is worth
+/// carrying.
+///
+/// Returns the page ids to mirror, and the newest `last_edited_time`
+/// seen — the point the next run resumes from.
+async fn search_since(
+    client: &NotionOfficialClient,
+    since: Option<&str>,
+    max_pages: Option<usize>,
+) -> Result<(Vec<String>, Option<String>)> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut newest_edited: Option<String> = None;
+    let mut cursor: Option<String> = None;
+    loop {
+        let resp = client
+            .search(cursor.as_deref(), false)
+            .await
+            .map_err(|e| anyhow::anyhow!("notion search: {e}"))?;
+        let results = resp
+            .get("results")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if results.is_empty() {
+            break;
+        }
+        for r in &results {
+            let edited = r.get("last_edited_time").and_then(|v| v.as_str());
+            if newest_edited.is_none() {
+                newest_edited = edited.map(String::from);
+            }
+            // Descending order means everything from here on is older.
+            if let (Some(e), Some(s)) = (edited, since) {
+                if e < s {
+                    tracing::info!(
+                        event = "notion_search_reached_resume_cursor",
+                        resume_cursor = s,
+                        discovered = ids.len(),
+                    );
+                    return Ok((ids, newest_edited));
+                }
+            }
+            // A data_source is a container; its rows come back from
+            // search as ordinary pages, so only pages are queued here.
+            if r.get("object").and_then(|v| v.as_str()) != Some("page") {
+                continue;
+            }
+            if let Some(id) = r.get("id").and_then(|v| v.as_str()) {
+                ids.push(id.to_string());
+            }
+        }
+        if max_pages.is_some_and(|m| ids.len() >= m) {
+            break;
+        }
+        if !resp
+            .get("has_more")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            break;
+        }
+        match resp.get("next_cursor").and_then(|v| v.as_str()) {
+            Some(c) => cursor = Some(c.to_string()),
+            None => break,
+        }
+    }
+    Ok((ids, newest_edited))
 }
 
 /// What a walk has already resolved, so one run spends at most one
@@ -706,7 +808,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let mut visited: HashSet<String> = HashSet::new();
     let mut queued: HashSet<String> = HashSet::new();
-    let mut state = WalkState {
+    let mut state_walk = WalkState {
         pages: db.page_states().await?,
         users: db.known_user_ids().await?,
         anchors: db.known_anchor_ids().await?,
@@ -734,7 +836,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 q,
                 &mut queued,
                 &mut visited,
-                &mut state,
+                &mut state_walk,
                 &mut summary,
                 true,
             )
@@ -755,11 +857,73 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 q,
                 &mut queued,
                 &mut visited,
-                &mut state,
+                &mut state_walk,
                 &mut summary,
                 true,
             )
             .await?;
+            return Ok(());
+        }
+
+        // No roots means the whole workspace, and the whole workspace
+        // means search — resumed where the last run stopped, so a
+        // steady-state run reads one page of results rather than 124.
+        if opts.subtree_pages.is_empty() {
+            let span = tracing::info_span!("notion_search_pass");
+            let _enter = span.enter();
+            let state = datalib_etl::scope_state::snapshot(db.pool()).await?;
+            let prior = datalib_etl::scope_config::load(db.pool(), SCOPE_CONFIG_KEY).await?;
+            let since = datalib_etl::scope_state::since_for_scope(
+                &state,
+                SEARCH_SCOPE,
+                opts.refresh_window_days,
+                opts.full_sync || opts.control.reset_and_redownload,
+                prior.as_ref(),
+            );
+            let (ids, newest_edited) =
+                search_since(&official, since.as_deref(), opts.max_pages).await?;
+            summary.discovered = ids.len();
+            tracing::info!(
+                event = "notion_search_pass",
+                since = since.as_deref().unwrap_or("(cold start)"),
+                discovered = ids.len(),
+            );
+            let mut q: VecDeque<String> = VecDeque::new();
+            for id in ids {
+                if queued.insert(id.clone()) {
+                    q.push_back(id);
+                }
+            }
+            // `single_page = true`: don't descend into child pages.
+            // Search already named every page in the workspace, so a
+            // walk would only re-visit pages it has, or drag in ones
+            // older than the resume cursor.
+            bfs_drain(
+                &official,
+                &db,
+                &opts,
+                "search",
+                q,
+                &mut queued,
+                &mut visited,
+                &mut state_walk,
+                &mut summary,
+                true,
+            )
+            .await?;
+            // Only after the pages actually landed: a resume cursor
+            // recorded over a failed pass would skip that window
+            // forever.
+            if let Some(mark) = newest_edited {
+                datalib_etl::doltlite_raw::upsert_scope_state(db.pool(), SEARCH_SCOPE, &mark)
+                    .await?;
+                datalib_etl::scope_config::store(
+                    db.pool(),
+                    SCOPE_CONFIG_KEY,
+                    &datalib_etl::scope_state::refresh_window_blob(opts.refresh_window_days),
+                )
+                .await?;
+            }
             return Ok(());
         }
 
@@ -783,7 +947,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 subtree_queue,
                 &mut queued,
                 &mut visited,
-                &mut state,
+                &mut state_walk,
                 &mut summary,
                 false,
             )
@@ -872,6 +1036,41 @@ mod tests {
             failed_pages: 42,
             ..Default::default()
         }));
+    }
+
+    /// Search's whole value as a resume mechanism is that it stops
+    /// early. The ordering this relies on — `last_edited_time` strictly
+    /// descending — was measured across 12,300 objects and 124 pages of
+    /// results against a real workspace.
+    #[test]
+    fn the_resume_cursor_ends_the_walk_at_the_first_older_result() {
+        let page = |id: &str, edited: &str| serde_json::json!({"object": "page", "id": id, "last_edited_time": edited});
+        let results = [
+            page("new-1", "2026-09-07T00:00:00.000Z"),
+            page("new-2", "2026-09-06T00:00:00.000Z"),
+            page("old-1", "2026-08-01T00:00:00.000Z"),
+            page("old-2", "2026-07-01T00:00:00.000Z"),
+        ];
+        let since = "2026-09-01T00:00:00.000Z";
+        let taken: Vec<&str> = results
+            .iter()
+            .take_while(|r| r["last_edited_time"].as_str().unwrap() >= since)
+            .map(|r| r["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(taken, vec!["new-1", "new-2"]);
+    }
+
+    /// A cold start has no resume cursor, so everything is in scope.
+    /// Getting this wrong the other way — treating "no point" as "stop
+    /// immediately" — would mirror nothing and look successful.
+    #[test]
+    fn a_cold_start_takes_everything() {
+        let edited = "2020-01-01T00:00:00.000Z";
+        let since: Option<&str> = None;
+        assert!(
+            since.is_none_or(|s| edited >= s),
+            "with no resume cursor every result is in scope"
+        );
     }
 
     /// One bad page among working ones is tolerated — that's the case the

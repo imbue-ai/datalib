@@ -59,7 +59,7 @@ Walking `POST /v1/search` sorted `last_edited_time desc`, 100 at a time:
 - **Zero duplicate ids** across 124 cursor pages. Cursor pagination is
   stable enough to walk.
 - **`last_edited_time` is strictly monotonic descending** across the
-  whole walk. The watermark design works: stop at the first result
+  whole walk. The resume cursor design works: stop at the first result
   older than the stored mark.
 - One request in ~130 returned an empty body (transport, not an API
   error). Retry has to cover this; a naive walk would silently truncate.
@@ -243,7 +243,7 @@ a *separate future source type*, not part of this.
 
 **Webhooks** need a public HTTPS endpoint. datalib runs on the user's
 machine, so they are not available to us, and that is precisely why the
-`last_edited_time` watermark in §4 is the incrementality mechanism
+`last_edited_time` resume cursor in §4 is the incrementality mechanism
 rather than a fallback.
 
 ## 4. What is actually wrong with what we have
@@ -332,8 +332,8 @@ POST /v1/search
 ```
 
 Walk pages of results and **stop at the first result older than the
-stored watermark**. Results are `page` and `data_source` objects. Store
-the new watermark with the shared `datalib_etl::scope_state` helper,
+stored resume cursor**. Results are `page` and `data_source` objects. Store
+the new resume cursor with the shared `datalib_etl::scope_state` helper,
 scoped on the workspace id, with `refresh_window_days` finally wired to
 the overlap floor it was declared for.
 
@@ -595,7 +595,7 @@ Genuinely still open, both blocked on re-setting the credential to
 Two smaller ones worth an answer before the schema is frozen:
 
 - Does `last_edited_time` on a *database row* move when only a property
-  changes, or only when body blocks change? The watermark's precision
+  changes, or only when body blocks change? The resume cursor's precision
   depends on it.
 - Does the empty-body response seen once in ~130 search requests
   correlate with the 3 req/s limit, or is it unrelated flakiness? The

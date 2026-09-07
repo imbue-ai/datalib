@@ -91,6 +91,9 @@ impl DataProcessor for NotionDownload {
             latchkey: self.latchkey.clone(),
             subtree_pages: seeds,
             max_pages: self.sync.max_pages.map(|m| m as usize),
+            refresh_window_days: self.sync.refresh_window_days.unwrap_or(0),
+            comments: self.sync.comments,
+            attachments: self.sync.attachments,
             sleep_between: Duration::ZERO,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
@@ -124,6 +127,14 @@ impl DataProcessor for NotionRender {
         use crate::render::{parse_api_dir, render::render_notion};
         let parsed = parse_api_dir(&self.raw_path)
             .with_context(|| format!("notion parse {}", self.raw_path.display()))?;
+        // This renderer walks the whole raw store every run, so the set it
+        // considered is the complete one: anything else the render store
+        // holds is a document whose source is gone. The driver sweeps.
+        //
+        // This is the stronger half of the two deletion mechanisms — it
+        // needs no `dolt_diff` (which notion is not on yet) and cannot miss
+        // a deletion a diff failed to mention.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
         render_notion(
             &parsed,
@@ -132,8 +143,10 @@ impl DataProcessor for NotionRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
+            &mut seen,
         )
         .context("render_notion")?;
+        ctx.retain_documents(&seen);
         Ok("rendered".into())
     }
 }

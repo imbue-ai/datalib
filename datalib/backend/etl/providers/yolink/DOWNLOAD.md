@@ -45,7 +45,7 @@ Three independent checks, worth repeating if you ever suspect the
 windowing:
 
 1. **Cold start really does begin at `start_ms`.** `resume_cursor`
-   returns `(start_ms, Normal)` when there is no watermark. Nothing
+   returns `(start_ms, Normal)` when there is no stored one. Nothing
    skipped ahead.
 2. **The endpoint honors the requested range.** A later incremental run
    asked for a ~56-minute window and got 42 rows. Had the endpoint
@@ -186,7 +186,7 @@ Notes on the shape of that statement:
   `nothing to commit, working tree clean`, which is `dolt_commit`
   reporting that nothing changed rather than a failure.
 - **`yolink_devices` is deliberately untouched.** The imported rows are
-  older than the existing watermark, so `last_ts_ms` stays at the tip
+  older than the existing resume cursor, so `last_ts_ms` stays at the tip
   and the next sync resumes there instead of re-walking from the
   backfilled start.
 - `dolt_log` is the undo — the whole import is one commit.

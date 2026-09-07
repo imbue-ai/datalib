@@ -133,7 +133,7 @@ participates in the resume decision.
 
 | Change | Reaction |
 |---|---|
-| `since` earlier | Walk `[since, min(ts)]` per channel — the window below what's mirrored. The forward watermark is untouched. Runs before the reply pass so backfilled thread roots get their replies. |
+| `since` earlier | Walk `[since, min(ts)]` per channel — the window below what's mirrored. The forward resume cursor is untouched. Runs before the reply pass so backfilled thread roots get their replies. |
 | `since` later | No-op |
 | `media` off → on | Re-walk from `since`, including already-mirrored threads: attachment rows only exist for messages walked while the knob was on, and reply attachments are fetched only inside `paginate_replies`. |
 | `blob_size_limit_bytes` raised/lifted, with `media` on | Same re-walk, same reason |
@@ -160,7 +160,7 @@ Two rules worth knowing when reading the code:
   * **The blob is recorded only when no channel failed.** Per-channel
     errors are warned and stepped over, so a run can return `Ok` without
     having covered everything; recording anyway would drop a scheduled
-    backfill permanently, since — unlike the watermark — bookkeeping
+    backfill permanently, since — unlike the resume cursor — bookkeeping
     doesn't self-heal from stored rows.
 
 ## Rate limits

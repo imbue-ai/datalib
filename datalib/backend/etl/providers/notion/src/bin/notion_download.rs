@@ -29,6 +29,15 @@ struct Args {
     #[arg(long)]
     max_pages: Option<usize>,
 
+    /// Ignore the stored resume cursor and walk the whole workspace.
+    #[arg(long)]
+    full_sync: bool,
+
+    /// Re-examine anything edited within this many days even when the
+    /// resume cursor is newer.
+    #[arg(long, default_value_t = 0)]
+    refresh_window_days: u32,
+
     /// Fetch a single page by UUID instead of BFS-walking a subtree.
     #[arg(long, value_name = "UUID")]
     page: Option<String>,
@@ -51,14 +60,15 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "notion-download")?;
 
-    if !args.retry_failed && args.subtree_page.is_empty() && args.page.is_none() {
-        anyhow::bail!("must specify --subtree-page, --page, or --retry-failed");
-    }
+    // No flag at all is the whole-workspace mirror: search enumerates
+    // what the token can see, so there is nothing to require.
 
     let opts = FetchOptions {
         db_path: args.out.clone(),
         subtree_pages: args.subtree_page.clone(),
         max_pages: args.max_pages,
+        full_sync: args.full_sync,
+        refresh_window_days: args.refresh_window_days,
         page: args.page.clone(),
         retry_failed: args.retry_failed,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),

@@ -368,7 +368,7 @@ const K_BLOB_CAP: &str = "blob_size_limit_bytes";
 
 /// The subset of [`FetchOptions`] that decides *which data lands on
 /// disk*, recorded after a successful run so the next one can spot a
-/// widening the per-channel watermark would otherwise swallow.
+/// widening the per-channel resume cursor would otherwise swallow.
 fn scope_config_blob(opts: &FetchOptions) -> Value {
     json!({
         K_SINCE: opts.since,
@@ -382,12 +382,12 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
 #[derive(Debug, Default, Clone)]
 struct Adjustments {
     /// `since` moved earlier: walk `[since_ts, oldest_stored_ts]` for
-    /// each channel that already has history. The forward watermark is
+    /// each channel that already has history. The forward resume cursor is
     /// untouched — this only fills in below the floor.
     backfill_below_oldest: bool,
     /// A blob knob was relaxed (`media` off→on, or a raised/lifted size
     /// cap): re-walk each channel from `since_ts` instead of resuming
-    /// at its watermark. Attachment rows only exist for messages walked
+    /// at its resume cursor. Attachment rows only exist for messages walked
     /// while the knob was on, so there is nothing to backfill in place —
     /// the messages have to come past `download_files_for_messages`
     /// again.
@@ -506,7 +506,7 @@ async fn export_channel(
     // the long-tail fetch.
     let mut collected: Vec<Value> = Vec::new();
 
-    // Resume at the channel's watermark when it has one — unless a
+    // Resume at the channel's resume cursor when it has one — unless a
     // relaxed blob knob means the already-stored messages have to come
     // back past `download_files_for_messages`, in which case we walk
     // the whole configured range again. Upserts are idempotent, so the
@@ -519,7 +519,7 @@ async fn export_channel(
     info!(
         event = "slack_channel_walk_planned",
         channel = %channel_id,
-        watermark = channel_latest_ts.unwrap_or("-"),
+        resume_cursor = channel_latest_ts.unwrap_or("-"),
         oldest = %forward_oldest,
         inclusive = inclusive,
         resumed = channel_latest_ts.is_some() && !adjust.force_full_walk,
@@ -1235,7 +1235,7 @@ mod tests {
         let plan = Adjustments::plan(Some(&prev), &opts("2023-01-01", true, None));
         assert!(plan.backfill_below_oldest);
         // A widened `since` never needs the expensive re-walk — the
-        // forward watermark is still valid.
+        // forward resume cursor is still valid.
         assert!(!plan.force_full_walk);
     }
 

@@ -1,6 +1,6 @@
 //! Render-side attachment behaviour, and the incrementality canary.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use datalib_etl::blob_cas::BlobBundle;
@@ -23,26 +23,33 @@ fn page(id: &str, title: &str) -> serde_json::Value {
     })
 }
 
+/// Returns `(emitted docs, every document the render considered)`. The
+/// second is what the driver sweeps against, and it must include
+/// documents skipped on an unchanged fingerprint.
 fn render(
     parsed: &ParsedNotion,
     root: &std::path::Path,
     prior: &HashMap<String, String>,
-) -> Vec<(String, String)> {
-    let mut seen = Vec::new();
-    let mut on_doc = |md: datalib_etl::grid_index::RenderedMarkdown| {
-        seen.push((md.markdown_uuid.clone(), md.source_fingerprint.clone()));
-        Ok(())
-    };
-    render_notion(
-        parsed,
-        root,
-        "notion",
-        &Progress::noop(),
-        prior,
-        &mut on_doc,
-    )
-    .unwrap();
-    seen
+) -> (Vec<(String, String)>, HashSet<String>) {
+    let mut emitted = Vec::new();
+    let mut considered: HashSet<String> = HashSet::new();
+    {
+        let mut on_doc = |md: datalib_etl::grid_index::RenderedMarkdown| {
+            emitted.push((md.markdown_uuid.clone(), md.source_fingerprint.clone()));
+            Ok(())
+        };
+        render_notion(
+            parsed,
+            root,
+            "notion",
+            &Progress::noop(),
+            prior,
+            &mut on_doc,
+            &mut considered,
+        )
+        .unwrap();
+    }
+    (emitted, considered)
 }
 
 /// An attachment whose bytes are in the CAS is written beside the page
@@ -165,21 +172,31 @@ fn only_the_changed_page_re_renders() {
         blobs_by_page: HashMap::new(),
         ..Default::default()
     };
-    let first = render(&parsed, d.path(), &HashMap::new());
+    let (first, considered) = render(&parsed, d.path(), &HashMap::new());
     assert_eq!(first.len(), 2);
+    assert_eq!(considered.len(), 2, "both pages were considered");
     let prior: HashMap<String, String> = first.into_iter().collect();
 
-    // Unchanged input: nothing re-renders.
+    // Unchanged input: nothing re-renders...
+    let (emitted, considered) = render(&parsed, d.path(), &prior);
     assert!(
-        render(&parsed, d.path(), &prior).is_empty(),
+        emitted.is_empty(),
         "an unchanged tree must produce no documents"
+    );
+    // ...but both pages must still be *named*. A renderer that reported
+    // only what it re-rendered would tell the driver its whole steady
+    // state had gone upstream, and the sweep would delete it.
+    assert_eq!(
+        considered.len(),
+        2,
+        "skipped documents must still be reported as present"
     );
 
     // Change B's body only.
     parsed
         .markdown_by_page
         .insert(b.to_string(), "# B\n\nnew paragraph\n".into());
-    let second = render(&parsed, d.path(), &prior);
+    let (second, _) = render(&parsed, d.path(), &prior);
     let ids: Vec<&str> = second.iter().map(|(id, _)| id.as_str()).collect();
     assert_eq!(ids, vec![b], "only the changed page should re-render");
 }
