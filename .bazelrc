@@ -155,6 +155,20 @@ build:release --stamp
 build --disk_cache=~/Library/Caches/bazel-disk-cache
 test  --disk_cache=~/Library/Caches/bazel-disk-cache
 
+# Cap it. The path above is absolute, so every checkout and every
+# `.claude/worktrees/*` clone writes into one store — and with the
+# default of 0 (unlimited) nothing ever prunes it, so it grows
+# monotonically across every branch anyone has ever built. Left alone it
+# reached 287 GB on a 926 GB volume, which is how this repo first filled
+# a disk.
+#
+# The collection runs inside the bazel server once it has been idle for
+# `gc_idle_delay` (default 5m), evicting least-recently-used entries
+# down to the cap. It is not on the critical path of a build, and a
+# build that needs an evicted entry simply rebuilds it.
+build --experimental_disk_cache_gc_max_size=50G
+test  --experimental_disk_cache_gc_max_size=50G
+
 # BuildBuddy remote cache + build event service. Opt-in via
 # `--config=buildbuddy` on `build` / `test`; the API key lives in
 # `.bazelrc.user` (gitignored) — see the `try-import` at the bottom of
