@@ -25,10 +25,9 @@ async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("e.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
-    let pool = db.pool().clone();
     mbox::fetch(mbox::FetchOptions {
         db_path: db_path.clone(),
-        db: Some(db),
+        db: Some(db.clone()),
         input_path: mbox_path,
         account_id_override: Some("enterprise".to_string()),
         ..mbox::FetchOptions::new(
@@ -39,9 +38,9 @@ async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
     })
     .await
     .expect("mbox download fetch");
-    // Close the writer pool so the subsequent reader-side open sees a
-    // consistent doltlite working tree.
-    pool.close().await;
+    // Closed, not dropped: the caller reopens this store, and a dropped
+    // pool is still a live connection for a moment.
+    db.close().await;
     (tmp, db_path)
 }
 
@@ -115,14 +114,11 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     assert!(exists);
 
     // Re-running is idempotent: same email ids on a second pass.
-    let pool = db.pool().clone();
-    drop(db);
-    pool.close().await;
+    db.close().await;
     let db2 = RawDb::open(&db_path).await.unwrap();
-    let pool2 = db2.pool().clone();
     mbox::fetch(mbox::FetchOptions {
         db_path: db_path.clone(),
-        db: Some(db2),
+        db: Some(db2.clone()),
         input_path: fixture_path(),
         account_id_override: Some("enterprise".to_string()),
         ..mbox::FetchOptions::new(
@@ -133,7 +129,7 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     })
     .await
     .unwrap();
-    pool2.close().await;
+    db2.close().await;
     let db = RawDb::open(&db_path).await.unwrap();
     let emails2 = db.load_emails().await.unwrap();
     let ids1: Vec<_> = emails.iter().map(|e| &e.id).collect();
@@ -151,10 +147,9 @@ async fn mbox_only_labels_filters_extraction() {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("e.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
-    let pool = db.pool().clone();
     mbox::fetch(mbox::FetchOptions {
         db_path: db_path.clone(),
-        db: Some(db),
+        db: Some(db.clone()),
         input_path: fixture_path(),
         account_id_override: Some("enterprise".to_string()),
         only_labels: vec!["Sent".to_string()],
@@ -166,7 +161,7 @@ async fn mbox_only_labels_filters_extraction() {
     })
     .await
     .expect("mbox download fetch with label filter");
-    pool.close().await;
+    db.close().await;
 
     let db = RawDb::open(&db_path).await.unwrap();
     let emails = db.load_emails().await.unwrap();

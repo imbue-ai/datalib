@@ -87,13 +87,21 @@ pub fn render(
     let (messages, groups, voice_messages, voice_blobs) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open(&db_path).await?;
-            let messages = db.load_payloads("chat_messages").await?;
-            // (dir name, group_info payload) — the directory name carries
-            // the space id, which `group_info.json` itself does not.
-            let groups = db.load_payloads_with_id("chat_groups").await?;
-            let voice_messages = db.load_payloads("voice_messages").await?;
-            let voice_blobs = load_voice_blobs(&db, &voice_messages).await?;
-            anyhow::Ok((messages, groups, voice_messages, voice_blobs))
+            let loaded = async {
+                let messages = db.load_payloads("chat_messages").await?;
+                // (dir name, group_info payload) — the directory name
+                // carries the space id, which `group_info.json` itself
+                // does not.
+                let groups = db.load_payloads_with_id("chat_groups").await?;
+                let voice_messages = db.load_payloads("voice_messages").await?;
+                let voice_blobs = load_voice_blobs(&db, &voice_messages).await?;
+                anyhow::Ok((messages, groups, voice_messages, voice_blobs))
+            }
+            .await;
+            // Closed, not dropped: the next open of this store is a
+            // second connection until this one is actually gone.
+            db.close().await;
+            loaded
         })
     })?;
 

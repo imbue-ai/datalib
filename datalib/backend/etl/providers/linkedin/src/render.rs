@@ -55,17 +55,26 @@ pub fn render(
         return Ok(());
     }
 
-    let mut chats: Vec<NormalizedChat> = Vec::new();
-    for table in message_tables() {
-        let payloads = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let db = RawDb::open(&db_path).await?;
+    // One open for every table, not one per table: reopening a doltlite
+    // store while the last connection is still closing is what makes a
+    // later `dolt_commit` fail.
+    let by_table = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let db = RawDb::open(&db_path).await?;
+            let mut loaded = Vec::new();
+            for table in message_tables() {
                 // A feed the user didn't export has no table; treat a
                 // load error as "absent" rather than failing the render.
-                Ok::<_, anyhow::Error>(db.load_payloads(table).await.unwrap_or_default())
-            })
-        })?;
-        chats.extend(build_chats(table, &payloads));
+                loaded.push((table, db.load_payloads(table).await.unwrap_or_default()));
+            }
+            db.close().await;
+            Ok::<_, anyhow::Error>(loaded)
+        })
+    })?;
+
+    let mut chats: Vec<NormalizedChat> = Vec::new();
+    for (table, payloads) in &by_table {
+        chats.extend(build_chats(table, payloads));
     }
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();

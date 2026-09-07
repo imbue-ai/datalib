@@ -54,6 +54,9 @@ async fn scan_and_commit(
     // doing it here too matches the binary, which opens the db itself.
     download::fetch(o).await.unwrap();
     db.commit(&format!("scan {id}")).await.unwrap();
+    // Closed, not dropped: the next open of this store is a second
+    // connection until this one is actually gone.
+    db.close().await;
 }
 
 async fn files_on_branch(db_path: &Path, branch: &str) -> Vec<String> {
@@ -72,9 +75,12 @@ async fn files_on_branch(db_path: &Path, branch: &str) -> Vec<String> {
     .fetch_all(db.pool())
     .await
     .unwrap();
-    rows.iter()
+    let ids = rows
+        .iter()
         .map(|r| r.get::<String, _>("id"))
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>();
+    db.close().await;
+    ids
 }
 
 /// The regression guard: `--branch` has to actually switch branches.
@@ -108,6 +114,7 @@ async fn two_roots_land_on_their_own_branches() {
         .iter()
         .map(|r| r.get::<String, _>("name"))
         .collect::<Vec<_>>();
+    db.close().await;
     assert!(
         branches.iter().any(|b| b == "beta"),
         "scanning with target_doltlite_branch=beta left no such branch; got {branches:?}"

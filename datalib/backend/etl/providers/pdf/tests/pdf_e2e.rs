@@ -67,8 +67,8 @@ impl Harness {
         // A temp cache per harness: tests must never read or write this
         // host's real one.
         let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
-        download::fetch(download::FetchOptions {
-            db,
+        let summary = download::fetch(download::FetchOptions {
+            db: db.clone(),
             source_name: STANZA.to_string(),
             root: self.root.clone(),
             ignore: vec![],
@@ -78,7 +78,11 @@ impl Harness {
             now: NOW.to_string(),
             progress: datalib_etl::progress::Progress::noop(),
         })
-        .await
+        .await;
+        // Closed, not dropped: `db` and `render` both reopen this store,
+        // and one doltlite file takes one connection at a time.
+        db.close().await;
+        summary
     }
 
     async fn render(
@@ -106,6 +110,8 @@ impl Harness {
         Ok((s, emitted))
     }
 
+    /// A handle for the assertions. Close it before any further `scan`
+    /// or `render` — see [`Self::scan`].
     async fn db(&self) -> RawDb {
         RawDb::open(&download::db_path_for(&self.raw_dir))
             .await
@@ -193,6 +199,7 @@ async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
     // suppresses the document and the assertions below stop meaning what
     // they say.
     assert_eq!(r.get::<i64, _>("has_encoding_issues"), 0);
+    db.close().await;
 
     let (_, emitted) = h.render(&HashMap::new()).await?;
     let survey = emitted

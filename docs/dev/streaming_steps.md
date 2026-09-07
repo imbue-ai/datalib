@@ -6,6 +6,17 @@ reproducer is [`hack/doltlite_concurrent_reader/`](../../hack/doltlite_concurren
 and every number quoted below comes from running it. The design that
 follows is a proposal and has not been implemented.
 
+**The build plan is [`streaming_steps_plan.md`](streaming_steps_plan.md).**
+Measuring the tree before writing it overturned two things below. The
+last section here recommends starting with `<source>.download →
+<source>.render`; the plan starts with `render → grid_index` instead,
+because that consumer's content reads are three queries in one shared
+file against forty spread across ten provider crates. And the
+plan does not build the persistent-worker/stdin channel described under
+"What actually has to change" — a streaming pass is an ordinary step
+invocation dispatched early, which is Bazel's `local` fallback promoted
+to being the only path.
+
 ## The idea in one paragraph
 
 This changes what the DAG is *for*. Right now an edge means two things

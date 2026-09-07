@@ -1,0 +1,1366 @@
+---
+source: datalib/backend/schema_inventory/tests/inventory.rs
+expression: out
+---
+== beeper/raw ==
+beeper_media_attachments
+    id
+    event_uuid
+    ref_id
+    blake3
+beeper_media_attachments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+events
+    id
+    source
+    network
+    room_uuid
+    sender_uuid
+    native_event_id
+    external_event_id
+    event_type
+    timestamp_ms
+    text_content
+    reply_to_native_event_id
+    edit_of_native_event_id
+    reaction_emoji
+    reaction_target_native_event_id
+events_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+rooms
+    id
+    source
+    network
+    native_room_id
+    external_room_id
+    external_workspace_id
+    account_id
+    room_type
+    title
+    description
+    is_dm
+    is_space
+rooms_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+users
+    id
+    source
+    network
+    native_user_id
+    display_name
+    full_name
+    remote_id
+    avatar_blob_id
+users_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== chatgpt/raw ==
+chatgpt_attachments
+    id
+    conversation_id
+    file_id
+    blake3
+chatgpt_attachments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+conversations
+    id
+    payload
+    title
+    update_time
+conversations_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+me
+    id
+    payload
+    email
+    name
+me_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== claude/raw ==
+claude_attachments
+    id
+    conversation_uuid
+    file_uuid
+    blake3
+claude_attachments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+conversations
+    id
+    payload
+    org_uuid
+    org_name
+    name
+    updated_at
+conversations_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+orgs
+    id
+    payload
+    name
+orgs_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+project_docs
+    id
+    payload
+    project_uuid
+    file_name
+    created_at
+project_docs_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+projects
+    id
+    payload
+    org_uuid
+    org_name
+    name
+    updated_at
+projects_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+users
+    id
+    payload
+    email
+    full_name
+users_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== contacts/raw ==
+accounts
+    id
+    server_url
+    principal_href
+    addressbook_home_set
+accounts_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+addressbooks
+    id
+    account_id
+    href
+    display_name
+    description
+    ctag
+    sync_token
+addressbooks_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+contact_photos
+    id
+    owner_id
+    source_url
+    blake3
+contacts
+    id
+    payload
+    addressbook_id
+    uid
+    href
+    etag
+    display_name
+    revision
+contacts_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at
+
+== email/raw ==
+accounts
+    id
+    payload
+    name
+    email_address
+    is_personal
+    is_read_only
+accounts_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+email_blobs
+    id
+    email_id
+    blob_id
+    blake3
+email_blobs_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+email_keywords
+    id
+    email_id
+    keyword
+email_mailboxes
+    id
+    email_id
+    mailbox_id
+emails
+    id
+    payload
+    account_id
+    thread_id
+    blob_id
+    message_id
+    in_reply_to
+    references_header
+    received_at
+    sent_at
+    size
+    subject
+    from_json
+    to_json
+    cc_json
+    has_attachment
+emails_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+gmail_messages
+    gmail_id
+    email_id
+    thread_id
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at
+mailboxes
+    id
+    payload
+    account_id
+    name
+    parent_id
+    role
+    sort_order
+    total_emails
+    unread_emails
+mailboxes_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+threads
+    id
+    payload
+    account_id
+    email_count
+threads_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== fsindex/raw ==
+files
+    id
+    kind
+    size
+    blake3
+    symlink_target
+    identity_uuid
+scan_meta
+    id
+    abs_path
+    os
+    case_sensitive
+    inode_stable
+    options_fingerprint
+    last_scan_at
+    scanner_version
+
+== github/raw ==
+issue_comments
+    id
+    payload
+    repo_full_name
+    pr_number
+    html_url
+    user_login
+    created_at
+    updated_at
+issue_comments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+pr_review_comments
+    id
+    payload
+    repo_full_name
+    pr_number
+    in_reply_to_id
+    pull_request_review_id
+    html_url
+    user_login
+    path
+    line
+    original_line
+    commit_id
+    original_commit_id
+    created_at
+    updated_at
+pr_review_comments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+pr_reviews
+    id
+    payload
+    repo_full_name
+    pr_number
+    state
+    commit_id
+    user_login
+    submitted_at
+    html_url
+pr_reviews_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+pull_requests
+    id
+    payload
+    repo_full_name
+    pr_number
+    state
+    html_url
+    head_sha
+    base_sha
+    head_ref
+    base_ref
+    updated_at
+    merged_at
+pull_requests_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+self_identity
+    id
+    payload
+    login
+    html_url
+self_identity_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== gitlab/raw ==
+discussions
+    id
+    payload
+    project_full_path
+    mr_iid
+    discussion_id
+    individual_note
+    max_note_updated_at
+discussions_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+merge_requests
+    id
+    payload
+    project_full_path
+    mr_iid
+    state
+    web_url
+    head_sha
+    base_sha
+    start_sha
+    source_branch
+    target_branch
+    updated_at
+    merged_at
+merge_requests_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+self_identity
+    id
+    payload
+    username
+    web_url
+self_identity_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== google_takeout/raw ==
+chat_attachments
+    id
+    message_id
+    export_name
+    blake3
+chat_attachments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+chat_groups
+    id
+    payload
+chat_groups_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+chat_messages
+    id
+    payload
+    group_id
+    sender_email
+    when_ts
+chat_messages_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+chat_users
+    id
+    payload
+chat_users_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+gemini_activity
+    id
+    payload
+    when_ts
+gemini_activity_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+gemini_attachments
+    id
+    activity_id
+    filename
+    blake3
+gemini_attachments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at
+maps_photos
+    id
+    payload
+    when_ts
+    blake3
+maps_photos_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+maps_reviews
+    id
+    payload
+    when_ts
+maps_reviews_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+maps_saved_places
+    id
+    payload
+    when_ts
+maps_saved_places_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+voice_attachments
+    id
+    message_id
+    ref_name
+    blake3
+voice_attachments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+voice_bills
+    id
+    payload
+voice_bills_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+voice_greetings
+    id
+    payload
+    blake3
+voice_greetings_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+voice_messages
+    id
+    payload
+    conversation_key
+    when_ts
+    kind
+    folder
+voice_messages_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+youtube_subscriptions
+    id
+    payload
+    channel_title
+youtube_subscriptions_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+youtube_watch_history
+    id
+    payload
+    when_ts
+    video_id
+    channel_id
+youtube_watch_history_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== media/raw ==
+media_audio
+    blake3
+    title
+    artist
+    album
+    album_artist
+    composer
+    genre
+    date
+    track_no
+    track_total
+    disc_no
+    disc_total
+    bitrate_kbps
+    sample_rate_hz
+    channels
+    bit_depth
+media_files
+    id
+    blake3
+    last_seen_at
+media_items
+    blake3
+    size
+    media_class
+    container
+    codec
+    duration_ms
+    payload_blake3
+    payload_scheme
+    first_seen_at
+media_playlist_entries
+    id
+    playlist_id
+    position
+    target_raw
+    target_kind
+    resolved_path
+    ext_title
+    ext_duration_s
+media_playlists
+    id
+    blake3
+    format
+    title
+    entry_count
+    last_seen_at
+media_scan_meta
+    id
+    abs_root
+    scanned_at
+media_visual
+    blake3
+    width
+    height
+    orientation
+    captured_at
+    camera_make
+    camera_model
+    lens_model
+    iso
+    exposure_time
+    f_number
+    focal_length_mm
+    gps_lat
+    gps_lon
+    gps_altitude_m
+    title
+    caption
+    frame_rate
+    video_codec
+    audio_codec
+
+== notion/raw ==
+comment_anchors
+    id
+    page_id
+    block_type
+    plain_text
+comment_anchors_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+comments
+    id
+    discussion_id
+    parent_type
+    parent_id
+    page_id
+    created_time
+    last_edited_time
+    payload
+comments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+notion_attachments
+    id
+    page_id
+    ref_id
+    blake3
+notion_attachments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+page_markdown
+    id
+    markdown
+    truncated
+    unresolved_block_ids
+    source_last_edited_time
+page_markdown_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+pages
+    id
+    parent_type
+    parent_id
+    in_trash
+    created_time
+    last_edited_time
+    url
+    payload
+pages_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+users
+    id
+    name
+    payload
+users_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== pdf/raw ==
+pdf_documents
+    blake3
+    size
+    page_count
+    pdf_type
+    confidence
+    needs_ocr
+    ocr_page_count
+    has_encoding_issues
+    title
+    author
+    doc_created_at
+    doc_modified_at
+    content_blake3
+    pdf_id_permanent
+    xmp_document_id
+    xmp_instance_id
+    xmp_original_document_id
+    first_seen_at
+pdf_paths
+    id
+    blake3
+    last_seen_at
+pdf_scan_meta
+    id
+    abs_root
+    scanned_at
+
+== signal/raw ==
+account
+    id
+    payload
+account_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+chat_item_attachments
+    id
+    chat_item_id
+    ref_id
+    blake3
+chat_item_attachments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+chat_items
+    id
+    payload
+    chat_id
+    author_id
+    date_sent
+chat_items_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+chats
+    id
+    payload
+    recipient_id
+chats_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+ingested_backups
+    fingerprint
+    blake3
+    snapshot_dir
+    total_byte_size
+    ingested_at
+recipients
+    id
+    payload
+    identifier
+    display_name
+recipients_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== slack/raw ==
+channels
+    id
+    payload
+    name
+    is_member
+    is_archived
+    is_dm
+    dm_user_ids
+channels_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+messages
+    id
+    payload
+    team_id
+    channel_id
+    ts
+    thread_ts
+    thread_root_uuid
+    is_thread_root
+    user_id
+messages_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+replies_pages
+    id
+    channel_id
+    thread_ts
+    latest_reply
+replies_pages_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+slack_attachments
+    id
+    message_uuid
+    file_id
+    blake3
+slack_attachments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+users
+    id
+    payload
+    team_id
+    name
+    real_name
+    display_name
+users_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+workspaces
+    id
+    payload
+    team_name
+    team_url
+    self_user_id
+workspaces_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== sms_backup_restore/raw ==
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at
+sms_attachments
+    id
+    message_id
+    ref_name
+    blake3
+sms_attachments_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+sms_calls
+    id
+    payload
+    conversation_key
+    when_ts
+    call_type
+sms_calls_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+sms_messages
+    id
+    payload
+    conversation_key
+    when_ts
+    kind
+    box_kind
+sms_messages_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== whatsapp/raw ==
+wa_chat
+    chat_jid
+    hidden
+    subject
+    created_timestamp
+    archived
+    sort_timestamp
+    mod_tag
+    gen
+    spam_detection
+    unseen_earliest_message_received_time
+    unseen_message_count
+    unseen_missed_calls_count
+    unseen_row_count
+    plaintext_disabled
+    vcard_ui_dismissed
+    show_group_description
+    ephemeral_expiration
+    ephemeral_setting_timestamp
+    ephemeral_displayed_exemptions
+    ephemeral_disappearing_messages_initiator
+    unseen_important_message_count
+    group_type
+    unseen_message_reaction_count
+    unseen_comment_message_count
+    growth_lock_level
+    growth_lock_expiration_ts
+    has_new_community_admin_dialog_been_acknowledged
+    history_sync_progress
+    chat_lock
+    chat_origin
+    participation_status
+    account_jid
+    chat_encryption_state
+    group_member_count
+    limited_sharing
+    limited_sharing_setting_timestamp
+    is_contact
+    ephemeral_after_read_duration
+    business_chat_state
+wa_jid
+    raw_string
+    user
+    server
+    agent
+    device
+    type
+wa_media_files
+    blake3
+    relative_path
+    size_bytes
+    mime_type
+wa_message
+    chat_jid
+    key_id
+    from_me
+    sender_jid
+    status
+    broadcast
+    recipient_count
+    participant_hash
+    origination_flags
+    origin
+    timestamp
+    received_timestamp
+    receipt_server_timestamp
+    message_type
+    text_data
+    starred
+    lookup_tables
+    message_add_on_flags
+    view_mode
+    sort_id
+    translated_text
+    server_sts
+wa_message_add_on
+    chat_jid
+    key_id
+    from_me
+    sender_jid
+    parent_chat_jid
+    parent_key_id
+    parent_from_me
+    timestamp
+    status
+    message_add_on_type
+    received_timestamp
+    expiry_duration_in_secs
+    server_timestamp
+    expiry_timestamp
+    expiry_type
+wa_message_add_on_reaction
+    chat_jid
+    key_id
+    from_me
+    reaction
+    sender_timestamp
+wa_message_media
+    chat_jid
+    key_id
+    from_me
+    autotransfer_retry_enabled
+    transferred
+    face_x
+    face_y
+    has_streaming_sidecar
+    page_count
+    thumbnail_height_width_ratio
+    first_scan_sidecar
+    first_scan_length
+    message_url
+    media_upload_handle
+    sticker_flags
+    raw_transcription_text
+    first_viewed_timestamp
+    is_animated_sticker
+    premium_message
+    media_caption
+    metadata_url
+    motion_photo_presentation_offset_ms
+    qr_url
+    media_key_domain
+    e2ee_media_key
+    emoji_tags
+    multicast_id
+    media_job_uuid
+    transcoded
+    file_path
+    file_size
+    suspicious_content
+    trim_from
+    trim_to
+    media_key
+    media_key_timestamp
+    width
+    height
+    gif_attribution
+    direct_path
+    mime_type
+    file_length
+    media_name
+    file_hash
+    media_duration
+    enc_file_hash
+    partial_media_hash
+    partial_media_enc_hash
+    original_file_hash
+    mute_video
+    doodle_id
+    media_source_type
+    accessibility_label
+    media_transcode_quality
+    is_offloaded
+wa_message_text
+    chat_jid
+    key_id
+    from_me
+    description
+    page_title
+    url
+    font_style
+    text_color
+    background_color
+    preview_type
+    invite_link_group_type
+    counter_abuse_token
+    fb_experiment_id
+    social_media_post_type
+    link_media_duration_seconds
+    link_end_index
+
+== yolink/raw ==
+yolink_devices
+    id
+    family_device_id
+    kind
+    start_ms
+    last_ts_ms
+yolink_devices_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+yolink_readings
+    id
+    payload
+    device_name
+    ts_ms
+    metric
+    value
+yolink_readings_bookkeeping
+    id
+    fetched_at
+    attempt_count
+    last_attempt_at
+    last_error
+    volatile_payload
+
+== unified_index/grid ==
+edges
+    edge_uuid
+    src_markdown_uuid
+    src_anchor_uuid
+    dst_markdown_uuid
+    dst_anchor_uuid
+    label
+grid_rows
+    uuid
+    provider
+    kind
+    source_label
+    when_ts
+    when_ts_utc
+    when_offset
+    author
+    account
+    project
+    org_uuid
+    org_name
+    channel
+    conversation_name
+    conversation_uuid
+    message_index
+    entire_chat
+    text
+    slack_link
+    qmd_path
+    source_url
+    git_sha
+    upstream_id
+    upstream_entity_kind
+    upstream_scope
+    notion_page_uuid
+    notion_block_uuid
+    markdown_uuid
+markdowns
+    markdown_uuid
+    source_name
+    provider
+    kind
+    title
+    created_at
+    updated_at
+    md_path
+    source_fingerprint
+    upstream_cursor
+    row_set_hash
+    renderer_version
+    rendered_at
+render_problems
+    uuid
+    scope_key
+    scope_kind
+    source_name
+    stage
+    outcome
+    problems
+    first_seen_at
+    last_seen_at
+    render_version
+source_cursors
+    source_name
+    store_commit
+    indexed_at
+    documents_applied
+
+== system ==
+disk_usage
+    path
+    measured_at
+    bytes
+feedback
+    feedback_uuid
+    created_at
+    sentiment
+    comment
+    app_version
+    git_hash
+    context_json
+    fixed_in_git_hash
+    notes
+sync_jobs
+    id
+    source_name
+    kind
+    parent_job_id
+    state
+    created_at
+    started_at
+    finished_at
+    error
+    pid
+    progress_pct
+    progress_msg
