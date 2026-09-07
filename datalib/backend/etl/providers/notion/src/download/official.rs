@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, LatchkeySettings};
+use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const BASE: &str = "https://api.notion.com/v1";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(180);
@@ -74,13 +74,13 @@ impl NotionOfficialClient {
         // in `latchkey_curl`; this issues the request once and parses the
         // definitive response.
         let req = match method {
-            "GET" => HttpRequest::get("notion", &url)
+            "GET" => HttpRequest::get(HttpService::Notion, &url)
                 .header("Accept", "application/json")
                 .latchkey(self.latchkey.clone())
                 .timeout(LATCHKEY_TIMEOUT),
             "POST" => {
                 let payload = body.map(|b| b.to_string().into_bytes()).unwrap_or_default();
-                HttpRequest::post_json("notion", &url, payload)
+                HttpRequest::post_json(HttpService::Notion, &url, payload)
                     .header("Accept", "application/json")
                     .latchkey(self.latchkey.clone())
                     .timeout(LATCHKEY_TIMEOUT)

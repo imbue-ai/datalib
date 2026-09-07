@@ -8,11 +8,11 @@ use serde_json::Value;
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
-use datalib_etl::http::{latchkey_curl, HttpRequest, HttpResponse, LatchkeySettings};
+use datalib_etl::http::{latchkey_curl, HttpRequest, HttpResponse, HttpService, LatchkeySettings};
 
-/// Playback / impersonation key. Not in `IMPERSONATE_PROVIDERS` — Google
+/// Playback key. `HttpService::Gmail.impersonates()` is false — Google
 /// does not front the API with a JA3 wall.
-pub const PROVIDER: &str = "gmail";
+pub const HTTP_SERVICE: HttpService = HttpService::Gmail;
 
 const BASE: &str = "https://gmail.googleapis.com/gmail/v1/users";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -96,7 +96,7 @@ fn wait_seconds(available: f64, cost: f64, units_per_minute: u32) -> f64 {
 }
 
 async fn get_json(url: &str, latchkey: &LatchkeySettings) -> Result<Value> {
-    let req = HttpRequest::get(PROVIDER, url)
+    let req = HttpRequest::get(HTTP_SERVICE, url)
         .timeout(REQUEST_TIMEOUT)
         .latchkey(latchkey.clone());
     let resp = latchkey_curl(&req).await.map_err(|e| anyhow!("{e}"))?;

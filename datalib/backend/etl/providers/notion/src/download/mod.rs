@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::{latchkey_curl, HttpRequest, LatchkeySettings};
+use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -179,7 +179,7 @@ async fn fetch_image_blobs(db: &RawDb, blocks: &[Value], summary: &mut FetchSumm
         // resolve an `aws` credential it doesn't have and fail the fetch. Only
         // URLs actually on a Notion host go through latchkey; send everything
         // else via plain curl.
-        let mut req = HttpRequest::get("notion", &url);
+        let mut req = HttpRequest::get(HttpService::Notion, &url);
         if !host_is_notion(&url) {
             req = req.plain();
         }

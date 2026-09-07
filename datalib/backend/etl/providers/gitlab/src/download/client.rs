@@ -10,7 +10,9 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpResponse, LatchkeySettings};
+use datalib_etl::http::{
+    latchkey_curl, HttpError, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
+};
 
 pub const BASE: &str = "https://gitlab.com/api/v4";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -59,7 +61,7 @@ impl GitLabClient {
     }
 
     async fn request_once(&self, url: &str) -> Result<HttpResponse, GitLabError> {
-        let req = HttpRequest::get("gitlab", url)
+        let req = HttpRequest::get(HttpService::Gitlab, url)
             .latchkey(self.latchkey.clone())
             .timeout(LATCHKEY_TIMEOUT);
         let resp = latchkey_curl(&req)
