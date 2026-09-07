@@ -15,7 +15,7 @@ use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_github::download::{db_path_for, fetch, FetchOptions};
+use datalib_etl_github::download::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_github::render::{parse_api_dir, render_github};
 use datalib_etl_github::synthesize::GithubSynth;
 use serde_json::{json, Map, Value};
@@ -73,6 +73,30 @@ async fn download(api: &Path, playback: &Path, out_db: &Path) {
     })
     .await
     .unwrap();
+
+    // Commit, the way the orchestrator's `RawStoreSession::finish` does
+    // after a real download. `fetch` on its own leaves the rows in the
+    // working set, so the store has no `dolt_log` entry — and with no HEAD
+    // to stamp there is no render cursor, so every run cold-starts and
+    // none of these tests would be exercising the diff.
+    //
+    // `open` itself rescue-commits a dirty tree, so the explicit commit
+    // usually finds nothing left to do. Tolerated rather than asserted:
+    // which of the two lands the commit is an implementation detail, and
+    // the next line checks the outcome either way.
+    let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
+    let _ = sqlx::query("SELECT dolt_commit('-Am', 'test: download')")
+        .execute(db.pool())
+        .await;
+    let commits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert!(
+        commits > 0,
+        "the store must have a HEAD for a cursor to name"
+    );
+    db.close().await;
 }
 
 /// One render pass. Returns the uuids emitted and how many the diff let it
@@ -211,6 +235,12 @@ async fn a_pr_that_left_the_store_is_named_as_vanished() {
         .execute(db.pool())
         .await
         .unwrap();
+    // Closed before the parse below reopens the file. Dropping only
+    // schedules the disconnect, and a second pool on a still-open doltlite
+    // store waits on it rather than failing — see AGENTS.md, "One open per
+    // doltlite file". Without this the parse reads the pre-delete tree and
+    // the assertion below comes back empty.
+    db.close().await;
 
     let cursor_path = datalib_etl::render_cursor::cursor_path(&out, "github");
     let cursor = datalib_etl::render_cursor::read_for_params(

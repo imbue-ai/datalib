@@ -309,7 +309,10 @@ pub async fn scan_changed(raw_dir: &Path, last_render_hash: Option<&str>) -> Res
     if !db_path.exists() {
         return Ok(PdfScan::default());
     }
-    let db = RawDb::open(&db_path).await?;
+    // Read-only, and closed before returning: `load_targets` ran just
+    // before this against the same file, and a second pool overlapping the
+    // first is the "database is locked" hazard `open_reader`'s docs name.
+    let db = RawDb::open_reader(&db_path).await?;
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         db.pool(),
         last_render_hash,
@@ -331,7 +334,9 @@ pub async fn scan_changed(raw_dir: &Path, last_render_hash: Option<&str>) -> Res
             ",
         },
     )
-    .await?;
+    .await;
+    db.close().await;
+    let scan = scan?;
     Ok(PdfScan {
         changed: scan.changed_buckets,
         new_head: scan.new_head,

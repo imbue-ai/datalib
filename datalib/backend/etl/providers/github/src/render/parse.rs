@@ -11,7 +11,7 @@ use once_cell::sync::Lazy;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::download::db::{block_on_load_all, db_path_for, LoadedChild, LoadedRaw};
+use crate::download::db::{db_path_for, LoadedChild, LoadedRaw, RawDb};
 
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_PR: &str = "pull_request";
@@ -170,11 +170,25 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
         // docs/dev/step_protocol.md, "Rendering a source with no data".
         return Ok(ParsedGithubApi::default());
     }
-    let raw = block_on_load_all(&db_path)
-        .with_context(|| format!("load github db {}", db_path.display()))?;
-    let mut parsed = parse_loaded(raw);
+    // One read-only open for the whole parse: the loads, the diff scan and
+    // the vanished-bucket probe. Three opens against one doltlite file is
+    // the "database is locked" hazard `doltlite_raw::open_reader` warns
+    // about — `max_connections` is 1, and a second pool overlapping the
+    // first waits on it rather than failing fast. See #312.
+    let (raw, scan, gone) = tokio::task::block_in_place(|| {
+        let last = last_render_hash.map(str::to_string);
+        let path = db_path.clone();
+        tokio::runtime::Handle::current().block_on(async move {
+            let db = RawDb::open_reader(&path).await?;
+            let out = read_everything(&db, last.as_deref()).await;
+            // Closed before returning, on the error path too.
+            db.close().await;
+            out
+        })
+    })
+    .with_context(|| format!("load github db {}", db_path.display()))?;
 
-    let scan = block_on_scan(&db_path, last_render_hash)?;
+    let mut parsed = parse_loaded(raw);
     if let Some(changed) = scan.changed_buckets.as_ref() {
         let before = parsed.pull_requests.len();
         parsed
@@ -186,76 +200,61 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
         parsed
             .comments
             .retain(|c| changed.contains(&pr_pk(&c.repo_full_name, c.pr_number)));
-        parsed.vanished_buckets = block_on_vanished(&db_path, changed)?;
+        parsed.vanished_buckets = gone;
     }
     parsed.scan = scan;
     Ok(parsed)
+}
+
+/// Everything the parse needs off one open store.
+async fn read_everything(
+    db: &RawDb,
+    last_render_hash: Option<&str>,
+) -> Result<(LoadedRaw, ScanResult, Vec<String>)> {
+    let raw = LoadedRaw {
+        self_identity: db.load_self_identity().await?,
+        pull_requests: db.load_pull_requests().await?,
+        issue_comments: db.load_children("issue_comments").await?,
+        pr_reviews: db.load_children("pr_reviews").await?,
+        pr_review_comments: db.load_children("pr_review_comments").await?,
+    };
+    let scan = datalib_etl::doltlite_raw::scan_buckets(
+        db.pool(),
+        last_render_hash,
+        &datalib_etl::doltlite_raw::DiffScanSpec {
+            // `self_identity` is not read by render, so a change to it fans
+            // out to nothing.
+            global_fanout_tables: &[],
+            bucket_query: BUCKET_QUERY,
+        },
+    )
+    .await?;
+    let gone = match scan.changed_buckets.as_ref() {
+        Some(changed) => {
+            datalib_etl::doltlite_raw::buckets_without_rows(
+                db.pool(),
+                changed,
+                &[("pull_requests", "id")],
+            )
+            .await?
+        }
+        None => Vec::new(),
+    };
+    Ok((
+        raw,
+        ScanResult {
+            changed_buckets: scan.changed_buckets,
+            new_head: scan.new_head,
+            scan_elapsed: scan.scan_elapsed,
+        },
+        gone,
+    ))
 }
 
 /// The bucket key a PR's rows share: `pull_requests.id`, and the same
 /// string composed from any child row's `(repo_full_name, pr_number)`.
 fn pr_pk(repo: &str, num: u32) -> String {
     format!("{repo}#{num}")
-}
-
-fn block_on_scan(db_path: &Path, last_render_hash: Option<&str>) -> Result<ScanResult> {
-    let path = db_path.to_path_buf();
-    let last = last_render_hash.map(str::to_string);
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async move {
-            let pool = open_ro(&path).await?;
-            let scan = datalib_etl::doltlite_raw::scan_buckets(
-                &pool,
-                last.as_deref(),
-                &datalib_etl::doltlite_raw::DiffScanSpec {
-                    // `self_identity` is not read by render, so a change to
-                    // it fans out to nothing.
-                    global_fanout_tables: &[],
-                    bucket_query: BUCKET_QUERY,
-                },
-            )
-            .await?;
-            pool.close().await;
-            Ok::<_, anyhow::Error>(ScanResult {
-                changed_buckets: scan.changed_buckets,
-                new_head: scan.new_head,
-                scan_elapsed: scan.scan_elapsed,
-            })
-        })
-    })
-}
-
-fn block_on_vanished(
-    db_path: &Path,
-    changed: &std::collections::HashSet<String>,
-) -> Result<Vec<String>> {
-    let path = db_path.to_path_buf();
-    let changed = changed.clone();
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async move {
-            let pool = open_ro(&path).await?;
-            let gone = datalib_etl::doltlite_raw::buckets_without_rows(
-                &pool,
-                &changed,
-                &[("pull_requests", "id")],
-            )
-            .await?;
-            pool.close().await;
-            Ok::<_, anyhow::Error>(gone)
-        })
-    })
-}
-
-async fn open_ro(db_path: &Path) -> Result<sqlx::SqlitePool> {
-    use std::str::FromStr;
-    let opts =
-        sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
-            .read_only(true);
-    sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(opts)
-        .await
-        .with_context(|| format!("open github doltlite for render {}", db_path.display()))
 }
 
 /// A PR's document is built from its own row plus its three child tables,

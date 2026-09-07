@@ -29,6 +29,19 @@ impl RawDb {
         Ok(Self { pool })
     }
 
+    /// Read-only open, for render. See github's twin and #312.
+    pub async fn open_reader(db_path: &Path) -> Result<Self> {
+        Ok(Self {
+            pool: dr::open_reader(db_path).await?,
+        })
+    }
+
+    /// Wait for the connection to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
