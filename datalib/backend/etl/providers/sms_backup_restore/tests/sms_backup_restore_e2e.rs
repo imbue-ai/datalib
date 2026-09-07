@@ -33,9 +33,12 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
 
     rt.block_on(async {
         // ── download ──────────────────────────────────────────────
+        // The test owns the store: one connection for both downloads and
+        // the assertions, because two is what breaks a doltlite file.
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
-            db: None,
+            db: Some(db.clone()),
             input_path: fixture_root(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
             progress: Progress::noop(),
@@ -52,7 +55,6 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         assert_eq!(summary.blobs_stored, 3, "3 distinct blobs in CAS");
         assert_eq!(summary.parse_errors, 0);
 
-        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         // 3 sms + 3 mms all land in one entity table.
         assert_eq!(db.load_payloads("sms_messages").await?.len(), 6);
         assert_eq!(db.load_payloads("sms_calls").await?.len(), 3);
@@ -75,7 +77,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // a byte, because neither file's stat moved.
         let again = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
-            db: None,
+            db: Some(db.clone()),
             input_path: fixture_root(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
             progress: Progress::noop(),
@@ -91,6 +93,9 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         );
 
         // ── render ───────────────────────────────────────────────
+        // `render` opens the store itself, so hand the file over first:
+        // one doltlite file takes one connection at a time.
+        db.close().await;
         let out_dir = tmp.path().join("out");
         fs::create_dir_all(&out_dir)?;
         let mut docs: Vec<RenderedMarkdown> = Vec::new();

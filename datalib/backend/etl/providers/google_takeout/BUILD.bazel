@@ -40,6 +40,24 @@ rust_library(
     ],
 )
 
+# End-to-end: walk the checked-in Takeout tree and assert on the store.
+rust_test(
+    name = "fixture_walk",
+    size = "medium",
+    srcs = ["tests/fixture_walk.rs"],
+    crate_root = "tests/fixture_walk.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {"TAKEOUT_FIXTURE_DIR": "datalib/backend/etl/providers/google_takeout/tests/fixtures/Takeout"},
+    deps = [
+        ":datalib_etl_google_takeout",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 rust_test(
     name = "google_takeout_unittests",
     size = "small",

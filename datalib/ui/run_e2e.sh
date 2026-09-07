@@ -26,6 +26,40 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
   || { echo>&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
 set -u
 
+# Resolve a runfile or die saying which one.
+#
+# Every path this is called with is a `data` dep of BOTH e2e targets
+# (`_E2E_DATA` in datalib/ui/BUILD.bazel), so a lookup that comes back
+# empty means the dep is gone — not that the file is optional. Letting
+# the variable stay empty is worse than useless: the binary silently
+# never reaches PATH, and the real cause resurfaces much later as a
+# spawn error inside a spec assertion.
+#
+# Prefer passing an `$(rlocationpath …)` from `_E2E_ENV` over a
+# hand-written `_main/…` string: the label is checked at analysis time,
+# so a renamed target is a build error rather than a miss here.
+#
+# `$2` is the test to apply, default `-e`: `-x` for a binary, `-f` for a
+# file, `-d` for a directory.
+#
+# Always call it as a plain assignment — `VAR="$(need_runfile ...)"` —
+# and export on the next line. `exit` here only leaves the command
+# substitution's subshell, so the caller aborts on the assignment's
+# status, and `export VAR="$(...)"` would report `export`'s status
+# instead and sail past a miss with VAR empty.
+need_runfile() {
+  local rloc="$1"
+  local flag="${2:--e}"
+  local out=""
+  out="$(rlocation "$rloc")" || out=""
+  if [[ -z "$out" ]] || ! test "$flag" "$out"; then
+    echo "ERROR: cannot locate '$rloc' in runfiles (wanted \`test $flag\`)" >&2
+    echo "Did it drop out of _E2E_DATA in datalib/ui/BUILD.bazel?" >&2
+    exit 1
+  fi
+  printf '%s\n' "$out"
+}
+
 # Temp dirs this script mints, removed by one EXIT trap. Several of them
 # and only one `trap ... EXIT` slot, so they are named here rather than
 # each installing a handler that would silently replace the other's.
@@ -80,11 +114,7 @@ else
   # spot where node_modules (from :node_modules), playwright.config.ts,
   # tsconfig.json, and tests/e2e/ all sit side-by-side — exactly what
   # Playwright expects under `cwd`.
-  PKG_RUNFILE="$(rlocation _main/datalib/ui/package.json)" || PKG_RUNFILE=""
-  if [[ -z "$PKG_RUNFILE" || ! -e "$PKG_RUNFILE" ]]; then
-    echo "ERROR: cannot locate datalib/ui/package.json in runfiles" >&2
-    exit 1
-  fi
+  PKG_RUNFILE="$(need_runfile _main/datalib/ui/package.json)"
   UI_DIR="$(dirname "$PKG_RUNFILE")"
   if [[ ! -d "$UI_DIR/node_modules" ]]; then
     echo "ERROR: bazel-linked node_modules not present at $UI_DIR/node_modules" >&2
@@ -149,35 +179,27 @@ fi
 # source-workspace `bazel-bin/...` convenience symlink, which is not a
 # declared input of this test and can race with concurrent bazel actions
 # under `bazel test //...`.
-BACKEND_BIN_RUNFILE="$(rlocation _main/datalib/backend/http/datalib_http_bin)" || BACKEND_BIN_RUNFILE=""
-if [[ -n "$BACKEND_BIN_RUNFILE" && -x "$BACKEND_BIN_RUNFILE" ]]; then
-  export DATALIB_HTTP_BIN="$BACKEND_BIN_RUNFILE"
-fi
+BACKEND_BIN_RUNFILE="$(need_runfile "${FW_E2E_HTTP_BIN_RLOC:-}" -x)"
+export DATALIB_HTTP_BIN="$BACKEND_BIN_RUNFILE"
 
 # Resolve the shared TNG materializer so playwright.config.ts can spawn
 # it directly (same script as `bazelisk run //datalib:dev_tng`).
-MATERIALIZE_RUNFILE="$(rlocation _main/tests/fixtures/materialize_tng_root)" || MATERIALIZE_RUNFILE=""
-if [[ -n "$MATERIALIZE_RUNFILE" && -x "$MATERIALIZE_RUNFILE" ]]; then
-  export FW_E2E_MATERIALIZE_TNG_ROOT="$MATERIALIZE_RUNFILE"
-fi
+MATERIALIZE_RUNFILE="$(need_runfile "${FW_E2E_MATERIALIZE_RLOC:-}" -x)"
+export FW_E2E_MATERIALIZE_TNG_ROOT="$MATERIALIZE_RUNFILE"
 
 # Resolve the step host so the sync spec can name it as a step's
 # `command:`. The fixture data root is a temp dir with nothing on PATH,
 # so an absolute path is the only way a step can be spawned there —
 # same reason the materializer writes the applet's path absolutely.
-STEP_BIN_RUNFILE="$(rlocation _main/datalib/backend/datalib_step/datalib_step)" || STEP_BIN_RUNFILE=""
-if [[ -n "$STEP_BIN_RUNFILE" && -x "$STEP_BIN_RUNFILE" ]]; then
-  export FW_E2E_DATALIB_STEP="$STEP_BIN_RUNFILE"
-fi
+STEP_BIN_RUNFILE="$(need_runfile "${FW_E2E_STEP_BIN_RLOC:-}" -x)"
+export FW_E2E_DATALIB_STEP="$STEP_BIN_RUNFILE"
 
 # The DAG runner. The http server's sync worker resolves it from
 # $DATALIB_DAG_BIN, then from its own directory, then PATH — and under
 # `bazel test` it sits in the runfiles rather than beside the server, so
 # the env var is the only one of the three that finds it.
-DAG_BIN_RUNFILE="$(rlocation _main/datalib/backend/dag/datalib_dag_bin)" || DAG_BIN_RUNFILE=""
-if [[ -n "$DAG_BIN_RUNFILE" && -x "$DAG_BIN_RUNFILE" ]]; then
-  export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
-fi
+DAG_BIN_RUNFILE="$(need_runfile "${FW_E2E_DAG_BIN_RLOC:-}" -x)"
+export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
 
 # A directory holding every shipped binary under its **public
 # dash-separated name** — the layout `scripts/install.sh` produces on a
@@ -192,40 +214,30 @@ fi
 # than a copy_to_directory dep: bazel names each output after its target
 # (`datalib_step`, `datalib_dag_bin`), and the rename is the whole point.
 BIN_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/datalib-e2e-bin.XXXXXX")"
-APPLET_BIN_RUNFILE="$(rlocation _main/datalib/backend/applets/datalib_applet)" || APPLET_BIN_RUNFILE=""
+APPLET_BIN_RUNFILE="$(need_runfile "${FW_E2E_APPLET_BIN_RLOC:-}" -x)"
 for pair in \
-  "datalib-step:${STEP_BIN_RUNFILE:-}" \
-  "datalib-dag:${DAG_BIN_RUNFILE:-}" \
-  "datalib-applet:${APPLET_BIN_RUNFILE:-}"; do
-  public="${pair%%:*}"
-  built="${pair#*:}"
-  if [[ -n "$built" && -x "$built" ]]; then
-    ln -sfn "$built" "$BIN_STAGE/$public"
-  fi
+  "datalib-step:$STEP_BIN_RUNFILE" \
+  "datalib-dag:$DAG_BIN_RUNFILE" \
+  "datalib-applet:$APPLET_BIN_RUNFILE"; do
+  ln -sfn "${pair#*:}" "$BIN_STAGE/${pair%%:*}"
 done
 export FW_E2E_BIN_DIR="$BIN_STAGE"
 
 # The local PDF corpus the sync spec scans. Anchor off one file and
 # hand over its directory, the way materialize_tng_root.sh anchors the
 # fsindex tree off its breadcrumb.
-PDF_ANCHOR="$(rlocation _main/datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng/captains_log.pdf)" || PDF_ANCHOR=""
-if [[ -n "$PDF_ANCHOR" && -f "$PDF_ANCHOR" ]]; then
-  export FW_E2E_PDF_FIXTURE_DIR="$(dirname "$PDF_ANCHOR")"
-fi
+PDF_ANCHOR="$(need_runfile _main/datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng/captains_log.pdf -f)"
+export FW_E2E_PDF_FIXTURE_DIR="$(dirname "$PDF_ANCHOR")"
 
 # Signal, for the onboarding spec's second source. Unlike the PDF
 # corpus there is nothing to point at directly: a Signal backup is an
 # encrypted blob, so it is *generated* from a checked-in JSON spec.
 # Hand playwright.config.ts both halves and let it expand them once per
 # config load, next to where it seeds the PDF scan directory.
-SIGNAL_FIXTURE_BIN="$(rlocation _main/datalib/backend/signal-backup/signal_make_fixture)" || SIGNAL_FIXTURE_BIN=""
-if [[ -n "$SIGNAL_FIXTURE_BIN" && -x "$SIGNAL_FIXTURE_BIN" ]]; then
-  export FW_E2E_SIGNAL_MAKE_FIXTURE="$SIGNAL_FIXTURE_BIN"
-fi
-SIGNAL_SPEC="$(rlocation _main/datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json)" || SIGNAL_SPEC=""
-if [[ -n "$SIGNAL_SPEC" && -f "$SIGNAL_SPEC" ]]; then
-  export FW_E2E_SIGNAL_SPEC="$SIGNAL_SPEC"
-fi
+SIGNAL_FIXTURE_BIN="$(need_runfile _main/datalib/backend/signal-backup/signal_make_fixture -x)"
+export FW_E2E_SIGNAL_MAKE_FIXTURE="$SIGNAL_FIXTURE_BIN"
+SIGNAL_SPEC="$(need_runfile _main/datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json -f)"
+export FW_E2E_SIGNAL_SPEC="$SIGNAL_SPEC"
 
 # --- the Node that runs qmd ------------------------------------------
 #

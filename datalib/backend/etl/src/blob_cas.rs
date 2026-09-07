@@ -97,6 +97,13 @@ impl BlobCas {
         &self.pool
     }
 
+    /// Wait for the connection to actually go away. Dropping the handle
+    /// only schedules that, and a store reopened in the meantime is a
+    /// second connection — see the crate README.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     pub async fn put(&self, bytes: &[u8], content_type: Option<&str>) -> Result<String> {
         let hash = blake3_hex(bytes);
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();

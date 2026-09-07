@@ -66,6 +66,13 @@ impl RawDb {
         &self.cas
     }
 
+    /// Wait for both connections to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+        self.cas.close().await;
+    }
+
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
@@ -389,17 +396,24 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            let pages = db.load_pages().await?;
-            let blocks = db.load_blocks().await?;
-            let comments = db.load_comments().await?;
-            let blobs_by_page =
-                load_blobs_by_page(db.pool(), &blob_cas::cas_path_for(&path), &blocks).await?;
-            Ok::<_, anyhow::Error>(LoadedRaw {
-                pages,
-                blocks,
-                comments,
-                blobs_by_page,
-            })
+            let loaded = async {
+                let pages = db.load_pages().await?;
+                let blocks = db.load_blocks().await?;
+                let comments = db.load_comments().await?;
+                let blobs_by_page =
+                    load_blobs_by_page(db.pool(), &blob_cas::cas_path_for(&path), &blocks).await?;
+                Ok::<_, anyhow::Error>(LoadedRaw {
+                    pages,
+                    blocks,
+                    comments,
+                    blobs_by_page,
+                })
+            }
+            .await;
+            // Closed, not dropped: the next open of this store is a
+            // second connection until this one is actually gone.
+            db.close().await;
+            loaded
         })
     })
 }

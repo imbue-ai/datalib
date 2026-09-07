@@ -27,6 +27,7 @@ pub mod periodize;
 pub mod pin;
 pub mod processor;
 pub mod progress;
+pub mod prune;
 pub mod raw_layout;
 pub mod raw_store;
 pub mod render_cursor;

@@ -77,10 +77,17 @@ pub fn render(
     let (messages, calls, blobs) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open(&db_path).await?;
-            let messages = db.load_payloads("sms_messages").await?;
-            let calls = db.load_payloads("sms_calls").await?;
-            let blobs = load_blobs(&db, &messages).await?;
-            anyhow::Ok((messages, calls, blobs))
+            let loaded = async {
+                let messages = db.load_payloads("sms_messages").await?;
+                let calls = db.load_payloads("sms_calls").await?;
+                let blobs = load_blobs(&db, &messages).await?;
+                anyhow::Ok((messages, calls, blobs))
+            }
+            .await;
+            // Closed, not dropped: the next open of this store is a
+            // second connection until this one is actually gone.
+            db.close().await;
+            loaded
         })
     })?;
 

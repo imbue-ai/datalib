@@ -109,7 +109,10 @@ impl DataProcessor for SlackDownload {
             .map(|(k, v)| format!("{k}={v}"))
             .collect::<Vec<_>>()
             .join(" ");
-        let summary = format!("msgs={} replies={} media[{}]", s.messages, s.replies, media);
+        let summary = format!(
+            "msgs={} replies={} pruned={} media[{}]",
+            s.messages, s.replies, s.pruned, media
+        );
         Ok(session.finish(ctx, summary).await)
     }
 }

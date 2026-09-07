@@ -46,6 +46,12 @@ impl RawDb {
         &self.pool
     }
 
+    /// Wait for the connection to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     /// What this source already ingested. Must run **before**
     /// [`Self::reset`].
     ///

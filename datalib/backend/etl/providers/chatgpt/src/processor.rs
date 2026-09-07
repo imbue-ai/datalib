@@ -82,8 +82,8 @@ impl DataProcessor for ChatgptDownload {
         })
         .await?;
         let summary = format!(
-            "fetched={} skipped={} out_of_scope={} errors={} listing={} requests={}",
-            s.fetched, s.skipped, s.out_of_scope, s.errors, s.listing, s.requests,
+            "fetched={} skipped={} out_of_scope={} errors={} listing={} pruned={} requests={}",
+            s.fetched, s.skipped, s.out_of_scope, s.errors, s.listing, s.pruned, s.requests,
         );
         Ok(session.finish(ctx, summary).await)
     }

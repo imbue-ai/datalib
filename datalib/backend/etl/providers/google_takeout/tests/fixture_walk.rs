@@ -2,29 +2,51 @@
 //! TNG-themed Takeout tree and assert each feed lands the rows
 //! `docs/dev/archived/google_takeout_ingestion.md` promises.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::progress::Progress;
 use datalib_etl_google_takeout::download::{self, FetchOptions, RawDb, SyncFlags};
 
 fn fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Takeout")
+    let rel =
+        std::env::var("TAKEOUT_FIXTURE_DIR").expect("TAKEOUT_FIXTURE_DIR must be set by the build");
+    // Under `bazel test` the runfiles root is CWD; under `cargo test`
+    // the env var is repo-relative from the workspace root.
+    let p = PathBuf::from(&rel);
+    if p.is_dir() {
+        return p;
+    }
+    let up = PathBuf::from("../../../../..").join(&rel);
+    assert!(up.is_dir(), "fixture dir not found: {rel}");
+    up
+}
+
+/// A temp cache per run: tests must never touch this host's real one.
+async fn opts(work: &Path, db_path: &Path, db: &RawDb, sync: SyncFlags) -> FetchOptions {
+    FetchOptions {
+        db_path: db_path.to_path_buf(),
+        db: Some(db.clone()),
+        input_path: fixture_root(),
+        cache: FingerprintCache::open(&work.join("fingerprints.sqlite"))
+            .await
+            .unwrap(),
+        sync,
+        progress: Progress::noop(),
+        control: Default::default(),
+    }
 }
 
 async fn run_all() -> (tempfile::TempDir, download::FetchSummary, PathBuf) {
     let work = tempfile::tempdir().unwrap();
     let db_path = work.path().join("gt.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
-    let pool = db.pool().clone();
-    let summary = download::fetch(FetchOptions {
-        db_path: db_path.clone(),
-        db: Some(db),
-        input_path: fixture_root(),
-        sync: SyncFlags::all(),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    pool.close().await;
+    let summary = download::fetch(opts(work.path(), &db_path, &db, SyncFlags::all()).await)
+        .await
+        .unwrap();
+    // Closed, not dropped: every caller reopens this store, and a
+    // dropped pool is still a live connection for a moment.
+    db.close().await;
     (work, summary, db_path)
 }
 
@@ -170,17 +192,10 @@ async fn second_run_skips_via_file_checkpoint() {
     // the first run mean every file's fingerprint matches and the
     // walkers short-circuit.
     let db = RawDb::open(&db_path).await.unwrap();
-    let pool = db.pool().clone();
-    let summary2 = download::fetch(FetchOptions {
-        db_path: db_path.clone(),
-        db: Some(db),
-        input_path: fixture_root(),
-        sync: SyncFlags::all(),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    pool.close().await;
+    let summary2 = download::fetch(opts(work.path(), &db_path, &db, SyncFlags::all()).await)
+        .await
+        .unwrap();
+    db.close().await;
     let _ = work; // keep temp dir alive
 
     assert_eq!(summary2.maps_reviews, 0);
@@ -196,18 +211,11 @@ async fn sync_flags_default_disables_everything() {
     let work = tempfile::tempdir().unwrap();
     let db_path = work.path().join("gt.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
-    let pool = db.pool().clone();
     // Default SyncFlags has every feed off.
-    let summary = download::fetch(FetchOptions {
-        db_path: db_path.clone(),
-        db: Some(db),
-        input_path: fixture_root(),
-        sync: SyncFlags::default(),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    pool.close().await;
+    let summary = download::fetch(opts(work.path(), &db_path, &db, SyncFlags::default()).await)
+        .await
+        .unwrap();
+    db.close().await;
     assert_eq!(summary.maps_reviews, 0);
     assert_eq!(summary.youtube_subscriptions, 0);
     assert_eq!(summary.chat_messages, 0);

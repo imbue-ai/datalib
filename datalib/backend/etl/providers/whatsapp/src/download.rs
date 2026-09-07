@@ -843,6 +843,9 @@ async fn mirror_media_files(
         }
     }
     put_media_batch(&cas, &pending).await?;
+    // Closed, not dropped: the next open of this store is a second
+    // connection until this one is actually gone.
+    cas.close().await;
 
     Ok(())
 }
