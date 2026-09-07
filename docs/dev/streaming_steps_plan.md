@@ -31,6 +31,14 @@ Two things stay true throughout, and they are what keep this cheap:
   No long-lived worker, no stdin channel, no re-pinning framework. This
   is the biggest departure from the design doc and the main reason the
   change stays small; see [The scheduler](#the-scheduler-streaming-dispatch).
+  The one thing this does *not* get for free: **a step must never be
+  dispatched while an earlier pass of it is still running.** Every store
+  in this tree has one writer, and a fan-in like `grid_index` will be
+  poked by every source's checkpoints, so the second poke will land
+  while the first pass is still going. The scheduler has to track
+  in-flight per step and drop (not queue) a checkpoint for a step
+  already running — dropping is safe because the next checkpoint, or
+  the final pass, subsumes it.
 
 ## What is already built
 
@@ -107,6 +115,13 @@ have collapsed this whole section to one line. Measured:
 
 So the pin has to go into each query, as `dolt_at_<table>('<hash>')`.
 
+That is more explicit than a connection-level setting would have been,
+and the explicitness turns out to be load-bearing rather than merely a
+consolation: a per-query pin is the only form that lets one pass read
+**two stores at two different pins**, which is exactly what the
+entities/CAS split below requires. A connection-level pin could not
+have expressed it.
+
 ### Two properties of `dolt_at_` that shape the helper
 
 Both measured:
@@ -118,10 +133,73 @@ Both measured:
   patch rather than assuming it.
 - **It does not exist for a table that has never been committed.**
   `SELECT … FROM dolt_at_fresh('HEAD')` on a brand-new table is
-  `no such table: dolt_at_fresh`, not an empty result. So the helper
-  must fall back to the bare table name when there is no pin — which is
-  the same cold-start fallback `scan_buckets` already has, and the same
-  branch that keeps first runs working.
+  `no such table: dolt_at_fresh`, not an empty result.
+
+  To be clear about why that matters, because "read a table nobody has
+  committed" is not a thing we should ever want to do: the point is not
+  that we process uncommitted tables, it is that **the pin can
+  legitimately be absent**, and when it is, the pinned form *crashes*
+  rather than returning nothing. Two ways it goes absent today, both
+  already handled by `scan_buckets`'s cold-start branch:
+
+  - a **dev build against stock libsqlite3**, where there are no dolt
+    extensions at all, so `dolt_log()` does not resolve and `new_head`
+    is `None`;
+  - a store with **zero commits** — a download that wrote rows and
+    whose commit failed, since `commit_with_suffix` is best-effort and
+    logs rather than failing the step.
+
+  So the fallback is crash-avoidance on paths that already exist, not a
+  feature. And it needs one new restriction under streaming, which is
+  the real answer to the question: an unpinned read *is* a working-set
+  read, so a consumer with no pin must not read a store while its
+  producer is live. It should do nothing that pass and wait for the
+  final one, rather than fall back to reading torn rows.
+
+### A second way to tear: one download, two stores
+
+A download writes **two** doltlite files with two independent HEADs —
+`raw/entities.doltlite_db` and `raw/blobs.doltlite_db` — and render
+reads both (`BlobBundle::load` takes a `refs_pool` and a `cas_pool`).
+So even with every query pinned there is a tear available between the
+two pins, and the two commits have to be ordered.
+
+**Commit blobs first, then entities.** The reference direction settles
+it. An entity row names a blob by its blake3, so:
+
+- entities first → a consumer can pin (entities=new, blobs=old) and see
+  a row referencing bytes that are not in its CAS pin. A dangling
+  attachment, which is a real defect.
+- blobs first → the worst available pin is (entities=old, blobs=new):
+  bytes in the CAS that nothing references yet. Harmless, and already
+  the normal state — the CAS is content-addressed and written with
+  `INSERT OR IGNORE`, so unreferenced blobs are routine.
+
+**No tagging scheme is needed to pair them**, because the pair is
+already the version string. `download.rs::raw_store_version` reports
+`entities:<h> blobs:<h>`, so a checkpoint carries both hashes in one
+value the consumer splits — which is exactly what a matching tag would
+have bought, minus the tag. The rule for the consumer is that both
+pins come out of *one* checkpoint string, never sampled separately.
+
+### And a third: `to_ref = 'HEAD'` is a moving target
+
+`scan_buckets` samples `new_head` from `dolt_log()` and then runs the
+bucket query with `to_ref = 'HEAD'` — a *symbolic* ref, resolved when
+the query runs. Nothing writes concurrently today, so the two always
+agree. Under streaming they can differ: a producer that commits between
+those two statements gives you a changed-bucket list computed at a
+newer commit than the pin the content reads will use, so the consumer
+looks for rows its pin does not have.
+
+The fix is one line and belongs in the same patch as the pinning:
+**`scan_buckets` must diff to the literal `new_head` hash, not to
+`'HEAD'`.** The scan and the content reads then name the same commit by
+construction. This answers "does the helper work for the renderer's
+initial work-to-do diff too?" — yes, and the pin it hands the content
+reads has to be the same hash the diff was taken at, which is why
+`new_head` (already computed, today only used to stamp the cursor)
+becomes the pin rather than a freshly sampled HEAD.
 
 ### How the sites get swept
 
@@ -205,40 +283,71 @@ The seam already exists in both places:
 
 ### Cadence
 
-A shared `Checkpointer` in `etl`: commit when either ~15s has elapsed or
-~5k rows/~64MB have been written since the last commit, whichever comes
-first, plus an explicit "done for now" call. Defaults in code, override
-by env (`DATALIB_DAG_CHECKPOINT_SECS` and friends) rather than by config
-file — whether a step can cope with chunked commits is a fact about the
-step, not a preference the user has, and the same argument applies to
-how often. The env override exists for experiments and for the tests.
+A shared `Checkpointer` in `etl` the producer *asks* at its natural
+batch boundary. Three refinements over the obvious fixed interval, all
+from review:
 
-The cost of getting this wrong is `dolt_log` size. The existing
+**It is a debounce with a ceiling, not a period.** Commit when writes
+have been quiet for `debounce` (default ~2s), or when `max_interval`
+(default ~15s) has passed since the last commit, whichever comes first.
+A fixed period makes a source that finishes a burst sit on its rows for
+the rest of the interval; a pure debounce never fires under a steady
+stream. Debounce-with-ceiling gets the good half of each: a burst that
+ends is published promptly, and a continuous writer still publishes
+every `max_interval`.
+
+**Nothing changed means no commit.** Check `dolt_status` before
+committing and skip when the store is clean, and emit no `checkpoint`
+event when `dolt_commit` returns `None` (which it already does for an
+empty commit — `commit_with_suffix` has the arm for it). Without this a
+long quiet stretch fills `dolt_log` with empty commits and wakes every
+consumer to discover nothing moved.
+
+**The cadence is the user's to set.** Earlier drafts of this plan put
+it behind env vars, arguing that whether a step can cope with chunked
+commits is a fact about the step rather than a preference. That is true
+of the *capability* and not of the *cadence* — how much latency to
+trade for how much `dolt_log` is exactly the kind of call a person
+should get to make. So: capability stays step-declared, cadence goes in
+`config.toml` as a top-level default with a per-step override, and the
+env vars remain only for tests.
+
+The cost of getting the dial wrong is `dolt_log` size. The existing
 one-commit-per-render rule is there precisely because "per-document
 commits would put thousands of entries in `dolt_log` per run"
-([render.rs](../../datalib/backend/datalib_step/src/render.rs)). Chunking
-is the compromise and the chunk size is the dial; a 20-minute download at
-15s granularity adds ~80 commits, which is fine, and a per-row commit
-would not be.
+([render.rs](../../datalib/backend/datalib_step/src/render.rs)). A
+20-minute download at 15s granularity adds ~80 commits, which is fine;
+a per-row commit would not be.
 
 ### The rule that is easy to get wrong
 
-**A checkpoint may only land where the store is semantically
-consistent.** Two known places where it must not:
+**A run that wipes and re-ingests must not checkpoint at all.** Not
+"must not checkpoint inside the critical section" — the whole run is
+the atomic unit, because a partially re-ingested store is wrong to push
+downstream at *any* point in it, not just mid-delete. Half a re-ingest
+looks exactly like a source that lost most of its data, and every
+consumer would faithfully propagate that.
 
-- The **reconcile** path in `grid_index.rs` drops and rebuilds every
-  index table together (see the comment on `index_ddl`). A commit
-  inside that publishes an empty index as HEAD.
-- The **prune-to-snapshot** path on the export-shaped ingests (the
-  `claude_export` edge described in AGENTS.md) deletes rows the current
-  snapshot does not contain. A commit mid-prune publishes a store that
-  is missing data it will have again a second later.
+Three cases, and the first two are the same case:
 
-Both are handled the same way: `Checkpointer` is asked, never
-self-firing, and the caller does not ask inside a critical section. The
-tests for this should assert that a reader pinned at any commit the
-producer published sees a store that satisfies the same invariants a
-finished run's store does.
+- **`reset_and_redownload`** truncates every data and bookkeeping table
+  and re-fetches ([`control.rs`](../../datalib/backend/etl/src/control.rs)).
+  Checkpointing is disabled for the whole run when
+  `DATALIB_DAG_RESET_AND_REDOWNLOAD` is set.
+- **Prune-to-snapshot** on the export-shaped ingests (the
+  `claude_export` edge in AGENTS.md) deletes whatever the current
+  snapshot does not contain. Same treatment: an ingest that declares
+  itself snapshot-shaped does not checkpoint.
+- **`grid_index`'s reconcile** drops and rebuilds every index table
+  together (see the comment on `index_ddl`), so a commit inside it
+  publishes an empty index. This one really is a critical section
+  rather than a whole run, and it is enough that `Checkpointer` is
+  asked rather than self-firing and the reconcile path does not ask.
+
+The test to write is the general one: a reader pinned at *any* commit
+the producer published must see a store satisfying the same invariants
+a finished run's store does. If that is hard to state for some ingest
+shape, that shape should not checkpoint.
 
 ## Consumer side
 
@@ -291,14 +400,29 @@ predicate and is **skipped** when nothing moved after the last
 checkpoint. Streaming is not a second code path beside the scheduler's
 rules; it is the same rules, evaluated earlier.
 
-Two invariants to hold explicitly, both cheap:
+Two invariants to hold explicitly:
 
 - **At most one instance of a step in flight.** Single-writer-per-file
   is load-bearing everywhere in this repo, and `grid_index` is a fan-in
-  that every source's checkpoint will poke.
-- **A streaming pass must not starve a producer.** It occupies a
-  parallelism slot. Simplest fix: when popping from `ready`, prefer a
-  step whose deps are satisfied over a speculative one.
+  every source's checkpoints will poke, so a second poke arriving
+  mid-pass is the common case rather than the rare one. A checkpoint
+  for a step already running is **dropped, not queued** — the next
+  checkpoint or the final pass subsumes it, which is the
+  slow-not-wrong rule doing its job.
+- **A streaming pass gets its own slot, outside `parallelism`.** An
+  earlier draft said to prefer deps-satisfied steps when popping from
+  `ready`, which review caught as self-defeating: with `parallelism`
+  at 4 and four downloads running, a strict preference means
+  `grid_index` never runs and *nothing reaches the UI* — losing the
+  entire point of the change in precisely the case it was meant for.
+
+  So give streaming passes a small separate budget (start at 1)
+  rather than making them compete. The justification is that
+  `parallelism` exists to bound long, network-bound fetches, and a
+  streaming pass is neither — it is bounded incremental work over a
+  delta, already capped at one instance per step. If the budget turns
+  out to need tuning it should be tuned as its own number, not by
+  borrowing from `parallelism`.
 
 ## The UI
 
@@ -322,17 +446,23 @@ Each of these is a reviewable PR that leaves the tree green.
    and the one that is boring on purpose. Splitting it in two along the
    edge boundary keeps the first streaming edge unblocked by the wide
    half.
-3. **Producer checkpoints.** `Checkpointer`, the two commit seams, the
-   `checkpoint` event, `subprocess.rs` parsing it, `progress_bus.rs`
-   showing it. Consumers still only run at the end, so this ships
-   durability and "N rows committed so far" progress with no scheduling
-   risk. Answers most of #164 on its own.
-4. **Consumers pin.** Thread `new_head` through. Still no early
+3. **Producer checkpoints.** `Checkpointer` (debounce + ceiling, skip
+   when clean, cadence from config), the two commit seams with **blobs
+   committed before entities**, checkpointing disabled for
+   wipe-and-re-ingest runs, the `checkpoint` event, `subprocess.rs`
+   parsing it, `progress_bus.rs` showing it. Consumers still only run
+   at the end, so this ships durability and "N rows committed so far"
+   progress with no scheduling risk. Answers most of #164 on its own.
+4. **Consumers pin.** Thread `new_head` through, and change
+   `scan_buckets` to diff to that literal hash rather than to `'HEAD'`
+   so the scan and the content reads name one commit. Still no early
    dispatch — but now provably safe against one, and the tests can
    assert it by running a consumer against a store with a dirty working
    set and checking it sees the committed count.
-5. **Streaming dispatch.** The scheduler change, `render → grid_index`
-   only. Measure the latency change before widening.
+5. **Streaming dispatch.** The scheduler change — in-flight tracking
+   with checkpoints dropped rather than queued, and the separate
+   streaming slot — for `render → grid_index` only. Measure the latency
+   change before widening.
 6. **`download → render`.** Turn the capability on for the second edge.
 7. **The UI frame.**
 
@@ -341,7 +471,7 @@ useful, so if this stalls partway it stalls somewhere useful.
 
 ## What this costs
 
-Roughly **+700 to +800 net lines** for the whole chain, most of it in
+Roughly **+800 to +900 net lines** for the whole chain, most of it in
 steps 1–2 (the sweep is wide and shallow) and in tests. It is not
 net-neutral, and it would be dishonest to plan as though it were. The
 parts that would normally be expensive — cursors, offsets, incremental
@@ -349,8 +479,14 @@ consumers — are the parts already built; what is left is mostly the
 mechanical cost of pinning forty-odd queries and the lint that keeps
 them pinned.
 
+That is up about a hundred lines from the first draft of this plan,
+which is what review cost: the debounce-with-ceiling, the config
+plumbing for cadence, the entities/CAS commit ordering, the
+`dolt_status` skip, and in-flight tracking in the scheduler. All of it
+buys correctness or control rather than scope.
+
 The first streaming edge on its own — steps 1, 3, 4, 5 with only the
-three-site half of step 2 — is roughly **+450**, and is the number to
+three-site half of step 2 — is roughly **+500**, and is the number to
 judge the idea by before committing to the wide half.
 
 ## Relation to the linked issues
@@ -381,3 +517,9 @@ judge the idea by before committing to the wide half.
   running. The design doc raises this and it is still open; "running,
   with a committed-so-far count" is the obvious answer and step 3 makes
   it available before step 5 needs it.
+- **How big the streaming budget should be.** One slot is the starting
+  guess and the argument for it is only that a streaming pass is
+  bounded work rather than a fetch. If a root with many sources turns
+  out to keep a fan-in permanently behind, the answer is to raise that
+  number rather than to reach into `parallelism` — but nobody has
+  measured it. Revisit after step 5 has run against a real root.
