@@ -289,6 +289,13 @@ impl DataProcessor for EmailRender {
         let cursor = datalib_etl::render_cursor::read_for_params(&cursor_path, &render_params)?;
         let parsed = parse(&db, cursor.as_ref().map(|c| c.last_rendered_hash.as_str()))?;
 
+        // Threads the mailbox lost — a JMAP `destroyed`, a Gmail history
+        // deletion, or a message gone from a re-ingested mbox.
+        let mut dropped = 0usize;
+        for (account_id, thread_id) in &parsed.vanished_threads {
+            dropped += ctx
+                .remove_conversation(&crate::render::render::thread_uuid(account_id, thread_id))?;
+        }
         let mut on_doc = |md| ctx.emit_doc(md);
         render_all(
             &parsed,
@@ -299,7 +306,11 @@ impl DataProcessor for EmailRender {
             ctx.progress,
             &mut on_doc,
         )?;
-        Ok("rendered".into())
+        Ok(if dropped == 0 {
+            "rendered".into()
+        } else {
+            format!("rendered, {dropped} document(s) gone upstream")
+        })
     }
 }
 

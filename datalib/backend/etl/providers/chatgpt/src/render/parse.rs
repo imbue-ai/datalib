@@ -149,6 +149,10 @@ pub struct ParsedChatGPTApi {
     /// Scan diagnostics propagated up to render so it can write the
     /// cursor + log elapsed_ms.
     pub scan: ScanResult,
+    /// Conversation ids the diff named that the raw store no longer has a
+    /// row for. Empty on a cold start, which looks at every bucket and so
+    /// has nothing to compare against.
+    pub vanished_buckets: Vec<String>,
 }
 
 fn epoch_to_iso(v: &Value) -> Option<String> {
@@ -523,6 +527,14 @@ async fn parse_doltlite_async(
 
     let mut parsed = parse_loaded(raw);
     parsed.docs_skipped = docs_skipped;
+    if let Some(changed) = scan.changed_conversations.as_ref() {
+        parsed.vanished_buckets = datalib_etl::doltlite_raw::buckets_without_rows(
+            &pool,
+            changed,
+            &[("conversations", "id")],
+        )
+        .await?;
+    }
     parsed.scan = scan;
 
     // Per-doc BlobBundle: walk each conversation's payload to collect

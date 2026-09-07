@@ -22,6 +22,9 @@ pub struct PlannedSource {
     pub raw_path: PathBuf,
     /// Resolved rate-limit give-up bounds for the download wave.
     pub download_params: DownloadParams,
+    /// `common.always_clear_before_ingest`, resolved. Download wave only —
+    /// render rewrites its own tree already.
+    pub always_clear_before_ingest: bool,
     pub processors: Vec<Box<dyn DataProcessor>>,
 }
 
@@ -123,11 +126,13 @@ pub fn plan(
                         .with_context(|| format!("source {name:?} (type={})", $tstr))?;
                     let raw_path = cfg.common.raw_path().to_path_buf();
                     let download_params = cfg.common.download_params.clone();
+                    let always_clear_before_ingest = cfg.common.always_clear_before_ingest;
                     PlannedSource {
                         name: name.to_string(),
                         type_str: $tstr,
                         raw_path,
                         download_params,
+                        always_clear_before_ingest,
                         processors: $provider::processor::$dl(ctx, cfg)?,
                     }
                 }
@@ -146,6 +151,7 @@ pub fn plan(
                         raw_path,
                         // Rate-limit bounds are download-only machinery.
                         download_params: Default::default(),
+                        always_clear_before_ingest: false,
                         processors: $provider::processor::$rn(ctx, cfg)?,
                     }
                 }
@@ -292,6 +298,42 @@ pub fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `common.always_clear_before_ingest` has to survive the trip from the
+    /// step's `--params` to the planned source, because the download driver
+    /// is the only thing that reads it. A flag that parses and then goes
+    /// nowhere reads exactly like one that works: the sync succeeds, and
+    /// the deletions the user asked us to notice stay invisible.
+    #[test]
+    fn always_clear_before_ingest_reaches_the_planned_source() {
+        let td = tempfile::tempdir().unwrap();
+        let planned = plan(
+            "sms_backup_restore",
+            Phase::Download,
+            "sms",
+            serde_json::json!({
+                "common": {
+                    "input_path": "/tmp/sms",
+                    "always_clear_before_ingest": true,
+                }
+            }),
+            td.path(),
+        )
+        .unwrap();
+        assert!(planned.always_clear_before_ingest);
+
+        // Absent means off: every source that has never heard of the knob
+        // must keep appending rather than start wiping itself.
+        let default = plan(
+            "sms_backup_restore",
+            Phase::Download,
+            "sms",
+            serde_json::json!({ "common": { "input_path": "/tmp/sms" } }),
+            td.path(),
+        )
+        .unwrap();
+        assert!(!default.always_clear_before_ingest);
+    }
 
     #[test]
     fn plans_slack_download_and_render_from_phase_params() {

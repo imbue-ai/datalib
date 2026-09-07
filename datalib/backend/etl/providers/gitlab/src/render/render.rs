@@ -261,6 +261,10 @@ pub fn render_gitlab(
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Every document this render considered, skipped ones included — the
+    // caller hands it to `RunCtx::retain_documents`, which drops whatever
+    // the store holds and this does not name.
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     let mut by_mr: std::collections::HashMap<(String, u32), Vec<NoteRow>> = Default::default();
@@ -277,6 +281,9 @@ pub fn render_gitlab(
         let fingerprint = fingerprint_for_mr(mr, &notes);
         let md_rel = mr_qmd_path_rel(stanza, &mr.project_full_path, mr.mr_iid);
         let md_path = root.join(&md_rel);
+        // Before the skip, so an unchanged MR reads as present rather than
+        // as one this run stopped producing.
+        seen.insert(mr.uuid.clone());
 
         if prior_fingerprints.get(&mr.uuid).map(String::as_str) == Some(fingerprint.as_str())
             && md_path.exists()

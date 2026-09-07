@@ -190,12 +190,60 @@ fingerprint decides *whether a document that was read needs writing*,
 and the cold path (no cursor, or a cursor the store's history no
 longer contains) still needs the second one.
 
-What Step 1 did *not* fix is deletion on the render side: nothing yet
-removes a document from a source's own store when it disappears
-upstream, because render is incremental and "not re-emitted this run"
-overwhelmingly means "not looked at". `IndexedMarkdownStore::remove_document`
-is the operation; no renderer calls it. That gap used to exist in two
-places and now exists in one.
+Deletion on the render side is now wired, and the shape it took is worth
+knowing before you port a renderer to it. "Not re-emitted this run" is
+*not* the signal — render is incremental, so it overwhelmingly means "not
+looked at". Nor is "absent from what parse returned", which is what the
+first draft used and is wrong for a subtler reason: every provider's
+loader filters (`payload IS NOT NULL` at minimum), so a bucket missing
+from a parse result may be one whose body we have not fetched yet, and
+deleting on that reading destroys a live document.
+
+The signal is **the raw store has no row with this id**, asked directly:
+`doltlite_raw::buckets_without_rows` takes the ids the `dolt_diff` scan
+named and returns those no entity table still carries. The renderer hands
+each one to `RunCtx::remove_conversation`, and the store drops every
+document belonging to it — rows and the `.md` file both. The file is not
+an afterthought: `md_path` is what `/applet/unified_index/chat/{uuid}`
+serves and what qmd indexed, so a document deleted from the store but left
+on disk is a deletion the user can still read.
+
+Keyed on the conversation rather than the document because a periodizing
+renderer (slack, signal, beeper) turned one conversation into several
+documents, and once the conversation is gone from the raw store the render
+store is the only thing that still knows how many. `grid_index` needs no
+change — it already learns of a removal from this store's diff.
+
+### Two mechanisms, because there are two kinds of renderer
+
+Which one a renderer uses follows from whether it is incremental, and
+that split is worth knowing on its own — **only 6 of the 17 renderers
+ask `dolt_diff` what changed** (checked 2026-09-07). The rest re-derive
+every document from their whole raw store on every run, and skip only
+the *write* on an unchanged fingerprint. That is a real cost the
+[provider migration recipe](provider_migration_dolt_diff_and_cas_edge.md)
+exists to pay down; it is not what the deletion work fixes.
+
+**Incremental (`dolt_diff`-narrowed): `RunCtx::remove_conversation`.**
+claude, chatgpt, email, signal, slack, whatsapp. They must name the
+vanished ids, because most of what they did not produce this run they
+simply did not look at.
+
+**Whole-store: `RunCtx::retain_documents`.** contacts, github, gitlab,
+google_takeout, linkedin, pdf, perseus, sms_backup_restore. They declare
+the complete set they considered and the driver sweeps the rest. No diff
+needed, and it cannot miss a deletion the diff failed to mention.
+
+The retain form has one trap, and it is the reason the set is "considered"
+rather than "emitted": a whole-store renderer *skips emitting* a document
+whose fingerprint is unchanged. Report only what was re-rendered and the
+sweep deletes the source's entire steady state. Documents whose render
+*failed* belong in the set too — that is a document we could not rewrite,
+not one the source lost.
+
+Not wired: **notion** (being reworked) and **beeper** (poorly supported;
+its `index.db` evicts, so absence there is not deletion). **yolink** is
+append-only telemetry with one document per store.
 
 The original argument, which still reads correctly:
 

@@ -45,6 +45,10 @@ pub fn render_posts(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    // Every document this render considered, skipped ones included — the
+    // caller hands it to `RunCtx::retain_documents`, which drops whatever
+    // the store holds and this does not name.
+    seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
@@ -65,7 +69,7 @@ pub fn render_posts(
     let chats = build_post_chats(&shares, &comments);
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
-    cc_render_all(
+    let s = cc_render_all(
         &profile(),
         &chats,
         out_dir,
@@ -75,6 +79,7 @@ pub fn render_posts(
         prior_fingerprints,
         on_doc_complete,
     )?;
+    seen.extend(s.documents);
     Ok(())
 }
 
