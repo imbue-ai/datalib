@@ -79,9 +79,32 @@ impl Subject {
 
     /// The one-line human summary that becomes `grid_rows.text` and the
     /// report's body line.
+    /// `grid_rows.text`. **Carries no byte figure**, on purpose.
+    ///
+    /// `text` is hashed into `compute_row_set_hash`, the markdown cache
+    /// key — and a doltlite store's size is not reproducible. It drifts
+    /// 1-22 bytes between rebuilds on one machine, and differs outright
+    /// between machines: CI's Linux runner and a developer's Mac
+    /// produce different sizes for byte-identical inputs, which made
+    /// the fixture golden unable to pass on both at once.
+    ///
+    /// The size is not lost — it is in `byte_size`, which the grid
+    /// renders in its own column, and in the report body via
+    /// [`Self::body_line`]. It is only kept out of the string that a
+    /// staleness decision hashes.
     fn summary(&self) -> String {
-        let counted = self.items.map(|n| plural(n, self.counts()));
-        match (self.bytes, counted) {
+        match self.items.map(|n| plural(n, self.counts())) {
+            Some(n) => format!("{} — {n}", self.path),
+            None => self.path.clone(),
+        }
+    }
+
+    /// The human-readable line in the rendered report, where the size
+    /// belongs: the body is in neither hash, and it is only rewritten
+    /// when a count moves, so the figure it shows is the one from the
+    /// last run that changed something.
+    fn body_line(&self) -> String {
+        match (self.bytes, self.items.map(|n| plural(n, self.counts()))) {
             (Some(b), Some(n)) => format!("{} — {}, {n}", self.path, human_bytes(b)),
             (Some(b), None) => format!("{} — {}", self.path, human_bytes(b)),
             (None, Some(n)) => format!("{} — {n}", self.path),
@@ -376,7 +399,7 @@ fn report_body(source_name: &str, subjects: &[Subject], now: &str) -> String {
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--datalib\">\n\n\
              - **{}** — {}\n\n</div>\n\n",
             s.kind.label(),
-            s.summary(),
+            s.body_line(),
         ));
     }
     out
@@ -892,7 +915,10 @@ mod tests {
                 "every row needs its anchor in the body: {body}"
             );
         }
-        assert!(body.contains("2.0 KiB"), "{body}");
+        assert!(
+            body.contains("2.0 KiB"),
+            "the report body shows the size: {body}"
+        );
         assert!(body.contains("2 files"), "a tree counts files: {body}");
         assert!(body.contains("7 rows"), "a table counts rows: {body}");
     }
@@ -919,6 +945,30 @@ mod tests {
             .samples
             .iter()
             .all(|s| s.measured_at == "2026-09-07T10:00:00-07:00"));
+    }
+
+    /// The size must reach the row and the report, but never
+    /// `grid_rows.text` — which `compute_row_set_hash` covers. A
+    /// doltlite store's size differs between machines, so a byte
+    /// figure in that string made the fixture golden unable to pass on
+    /// CI and a developer's machine at once.
+    #[test]
+    fn the_hashed_text_carries_no_byte_figure() {
+        let s = subject("s/raw", MeasurementKind::Tree, Some(2048), Some(2));
+        assert_eq!(s.summary(), "s/raw — 2 files");
+        assert!(
+            !s.summary().contains("KiB") && !s.summary().contains("2048"),
+            "the hashed text must not carry a size: {}",
+            s.summary()
+        );
+        // …and it is not lost: the body says it, and so does the column.
+        assert_eq!(s.body_line(), "s/raw — 2.0 KiB, 2 files");
+
+        let td = tempdir().unwrap();
+        let m = plan(td.path(), "s", vec![s], "2026-09-07T10:00:00-07:00")
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.doc.rows[0].byte_size, Some(2048));
     }
 
     #[test]
