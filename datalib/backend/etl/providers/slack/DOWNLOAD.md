@@ -117,6 +117,67 @@ A page is skipped if every item in it matches a prior capture by
 canonical content hash, so re-running soon after a successful run is
 cheap.
 
+## Noticing a deleted message
+
+Slack never tells us a message was deleted. There is no tombstone and no
+"what changed since" endpoint — a deleted message just stops appearing in
+`conversations.history`. The only way to see one go is to re-ask for a
+stretch of history we already mirrored and compare.
+
+We do that in two places. Outside them, a deletion is invisible to us,
+and that is worth knowing before you rely on it.
+
+### Top-level messages: inside the refresh window, and only there
+
+`refresh_window_days` makes every run re-walk the last N days of each
+channel. Anything we hold in that range that the re-walk did not return
+has been deleted upstream, so we delete our copy.
+
+**It defaults to off** (`0`), so out of the box we notice nothing. Set it
+to how far back you want deletions caught:
+
+```toml
+[steps.params.sync]
+refresh_window_days = 7
+```
+
+The window costs one extra pass over that many days of every channel, per
+run, so it trades API calls against how quickly a deletion is spotted.
+Nothing older than the window is ever looked at again — a message deleted
+from last year stays in our copy indefinitely.
+
+### Thread replies: when the thread is re-fetched anyway
+
+A thread is re-walked when its newest reply is newer than the one we
+stored. `conversations.replies` hands back the whole thread, so a reply
+we hold that is missing from it was deleted, and we drop it.
+
+The catch: **deleting a reply does not make a thread look stale.** The
+newest reply either stays where it was or moves *backwards*, and neither
+reads as "something new here". So a deleted reply is noticed the next
+time somebody posts in that thread, and not before.
+
+### Two cases where we deliberately delete nothing
+
+- **The walk stopped short.** Slack pages with a cursor, and a response
+  that claims there is more without supplying one leaves us holding part
+  of a range. We keep everything: a range we only partly read looks
+  exactly like a range whose messages were all deleted.
+- **`force_full_walk`** — the re-walk triggered by turning `media` on or
+  raising the attachment size cap (see the next section). It re-reads
+  everything and would be an ideal moment to reconcile, but it skips the
+  refresh-window pass as redundant, and that pass is where the comparison
+  lives. A missed detection rather than a wrong one.
+
+### Deleting our copy is not as final as it sounds
+
+The raw store is versioned, so a pruned row stays in history.
+`dolt_diff_messages` names what a run removed and
+`dolt_at_messages('HEAD^1')` reads it back — see
+[doltlite.md](/docs/dev/doltlite.md). That is why none of this second-
+guesses itself: if a prune turns out to be wrong, the rows are still
+there.
+
 ## Config changes the cursor would otherwise swallow
 
 The resume cursor above answers "where do I start?" entirely from stored
