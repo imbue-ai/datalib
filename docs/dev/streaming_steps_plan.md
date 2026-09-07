@@ -207,14 +207,22 @@ It is measured, not reasoned:
 asserts that a row left dirty by one pool is committed and visible at
 `HEAD` after a second pool merely opens the file.
 
-So a consumer opens with **`open_reader`**, which connects and does
-nothing else, and the render store is reached through
-`IndexedMarkdownStore::open_for_reading`. The behaviour that goes away
-with it is the schema reconcile — a consumer will no longer quietly
-migrate a producer's store, and a read needing a column the store has
-not got will fail saying so. That is the right direction (the owner adds
-it on its next run) but it *is* a change, and worth knowing before the
-same treatment reaches the raw stores on the other edge.
+So a consumer opens with **`open_reader`**, which connects `read_only`
+and does nothing else; the render store is reached through
+`IndexedMarkdownStore::open_for_reading`. Read-only at the engine rather
+than by convention: a write through it fails with `attempt to write a
+readonly database`, so "a reader must not write" is enforced the same
+way `Pin` enforces "no unpinned reads". The `pinned_<table>` views still
+install, because they live in the per-connection temp schema rather than
+in the file — measured by `a_reader_cannot_write_but_can_still_pin`.
+
+The behaviour that goes away with it is the schema reconcile. **This is
+not new ground**: slack's render pool is already read-only and its
+`load_channels` documents exactly this, probing with `column_exists` and
+falling back to the columns that have always been there; whatsapp reads
+through its own `open_ro_pool`. So the idiom for "a store the current
+downloader has not touched" already exists in the tree, and the answer
+for the other edge is to use it rather than to invent something.
 
 `grid_index`'s `a_document_the_renderer_has_not_committed_is_not_indexed`
 is the end-to-end guard: a document written but not committed must not

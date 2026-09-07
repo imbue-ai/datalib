@@ -214,16 +214,22 @@ pub fn db_path_for(p: &Path) -> PathBuf {
 /// `acquire_timeout` is far past sqlx's 30s default because cold opens of
 /// multi-GB stores legitimately take 4-10s inside `sqlite3_open_v2`; 5min is
 /// "something else is wrong" territory.
-async fn connect_pool(db_path: &Path) -> Result<SqlitePool> {
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create dir {}", parent.display()))?;
+async fn connect_pool(db_path: &Path, access: Access) -> Result<SqlitePool> {
+    let writable = access == Access::ReadWrite;
+    if writable {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create dir {}", parent.display()))?;
+        }
     }
     // No `journal_mode` pragma: doltlite manages its own storage and rejects
     // it outright.
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
         .with_context(|| format!("sqlite uri for {}", db_path.display()))?
-        .create_if_missing(true);
+        // A reader never conjures a store: an absent file is a real error for
+        // it, where for the owner it is the first run.
+        .create_if_missing(writable)
+        .read_only(!writable);
     SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -258,12 +264,25 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
 /// Pinning cannot save you from that, because by then the torn rows *are*
 /// committed.
 ///
-/// So this does none of it: connect, and hand back the pool. A schema this
-/// store has not got yet is the owner's to add on its next run, and a read
-/// that needs a missing column should fail saying so rather than quietly
-/// migrating someone else's data.
+/// So this does none of it: connect read-only, and hand back the pool. The
+/// connection is opened `read_only`, so "a reader must not write" is enforced
+/// by the engine (`attempt to write a readonly database`) rather than left as
+/// an intention — and creating the `pinned_<table>` views still works, since
+/// they live in the per-connection temp schema rather than in the file.
+///
+/// A schema this store has not got yet is the owner's to add on its next run,
+/// and a read naming a column it lacks fails at prepare time saying so. Probe
+/// with [`column_exists`] and fall back where that is a real possibility;
+/// slack's `load_channels` is the worked example.
 pub async fn open_reader(db_path: &Path) -> Result<SqlitePool> {
-    connect_pool(db_path).await
+    connect_pool(db_path, Access::ReadOnly).await
+}
+
+/// Whether a pool may write the file it opens. See [`open_reader`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Access {
+    ReadWrite,
+    ReadOnly,
 }
 
 async fn open_inner(
@@ -280,7 +299,7 @@ async fn open_inner(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
     }
-    let pool = connect_pool(db_path).await?;
+    let pool = connect_pool(db_path, Access::ReadWrite).await?;
     // Seal anything a crashed prior run left dirty into its own commit, so
     // this run's `dolt_log` entry describes only this run.
     rescue_dirty_working_tree(&pool, db_path).await;
@@ -2140,6 +2159,51 @@ mod tests {
 
     /// What the setting above defends against: a *different* connection to
     /// the same file does not inherit the active branch.
+    /// `open_reader` is read-only at the engine, not merely by convention: a
+    /// write through it fails rather than landing in a file the caller does
+    /// not own. The pinned views still install, because they live in the
+    /// per-connection temp schema rather than in the file.
+    #[tokio::test]
+    async fn a_reader_cannot_write_but_can_still_pin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ro.doltlite_db");
+        let owner = open(
+            &path,
+            &["CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)"],
+        )
+        .await
+        .unwrap();
+        if !has_dolt_extensions(&owner).await {
+            return;
+        }
+        sqlx::query("INSERT INTO t VALUES (1)")
+            .execute(&owner)
+            .await
+            .unwrap();
+        let commit = commit_run(&owner, "one row").await.unwrap().unwrap();
+        owner.close().await;
+
+        let reader = open_reader(&path).await.unwrap();
+        let err = sqlx::query("INSERT INTO t VALUES (2)")
+            .execute(&reader)
+            .await
+            .expect_err("a reader must not be able to write the store");
+        assert!(
+            err.to_string().contains("readonly"),
+            "expected a readonly-database error, got: {err}"
+        );
+
+        crate::pin::install_views(&reader, &crate::pin::Pin::at(&commit).unwrap())
+            .await
+            .expect("temp views install on a read-only connection");
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_t")
+            .fetch_one(&reader)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "and the pinned read works through them");
+        reader.close().await;
+    }
+
     /// Opening a store *commits* whatever it finds dirty. Harmless when the
     /// prior writer is gone — that is what the rescue is for — and a hazard
     /// the moment a writer is still running: the reader's own open seals the
