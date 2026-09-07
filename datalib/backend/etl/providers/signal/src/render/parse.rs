@@ -320,11 +320,11 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                 SELECT DISTINCT chat_id FROM (
                     SELECT coalesce(to_id, from_id) AS chat_id
                       FROM dolt_diff_chats
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_chat_id, from_chat_id)
                       FROM dolt_diff_chat_items
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     -- Attachment changes propagate to their owning chat by
                     -- joining the diff vtab back to the live `chat_items`
@@ -334,7 +334,7 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                       FROM dolt_diff_chat_item_attachments ca
                       JOIN chat_items
                         ON chat_items.id = coalesce(ca.to_chat_item_id, ca.from_chat_item_id)
-                     WHERE ca.from_ref = ?1 AND ca.to_ref = 'HEAD'
+                     WHERE ca.from_ref = ?1 AND ca.to_ref = ?2
                        AND ca.diff_type != 'unchanged'
                 )
                 WHERE chat_id IS NOT NULL

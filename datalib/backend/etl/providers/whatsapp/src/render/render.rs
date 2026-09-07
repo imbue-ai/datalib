@@ -170,9 +170,14 @@ async fn scan_diff(
             .ok()
             .flatten();
 
-    let (changed, elapsed) = match last_hash {
-        None => (None, None),
-        Some(from_ref) => {
+    // Both refs, or neither: with no commit to scan *to* there is nothing
+    // committed to diff against, and cold-starting is the only honest answer.
+    // Scanning to the sampled hash rather than to the symbolic `HEAD` keeps
+    // this diff and the reads that follow it naming one commit even while a
+    // producer is still committing — see `datalib_etl::pin`.
+    let (changed, elapsed) = match (last_hash, new_head.as_deref()) {
+        (None, _) | (_, None) => (None, None),
+        (Some(from_ref), Some(to_ref)) => {
             // One union across the per-table dolt_diff vtabs. The
             // `chat_jid` column lives on every wa_message_* table, so a
             // single COALESCE(to, from) projects the natural bucket key
@@ -183,33 +188,34 @@ async fn scan_diff(
                 SELECT DISTINCT chat_jid FROM (
                     SELECT coalesce(to_chat_jid, from_chat_jid) AS chat_jid
                       FROM dolt_diff_wa_chat
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_chat_jid, from_chat_jid)
                       FROM dolt_diff_wa_message
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_chat_jid, from_chat_jid)
                       FROM dolt_diff_wa_message_text
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_chat_jid, from_chat_jid)
                       FROM dolt_diff_wa_message_media
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_chat_jid, from_chat_jid)
                       FROM dolt_diff_wa_message_add_on
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
                     SELECT coalesce(to_chat_jid, from_chat_jid)
                       FROM dolt_diff_wa_message_add_on_reaction
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
                 WHERE chat_jid IS NOT NULL
             ";
             let started = std::time::Instant::now();
             let rows = sqlx::query(sql)
                 .bind(from_ref)
+                .bind(to_ref)
                 .fetch_all(&pool)
                 .await
                 .context("query dolt_diff_wa_* changed chats")?;

@@ -78,6 +78,26 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Open somebody else's render store to read it.
+    ///
+    /// The index is not this store's owner — the render step is — so this goes
+    /// through [`crate::doltlite_raw::open_reader`] and performs none of the
+    /// writes [`Self::open`] does on the way in. Read that function's note for
+    /// what those are and why they are a hazard here specifically.
+    ///
+    /// No `now`, no write lock: nothing reached through this handle may write.
+    pub fn open_for_reading(rendered_root: &Path) -> Result<Self> {
+        let path = path_for(rendered_root);
+        let pool = blocking(crate::doltlite_raw::open_reader(&path))
+            .with_context(|| format!("open render store for reading {}", path.display()))?;
+        Ok(Self {
+            write_lock: WriteLock::new(pool.clone()),
+            pool,
+            path,
+            now: String::new(),
+        })
+    }
+
     /// Use the run-pinned "now" (`--now` / `$DATALIB_DAG_NOW`) for the
     /// problem timestamps this store stamps, so every row one render
     /// writes agrees. Without it the store samples its own clock at
@@ -349,8 +369,12 @@ impl IndexedMarkdownStore {
         })
     }
 
-    pub fn documents(&self, out_dir: &Path) -> Result<Vec<RenderedMarkdown>> {
-        self.documents_matching(out_dir, None)
+    pub fn documents(
+        &self,
+        out_dir: &Path,
+        pin: &crate::pin::Pin,
+    ) -> Result<Vec<RenderedMarkdown>> {
+        self.documents_matching(out_dir, None, pin)
     }
 
     pub fn changed_since(&self, cursor: Option<&str>) -> Result<crate::doltlite_raw::DiffScan> {
@@ -369,16 +393,16 @@ impl IndexedMarkdownStore {
                     SELECT DISTINCT markdown_uuid FROM (
                         SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
                           FROM dolt_diff_markdowns
-                         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                         UNION
                         SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
                           FROM dolt_diff_grid_rows
-                         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                         UNION
                         SELECT coalesce(to_src_markdown_uuid, from_src_markdown_uuid)
                                  AS markdown_uuid
                           FROM dolt_diff_edges
-                         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     )
                     WHERE markdown_uuid IS NOT NULL
                 ",
@@ -390,14 +414,25 @@ impl IndexedMarkdownStore {
     /// `Some`. An id in `only` with no document behind it is simply
     /// absent from the result — that is how a *deletion* reaches the
     /// caller, which compares what it asked for against what it got.
+    ///
+    /// Reads at `pin`, which must be the commit the caller's
+    /// [`changed_since`](Self::changed_since) scanned to — otherwise the
+    /// changed set and the rows behind it describe different commits. This
+    /// is the read side of the store; the write side above deliberately does
+    /// not go through the pinned views, since a render step writing its own
+    /// store has nothing to protect itself from.
     pub fn documents_matching(
         &self,
         out_dir: &Path,
         only: Option<&HashSet<String>>,
+        pin: &crate::pin::Pin,
     ) -> Result<Vec<RenderedMarkdown>> {
         blocking(async {
+            crate::pin::install_views(&self.pool, pin)
+                .await
+                .context("install pinned views over the render store")?;
             let mds: Vec<datalib_schema::markdowns::MarkdownRow> =
-                sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid")
+                sqlx::query_as("SELECT * FROM pinned_markdowns ORDER BY markdown_uuid")
                     .fetch_all(&self.pool)
                     .await
                     .context("read markdowns")?;
@@ -410,14 +445,15 @@ impl IndexedMarkdownStore {
             };
             let mut out = Vec::with_capacity(mds.len());
             for md in mds {
-                let rows: Vec<datalib_schema::grid_rows::GridRow> =
-                    sqlx::query_as("SELECT * FROM grid_rows WHERE markdown_uuid = ? ORDER BY uuid")
-                        .bind(&md.markdown_uuid)
-                        .fetch_all(&self.pool)
-                        .await
-                        .with_context(|| format!("read rows for {}", md.markdown_uuid))?;
+                let rows: Vec<datalib_schema::grid_rows::GridRow> = sqlx::query_as(
+                    "SELECT * FROM pinned_grid_rows WHERE markdown_uuid = ? ORDER BY uuid",
+                )
+                .bind(&md.markdown_uuid)
+                .fetch_all(&self.pool)
+                .await
+                .with_context(|| format!("read rows for {}", md.markdown_uuid))?;
                 let edges: Vec<datalib_schema::edges::EdgeRow> = sqlx::query_as(
-                    "SELECT * FROM edges WHERE src_markdown_uuid = ? ORDER BY edge_uuid",
+                    "SELECT * FROM pinned_edges WHERE src_markdown_uuid = ? ORDER BY edge_uuid",
                 )
                 .bind(&md.markdown_uuid)
                 .fetch_all(&self.pool)
