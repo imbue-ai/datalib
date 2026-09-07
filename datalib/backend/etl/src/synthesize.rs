@@ -32,7 +32,7 @@ pub struct SynthesizeReport {
 /// branch looks up), so caller and replayer never have to agree on a
 /// naming scheme separately.
 pub fn write_fixture(out_root: &Path, req: &HttpRequest, resp: &HttpResponse) -> Result<()> {
-    let dir = out_root.join(req.provider);
+    let dir = out_root.join(req.service.as_str());
     fs::create_dir_all(&dir).with_context(|| format!("create fixture dir {}", dir.display()))?;
     let path = dir.join(fixture_key(req));
     let bytes = serde_json::to_vec_pretty(resp).context("serialize HttpResponse")?;
@@ -59,13 +59,14 @@ pub fn json_response(body: &Value) -> HttpResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::HttpService;
     use serde_json::json;
     use tempfile::tempdir;
 
     #[test]
     fn write_fixture_roundtrips_through_playback_key() {
         let d = tempdir().unwrap();
-        let req = HttpRequest::get("test_provider", "https://example.com/v1/things?b=2&a=1");
+        let req = HttpRequest::get(HttpService::Test, "https://example.com/v1/things?b=2&a=1");
         let resp = json_response(&json!({"hello": "world"}));
         write_fixture(d.path(), &req, &resp).unwrap();
 

@@ -9,7 +9,7 @@ use serde_json::Value;
 use tracing::instrument;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, LatchkeySettings};
+use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const BASE: &str = "https://claude.ai/api";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);
@@ -56,7 +56,7 @@ impl ClaudeClient {
     #[instrument(skip(self), fields(path = path))]
     pub async fn get(&mut self, path: &str) -> Result<Value, ClaudeError> {
         let url = format!("{BASE}{path}");
-        let req = HttpRequest::get("claude", &url)
+        let req = HttpRequest::get(HttpService::Claude, &url)
             .header("Accept", "application/json")
             .latchkey(self.latchkey.clone())
             .timeout(LATCHKEY_TIMEOUT);

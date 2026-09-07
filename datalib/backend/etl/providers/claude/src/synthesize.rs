@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_etl::http::HttpRequest;
+use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
@@ -26,7 +26,7 @@ impl ClaudeSynth {
 }
 
 fn req_get(url: &str) -> HttpRequest {
-    HttpRequest::get("claude", url).header("Accept", "application/json")
+    HttpRequest::get(HttpService::Claude, url).header("Accept", "application/json")
 }
 
 fn org_uuid_of(conv: &Value) -> Option<String> {

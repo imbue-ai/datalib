@@ -6,7 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use datalib_etl::http::{latchkey_curl, HttpRequest, LatchkeySettings};
+use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
 
 /// JMAP capability URIs we list in every `using:` array. Mail is the
 /// only capability we currently exercise; the core uri is required by
@@ -42,7 +42,7 @@ impl Session {
         // cap at 5 to defend against a misconfigured server pointing at
         // itself.
         for _ in 0..5 {
-            let req = HttpRequest::get("jmap", &url)
+            let req = HttpRequest::get(HttpService::Jmap, &url)
                 .latchkey(latchkey.clone())
                 .timeout(Duration::from_secs(30));
             let resp = latchkey_curl(&req).await.map_err(|e| anyhow!("{e}"))?;

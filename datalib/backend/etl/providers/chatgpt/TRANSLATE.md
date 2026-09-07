@@ -4,7 +4,7 @@ The chatgpt translate step is an in-process library (called from
 `datalib-sync`, no standalone bin) that reads the doltlite db at
 `<out>/raw/<name>/entities.doltlite_db` (written by `chatgpt-download`) and
 emits, per ChatGPT conversation, a `.md` at
-`<out>/rendered_md/openai/<account>/llm_chats/<conv>__<slug>.md` plus
+`<out>/rendered_md/chatgpt/<account>/llm_chats/<conv>__<slug>.md` plus
 that document's rows in the source's render store
 (`<out>/rendered_md/indexed_markdown.doltlite_db`).
 
@@ -37,7 +37,7 @@ namespacing — ChatGPT's UUIDs are already globally unique).
 `id`, `title`, `account_id`, `create_time`, `update_time`,
 `default_model_slug`). Per message it emits:
 
-  * A `<div id="m-…" data-msg-index="N" class="msg msg--openai">`
+  * A `<div id="m-…" data-msg-index="N" class="msg msg--chatgpt">`
     wrapper for anchor stability.
   * `## <Role>` heading + italic `*timestamp · model_slug*` line.
   * Per content part, a `<a id="b-…">` anchor and content-type-specific
