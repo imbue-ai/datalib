@@ -11,9 +11,9 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
-    ],
+        "@datalib_crates//:tracing",    ],
 )
 
 # The load-bearing experiment, run against the real engine: that

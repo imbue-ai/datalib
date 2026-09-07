@@ -17,13 +17,14 @@ use serde_json::Value;
 
 use crate::download::schema_raw::{message_tables, ns_id as uuid5};
 use crate::download::{db_path_for, RawDb};
+use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 pub const RENDER_VERSION: u32 = 2;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "linkedin",
+        provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         chat_kind: "LinkedIn Chat".to_string(),
         message_kind: "LinkedIn Message".to_string(),

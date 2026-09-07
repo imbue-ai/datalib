@@ -20,6 +20,7 @@ use datalib_etl_chat_common::types::{
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
 use super::{slack_link, ts_to_ms, Message, ParsedSlack};
+use datalib_schema::providers::Provider;
 
 /// Bump when the on-disk render layout changes in a way that must
 /// invalidate stale docs. v3: render via chat-common.
@@ -44,7 +45,7 @@ pub struct RenderSummary {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "slack",
+        provider: Provider::Slack,
         source_label: "Slack".to_string(),
         chat_kind: "Slack Thread".to_string(),
         message_kind: "Slack Message".to_string(),

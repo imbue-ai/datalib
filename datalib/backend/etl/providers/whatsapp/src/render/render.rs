@@ -17,6 +17,7 @@ use datalib_etl_chat_common::{
     render::{RenderProfile, RenderSummary, ENTITY_KIND_CONVERSATION},
     NormalizedChat,
 };
+use datalib_schema::providers::Provider;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
@@ -28,7 +29,7 @@ const SOURCE_LABEL: &str = "WhatsApp";
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        provider: "whatsapp",
+        provider: Provider::Whatsapp,
         source_label: SOURCE_LABEL.to_string(),
         chat_kind: "WhatsApp Chat".to_string(),
         message_kind: "WhatsApp Message".to_string(),

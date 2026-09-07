@@ -326,6 +326,14 @@ use it. A partial export of a normally-complete source is the same trap.
 sentence used to defer is now done. What each source re-enumerates, and
 therefore what it can see:
 
+**A deletion the download notices now reaches the grid.** That used to
+be a second gap and is not any more — see
+[parse and render](data_architecture_parse_and_render.md), "Two
+mechanisms, because there are two kinds of renderer". It is worth
+keeping the two apart when reading a bug report: "we never noticed"
+(this section) and "we noticed and the grid still shows it" (that one)
+look identical from the UI.
+
 | source | re-enumeration | prunes |
 | --- | --- | --- |
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |

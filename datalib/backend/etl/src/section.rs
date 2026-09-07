@@ -1,5 +1,7 @@
 //! Shared "section anchor" helpers for provider renderers.
 
+use datalib_schema::providers::Provider;
+
 /// HTML attribute fragment that anchors a navigable section.
 /// Identical shape across providers: `id="m-{uuid}"` for in-page
 /// `#anchor` links and `data-section-uuid="{uuid}"` for the frontend's
@@ -12,7 +14,7 @@ pub fn section_attrs(uuid: &str) -> String {
 /// [`MSG_DIV_CLOSE`]. `provider` tags the element so per-provider CSS
 /// (avatar, accent color, etc.) can apply without each renderer
 /// inventing its own class scheme.
-pub fn msg_div_open(msg_uuid: &str, provider: &str) -> String {
+pub fn msg_div_open(msg_uuid: &str, provider: Provider) -> String {
     format!(
         r#"<div {attrs} class="msg msg--{provider}">"#,
         attrs = section_attrs(msg_uuid),
@@ -39,7 +41,7 @@ mod tests {
     #[test]
     fn div_open_shape() {
         assert_eq!(
-            msg_div_open("abc", "slack"),
+            msg_div_open("abc", Provider::Slack),
             r#"<div id="m-abc" data-section-uuid="abc" class="msg msg--slack">"#
         );
     }

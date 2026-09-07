@@ -7,7 +7,17 @@
 // (queue placeholders like "syncing …", legacy rows) yield null and
 // the caller falls back to an indeterminate bar.
 
-import type { SyncTask } from "@/api";
+import type { SyncTask, SyncTaskState } from "@/api";
+
+const TASK_STATES: readonly SyncTaskState[] = [
+  "todo",
+  "running",
+  "done",
+  "skipped",
+  "not_selected",
+  "failed",
+  "blocked",
+];
 
 export function parseTasks(msg: string | null | undefined): SyncTask[] | null {
   if (!msg || !msg.startsWith("{")) return null;
@@ -18,9 +28,12 @@ export function parseTasks(msg: string | null | undefined): SyncTask[] | null {
     for (const t of v.tasks) {
       const o = t as { id?: unknown; state?: unknown; detail?: unknown };
       if (typeof o.id !== "string" || typeof o.state !== "string") return null;
+      // A word this build does not know is a board it cannot draw; say
+      // so rather than typing it as a state it is not.
+      if (!TASK_STATES.includes(o.state as SyncTaskState)) return null;
       tasks.push({
         id: o.id,
-        state: o.state,
+        state: o.state as SyncTaskState,
         detail: typeof o.detail === "string" ? o.detail : undefined,
       });
     }
