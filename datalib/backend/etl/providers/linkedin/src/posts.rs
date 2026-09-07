@@ -63,6 +63,9 @@ pub fn render_posts(
             // error as "absent" rather than failing the render.
             let shares = db.load_payloads("shares").await.unwrap_or_default();
             let comments = db.load_payloads("comments").await.unwrap_or_default();
+            // Closed, not dropped: the next open of this store is a
+            // second connection until this one is actually gone.
+            db.close().await;
             Ok::<_, anyhow::Error>((shares, comments))
         })
     })?;

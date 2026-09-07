@@ -117,6 +117,12 @@ code is right and this table is stale.
 Minted by `datalib_id::entity_id` for ported providers; the others pass an
 upstream id through directly.
 
+The authoritative list of tables and columns is the `schema_inventory`
+golden at
+`datalib/backend/schema_inventory/tests/snapshots/inventory__schema_inventory.snap`,
+generated from the DDL this build actually declares. Check the names
+below against it; that file cannot go stale, and this one can.
+
 Table names below are the **raw-store** tables, which are unprefixed:
 each provider writes its own `<name>/raw/entities.doltlite_db`, so there
 is no `claude_`/`slack_` prefix to disambiguate. Only the CAS edge

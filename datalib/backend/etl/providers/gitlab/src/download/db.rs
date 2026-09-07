@@ -168,6 +168,40 @@ impl RawDb {
 
     // ── sync_scope_state (delegates) ────────────────────────────────
 
+    /// Drop this MR's discussion rows that the fresh listing did not name.
+    /// Scoped to the one MR — the endpoint enumerated its threads and no
+    /// others.
+    pub async fn prune_mr_discussions(
+        &self,
+        proj: &str,
+        iid: u32,
+        listed: &[Value],
+    ) -> Result<usize> {
+        let keep: std::collections::HashSet<String> = listed
+            .iter()
+            .filter_map(|d| d.get("id").and_then(|v| v.as_str()))
+            .map(|id| super::schema_raw::discussion_pk_recipe(proj, iid, id))
+            .collect();
+        let iid_s = iid.to_string();
+        let gone = datalib_etl::prune::prune_scope(
+            &self.pool,
+            "discussions",
+            &[("project_full_path", proj), ("mr_iid", &iid_s)],
+            &keep,
+        )
+        .await?;
+        if !gone.is_empty() {
+            tracing::info!(
+                event = "gitlab_discussions_pruned",
+                proj,
+                iid,
+                removed = gone.len(),
+                "GitLab no longer lists these discussions; deleting our copies",
+            );
+        }
+        Ok(gone.len())
+    }
+
     pub async fn load_scope_state(&self) -> Result<HashMap<String, String>> {
         dr::load_scope_state(&self.pool).await
     }

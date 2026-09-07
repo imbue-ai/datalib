@@ -118,7 +118,8 @@ mod tests {
         }])
         .await
         .unwrap();
-        drop(db);
+        // Closed, not dropped: `parse_api_dir` reopens this store.
+        db.close().await;
 
         let parsed = parse_api_dir(&db_file).unwrap();
         assert_eq!(parsed.pages.len(), 1);
@@ -153,7 +154,8 @@ mod tests {
             .await
             .unwrap();
         }
-        drop(db);
+        // Closed, not dropped: `parse_api_dir` reopens this store.
+        db.close().await;
         let parsed = parse_api_dir(&db_file).unwrap();
         let got: Vec<&str> = parsed
             .blocks

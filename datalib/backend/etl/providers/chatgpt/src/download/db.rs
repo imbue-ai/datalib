@@ -1,6 +1,6 @@
 //! Doltlite-backed raw store for the ChatGPT provider.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -103,6 +103,52 @@ impl RawDb {
             }
         }
         Ok(out)
+    }
+
+    /// Delete every conversation not in `keep`, and its attachment edges.
+    ///
+    /// Only for a caller holding a **complete** listing — see the gate at
+    /// the callsite. That gate is the whole safety story: nothing here
+    /// second-guesses how much it deletes, because the rows stay in
+    /// doltlite history either way.
+    pub async fn prune_conversations(&self, keep: &HashSet<String>) -> Result<usize> {
+        let held: Vec<String> = sqlx::query_scalar("SELECT id FROM conversations")
+            .fetch_all(&self.pool)
+            .await
+            .context("list conversation ids for prune")?;
+        let gone: Vec<String> = held
+            .iter()
+            .filter(|id| !keep.contains(*id))
+            .cloned()
+            .collect();
+        if gone.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.pool.begin().await.context("begin prune tx")?;
+        for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
+            let mut placeholders = String::new();
+            datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
+            for sql in [
+                format!(
+                    "DELETE FROM chatgpt_attachments WHERE conversation_id IN ({placeholders})"
+                ),
+                format!("DELETE FROM conversations WHERE id IN ({placeholders})"),
+                format!("DELETE FROM conversations_bookkeeping WHERE id IN ({placeholders})"),
+            ] {
+                // Audited: static table names; the IN-list is a `?,?,?` run
+                // sized from the chunk and every id is bound.
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+                for id in chunk {
+                    q = q.bind(id.clone());
+                }
+                q.execute(&mut *tx)
+                    .await
+                    .context("prune chatgpt conversations")?;
+            }
+        }
+        tx.commit().await.context("commit prune tx")?;
+        datalib_etl::prune::record("chatgpt conversations", held.len(), gone.len());
+        Ok(gone.len())
     }
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {

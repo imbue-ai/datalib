@@ -34,6 +34,13 @@ are relative to the repo root.
   doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
+- [`docs/dev/streaming_steps_plan.md`](docs/dev/streaming_steps_plan.md)
+  — *plan*, nothing built: how to build the above, measured against
+  the tree. Read it before touching how any consumer reads a store —
+  its §"The hazard" is the one to know, because the cursor scans are
+  already safe under a live writer and every *content* read is not.
+  It also inventories what already exists (more than the proposal
+  above implies) and overturns two of that proposal's conclusions.
 - [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs)
   — **read before changing how a config is validated**: why the loader
   returns a list of diagnostics rather than an `Err`, and what
@@ -110,12 +117,18 @@ are relative to the repo root.
   what keeps them writing one deduped schema, and why an IMAP mode was
   built and removed.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows`
-  union table behind the grid UI. Its last two sections cover the
-  **storage rows** every source now emits (what a mirror weighs, and
-  the row counts inside it) — read those before changing
-  `datalib_step/src/introspect.rs`, and in particular before moving the
-  measurement *history* into `grid_rows`, which was considered and
-  rejected for four reasons written down there.
+  union table behind the grid UI. Its per-provider mapping tables name
+  raw-store tables and columns; check those against the
+  `schema_inventory` golden
+  (`datalib/backend/schema_inventory/`), which is generated from the
+  DDL and so is the one list that cannot be stale. Prose here has been
+  wrong before — it named `openai_conversations`, `claude_conversations`
+  and `slack_workspaces`, none of which have ever existed.
+  Its last two sections cover the **storage rows** every source emits
+  (what a mirror weighs, and the row counts inside it) — read those
+  before changing `datalib_step/src/introspect.rs`, and in particular
+  before moving the measurement *history* into `grid_rows`, which was
+  considered and rejected for four reasons written down there.
 - [`docs/dev/edges.md`](docs/dev/edges.md) — the cross-document `edges`
   table.
 - [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — **read before
@@ -899,6 +912,23 @@ applies to *every* bazel workspace on the machine, and the
 `buildbuddy` config is only defined in this repo's `.bazelrc`, so
 unrelated projects would fail with "Config value 'buildbuddy' is not
 defined in any .rc file".
+
+### "Which tests are flaky?" — read the reruns
+
+Hitting "re-run failed jobs" replays the same commit, so a commit that
+carries both a failure and a success flaked. `scripts/flaky_tests.py`
+groups GitHub Actions runs by commit, keeps the mixed ones, and reads
+the failed attempt's log for bazel's `FAILED` summary, so you get target
+names and a BuildBuddy link per episode rather than "CI was red":
+
+```bash
+scripts/flaky_tests.py --limit 400
+```
+
+It only sees flakes somebody actually re-ran — a red PR that got an
+empty commit pushed at it instead leaves no trace — and GitHub deletes
+run logs after 90 days, past which an episode still counts but its
+target names are gone.
 
 ## Common commands
 

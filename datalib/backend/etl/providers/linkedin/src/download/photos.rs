@@ -196,14 +196,21 @@ pub async fn load_photo_blobs(
     let cas = BlobCas::open(&cas_path_for(db_path))
         .await
         .context("open linkedin CAS")?;
-    for row in edges {
-        let owner_id: String = row.get("owner_id");
-        let blake3: String = row.get("blake3");
-        if let Some((bytes, content_type)) = load_cas_bytes(&cas, &blake3).await? {
-            out.insert(owner_id, (bytes, content_type));
+    let loaded = async {
+        for row in edges {
+            let owner_id: String = row.get("owner_id");
+            let blake3: String = row.get("blake3");
+            if let Some((bytes, content_type)) = load_cas_bytes(&cas, &blake3).await? {
+                out.insert(owner_id, (bytes, content_type));
+            }
         }
+        Ok(out)
     }
-    Ok(out)
+    .await;
+    // Closed, not dropped: the next open of this store is a second
+    // connection until this one is actually gone.
+    cas.close().await;
+    loaded
 }
 
 async fn load_cas_bytes(cas: &BlobCas, blake3: &str) -> Result<Option<(Vec<u8>, Option<String>)>> {

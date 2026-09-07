@@ -380,8 +380,11 @@ reads it with a single query and renders it without knowing which
 provider produced any given row.
 
 Unification should **never** happen in the raw store: Slack, Beeper,
-Signal, Anthropic, and ChatGPT each have their own raw tables, in their
-own doltlite DBs (`slack_messages`, `beeper_messages`, …). Once we
+Signal, Claude, and ChatGPT each have their own raw tables, in their own
+doltlite DBs — and because each store is its own file, the tables need
+no provider prefix to stay apart. Slack's messages are in `messages`,
+Beeper's in `events`, Signal's in `chat_items`. The full list is the
+`schema_inventory` golden. Once we
 *render*, though, we aspire to share as much as possible — projecting
 raw data into unified schemas where appropriate, then sending that
 unified data through common code paths for interpretation, rendering,

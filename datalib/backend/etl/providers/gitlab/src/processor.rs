@@ -101,8 +101,8 @@ impl DataProcessor for GitlabDownload {
         })
         .await?;
         let summary = format!(
-            "mrs(new={} skipped_unchanged={}) discussions(new={}) requests={}",
-            s.new_mrs, s.skipped_unchanged_mrs, s.new_discussions, s.requests,
+            "mrs(new={} skipped_unchanged={}) discussions(new={}) pruned={} requests={}",
+            s.new_mrs, s.skipped_unchanged_mrs, s.new_discussions, s.pruned, s.requests,
         );
         Ok(session.finish(ctx, summary).await)
     }

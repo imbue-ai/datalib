@@ -197,6 +197,13 @@ dm_users = ["@riker", "Jean-Luc Picard"]
                             # reactions. NOT a range bound — it only adds
                             # work on top of the walk from `since`. Unset
                             # here means no refresh pass.
+                            #
+                            # It is also the only way we notice a DELETED
+                            # message: Slack has no tombstones, so a
+                            # deletion is only visible by re-walking a
+                            # range and finding it gone. Unset, we never
+                            # notice one. See the provider's DOWNLOAD.md,
+                            # "Noticing a deleted message".
 
 [[steps]]
 id = "slack/rendered_md"

@@ -111,14 +111,15 @@ impl DataProcessor for ClaudeDownload {
         })
         .await?;
         let summary = format!(
-            "fetched={} skipped={} out_of_scope={} errors={} forbidden_orgs={} total={} \
-             projects={} projects_skipped={} project_docs={} project_docs_skipped={} \
+            "fetched={} skipped={} out_of_scope={} errors={} forbidden_orgs={} pruned={} \
+             total={} projects={} projects_skipped={} project_docs={} project_docs_skipped={} \
              requests={} forbidden_retry_attempts={} forbidden_retry_recoveries={}",
             s.fetched,
             s.skipped,
             s.out_of_scope,
             s.errors,
             s.forbidden_orgs,
+            s.pruned,
             s.total,
             s.projects_fetched,
             s.projects_skipped,
