@@ -81,6 +81,21 @@ fn write_history(
     inclusive: bool,
     messages: Value,
 ) {
+    write_history_with_more(api, run, oldest, latest, inclusive, messages, false)
+}
+
+/// As above, but able to claim `has_more` without supplying a cursor —
+/// the shape that makes a walk stop short of its range.
+#[allow(clippy::too_many_arguments)]
+fn write_history_with_more(
+    api: &Path,
+    run: &str,
+    oldest: &str,
+    latest: Option<&str>,
+    inclusive: bool,
+    messages: Value,
+    has_more: bool,
+) {
     let mut params = json!({
         "channel": "C1",
         "include_all_metadata": "true",
@@ -96,7 +111,7 @@ fn write_history(
         &json!({
             "method": "conversations.history",
             "params": params,
-            "response": {"ok": true, "messages": messages, "has_more": false},
+            "response": {"ok": true, "messages": messages, "has_more": has_more},
         }),
     );
 }
@@ -230,5 +245,59 @@ async fn no_refresh_window_means_no_prune() {
         stored_ts(&out),
         vec![TS_A.to_string(), TS_B.to_string(), TS_C.to_string()],
         "a forward walk that returned nothing is not evidence of deletion",
+    );
+}
+
+/// A walk that stopped short must prune nothing.
+///
+/// Slack signals more pages with `response_metadata.next_cursor`, and the
+/// loop also stops when that is absent. A response claiming `has_more`
+/// without a cursor therefore ends the walk mid-range — harmless while the
+/// only cost was fetching less, and destructive once "absent from the walk"
+/// started meaning "deleted". This is that case: the window pass reads one
+/// page of a two-page range, and the messages it never reached must stay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_truncated_walk_prunes_nothing() {
+    let _guard = ENV_LOCK.lock().await;
+    let d = tempdir().unwrap();
+    let (api, playback, out) = (
+        d.path().join("input_raw"),
+        d.path().join("playback"),
+        d.path().join("out_raw"),
+    );
+    write_setup_fixtures(&api);
+
+    write_history(
+        &api,
+        "run-1",
+        &since_ts(),
+        None,
+        true,
+        json!([msg(TS_A, "a"), msg(TS_B, "b"), msg(TS_C, "c")]),
+    );
+    write_history(&api, "run-2", TS_C, None, false, json!([]));
+    // The window pass gets a page claiming more, with no cursor to follow.
+    write_history_with_more(
+        &api,
+        "run-3",
+        &since_ts(),
+        Some(TS_C),
+        true,
+        json!([msg(TS_A, "a")]),
+        true,
+    );
+
+    SlackSynth::new(&api).synthesize(&playback).unwrap();
+    std::env::set_var(PLAYBACK_ENV, &playback);
+
+    run_fetch(&out, 0).await;
+    let pruned = run_fetch(&out, 3650).await;
+
+    assert_eq!(pruned, 0, "a walk that stopped short licenses no deletion");
+    assert_eq!(
+        stored_ts(&out),
+        vec![TS_A.to_string(), TS_B.to_string(), TS_C.to_string()],
+        "B and C were never reached by the walk, so their absence from it \
+         says nothing about whether Slack still has them",
     );
 }

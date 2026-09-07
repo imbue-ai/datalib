@@ -563,7 +563,7 @@ async fn export_channel(
                 // against messages the forward walk found outside it would
                 // spare nothing while widening what looks "seen".
                 let before = collected.len();
-                list_history(
+                let drained = list_history(
                     db,
                     team_id,
                     channel_id,
@@ -586,14 +586,16 @@ async fn export_channel(
                 // visible: Slack has no tombstones and no changes cursor, so
                 // a message that is simply absent from a range we re-walked
                 // is a message that was deleted.
-                let seen_ts: std::collections::HashSet<String> = collected[before..]
-                    .iter()
-                    .filter_map(|m| m.get("ts").and_then(|v| v.as_str()))
-                    .map(String::from)
-                    .collect();
-                totals.pruned += db
-                    .prune_history_window(channel_id, &effective, latest_ts, &seen_ts)
-                    .await?;
+                if drained == Drained::Yes {
+                    let seen_ts: std::collections::HashSet<String> = collected[before..]
+                        .iter()
+                        .filter_map(|m| m.get("ts").and_then(|v| v.as_str()))
+                        .map(String::from)
+                        .collect();
+                    totals.pruned += db
+                        .prune_history_window(channel_id, &effective, latest_ts, &seen_ts)
+                        .await?;
+                }
             }
         }
     }
@@ -729,7 +731,7 @@ async fn list_history(
     progress: &datalib_etl::progress::Progress,
     collected: &mut Vec<Value>,
     latchkey: &LatchkeySettings,
-) -> Result<()> {
+) -> Result<Drained> {
     let mut base = BTreeMap::new();
     base.insert("channel".to_string(), channel_id.to_string());
     base.insert("oldest".to_string(), oldest_ts.to_string());
@@ -804,12 +806,38 @@ async fn list_history(
 
         collected.extend(messages);
 
+        let has_more = resp.get("has_more").and_then(|v| v.as_bool());
         cursor = next_cursor(&resp);
-        if cursor.is_none() || resp.get("has_more").and_then(|v| v.as_bool()) == Some(false) {
-            break;
+        if cursor.is_none() || has_more == Some(false) {
+            // Slack said there is more and handed us nothing to ask with.
+            // The walk stops here having read part of the range, which is
+            // survivable on its own — the next run picks the rest up — but
+            // must never be read as "the rest of this range is empty".
+            return Ok(if cursor.is_none() && has_more == Some(true) {
+                warn!(
+                    event = "slack_history_walk_truncated",
+                    channel = %channel_id,
+                    oldest = oldest_ts,
+                    "has_more with no cursor; this range was only partly read",
+                );
+                Drained::No
+            } else {
+                Drained::Yes
+            });
         }
     }
-    Ok(())
+}
+
+/// Whether a paginated walk read its whole range, or stopped short.
+///
+/// Only the first licenses a prune. A short read looks exactly like a
+/// range whose messages were all deleted, and the two must not be
+/// confused — which is why this is a named type rather than a `bool` that
+/// a future caller could pass the wrong way round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drained {
+    Yes,
+    No,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -836,6 +864,7 @@ async fn paginate_replies(
     // back the thread whole (across pages), so once the walk finishes, a
     // stored message on this thread that is not here was deleted.
     let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut drained = Drained::Yes;
     loop {
         let mut p = base.clone();
         if let Some(c) = &cursor {
@@ -884,22 +913,35 @@ async fn paginate_replies(
                 *totals.media.entry(k).or_insert(0) += v;
             }
         }
+        let has_more = resp.get("has_more").and_then(|v| v.as_bool());
         cursor = next_cursor(&resp);
-        if cursor.is_none() || resp.get("has_more").and_then(|v| v.as_bool()) == Some(false) {
+        if cursor.is_none() || has_more == Some(false) {
+            if cursor.is_none() && has_more == Some(true) {
+                warn!(
+                    event = "slack_replies_walk_truncated",
+                    channel = %channel_id,
+                    thread = thread_ts,
+                    "has_more with no cursor; this thread was only partly read",
+                );
+                drained = Drained::No;
+            }
             break;
         }
     }
     db.upsert_replies_page(channel_id, thread_ts, last_seen_reply.as_deref())
         .await?;
-    // Only after the loop drained: a walk that stopped early saw part of
-    // the thread, and reconciling against a partial read deletes replies
-    // that are still there. Every `?` above returns before reaching this.
-    totals.pruned += db
-        .prune_thread_replies(
-            &schema_raw::slack_thread_uuid(team_id, channel_id, thread_ts),
-            &seen_ids,
-        )
-        .await?;
+    // Only when the loop drained: a walk that stopped early saw part of the
+    // thread, and reconciling against a partial read deletes replies that
+    // are still there. Every `?` above returns before reaching this, so the
+    // remaining way to be short is a `has_more` we could not follow.
+    if drained == Drained::Yes {
+        totals.pruned += db
+            .prune_thread_replies(
+                &schema_raw::slack_thread_uuid(team_id, channel_id, thread_ts),
+                &seen_ids,
+            )
+            .await?;
+    }
     Ok(())
 }
 
