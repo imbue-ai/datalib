@@ -228,6 +228,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Signal's raw entity store, which holds `ingested_backups`."""
         return self.workspace / "signal" / "raw" / "entities.doltlite_db"
 
+    @property
+    def _claude_entities_db(self) -> Path:
+        """Claude's raw entity store, where run 5 stages a deletion."""
+        return self.workspace / "claude-api" / "raw" / "entities.doltlite_db"
+
     def _query(self, db: Path, sql: str) -> list[str]:
         """Run one SQL statement, returning stripped non-empty lines."""
         self.assertTrue(db.is_file(), f"expected a doltlite store at {db}")
@@ -589,6 +594,35 @@ class IngestedTngPipelineTest(unittest.TestCase):
         result.check_returncode()
         return result
 
+    def _run_step(self, step_id: str, *argv: str) -> subprocess.CompletedProcess:
+        """Run one `datalib-step` invocation the way the runner would.
+
+        Steps take their identity from `$DATALIB_DAG_STEP` and their data
+        root from `$DATALIB_DAG_DATA_ROOT`, so a single step is drivable
+        without the runner. Used to re-render and re-index one source
+        without the download step in front of it — `datalib-dag --sync`
+        cannot express that, since it only accepts source steps (those with
+        no inputs) and pulls in everything downstream of them.
+        """
+        env = {
+            **os.environ,
+            "DATALIB_DAG_DATA_ROOT": str(self.workspace),
+            "DATALIB_DAG_STEP": step_id,
+            "DATALIB_DAG_NOW": self.now,
+        }
+        result = subprocess.run(
+            [str(Path(self.cwd) / self.step_bin), *argv],
+            check=False,
+            cwd=str(self.cwd),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        result.check_returncode()
+        return result
+
     def test_pipeline_resume_and_reset(self) -> None:
         # --- Run 1: fresh workspace. Full ingest.
         run1 = self._run_pipeline(reset=False)
@@ -914,6 +948,117 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "a fresh data root over the same fixture must mint "
             "byte-identical ids — an id recipe that reads the clock, the "
             "scan order, or the config would differ here and nowhere else",
+        )
+
+        # --- Run 5: the upstream lost a conversation.
+        #
+        # Everything above proves the pipeline ADDS and KEEPS. This proves
+        # it can SUBTRACT, which is a separate mechanism and was missing
+        # entirely: render only ever had `emit_doc`, so a raw row that went
+        # away left its markdown on disk and its rows in the grid forever.
+        #
+        # The deletion is made in the raw store rather than in the fixture
+        # because the two halves are independent. Whether claude's DOWNLOAD
+        # can notice that claude.ai dropped a conversation is a question
+        # about re-enumeration and pruning; this is the question downstream
+        # of it — given a raw store that lost a row, does the loss reach the
+        # grid? Simulating it directly is what keeps this test honest about
+        # which half it covers.
+        victim = self._scalar(
+            self._index_db,
+            "SELECT upstream_id FROM grid_rows "
+            "WHERE provider = 'claude' AND upstream_entity_kind = 'conversation' "
+            "ORDER BY upstream_id LIMIT 1;",
+        )
+        conversation_uuid = self._scalar(
+            self._index_db,
+            "SELECT DISTINCT conversation_uuid FROM grid_rows "
+            f"WHERE provider = 'claude' AND upstream_id = '{victim}';",
+        )
+        doomed_docs = self._query(
+            self._index_db,
+            "SELECT DISTINCT markdown_uuid FROM grid_rows "
+            f"WHERE conversation_uuid = '{conversation_uuid}' "
+            "AND markdown_uuid IS NOT NULL;",
+        )
+        self.assertTrue(
+            doomed_docs,
+            f"fixture must have rendered claude conversation {victim}, "
+            "or this run asserts nothing",
+        )
+        doomed_files = [
+            self.workspace / p
+            for p in self._query(
+                self._index_db,
+                "SELECT md_path FROM markdowns "
+                f"WHERE markdown_uuid IN ({_sql_in(doomed_docs)}) "
+                "AND md_path IS NOT NULL;",
+            )
+        ]
+        for f in doomed_files:
+            self.assertTrue(f.is_file(), f"expected a rendered markdown at {f}")
+        survivors = set(self._index_ids()["grid_rows"]) - set(
+            self._query(
+                self._index_db,
+                "SELECT uuid FROM grid_rows "
+                f"WHERE conversation_uuid = '{conversation_uuid}';",
+            )
+        )
+
+        # Delete it the way an upstream loss reaches us: the row goes, and
+        # the store commits, so the render step's `dolt_diff` names the
+        # bucket as changed and finds nothing behind it.
+        self._query(
+            self._claude_entities_db,
+            f"DELETE FROM conversations WHERE id = '{victim}'; "
+            f"DELETE FROM conversations_bookkeeping WHERE id = '{victim}'; "
+            "SELECT dolt_commit('-Am', 'test: upstream dropped a conversation');",
+        )
+
+        # Render + index only. A full pipeline run would replay the
+        # playback tape and put the conversation straight back — correct
+        # behavior for the download step, and it would make this assert
+        # nothing.
+        self._run_step("claude-api/rendered_md", "render", "claude_api")
+        self._run_step("unified_index/grid", "grid_index")
+
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT uuid FROM grid_rows "
+                f"WHERE conversation_uuid = '{conversation_uuid}';",
+            ),
+            [],
+            "every grid row of a conversation the raw store lost must go",
+        )
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT markdown_uuid FROM markdowns "
+                f"WHERE markdown_uuid IN ({_sql_in(doomed_docs)});",
+            ),
+            [],
+            "and so must its markdowns rows",
+        )
+        for f in doomed_files:
+            self.assertFalse(
+                f.is_file(),
+                f"{f} outlived the conversation it renders. The grid no "
+                "longer lists it, but /applet/unified_index/chat/{uuid} "
+                "still resolves and qmd still finds it — a deletion the "
+                "user can read",
+            )
+        # Nothing else moved. A sweep that takes the neighbours with it is
+        # worse than one that never fires.
+        self.assertEqual(
+            set(self._index_ids()["grid_rows"]),
+            survivors,
+            "removing one conversation must leave every other row alone",
+        )
+        self.assertEqual(
+            self._providers(),
+            EXPECTED_PROVIDERS,
+            "run 5 removed one conversation, not a provider",
         )
 
 

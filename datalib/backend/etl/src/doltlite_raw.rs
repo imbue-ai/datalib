@@ -1016,6 +1016,63 @@ pub struct DiffScanSpec<'a> {
     pub bucket_query: &'a str,
 }
 
+/// Of `bucket_ids`, the ones no row of any `(table, id_column)` pair still
+/// carries — the buckets whose upstream entity is gone.
+///
+/// Asked of the raw store rather than inferred from what parse returned, and
+/// the difference is the point: every provider's loader filters (`payload IS
+/// NOT NULL` at minimum), so a bucket missing from a parse result may simply
+/// be one we have not fetched the body of yet. Deleting on that reading would
+/// destroy a live document. "The store has no row with this id" is the only
+/// claim that means the entity went away.
+///
+/// Table and column names are interpolated; callers pass trusted identifiers.
+pub async fn buckets_without_rows(
+    pool: &sqlx::SqlitePool,
+    bucket_ids: &std::collections::HashSet<String>,
+    id_columns: &[(&str, &str)],
+) -> Result<Vec<String>> {
+    if bucket_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut present: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let ids: Vec<&String> = bucket_ids.iter().collect();
+    for (table, column) in id_columns {
+        for chunk in ids.chunks(crate::bulk::SQL_CHUNK) {
+            let mut sql = format!("SELECT DISTINCT {column} FROM {table} WHERE {column} IN (");
+            crate::bulk::push_placeholder_list(&mut sql, chunk.len());
+            sql.push(')');
+            // Audited: `table` / `column` are `&'static str` at every
+            // callsite (each provider names its own tables); the IN-list is a
+            // placeholder run sized from the chunk and every id is bound.
+            let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+            for id in chunk {
+                q = q.bind((*id).clone());
+            }
+            match q.fetch_all(pool).await {
+                Ok(found) => present.extend(found),
+                Err(e) => {
+                    // A table this provider does not have yet (an older
+                    // store) must not read as "every bucket vanished".
+                    tracing::warn!(
+                        table,
+                        error = %e,
+                        "vanished-bucket probe failed; treating every bucket as present",
+                    );
+                    return Ok(Vec::new());
+                }
+            }
+        }
+    }
+    let mut gone: Vec<String> = bucket_ids
+        .iter()
+        .filter(|b| !present.contains(*b))
+        .cloned()
+        .collect();
+    gone.sort();
+    Ok(gone)
+}
+
 /// Look up HEAD, short-circuit if any [`DiffScanSpec::global_fanout_tables`]
 /// changed, then project the per-bucket changed set.
 ///

@@ -173,6 +173,11 @@ pub struct ParsedExport {
     /// Count of docs (conversations + projects) `dolt_diff` reported as
     /// unchanged.
     pub docs_skipped: usize,
+    /// Bucket ids the diff named that the raw store no longer has a row for:
+    /// conversations and projects that went away upstream. Empty on a cold
+    /// start, which examines every bucket and so has nothing to compare
+    /// against.
+    pub vanished_buckets: Vec<String>,
     pub scan: ScanResult,
 }
 
@@ -279,6 +284,18 @@ async fn parse_doltlite_async(
             kept
         }
     };
+    // A bucket the diff named whose row is gone from both entity tables is a
+    // conversation or project claude.ai no longer has. Rendering cannot see
+    // this — it only ever gets handed what still exists — so the question is
+    // asked of the store here, while the changed set is still in hand.
+    if let Some(changed) = scan.changed_buckets.as_ref() {
+        parsed.vanished_buckets = datalib_etl::doltlite_raw::buckets_without_rows(
+            &pool,
+            changed,
+            &[("conversations", "id"), ("projects", "id")],
+        )
+        .await?;
+    }
     parsed.scan = scan;
 
     // Per-doc BlobBundle: walk each conversation's

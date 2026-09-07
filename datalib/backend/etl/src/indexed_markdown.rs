@@ -140,10 +140,23 @@ impl IndexedMarkdownStore {
         })
     }
 
-    pub fn remove_document(&self, markdown_uuid: &str) -> Result<()> {
+    /// Drop one document: its rows here, and the `.md` file itself.
+    ///
+    /// The file matters as much as the rows. `md_path` is what
+    /// `/applet/unified_index/chat/{uuid}` serves and what qmd indexed, so a
+    /// document deleted from the store but left on disk stays searchable and
+    /// still resolves — a deletion the user can still read.
+    pub fn remove_document(&self, out_dir: &Path, markdown_uuid: &str) -> Result<()> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
+            let md_path: Option<String> =
+                sqlx::query_scalar("SELECT md_path FROM markdowns WHERE markdown_uuid = ?")
+                    .bind(markdown_uuid)
+                    .fetch_optional(&mut **conn)
+                    .await
+                    .with_context(|| format!("read md_path for {markdown_uuid}"))?
+                    .flatten();
             for sql in [
                 "DELETE FROM grid_rows WHERE markdown_uuid = ?",
                 "DELETE FROM edges WHERE src_markdown_uuid = ?",
@@ -156,10 +169,65 @@ impl IndexedMarkdownStore {
                     .await
                     .with_context(|| format!("remove {markdown_uuid} from the store"))?;
             }
+            drop(guard);
+            if let Some(rel) = md_path {
+                unlink_rendered(out_dir, &rel);
+            }
             Ok(())
         })
     }
 
+    /// Every `markdown_uuid` whose rows belong to `conversation_uuid`.
+    ///
+    /// The indirection exists because a provider that periodizes — slack per
+    /// thread-month, beeper and signal per period — turns one upstream
+    /// conversation into several documents, and their count is a fact about
+    /// what was rendered rather than anything the provider can recompute
+    /// once the conversation is gone from the raw store. The store is the
+    /// only thing that still knows.
+    pub fn documents_for_conversation(&self, conversation_uuid: &str) -> Result<Vec<String>> {
+        blocking(async {
+            let rows = sqlx::query(
+                "SELECT DISTINCT markdown_uuid FROM grid_rows \
+                 WHERE conversation_uuid = ? AND markdown_uuid IS NOT NULL",
+            )
+            .bind(conversation_uuid)
+            .fetch_all(&self.pool)
+            .await
+            .with_context(|| format!("documents for conversation {conversation_uuid}"))?;
+            rows.into_iter()
+                .map(|r| r.try_get::<String, _>(0).map_err(Into::into))
+                .collect()
+        })
+    }
+}
+
+/// Delete a rendered document's file, and the per-document directory it sat
+/// in once that is empty (`<source>/rendered_md/<uuid>/all.md` is the usual
+/// shape, and leaving the empty parent behind makes a deleted conversation
+/// still look present to anyone listing the tree).
+///
+/// Best-effort by design: a file already gone is the state we wanted, and a
+/// tree we cannot write is not worth failing a render over once the rows —
+/// the thing the grid reads — are gone.
+fn unlink_rendered(out_dir: &Path, md_path_rel: &str) {
+    let abs = out_dir.join(md_path_rel);
+    if let Err(e) = std::fs::remove_file(&abs) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                path = %abs.display(),
+                error = %e,
+                "render: could not delete the markdown of a document that went away",
+            );
+            return;
+        }
+    }
+    if let Some(dir) = abs.parent() {
+        let _ = std::fs::remove_dir(dir);
+    }
+}
+
+impl IndexedMarkdownStore {
     async fn sweep_problems(
         &self,
         markdown_uuid: &str,

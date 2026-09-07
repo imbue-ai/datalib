@@ -200,6 +200,17 @@ impl DataProcessor for ClaudeRender {
             cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
         )
         .with_context(|| format!("claude parse {}", self.raw_path.display()))?;
+        // Conversations and projects claude.ai no longer has. Their pages go
+        // before we render, so a run interrupted afterwards has already
+        // dropped them rather than leaving a document whose source is gone.
+        // A bucket id could have been either kind and the store no longer
+        // says which, so both derivations are offered; the one that names
+        // nothing removes nothing.
+        let mut dropped = 0usize;
+        for bucket in &parsed.vanished_buckets {
+            dropped += ctx.remove_conversation(&crate::render::ids::conversation(bucket).uuid)?;
+            dropped += ctx.remove_conversation(&crate::render::ids::project(bucket).uuid)?;
+        }
         let mut on_doc = |md| ctx.emit_doc(md);
         render_all(
             &parsed,
@@ -212,6 +223,10 @@ impl DataProcessor for ClaudeRender {
             &mut on_doc,
         )
         .context("claude render_all")?;
-        Ok("rendered".into())
+        Ok(if dropped == 0 {
+            "rendered".into()
+        } else {
+            format!("rendered, {dropped} document(s) gone upstream")
+        })
     }
 }

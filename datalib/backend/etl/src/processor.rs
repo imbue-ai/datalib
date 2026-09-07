@@ -59,12 +59,26 @@ pub trait Checkpoint: Send + Sync {
 /// like every other processor's.
 pub type DocCallback<'a> = dyn FnMut(RenderedMarkdown) -> Result<()> + Send + 'a;
 
+/// The counterpart to [`DocCallback`]: a render processor names a
+/// conversation the raw store no longer has, and every document rendered
+/// from it goes — rows and `.md` alike.
+///
+/// Keyed by conversation rather than by document because a periodizing
+/// renderer produced several documents from one conversation and cannot
+/// recompute how many once the conversation is gone. The store resolves it.
+pub type RemoveCallback<'a> = dyn FnMut(&str) -> Result<usize> + Send + 'a;
+
 /// Interior-mutable wrapper around the orchestrator's fused-Load callback so
 /// a render processor can emit through a shared `&RunCtx`. The `Mutex`
 /// keeps [`RunCtx`] `Sync` (hence every `run` future `Send`); per-source
 /// render is sequential, so the lock is never actually contended.
 struct DocSink<'a> {
     cb: Mutex<&'a mut DocCallback<'a>>,
+}
+
+/// Same wrapper, for the removal half of the sink.
+struct RemoveSink<'a> {
+    cb: Mutex<&'a mut RemoveCallback<'a>>,
 }
 
 /// One registered interrupt-commit hook, paired with its source name for
@@ -132,6 +146,9 @@ pub struct RunCtx<'a> {
     /// Where render processors send finished documents (fused Load).
     /// `None` on a download context.
     emit: Option<DocSink<'a>>,
+    /// Where render processors name conversations that went away.
+    /// `None` on a download context.
+    remove: Option<RemoveSink<'a>>,
 }
 
 impl<'a> RunCtx<'a> {
@@ -158,6 +175,7 @@ impl<'a> RunCtx<'a> {
             metrics: Some(metrics),
             diagnostics: Some(diagnostics),
             emit: None,
+            remove: None,
         }
     }
 
@@ -171,6 +189,7 @@ impl<'a> RunCtx<'a> {
         prior_fingerprints: &'a HashMap<String, String>,
         checkpoints: &'a CheckpointSink,
         on_doc: &'a mut DocCallback<'a>,
+        on_remove: &'a mut RemoveCallback<'a>,
     ) -> Self {
         Self {
             name,
@@ -184,6 +203,9 @@ impl<'a> RunCtx<'a> {
             diagnostics: None,
             emit: Some(DocSink {
                 cb: Mutex::new(on_doc),
+            }),
+            remove: Some(RemoveSink {
+                cb: Mutex::new(on_remove),
             }),
         }
     }
@@ -225,5 +247,21 @@ impl<'a> RunCtx<'a> {
             .ok_or_else(|| anyhow::anyhow!("emit_doc called on a non-render RunCtx"))?;
         let mut cb = sink.cb.lock().unwrap();
         (cb)(md)
+    }
+
+    /// This conversation is no longer in the raw store: drop every document
+    /// rendered from it. Returns how many went.
+    ///
+    /// Call it only for a conversation the run actually looked for and did
+    /// not find — an id the `dolt_diff` scan named, whose rows the parse then
+    /// came back empty for. Absence from a bucket the run never examined
+    /// means nothing.
+    pub fn remove_conversation(&self, conversation_uuid: &str) -> Result<usize> {
+        let sink = self
+            .remove
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("remove_conversation called on a non-render RunCtx"))?;
+        let mut cb = sink.cb.lock().unwrap();
+        (cb)(conversation_uuid)
     }
 }

@@ -190,12 +190,32 @@ fingerprint decides *whether a document that was read needs writing*,
 and the cold path (no cursor, or a cursor the store's history no
 longer contains) still needs the second one.
 
-What Step 1 did *not* fix is deletion on the render side: nothing yet
-removes a document from a source's own store when it disappears
-upstream, because render is incremental and "not re-emitted this run"
-overwhelmingly means "not looked at". `IndexedMarkdownStore::remove_document`
-is the operation; no renderer calls it. That gap used to exist in two
-places and now exists in one.
+Deletion on the render side is now wired, and the shape it took is worth
+knowing before you port a renderer to it. "Not re-emitted this run" is
+*not* the signal — render is incremental, so it overwhelmingly means "not
+looked at". Nor is "absent from what parse returned", which is what the
+first draft used and is wrong for a subtler reason: every provider's
+loader filters (`payload IS NOT NULL` at minimum), so a bucket missing
+from a parse result may be one whose body we have not fetched yet, and
+deleting on that reading destroys a live document.
+
+The signal is **the raw store has no row with this id**, asked directly:
+`doltlite_raw::buckets_without_rows` takes the ids the `dolt_diff` scan
+named and returns those no entity table still carries. The renderer hands
+each one to `RunCtx::remove_conversation`, and the store drops every
+document belonging to it — rows and the `.md` file both. The file is not
+an afterthought: `md_path` is what `/applet/unified_index/chat/{uuid}`
+serves and what qmd indexed, so a document deleted from the store but left
+on disk is a deletion the user can still read.
+
+Keyed on the conversation rather than the document because a periodizing
+renderer (slack, signal, beeper) turned one conversation into several
+documents, and once the conversation is gone from the raw store the render
+store is the only thing that still knows how many. `grid_index` needs no
+change — it already learns of a removal from this store's diff.
+
+Ported so far: **claude**. Every other renderer still leaves a vanished
+entity's documents in place.
 
 The original argument, which still reads correctly:
 
