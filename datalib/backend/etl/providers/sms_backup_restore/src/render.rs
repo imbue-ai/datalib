@@ -65,23 +65,21 @@ pub fn render(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name.
-    seen: &mut std::collections::HashSet<String>,
-) -> Result<()> {
+    last_render_hash: Option<&str>,
+) -> Result<RenderOutcome> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(());
+        return Ok(RenderOutcome::default());
     }
-    let (messages, calls, blobs) = tokio::task::block_in_place(|| {
+    let (messages, calls, blobs, scan) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open(&db_path).await?;
             let loaded = async {
                 let messages = db.load_payloads("sms_messages").await?;
                 let calls = db.load_payloads("sms_calls").await?;
                 let blobs = load_blobs(&db, &messages).await?;
-                anyhow::Ok((messages, calls, blobs))
+                let scan = scan_diff(db.pool(), last_render_hash).await?;
+                anyhow::Ok((messages, calls, blobs, scan))
             }
             .await;
             // Closed, not dropped: the next open of this store is a
@@ -92,9 +90,38 @@ pub fn render(
     })?;
 
     if messages.is_empty() && calls.is_empty() {
-        return Ok(());
+        return Ok(RenderOutcome::default());
     }
-    let chats = build_chats(&messages, &calls);
+    let all_chats = build_chats(&messages, &calls);
+
+    // Narrow to the conversations the diff named. Everything else is
+    // byte-identical to what the store already holds, so re-deriving it
+    // only to have the fingerprint compare throw it away is the cost this
+    // cursor exists to remove.
+    let mut outcome = RenderOutcome {
+        new_head: scan.new_head.clone(),
+        scan_elapsed: scan.scan_elapsed,
+        ..Default::default()
+    };
+    let chats: Vec<NormalizedChat> = match &scan.changed_buckets {
+        None => all_chats,
+        Some(changed) => {
+            let present: std::collections::HashSet<&str> =
+                all_chats.iter().map(|c| c.id.as_str()).collect();
+            // A conversation key the diff named that no chat carries any
+            // more: every message and call for that number is gone.
+            for gone in changed.iter().filter(|k| !present.contains(k.as_str())) {
+                outcome.vanished.push(uuid5(&format!("chat:{gone}")));
+            }
+            let before = all_chats.len();
+            let kept: Vec<NormalizedChat> = all_chats
+                .into_iter()
+                .filter(|c| changed.contains(&c.id))
+                .collect();
+            outcome.skipped = before.saturating_sub(kept.len());
+            kept
+        }
+    };
     let s = cc_render_all(
         &profile(),
         &chats,
@@ -105,8 +132,65 @@ pub fn render(
         prior_fingerprints,
         on_doc_complete,
     )?;
-    seen.extend(s.documents);
-    Ok(())
+    outcome.rendered = s.docs_rendered;
+    Ok(outcome)
+}
+
+/// What one render pass did, and what the caller must act on: the cursor
+/// to stamp and the conversations that went away.
+#[derive(Debug, Clone, Default)]
+pub struct RenderOutcome {
+    pub rendered: usize,
+    /// Conversations the diff named and no chat still carries — their
+    /// documents are the caller's to remove. Keyed by `chat_uuid`, since a
+    /// conversation periodizes into several documents and only the render
+    /// store knows how many.
+    pub vanished: Vec<String>,
+    pub skipped: usize,
+    pub new_head: Option<String>,
+    pub scan_elapsed: Option<std::time::Duration>,
+}
+
+/// Which conversations moved since `last_render_hash`.
+///
+/// The bucket is `"sms:{conversation_key}"` — the same string
+/// [`chat_id`] builds, so the changed set compares directly against
+/// `NormalizedChat::id`.
+///
+/// Attachments are deliberately *not* in the union. Naming their
+/// conversation needs a join back to `sms_messages`, and a plain read of a
+/// content table from render code is what
+/// `docs/dev/streaming_steps_plan.md` is working off — the repo lint
+/// ratchets that count down and refuses new ones. The miss it costs is
+/// narrow: this provider parses local XML, so a message and its attachment
+/// land in the same commit and the message row already names the bucket. A
+/// blob filled in by a later run on its own would go unnoticed until
+/// something else in that conversation moves.
+async fn scan_diff(
+    pool: &sqlx::SqlitePool,
+    last_render_hash: Option<&str>,
+) -> Result<datalib_etl::doltlite_raw::DiffScan> {
+    datalib_etl::doltlite_raw::scan_buckets(
+        pool,
+        last_render_hash,
+        &datalib_etl::doltlite_raw::DiffScanSpec {
+            global_fanout_tables: &[],
+            bucket_query: "
+                SELECT DISTINCT bucket FROM (
+                    SELECT 'sms:' || coalesce(to_conversation_key, from_conversation_key)
+                             AS bucket
+                      FROM dolt_diff_sms_messages
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'sms:' || coalesce(to_conversation_key, from_conversation_key)
+                      FROM dolt_diff_sms_calls
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                )
+                WHERE bucket IS NOT NULL AND bucket != 'sms:'
+            ",
+        },
+    )
+    .await
 }
 
 async fn load_blobs(db: &RawDb, messages: &[Value]) -> Result<HashMap<String, BlobBundle>> {

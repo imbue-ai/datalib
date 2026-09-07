@@ -111,7 +111,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
                 &Progress::noop(),
                 &HashMap::new(),
                 &mut on_doc,
-                &mut std::collections::HashSet::new(),
+                None,
             )
             .context("render")?;
         }
