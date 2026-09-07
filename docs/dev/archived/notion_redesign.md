@@ -1,11 +1,19 @@
 # Notion, rebuilt on Notion's own API
 
-**Status: largely built, 2026-09-07.** §2's measurements are real —
-run against a live workspace, not read off documentation. §5's design
-is implemented except where §8 says otherwise; the provider's own
-[`DOWNLOAD.md`](../../datalib/backend/etl/providers/notion/DOWNLOAD.md)
-is the current reference for how it behaves, and this file is the
-argument for why. Where the two disagree, that one is newer.
+> **Archived 2026-09-07 — built, and not current reference.** The
+> rewrite this argues for shipped; the provider's own
+> [`DOWNLOAD.md`](../../../datalib/backend/etl/providers/notion/DOWNLOAD.md)
+> is the live description of how it behaves, and this is the argument
+> for why it behaves that way. Where the two disagree, that one is
+> newer. §8's "not built" list was accurate the day this was written
+> and will drift; `DOWNLOAD.md` keeps the current one.
+>
+> §2 is the part worth keeping. It is measurement — run against a live
+> workspace, not read off Notion's documentation — and several of its
+> numbers changed the design: 87% of that workspace is database rows,
+> 71% of pages have no body, signed file URLs rotate on every fetch,
+> and `truncated` covers two situations that one attribute tells
+> apart.
 
 Notion has shipped, over the last year, most of the things our provider
 was built to work around. The provider we have predates all of it and

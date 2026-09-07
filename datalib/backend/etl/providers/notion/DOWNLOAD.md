@@ -198,4 +198,4 @@ incremental render is the follow-up.
 - Incremental render (`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`).
 
 The design and the measurements behind it are in
-[`docs/dev/notion_redesign.md`](../../../../../docs/dev/notion_redesign.md).
+[`docs/dev/archived/notion_redesign.md`](../../../../../docs/dev/archived/notion_redesign.md).
