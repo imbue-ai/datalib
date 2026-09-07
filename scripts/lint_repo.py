@@ -309,11 +309,12 @@ def main() -> int:
 # *torn* view, part of one commit and part of a batch still being
 # written, with no error anywhere.
 #
-# The fix is per query: name the commit with `dolt_at_<table>(...)`,
-# which `datalib_etl::pin::Pin::sql` does from a `{table}` placeholder.
-# The fix is also across ~50 sites in ten crates, and one missed site is
-# a silent data bug -- so this is a ratchet rather than a review
-# question. See `docs/dev/streaming_steps_plan.md`.
+# The fix is to read the pinned view instead: `datalib_etl::pin::install_views`
+# creates a `pinned_<table>` view over `dolt_at_<table>(...)` once per
+# connection, so a query changes from `FROM users` to `FROM pinned_users`
+# and nothing else. The fix is across ~50 sites in ten crates, and one
+# missed site is a silent data bug -- so this is a ratchet rather than a
+# review question. See `docs/dev/streaming_steps_plan.md`.
 #
 # `EXPECTED_UNPINNED_READS` is the baseline being worked off. Numbers may
 # only go down; a file that reaches zero comes out of the dict. Both
@@ -332,9 +333,11 @@ EXPECTED_UNPINNED_READS: dict[str, int] = {
     "datalib/backend/etl/providers/yolink/src/render/parse.rs": 5,
 }
 
-# `dolt_*` are the history vtabs (already committed-only), `pragma_*` and
-# `sqlite_*` are engine tables with no working set of their own.
-_PINNED_OK_PREFIXES = ("dolt_", "pragma_", "sqlite_")
+# `pinned_` is the whole point: a view over `dolt_at_<table>`, so reading it
+# is reading committed state. `dolt_*` are the history vtabs (already
+# committed-only), and `pragma_*` / `sqlite_*` are engine tables with no
+# working set of their own.
+_PINNED_OK_PREFIXES = ("pinned_", "dolt_", "pragma_", "sqlite_")
 
 # A table named directly after FROM or JOIN. A `{placeholder}` does not
 # match (it starts with `{`), which is what makes a swept site invisible
@@ -387,9 +390,10 @@ def _check_unpinned_render_reads(root: Path) -> int:
                 print(f"      {rel}:{lineno}: {table}", file=sys.stderr)
         print(
             "\nA plain SELECT reads doltlite's working set, so it can return\n"
-            "rows the producer has not committed. Name the commit instead:\n"
-            "write the table as `{table}` in the query and run it through\n"
-            "`datalib_etl::pin::Pin::sql`. See docs/dev/streaming_steps_plan.md.",
+            "rows the producer has not committed. Read the pinned view instead:\n"
+            "`FROM pinned_<table>`, with `datalib_etl::pin::install_views` called\n"
+            "once where the store is opened for reading.\n"
+            "See docs/dev/streaming_steps_plan.md.",
             file=sys.stderr,
         )
 

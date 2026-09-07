@@ -114,25 +114,27 @@ have collapsed this whole section to one line. Measured:
 - Opening the file `-readonly` does not help: a plain `SELECT` still
   returns the working set.
 
-So the pin has to go into each query, as `dolt_at_<table>('<hash>')`.
+So the commit has to be named in SQL, as `dolt_at_<table>('<hash>')`.
 
-That is more explicit than a connection-level setting would have been,
-and the explicitness turns out to be load-bearing rather than merely a
-consolation: a per-query pin is the only form that lets one pass read
-**two stores at two different pins**, which is exactly what the
-entities/CAS split below requires. A connection-level pin could not
-have expressed it.
+Not per query, though — per *connection*. A `TEMP VIEW` over that
+expression is a pure read that leaves the file untouched, and views are
+per-connection, so one pass installs a set of them once and every query
+afterwards reads committed state. That is what `install_views` does, and
+it is why the pin never has to be threaded through the code that runs
+the queries. It also keeps the entities/CAS case working, since those
+are two files with two pools and therefore two independent view sets.
 
 ### Two properties of `dolt_at_` that shape the helper
 
 Both measured:
 
 - **It composes normally.** It works with aliases, in `JOIN`s and under
-  `WHERE`, and `pin.rs`'s `a_pinned_read_ignores_the_working_set` now
-  proves the whole thing end to end through sqlx rather than through the
-  shell: against a store with a dirty working set, the unpinned read
-  sees three rows and the pinned one sees the two that were committed.
-  That test is the premise of this entire plan, so it was checked
+  `WHERE`, and through a view. `pin.rs`'s
+  `pinned_views_read_the_commit_not_the_working_set` proves it end to end
+  through sqlx rather than through the shell: against a store with a
+  dirty working set the plain read sees two rows and the pinned view sees
+  the one that was committed, including across a join between two pinned
+  views. That test is the premise of this entire plan, so it was checked
   against a deliberate break to confirm it can fail.
 - **It does not exist for a table that has never been committed.**
   `SELECT … FROM dolt_at_fresh('HEAD')` on a brand-new table is
@@ -236,33 +238,67 @@ Two things a hand count missed:
 A 48-site sweep where one miss is a silent tearing bug needs an
 enforceable shape, not care. Both halves of that are now built.
 
-**The helper** is [`datalib_etl::pin::Pin`](../../datalib/backend/etl/src/pin.rs):
+**The helper** is [`datalib_etl::pin`](../../datalib/backend/etl/src/pin.rs).
+`install_views` creates one `pinned_<table>` view per table over
+`dolt_at_<table>('<hash>')`, once per connection, and a query reads the
+view:
 
 ```rust
 // before
 sqlx::query("SELECT id, json(payload) AS payload FROM users")
 // after
-sqlx::query(pin.sql("SELECT id, json(payload) AS payload FROM {users}"))
+sqlx::query("SELECT id, json(payload) AS payload FROM pinned_users")
 ```
 
-Three decisions that came out of writing it rather than planning it:
+**The views are named distinctly rather than shadowing the tables**, and
+that is the whole design. A temp view named `users` shadows the real
+`users`, which would pin every existing query with no edit at all — a
+zero-site sweep. It was tempting and it is wrong, because a pass that
+forgot to install the views would then *silently* read the working set.
+The distinct name turns that into `no such table: pinned_users`. It also
+leaves writes through the real names working, so a pool that reads and
+writes is unaffected and no audit of which pools do both is needed.
 
-- **A free-standing `Pin`, not a method on a store handle.** The plan
-  said `store.sql(…)`, but `BlobBundle::load` takes raw pools and has no
-  handle to hang it on.
-- **The hash is interpolated, not bound.** Binding it would prepend a
-  positional parameter to every query and break each callsite's existing
-  bind order — 48 chances to get an off-by-one wrong, for no gain.
-  `Pin::at` instead validates the hash as 40 lowercase hex characters at
-  construction (which is exactly what the engine accepts — it rejects
-  even a shortened prefix with `ref not found`), so `sql()` is infallible
-  and the interpolated value cannot be anything else.
-- **`AssertSqlSafe` is asserted once, inside `Pin::sql`**, rather than at
-  48 callsites with 48 audit comments. That is the one place the claim
-  can actually be justified: static template, table name checked to be a
-  plain identifier, and a hash we minted and validated.
+The sweep is therefore still ~50 sites, but each is a one-token rename
+in a string literal with no signature change. Note what it is *not*: an
+earlier draft had queries call `pin.sql("… FROM {users}")`, which would
+have meant threading a `&Pin` down to every function that runs a query
+across ten crates. The views hold the pin on the connection instead, so
+query text stays `&'static str` and the pin is known only to the code
+that opens the store.
 
-`Pin` also **cannot hold `HEAD`** — only a full hash. That makes the
+Four properties, all measured (`pin.rs`'s `view_tests` guard the first
+three, and each was checked against a deliberate break):
+
+- **A missing view fails loudly** rather than reading the working set —
+  `a_missing_pinned_view_fails_loudly`.
+- **Pinned reads ignore a dirty working set**, including across a join
+  between two pinned views —
+  `pinned_views_read_the_commit_not_the_working_set`.
+- **The views are connection-scoped.** Installing them once covers every
+  later query on that pool, and a second connection to the same file
+  does not inherit them (it gets `no such table`, not a silent
+  working-set read). Our pools are already size 1 with recycling
+  disabled — `doltlite_raw`'s `open_disables_connection_recycling`,
+  which exists because doltlite's own session state is per-connection —
+  so this reuses an invariant the tree already guards rather than adding
+  one.
+- **Creating them writes nothing**: the file is byte-identical
+  afterwards, no commit, no branch.
+
+Two details that only showed up in the building:
+
+- **A table with no `dolt_at_` module** — one created after the last
+  commit — gets a view of `SELECT * FROM main.<t> WHERE 0`. Right
+  columns, no rows, which is the honest answer: there is no committed
+  state, and the uncommitted rows are not ours to read.
+- **The hash is interpolated, not bound.** `Pin::at` validates it as 40
+  lowercase hex at construction — exactly what the engine accepts, since
+  it rejects even a shortened prefix with `ref not found` — so the
+  interpolated value cannot be anything else, and the `AssertSqlSafe` is
+  asserted in one place instead of at every callsite.
+
+`Pin` **cannot hold `HEAD`** — only a full hash. That makes the
 `to_ref = 'HEAD'` race below unrepresentable rather than merely
 discouraged, which is most of what the type is for.
 
@@ -270,8 +306,8 @@ discouraged, which is most of what the type is for.
 **ratchet with a baseline** rather than a hard zero — which is what lets
 it land before the sweep instead of after. It fails in both directions:
 a new unpinned read added, or an existing one fixed without moving the
-baseline down. A swept site is invisible to it, because `{table}` does
-not match the detector.
+baseline down. A converted site is invisible to it, because
+`pinned_users` is on the allowed-prefix list next to `dolt_`.
 
 ## The protocol
 
@@ -387,8 +423,8 @@ already asks `scan_buckets` for the changed set, and already gets
 should use. Today it is only used to stamp the cursor.
 
 So the change per consumer is: thread `new_head` into the content reads
-through the `{table}` helper, and advance the cursor to the *same* hash
-it read at. Cold start (no pin, or a store with no commits) keeps
+by installing the pinned views at that hash, and advance the cursor to
+the *same* hash it read at. Cold start (no pin, or a store with no commits) keeps
 today's behavior.
 
 The re-pinning discipline the design doc worries about — a long-lived
@@ -468,12 +504,13 @@ Each of these is a reviewable PR that leaves the tree green.
 
 1. ~~**The lint and the helper.**~~ **Done.**
    [`etl/src/pin.rs`](../../datalib/backend/etl/src/pin.rs) (`Pin`, the
-   `{table}` template, the cold-start fallback) and check 4 in
-   `scripts/lint_repo.py`, holding a baseline of 48. No behavior change:
-   nothing constructs a pin yet, so every expansion is still the bare
-   table. Carries the end-to-end test that a pinned read through sqlx
-   ignores a dirty working set — the assertion the rest of this plan
-   rests on.
+   `install_views`, the `pinned_<table>` naming, the empty view for a
+   table absent at the pin) and check 4 in `scripts/lint_repo.py`,
+   holding a baseline of 48. No behavior change: nothing calls
+   `install_views` yet. Carries the tests that a pinned view ignores a
+   dirty working set, that a missing view fails loudly, and that the
+   views are connection-scoped — the three assertions the rest of this
+   plan rests on.
 2. **The sweep.** 3 sites in `indexed_markdown.rs` first, then the 48
    provider sites + 2 in `blob_cas.rs`, all still `Pin::Unpinned`. Still no behavior change — this is the patch to review carefully
    and the one that is boring on purpose. Splitting it in two along the
