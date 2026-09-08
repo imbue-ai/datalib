@@ -126,6 +126,7 @@ rust_test(
     ],
     deps = [
         ":datalib_etl_notion",
+        "//datalib/backend/etl:datalib_etl",
         "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",

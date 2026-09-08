@@ -123,7 +123,23 @@ pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
         // No `dolt_hashof` at all is a build without the extensions, which
         // reads the same as a store with nothing committed: no pin.
         .unwrap_or(None);
+    if commit.is_none() {
+        // Every caller turns this into "nothing to read", and then reports a
+        // completed pass over zero rows -- indistinguishable from a source
+        // that really is empty. This line is the only place the difference
+        // survives.
+        tracing::warn!(
+            store = %store_filename(pool),
+            "no commit to pin: reading this store as empty, which is not the \
+             same as it being empty",
+        );
+    }
     Pin::from_scan(commit.as_deref())
+}
+
+/// The file a pool is against, for a log line.
+fn store_filename(pool: &sqlx::SqlitePool) -> String {
+    pool.connect_options().get_filename().display().to_string()
 }
 
 /// Create one `pinned_<table>` view per table on this connection, and return
@@ -140,6 +156,7 @@ pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
 /// and building views over the bare tables would answer that by handing back
 /// the working set, which is the failure this module exists to prevent.
 pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> {
+    warn_if_dirty(pool).await;
     // `sqlite_*` are the engine's own bookkeeping tables; SQLite refuses to
     // create a view over some of them, and a reader has no business in them.
     let names: Vec<String> = sqlx::query_scalar(
@@ -172,6 +189,36 @@ pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> 
         create_view(pool, t, &body).await?;
     }
     Ok(tables.len())
+}
+
+/// `None` from a build with no dolt extensions, where there is no
+/// `dolt_status` to ask.
+async fn dirty_table_count(pool: &sqlx::SqlitePool) -> Option<i64> {
+    sqlx::query_scalar("SELECT count(*) FROM dolt_status")
+        .fetch_one(pool)
+        .await
+        .ok()
+}
+
+/// The reader's half of what `doltlite_raw`'s rescue commit does for a writer.
+///
+/// A writer seals a dirty tree on the way in. A reader must not write to a
+/// store it does not own, so all it can do is say what it is about to miss:
+/// rows nobody committed are invisible to every pinned read below, and they
+/// read back exactly like a source that holds nothing. That ambiguity is the
+/// whole reason this line exists — nothing downstream can recover it.
+async fn warn_if_dirty(pool: &sqlx::SqlitePool) {
+    let Some(dirty) = dirty_table_count(pool).await else {
+        return;
+    };
+    if dirty > 0 {
+        tracing::warn!(
+            store = %store_filename(pool),
+            dirty_tables = dirty,
+            "reading a store with uncommitted changes: whoever wrote them never \
+             sealed, and a pinned read cannot tell those rows from an empty source",
+        );
+    }
 }
 
 async fn create_view(pool: &sqlx::SqlitePool, table: &str, body: &str) -> Result<()> {
@@ -345,6 +392,59 @@ mod view_tests {
             0,
             "a table that did not exist at the pin reads empty, not dirty"
         );
+    }
+
+    /// The one thing a reader can say about the store this whole file is
+    /// careful not to read: it is dirty, so somebody wrote rows and never
+    /// sealed them. A pinned read cannot tell those rows from a source that
+    /// holds nothing, which is how three live tests came to download a page
+    /// and then assert on zero rows.
+    #[tokio::test]
+    async fn a_writer_that_never_sealed_leaves_the_store_dirty() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(
+            &dir.path().join("unsealed.doltlite_db"),
+            &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY)"],
+        )
+        .await
+        .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+        assert_eq!(
+            dirty_table_count(&pool).await,
+            Some(0),
+            "a freshly opened store is sealed by the open itself"
+        );
+
+        sqlx::query("INSERT INTO entities VALUES ('never-sealed')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            dirty_table_count(&pool).await,
+            Some(1),
+            "a row nobody committed has to be visible as dirtiness, or the \
+             reader has nothing at all to warn about"
+        );
+
+        // And the read really is blind to it: HEAD is still the schema
+        // commit, which has no rows.
+        let pin = head(&pool)
+            .await
+            .unwrap()
+            .expect("the open commits a schema");
+        install_views(&pool, &pin).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_entities")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "the pinned read sees an empty store, not the row");
+
+        crate::doltlite_raw::commit_run(&pool, "seal")
+            .await
+            .unwrap();
+        assert_eq!(dirty_table_count(&pool).await, Some(0), "sealing cleans it");
     }
 
     /// The guarantee every pinned render now rests on, stated once against a

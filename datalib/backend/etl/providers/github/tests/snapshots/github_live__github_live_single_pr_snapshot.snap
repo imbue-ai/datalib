@@ -1,20 +1,19 @@
 ---
-source: etl/providers/github/tests/github_live.rs
-assertion_line: 97
+source: datalib/backend/etl/providers/github/tests/github_live.rs
 expression: view
 ---
 {
-  "comment_count": 51,
+  "comment_count": 55,
   "has_html_url": true,
   "has_title": true,
   "pr_number": 1650,
   "rendered_md_exists": true,
   "repo": "imbue-ai/mngr",
+  "rows_emitted": true,
   "sections_present": [
     "Review",
     "General",
     "Inline"
   ],
-  "rows_emitted": true,
   "state_known": true
 }
