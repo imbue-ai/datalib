@@ -32,6 +32,17 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      remote_execution:
+        description: >
+          Run the test job on BuildBuddy remote execution instead of on the
+          runner. A trial switch, not the merge gate: the gate stays local
+          until a dispatch with this on has gone green and the BuildBuddy
+          usage graph shows what a month of it costs in cache transfer.
+          Requires ghcr.io/imbue-ai/datalib_devcontainer to be a PUBLIC
+          package — the executors pull it anonymously.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -285,7 +296,19 @@ jobs:
           # what aimed the genrule and the e2e materializer at the
           # image's cache, GitHub having forced HOME=/github/home for
           # container steps. Nothing reads that variable now.
-          bazel test -c opt --config=release --config=ci --nostamp --jobs=16 \
+          # Remote execution is opt-in per dispatch (see the workflow
+          # inputs). `inputs.remote_execution` is empty on push and
+          # pull_request, so those take the local branch.
+          #
+          # `--jobs` is set by `--config=remote` (80, the free tier's
+          # core ceiling). A command-line `--jobs` beats an rc file, so
+          # the local branch is the only one that may pass it.
+          if [[ "${{ inputs.remote_execution }}" == "true" ]]; then
+              mode=(--config=remote)
+          else
+              mode=(--jobs=16)
+          fi
+          bazel test -c opt --config=release --config=ci --nostamp "${mode[@]}" \
             --build_metadata=ROLE=CI \
             --action_env=LIBCLANG_PATH="${libdir}" \
             --host_action_env=LIBCLANG_PATH="${libdir}" \
