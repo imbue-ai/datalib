@@ -42,10 +42,14 @@ sh_test(
 # from a host `.venv` populated by `uv run` at test time. That is the
 # whole point: this target sandboxes, needs no network and no host
 # `$HOME`, and remote-caches. See tools/lint_python.py.
+# `no-remote-exec`: ruff's EXE002 reads a file's mode bit, and a remote
+# worker materializes every CAS input executable — so it fires on files
+# that are 100644 in git. Cache still applies; only execution is pinned.
 py_test(
     name = "ruff_test",
     size = "small",
     srcs = ["lint_python.py"],
+    tags = ["no-remote-exec"],
     args = [
         "$(rootpath @py_pip//ruff:whl)",
         "$(rootpath //:pyproject.toml)",
