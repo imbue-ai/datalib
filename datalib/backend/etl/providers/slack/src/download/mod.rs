@@ -369,11 +369,32 @@ const K_BLOB_CAP: &str = "blob_size_limit_bytes";
 /// The subset of [`FetchOptions`] that decides *which data lands on
 /// disk*, recorded after a successful run so the next one can spot a
 /// widening the per-channel resume cursor would otherwise swallow.
-fn scope_config_blob(opts: &FetchOptions) -> Value {
+///
+/// Split out of the options struct so the comparison can be exercised
+/// without a live store handle, and so a knob that must *not* reach the
+/// record cannot reach it by accident.
+#[derive(Debug, Clone)]
+struct ScopeInputs {
+    since: String,
+    media: bool,
+    blob_size_limit_bytes: Option<u64>,
+}
+
+impl FetchOptions {
+    fn scope_inputs(&self) -> ScopeInputs {
+        ScopeInputs {
+            since: self.since.clone(),
+            media: self.media,
+            blob_size_limit_bytes: self.blob_size_limit_bytes,
+        }
+    }
+}
+
+fn scope_config_blob(inputs: &ScopeInputs) -> Value {
     json!({
-        K_SINCE: opts.since,
-        K_MEDIA: opts.media,
-        K_BLOB_CAP: opts.blob_size_limit_bytes,
+        K_SINCE: inputs.since,
+        K_MEDIA: inputs.media,
+        K_BLOB_CAP: inputs.blob_size_limit_bytes,
     })
 }
 
@@ -414,7 +435,7 @@ impl Adjustments {
         run_ok && channel_failures == 0
     }
 
-    fn plan(prev: Option<&Value>, opts: &FetchOptions) -> Self {
+    fn plan(prev: Option<&Value>, inputs: &ScopeInputs) -> Self {
         let mut out = Self::default();
         let Some(prev) = prev else {
             return out;
@@ -423,14 +444,14 @@ impl Adjustments {
         if let Some(stored) = prev.get(K_SINCE).and_then(Value::as_str) {
             match (
                 parse_iso_or_utc_date(stored),
-                parse_iso_or_utc_date(&opts.since),
+                parse_iso_or_utc_date(&inputs.since),
             ) {
                 (Ok(before), Ok(now)) if now < before => {
                     out.backfill_below_oldest = true;
                     info!(
                         event = "slack_since_widened",
                         from = stored,
-                        to = %opts.since,
+                        to = %inputs.since,
                         "backfilling below each channel's oldest stored message",
                     );
                 }
@@ -444,7 +465,7 @@ impl Adjustments {
             }
         }
 
-        if scope_config::turned_on(Some(prev), K_MEDIA, opts.media) {
+        if scope_config::turned_on(Some(prev), K_MEDIA, inputs.media) {
             out.force_full_walk = true;
             info!(
                 event = "slack_media_turned_on",
@@ -457,13 +478,13 @@ impl Adjustments {
         // blobs are off. Re-walking every channel (and re-paginating
         // every mirrored thread) against a rate-limited API to download
         // exactly zero bytes is pure cost.
-        if opts.media
-            && scope_config::limit_relaxed(Some(prev), K_BLOB_CAP, opts.blob_size_limit_bytes)
+        if inputs.media
+            && scope_config::limit_relaxed(Some(prev), K_BLOB_CAP, inputs.blob_size_limit_bytes)
         {
             out.force_full_walk = true;
             info!(
                 event = "slack_blob_limit_relaxed",
-                limit = ?opts.blob_size_limit_bytes,
+                limit = ?inputs.blob_size_limit_bytes,
                 "re-walking history so previously-oversize attachments get fetched",
             );
         }
@@ -997,7 +1018,11 @@ pub struct FetchOptions {
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
     pub db_path: PathBuf,
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     pub channels: Option<Vec<String>>,
     pub since: String,
     pub refresh_window_days: i64,
@@ -1015,11 +1040,13 @@ pub struct FetchOptions {
     pub control: datalib_etl::control::DownloadControl,
 }
 
-impl Default for FetchOptions {
-    fn default() -> Self {
+impl FetchOptions {
+    /// Every field defaulted except the store, which has none to give:
+    /// it is a live handle the caller opens and closes.
+    pub fn new(db: RawDb) -> Self {
         Self {
             db_path: PathBuf::new(),
-            db: None,
+            db,
             latchkey: LatchkeySettings::default(),
             channels: None,
             since: DEFAULT_SINCE.to_string(),
@@ -1046,19 +1073,8 @@ pub struct FetchSummary {
 
 #[instrument(skip_all, fields(db = %opts.db_path.display()))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db_path = db_path_for(&opts.db_path);
     let _ = datalib_etl::latchkey::ensure_curl_dispatch();
-    // `owned` is "we opened this pool, so we close it" — see the close
-    // below.
-    let (db, owned) = match opts.db.clone() {
-        Some(db) => (db, false),
-        None => (
-            RawDb::open(&db_path)
-                .await
-                .with_context(|| format!("open raw db {}", db_path.display()))?,
-            true,
-        ),
-    };
+    let db = opts.db.clone();
 
     if opts.control.reset_and_redownload {
         tracing::info!(event = "slack_reset_and_redownload");
@@ -1091,9 +1107,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Diff this run's scope-affecting params against the ones that
     // produced the store's current contents. `None` (fresh store, or one
     // written before `sync_scope_config` existed) plans no adjustments.
-    let scope_cfg = scope_config_blob(&opts);
+    let scope_cfg = scope_config_blob(&opts.scope_inputs());
     let prior_scope_cfg = scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
-    let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts);
+    let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts.scope_inputs());
 
     let t_scan = std::time::Instant::now();
     let channel_ts_bounds = db.ts_bounds_by_channel().await?;
@@ -1258,13 +1274,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await;
     run.finish(&result, &grand).await;
-    // Close the pool if — and only if — we opened it. A caller that
-    // handed us a `db` owns its lifetime (the processor shares one pool
-    // with its `RawStoreSession`, which closes it in `finish`); a
-    // caller that did not gets a pool nothing would ever close.
-    if owned {
-        db.pool().close().await;
-    }
     result?;
 
     info!(
@@ -1286,12 +1295,11 @@ fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
 mod tests {
     use super::*;
 
-    fn opts(since: &str, media: bool, blob_size_limit_bytes: Option<u64>) -> FetchOptions {
-        FetchOptions {
+    fn opts(since: &str, media: bool, blob_size_limit_bytes: Option<u64>) -> ScopeInputs {
+        ScopeInputs {
             since: since.to_string(),
             media,
             blob_size_limit_bytes,
-            ..Default::default()
         }
     }
 
@@ -1462,16 +1470,10 @@ mod tests {
 
     #[test]
     fn blob_records_only_scope_affecting_params() {
-        let o = FetchOptions {
-            since: "2024-01-01".into(),
-            channels: Some(vec!["general".into()]),
-            refresh_window_days: 30,
-            members_only: false,
-            dms: true,
-            dm_users: Some(vec!["picard".into()]),
-            ..Default::default()
-        };
-        let blob = scope_config_blob(&o);
+        // Everything the blob must ignore — channels, refresh window,
+        // members_only, the DM knobs — is absent from `ScopeInputs` by
+        // construction, so this asserts the split as well as the blob.
+        let blob = scope_config_blob(&opts("2024-01-01", true, None));
         let obj = blob.as_object().expect("blob is an object");
         // A newly listed channel cold-starts on its own, and the refresh
         // window is re-applied every run — recording either would only

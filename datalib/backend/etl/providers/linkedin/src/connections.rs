@@ -1,6 +1,7 @@
 //! Render LinkedIn `connections` as first-class contacts through the
 //! shared [`datalib_etl_contact_common`] renderer.
 
+use datalib_etl::processor::RenderPass;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -39,25 +40,43 @@ pub fn render_connections(
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
-) -> Result<()> {
+) -> Result<RenderPass> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(());
+        return Ok(RenderPass::Skipped);
     }
-    let (payloads, photos) = tokio::task::block_in_place(|| {
+    let Some((payloads, photos)) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open(&db_path).await?;
+            let db = RawDb::open_reader(&db_path).await?;
+            // Read at a commit: this store belongs to the download step, and
+            // nothing committed means nothing to render from.
+            let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+                db.close().await;
+                // `None` all the way out, not an empty value: an empty load is
+                // indistinguishable from a source with nothing in it, and the
+                // caller sweeps every document this pass did not name.
+                return Ok(None);
+            };
+            datalib_etl::pin::install_views(db.pool(), &pin).await?;
             // A user who excluded connections has no table; treat a load
             // error as "absent" rather than failing the whole render.
-            let payloads = db.load_payloads("connections").await.unwrap_or_default();
+            let payloads = db
+                .load_payloads(datalib_etl::pin::Reads::At(&pin), "connections")
+                .await
+                .unwrap_or_default();
             // Photos, if any were fetched, keyed by connection_uuid.
             let photos = load_photo_blobs(&db, &db_path).await.unwrap_or_default();
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             db.close().await;
-            Ok::<_, anyhow::Error>((payloads, photos))
+            Ok::<_, anyhow::Error>(Some((payloads, photos)))
         })
-    })?;
+    })?
+    else {
+        // Nothing committed to read: this pass did not walk, so it must not
+        // reach the retain sweep.
+        return Ok(RenderPass::Skipped);
+    };
 
     let contacts: Vec<NormalizedContact> = payloads
         .iter()
@@ -90,7 +109,7 @@ pub fn render_connections(
         on_doc_complete,
     )?;
     seen.extend(s.documents);
-    Ok(())
+    Ok(RenderPass::Walked)
 }
 
 fn to_contact(p: &Value) -> NormalizedContact {

@@ -21,15 +21,20 @@ async fn claude_live_single_conv_snapshot() {
         .keep();
     eprintln!("[test] downloading to {}", tmp.display());
 
+    let db = claude::RawDb::open(&claude::db_path_for(&tmp))
+        .await
+        .unwrap();
     let opts = claude::FetchOptions {
         db_path: tmp.clone(),
         export_dir: None,
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuids: vec![TARGET_UUID.to_string()],
-        ..Default::default()
+        ..claude::FetchOptions::new(db.clone())
     };
-    claude::fetch(opts).await.expect("claude fetch failed");
+    let r = claude::fetch(opts).await;
+    db.close().await;
+    r.expect("claude fetch failed");
 
     let raw = block_on_load_all(&db_path_for(&tmp)).expect("load db");
     let conv = raw

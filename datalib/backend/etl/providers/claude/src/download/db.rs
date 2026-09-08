@@ -34,6 +34,13 @@ impl RawDb {
         Ok(Self { pool, cas })
     }
 
+    /// Wait for the connections to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+        self.cas.close().await;
+    }
+
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
@@ -105,15 +112,15 @@ impl RawDb {
     /// The `orgs` rows we already have, as raw payloads — what a warm
     /// [`Self::sweep_age`] hit serves instead of re-listing upstream.
     pub async fn load_orgs(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, "orgs").await
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "orgs").await
     }
 
     pub async fn load_users(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, "users").await
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "users").await
     }
 
     pub async fn first_user_uuid(&self) -> Result<Option<String>> {
-        first_user_uuid_from(&self.pool).await
+        first_user_uuid_from(&self.pool, datalib_etl::pin::Reads::Own).await
     }
 
     // ── conversations: listing skip-check ──────────────────────────
@@ -177,11 +184,11 @@ impl RawDb {
     }
 
     pub async fn load_projects(&self) -> Result<Vec<LoadedProject>> {
-        load_projects_from(&self.pool).await
+        load_projects_from(&self.pool, datalib_etl::pin::Reads::Own).await
     }
 
     pub async fn load_project_docs(&self) -> Result<Vec<LoadedProjectDoc>> {
-        load_project_docs_from(&self.pool).await
+        load_project_docs_from(&self.pool, datalib_etl::pin::Reads::Own).await
     }
 
     /// Delete this org's conversations that a **complete** listing of that
@@ -266,7 +273,7 @@ impl RawDb {
     }
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
-        load_conversations_from(&self.pool).await
+        load_conversations_from(&self.pool, datalib_etl::pin::Reads::Own).await
     }
 
     /// Snapshot `(file_uuid → blake3)` for every attachment whose
@@ -297,11 +304,16 @@ pub struct LoadedProjectDoc {
     pub payload: Value,
 }
 
-pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
-    let rows = sqlx::query(
-        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations \
+pub async fn load_conversations_from(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+) -> Result<Vec<LoadedConversation>> {
+    // Audited: as `first_user_uuid_from`.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM {} \
           WHERE payload IS NOT NULL ORDER BY id",
-    )
+        reads.table("conversations")
+    )))
     .fetch_all(pool)
     .await
     .context("load_conversations")?;
@@ -322,19 +334,32 @@ pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConv
     Ok(out)
 }
 
-pub async fn first_user_uuid_from(pool: &SqlitePool) -> Result<Option<String>> {
-    let row = sqlx::query("SELECT id FROM users ORDER BY id LIMIT 1")
-        .fetch_optional(pool)
-        .await
-        .context("first_user_uuid")?;
+pub async fn first_user_uuid_from(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+) -> Result<Option<String>> {
+    // Audited: the only interpolation is a table name the caller chose --
+    // a literal, or that literal behind `pinned_`.
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT id FROM {} ORDER BY id LIMIT 1",
+        reads.table("users")
+    )))
+    .fetch_optional(pool)
+    .await
+    .context("first_user_uuid")?;
     Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
 }
 
-pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>> {
-    let rows = sqlx::query(
-        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM projects \
+pub async fn load_projects_from(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+) -> Result<Vec<LoadedProject>> {
+    // Audited: as `first_user_uuid_from`.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM {} \
           WHERE payload IS NOT NULL ORDER BY id",
-    )
+        reads.table("projects")
+    )))
     .fetch_all(pool)
     .await
     .context("load_projects")?;
@@ -353,11 +378,16 @@ pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>>
     Ok(out)
 }
 
-pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProjectDoc>> {
-    let rows = sqlx::query(
-        "SELECT id, project_uuid, json(payload) AS payload FROM project_docs \
+pub async fn load_project_docs_from(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+) -> Result<Vec<LoadedProjectDoc>> {
+    // Audited: as `first_user_uuid_from`.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT id, project_uuid, json(payload) AS payload FROM {} \
           WHERE payload IS NOT NULL AND project_uuid IS NOT NULL ORDER BY project_uuid, id",
-    )
+        reads.table("project_docs")
+    )))
     .fetch_all(pool)
     .await
     .context("load_project_docs")?;

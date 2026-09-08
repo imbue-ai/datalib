@@ -22,7 +22,7 @@ const EML_PROJECTION_SQL: &str = "
     SELECT DISTINCT blob_id AS ref_id, blake3,
            'message/rfc822' AS content_type,
            NULL AS upstream_name
-      FROM email_blobs
+      FROM pinned_email_blobs email_blobs
      WHERE blob_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 /// Result of the dolt_diff scan. Travels alongside the parsed bag so
@@ -105,12 +105,24 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         None
     };
 
-    let accounts = load_payloads(&pool, "accounts").await?;
-    let mailboxes = load_payloads(&pool, "mailboxes").await?;
-    let threads = load_payloads(&pool, "threads").await?;
+    // Pin before anything reads this store. The diff below and the rows
+    // behind it have to name one commit, and the `pinned_<table>` views must
+    // already exist when the diff runs — its bucket query joins live tables.
+    // No commit at all means nothing has been committed here to render, which
+    // is emptiness, not a reason to read the working set.
+    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        return Ok(ParsedEmail::default());
+    };
+    datalib_etl::pin::install_views(&pool, &pin)
+        .await
+        .context("pin the email raw store for render")?;
+
+    let accounts = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "accounts").await?;
+    let mailboxes = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "mailboxes").await?;
+    let threads = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "threads").await?;
 
     // ── Phase 1: which threads changed since last_render_hash? ────
-    let scan = scan_diff(&pool, last_render_hash).await?;
+    let scan = scan_diff(&pool, last_render_hash, &pin).await?;
 
     let (to_load, docs_skipped) = match &scan.changed_threads {
         None => {
@@ -172,6 +184,7 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
             let gone: std::collections::HashSet<String> =
                 datalib_etl::doltlite_raw::buckets_without_rows(
                     &pool,
+                    datalib_etl::pin::Reads::At(&pin),
                     &ids,
                     &[("threads", "id"), ("emails", "thread_id")],
                 )
@@ -290,10 +303,15 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
 /// claude / signal). Bucket key shape is `"<account_id>|<thread_id>"`
 /// so it fits the helper's `HashSet<String>` API; we split it back
 /// into a `(String, String)` pair locally for the load step.
-async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
+async fn scan_diff(
+    pool: &SqlitePool,
+    last_render_hash: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
+) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
         last_render_hash,
+        pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             global_fanout_tables: &[],
             bucket_query: "
@@ -308,18 +326,18 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
                     UNION
                     SELECT emails.account_id, emails.thread_id
                       FROM dolt_diff_email_mailboxes d
-                      JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
+                      JOIN pinned_emails emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
                      WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                     UNION
                     SELECT emails.account_id, emails.thread_id
                       FROM dolt_diff_email_keywords d
-                      JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
+                      JOIN pinned_emails emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
                      WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                     UNION
                     SELECT t.account_id,
                            coalesce(dt.to_id, dt.from_id) AS thread_id
                       FROM dolt_diff_threads dt
-                      JOIN threads t ON t.id = coalesce(dt.to_id, dt.from_id)
+                      JOIN pinned_threads t ON t.id = coalesce(dt.to_id, dt.from_id)
                      WHERE dt.from_ref = ?1 AND dt.to_ref = ?2 AND dt.diff_type != 'unchanged'
                 )
                 WHERE account_id IS NOT NULL AND thread_id IS NOT NULL
@@ -343,7 +361,7 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
 }
 
 async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, String)>> {
-    let rows = sqlx::query("SELECT DISTINCT account_id, thread_id FROM emails")
+    let rows = sqlx::query("SELECT DISTINCT account_id, thread_id FROM pinned_emails")
         .fetch_all(pool)
         .await
         .context("load all (account_id, thread_id) pairs")?;
@@ -358,7 +376,12 @@ async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, Stri
     Ok(out)
 }
 
-async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
+async fn load_payloads(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+    table: &str,
+) -> Result<Vec<Value>> {
+    let table = reads.table(table);
     let sql = format!("SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
     // Audited: `table` is a literal at both callsites.
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
@@ -405,7 +428,7 @@ async fn load_buckets(
     let sql = format!(
         "SELECT id, account_id, thread_id, blob_id, message_id, in_reply_to, \"references\",
                 received_at, sent_at, size, subject, from_json, to_json, cc_json, has_attachment
-           FROM emails
+           FROM pinned_emails emails
           WHERE thread_id IN ({placeholders})
           ORDER BY thread_id, received_at, id"
     );
@@ -469,7 +492,7 @@ async fn load_buckets(
 
     // mailboxes
     let sql = format!(
-        "SELECT email_id, mailbox_id FROM email_mailboxes WHERE email_id IN ({placeholders})"
+        "SELECT email_id, mailbox_id FROM pinned_email_mailboxes email_mailboxes WHERE email_id IN ({placeholders})"
     );
     let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for e in &email_ids_in_buckets {
@@ -489,8 +512,9 @@ async fn load_buckets(
     }
 
     // keywords
-    let sql =
-        format!("SELECT email_id, keyword FROM email_keywords WHERE email_id IN ({placeholders})");
+    let sql = format!(
+        "SELECT email_id, keyword FROM pinned_email_keywords email_keywords WHERE email_id IN ({placeholders})"
+    );
     let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for e in &email_ids_in_buckets {
         q = q.bind(e);

@@ -119,14 +119,30 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         .await
         .with_context(|| format!("open yolink doltlite for render {}", db_path.display()))?;
 
+    // The HEAD lookup this already did *is* the pin, so it does both jobs
+    // now: it decides whether the cursor is current, and it is the commit
+    // every read below is taken at. No commit means nothing has been
+    // committed here to render, which is emptiness rather than a reason to
+    // read whatever is sitting in the working set.
     let started = std::time::Instant::now();
-    let head: Option<String> =
-        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
+    let pin = datalib_etl::pin::head(&pool).await?;
     let scan_elapsed = Some(started.elapsed());
+    let Some(pin) = pin else {
+        return Ok(Parsed::Fresh(Box::new(ParsedYolink {
+            head: None,
+            scan_elapsed,
+            devices: Vec::new(),
+            series: Vec::new(),
+            commits: Vec::new(),
+            scope_config: Vec::new(),
+            reading_errors: 0,
+            reading_count: 0,
+        })));
+    };
+    datalib_etl::pin::install_views(&pool, &pin)
+        .await
+        .context("pin the yolink raw store for render")?;
+    let head = Some(pin.commit().to_string());
 
     if let (Some(head), Some(last)) = (head.as_deref(), last_render_hash) {
         if head == last {
@@ -141,15 +157,16 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
     let commits = load_commits(&pool).await;
     let scope_config = load_scope_config(&pool).await;
     let reading_errors: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM yolink_readings_bookkeeping WHERE last_error IS NOT NULL",
+        "SELECT COUNT(*) FROM pinned_yolink_readings_bookkeeping yolink_readings_bookkeeping WHERE last_error IS NOT NULL",
     )
     .fetch_one(&pool)
     .await
     .unwrap_or(0);
-    let reading_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM yolink_readings")
-        .fetch_one(&pool)
-        .await
-        .context("count yolink_readings")?;
+    let reading_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pinned_yolink_readings yolink_readings")
+            .fetch_one(&pool)
+            .await
+            .context("count yolink_readings")?;
 
     Ok(Parsed::Fresh(Box::new(ParsedYolink {
         head,
@@ -166,7 +183,7 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
 async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
     let rows = sqlx::query(
         "SELECT id, kind, start_ms, last_ts_ms, family_device_id \
-           FROM yolink_devices ORDER BY id",
+           FROM pinned_yolink_devices yolink_devices ORDER BY id",
     )
     .fetch_all(pool)
     .await
@@ -191,7 +208,7 @@ async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
 async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
     let rows = sqlx::query(
         "SELECT device_name, metric, ts_ms, value \
-           FROM yolink_readings ORDER BY device_name, metric, ts_ms",
+           FROM pinned_yolink_readings yolink_readings ORDER BY device_name, metric, ts_ms",
     )
     .fetch_all(pool)
     .await
@@ -242,7 +259,7 @@ async fn load_commits(pool: &SqlitePool) -> Vec<CommitRow> {
 
 async fn load_scope_config(pool: &SqlitePool) -> Vec<ScopeConfigRow> {
     let Ok(rows) =
-        sqlx::query("SELECT scope, config, updated_at FROM sync_scope_config ORDER BY scope")
+        sqlx::query("SELECT scope, config, updated_at FROM pinned_sync_scope_config sync_scope_config ORDER BY scope")
             .fetch_all(pool)
             .await
     else {

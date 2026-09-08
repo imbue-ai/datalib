@@ -14,9 +14,17 @@ const rowLocator = (page: Page, rowIndex: number): Locator =>
 
 // Ask the grid to put `uuid`'s row in the middle of the viewport, and
 // report the index it lives at (null if no node carries that uuid).
-const nudgeRowIntoView = (page: Page, uuid: string): Promise<number | null> =>
+//
+// `colId` nudges the horizontal axis too. The grid virtualizes both, so
+// a caller that wants to read one particular cell has to name its
+// column — otherwise the row is there and the cell it came for is not.
+const nudgeRowIntoView = (
+  page: Page,
+  uuid: string,
+  colId?: string,
+): Promise<number | null> =>
   page.evaluate(
-    ({ uuid }) => {
+    ({ uuid, colId }) => {
       type Node = {
         rowIndex: number | null;
         data?: { uuid: string };
@@ -25,6 +33,7 @@ const nudgeRowIntoView = (page: Page, uuid: string): Promise<number | null> =>
         __fwGridApi?: {
           forEachNode: (cb: (n: Node) => void) => void;
           ensureNodeVisible: (n: Node, pos: "middle") => void;
+          ensureColumnVisible: (col: string) => void;
         };
       };
       const api = w.__fwGridApi!;
@@ -35,9 +44,10 @@ const nudgeRowIntoView = (page: Page, uuid: string): Promise<number | null> =>
           found = node.rowIndex;
         }
       });
+      if (colId) api.ensureColumnVisible(colId);
       return found;
     },
-    { uuid },
+    { uuid, colId },
   );
 
 // Scroll a (possibly virtualized-away) row into view via the grid api
@@ -57,13 +67,17 @@ const nudgeRowIntoView = (page: Page, uuid: string): Promise<number | null> =>
 // converges and the click fails at its 30s default having never
 // re-asked. So the nudge is inside the poll, and gets repeated until
 // the row is there.
-async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
-  const rowIndex = await nudgeRowIntoView(page, uuid);
+async function scrollRowIntoView(
+  page: Page,
+  uuid: string,
+  colId?: string,
+): Promise<number> {
+  const rowIndex = await nudgeRowIntoView(page, uuid, colId);
   expect(rowIndex, `node for uuid=${uuid} found in grid`).not.toBeNull();
   await expect
     .poll(
       async () => {
-        await nudgeRowIntoView(page, uuid);
+        await nudgeRowIntoView(page, uuid, colId);
         return rowLocator(page, rowIndex as number).count();
       },
       {
@@ -87,18 +101,21 @@ async function scrollRowIntoView(page: Page, uuid: string): Promise<number> {
 // whole 30s test budget, so the first click consumed it waiting for a
 // node that was already gone. Both halves are load-bearing; either one
 // alone leaves the race in place.
-async function actOnRowByUuid(
+export async function actOnRowByUuid<T>(
   page: Page,
   uuid: string,
-  act: (row: Locator) => Promise<void>,
-): Promise<void> {
+  act: (row: Locator) => Promise<T>,
+  colId?: string,
+): Promise<T> {
+  let out!: T;
   await expect(async () => {
-    const rowIndex = await scrollRowIntoView(page, uuid);
-    await act(rowLocator(page, rowIndex));
+    const rowIndex = await scrollRowIntoView(page, uuid, colId);
+    out = await act(rowLocator(page, rowIndex));
   }, `row uuid=${uuid} never took the action`).toPass({
     timeout: 15_000,
     intervals: [100, 250, 500],
   });
+  return out;
 }
 
 // Scroll a (possibly virtualized-away) row into view, then click it.

@@ -64,15 +64,18 @@ fn build_events(api: &Path, prs: &[(u64, &str)]) {
 async fn download(api: &Path, playback: &Path, out_db: &Path) {
     GithubSynth::new(api).synthesize(playback).unwrap();
     std::env::set_var(PLAYBACK_ENV, playback);
-    fetch(FetchOptions {
+    // The test owns the store: one connection for the download and the
+    // assertions both, because two is what breaks a doltlite file.
+    let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
+    let out = fetch(FetchOptions {
         db_path: out_db.to_path_buf(),
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: std::time::Duration::ZERO,
-        ..FetchOptions::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap();
+    .await;
+    out.unwrap();
 
     // Commit, the way the orchestrator's `RawStoreSession::finish` does
     // after a real download. `fetch` on its own leaves the rows in the
@@ -80,11 +83,9 @@ async fn download(api: &Path, playback: &Path, out_db: &Path) {
     // to stamp there is no render cursor, so every run cold-starts and
     // none of these tests would be exercising the diff.
     //
-    // `open` itself rescue-commits a dirty tree, so the explicit commit
-    // usually finds nothing left to do. Tolerated rather than asserted:
-    // which of the two lands the commit is an implementation detail, and
-    // the next line checks the outcome either way.
-    let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
+    // On the same handle: reopening here would be a second connection
+    // while this one is still alive, which is what makes a `dolt_commit`
+    // fail with "commit conflict".
     let _ = sqlx::query("SELECT dolt_commit('-Am', 'test: download')")
         .execute(db.pool())
         .await;

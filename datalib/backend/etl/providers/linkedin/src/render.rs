@@ -1,6 +1,7 @@
 //! Render LinkedIn's message-shaped feeds into markdown via the shared
 //! chat renderer.
 
+use datalib_etl::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -49,28 +50,48 @@ pub fn render(
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
-) -> Result<()> {
+) -> Result<RenderPass> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(());
+        return Ok(RenderPass::Skipped);
     }
 
     // One open for every table, not one per table: reopening a doltlite
     // store while the last connection is still closing is what makes a
     // later `dolt_commit` fail.
-    let by_table = tokio::task::block_in_place(|| {
+    let Some(by_table) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open_reader(&db_path).await?;
+            // Read at a commit: this store belongs to the download step, and
+            // nothing committed means nothing to render from.
+            let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+                db.close().await;
+                // `None` all the way out, not an empty value: an empty load is
+                // indistinguishable from a source with nothing in it, and the
+                // caller sweeps every document this pass did not name.
+                return Ok(None);
+            };
+            datalib_etl::pin::install_views(db.pool(), &pin).await?;
             let mut loaded = Vec::new();
             for table in message_tables() {
                 // A feed the user didn't export has no table; treat a
                 // load error as "absent" rather than failing the render.
-                loaded.push((table, db.load_payloads(table).await.unwrap_or_default()));
+                loaded.push((
+                    table,
+                    db.load_payloads(datalib_etl::pin::Reads::At(&pin), table)
+                        .await
+                        .unwrap_or_default(),
+                ));
             }
             db.close().await;
-            Ok::<_, anyhow::Error>(loaded)
+            Ok::<_, anyhow::Error>(Some(loaded))
         })
-    })?;
+    })?
+    else {
+        // Nothing committed to read: this pass did not walk, so it must not
+        // reach the retain sweep.
+        return Ok(RenderPass::Skipped);
+    };
 
     let mut chats: Vec<NormalizedChat> = Vec::new();
     for (table, payloads) in &by_table {
@@ -89,7 +110,7 @@ pub fn render(
         on_doc_complete,
     )?;
     seen.extend(s.documents);
-    Ok(())
+    Ok(RenderPass::Walked)
 }
 
 fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {

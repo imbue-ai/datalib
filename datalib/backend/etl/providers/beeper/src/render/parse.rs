@@ -129,12 +129,22 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
         .await
         .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?;
 
+    // This provider does no diff scan, so it samples HEAD itself. No commit
+    // means nothing has been committed here to render — emptiness, not a
+    // reason to read whatever is sitting in the working set.
+    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        return Ok(ParsedBeeper::default());
+    };
+    datalib_etl::pin::install_views(&pool, &pin)
+        .await
+        .context("pin the beeper raw store for render")?;
+
     // ── rooms ──────────────────────────────────────────────────────
     let mut rooms: HashMap<String, Room> = HashMap::new();
     let room_rows = sqlx::query(
         "SELECT id, source, network, native_room_id, external_room_id,
                 external_workspace_id, account_id, title, description, is_dm
-         FROM rooms",
+         FROM pinned_rooms rooms",
     )
     .fetch_all(&pool)
     .await
@@ -163,10 +173,11 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
     // native_user_id. Stored separately rather than joined into
     // the event SELECT so a single user appearing in many events
     // only round-trips once.
-    let user_rows = sqlx::query("SELECT id, native_user_id, display_name, full_name FROM users")
-        .fetch_all(&pool)
-        .await
-        .context("read users")?;
+    let user_rows =
+        sqlx::query("SELECT id, native_user_id, display_name, full_name FROM pinned_users users")
+            .fetch_all(&pool)
+            .await
+            .context("read users")?;
     let mut user_label: HashMap<String, String> = HashMap::new();
     for r in &user_rows {
         let id: String = r.try_get("id")?;
@@ -187,7 +198,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
     // other ported provider grabs that metadata at render time.
     let blob_rows = sqlx::query(
         "SELECT event_uuid, ref_id, blake3
-         FROM beeper_media_attachments",
+         FROM pinned_beeper_media_attachments beeper_media_attachments",
     )
     .fetch_all(&pool)
     .await
@@ -269,7 +280,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
                 MIN(timestamp_ms) AS first_ms,
                 MAX(timestamp_ms) AS last_ms,
                 COUNT(*) AS event_count
-         FROM events
+         FROM pinned_events events
          WHERE event_type != 'REACTION'
          GROUP BY room_uuid, period_key
          ORDER BY room_uuid, period_key"
@@ -298,7 +309,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
                 reply_to_native_event_id, edit_of_native_event_id,
                 reaction_emoji, reaction_target_native_event_id,
                 {period_expr} AS period_key
-         FROM events
+         FROM pinned_events events
          ORDER BY room_uuid, timestamp_ms"
     );
     let event_rows = sqlx::query(sqlx::AssertSqlSafe(events_sql))

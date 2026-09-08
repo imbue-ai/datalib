@@ -1087,6 +1087,7 @@ pub struct DiffScanSpec<'a> {
 /// Table and column names are interpolated; callers pass trusted identifiers.
 pub async fn buckets_without_rows(
     pool: &sqlx::SqlitePool,
+    reads: crate::pin::Reads<'_>,
     bucket_ids: &std::collections::HashSet<String>,
     id_columns: &[(&str, &str)],
 ) -> Result<Vec<String>> {
@@ -1097,6 +1098,7 @@ pub async fn buckets_without_rows(
     let ids: Vec<&String> = bucket_ids.iter().collect();
     for (table, column) in id_columns {
         for chunk in ids.chunks(crate::bulk::SQL_CHUNK) {
+            let table = reads.table(table);
             let mut sql = format!("SELECT DISTINCT {column} FROM {table} WHERE {column} IN (");
             crate::bulk::push_placeholder_list(&mut sql, chunk.len());
             sql.push(')');
@@ -1137,30 +1139,33 @@ pub async fn buckets_without_rows(
 /// Any failure short of "no last hash" falls back to cold start:
 /// render-everything is always safe, partial-render against a stale diff is
 /// not.
+/// Does this error mean the query named something the store does not have,
+/// rather than that the *cursor* named a commit it does not have?
+///
+/// The distinction decides whether a failed scan is a bug to surface or a
+/// stale cursor to cold-start past. Matching on the message is crude, but
+/// sqlx surfaces both as a bare `Error::Database` and the text is the only
+/// thing that separates them.
+fn is_missing_schema(e: &sqlx::Error) -> bool {
+    let msg = e.to_string();
+    msg.contains("no such table") || msg.contains("no such column")
+}
+
 pub async fn scan_buckets(
     pool: &sqlx::SqlitePool,
     last_render_hash: Option<&str>,
+    pin: &crate::pin::Pin,
     spec: &DiffScanSpec<'_>,
 ) -> Result<DiffScan> {
-    let new_head: Option<String> =
-        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+    // The caller pinned first and hands us the commit, rather than us sampling
+    // HEAD here. That ordering is load-bearing twice over: the diff and the
+    // content reads that follow it name one commit by construction, and the
+    // `pinned_<table>` views already exist by the time `bucket_query` runs —
+    // which it needs, because those queries join live tables against the diff.
+    let to_ref = pin.commit().to_string();
+    let new_head = Some(to_ref.clone());
 
     let Some(from_ref) = last_render_hash else {
-        return Ok(DiffScan {
-            changed_buckets: None,
-            new_head,
-            scan_elapsed: None,
-        });
-    };
-
-    // Scanning to the sampled hash rather than to `HEAD`, for the reason on
-    // `bucket_query`. With no hash to scan to there is no commit at all, and
-    // the cold start below is the only honest answer.
-    let Some(to_ref) = new_head.clone() else {
         return Ok(DiffScan {
             changed_buckets: None,
             new_head,
@@ -1199,15 +1204,35 @@ pub async fn scan_buckets(
         .fetch_all(pool)
         .await;
     let elapsed = started.elapsed();
+    // A failed scan used to cold-start unconditionally, logging at `info`
+    // through `tracing` — which the tests that would have caught it do not
+    // capture. That is the AGENTS.md hazard exactly: it *succeeded*,
+    // re-rendering everything and reaching the right answer the slow way, so
+    // a bucket query broken by a rename survived a whole review.
+    //
+    // But the two causes are not the same thing, and only one is a bug.
+    //
+    // A `from_ref` this store has never heard of — a cursor left by a reset,
+    // a rebuild, a store replaced wholesale — is a real condition, and
+    // re-reading everything is the correct answer to it.
+    //
+    // A query naming a table or column that does not exist is a bug in the
+    // query. Absorbing it means every render silently does the most expensive
+    // possible thing, forever, and nothing ever says why.
     let rows = match res {
         Ok(r) => r,
+        Err(e) if is_missing_schema(&e) => {
+            return Err(anyhow::Error::new(e).context(
+                "dolt_diff bucket scan names a table or column this store does \
+                 not have. That is a bug in the query, not a stale cursor: \
+                 cold-starting past it would re-render everything on every run \
+                 and never say why.",
+            ))
+        }
         Err(e) => {
-            // `dolt_diff_<table>` can fail to resolve on a brand-new working
-            // set, or without doltlite extensions. Cold-start rather than
-            // report "nothing changed" when we can't tell.
             tracing::info!(
                 error = %e,
-                "dolt_diff scan failed — falling back to cold-start (render everything)"
+                "dolt_diff scan could not use this cursor — cold-starting (render everything)"
             );
             return Ok(DiffScan {
                 changed_buckets: None,
@@ -1253,9 +1278,14 @@ pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
+pub async fn load_payloads(
+    pool: &SqlitePool,
+    reads: crate::pin::Reads<'_>,
+    table: &str,
+) -> Result<Vec<Value>> {
     // `json(payload)` so we get text back whether the column holds a JSONB
     // blob or a JSON text literal.
+    let table = reads.table(table);
     let sql = format!(
         "SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
     );
@@ -1276,7 +1306,12 @@ pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>>
     Ok(out)
 }
 
-pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec<(String, Value)>> {
+pub async fn load_payloads_with_id(
+    pool: &SqlitePool,
+    reads: crate::pin::Reads<'_>,
+    table: &str,
+) -> Result<Vec<(String, Value)>> {
+    let table = reads.table(table);
     let sql = format!(
         "SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
     );
@@ -1337,6 +1372,9 @@ pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &s
 // to fail.
 #[allow(clippy::disallowed_macros)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
@@ -1367,6 +1405,75 @@ mod tests {
         let owned = test_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         open(p, &slices).await.unwrap()
+    }
+
+    /// Two live connections to one store make each other's `dolt_commit`
+    /// fail — the reason every caller must hold exactly one handle.
+    ///
+    /// `dolt_commit` takes the store's lock without waiting, and reports
+    /// whoever else holds it as `commit conflict: another connection
+    /// committed to this branch` whether or not that peer committed
+    /// anything. Ordinary DML retries under a busy handler and so rides
+    /// out the overlap; only the commit surfaces it. That asymmetry is
+    /// why a second pool is a timing bug rather than an immediate one,
+    /// and why in the field it reads as a CI flake.
+    ///
+    /// Both sides commit in lockstep so the contention is forced rather
+    /// than hoped for. The round count is what makes a false pass
+    /// impossible in practice; if this ever fails, doltlite has started
+    /// waiting for the store lock, and the pool rules can be revisited.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_live_pools_on_one_store_break_each_others_commits() {
+        const ROUNDS: usize = 64;
+
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("entities.doltlite_db");
+        let first = open_test(&db).await;
+        if !has_dolt_extensions(&first).await {
+            eprintln!("[two-pool test] stock libsqlite3 — nothing to contend over");
+            first.close().await;
+            return;
+        }
+        let owned = test_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let second = open(&db, &slices).await.expect("second open");
+
+        let conflicts = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let mut writers = Vec::new();
+        for (tag, pool) in [("a", first.clone()), ("b", second.clone())] {
+            let conflicts = conflicts.clone();
+            let gate = gate.clone();
+            writers.push(tokio::spawn(async move {
+                for round in 0..ROUNDS {
+                    sqlx::query("INSERT OR REPLACE INTO widgets (id, name) VALUES (?, ?)")
+                        .bind(format!("{tag}-{round}"))
+                        .bind(tag)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                    gate.wait().await;
+                    if let Err(e) = commit_run(&pool, tag).await {
+                        let msg = format!("{e:#}");
+                        assert!(msg.contains("commit conflict"), "unexpected error: {msg}");
+                        conflicts.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }));
+        }
+        for w in writers {
+            w.await.unwrap();
+        }
+
+        second.close().await;
+        first.close().await;
+        assert!(
+            conflicts.load(Ordering::Relaxed) > 0,
+            "{ROUNDS} rounds of simultaneous commits from two pools on one \
+             store produced no conflict. Either doltlite now waits for the \
+             store lock instead of failing, or this test stopped contending; \
+             find out which before deleting it."
+        );
     }
 
     // ── Opening costs nothing ─────────────────────────────────────
@@ -2159,6 +2266,58 @@ mod tests {
 
     /// What the setting above defends against: a *different* connection to
     /// the same file does not inherit the active branch.
+    /// A bucket query naming a table that does not exist must fail, where a
+    /// cursor naming a commit that does not exist must cold-start. Both used
+    /// to cold-start, which is how a query broken by a table rename rendered
+    /// everything on every run and said so only through a `tracing` line no
+    /// test captured.
+    #[tokio::test]
+    async fn a_broken_bucket_query_fails_where_a_stale_cursor_cold_starts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = open(
+            &tmp.path().join("scan.doltlite_db"),
+            &["CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, bucket TEXT)"],
+        )
+        .await
+        .unwrap();
+        if !has_dolt_extensions(&pool).await {
+            return;
+        }
+        sqlx::query("INSERT INTO notes VALUES ('n1', 'b1')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let commit = commit_run(&pool, "one note").await.unwrap().unwrap();
+        let pin = crate::pin::Pin::at(&commit).unwrap();
+
+        let good = DiffScanSpec {
+            global_fanout_tables: &[],
+            bucket_query: "SELECT DISTINCT to_bucket FROM dolt_diff_notes                            WHERE from_ref = ?1 AND to_ref = ?2 AND to_bucket IS NOT NULL",
+        };
+        // A cursor this store never had: a reset, a rebuild, a replaced store.
+        let stale = "0000000000000000000000000000000000000000";
+        let scan = scan_buckets(&pool, Some(stale), &pin, &good)
+            .await
+            .expect("a stale cursor cold-starts rather than failing");
+        assert!(
+            scan.changed_buckets.is_none(),
+            "cold start means `None`, i.e. render everything"
+        );
+
+        let broken = DiffScanSpec {
+            global_fanout_tables: &[],
+            bucket_query: "SELECT DISTINCT to_bucket FROM dolt_diff_notes_renamed_away                            WHERE from_ref = ?1 AND to_ref = ?2",
+        };
+        let err = scan_buckets(&pool, Some(&commit), &pin, &broken)
+            .await
+            .expect_err("a query naming a table that is not there must fail");
+        assert!(
+            format!("{err:#}").contains("bug in the query"),
+            "the error should say it is a query bug, got: {err:#}"
+        );
+        pool.close().await;
+    }
+
     /// `open_reader` is read-only at the engine, not merely by convention: a
     /// write through it fails rather than landing in a file the caller does
     /// not own. The pinned views still install, because they live in the

@@ -113,15 +113,15 @@ impl RawDb {
     // ── loads (consumed by render) ───────────────────────────────
 
     pub async fn load_accounts(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, "accounts").await
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "accounts").await
     }
 
     pub async fn load_mailboxes(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, "mailboxes").await
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "mailboxes").await
     }
 
     pub async fn load_threads(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, "threads").await
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "threads").await
     }
 
     pub async fn thread_email_counts(&self) -> Result<HashMap<String, i64>> {

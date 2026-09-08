@@ -35,12 +35,16 @@ are relative to the repo root.
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
 - [`docs/dev/streaming_steps_plan.md`](docs/dev/streaming_steps_plan.md)
-  — *plan*, nothing built: how to build the above, measured against
-  the tree. Read it before touching how any consumer reads a store —
-  its §"The hazard" is the one to know, because the cursor scans are
-  already safe under a live writer and every *content* read is not.
-  It also inventories what already exists (more than the proposal
-  above implies) and overturns two of that proposal's conclusions.
+  — *plan*, partly built: how to build the above, measured against the
+  tree, with each step marked done or not. Read it before touching how
+  any consumer reads a store — its §"The hazard" is the one to know,
+  because the cursor scans are already safe under a live writer and
+  every *content* read is not. §"The sink contract" is the one to know
+  before writing anything that *deletes* on an empty read: a sink that
+  cannot tell "absent" from "empty" gets its whole source swept, which
+  has happened here twice. It also inventories what already exists
+  (more than the proposal above implies) and overturns two of that
+  proposal's conclusions.
 - [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs)
   — **read before changing how a config is validated**: why the loader
   returns a list of diagnostics rather than an `Err`, and what
@@ -623,12 +627,35 @@ what it *did*.
 
 ## One open per doltlite file, and close it before the next
 
-Every pool against a `.doltlite_db` is `max_connections(1)`, so a second
-pool on a file that is already open does not fail — it **waits**. Overlap
-two and the run blocks on a file lock instead of erroring, which is the
-shape a hang takes here.
+Every pool against a `.doltlite_db` is `max_connections(1)`, and doltlite's
+working set lives in the **file** rather than in the connection. A second
+pool is therefore not a second view of the store; it is a second handle on
+one shared uncommitted tree, and a `dolt_commit('-Am')` through either one
+sweeps up whatever the other has in flight.
 
-Two rules follow, and neither is optional:
+**The open itself does not wait.** Measured on macOS with doltlite 0.50.3
+by `//datalib/backend/etl:doltlite_two_process_test`: a second read-write
+pool on an already-open file opens in ~2ms and both pools then commit, and
+a read-only pool alongside a live writer — opened in either order — costs
+each other nothing. What overlap costs you is the shared working set above,
+plus contention while two pools are actually mid-write. So a hang here is
+not the open blocking; it is two writers on one tree.
+
+**Two writers mid-write is the second face, and it errors rather than
+waits.** Those measurements commit through each pool in turn. Commit
+through both *at once* and one of them fails outright with `commit
+conflict: another connection committed to this branch` — naming a commit
+that need not have happened; read it as "someone else has this store open
+right now". The asymmetry is in the source: ordinary DML retries under a
+busy handler (`btreeBeginTrans` loops on `prollyInvokeBusyHandler`) and
+rides the overlap out, while `dolt_commit` takes the store's lock once
+(`csFileLockNB`, via `RefreshAndConfirmHead`) and gives up if a peer holds
+it. `doltlite_raw::open` commits three times on the way in, so an
+overlapping *open* fails inside `open` itself, reported as `commit schema
+after DDL`. `two_live_pools_on_one_store_break_each_others_commits` in
+`doltlite_raw.rs` pins this half.
+
+Three rules follow, and none is optional:
 
 - **Open the store once per pass.** If a stage needs to load rows, run a
   `dolt_diff` scan and probe for missing ids, all three go on the one
@@ -637,18 +664,27 @@ Two rules follow, and neither is optional:
 - **`close().await` before the next open**, on the error path too.
   Dropping the handle only *schedules* the disconnect, so a `?` between
   two opens leaves them overlapping.
+- **A download takes the store as an input.** Every provider's
+  `FetchOptions` carries `pub db: RawDb`; `fetch` never opens one, and
+  whoever opened it closes it. `lint_repo.py`'s check 6 enforces this.
+  See `datalib/backend/etl/README.md` for what the `Option<RawDb>` this
+  replaced actually cost.
 
 Render additionally reads through `open_reader`, never `open`: the write
 path rescue-commits, reconciles the schema and commits with `-Am`, which
 is three writes to a store the render step does not own. `lint_repo.py`'s
-check 5 enforces that half; nothing enforces the two rules above.
+check 5 enforces that half; nothing enforces the first two rules above.
 
 **Expect this to pass locally and fail on CI.** Whether overlapping pools
 actually collide depends on timing and on the filesystem's locking, so a
 mac laptop and a Linux CI container disagree readily. A render path that
 opened three pools per pass ran in 10s here and hit the 300s timeout on
-`//tests/fixtures:ingested_tng_test` there (#311). If a doltlite-touching
-change is green locally and times out in CI, count the opens first.
+`//tests/fixtures:ingested_tng_test` there (#311). A download that opened
+its own pool and never closed it produced intermittent `commit conflict`
+failures across the doltlite-heavy targets (#327). The measurements above
+are macOS only, and that is exactly the platform this warning says not to
+trust: if a doltlite-touching change is green locally and red or slow in
+CI, count the opens first.
 
 ## Git: prefer merges over rebases
 
@@ -733,14 +769,26 @@ tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \
   //datalib/backend/signal-backup:signal_make_fixture
 ```
 
-**Default to `bazelisk test //...` for any "are tests passing?" question.**
-It's the source of truth: it runs Rust, cross-language goldens, and the
-Playwright e2e suite in one shot, the same way CI does. Bazel's action
-cache makes re-runs cheap — unchanged targets are served from cache, so
-iterating costs only what you actually touched. For a tight inner loop,
-narrow the *bazel* invocation to the package you're touching
+**Let CI run the full suite; keep the local loop narrow.** `bazelisk
+test //...` is still the source of truth and still what "build green"
+means — but `imbue-ai/datalib` is public, which makes GitHub's standard
+runners free and unmetered, while your laptop's cores are the scarce
+resource. **A green CI run of `//...` satisfies the rule above; a
+narrower local run does not.** So push the branch and read the run
+rather than burning an afternoon of fans on a cold rebuild.
+
+Locally, narrow the *bazel* invocation to the package you're touching
 (`bazelisk test //datalib/backend/etl/...`) — don't shell out to
 `cargo` / `pnpm`, which bypass the cache and can disagree with CI.
+
+The disk cache is what makes that narrow loop cheap, and it is
+**shared across every worktree** (one absolute path, see `.bazelrc`).
+Size its cap against the number of worktrees you keep live, not against
+one build: when the cap is below their sum they evict each other and
+every worktree switch recompiles what the last one just built. Ten live
+worktrees against a 50G cap was measured doing exactly that. Check with
+`du -sh ~/Library/Caches/bazel-disk-cache` — sitting *at* the cap is the
+symptom.
 
 **Do not add `--test_tag_filters=-manual,-external` to this invocation.**
 The canonical line is the bare `bazelisk test //...`. Filtering on
@@ -872,7 +920,8 @@ which is the point of writing this down. `rdeps` says how much of the
 tree a file's crate is upstream of:
 
 ```bash
-bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))'   # 67 test targets
+bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))'   # 80 test targets
+bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'  # 96 — two thirds of the suite
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl/providers/slack:datalib_etl_slack))'  # 12
 bazelisk query 'kind(".*_test", rdeps(//..., //tests/fixtures:ingested_tng))'       # 3, incl. the 42s e2e suite
 ```
@@ -885,6 +934,28 @@ cache is warm and later PRs drop back to ~3m. It is worth knowing about
 mainly so you can (a) not panic, and (b) decide deliberately whether a
 small helper really belongs in a shared crate — the `rdeps` number is
 the price tag.
+
+**Runs here are bimodal, so ask which mode you are in before asking
+anything else.** A warm run executes 0 tests and finishes in ~3 min; a
+cold one rebuilds ~345 actions and takes ~20. There is almost nothing in
+between, so a rising *median* usually means cold runs got more frequent,
+not that anything got slower. Measured over 09-01 → 09-08, the share of
+cold runs went 7% → ~35% while the cost of a cold run held flat.
+
+**It is not the e2e suite.** On a 1254s cold run every executed test
+together came to 200s, of which `//datalib/ui:e2e_test` was 94s. The
+other ~1050s is opt-mode Rust compiling, and the only lever on it is
+blast radius.
+
+The second lever is where those compiles run. `--config=remote`
+(`.bazelrc`) sends them to BuildBuddy remote execution instead of the
+runner's 4 vCPUs; `test.yml` takes it via a `remote_execution` dispatch
+input. It is a **trial switch, not the merge gate** — flip the gate only
+once a dispatch has gone green *and* the usage graph shows what a month
+costs, because the free tier's binding limit is 100 GB/month of cache
+transfer rather than its 80 cores. Note the floor it cannot beat: that
+same 1254s run had a 540s critical path, which is a chain of rustc
+invocations no amount of parallelism shortens.
 
 Not exercised here, so treat as a pointer rather than a recipe:
 BuildBuddy also has a REST API and a side-by-side invocation compare in
@@ -910,6 +981,16 @@ Two things hide this, so check rather than assume:
 ```bash
 grep -c buildbuddy .bazelrc.user 2>/dev/null || echo "no .bazelrc.user in THIS workspace"
 ```
+
+**Even with the key, a mac shares almost nothing with CI.** An action's
+cache key covers its toolchain and target, so a darwin-arm64 rustc
+action and CI's linux-x86_64 one are different actions and neither can
+hit the other's entry. Locally the remote cache buys you sharing with
+your *own* other worktrees and machines, plus repository fetches through
+the remote downloader — not a replay of CI's work. For the same reason
+`.bazelrc`'s `remote` config (BuildBuddy remote *execution*) is CI-only:
+the autodetected cc toolchain is generated from the client host, so
+driving Linux executors from a mac hands them a darwin toolchain.
 
 The `processes:` line settles it either way. A run on the remote cache
 names it — CI's reads `4070 remote cache hit, …`. A local run without

@@ -57,6 +57,13 @@ impl RawDb {
         })
     }
 
+    /// Wait for the connections to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+        self.cas.close().await;
+    }
+
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
@@ -246,7 +253,7 @@ impl RawDb {
     }
 
     pub async fn load_users(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, "users").await
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "users").await
     }
 
     // ── channels ────────────────────────────────────────────────────
@@ -317,7 +324,7 @@ impl RawDb {
     }
 
     pub async fn load_channels(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, "channels").await
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "channels").await
     }
 
     pub async fn channels_for_fetch(

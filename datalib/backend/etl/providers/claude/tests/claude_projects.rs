@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_claude::download::{fetch, FetchOptions};
+use datalib_etl_claude::download::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_claude::render::parse::parse;
 use datalib_etl_claude::synthesize::ClaudeSynth;
 use serde_json::{json, Value};
@@ -98,16 +98,28 @@ fn seed(api: &std::path::Path, playback: &std::path::Path, project_updated_at: &
     ClaudeSynth::new(api).synthesize(playback).unwrap();
 }
 
-fn opts(raw: &std::path::Path, api: &std::path::Path) -> FetchOptions {
-    FetchOptions {
+/// Opens the store, runs one download through it, and closes it before
+/// returning. Every caller reads the store afterwards, and a second
+/// live connection to one file makes a `dolt_commit` fail.
+async fn run(
+    raw: &std::path::Path,
+    api: &std::path::Path,
+    tweak: impl FnOnce(&mut FetchOptions),
+) -> FetchSummary {
+    let db = RawDb::open(&db_path_for(raw)).await.unwrap();
+    let mut o = FetchOptions {
         db_path: raw.to_path_buf(),
         export_dir: Some(api.to_path_buf()),
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
         projects: true,
-        ..Default::default()
-    }
+        ..FetchOptions::new(db.clone())
+    };
+    tweak(&mut o);
+    let s = fetch(o).await;
+    db.close().await;
+    s.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -131,18 +143,14 @@ async fn conv_uuids_scopes_conversations_not_projects() {
     seed(&api, &playback, "2025-01-03T00:00:00Z");
     std::env::set_var(PLAYBACK_ENV, &playback);
 
-    let s = fetch(FetchOptions {
-        conv_uuids: vec!["c1".to_string()],
-        ..opts(&raw, &api)
-    })
-    .await
-    .unwrap();
+    let s = run(&raw, &api, |o| o.conv_uuids = vec!["c1".to_string()]).await;
     assert_eq!(
         s.projects_fetched, 2,
         "a targeted chat refetch still mirrors projects"
     );
     assert_eq!(s.project_docs_fetched, 3, "and their knowledge docs");
 
+    seal(&raw).await;
     let parsed = parse(&raw, None).expect("parse the raw store");
     assert_eq!(
         parsed.project_name_by_uuid.get(PROJECT).map(String::as_str),
@@ -154,13 +162,11 @@ async fn conv_uuids_scopes_conversations_not_projects() {
     // walk whether or not conversations are scoped.
     let raw2 = d.path().join("raw2");
     fs::create_dir_all(&raw2).unwrap();
-    let s2 = fetch(FetchOptions {
-        conv_uuids: vec!["c1".to_string()],
-        project_uuids: vec![PROJECT.to_string()],
-        ..opts(&raw2, &api)
+    let s2 = run(&raw2, &api, |o| {
+        o.conv_uuids = vec!["c1".to_string()];
+        o.project_uuids = vec![PROJECT.to_string()];
     })
-    .await
-    .unwrap();
+    .await;
     assert_eq!(
         s2.projects_fetched, 1,
         "an explicit project_uuids is honored, not swallowed by conv_uuids"
@@ -169,14 +175,27 @@ async fn conv_uuids_scopes_conversations_not_projects() {
     // And `projects = false` still switches it off in this mode.
     let raw3 = d.path().join("raw3");
     fs::create_dir_all(&raw3).unwrap();
-    let s3 = fetch(FetchOptions {
-        conv_uuids: vec!["c1".to_string()],
-        projects: false,
-        ..opts(&raw3, &api)
+    let s3 = run(&raw3, &api, |o| {
+        o.conv_uuids = vec!["c1".to_string()];
+        o.projects = false;
     })
-    .await
-    .unwrap();
+    .await;
     assert_eq!(s3.projects_fetched, 0, "the off switch still works");
+}
+
+/// Commit what a `fetch` wrote, the way the processor's `RawStoreSession`
+/// does in production. Render pins HEAD, so an uncommitted row is invisible
+/// to it — without this these tests assert against the working set, which is
+/// the bug the pinning work exists to remove.
+async fn seal(raw: &std::path::Path) {
+    let db =
+        datalib_etl::doltlite_raw::open(&datalib_etl_claude::download::db::db_path_for(raw), &[])
+            .await
+            .expect("open to commit");
+    datalib_etl::doltlite_raw::commit_run(&db, "test: claude fetch")
+        .await
+        .expect("commit the fetch");
+    db.close().await;
 }
 
 async fn round_trip_and_only_refetch_when_upstream_moves() {
@@ -189,7 +208,7 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
     std::env::set_var(PLAYBACK_ENV, &playback);
 
     // ── Run 1: cold ───────────────────────────────────────────────
-    let s1 = fetch(opts(&raw, &api)).await.unwrap();
+    let s1 = run(&raw, &api, |_| {}).await;
     assert_eq!(s1.projects_fetched, 2, "cold run must store both projects");
     assert_eq!(
         s1.project_docs_fetched, 3,
@@ -199,6 +218,7 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
     assert_eq!(s1.project_docs_skipped, 0);
 
     // ── The doltlite → render read path ───────────────────────────
+    seal(&raw).await;
     let parsed = parse(&raw, None).expect("parse the raw store");
     assert_eq!(parsed.projects.len(), 2, "both projects should render");
     let p = parsed
@@ -242,7 +262,7 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
     );
 
     // ── Run 2: nothing moved upstream ─────────────────────────────
-    let s2 = fetch(opts(&raw, &api)).await.unwrap();
+    let s2 = run(&raw, &api, |_| {}).await;
     assert_eq!(
         s2.projects_fetched, 0,
         "unchanged project metadata must not be rewritten"
@@ -256,7 +276,7 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
 
     // ── Run 3: upstream bumped `updated_at` ───────────────────────
     seed(&api, &playback, "2025-06-01T00:00:00Z");
-    let s3 = fetch(opts(&raw, &api)).await.unwrap();
+    let s3 = run(&raw, &api, |_| {}).await;
     assert_eq!(
         s3.projects_fetched, 1,
         "only the project whose updated_at moved should be re-stored"
@@ -281,17 +301,16 @@ async fn project_uuids_bounds_the_walk() {
     seed(&api, &playback, "2025-01-03T00:00:00Z");
     std::env::set_var(PLAYBACK_ENV, &playback);
 
-    let s = fetch(FetchOptions {
+    let s = run(&raw, &api, |o| {
         // Given as a paste-able URL to pin that the same
         // `normalize_id_token` treatment `conv_uuids` gets applies here.
-        project_uuids: vec![format!("https://claude.ai/project/{PROJECT}")],
-        ..opts(&raw, &api)
+        o.project_uuids = vec![format!("https://claude.ai/project/{PROJECT}")];
     })
-    .await
-    .unwrap();
+    .await;
     assert_eq!(s.projects_fetched, 1, "only the named project is stored");
     assert_eq!(s.project_docs_fetched, 2, "and only its docs");
 
+    seal(&raw).await;
     let parsed = parse(&raw, None).expect("parse the raw store");
     let uuids: Vec<&str> = parsed
         .projects
@@ -316,16 +335,12 @@ async fn projects_can_be_disabled() {
     seed(&api, &playback, "2025-01-03T00:00:00Z");
     std::env::set_var(PLAYBACK_ENV, &playback);
 
-    let s = fetch(FetchOptions {
-        projects: false,
-        ..opts(&raw, &api)
-    })
-    .await
-    .unwrap();
+    let s = run(&raw, &api, |o| o.projects = false).await;
     assert_eq!(s.projects_fetched, 0);
     assert_eq!(s.project_docs_fetched, 0);
     assert_eq!(s.errors, 0);
 
+    seal(&raw).await;
     let parsed = parse(&raw, None).expect("parse the raw store");
     assert!(parsed.projects.is_empty(), "no projects should be stored");
     assert!(

@@ -38,7 +38,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
-            db: Some(db.clone()),
+            db: db.clone(),
             input_path: fixture_root(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
             progress: Progress::noop(),
@@ -46,6 +46,9 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         })
         .await
         .context("fetch")?;
+        // Commit, the way the processor's `RawStoreSession` does in
+        // production: render reads committed state only.
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: sms fetch").await?;
 
         assert_eq!(summary.files, 2, "2 xml files (sms + calls)");
         assert_eq!(summary.sms, 3, "3 plain SMS");
@@ -56,8 +59,18 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         assert_eq!(summary.parse_errors, 0);
 
         // 3 sms + 3 mms all land in one entity table.
-        assert_eq!(db.load_payloads("sms_messages").await?.len(), 6);
-        assert_eq!(db.load_payloads("sms_calls").await?.len(), 3);
+        assert_eq!(
+            db.load_payloads(datalib_etl::pin::Reads::Own, "sms_messages")
+                .await?
+                .len(),
+            6
+        );
+        assert_eq!(
+            db.load_payloads(datalib_etl::pin::Reads::Own, "sms_calls")
+                .await?
+                .len(),
+            3
+        );
 
         // CAS edge rows carry a blake3, and the bytes are in cas_objects.
         let edges: i64 =
@@ -77,7 +90,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // a byte, because neither file's stat moved.
         let again = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
-            db: Some(db.clone()),
+            db: db.clone(),
             input_path: fixture_root(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
             progress: Progress::noop(),
@@ -87,7 +100,9 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         .context("second fetch")?;
         assert_eq!(again.files, 0, "unchanged files are skipped on re-run");
         assert_eq!(
-            db.load_payloads("sms_messages").await?.len(),
+            db.load_payloads(datalib_etl::pin::Reads::Own, "sms_messages")
+                .await?
+                .len(),
             6,
             "no duplicate messages after re-ingest"
         );

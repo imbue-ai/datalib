@@ -136,6 +136,7 @@ rust_test(
     },
     deps = [
         ":datalib_etl_claude",
+        "//datalib/backend/etl:datalib_etl",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
@@ -153,6 +154,7 @@ rust_test(
     tags = [
         "external",  # talks to claude.ai/api
         "manual",
+        "no-remote-exec",
         "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
     ],
     deps = [

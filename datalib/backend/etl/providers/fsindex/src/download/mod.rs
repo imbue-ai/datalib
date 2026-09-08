@@ -44,7 +44,11 @@ const PROGRESS_INTERVAL_MS: u64 = 500;
 
 pub struct FetchOptions {
     pub db_path: PathBuf,
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     pub source_id: String,
     pub root: PathBuf,
     pub target_doltlite_branch: Option<String>,
@@ -131,10 +135,7 @@ async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Re
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let total_start = Instant::now();
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&opts.db_path).await?,
-    };
+    let db = opts.db.clone();
     if let Some(branch) = opts.target_doltlite_branch.as_deref() {
         db.checkout_branch(branch).await?;
     }

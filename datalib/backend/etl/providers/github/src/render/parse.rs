@@ -179,8 +179,19 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
         let last = last_render_hash.map(str::to_string);
         let path = db_path.clone();
         tokio::runtime::Handle::current().block_on(async move {
-            let db = RawDb::open_reader(&path).await?;
-            let out = read_everything(&db, last.as_deref()).await;
+            // `open_reader` pins to HEAD and installs the views, so the
+            // loads and the diff below all name one commit. `None` means
+            // the store cannot be read at all; github never hands its
+            // rendered set to `retain_documents`, so an empty result here
+            // deletes nothing.
+            let Some(db) = RawDb::open_reader(&path).await? else {
+                return Ok(Default::default());
+            };
+            let pin = db
+                .pin()
+                .expect("open_reader returns a pinned handle")
+                .clone();
+            let out = read_everything(&db, last.as_deref(), &pin).await;
             // Closed before returning, on the error path too.
             db.close().await;
             out
@@ -210,6 +221,7 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
 async fn read_everything(
     db: &RawDb,
     last_render_hash: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
 ) -> Result<(LoadedRaw, ScanResult, Vec<String>)> {
     let raw = LoadedRaw {
         self_identity: db.load_self_identity().await?,
@@ -221,6 +233,7 @@ async fn read_everything(
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         db.pool(),
         last_render_hash,
+        pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             // `self_identity` is not read by render, so a change to it fans
             // out to nothing.
@@ -233,6 +246,7 @@ async fn read_everything(
         Some(changed) => {
             datalib_etl::doltlite_raw::buckets_without_rows(
                 db.pool(),
+                datalib_etl::pin::Reads::At(pin),
                 changed,
                 &[("pull_requests", "id")],
             )

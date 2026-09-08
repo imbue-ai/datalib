@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
+use anyhow::Context;
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
@@ -31,7 +32,7 @@ pub const RENDER_VERSION: u32 = 2;
 /// falls back to `cas_objects`.
 const SMS_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
             NULL AS content_type, NULL AS upstream_name \
-     FROM sms_attachments \
+     FROM pinned_sms_attachments sms_attachments \
      WHERE ref_name IN ({placeholders}) AND blake3 IS NOT NULL";
 
 fn ns() -> Uuid {
@@ -74,11 +75,26 @@ pub fn render(
     let (messages, calls, blobs, scan) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open_reader(&db_path).await?;
+            // Pin before reading, and pin the CAS too — separate file,
+            // separate HEAD. No commit means nothing has been committed here
+            // to render, which is emptiness rather than a reason to read the
+            // working set.
+            let pin = datalib_etl::pin::head(db.pool()).await?;
             let loaded = async {
-                let messages = db.load_payloads("sms_messages").await?;
-                let calls = db.load_payloads("sms_calls").await?;
+                let Some(pin) = pin else {
+                    return anyhow::Ok(Default::default());
+                };
+                datalib_etl::pin::install_views(db.pool(), &pin)
+                    .await
+                    .context("pin the sms_backup_restore raw store for render")?;
+                let messages = db
+                    .load_payloads(datalib_etl::pin::Reads::At(&pin), "sms_messages")
+                    .await?;
+                let calls = db
+                    .load_payloads(datalib_etl::pin::Reads::At(&pin), "sms_calls")
+                    .await?;
                 let blobs = load_blobs(&db, &messages).await?;
-                let scan = scan_diff(db.pool(), last_render_hash).await?;
+                let scan = scan_diff(db.pool(), last_render_hash, &pin).await?;
                 anyhow::Ok((messages, calls, blobs, scan))
             }
             .await;
@@ -169,10 +185,12 @@ pub struct RenderOutcome {
 async fn scan_diff(
     pool: &sqlx::SqlitePool,
     last_render_hash: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
 ) -> Result<datalib_etl::doltlite_raw::DiffScan> {
     datalib_etl::doltlite_raw::scan_buckets(
         pool,
         last_render_hash,
+        pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             global_fanout_tables: &[],
             bucket_query: "

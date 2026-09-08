@@ -313,9 +313,20 @@ pub async fn scan_changed(raw_dir: &Path, last_render_hash: Option<&str>) -> Res
     // before this against the same file, and a second pool overlapping the
     // first is the "database is locked" hazard `open_reader`'s docs name.
     let db = RawDb::open_reader(&db_path).await?;
+    // Pin first: the diff and anything read at it must name one commit, and
+    // the views have to exist before the bucket query runs. No commit means
+    // nothing committed to scan.
+    let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+        db.close().await;
+        return Ok(PdfScan::default());
+    };
+    datalib_etl::pin::install_views(db.pool(), &pin)
+        .await
+        .context("pin the pdf raw store for the render scan")?;
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         db.pool(),
         last_render_hash,
+        &pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             // `pdf_scan_meta` records where the scan ran, which no
             // rendered document reads.

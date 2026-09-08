@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use datalib_etl_gitlab::download::{self as gitlab, parse_mr_ref, FetchOptions, DEFAULT_SCOPES};
+use datalib_etl_gitlab::download::{
+    self as gitlab, db_path_for, parse_mr_ref, FetchOptions, RawDb, DEFAULT_SCOPES,
+};
 use datalib_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
 
@@ -67,6 +69,9 @@ async fn main() -> Result<()> {
         .map(|s| parse_mr_ref(s))
         .collect::<Result<Vec<_>>>()?;
 
+    // The one writer: this process opens the store, hands the handle to
+    // `fetch`, and closes it below.
+    let db = RawDb::open(&db_path_for(&args.out)).await?;
     let opts = FetchOptions {
         db_path: args.out.clone(),
         scopes,
@@ -75,11 +80,13 @@ async fn main() -> Result<()> {
         targets,
         full_sync: args.full,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     };
 
     let span = info_span!("gitlab_download", out = %args.out.display());
-    let summary = gitlab::fetch(opts).instrument(span).await?;
+    let summary = gitlab::fetch(opts).instrument(span).await;
+    db.close().await;
+    let summary = summary?;
     info!(
         event = "gitlab_download_complete",
         new_mrs = summary.new_mrs,

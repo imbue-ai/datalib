@@ -1,6 +1,7 @@
 //! Render the user's own LinkedIn posts and the comments they left,
 //! grouped into one chat-style thread per post.
 
+use datalib_etl::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -50,25 +51,46 @@ pub fn render_posts(
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
-) -> Result<()> {
+) -> Result<RenderPass> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(());
+        return Ok(RenderPass::Skipped);
     }
 
-    let (shares, comments) = tokio::task::block_in_place(|| {
+    let Some((shares, comments)) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open(&db_path).await?;
+            let db = RawDb::open_reader(&db_path).await?;
+            // Read at a commit: this store belongs to the download step, and
+            // nothing committed means nothing to render from.
+            let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+                db.close().await;
+                // `None` all the way out, not an empty value: an empty load is
+                // indistinguishable from a source with nothing in it, and the
+                // caller sweeps every document this pass did not name.
+                return Ok(None);
+            };
+            datalib_etl::pin::install_views(db.pool(), &pin).await?;
             // A feed the user didn't export has no table; treat a load
             // error as "absent" rather than failing the render.
-            let shares = db.load_payloads("shares").await.unwrap_or_default();
-            let comments = db.load_payloads("comments").await.unwrap_or_default();
+            let shares = db
+                .load_payloads(datalib_etl::pin::Reads::At(&pin), "shares")
+                .await
+                .unwrap_or_default();
+            let comments = db
+                .load_payloads(datalib_etl::pin::Reads::At(&pin), "comments")
+                .await
+                .unwrap_or_default();
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             db.close().await;
-            Ok::<_, anyhow::Error>((shares, comments))
+            Ok::<_, anyhow::Error>(Some((shares, comments)))
         })
-    })?;
+    })?
+    else {
+        // Nothing committed to read: this pass did not walk, so it must not
+        // reach the retain sweep.
+        return Ok(RenderPass::Skipped);
+    };
 
     let chats = build_post_chats(&shares, &comments);
 
@@ -84,7 +106,7 @@ pub fn render_posts(
         on_doc_complete,
     )?;
     seen.extend(s.documents);
-    Ok(())
+    Ok(RenderPass::Walked)
 }
 
 /// One share + its comments, sharing a post key.

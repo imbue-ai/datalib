@@ -20,9 +20,16 @@ async fn parses_tng_api_fixture() {
     // Same path the pipeline takes: the export directory is ingested
     // into a raw store, and render reads that store.
     let raw = tempfile::tempdir().expect("raw");
+    // One handle for ingest and the commit that follows it: a second
+    // live connection to the store makes one of the two commits fail.
+    let db = datalib_etl_claude::download::RawDb::open(
+        &datalib_etl_claude::download::db::db_path_for(raw.path()),
+    )
+    .await
+    .expect("open raw store");
     ingest(IngestOptions {
         db_path: raw.path().to_path_buf(),
-        db: None,
+        db: db.clone(),
         input_path: fixture_dir(),
         now: "2026-09-04T00:00:00-07:00".to_string(),
         progress: Default::default(),
@@ -30,6 +37,14 @@ async fn parses_tng_api_fixture() {
     })
     .await
     .expect("ingest");
+    // Commit what the ingest wrote, the way the processor's `RawStoreSession`
+    // does in production: render reads committed state only.
+    {
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: claude ingest")
+            .await
+            .expect("commit the ingest");
+        db.close().await;
+    }
     let parsed = parse(raw.path(), None).expect("parse");
 
     assert!(!parsed.accounts.is_empty(), "expected accounts");

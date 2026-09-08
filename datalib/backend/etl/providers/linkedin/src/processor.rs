@@ -1,5 +1,6 @@
 //! Program-A `DataProcessor`s for the `linkedin` source.
 
+use datalib_etl::processor::RenderPass;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -67,7 +68,7 @@ impl DataProcessor for LinkedinDownload {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
-            db: Some(db),
+            db,
             input_path: self.input_path.clone(),
             fetch_photos: self.fetch_photos,
             // Piggyback the shared give-up knob: stop the photo sweep after
@@ -112,7 +113,7 @@ impl DataProcessor for LinkedinRender {
         let mut on_doc = |md| ctx.emit_doc(md);
 
         // Every message-shaped feed (DMs + AI-coach transcripts) renders.
-        crate::render::render(
+        let r_pass = crate::render::render(
             &self.raw_path,
             ctx.root,
             &self.name,
@@ -124,7 +125,7 @@ impl DataProcessor for LinkedinRender {
         .context("linkedin render")?;
         // Connections render as first-class contacts via the shared contact
         // renderer (sibling of the chat path above).
-        crate::connections::render_connections(
+        let c_pass = crate::connections::render_connections(
             &self.raw_path,
             ctx.root,
             &self.name,
@@ -136,7 +137,7 @@ impl DataProcessor for LinkedinRender {
         .context("linkedin connections render")?;
         // Your own posts (Shares) and the comments you left, grouped one
         // chat-style thread per post, with linkouts back to linkedin.com.
-        crate::posts::render_posts(
+        let p_pass = crate::posts::render_posts(
             &self.raw_path,
             ctx.root,
             &self.name,
@@ -150,7 +151,18 @@ impl DataProcessor for LinkedinRender {
         // One sweep over the union of all three feeds: each contributes a
         // slice of this source's documents, and sweeping per feed would
         // have each delete the other two's.
-        ctx.retain_documents(&seen);
+        // The sweep drops anything none of the three named, so it is only
+        // safe when all three actually walked. One that bailed contributed
+        // no uuids, and sweeping on that deletes what it would have named.
+        let pass = if [c_pass, p_pass, r_pass]
+            .iter()
+            .all(|p| *p == RenderPass::Walked)
+        {
+            RenderPass::Walked
+        } else {
+            RenderPass::Skipped
+        };
+        ctx.retain_documents(pass, &seen);
         Ok("rendered".into())
     }
 }

@@ -25,12 +25,17 @@ async fn notion_live_single_page_snapshot() {
         .keep();
     eprintln!("[test] downloading {page} -> {}", tmp.display());
 
+    let db = notion::RawDb::open(&notion::db_path_for(&tmp))
+        .await
+        .unwrap();
     let opts = FetchOptions {
         db_path: tmp.clone(),
         page: Some(page.clone()),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     };
-    notion::fetch(opts).await.expect("notion fetch failed");
+    let r = notion::fetch(opts).await;
+    db.close().await;
+    r.expect("notion fetch failed");
 
     let parsed = parse_api_dir(&tmp, None).expect("parse_api_dir");
     assert_eq!(parsed.pages.len(), 1, "expected exactly one page");

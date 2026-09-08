@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use datalib_etl_chatgpt::download::{self as chatgpt, FetchOptions, SLEEP_BETWEEN};
+use datalib_etl_chatgpt::download::{
+    self as chatgpt, db_path_for, FetchOptions, RawDb, SLEEP_BETWEEN,
+};
 use datalib_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
 
@@ -55,6 +57,9 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "chatgpt-download")?;
 
+    // The one writer: this process opens the store, hands the handle
+    // to `fetch`, and closes it below.
+    let db = RawDb::open(&db_path_for(&args.out)).await?;
     let opts = FetchOptions {
         db_path: args.out.clone(),
         max_pages: args.max_pages,
@@ -62,11 +67,13 @@ async fn main() -> Result<()> {
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
         since: args.since.clone(),
         conv_uuids: args.conv_uuids.clone(),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     };
 
     let span = info_span!("chatgpt_download", out = %args.out.display());
-    let summary = chatgpt::fetch(opts).instrument(span).await?;
+    let summary = chatgpt::fetch(opts).instrument(span).await;
+    db.close().await;
+    let summary = summary?;
     info!(
         event = "chatgpt_download_complete",
         listing = summary.listing,

@@ -14,6 +14,10 @@ pub trait ProgressSink: Send + Sync {
     /// indicatif this is `finish_and_clear`; sinks that have nothing
     /// to clear can treat it as `finish`.
     fn finish_and_clear(&self) {}
+    /// A producer sealed what it has written so far, and `version` names
+    /// the result. Distinct from the progress calls above: those say how far
+    /// along the work is, this says a consumer could start on it.
+    fn checkpoint(&self, _version: &str) {}
     fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
         Arc::new(NoopSink)
     }
@@ -50,6 +54,9 @@ impl Progress {
     }
     pub fn finish_and_clear(&self) {
         self.sink.finish_and_clear();
+    }
+    pub fn checkpoint(&self, version: &str) {
+        self.sink.checkpoint(version);
     }
     pub fn child(&self, prefix: &str) -> Progress {
         Progress::new(self.sink.child(prefix))
@@ -110,6 +117,15 @@ impl ProgressSink for TracingSink {
             delta = delta,
         );
     }
+    // Not TRACE, unlike its neighbours: a checkpoint is rare, and it is the
+    // line that explains why a consumer woke up early.
+    fn checkpoint(&self, version: &str) {
+        tracing::info!(
+            event = "progress.checkpoint",
+            source = %self.source,
+            version = %version,
+        );
+    }
     fn set_message(&self, msg: &str) {
         tracing::trace!(
             event = "progress.message",
@@ -143,6 +159,11 @@ impl FanOut {
 }
 
 impl ProgressSink for FanOut {
+    fn checkpoint(&self, version: &str) {
+        for s in &self.sinks {
+            s.checkpoint(version);
+        }
+    }
     fn set_length(&self, total: Option<u64>) {
         for s in &self.sinks {
             s.set_length(total);
@@ -188,10 +209,14 @@ mod tests {
     #[derive(Default, Clone)]
     struct RecordingSink {
         finish_and_clear: Arc<AtomicUsize>,
+        checkpoints: Arc<std::sync::Mutex<Vec<String>>>,
     }
     impl ProgressSink for RecordingSink {
         fn finish_and_clear(&self) {
             self.finish_and_clear.fetch_add(1, Ordering::SeqCst);
+        }
+        fn checkpoint(&self, version: &str) {
+            self.checkpoints.lock().unwrap().push(version.to_string());
         }
         fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
             Arc::new(self.clone())
@@ -222,6 +247,31 @@ mod tests {
             b.finish_and_clear.load(Ordering::SeqCst),
             1,
             "FanOut must forward finish_and_clear to its second sink",
+        );
+    }
+
+    /// Same gap as the test above, one method later. A producer's seal
+    /// reaches the wire through `FanOut`, so a missing forward here means the
+    /// `checkpoint` event silently never leaves the step -- and nothing
+    /// downstream would look broken, it would just never stream.
+    #[test]
+    fn fanout_forwards_checkpoint_to_every_sink() {
+        let a = Arc::new(RecordingSink::default());
+        let b = Arc::new(RecordingSink::default());
+        let sinks: Vec<Arc<dyn ProgressSink>> = vec![a.clone(), b.clone()];
+        let fan = FanOut::new(sinks);
+
+        fan.checkpoint("deadbeef");
+
+        assert_eq!(
+            *a.checkpoints.lock().unwrap(),
+            vec!["deadbeef".to_string()],
+            "FanOut must forward checkpoint to its first sink",
+        );
+        assert_eq!(
+            *b.checkpoints.lock().unwrap(),
+            vec!["deadbeef".to_string()],
+            "FanOut must forward checkpoint to its second sink",
         );
     }
 

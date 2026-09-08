@@ -133,3 +133,41 @@ rust_test(
         "@datalib_crates//:tempfile",
     ],
 )
+
+# One side of the two-process doltlite concurrency test below: a writer, a
+# pinned reader, or a probe. It is a binary rather than a second pool inside
+# the test because doltlite's working set and chunk-store lock are per *file*
+# and shared across processes — two pools in one process do not exercise them.
+# `testonly` and under `tests/`: nothing shipped may link it, and cargo does
+# not pick it up as a bin of this crate.
+rust_binary(
+    name = "doltlite_two_process",
+    testonly = True,
+    srcs = ["tests/bin/doltlite_two_process.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# Can a reader pin an earlier commit while another process holds the store
+# open and commits — in both orders of opening? Hermetic: the store is a
+# tempdir, and the only program it runs is the helper above, from runfiles.
+rust_test(
+    name = "doltlite_two_process_test",
+    size = "medium",
+    srcs = ["tests/doltlite_two_process.rs"],
+    data = [":doltlite_two_process"],
+    edition = "2021",
+    env = {
+        "HELPER_BIN": "$(rootpath :doltlite_two_process)",
+    },
+    deps = [
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+    ],
+)

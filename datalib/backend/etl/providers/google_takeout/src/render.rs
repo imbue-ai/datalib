@@ -1,10 +1,12 @@
 //! Render the chat-shaped Takeout feeds into markdown via the shared
 //! chat renderer.
 
+use datalib_etl::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
+use anyhow::Context;
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
@@ -31,7 +33,7 @@ pub const RENDER_VERSION: u32 = 2;
 /// falls back to `cas_objects` (we don't store it on the edge).
 const VOICE_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
             NULL AS content_type, NULL AS upstream_name \
-     FROM voice_attachments \
+     FROM pinned_voice_attachments voice_attachments \
      WHERE ref_name IN ({placeholders}) AND blake3 IS NOT NULL";
 
 fn ns() -> Uuid {
@@ -79,31 +81,57 @@ pub fn render(
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
-) -> Result<()> {
+) -> Result<RenderPass> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(());
+        return Ok(RenderPass::Skipped);
     }
-    let (messages, groups, voice_messages, voice_blobs) = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open_reader(&db_path).await?;
-            let loaded = async {
-                let messages = db.load_payloads("chat_messages").await?;
-                // (dir name, group_info payload) — the directory name
-                // carries the space id, which `group_info.json` itself
-                // does not.
-                let groups = db.load_payloads_with_id("chat_groups").await?;
-                let voice_messages = db.load_payloads("voice_messages").await?;
-                let voice_blobs = load_voice_blobs(&db, &voice_messages).await?;
-                anyhow::Ok((messages, groups, voice_messages, voice_blobs))
-            }
-            .await;
-            // Closed, not dropped: the next open of this store is a
-            // second connection until this one is actually gone.
-            db.close().await;
-            loaded
-        })
-    })?;
+    let Some((messages, groups, voice_messages, voice_blobs)) =
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let db = RawDb::open_reader(&db_path).await?;
+                // Pin before reading, and pin the CAS too — separate file,
+                // separate HEAD. No commit means nothing has been committed here
+                // to render, which is emptiness rather than a reason to read the
+                // working set.
+                let pin = datalib_etl::pin::head(db.pool()).await?;
+                let loaded = async {
+                    // `None` all the way out, not an empty tuple: an empty load
+                    // is indistinguishable from a source with nothing in it, and
+                    // the caller sweeps every document this pass did not name.
+                    let Some(pin) = pin else {
+                        return anyhow::Ok(None);
+                    };
+                    datalib_etl::pin::install_views(db.pool(), &pin)
+                        .await
+                        .context("pin the google_takeout raw store for render")?;
+                    let messages = db
+                        .load_payloads(datalib_etl::pin::Reads::At(&pin), "chat_messages")
+                        .await?;
+                    // (dir name, group_info payload) — the directory name
+                    // carries the space id, which `group_info.json` itself
+                    // does not.
+                    let groups = db
+                        .load_payloads_with_id(datalib_etl::pin::Reads::At(&pin), "chat_groups")
+                        .await?;
+                    let voice_messages = db
+                        .load_payloads(datalib_etl::pin::Reads::At(&pin), "voice_messages")
+                        .await?;
+                    let voice_blobs = load_voice_blobs(&db, &voice_messages).await?;
+                    anyhow::Ok(Some((messages, groups, voice_messages, voice_blobs)))
+                }
+                .await;
+                // Closed, not dropped: the next open of this store is a
+                // second connection until this one is actually gone.
+                db.close().await;
+                loaded
+            })
+        })?
+    else {
+        // Nothing committed to read: this pass did not walk, so it must not
+        // reach the retain sweep.
+        return Ok(RenderPass::Skipped);
+    };
 
     if !messages.is_empty() {
         let chats = build_chats(&messages, &groups);
@@ -135,7 +163,7 @@ pub fn render(
         )?;
         seen.extend(s.documents);
     }
-    Ok(())
+    Ok(RenderPass::Walked)
 }
 
 async fn load_voice_blobs(

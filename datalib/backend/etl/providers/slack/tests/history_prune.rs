@@ -10,7 +10,7 @@ use std::path::Path;
 
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_slack::download::{block_on_load_all, db_path_for, fetch, FetchOptions};
+use datalib_etl_slack::download::{block_on_load_all, db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_slack::synthesize::SlackSynth;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -128,6 +128,10 @@ fn since_ts() -> String {
 }
 
 async fn run_fetch(out: &Path, refresh_window_days: i64) -> usize {
+    // Open the store here and close it before anything reads it back:
+    // a second live connection to one file makes the `dolt_commit`s
+    // inside `open` fail with "commit conflict".
+    let db = RawDb::open(&db_path_for(out)).await.unwrap();
     let s = fetch(FetchOptions {
         db_path: out.to_path_buf(),
         channels: None,
@@ -135,11 +139,11 @@ async fn run_fetch(out: &Path, refresh_window_days: i64) -> usize {
         refresh_window_days,
         members_only: false,
         media: false,
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap();
-    s.pruned
+    .await;
+    db.close().await;
+    s.unwrap().pruned
 }
 
 fn stored_ts(out: &Path) -> Vec<String> {

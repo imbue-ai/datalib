@@ -77,7 +77,6 @@ impl DataProcessor for GitlabDownload {
             .context("parse gitlab merge_requests refs")?;
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
-            db: Some(db),
             latchkey: self.latchkey.clone(),
             // full_sync stays false (FetchOptions default) so the
             // gitlab provider honors saved `sync_scope_state` and
@@ -97,7 +96,7 @@ impl DataProcessor for GitlabDownload {
             sleep_between: Duration::ZERO,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
-            ..Default::default()
+            ..download::FetchOptions::new(db)
         })
         .await?;
         let summary = format!(

@@ -75,6 +75,57 @@ impl Pin {
     }
 }
 
+/// Whose store a read is against.
+///
+/// The helpers that build a query around a table name — `load_payloads` and
+/// friends — are used from both sides of a store: the download step reads the
+/// store it is writing, and render reads somebody else's. Those want opposite
+/// things. The owner wants its own working set, which is the whole point of
+/// having one. Everyone else must read committed state, or they see rows the
+/// writer has not finished with.
+///
+/// A regex cannot tell those apart at the call site, and a default would pick
+/// one of them silently. So the parameter is mandatory: every caller answers
+/// the question, and `Own` is greppable when you want to audit the answers.
+#[derive(Debug, Clone, Copy)]
+pub enum Reads<'a> {
+    /// This process owns the store and is reading what it wrote.
+    Own,
+    /// Somebody else owns it: read at `pin`, through the views
+    /// [`install_views`] created.
+    At(&'a Pin),
+}
+
+impl Reads<'_> {
+    /// The name this read should use for `table`.
+    pub fn table(&self, table: &str) -> String {
+        match self {
+            Reads::Own => table.to_string(),
+            Reads::At(_) => format!("{VIEW_PREFIX}{table}"),
+        }
+    }
+}
+
+/// The commit this store is at now, or `None` when it has no commits.
+///
+/// For a consumer driven by [`crate::doltlite_raw::scan_buckets`], prefer the
+/// `new_head` that scan already returned: the diff and the reads that follow
+/// it must name one commit, and sampling HEAD a second time can pick up a
+/// commit the diff did not see. This is for the consumers that do no diff at
+/// all, and for a sibling store (a blob CAS) with a HEAD of its own.
+pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
+    // `dolt_hashof` resolves the ref, rather than ordering `dolt_log()` by a
+    // `date` that only has second resolution -- checkpointing commits several
+    // times a second, so ties are the normal case, not the edge one.
+    let commit: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+        .fetch_optional(pool)
+        .await
+        // No `dolt_hashof` at all is a build without the extensions, which
+        // reads the same as a store with nothing committed: no pin.
+        .unwrap_or(None);
+    Pin::from_scan(commit.as_deref())
+}
+
 /// Create one `pinned_<table>` view per table on this connection, and return
 /// how many. Call it once, when a store is opened for reading.
 ///
@@ -294,6 +345,110 @@ mod view_tests {
             0,
             "a table that did not exist at the pin reads empty, not dirty"
         );
+    }
+
+    /// The guarantee every pinned render now rests on, stated once against a
+    /// store shaped like a provider's: a row written but not committed must
+    /// not be visible through the views, and one that *was* committed must.
+    ///
+    /// Each provider gets this property by construction — it opens with
+    /// `open_reader`, pins, installs the views, and reads `pinned_<table>`,
+    /// and the repo lint refuses a render read that does not. This test is
+    /// what makes that chain mean something: if `install_views` ever stopped
+    /// excluding the working set, every provider would silently start
+    /// rendering half-written rows and no provider test would notice, because
+    /// none of them writes uncommitted data on purpose.
+    #[tokio::test]
+    async fn an_uncommitted_row_is_invisible_through_the_views() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(
+            &dir.path().join("provider.doltlite_db"),
+            &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT)"],
+        )
+        .await
+        .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+        sqlx::query("INSERT INTO entities VALUES ('committed', 'a')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let commit = crate::doltlite_raw::commit_run(&pool, "one entity")
+            .await
+            .unwrap()
+            .unwrap();
+        // The shape a download mid-run leaves behind.
+        sqlx::query("INSERT INTO entities VALUES ('in-flight', 'b')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        install_views(&pool, &Pin::at(&commit).unwrap())
+            .await
+            .unwrap();
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM pinned_entities ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            ids,
+            vec!["committed".to_string()],
+            "the pinned view must show the committed row and not the in-flight one"
+        );
+    }
+
+    /// `dolt_log().date` has one-second resolution, so a burst of commits --
+    /// which is what checkpointing produces -- gives several rows one
+    /// timestamp. Ordering by it leaves the winner to an unspecified tiebreak;
+    /// `head` must name the actual HEAD every time.
+    #[tokio::test]
+    async fn head_tracks_head_through_a_burst_of_same_second_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(
+            &dir.path().join("burst.doltlite_db"),
+            &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT)"],
+        )
+        .await
+        .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+
+        for i in 0..8 {
+            sqlx::query("INSERT INTO entities VALUES (?, 'x')")
+                .bind(format!("e{i}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+            let sealed = crate::doltlite_raw::commit_run(&pool, &format!("batch {i}"))
+                .await
+                .unwrap()
+                .unwrap();
+
+            let pin = head(&pool)
+                .await
+                .unwrap()
+                .expect("a sealed store has a head");
+            assert_eq!(
+                pin.commit(),
+                sealed,
+                "head must name the commit just sealed, not a same-second sibling"
+            );
+
+            // And the pin has to carry every row committed so far -- naming the
+            // right hash is only half of it.
+            // Safe: `pin.commit()` is validated hex, and the table name is a
+            // literal -- the same argument `install_views` makes.
+            let seen: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM dolt_at_entities('{}')",
+                pin.commit()
+            )))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(seen, i64::from(i) + 1, "pin at batch {i} lost rows");
+        }
     }
 
     /// Pinned views are per-connection state. The design leans on that in two

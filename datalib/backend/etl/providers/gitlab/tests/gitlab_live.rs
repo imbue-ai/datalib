@@ -26,12 +26,17 @@ async fn gitlab_live_single_mr_snapshot() {
         .keep();
     eprintln!("[test] downloading {proj}!{iid} -> {}", tmp.display());
 
+    let db = gitlab::RawDb::open(&gitlab::db_path_for(&tmp))
+        .await
+        .unwrap();
     let opts = FetchOptions {
         db_path: tmp.clone(),
         targets: vec![(proj.clone(), iid)],
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     };
-    gitlab::fetch(opts).await.expect("gitlab fetch failed");
+    let r = gitlab::fetch(opts).await;
+    db.close().await;
+    r.expect("gitlab fetch failed");
 
     let parsed = parse_api_dir(&tmp, None).expect("parse_api_dir");
     assert_eq!(parsed.merge_requests.len(), 1, "expected exactly one MR");

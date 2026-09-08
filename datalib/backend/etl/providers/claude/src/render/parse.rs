@@ -17,7 +17,7 @@ use crate::download::normalize::normalize_to_export_shape;
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_uuid AS ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
-      FROM claude_attachments
+      FROM pinned_claude_attachments claude_attachments
      WHERE file_uuid IN ({placeholders}) AND blake3 IS NOT NULL";
 
 #[derive(Debug, Clone)]
@@ -223,15 +223,37 @@ async fn parse_doltlite_async(
         None
     };
 
-    let scan = scan_diff(&pool, last_render_hash).await?;
+    // Pin before anything reads this store. The diff below and the rows
+    // behind it have to name one commit, and the `pinned_<table>` views must
+    // already exist when the diff runs — its bucket query joins live tables.
+    //
+    // No commit means the store cannot be read, which is *not* the same as
+    // the source holding nothing; reading the working set instead would be
+    // worse than either. Claude never hands its rendered set to
+    // `retain_documents`, so returning an empty parse here deletes nothing —
+    // a provider that swept would have to skip instead. See the plan's
+    // "The sink contract".
+
+    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        return Ok(ParsedExport::default());
+    };
+
+    datalib_etl::pin::install_views(&pool, &pin)
+        .await
+        .context("pin the claude raw store for render")?;
+
+    let scan = scan_diff(&pool, last_render_hash, &pin).await?;
 
     // These three all read tables the download side also reads; the
     // single copy of each lives in `download::db` (users/orgs go
     // through the shared `doltlite_raw` helper). See "One reader per
     // table" there.
-    let users = datalib_etl::doltlite_raw::load_payloads(&pool, "users").await?;
-    let first_user_uuid = db::first_user_uuid_from(&pool).await?;
-    let all_convs = db::load_conversations_from(&pool).await?;
+    let users =
+        datalib_etl::doltlite_raw::load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "users")
+            .await?;
+    let first_user_uuid =
+        db::first_user_uuid_from(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
+    let all_convs = db::load_conversations_from(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     let total = all_convs.len();
 
     let (filtered, docs_skipped) = match &scan.changed_buckets {
@@ -259,7 +281,7 @@ async fn parse_doltlite_async(
     // `project_name_by_uuid` is loaded unfiltered, though — an unchanged
     // conversation that *is* being re-rendered (because something else
     // in its bucket moved) still has to resolve its project's name.
-    let all_projects = load_project_rows(&pool).await?;
+    let all_projects = load_project_rows(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     parsed.project_name_by_uuid = name_index(&all_projects);
     parsed.projects = match &scan.changed_buckets {
         None => all_projects,
@@ -280,6 +302,7 @@ async fn parse_doltlite_async(
     if let Some(changed) = scan.changed_buckets.as_ref() {
         parsed.vanished_buckets = datalib_etl::doltlite_raw::buckets_without_rows(
             &pool,
+            datalib_etl::pin::Reads::At(&pin),
             changed,
             &[("conversations", "id"), ("projects", "id")],
         )
@@ -332,14 +355,17 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
 
 /// Load every project out of the raw store and hang its knowledge
 /// documents off it. Two queries total, not one per project.
-async fn load_project_rows(pool: &SqlitePool) -> Result<Vec<ProjectRow>> {
-    let projects = db::load_projects_from(pool).await?;
+async fn load_project_rows(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+) -> Result<Vec<ProjectRow>> {
+    let projects = db::load_projects_from(pool, reads).await?;
     if projects.is_empty() {
         return Ok(Vec::new());
     }
     let mut docs_by_project: std::collections::HashMap<String, Vec<ProjectDocRow>> =
         std::collections::HashMap::new();
-    for d in db::load_project_docs_from(pool).await? {
+    for d in db::load_project_docs_from(pool, reads).await? {
         docs_by_project
             .entry(d.project_uuid.clone())
             .or_default()
@@ -413,10 +439,15 @@ fn project_doc_row(project_uuid: String, doc_uuid: String, payload: Value) -> Pr
 /// `dolt_diff_claude_attachments` and `dolt_diff_project_docs` to
 /// project the changed bucket keys — conversation UUIDs from the first
 /// two, project UUIDs from the third.
-async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
+async fn scan_diff(
+    pool: &SqlitePool,
+    last_render_hash: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
+) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
         last_render_hash,
+        pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             global_fanout_tables: &["users", "orgs", "projects"],
             bucket_query: "

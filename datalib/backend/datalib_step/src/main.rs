@@ -18,7 +18,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use datalib_dag::subprocess::{
-    ENV_DATA_ROOT, ENV_NOW, ENV_REFETCH_BLOBS, ENV_RESET_AND_REDOWNLOAD, ENV_STEP,
+    ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_REFETCH_BLOBS, ENV_RESET_AND_REDOWNLOAD,
+    ENV_STEP,
 };
 use datalib_dag::FailureKind;
 
@@ -125,6 +126,29 @@ enum Cmd {
     },
 }
 
+/// The cadence the config asked for, as the `etl` type.
+///
+/// `None` on anything unreadable rather than a failure: a malformed value
+/// from a newer config should not take the run down, and the step's own
+/// default is a safe answer. It is logged, though — a fallback that fires
+/// silently is the kind this repo has been burned by.
+fn checkpoint_cadence() -> Option<datalib_etl::checkpointer::Cadence> {
+    let raw = std::env::var(ENV_CHECKPOINT_CADENCE).ok()?;
+    match datalib_dag::config::CheckpointCadence::decode(&raw) {
+        Some(c) => Some(datalib_etl::checkpointer::Cadence {
+            quiet_for: std::time::Duration::from_secs_f64(c.quiet_for_secs),
+            at_most_every: std::time::Duration::from_secs_f64(c.at_most_every_secs),
+        }),
+        None => {
+            tracing::warn!(
+                raw = %raw,
+                "{ENV_CHECKPOINT_CADENCE} is not a readable cadence; using the default"
+            );
+            None
+        }
+    }
+}
+
 fn env_flag(name: &str) -> bool {
     matches!(
         std::env::var(name).ok().as_deref(),
@@ -190,6 +214,7 @@ async fn main() {
     let control = datalib_etl::control::DownloadControl {
         reset_and_redownload: cli.reset_and_redownload || env_flag(ENV_RESET_AND_REDOWNLOAD),
         refetch_blobs: cli.refetch_blobs || env_flag(ENV_REFETCH_BLOBS),
+        checkpoint_cadence: checkpoint_cadence(),
     };
 
     let step_io = StepIo { params: cli.params };

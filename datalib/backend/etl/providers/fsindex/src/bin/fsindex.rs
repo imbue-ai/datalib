@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
     let progress = Progress::indicatif_message_only(source_id.clone());
     let opts = FetchOptions {
         db_path: args.db.clone(),
-        db: Some(db.clone()),
+        db: db.clone(),
         source_id: source_id.clone(),
         root: args.root.clone(),
         target_doltlite_branch: args.branch.clone(),

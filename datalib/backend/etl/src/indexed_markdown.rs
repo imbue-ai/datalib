@@ -423,6 +423,26 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Pin this store and install the `pinned_<table>` views, before anything
+    /// reads it. `None` means the store has no commits — nothing has been
+    /// committed here to read, and the caller should contribute nothing
+    /// rather than fall back to the working set.
+    ///
+    /// Everything below reads through the views this installs, so it has to
+    /// come first: `changed_since`'s diff and `documents_matching`'s rows must
+    /// name the same commit, and the views must exist before either runs.
+    pub fn pin_for_reading(&self) -> Result<Option<crate::pin::Pin>> {
+        blocking(async {
+            let Some(pin) = crate::pin::head(&self.pool).await? else {
+                return Ok(None);
+            };
+            crate::pin::install_views(&self.pool, &pin)
+                .await
+                .context("install pinned views over the render store")?;
+            Ok(Some(pin))
+        })
+    }
+
     pub fn documents(
         &self,
         out_dir: &Path,
@@ -431,10 +451,15 @@ impl IndexedMarkdownStore {
         self.documents_matching(out_dir, None, pin)
     }
 
-    pub fn changed_since(&self, cursor: Option<&str>) -> Result<crate::doltlite_raw::DiffScan> {
+    pub fn changed_since(
+        &self,
+        cursor: Option<&str>,
+        pin: &crate::pin::Pin,
+    ) -> Result<crate::doltlite_raw::DiffScan> {
         blocking(crate::doltlite_raw::scan_buckets(
             &self.pool,
             cursor,
+            pin,
             &crate::doltlite_raw::DiffScanSpec {
                 // Nothing in a render store fans out to "re-index
                 // everything": every row already names the document it
@@ -481,12 +506,10 @@ impl IndexedMarkdownStore {
         only: Option<&HashSet<String>>,
         pin: &crate::pin::Pin,
     ) -> Result<Vec<RenderedMarkdown>> {
+        let _ = pin; // the views were installed by `pin_for_reading`
         blocking(async {
-            crate::pin::install_views(&self.pool, pin)
-                .await
-                .context("install pinned views over the render store")?;
             let mds: Vec<datalib_schema::markdowns::MarkdownRow> =
-                sqlx::query_as("SELECT * FROM pinned_markdowns ORDER BY markdown_uuid")
+                sqlx::query_as("SELECT * FROM pinned_markdowns markdowns ORDER BY markdown_uuid")
                     .fetch_all(&self.pool)
                     .await
                     .context("read markdowns")?;
@@ -500,14 +523,14 @@ impl IndexedMarkdownStore {
             let mut out = Vec::with_capacity(mds.len());
             for md in mds {
                 let rows: Vec<datalib_schema::grid_rows::GridRow> = sqlx::query_as(
-                    "SELECT * FROM pinned_grid_rows WHERE markdown_uuid = ? ORDER BY uuid",
+                    "SELECT * FROM pinned_grid_rows grid_rows WHERE markdown_uuid = ? ORDER BY uuid",
                 )
                 .bind(&md.markdown_uuid)
                 .fetch_all(&self.pool)
                 .await
                 .with_context(|| format!("read rows for {}", md.markdown_uuid))?;
                 let edges: Vec<datalib_schema::edges::EdgeRow> = sqlx::query_as(
-                    "SELECT * FROM pinned_edges WHERE src_markdown_uuid = ? ORDER BY edge_uuid",
+                    "SELECT * FROM pinned_edges edges WHERE src_markdown_uuid = ? ORDER BY edge_uuid",
                 )
                 .bind(&md.markdown_uuid)
                 .fetch_all(&self.pool)

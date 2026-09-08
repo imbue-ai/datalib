@@ -155,6 +155,7 @@ rust_test(
     tags = [
         "external",  # talks to gmail.googleapis.com
         "manual",
+        "no-remote-exec",
         "no-sandbox",  # latchkey reads the host keyring
     ],
     deps = [
@@ -180,6 +181,7 @@ rust_test(
     tags = [
         "external",
         "manual",
+        "no-remote-exec",
         "no-sandbox",
     ],
     deps = [
