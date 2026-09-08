@@ -69,7 +69,8 @@ async fn run_extract(
     beeper_data_dir: PathBuf,
     sources: Vec<&str>,
 ) -> Result<FetchSummary> {
-    download::fetch(FetchOptions {
+    let committed_path = db_path.clone();
+    let summary = download::fetch(FetchOptions {
         db_path,
         db: None,
         sources: sources.into_iter().map(String::from).collect(),
@@ -78,7 +79,14 @@ async fn run_extract(
         progress: Progress::noop(),
         control: Default::default(),
     })
-    .await
+    .await?;
+    // Commit what the fetch wrote, the way the processor's `RawStoreSession`
+    // does in production. Render reads committed state only, so a store left
+    // dirty here renders as empty — correct, and not what this test is about.
+    let db = datalib_etl::doltlite_raw::open(&committed_path, &[]).await?;
+    datalib_etl::doltlite_raw::commit_run(&db, "test: beeper fetch").await?;
+    db.close().await;
+    Ok(summary)
 }
 
 fn run_extract_sync(

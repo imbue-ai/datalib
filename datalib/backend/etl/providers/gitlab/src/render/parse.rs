@@ -143,7 +143,18 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
         let path = db_path.clone();
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open_reader(&path).await?;
-            let out = read_everything(&db, last.as_deref()).await;
+            // Pin before reading: `read_everything` loads content and then
+            // diffs, and both have to name one commit.
+            let pin = datalib_etl::pin::head(db.pool()).await?;
+            let out = match &pin {
+                None => Ok(Default::default()),
+                Some(pin) => {
+                    datalib_etl::pin::install_views(db.pool(), pin)
+                        .await
+                        .context("pin the gitlab raw store for render")?;
+                    read_everything(&db, last.as_deref(), pin).await
+                }
+            };
             // Closed before returning, on the error path too.
             db.close().await;
             out
@@ -173,6 +184,7 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
 async fn read_everything(
     db: &RawDb,
     last_render_hash: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
 ) -> Result<(LoadedRaw, ScanResult, Vec<String>)> {
     let raw = LoadedRaw {
         self_identity: db.load_self_identity().await?,
@@ -182,6 +194,7 @@ async fn read_everything(
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         db.pool(),
         last_render_hash,
+        pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             // `self_identity` is not read by render, so a change to it fans
             // out to nothing.

@@ -46,6 +46,9 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         })
         .await
         .context("fetch")?;
+        // Commit, the way the processor's `RawStoreSession` does in
+        // production: render reads committed state only.
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: sms fetch").await?;
 
         assert_eq!(summary.files, 2, "2 xml files (sms + calls)");
         assert_eq!(summary.sms, 3, "3 plain SMS");

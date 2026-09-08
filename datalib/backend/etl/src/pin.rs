@@ -75,6 +75,24 @@ impl Pin {
     }
 }
 
+/// The commit this store is at now, or `None` when it has no commits.
+///
+/// For a consumer driven by [`crate::doltlite_raw::scan_buckets`], prefer the
+/// `new_head` that scan already returned: the diff and the reads that follow
+/// it must name one commit, and sampling HEAD a second time can pick up a
+/// commit the diff did not see. This is for the consumers that do no diff at
+/// all, and for a sibling store (a blob CAS) with a HEAD of its own.
+pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
+    let commit: Option<String> =
+        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            // No `dolt_log` at all is a build without the extensions, which
+            // reads the same as a store with nothing committed: no pin.
+            .unwrap_or(None);
+    Pin::from_scan(commit.as_deref())
+}
+
 /// Create one `pinned_<table>` view per table on this connection, and return
 /// how many. Call it once, when a store is opened for reading.
 ///
@@ -293,6 +311,57 @@ mod view_tests {
             count("SELECT COUNT(*) FROM pinned_later").await,
             0,
             "a table that did not exist at the pin reads empty, not dirty"
+        );
+    }
+
+    /// The guarantee every pinned render now rests on, stated once against a
+    /// store shaped like a provider's: a row written but not committed must
+    /// not be visible through the views, and one that *was* committed must.
+    ///
+    /// Each provider gets this property by construction — it opens with
+    /// `open_reader`, pins, installs the views, and reads `pinned_<table>`,
+    /// and the repo lint refuses a render read that does not. This test is
+    /// what makes that chain mean something: if `install_views` ever stopped
+    /// excluding the working set, every provider would silently start
+    /// rendering half-written rows and no provider test would notice, because
+    /// none of them writes uncommitted data on purpose.
+    #[tokio::test]
+    async fn an_uncommitted_row_is_invisible_through_the_views() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(
+            &dir.path().join("provider.doltlite_db"),
+            &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT)"],
+        )
+        .await
+        .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+        sqlx::query("INSERT INTO entities VALUES ('committed', 'a')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let commit = crate::doltlite_raw::commit_run(&pool, "one entity")
+            .await
+            .unwrap()
+            .unwrap();
+        // The shape a download mid-run leaves behind.
+        sqlx::query("INSERT INTO entities VALUES ('in-flight', 'b')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        install_views(&pool, &Pin::at(&commit).unwrap())
+            .await
+            .unwrap();
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM pinned_entities ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            ids,
+            vec!["committed".to_string()],
+            "the pinned view must show the committed row and not the in-flight one"
         );
     }
 

@@ -1140,27 +1140,18 @@ pub async fn buckets_without_rows(
 pub async fn scan_buckets(
     pool: &sqlx::SqlitePool,
     last_render_hash: Option<&str>,
+    pin: &crate::pin::Pin,
     spec: &DiffScanSpec<'_>,
 ) -> Result<DiffScan> {
-    let new_head: Option<String> =
-        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+    // The caller pinned first and hands us the commit, rather than us sampling
+    // HEAD here. That ordering is load-bearing twice over: the diff and the
+    // content reads that follow it name one commit by construction, and the
+    // `pinned_<table>` views already exist by the time `bucket_query` runs —
+    // which it needs, because those queries join live tables against the diff.
+    let to_ref = pin.commit().to_string();
+    let new_head = Some(to_ref.clone());
 
     let Some(from_ref) = last_render_hash else {
-        return Ok(DiffScan {
-            changed_buckets: None,
-            new_head,
-            scan_elapsed: None,
-        });
-    };
-
-    // Scanning to the sampled hash rather than to `HEAD`, for the reason on
-    // `bucket_query`. With no hash to scan to there is no commit at all, and
-    // the cold start below is the only honest answer.
-    let Some(to_ref) = new_head.clone() else {
         return Ok(DiffScan {
             changed_buckets: None,
             new_head,

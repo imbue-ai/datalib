@@ -27,7 +27,7 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT blake3 AS ref_id, blake3,
            mime_type AS content_type,
            relative_path AS upstream_name
-      FROM wa_media_files
+      FROM pinned_wa_media_files wa_media_files
      WHERE blake3 IN ({placeholders})";
 
 /// What `parse` returns to render: the chat tree plus a per-chat `BlobBundle`
@@ -64,13 +64,25 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
         .await
         .with_context(|| format!("open {}", db_path.display()))?;
 
+    // Pin before the first read. whatsapp diffs by hand rather than through
+    // `scan_buckets`, so it samples HEAD here; no commit means nothing has
+    // been committed to render, which is emptiness rather than a reason to
+    // read the working set.
+    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        return Ok(ParsedWhatsApp::default());
+    };
+    datalib_etl::pin::install_views(&pool, &pin)
+        .await
+        .context("pin the whatsapp raw store for render")?;
+
     // 1) Pull every chat with its display label. Group chats use
     //    `subject`; 1:1 chats fall back to the JID's local part.
-    let chat_rows =
-        sqlx::query("SELECT chat_jid, subject, group_type FROM wa_chat ORDER BY chat_jid")
-            .fetch_all(&pool)
-            .await
-            .context("select wa_chat")?;
+    let chat_rows = sqlx::query(
+        "SELECT chat_jid, subject, group_type FROM pinned_wa_chat wa_chat ORDER BY chat_jid",
+    )
+    .fetch_all(&pool)
+    .await
+    .context("select wa_chat")?;
     let mut chats: Vec<ChatHeader> = chat_rows
         .iter()
         .map(|r| {
@@ -96,7 +108,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
     // 2) Messages.
     let msg_rows = sqlx::query(
         "SELECT chat_jid, key_id, from_me, sender_jid, timestamp, message_type, text_data \
-         FROM wa_message ORDER BY chat_jid, sort_id, timestamp, key_id",
+         FROM pinned_wa_message wa_message ORDER BY chat_jid, sort_id, timestamp, key_id",
     )
     .fetch_all(&pool)
     .await
@@ -109,8 +121,8 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
     let media_rows = sqlx::query(
         "SELECT m.chat_jid, m.key_id, m.from_me, m.file_path, m.mime_type, m.file_size, \
                 m.media_caption, m.media_name, f.blake3 \
-         FROM wa_message_media m \
-         LEFT JOIN wa_media_files f ON f.relative_path = m.file_path",
+         FROM pinned_wa_message_media m \
+         LEFT JOIN pinned_wa_media_files f ON f.relative_path = m.file_path",
     )
     .fetch_all(&pool)
     .await
@@ -154,8 +166,8 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
         "SELECT a.chat_jid AS add_on_chat_jid, a.key_id AS add_on_key_id, a.from_me AS add_on_from_me, \
                 a.sender_jid, a.parent_chat_jid, a.parent_key_id, a.parent_from_me, \
                 a.timestamp, r.reaction \
-         FROM wa_message_add_on a \
-         JOIN wa_message_add_on_reaction r \
+         FROM pinned_wa_message_add_on a \
+         JOIN pinned_wa_message_add_on_reaction r \
             ON r.chat_jid = a.chat_jid AND r.key_id = a.key_id AND r.from_me = a.from_me \
          WHERE a.parent_key_id IS NOT NULL",
     )

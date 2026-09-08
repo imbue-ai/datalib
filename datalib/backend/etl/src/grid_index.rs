@@ -628,9 +628,24 @@ pub async fn build_grid_index(
             let store =
                 crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(&rendered_root)
                     .with_context(|| format!("open render store for {stanza}"))?;
+            // Pin before anything reads: the diff below and the rows behind
+            // it must name one commit, and the views have to exist before
+            // either query runs.
+            let Some(pin) = store
+                .pin_for_reading()
+                .with_context(|| format!("pin the render store for {stanza}"))?
+            else {
+                tracing::warn!(
+                    source = %stanza,
+                    "index: this store names no commit, so there is nothing \
+                     committed to index; skipping it this run"
+                );
+                store.close();
+                continue;
+            };
             let cursor = cursors.get(&stanza).map(String::as_str);
             let scan = store
-                .changed_since(cursor)
+                .changed_since(cursor, &pin)
                 .with_context(|| format!("diff render store for {stanza}"))?;
             // Say which path was taken, every time: a cold start that fires
             // silently on every run looks exactly like a fast one from the
@@ -653,22 +668,6 @@ pub async fn build_grid_index(
                     "index: documents changed since the last index"
                 ),
             }
-            // Read at the commit the scan named, so the changed set and the
-            // rows behind it describe one commit. No commit means this store
-            // has nothing committed to read — an interrupted first render, or
-            // a build with no dolt extensions — and reading it anyway would
-            // mean indexing rows the renderer had not finished writing.
-            let Some(pin) = crate::pin::Pin::from_scan(scan.new_head.as_deref())
-                .with_context(|| format!("pin the render store for {stanza}"))?
-            else {
-                tracing::warn!(
-                    source = %stanza,
-                    "index: this store names no commit, so there is nothing \
-                     committed to index; skipping it this run"
-                );
-                store.close();
-                continue;
-            };
             let found = store
                 .documents_matching(out_dir, scan.changed_buckets.as_ref(), &pin)
                 .with_context(|| format!("read documents from {stanza}"))?;
@@ -2030,8 +2029,12 @@ mod source_cursor_tests {
         let cursors = load_source_cursors(&pool).await.unwrap();
         let recorded = cursors.get("src").expect("a cursor for src").clone();
 
-        let store = IndexedMarkdownStore::open(&rendered_root(root, "src")).unwrap();
-        let head = store.changed_since(None).unwrap().new_head;
+        let store = IndexedMarkdownStore::open_for_reading(&rendered_root(root, "src")).unwrap();
+        let pin = store
+            .pin_for_reading()
+            .unwrap()
+            .expect("the store has commits");
+        let head = store.changed_since(None, &pin).unwrap().new_head;
         store.close();
         assert_eq!(Some(recorded), head, "the cursor is the store's HEAD");
     }

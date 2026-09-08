@@ -17,7 +17,7 @@ use crate::download::normalize::normalize_to_export_shape;
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_uuid AS ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
-      FROM claude_attachments
+      FROM pinned_claude_attachments claude_attachments
      WHERE file_uuid IN ({placeholders}) AND blake3 IS NOT NULL";
 
 #[derive(Debug, Clone)]
@@ -223,7 +223,35 @@ async fn parse_doltlite_async(
         None
     };
 
-    let scan = scan_diff(&pool, last_render_hash).await?;
+    // Pin before anything reads this store. The diff below and the rows
+
+    // behind it have to name one commit, and the `pinned_<table>` views must
+
+    // already exist when the diff runs — its bucket query joins live tables.
+
+    // No commit at all means nothing has been committed here to render, which
+
+    // is emptiness, not a reason to read the working set.
+
+    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        return Ok(ParsedExport::default());
+    };
+
+    datalib_etl::pin::install_views(&pool, &pin)
+        .await
+        .context("pin the claude raw store for render")?;
+
+    // The CAS is a separate file with its own HEAD, so it takes its own pin.
+
+    if let Some(cas_pool) = cas_pool.as_ref() {
+        if let Some(cas_pin) = datalib_etl::pin::head(cas_pool).await? {
+            datalib_etl::pin::install_views(cas_pool, &cas_pin)
+                .await
+                .context("pin the claude CAS for render")?;
+        }
+    }
+
+    let scan = scan_diff(&pool, last_render_hash, &pin).await?;
 
     // These three all read tables the download side also reads; the
     // single copy of each lives in `download::db` (users/orgs go
@@ -413,10 +441,15 @@ fn project_doc_row(project_uuid: String, doc_uuid: String, payload: Value) -> Pr
 /// `dolt_diff_claude_attachments` and `dolt_diff_project_docs` to
 /// project the changed bucket keys — conversation UUIDs from the first
 /// two, project UUIDs from the third.
-async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
+async fn scan_diff(
+    pool: &SqlitePool,
+    last_render_hash: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
+) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
         last_render_hash,
+        pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             global_fanout_tables: &["users", "orgs", "projects"],
             bucket_query: "
