@@ -9,6 +9,8 @@
 //! `NamedTempFile` dropped at the end, and media are read in place from
 //! `backup_dir/Media/`, which WhatsApp already stores in the clear.
 
+use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -47,7 +49,7 @@ pub struct IngestSummary {
 /// orchestrator open the pool once at the start of an download run
 /// (so SIGINT can flush in-flight stores) and pass the same handle
 /// into `ingest`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
     /// Path on disk of the doltlite file the pool wraps. Kept so
@@ -66,10 +68,10 @@ impl RawDb {
         })
     }
 
-    /// Wait for the connections to actually go away, so the store can be
-    /// reopened. Dropping the handle only schedules that.
+    /// Release every store this handle opened, and wait for the
+    /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
-        self.pool.close().await;
+        self.close_all().await;
     }
 
     pub fn pool(&self) -> &SqlitePool {

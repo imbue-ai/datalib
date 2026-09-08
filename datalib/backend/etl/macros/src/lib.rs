@@ -1,8 +1,11 @@
 //! Proc-macros for the datalib ETL crates.
 //!
-//! Four derives, one per table shape, so a provider's `schema_raw.rs` is its
-//! row structs and nothing else. Required struct shapes, attributes and the
-//! Rust→SQL type mapping are in this crate's README.
+//! Four table derives, one per table shape, so a provider's
+//! `schema_raw.rs` is its row structs and nothing else — plus
+//! `RawStoreHandle`, which reads a store handle's fields so that closing
+//! every pool it opened is not something anyone has to remember. Required
+//! struct shapes, attributes and the Rust→SQL type mapping are in this
+//! crate's README.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -109,6 +112,97 @@ fn parse_table_attr(attrs: &[Attribute], struct_name: &Ident) -> syn::Result<Str
         struct_name,
         "#[derive(WirePayloadRow)] requires #[wire_payload_row(table = \"…\")]",
     ))
+}
+
+/// Implement `datalib_etl::store_handle::RawStoreHandle` by reading the
+/// struct's fields: every `SqlitePool` and every `BlobCas`, in declaration
+/// order, and nothing else.
+///
+/// The point is exhaustiveness. A handle that grows a second store is the
+/// shape that has already gone wrong here — `RawStoreSession::finish`
+/// named its entity pool directly and left the blob CAS open — and a
+/// hand-written list is exactly where that recurs. Matching is on the
+/// trailing path segment, as `WirePayloadRow` does, so `SqlitePool`,
+/// `sqlx::SqlitePool` and `Option<BlobCas>` all resolve.
+#[proc_macro_derive(RawStoreHandle)]
+pub fn derive_raw_store_handle(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_raw_store_handle(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// How a field contributes pools, or `None` when it is not a store.
+enum StoreField {
+    Pool,
+    Cas,
+    OptionalPool,
+    OptionalCas,
+}
+
+fn classify_store_field(ty: &Type) -> Option<StoreField> {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return None;
+    };
+    let seg = path.segments.last()?;
+    match seg.ident.to_string().as_str() {
+        "SqlitePool" => Some(StoreField::Pool),
+        "BlobCas" => Some(StoreField::Cas),
+        "Option" => {
+            let PathArguments::AngleBracketed(args) = &seg.arguments else {
+                return None;
+            };
+            let GenericArgument::Type(inner) = args.args.first()? else {
+                return None;
+            };
+            match classify_store_field(inner)? {
+                StoreField::Pool => Some(StoreField::OptionalPool),
+                StoreField::Cas => Some(StoreField::OptionalCas),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn expand_raw_store_handle(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let name = &input.ident;
+    let fields = collect_named_fields(&input)?;
+    let mut pushes: Vec<TokenStream2> = Vec::new();
+    for f in &fields {
+        let ident = f.ident.as_ref().expect("named field");
+        match classify_store_field(&f.ty) {
+            Some(StoreField::Pool) => pushes.push(quote! { out.push(&self.#ident); }),
+            Some(StoreField::Cas) => pushes.push(quote! { out.push(self.#ident.pool()); }),
+            Some(StoreField::OptionalPool) => pushes.push(quote! {
+                if let Some(p) = self.#ident.as_ref() { out.push(p); }
+            }),
+            Some(StoreField::OptionalCas) => pushes.push(quote! {
+                if let Some(c) = self.#ident.as_ref() { out.push(c.pool()); }
+            }),
+            None => {}
+        }
+    }
+    if pushes.is_empty() {
+        return Err(syn::Error::new_spanned(
+            name,
+            "#[derive(RawStoreHandle)] found no store field; add a SqlitePool or BlobCas, \
+             or drop the derive",
+        ));
+    }
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    Ok(quote! {
+        impl #impl_generics ::datalib_etl::store_handle::RawStoreHandle
+            for #name #ty_generics #where_clause
+        {
+            fn pools(&self) -> ::std::vec::Vec<&::sqlx::sqlite::SqlitePool> {
+                let mut out = ::std::vec::Vec::new();
+                #(#pushes)*
+                out
+            }
+        }
+    })
 }
 
 // Field walking

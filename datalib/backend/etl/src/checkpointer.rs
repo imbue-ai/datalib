@@ -45,6 +45,15 @@ impl Default for Cadence {
 /// atomic: half a re-ingest is indistinguishable from a source that lost most
 /// of its data, and publishing that lets every consumer downstream act on it.
 /// The whole run is the unit, so it takes one commit at the end.
+///
+/// **`reset_and_redownload` is not the whole test.** That flag is one reason a
+/// run wipes first; it is not the only one. `whatsapp`, `pdf` and `fsindex`
+/// truncate on *every* run — for them the truncate is what makes upstream
+/// deletions fall out — so a checkpoint taken partway through their refill
+/// publishes exactly the mass deletion this exists to prevent, flag or no
+/// flag. A provider like that either takes `Never`, or seals only after its
+/// refill completes. Neither is something a shared cadence can work out;
+/// whoever wires a provider up has to answer it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
     Never,

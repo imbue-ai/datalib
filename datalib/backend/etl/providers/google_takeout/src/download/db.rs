@@ -1,6 +1,8 @@
 //! Thin `RawDb` wrapper around the shared bulk/CAS/file-checkpoint
 //! helpers.
 
+use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_macros::RawStoreHandle;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -17,7 +19,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 /// Every cursor scope this provider owns. Reset wipes them in one go.
 pub const CURSOR_SCOPE_PREFIX: &str = "google_takeout/";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
     cas: BlobCas,
@@ -59,11 +61,10 @@ impl RawDb {
         &self.cas
     }
 
-    /// Wait for both connections to actually go away, so the store can be
-    /// reopened. Dropping the handle only schedules that.
+    /// Release every store this handle opened, and wait for the
+    /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
-        self.pool.close().await;
-        self.cas.close().await;
+        self.close_all().await;
     }
 
     /// `--reset-and-redownload`. Truncates every entity / edge data

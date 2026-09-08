@@ -39,12 +39,18 @@ pub struct RenderSummary {
 /// database work finishes before the non-`Send` document sink enters
 /// scope — otherwise the whole render future is non-`Send` and cannot
 /// be driven by the `#[async_trait]` processor.
-pub async fn load_targets(raw_dir: &Path) -> Result<Vec<RenderTarget>> {
+/// **`None` means the store could not be read**, which is not the same as
+/// a corpus with nothing in it. The caller uses this list as the membership
+/// test behind its deletions, so an empty vec here would remove every
+/// document the diff named.
+pub async fn load_targets(raw_dir: &Path) -> Result<Option<Vec<RenderTarget>>> {
     let db_path = crate::download::db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
-    let db = RawDb::open_reader(&db_path).await?;
+    let Some(db) = RawDb::open_reader(&db_path).await? else {
+        return Ok(None);
+    };
     let targets = async {
         match db.scan_root().await? {
             Some(root) => db.convertible_documents(&root).await,
@@ -56,7 +62,7 @@ pub async fn load_targets(raw_dir: &Path) -> Result<Vec<RenderTarget>> {
     // Closed before returning, on the error path too: the next open of
     // this store is a second connection until this one is gone.
     db.close().await;
-    targets
+    targets.map(Some)
 }
 
 pub fn render_targets(
@@ -123,7 +129,9 @@ pub async fn render(
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let targets = load_targets(raw_dir).await?;
+    // An unreadable store renders nothing. This wrapper does no deleting,
+    // so unlike the processor's path it can treat the two alike.
+    let targets = load_targets(raw_dir).await?.unwrap_or_default();
     render_targets(
         &targets,
         out_dir,
@@ -312,17 +320,15 @@ pub async fn scan_changed(raw_dir: &Path, last_render_hash: Option<&str>) -> Res
     // Read-only, and closed before returning: `load_targets` ran just
     // before this against the same file, and a second pool overlapping the
     // first is the "database is locked" hazard `open_reader`'s docs name.
-    let db = RawDb::open_reader(&db_path).await?;
-    // Pin first: the diff and anything read at it must name one commit, and
-    // the views have to exist before the bucket query runs. No commit means
-    // nothing committed to scan.
-    let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
-        db.close().await;
+    // `open_reader` pins to HEAD and installs the views, so the diff and
+    // everything read at it name one commit.
+    let Some(db) = RawDb::open_reader(&db_path).await? else {
         return Ok(PdfScan::default());
     };
-    datalib_etl::pin::install_views(db.pool(), &pin)
-        .await
-        .context("pin the pdf raw store for the render scan")?;
+    let pin = db
+        .pin()
+        .expect("open_reader returns a pinned handle")
+        .clone();
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         db.pool(),
         last_render_hash,

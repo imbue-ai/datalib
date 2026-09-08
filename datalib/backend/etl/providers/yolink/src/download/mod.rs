@@ -9,6 +9,8 @@
 
 pub mod schema_raw;
 
+use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_macros::RawStoreHandle;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -142,7 +144,7 @@ pub fn parse(body: &str, kind: &str) -> Result<Vec<Reading>> {
 /// Thin wrapper around the doltlite pool — open + reset is all the
 /// sync runner consumes externally. Everything else stays inline in
 /// [`fetch`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
 }
@@ -154,10 +156,10 @@ impl RawDb {
         let pool = dr::open(db_path, &slices).await?;
         Ok(Self { pool })
     }
-    /// Wait for the connections to actually go away, so the store can be
-    /// reopened. Dropping the handle only schedules that.
+    /// Release every store this handle opened, and wait for the
+    /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
-        self.pool.close().await;
+        self.close_all().await;
     }
 
     pub fn pool(&self) -> &SqlitePool {
