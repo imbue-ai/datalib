@@ -57,14 +57,17 @@ pub fn render_posts(
         return Ok(RenderPass::Skipped);
     }
 
-    let (shares, comments) = tokio::task::block_in_place(|| {
+    let Some((shares, comments)) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open_reader(&db_path).await?;
             // Read at a commit: this store belongs to the download step, and
             // nothing committed means nothing to render from.
             let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
                 db.close().await;
-                return Ok(Default::default());
+                // `None` all the way out, not an empty value: an empty load is
+                // indistinguishable from a source with nothing in it, and the
+                // caller sweeps every document this pass did not name.
+                return Ok(None);
             };
             datalib_etl::pin::install_views(db.pool(), &pin).await?;
             // A feed the user didn't export has no table; treat a load
@@ -80,9 +83,14 @@ pub fn render_posts(
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             db.close().await;
-            Ok::<_, anyhow::Error>((shares, comments))
+            Ok::<_, anyhow::Error>(Some((shares, comments)))
         })
-    })?;
+    })?
+    else {
+        // Nothing committed to read: this pass did not walk, so it must not
+        // reach the retain sweep.
+        return Ok(RenderPass::Skipped);
+    };
 
     let chats = build_post_chats(&shares, &comments);
 

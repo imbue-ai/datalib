@@ -376,6 +376,63 @@ checkpoint is to dispatch the consumer again, which is the design's
 "fallback" path (Bazel's `--strategy=worker,local`) promoted to being
 the only path.
 
+## The sink contract
+
+Everything above is written in doltlite's vocabulary — commits, pins,
+`dolt_at_`. That is an implementation, not the contract. A step's sink
+is whatever it writes: a doltlite store today, and we should not build
+so that it is always one.
+
+The contract a sink owes a consumer is two sentences:
+
+> **A sink can always be read, and it may be empty.** "I could not read
+> it" and "I read it and there was nothing there" are different answers,
+> and a sink must never return the first when it means the second.
+
+That distinction is the whole of it, and getting it wrong is expensive
+in one direction only. A consumer that reads an empty sink concludes the
+source currently holds nothing — which, for render, means every document
+that source used to have is gone, and `retain_documents` deletes them.
+So a sink that cannot answer must say *that*, not hand back an empty
+result and let the consumer draw the conclusion.
+
+We have already shipped that bug once. `pin::head()` returns `None` when
+a store has no usable commit; five render paths turned it into an empty
+result set and then reported a completed walk, which swept the source.
+The guard was there and tested the right thing — the empty value leaked
+past it from an inner block.
+
+**How doltlite honors it.** A store gets an "Initialize data repository"
+commit when the file is created, before any DDL — so a store's log is
+never empty, but that first commit carries no tables, and pinning it
+gives a reader a pin that cannot resolve any of them. What makes a store
+readable is the *schema commit*: `open` runs the DDL and commits with
+`-Am`, and a reader pinned there gets `pinned_<table>` over zero rows,
+cleanly. So:
+
+- a store with a schema commit is **readable, possibly empty** — and a
+  consumer that finds zero rows may act on that, sweeps included;
+- a store without one, or with no file at all, is **unreadable** — the
+  consumer skips, and must not sweep.
+
+Today those two collapse into one `None`, and render treats both as
+"skip". That is the safe side of the mistake, but it is still a
+mistake: a source that legitimately drops to zero documents never gets
+them cleaned up. Making the schema commit a *guaranteed* sentinel is
+what separates them, and it is worth doing — after the reads in
+`EXPECTED_UNPINNED_READS` are pinned, since it changes what a skip
+means.
+
+The sentinel earns its keep a second way: it gives every downstream step
+a legitimate, pinnable, empty input to be tested against. Processing an
+empty dataset should always work, and that is the case nobody writes a
+fixture for.
+
+**For a non-doltlite sink**, the contract is the same two sentences and
+the mechanism is its own. A sink that cannot distinguish "absent" from
+"empty" has not met it, and a consumer reading such a sink cannot be
+allowed to delete on an empty read.
+
 ## Producer side: chunked commits
 
 The seam already exists in both places:
@@ -568,9 +625,21 @@ Each of these is a reviewable PR that leaves the tree green.
 
    Those helpers take a mandatory `Reads` now: `Own` for the download step
    reading what it wrote, `At(&pin)` for everyone else. The compiler asks
-   the question at every call, which is what makes the empty baseline mean
-   something. `Reads::Own` in render code is what the lint watches for, and
-   the blob CAS is the one documented exemption.
+   the question at every call. `Reads::Own` in render code is what the lint
+   watches for, and the blob CAS is the one documented exemption.
+
+   **Not finished.** Thirteen reads remain, in five providers, and the
+   check's baseline names them:
+
+   ```
+   notion 3, claude 3, gitlab 3, github 2, contacts 2
+   ```
+
+   Each is a bespoke query in a `download/db.rs` that render calls into,
+   so neither the compiler nor a regex over `src/render*` sees it — which
+   is how this check printed "every render read is pinned" for two
+   commits running. Until they are pinned, `download -> render` (step 7)
+   cannot stream.
 
 
 3. **Producer checkpoints.** `Checkpointer` (debounce + ceiling, skip
@@ -582,12 +651,17 @@ Each of these is a reviewable PR that leaves the tree green.
    progress with no scheduling risk. Answers most of #164 on its own.
 4. ~~**Consumers pin.**~~ Folded into step 2, per above. Done for
    `render -> grid_index`; still to do for `download -> render`.
-5. **Streaming dispatch.** The scheduler change — in-flight tracking
+5. **The empty-store sentinel.** Guarantee the schema commit, so a
+   readable-but-empty sink stops being indistinguishable from an
+   unreadable one — see [The sink contract](#the-sink-contract). Small,
+   and it has to land after the thirteen reads above, because it changes
+   what a skip means.
+6. **Streaming dispatch.** The scheduler change — in-flight tracking
    with checkpoints dropped rather than queued, and the separate
    streaming slot — for `render → grid_index` only. Measure the latency
    change before widening.
-6. **`download → render`.** Turn the capability on for the second edge.
-7. **The UI frame.**
+7. **`download → render`.** Turn the capability on for the second edge.
+8. **The UI frame.**
 
 Steps 1–4 carry no scheduling risk at all, and 3 is independently
 useful, so if this stalls partway it stalls somewhere useful.

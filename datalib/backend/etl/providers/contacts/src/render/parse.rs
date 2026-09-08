@@ -59,13 +59,16 @@ pub struct ParsedContacts {
     pub contacts: Vec<ParsedContact>,
 }
 
-/// Load every contact from the raw doltlite store at `db_path` and
-/// parse each vCard. Returns an empty [`ParsedContacts`] when the
-/// store is absent or empty — render paths shouldn't fail hard
-/// when the upstream download hasn't run yet.
-pub fn parse(db_path: &Path) -> Result<ParsedContacts> {
+/// Load every contact from the raw doltlite store at `db_path` and parse each
+/// vCard. `None` when the store is absent — a render path must not fail hard
+/// because the download has not run yet.
+///
+/// **`None`, not an empty [`ParsedContacts`].** The caller sweeps every
+/// document this pass did not name, and an empty parse is indistinguishable
+/// at the sweep from a source that lost every contact it had.
+pub fn parse(db_path: &Path) -> Result<Option<ParsedContacts>> {
     if !db_path.exists() {
-        return Ok(ParsedContacts::default());
+        return Ok(None);
     }
     let path = db_path.to_path_buf();
     let rows = tokio::task::block_in_place(|| {
@@ -78,7 +81,7 @@ pub fn parse(db_path: &Path) -> Result<ParsedContacts> {
             rows
         })
     })?;
-    Ok(parse_loaded(rows))
+    Ok(Some(parse_loaded(rows)))
 }
 
 pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
@@ -344,8 +347,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_missing_db_returns_empty_silently() {
+    /// An absent store is `None`, not an empty parse. The caller sweeps
+    /// every document this pass did not name, so "no store yet" and "the
+    /// source lost every contact" must not look the same to it.
+    fn parse_missing_db_reads_as_absent_not_empty() {
         let parsed = parse(Path::new("/this/does/not/exist.doltlite_db")).unwrap();
-        assert_eq!(parsed.contacts.len(), 0);
+        assert!(parsed.is_none());
     }
 }

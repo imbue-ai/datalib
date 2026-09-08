@@ -321,6 +321,11 @@ _WRITABLE_OPEN = re.compile(
 def _check_render_opens_read_only(root: Path) -> int:
     bad: list[str] = []
     for rel in _render_sources(root):
+        # A `download/db.rs` is a download file that render calls into. Its
+        # opens are the download step's, and the download step owns the store
+        # it is writing -- only check 4 has anything to say about these.
+        if rel in _RENDER_REACHABLE_LOADERS:
+            continue
         text = (root / rel).read_text(encoding="utf-8", errors="replace")
         # Test modules build the stores they then read, so they need `open`.
         body = text.split("#[cfg(test)]")[0]
@@ -376,7 +381,16 @@ def _check_render_opens_read_only(root: Path) -> int:
 # mandatory `Reads`, so every call site answers "whose store is this?" and
 # the compiler will not let it be skipped. This dict is now only for a render
 # read that must genuinely be unpinned — and there are none.
-EXPECTED_UNPINNED_READS: dict[str, int] = {}
+EXPECTED_UNPINNED_READS: dict[str, int] = {
+    # Render-reachable loaders that still read the working set. Each is a
+    # bespoke query in a `download/db.rs`, so pinning one means threading a
+    # `Reads` through it and updating its render call site.
+    "datalib/backend/etl/providers/notion/src/download/db.rs": 3,
+    "datalib/backend/etl/providers/claude/src/download/db.rs": 3,
+    "datalib/backend/etl/providers/gitlab/src/download/db.rs": 3,
+    "datalib/backend/etl/providers/github/src/download/db.rs": 2,
+    "datalib/backend/etl/providers/contacts/src/download/db.rs": 2,
+}
 
 # `pinned_` is the whole point: a view over `dolt_at_<table>`, so reading it
 # is reading committed state. `dolt_*` are the history vtabs (already
@@ -407,23 +421,65 @@ _TABLE_READ = re.compile(r"\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*)")
 _OWN_READ = re.compile(r"Reads::Own\b")
 
 
+# Loaders that live in `download/db.rs` but are called from render. Their SQL
+# is bespoke rather than going through a `Reads`-taking helper, so neither the
+# regex nor the compiler sees them -- which is how this check printed "every
+# render read is pinned" twice while five providers read their whole content
+# from the working set.
+#
+# Listing them by hand is unsatisfying, and it is still better than the two
+# things it replaced: a file glob that could not reach them, and a claim that
+# they did not exist. An entry leaves when its loader takes a pin.
+_RENDER_REACHABLE_LOADERS: dict[str, tuple[str, ...]] = {
+    "datalib/backend/etl/providers/notion/src/download/db.rs": (
+        "load_comment_anchors",
+        "load_page_markdown",
+        "load_comments",
+    ),
+    "datalib/backend/etl/providers/claude/src/download/db.rs": (
+        "load_conversations_from",
+        "first_user_uuid_from",
+    ),
+    "datalib/backend/etl/providers/github/src/download/db.rs": (
+        "load_self_identity",
+        "load_pull_requests",
+        "load_children",
+    ),
+    "datalib/backend/etl/providers/gitlab/src/download/db.rs": (
+        "load_self_identity",
+        "load_merge_requests",
+        "load_discussions",
+    ),
+    "datalib/backend/etl/providers/contacts/src/download/db.rs": (
+        "load_all_for_render_and_index_md",
+    ),
+}
+
+
 def _render_sources(root: Path) -> list[str]:
     # Most providers keep render under `src/render*`, but not all: linkedin
     # renders from `src/posts.rs` and `src/connections.rs`, which is how two
     # writable opens and five unpinned reads sat outside this check.
     extra = ("/src/posts.rs", "/src/connections.rs")
-    return [
+    files = [
         p
         for p in _git_ls_files(root, "datalib/backend/etl/providers")
         if p.endswith(".rs")
         and "/tests/" not in p
         and ("/src/render" in p or p.endswith(extra))
     ]
+    return files + [f for f in _RENDER_REACHABLE_LOADERS if (root / f).is_file()]
 
 
 def _unpinned_reads(root: Path, rel: str) -> list[tuple[int, str]]:
-    out: list[tuple[int, str]] = []
     text = (root / rel).read_text(encoding="utf-8", errors="replace")
+    # For a `download/db.rs` only the render-reachable loaders count: the rest
+    # of that file is the download step reading the store it is writing, which
+    # must stay unpinned.
+    if rel in _RENDER_REACHABLE_LOADERS:
+        return _loader_reads(text, _RENDER_REACHABLE_LOADERS[rel])
+
+    out: list[tuple[int, str]] = []
     for lineno, line in enumerate(text.splitlines(), 1):
         for table in _TABLE_READ.findall(line):
             if (
@@ -433,6 +489,26 @@ def _unpinned_reads(root: Path, rel: str) -> list[tuple[int, str]]:
                 out.append((lineno, table))
         if _OWN_READ.search(line):
             out.append((lineno, "Reads::Own"))
+    return out
+
+
+def _loader_reads(text: str, loaders: tuple[str, ...]) -> list[tuple[int, str]]:
+    """Unpinned table reads inside the named functions only."""
+    out: list[tuple[int, str]] = []
+    for fn in loaders:
+        start = text.find(f"fn {fn}")
+        if start < 0:
+            continue
+        end = text.find("\n    }\n", start)
+        body = text[start : end if end > 0 else len(text)]
+        base = text[:start].count("\n") + 1
+        for offset, line in enumerate(body.splitlines()):
+            for table in _TABLE_READ.findall(line):
+                if (
+                    not table.startswith(_PINNED_OK_PREFIXES)
+                    and table not in _UNPINNED_BY_DESIGN
+                ):
+                    out.append((base + offset, f"{fn}: {table}"))
     return out
 
 
@@ -447,7 +523,11 @@ def _check_unpinned_render_reads(root: Path) -> int:
         if not actual:
             print("OK: every render read is pinned.")
         else:
-            print(f"OK: {total} unpinned render read(s), matching the baseline.")
+            print(
+                f"OK: {total} unpinned render read(s) in "
+                f"{len(actual)} file(s), matching the baseline -- "
+                "still to pin, not yet safe to stream from."
+            )
         return 0
 
     added = {

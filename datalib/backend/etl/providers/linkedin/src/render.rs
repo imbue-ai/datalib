@@ -59,14 +59,17 @@ pub fn render(
     // One open for every table, not one per table: reopening a doltlite
     // store while the last connection is still closing is what makes a
     // later `dolt_commit` fail.
-    let by_table = tokio::task::block_in_place(|| {
+    let Some(by_table) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open_reader(&db_path).await?;
             // Read at a commit: this store belongs to the download step, and
             // nothing committed means nothing to render from.
             let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
                 db.close().await;
-                return Ok(Default::default());
+                // `None` all the way out, not an empty value: an empty load is
+                // indistinguishable from a source with nothing in it, and the
+                // caller sweeps every document this pass did not name.
+                return Ok(None);
             };
             datalib_etl::pin::install_views(db.pool(), &pin).await?;
             let mut loaded = Vec::new();
@@ -81,9 +84,14 @@ pub fn render(
                 ));
             }
             db.close().await;
-            Ok::<_, anyhow::Error>(loaded)
+            Ok::<_, anyhow::Error>(Some(loaded))
         })
-    })?;
+    })?
+    else {
+        // Nothing committed to read: this pass did not walk, so it must not
+        // reach the retain sweep.
+        return Ok(RenderPass::Skipped);
+    };
 
     let mut chats: Vec<NormalizedChat> = Vec::new();
     for (table, payloads) in &by_table {

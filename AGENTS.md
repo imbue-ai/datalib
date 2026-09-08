@@ -35,12 +35,16 @@ are relative to the repo root.
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
 - [`docs/dev/streaming_steps_plan.md`](docs/dev/streaming_steps_plan.md)
-  — *plan*, nothing built: how to build the above, measured against
-  the tree. Read it before touching how any consumer reads a store —
-  its §"The hazard" is the one to know, because the cursor scans are
-  already safe under a live writer and every *content* read is not.
-  It also inventories what already exists (more than the proposal
-  above implies) and overturns two of that proposal's conclusions.
+  — *plan*, partly built: how to build the above, measured against the
+  tree, with each step marked done or not. Read it before touching how
+  any consumer reads a store — its §"The hazard" is the one to know,
+  because the cursor scans are already safe under a live writer and
+  every *content* read is not. §"The sink contract" is the one to know
+  before writing anything that *deletes* on an empty read: a sink that
+  cannot tell "absent" from "empty" gets its whole source swept, which
+  has happened here twice. It also inventories what already exists
+  (more than the proposal above implies) and overturns two of that
+  proposal's conclusions.
 - [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs)
   — **read before changing how a config is validated**: why the loader
   returns a list of diagnostics rather than an `Err`, and what
