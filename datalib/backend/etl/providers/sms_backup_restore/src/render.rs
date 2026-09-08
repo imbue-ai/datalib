@@ -87,8 +87,12 @@ pub fn render(
                 datalib_etl::pin::install_views(db.pool(), &pin)
                     .await
                     .context("pin the sms_backup_restore raw store for render")?;
-                let messages = db.load_payloads("sms_messages").await?;
-                let calls = db.load_payloads("sms_calls").await?;
+                let messages = db
+                    .load_payloads(datalib_etl::pin::Reads::At(&pin), "sms_messages")
+                    .await?;
+                let calls = db
+                    .load_payloads(datalib_etl::pin::Reads::At(&pin), "sms_calls")
+                    .await?;
                 let blobs = load_blobs(&db, &messages).await?;
                 let scan = scan_diff(db.pool(), last_render_hash, &pin).await?;
                 anyhow::Ok((messages, calls, blobs, scan))

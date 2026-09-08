@@ -533,6 +533,7 @@ async fn parse_doltlite_async(
     if let Some(changed) = scan.changed_conversations.as_ref() {
         parsed.vanished_buckets = datalib_etl::doltlite_raw::buckets_without_rows(
             &pool,
+            datalib_etl::pin::Reads::At(&pin),
             changed,
             &[("conversations", "id")],
         )

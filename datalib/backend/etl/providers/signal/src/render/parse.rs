@@ -241,8 +241,13 @@ async fn parse_async(
     // backup no longer carries it.
     let vanished_buckets = match scan.changed_chats.as_ref() {
         Some(changed) => {
-            datalib_etl::doltlite_raw::buckets_without_rows(&pool, changed, &[("chats", "id")])
-                .await?
+            datalib_etl::doltlite_raw::buckets_without_rows(
+                &pool,
+                datalib_etl::pin::Reads::At(&pin),
+                changed,
+                &[("chats", "id")],
+            )
+            .await?
         }
         None => Vec::new(),
     };

@@ -101,12 +101,18 @@ pub fn render(
                 datalib_etl::pin::install_views(db.pool(), &pin)
                     .await
                     .context("pin the google_takeout raw store for render")?;
-                let messages = db.load_payloads("chat_messages").await?;
+                let messages = db
+                    .load_payloads(datalib_etl::pin::Reads::At(&pin), "chat_messages")
+                    .await?;
                 // (dir name, group_info payload) — the directory name
                 // carries the space id, which `group_info.json` itself
                 // does not.
-                let groups = db.load_payloads_with_id("chat_groups").await?;
-                let voice_messages = db.load_payloads("voice_messages").await?;
+                let groups = db
+                    .load_payloads_with_id(datalib_etl::pin::Reads::At(&pin), "chat_groups")
+                    .await?;
+                let voice_messages = db
+                    .load_payloads(datalib_etl::pin::Reads::At(&pin), "voice_messages")
+                    .await?;
                 let voice_blobs = load_voice_blobs(&db, &voice_messages).await?;
                 anyhow::Ok((messages, groups, voice_messages, voice_blobs))
             }

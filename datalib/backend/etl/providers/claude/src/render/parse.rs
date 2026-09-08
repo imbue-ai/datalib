@@ -243,7 +243,9 @@ async fn parse_doltlite_async(
     // single copy of each lives in `download::db` (users/orgs go
     // through the shared `doltlite_raw` helper). See "One reader per
     // table" there.
-    let users = datalib_etl::doltlite_raw::load_payloads(&pool, "users").await?;
+    let users =
+        datalib_etl::doltlite_raw::load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "users")
+            .await?;
     let first_user_uuid = db::first_user_uuid_from(&pool).await?;
     let all_convs = db::load_conversations_from(&pool).await?;
     let total = all_convs.len();
@@ -294,6 +296,7 @@ async fn parse_doltlite_async(
     if let Some(changed) = scan.changed_buckets.as_ref() {
         parsed.vanished_buckets = datalib_etl::doltlite_raw::buckets_without_rows(
             &pool,
+            datalib_etl::pin::Reads::At(&pin),
             changed,
             &[("conversations", "id"), ("projects", "id")],
         )

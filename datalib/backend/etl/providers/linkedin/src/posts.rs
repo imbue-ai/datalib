@@ -59,11 +59,24 @@ pub fn render_posts(
 
     let (shares, comments) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open(&db_path).await?;
+            let db = RawDb::open_reader(&db_path).await?;
+            // Read at a commit: this store belongs to the download step, and
+            // nothing committed means nothing to render from.
+            let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+                db.close().await;
+                return Ok(Default::default());
+            };
+            datalib_etl::pin::install_views(db.pool(), &pin).await?;
             // A feed the user didn't export has no table; treat a load
             // error as "absent" rather than failing the render.
-            let shares = db.load_payloads("shares").await.unwrap_or_default();
-            let comments = db.load_payloads("comments").await.unwrap_or_default();
+            let shares = db
+                .load_payloads(datalib_etl::pin::Reads::At(&pin), "shares")
+                .await
+                .unwrap_or_default();
+            let comments = db
+                .load_payloads(datalib_etl::pin::Reads::At(&pin), "comments")
+                .await
+                .unwrap_or_default();
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             db.close().await;
