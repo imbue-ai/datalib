@@ -86,17 +86,22 @@ branch would silently start writing to `main` after 30 minutes and report
 success — and multi-million-entry scans reach that window.
 
 Any other code opening a `SqlitePool` against a `.doltlite_db` must do the
-same — and one pool, not two. Size 1 is necessary, not sufficient: a store
-guards itself with a lock it never waits on, so whichever connection is
-holding it makes the other one's `dolt_commit` fail. The message that comes
-back, `commit conflict: another connection committed to this branch`, names
-a commit that need not have happened; read it as "someone else has this
-store open right now".
+same — and one pool, not two. Size 1 is necessary, not sufficient. A second
+pool shares the first's working set, so an `-Am` commit through either
+sweeps up whatever the other has in flight; and while the two are actually
+mid-write they contend for a lock `dolt_commit` takes without waiting, so
+one of them fails with `commit conflict: another connection committed to
+this branch`. The message names a commit that need not have happened; read
+it as "someone else is writing this store right now".
 
-That makes a second pool a timing bug rather than an immediate one, and a
-pool you dropped is not yet a pool that is gone: sqlx closes its connections
-on a background task, so a store reopened right after the previous handle
-went out of scope can still find the old connection there.
+An idle peer costs neither of those —
+`//datalib/backend/etl:doltlite_two_process_test` measures a second
+read-write open landing in ~2ms with both pools then committing — which is
+what makes a second pool a timing bug rather than an immediate one. And a
+pool you dropped is not yet a pool that is gone: sqlx closes its
+connections on a background task, so a store reopened right after the
+previous handle went out of scope can still find the old connection
+there.
 
 So there are two ways to be right, and dropping a handle is neither. Hold
 one handle for as long as the store is in use. Or, where a fresh connection

@@ -627,22 +627,33 @@ what it *did*.
 
 ## One open per doltlite file, and close it before the next
 
-Every pool against a `.doltlite_db` is `max_connections(1)`. Two pools on
-one file are two connections, and they contend over the store's lock —
-but the two kinds of statement contend *differently*, which is why this
-bug has two faces:
+Every pool against a `.doltlite_db` is `max_connections(1)`, and doltlite's
+working set lives in the **file** rather than in the connection. A second
+pool is therefore not a second view of the store; it is a second handle on
+one shared uncommitted tree, and a `dolt_commit('-Am')` through either one
+sweeps up whatever the other has in flight.
 
-- **Ordinary reads and writes wait.** They retry under a busy handler, so
-  overlapping pools show up as a run that blocks on a file lock rather
-  than erroring. That is the shape a hang takes here.
-- **`dolt_commit` does not wait.** It takes the lock once and, if a peer
-  holds it, fails immediately with `commit conflict: another connection
-  committed to this branch. Please retry your transaction.` The message
-  names a commit that need not have happened — read it as "someone else
-  has this store open right now".
+**The open itself does not wait.** Measured on macOS with doltlite 0.50.3
+by `//datalib/backend/etl:doltlite_two_process_test`: a second read-write
+pool on an already-open file opens in ~2ms and both pools then commit, and
+a read-only pool alongside a live writer — opened in either order — costs
+each other nothing. What overlap costs you is the shared working set above,
+plus contention while two pools are actually mid-write. So a hang here is
+not the open blocking; it is two writers on one tree.
 
-`doltlite_raw::open` commits on the way in, so an overlapping *open* fails
-inside `open` itself, reported as `commit schema after DDL`.
+**Two writers mid-write is the second face, and it errors rather than
+waits.** Those measurements commit through each pool in turn. Commit
+through both *at once* and one of them fails outright with `commit
+conflict: another connection committed to this branch` — naming a commit
+that need not have happened; read it as "someone else has this store open
+right now". The asymmetry is in the source: ordinary DML retries under a
+busy handler (`btreeBeginTrans` loops on `prollyInvokeBusyHandler`) and
+rides the overlap out, while `dolt_commit` takes the store's lock once
+(`csFileLockNB`, via `RefreshAndConfirmHead`) and gives up if a peer holds
+it. `doltlite_raw::open` commits three times on the way in, so an
+overlapping *open* fails inside `open` itself, reported as `commit schema
+after DDL`. `two_live_pools_on_one_store_break_each_others_commits` in
+`doltlite_raw.rs` pins this half.
 
 Three rules follow, and none is optional:
 
@@ -670,8 +681,10 @@ mac laptop and a Linux CI container disagree readily. A render path that
 opened three pools per pass ran in 10s here and hit the 300s timeout on
 `//tests/fixtures:ingested_tng_test` there (#311). A download that opened
 its own pool and never closed it produced intermittent `commit conflict`
-failures across the doltlite-heavy targets (#327). If a doltlite-touching
-change is green locally and red or slow in CI, count the opens first.
+failures across the doltlite-heavy targets (#327). The measurements above
+are macOS only, and that is exactly the platform this warning says not to
+trust: if a doltlite-touching change is green locally and red or slow in
+CI, count the opens first.
 
 ## Git: prefer merges over rebases
 
