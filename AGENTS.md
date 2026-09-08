@@ -733,17 +733,40 @@ tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \
   //datalib/backend/signal-backup:signal_make_fixture
 ```
 
-**Let CI run the full suite; keep the local loop narrow.** `bazelisk
+**Run the cheap tests locally; let CI run the full suite.** `bazelisk
 test //...` is still the source of truth and still what "build green"
 means — but `imbue-ai/datalib` is public, which makes GitHub's standard
 runners free and unmetered, while your laptop's cores are the scarce
 resource. **A green CI run of `//...` satisfies the rule above; a
-narrower local run does not.** So push the branch and read the run
-rather than burning an afternoon of fans on a cold rebuild.
+narrower local run does not.**
 
-Locally, narrow the *bazel* invocation to the package you're touching
-(`bazelisk test //datalib/backend/etl/...`) — don't shell out to
-`cargo` / `pnpm`, which bypass the cache and can disagree with CI.
+That is an argument about the *full* suite, not about testing locally,
+and the cheap tiers are cheap enough to be worth running every time.
+Measured on one warm mac:
+
+| loop | command | cost |
+|---|---|---|
+| lint + typecheck | `bazelisk test //:lint` | **~3s** |
+| every hermetic test | `bazelisk test //... --build_tests_only --test_tag_filters=-no-sandbox,-requires-network,-external,-manual` | **~106s** after edits to a shared crate, **~2s** when nothing moved; 133 of 146 targets |
+| the package you're editing | `bazelisk test //datalib/backend/etl/...` | varies |
+| the whole gate, e2e included | push, and read CI | ~3 min warm / ~20 min cold |
+
+The middle row is the one to reach for before pushing. Its two numbers
+are the same bimodality CI shows: it re-runs only what your edit
+actually invalidated, so it is near-instant until you touch something
+shared. It drops
+exactly the 13 targets that need a host — the Playwright suite, the two
+applet tests that bind loopback ports, lightroom's real catalogs, and
+the `*_live` provider tests — and `--build_tests_only` keeps it from
+building the rest of the tree to run them.
+
+**Those tag filters belong on that invocation and NOWHERE else.** In
+particular do not carry them onto a full `bazelisk test //...`; the
+paragraph below says why, and it is a rule this repo learned the hard
+way.
+
+Don't shell out to `cargo` / `pnpm` for any of these — they bypass the
+cache and can disagree with CI.
 
 The disk cache is what makes that narrow loop cheap, and it is
 **shared across every worktree** (one absolute path, see `.bazelrc`).
@@ -754,8 +777,9 @@ worktrees against a 50G cap was measured doing exactly that. Check with
 `du -sh ~/Library/Caches/bazel-disk-cache` — sitting *at* the cap is the
 symptom.
 
-**Do not add `--test_tag_filters=-manual,-external` to this invocation.**
-The canonical line is the bare `bazelisk test //...`. Filtering on
+**Do not add `--test_tag_filters=-manual,-external` to the FULL run**
+(the last row of the table above — the one whose green is what "build
+green" means). The canonical line is the bare `bazelisk test //...`. Filtering on
 `-external` silently drops `//datalib/ui:e2e_test` (Playwright), which
 lets UI regressions through. (The lint/typecheck gate — `//:lint`, i.e.
 ruff + pyright + vue-tsc — is fully hermetic and carries no tags, so no
@@ -914,12 +938,28 @@ blast radius.
 The second lever is where those compiles run. `--config=remote`
 (`.bazelrc`) sends them to BuildBuddy remote execution instead of the
 runner's 4 vCPUs; `test.yml` takes it via a `remote_execution` dispatch
-input. It is a **trial switch, not the merge gate** — flip the gate only
-once a dispatch has gone green *and* the usage graph shows what a month
-costs, because the free tier's binding limit is 100 GB/month of cache
-transfer rather than its 80 cores. Note the floor it cannot beat: that
-same 1254s run had a 540s critical path, which is a chain of rustc
-invocations no amount of parallelism shortens.
+input. It is a **trial switch, not the merge gate**.
+
+The first trial (run `34206079545`) says it works and that the win is
+smaller than the queue depth suggests:
+
+```
+6305 processes: 2454 internal, 19 local, 6 processwrapper-sandbox, 3963 remote.
+INFO: Elapsed time: 832.265s, Critical Path: 632.58s
+```
+
+Against the comparable local cold run — 1254s elapsed, 540s critical
+path — wall clock fell 34% while **the critical path went UP**. Remote
+workers run an individual action slower than the runner does, so
+draining the queue faster lengthens the serial chain it drains around.
+That 832s is also a cold number in a second sense: a remote action keys
+differently from a local one, so the trial rebuilt from an empty remote
+cache and executed all 137 tests.
+
+Before flipping the gate, get a warm-cache dispatch *and* check the
+usage graph — the free tier's binding limit is 100 GB/month of cache
+transfer rather than its 80 cores, and remote execution moves far more
+of it than the cache-only mode does.
 
 Not exercised here, so treat as a pointer rather than a recipe:
 BuildBuddy also has a REST API and a side-by-side invocation compare in
