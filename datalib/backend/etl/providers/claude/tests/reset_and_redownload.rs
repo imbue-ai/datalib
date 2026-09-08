@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_claude::download::{db::db_path_for, fetch, FetchOptions};
+use datalib_etl_claude::download::{db::db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_claude::synthesize::ClaudeSynth;
 use serde_json::json;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -146,16 +146,20 @@ async fn reset_and_redownload_preserves_data_tables() {
     std::env::set_var(PLAYBACK_ENV, &playback);
 
     // ── Run 1: fresh download ─────────────────────────────────────
+    // Open here and close before the store is read back: a second
+    // live connection to one file makes a `dolt_commit` fail.
+    let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let s1 = fetch(FetchOptions {
         db_path: out_db.clone(),
         export_dir: Some(api.clone()),
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap();
+    .await;
+    db.close().await;
+    let s1 = s1.unwrap();
     assert_eq!(s1.fetched, 2, "first run should fetch 2 conversations");
 
     // Pool size 1 is the only safe choice for doltlite (per-connection
@@ -186,6 +190,9 @@ async fn reset_and_redownload_preserves_data_tables() {
     pool.close().await;
 
     // ── Run 2: reset + re-download ────────────────────────────────
+    // Open here and close before the store is read back: a second
+    // live connection to one file makes a `dolt_commit` fail.
+    let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let s2 = fetch(FetchOptions {
         db_path: out_db.clone(),
         export_dir: Some(api.clone()),
@@ -197,10 +204,11 @@ async fn reset_and_redownload_preserves_data_tables() {
             refetch_blobs: false,
             checkpoint_cadence: None,
         },
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap();
+    .await;
+    db.close().await;
+    let s2 = s2.unwrap();
     assert_eq!(
         s2.fetched, 2,
         "after reset the second run should refetch every conversation"

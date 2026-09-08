@@ -62,14 +62,13 @@ pub struct FetchOptions {
     pub latchkey: LatchkeySettings,
     /// Path to the doltlite database file. The entity db lives inside
     /// the per-source directory as `entities.doltlite_db` (the dir is
-    /// created if needed). Ignored for opening when `db` is `Some`.
+    /// created if needed).
     pub db_path: PathBuf,
-    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
-    /// instead of opening from `db_path`. The sync orchestrator pre-
-    /// opens at startup so a download isn't started against a DB we
-    /// can't write to (and so the post-download commit can run on the
-    /// same connection — no reopen race).
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     /// Path to a bulk-export directory (`users.json` and friends). If
     /// set and the DB is missing users, we pre-seed them from here.
     pub export_dir: Option<PathBuf>,
@@ -99,12 +98,14 @@ pub struct FetchOptions {
     pub sealer: Option<datalib_etl::raw_store::Sealer>,
 }
 
-impl Default for FetchOptions {
-    fn default() -> Self {
+impl FetchOptions {
+    /// Every field defaulted except the store, which has none to give:
+    /// it is a live handle the caller opens and closes.
+    pub fn new(db: RawDb) -> Self {
         Self {
             latchkey: LatchkeySettings::default(),
             db_path: PathBuf::new(),
-            db: None,
+            db,
             export_dir: None,
             overlap: 0,
             sleep_between: Duration::ZERO,
@@ -161,14 +162,8 @@ pub struct FetchSummary {
 
 #[instrument(skip_all, fields(db = %opts.db_path.display()))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db_path = db_path_for(&opts.db_path);
     let _ = datalib_etl::latchkey::ensure_curl_dispatch();
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&db_path)
-            .await
-            .with_context(|| format!("open raw db {}", db_path.display()))?,
-    };
+    let db = opts.db.clone();
 
     if opts.control.reset_and_redownload {
         info!(event = "claude_reset_and_redownload");

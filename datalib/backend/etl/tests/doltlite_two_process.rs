@@ -168,9 +168,14 @@ fn a_writer_opens_and_commits_under_a_reader_that_is_already_open() {
 /// the one neither scenario above reaches: two read-write pools on one file
 /// inside a single process. The rule is worth keeping — a second pool shares
 /// the first's working set, so their `-Am` commits sweep up each other's rows
-/// — but the reason given for it, that the second open waits on a file lock,
-/// is what this measures. Bounded, so a platform where it really does wait
-/// says so instead of hanging until the 300s acquire timeout.
+/// — but the reason once given for it, that the second open waits on a file
+/// lock, is what this measures. Bounded, so a platform where it really does
+/// wait says so instead of hanging until the 300s acquire timeout.
+///
+/// Commits here take turns. Issue them *simultaneously* and one fails with
+/// `commit conflict`, which is the other half of the rule; that half is
+/// covered by `two_live_pools_on_one_store_break_each_others_commits` in
+/// `doltlite_raw.rs`.
 #[test]
 fn a_second_read_write_pool_does_not_block_on_the_first() {
     let t = Scratch::new();

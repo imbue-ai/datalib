@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use datalib_etl_notion::download::{self as notion, FetchOptions};
+use datalib_etl_notion::download::{self as notion, db_path_for, FetchOptions, RawDb};
 use datalib_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
 
@@ -63,6 +63,9 @@ async fn main() -> Result<()> {
     // No flag at all is the whole-workspace mirror: search enumerates
     // what the token can see, so there is nothing to require.
 
+    // The one writer: this process opens the store, hands the handle to
+    // `fetch`, and closes it below.
+    let db = RawDb::open(&db_path_for(&args.out)).await?;
     let opts = FetchOptions {
         db_path: args.out.clone(),
         subtree_pages: args.subtree_page.clone(),
@@ -72,11 +75,13 @@ async fn main() -> Result<()> {
         page: args.page.clone(),
         retry_failed: args.retry_failed,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     };
 
     let span = info_span!("notion_download", db = %args.out.display());
-    let summary = notion::fetch(opts).instrument(span).await?;
+    let summary = notion::fetch(opts).instrument(span).await;
+    db.close().await;
+    let summary = summary?;
     info!(
         event = "notion_download_complete",
         new_pages = summary.new_pages,

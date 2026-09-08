@@ -80,7 +80,7 @@ impl DataProcessor for GoogleTakeoutDownload {
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            db: Some(db),
+            db,
             input_path: self.input_path.clone(),
             sync: self.sync.clone(),
             progress: ctx.progress.clone(),

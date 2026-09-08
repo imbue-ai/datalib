@@ -1372,6 +1372,9 @@ pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &s
 // to fail.
 #[allow(clippy::disallowed_macros)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
@@ -1402,6 +1405,75 @@ mod tests {
         let owned = test_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         open(p, &slices).await.unwrap()
+    }
+
+    /// Two live connections to one store make each other's `dolt_commit`
+    /// fail — the reason every caller must hold exactly one handle.
+    ///
+    /// `dolt_commit` takes the store's lock without waiting, and reports
+    /// whoever else holds it as `commit conflict: another connection
+    /// committed to this branch` whether or not that peer committed
+    /// anything. Ordinary DML retries under a busy handler and so rides
+    /// out the overlap; only the commit surfaces it. That asymmetry is
+    /// why a second pool is a timing bug rather than an immediate one,
+    /// and why in the field it reads as a CI flake.
+    ///
+    /// Both sides commit in lockstep so the contention is forced rather
+    /// than hoped for. The round count is what makes a false pass
+    /// impossible in practice; if this ever fails, doltlite has started
+    /// waiting for the store lock, and the pool rules can be revisited.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_live_pools_on_one_store_break_each_others_commits() {
+        const ROUNDS: usize = 64;
+
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("entities.doltlite_db");
+        let first = open_test(&db).await;
+        if !has_dolt_extensions(&first).await {
+            eprintln!("[two-pool test] stock libsqlite3 — nothing to contend over");
+            first.close().await;
+            return;
+        }
+        let owned = test_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let second = open(&db, &slices).await.expect("second open");
+
+        let conflicts = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let mut writers = Vec::new();
+        for (tag, pool) in [("a", first.clone()), ("b", second.clone())] {
+            let conflicts = conflicts.clone();
+            let gate = gate.clone();
+            writers.push(tokio::spawn(async move {
+                for round in 0..ROUNDS {
+                    sqlx::query("INSERT OR REPLACE INTO widgets (id, name) VALUES (?, ?)")
+                        .bind(format!("{tag}-{round}"))
+                        .bind(tag)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                    gate.wait().await;
+                    if let Err(e) = commit_run(&pool, tag).await {
+                        let msg = format!("{e:#}");
+                        assert!(msg.contains("commit conflict"), "unexpected error: {msg}");
+                        conflicts.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }));
+        }
+        for w in writers {
+            w.await.unwrap();
+        }
+
+        second.close().await;
+        first.close().await;
+        assert!(
+            conflicts.load(Ordering::Relaxed) > 0,
+            "{ROUNDS} rounds of simultaneous commits from two pools on one \
+             store produced no conflict. Either doltlite now waits for the \
+             store lock instead of failing, or this test stopped contending; \
+             find out which before deleting it."
+        );
     }
 
     // ── Opening costs nothing ─────────────────────────────────────

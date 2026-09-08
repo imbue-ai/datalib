@@ -35,12 +35,13 @@ pub struct FetchOptions {
     /// Path to the doltlite database we write into. [`db_path_for`]
     /// places the entity db inside the per-source directory as
     /// `entities.doltlite_db` (the dir is created if needed).
-    /// Ignored for opening when `db` is `Some`.
+    ///
     pub db_path: PathBuf,
-    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
-    /// instead of opening from `db_path`. See the matching field on
-    /// the other providers' FetchOptions for rationale.
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     /// Canonical network names to ingest. Empty = none (refuse;
     /// caller probably forgot to configure). Order doesn't matter.
     pub sources: Vec<String>,
@@ -56,11 +57,13 @@ pub struct FetchOptions {
     pub control: datalib_etl::control::DownloadControl,
 }
 
-impl Default for FetchOptions {
-    fn default() -> Self {
+impl FetchOptions {
+    /// Every field defaulted except the store, which has none to give:
+    /// it is a live handle the caller opens and closes.
+    pub fn new(db: RawDb) -> Self {
         Self {
             db_path: PathBuf::new(),
-            db: None,
+            db,
             sources: Vec::new(),
             beeper_data_dir: None,
             media: true,
@@ -91,13 +94,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if opts.sources.is_empty() {
         anyhow::bail!("no sources configured; set e.g. `sources: [\"signal\", \"googlechat\"]`");
     }
-    let db_path = db_path_for(&opts.db_path);
-    let dst = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&db_path)
-            .await
-            .with_context(|| format!("open dest doltlite {}", db_path.display()))?,
-    };
+    let dst = opts.db.clone();
 
     if opts.control.reset_and_redownload {
         tracing::info!(event = "beeper_reset_and_redownload");

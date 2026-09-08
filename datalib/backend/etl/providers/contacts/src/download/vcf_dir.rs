@@ -18,7 +18,11 @@ use super::schema_raw::{synthesized_name_uid, ContactRow};
 
 pub struct FetchOptions {
     pub db_path: PathBuf,
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     pub input_path: PathBuf,
     /// Host-wide fingerprint cache — the shared answer to "did this
     /// file change?", so an unchanged `.vcf` costs a `stat`.
@@ -46,10 +50,7 @@ pub struct FetchSummary {
 const CHECKPOINT_SCOPE: &str = "carddav/vcf";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&opts.db_path).await?,
-    };
+    let db = opts.db.clone();
     if opts.control.reset_and_redownload {
         db.reset().await?;
         // Drop the resume cursor too, so every `.vcf` re-ingests
@@ -303,7 +304,7 @@ mod tests {
         let db = RawDb::open(&entity_db).await.unwrap();
         let summary = fetch(FetchOptions {
             db_path: source_dir.clone(),
-            db: Some(db),
+            db: db.clone(),
             input_path: export.path().to_path_buf(),
             cache: test_cache().await,
             account_id_override: None,
@@ -322,6 +323,7 @@ mod tests {
             !raw_root.path().join("blobs.doltlite_db").exists(),
             "photo CAS must not leak into the shared raw/ parent",
         );
+        db.close().await;
     }
 
     #[tokio::test]
@@ -335,9 +337,10 @@ mod tests {
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
         let cache = test_cache().await;
+        let db = RawDb::open(&db_path).await.unwrap();
         let opts = || FetchOptions {
             db_path: db_path.clone(),
-            db: None,
+            db: db.clone(),
             input_path: dir.path().to_path_buf(),
             cache: cache.clone(),
             account_id_override: None,
@@ -349,7 +352,6 @@ mod tests {
         assert_eq!(summary.addressbooks, 1);
         assert_eq!(summary.files_skipped, 0);
 
-        let db = RawDb::open(&db_path).await.unwrap();
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
             .fetch_one(db.pool())
             .await
@@ -362,6 +364,7 @@ mod tests {
         assert_eq!(again.files_skipped, 1);
         assert_eq!(again.contacts_new, 0);
         assert_eq!(again.contacts_updated, 0);
+        db.close().await;
     }
 
     #[tokio::test]
@@ -375,9 +378,10 @@ mod tests {
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
         let cache = test_cache().await;
+        let db = RawDb::open(&db_path).await.unwrap();
         let opts = || FetchOptions {
             db_path: db_path.clone(),
-            db: None,
+            db: db.clone(),
             input_path: dir.path().to_path_buf(),
             cache: cache.clone(),
             account_id_override: None,
@@ -400,6 +404,7 @@ mod tests {
         assert_eq!(second.files_skipped, 0);
         assert_eq!(second.contacts_new, 1);
         assert_eq!(second.contacts_updated, 1);
+        db.close().await;
     }
 
     // Google's vCard export carries no `UID:` — identity rides the
@@ -417,9 +422,10 @@ mod tests {
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
         let cache = test_cache().await;
+        let db = RawDb::open(&db_path).await.unwrap();
         let opts = || FetchOptions {
             db_path: db_path.clone(),
-            db: None,
+            db: db.clone(),
             input_path: dir.path().to_path_buf(),
             cache: cache.clone(),
             account_id_override: None,
@@ -442,12 +448,12 @@ mod tests {
         assert_eq!(second.contacts_new, 0);
         assert_eq!(second.contacts_updated, 1);
 
-        let db = RawDb::open(&db_path).await.unwrap();
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
             .fetch_one(db.pool())
             .await
             .unwrap();
         assert_eq!(n, 1, "edited contact stayed one row, not two");
+        db.close().await;
     }
 
     // Two UID-less cards sharing a first+last name collapse onto one
@@ -463,9 +469,10 @@ mod tests {
         )
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
+        let db = RawDb::open(&db_path).await.unwrap();
         let summary = fetch(FetchOptions {
             db_path: db_path.clone(),
-            db: None,
+            db: db.clone(),
             input_path: dir.path().to_path_buf(),
             cache: test_cache().await,
             account_id_override: None,
@@ -476,12 +483,12 @@ mod tests {
         .unwrap();
         assert_eq!(summary.addressbooks, 1);
 
-        let db = RawDb::open(&db_path).await.unwrap();
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
             .fetch_one(db.pool())
             .await
             .unwrap();
         assert_eq!(n, 1, "same-name cards share a synthesized id");
+        db.close().await;
     }
 
     // A card with neither UID nor name keeps file-position identity so
@@ -496,9 +503,10 @@ mod tests {
         )
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
+        let db = RawDb::open(&db_path).await.unwrap();
         let summary = fetch(FetchOptions {
             db_path: db_path.clone(),
-            db: None,
+            db: db.clone(),
             input_path: dir.path().to_path_buf(),
             cache: test_cache().await,
             account_id_override: None,
@@ -509,11 +517,11 @@ mod tests {
         .unwrap();
         assert_eq!(summary.contacts_new, 2);
 
-        let db = RawDb::open(&db_path).await.unwrap();
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
             .fetch_one(db.pool())
             .await
             .unwrap();
         assert_eq!(n, 2, "two nameless cards stayed distinct rows");
+        db.close().await;
     }
 }

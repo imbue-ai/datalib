@@ -27,12 +27,13 @@ pub struct FetchOptions {
     pub latchkey: LatchkeySettings,
     /// Doltlite database path. [`db_path_for`] places the entity db
     /// inside the per-source directory as `entities.doltlite_db` (the
-    /// dir is created if needed). Ignored for opening when `db` is `Some`.
+    /// dir is created if needed).
     pub db_path: PathBuf,
-    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
-    /// instead of opening from `db_path`. See the matching field on
-    /// the other providers' FetchOptions for rationale.
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     /// Root URL of the user's CardDAV server. We start discovery
     /// here (PROPFIND for `current-user-principal`). Examples:
     /// `https://contacts.icloud.com/`,
@@ -60,10 +61,7 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&db_path_for(&opts.db_path)).await?,
-    };
+    let db = opts.db.clone();
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }

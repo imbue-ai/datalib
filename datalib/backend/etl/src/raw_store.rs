@@ -111,13 +111,13 @@ impl RawStoreSession {
     }
 
     /// Clean-completion finish: commit the source's `dolt_commit` (appending
-    /// the `commit=<hash>` suffix to `summary`) and `close()` the pool so
-    /// render can re-open the file. Best-effort commit — a failure logs and
+    /// the `commit=<hash>` suffix to `summary`) and `close()` every store so
+    /// render can re-open them. Best-effort commit — a failure logs and
     /// returns the bare summary.
     pub async fn finish(self, _ctx: &RunCtx<'_>, summary: String) -> String {
         let final_summary =
             commit_with_suffix(&self.state.pool, &self.state.source_name, summary).await;
-        self.state.pool.close().await;
+        self.state.close_all().await;
         final_summary
     }
 }
@@ -171,6 +171,18 @@ impl SealState {
             self.progress.checkpoint(&hash);
         }
         Ok(())
+    }
+
+    /// Close every store this session owns. The pair with [`seal`], which
+    /// commits to the same set — a source that grows a third store has to
+    /// reach both, and dropping a pool instead of closing it only
+    /// *schedules* the disconnect, which is not the same as the file being
+    /// free for the next opener.
+    async fn close_all(&self) {
+        if let Some(cas) = self.cas_pool.as_ref() {
+            cas.close().await;
+        }
+        self.pool.close().await;
     }
 }
 
@@ -320,6 +332,32 @@ mod tests {
             announced,
             vec![head.commit().to_string()],
             "the announced version must be the new HEAD"
+        );
+    }
+
+    /// `finish` has to release every store the session was handed, not just
+    /// the entities one. The CAS stayed open because `finish` named the
+    /// entity pool directly, and it went unnoticed while nothing committed
+    /// through the CAS; #329 made it a committing writer.
+    #[tokio::test]
+    async fn finish_closes_every_store_it_was_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let entities = store(&dir.path().join("entities.doltlite_db")).await;
+        let cas = store(&dir.path().join("blobs.doltlite_db")).await;
+
+        state(
+            entities.clone(),
+            Some(cas.clone()),
+            crate::progress::Progress::noop(),
+        )
+        .close_all()
+        .await;
+
+        assert!(entities.is_closed(), "the entity pool must be closed");
+        assert!(
+            cas.is_closed(),
+            "the blob store must be closed too — a pool nothing closes is a \
+             connection the next opener contends with"
         );
     }
 

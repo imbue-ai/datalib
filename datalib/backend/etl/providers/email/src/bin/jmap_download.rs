@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use datalib_etl_email::download::{self as jmap, FetchOptions};
+use datalib_etl_email::download::{self as jmap, db_path_for, FetchOptions, RawDb};
 use datalib_obs::{init as init_obs, ObsArgs};
 use tracing::{info_span, Instrument};
 
@@ -56,7 +56,11 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "jmap-download")?;
 
+    // The one writer: this process opens the store, hands the handle to
+    // `fetch`, and closes it below.
+    let db = RawDb::open(&db_path_for(&args.out)).await?;
     let opts = FetchOptions {
+        db: db.clone(),
         db_path: args.out.clone(),
         hostname: args.hostname.clone(),
         account_id: args.account_id.clone(),
@@ -64,7 +68,7 @@ async fn main() -> Result<()> {
         only_mailbox_labels: args.only_mailbox_labels.clone(),
         blob_size_limit_bytes: args.blob_size_limit_bytes,
         blob_download_concurrency: args.blob_download_concurrency,
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     };
 
     let span = info_span!(
@@ -72,6 +76,8 @@ async fn main() -> Result<()> {
         hostname = %args.hostname,
         out = %args.out.display(),
     );
-    jmap::fetch(opts).instrument(span).await?;
+    let result = jmap::fetch(opts).instrument(span).await;
+    db.close().await;
+    result?;
     Ok(())
 }

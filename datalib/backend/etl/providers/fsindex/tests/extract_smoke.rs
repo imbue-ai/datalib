@@ -102,7 +102,7 @@ async fn assert_inode_stamp_kind(cache: &FingerprintCache, root: &Path) {
 fn fetch_opts(db: &RawDb, db_path: &Path, root: &Path, cache: FingerprintCache) -> FetchOptions {
     FetchOptions {
         db_path: db_path.to_path_buf(),
-        db: Some(db.clone()),
+        db: db.clone(),
         source_id: "smoke".to_string(),
         root: root.to_path_buf(),
         target_doltlite_branch: None,

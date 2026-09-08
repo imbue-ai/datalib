@@ -35,7 +35,7 @@ pub const PAGE_SIZE: usize = 100;
 /// File-timeout for attachment GETs through the latchkey shim.
 const ATTACH_FILE_TIMEOUT: Duration = Duration::from_secs(600);
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct FetchOptions {
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block. Default = the only stored
@@ -43,12 +43,13 @@ pub struct FetchOptions {
     pub latchkey: LatchkeySettings,
     /// Path to the doltlite database file. The entity db lives inside
     /// the per-source directory as `entities.doltlite_db` (the dir is
-    /// created if needed). Ignored for opening when `db` is `Some`.
+    /// created if needed).
     pub db_path: PathBuf,
-    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
-    /// instead of opening from `db_path`. See the matching field on
-    /// the other providers' FetchOptions for rationale.
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     pub max_pages: Option<usize>,
     pub limit: Option<usize>,
     pub sleep_between: Duration,
@@ -71,6 +72,26 @@ pub struct FetchOptions {
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (`--reset-and-redownload`, etc).
     pub control: datalib_etl::control::DownloadControl,
+}
+
+impl FetchOptions {
+    /// Every field defaulted except the store, which has none to give:
+    /// it is a live handle the caller opens and closes.
+    pub fn new(db: RawDb) -> Self {
+        Self {
+            latchkey: LatchkeySettings::default(),
+            db_path: PathBuf::new(),
+            db,
+            max_pages: None,
+            limit: None,
+            sleep_between: Duration::ZERO,
+            since: None,
+            conv_uuids: Vec::new(),
+            fetched_at: None,
+            progress: datalib_etl::progress::Progress::noop(),
+            control: datalib_etl::control::DownloadControl::default(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -96,14 +117,8 @@ pub struct FetchSummary {
 
 #[instrument(skip_all, fields(db = %opts.db_path.display()))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db_path = db_path_for(&opts.db_path);
     let _ = datalib_etl::latchkey::ensure_curl_dispatch();
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&db_path)
-            .await
-            .with_context(|| format!("open raw db {}", db_path.display()))?,
-    };
+    let db = opts.db.clone();
 
     if opts.control.reset_and_redownload {
         tracing::info!(event = "chatgpt_reset_and_redownload");

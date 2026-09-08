@@ -26,12 +26,17 @@ async fn github_live_single_pr_snapshot() {
         .keep();
     eprintln!("[test] downloading {repo}#{num} -> {}", tmp.display());
 
+    let db = github::RawDb::open(&github::db_path_for(&tmp))
+        .await
+        .unwrap();
     let opts = FetchOptions {
         db_path: tmp.clone(),
         targets: vec![(repo.clone(), num)],
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     };
-    github::fetch(opts).await.expect("github fetch failed");
+    let r = github::fetch(opts).await;
+    db.close().await;
+    r.expect("github fetch failed");
 
     let parsed = parse_api_dir(&tmp, None).expect("parse_api_dir");
     assert_eq!(parsed.pull_requests.len(), 1, "expected exactly one PR");

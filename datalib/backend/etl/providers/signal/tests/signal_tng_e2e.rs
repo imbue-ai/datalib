@@ -111,9 +111,12 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
 
     // A temp cache: tests must never touch this host's real one.
     let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite")).await?;
+    // One handle for the whole pass: a second live connection to the
+    // same store makes one of the two `dolt_commit`s fail.
+    let db = download::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&raw_db_path)).await?;
     let summary = download::fetch(FetchOptions {
         db_path: raw_db_path.clone(),
-        db: None,
+        db: db.clone(),
         cache,
         snapshot_root: snapshot_root.clone(),
         files_root: None, // defaults to snapshot_root/files (the layout the fixture writes)
@@ -138,24 +141,15 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // and the second-pass docs_skipped assertion below would fail.
     // Self-skips on stock libsqlite3.
     {
-        use datalib_etl::doltlite_raw::commit_run;
-        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-        use std::str::FromStr;
-        let db_path = datalib_etl::doltlite_raw::db_path_for(&raw_db_path);
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await?;
         for q in [
             "SELECT dolt_config('user.name', 'datalib-test')",
             "SELECT dolt_config('user.email', 'test@datalib.local')",
         ] {
-            let _ = sqlx::query(q).execute(&pool).await;
+            let _ = sqlx::query(q).execute(db.pool()).await;
         }
-        let _ = commit_run(&pool, "test download").await;
-        pool.close().await;
+        let _ = datalib_etl::doltlite_raw::commit_run(db.pool(), "test download").await;
     }
+    db.close().await;
 
     // Render runs against the doltlite-extended sqlite the
     // extractor wrote. parse_raw_dir wants the raw path (without the

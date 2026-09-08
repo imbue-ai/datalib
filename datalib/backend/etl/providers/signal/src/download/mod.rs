@@ -23,8 +23,11 @@ const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
 pub struct FetchOptions {
     /// Doltlite database path. Ignored when `db` is `Some`.
     pub db_path: PathBuf,
-    /// Pre-opened raw DB (sync orchestrator populates this).
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     /// Directory containing one or more `signal-backup-YYYY-MM-DD-HH-MM-SS/`
     /// snapshot subdirs. The newest (lexicographically — Signal's
     /// timestamps sort correctly) is the one we ingest.
@@ -75,10 +78,7 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&db_path_for(&opts.db_path)).await?,
-    };
+    let db = opts.db.clone();
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }

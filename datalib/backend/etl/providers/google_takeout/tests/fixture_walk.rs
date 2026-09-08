@@ -26,7 +26,7 @@ fn fixture_root() -> PathBuf {
 async fn opts(work: &Path, db_path: &Path, db: &RawDb, sync: SyncFlags) -> FetchOptions {
     FetchOptions {
         db_path: db_path.to_path_buf(),
-        db: Some(db.clone()),
+        db: db.clone(),
         input_path: fixture_root(),
         cache: FingerprintCache::open(&work.join("fingerprints.sqlite"))
             .await

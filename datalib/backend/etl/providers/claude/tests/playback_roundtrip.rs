@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_claude::download::{db::block_on_load_all, db::db_path_for, fetch, FetchOptions};
+use datalib_etl_claude::download::{
+    db::block_on_load_all, db::db_path_for, fetch, FetchOptions, RawDb,
+};
 use datalib_etl_claude::synthesize::ClaudeSynth;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -60,6 +62,9 @@ async fn claude_synth_playback_extract_roundtrip() {
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
+    // Open here and close before the store is read back: a second
+    // live connection to one file makes a `dolt_commit` fail.
+    let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         db_path: out_db.clone(),
         // Point export_dir at our input snapshot so users.json gets
@@ -68,10 +73,11 @@ async fn claude_synth_playback_extract_roundtrip() {
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap();
+    .await;
+    db.close().await;
+    let summary = summary.unwrap();
     assert_eq!(summary.fetched, 2);
     assert_eq!(summary.total, 2);
 
@@ -95,14 +101,18 @@ async fn claude_synth_playback_extract_roundtrip() {
     // `since` scoping against a fresh db: c2 (updated 2025-01-01)
     // predates the cutoff, so only c1 is fetched.
     let since_db = d.path().join("out_since.doltlite_db");
+    // Open here and close before the store is read back: a second
+    // live connection to one file makes a `dolt_commit` fail.
+    let db = RawDb::open(&db_path_for(&since_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         db_path: since_db.clone(),
         export_dir: Some(api.clone()),
         since: Some("2025-01-02".to_string()),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap();
+    .await;
+    db.close().await;
+    let summary = summary.unwrap();
     assert_eq!(summary.fetched, 1);
     assert_eq!(summary.out_of_scope, 1);
     assert_eq!(summary.total, 1);
@@ -112,14 +122,18 @@ async fn claude_synth_playback_extract_roundtrip() {
 
     // Moving `since` further back backfills the newly-in-scope c2 as
     // missing while the already-fetched c1 classifies up to date.
+    // Open here and close before the store is read back: a second
+    // live connection to one file makes a `dolt_commit` fail.
+    let db = RawDb::open(&db_path_for(&since_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         db_path: since_db.clone(),
         export_dir: Some(api.clone()),
         since: Some("2024-12-01".to_string()),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap();
+    .await;
+    db.close().await;
+    let summary = summary.unwrap();
     assert_eq!(summary.fetched, 1);
     assert_eq!(summary.skipped, 1);
     assert_eq!(summary.out_of_scope, 0);
