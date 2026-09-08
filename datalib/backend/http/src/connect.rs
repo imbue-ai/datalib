@@ -411,7 +411,7 @@ mod tests {
     use serde_json::json;
 
     /// The exact shape `latchkey services info <name>` prints, as
-    /// captured from latchkey 3.8.0. If latchkey changes it, this test
+    /// captured from latchkey 3.11.0. If latchkey changes it, this test
     /// is what says so — the handler itself would just start returning
     /// an empty account list.
     #[test]
