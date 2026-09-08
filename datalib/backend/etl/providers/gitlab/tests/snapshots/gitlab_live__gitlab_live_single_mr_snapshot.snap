@@ -1,6 +1,5 @@
 ---
-source: etl/providers/gitlab/tests/gitlab_live.rs
-assertion_line: 93
+source: datalib/backend/etl/providers/gitlab/tests/gitlab_live.rs
 expression: view
 ---
 {
@@ -10,10 +9,10 @@ expression: view
   "note_count": 9,
   "project": "generally-intelligent/generally_intelligent",
   "rendered_md_exists": true,
+  "rows_emitted": true,
   "sections_present": [
     "General",
     "Inline"
   ],
-  "rows_emitted": true,
   "state_known": true
 }

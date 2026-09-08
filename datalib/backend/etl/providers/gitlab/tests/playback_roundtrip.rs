@@ -11,6 +11,7 @@ use datalib_etl_gitlab::download::{
     block_on_load_all, db_path_for, fetch, FetchOptions, RawDb, ENTITY_DISCUSSION, ENTITY_MR,
     ENTITY_SELF,
 };
+use datalib_etl_gitlab::render::parse_api_dir;
 use datalib_etl_gitlab::synthesize::GitlabSynth;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
@@ -74,10 +75,31 @@ async fn gitlab_synth_playback_extract_roundtrip() {
         ..FetchOptions::new(db.clone())
     })
     .await;
+    // Seal on the same handle, the way the download step's
+    // `RawStoreSession::finish` does. The render read below is taken at a
+    // commit, so without this it has nothing to read.
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: gitlab download")
+        .await
+        .expect("seal the raw store");
     db.close().await;
     let summary = summary.unwrap();
     assert_eq!(summary.new_mrs, 1);
     assert_eq!(summary.new_discussions, 1);
+
+    // The render side of the seam, and it has to come first: render reads
+    // somebody else's store at a commit, while `block_on_load_all` below
+    // opens read-write and rescue-commits on the way in — so running that
+    // first would seal the store and hide a missing seal. gitlab had no
+    // test crossing this seam at all, which is how `gitlab_live` came to
+    // read an unsealed store and assert on zero rows.
+    let parsed = parse_api_dir(&out_db, None).expect("parse_api_dir");
+    assert_eq!(
+        parsed.merge_requests.len(),
+        1,
+        "render found no MR — a zero here means the download's rows were \
+         never committed, not that the source is empty"
+    );
+    assert_eq!(parsed.merge_requests[0].mr_iid as u64, iid);
 
     let raw = block_on_load_all(&db_path_for(&out_db)).expect("load db");
     let me = raw.self_identity.expect("self identity present");
