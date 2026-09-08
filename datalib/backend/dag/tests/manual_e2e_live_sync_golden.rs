@@ -3,7 +3,13 @@
 // stderr/stdout writes defined in clippy.toml.
 #![allow(clippy::disallowed_macros)]
 
-//! Live end-to-end golden test for the `datalib-dag` pipeline.
+//! Live end-to-end golden bake for the `datalib-dag` pipeline.
+//!
+//! It runs only in snapshot-update mode, and [`require_update_mode`]
+//! says why. The snapshots are a diff to read, not a gate to pass; the
+//! `assert!`s around them — step statuses, layout invariants, the
+//! run-3 content-stability check — are the pass/fail part, and they
+//! hold in update mode exactly as they would in compare mode.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -298,9 +304,47 @@ fn persistent_run_root() -> PathBuf {
     run_root
 }
 
+/// Refuse to run outside snapshot-update mode, before anything is
+/// fetched.
+///
+/// A compare run costs three full pipeline passes against real
+/// provider APIs and then reports a diff that was always going to be
+/// accepted: upstream moves on its own, so these snapshots record what
+/// the world looked like at the last bake rather than a contract the
+/// code has to meet. Baking and reading the diff is the only way this
+/// test has ever been used.
+///
+/// The modes that write a `.snap` in place and pass are `always` and
+/// `force`; `auto` / `new` / `unseen` write `.snap.new` beside it and
+/// fail, which is the same waste with extra litter.
+fn require_update_mode() {
+    let mode = std::env::var("INSTA_UPDATE").unwrap_or_default();
+    if matches!(mode.as_str(), "always" | "1" | "force") {
+        return;
+    }
+    let saw = if mode.is_empty() {
+        "unset".to_string()
+    } else {
+        format!("{mode:?}")
+    };
+    panic!(
+        "this test only runs in snapshot-update mode (INSTA_UPDATE is {saw}).\n\
+         \n\
+         It is a bake-and-eyeball tool, not a pass/fail gate — see the module \
+         header. Run it as:\n\
+         \n    datalib/backend/dag/manual_e2e_run.sh\n\
+         \n\
+         which is `bazel run \
+         //datalib/backend/dag:manual_e2e_live_sync_golden.update`, and then \
+         read the diff in $DATALIB_MANUAL_E2E_DIR/snapshots."
+    );
+}
+
 #[test]
 #[ignore]
 fn manual_e2e_live_sync_golden() {
+    require_update_mode();
+
     let src_config = match std::env::var("DATALIB_TEST_CONFIG") {
         Ok(p) => PathBuf::from(p),
         Err(_) => e2e_dir()
