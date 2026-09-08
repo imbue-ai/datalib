@@ -225,6 +225,7 @@ fn retag(ev: Event, id: &str) -> Event {
             status,
             error,
         },
+        Event::Checkpoint { version, .. } => Event::Checkpoint { step: id, version },
         Event::ProgressLength { total, .. } => Event::ProgressLength { step: id, total },
         Event::ProgressInc { delta, .. } => Event::ProgressInc { step: id, delta },
         Event::ProgressMessage { msg, .. } => Event::ProgressMessage { step: id, msg },

@@ -251,6 +251,25 @@ impl<'a> RunCtx<'a> {
         }
     }
 
+    /// Whether this run seals partial output, and how often.
+    ///
+    /// **A wipe-and-re-ingest run never does.** `reset_and_redownload`
+    /// truncates every table and re-fetches, so at any point before it
+    /// finishes the store holds a fraction of the source. Publishing that is
+    /// not "partial progress" — half a re-ingest is indistinguishable from a
+    /// source that lost most of its data, and every consumer downstream would
+    /// act on it. The whole run is the atomic unit, so it commits once, at
+    /// the end.
+    ///
+    /// The same reasoning covers any ingest that prunes to a snapshot; those
+    /// pass `Never` themselves.
+    pub fn checkpoint_policy(&self) -> crate::checkpointer::Policy {
+        if self.control.reset_and_redownload {
+            return crate::checkpointer::Policy::Never;
+        }
+        crate::checkpointer::Policy::Every(self.control.checkpoint_cadence.unwrap_or_default())
+    }
+
     pub fn register_checkpoint(&self, name: &str, hook: Arc<dyn Checkpoint>) {
         self.checkpoints.register(name, hook);
     }

@@ -90,6 +90,18 @@ impl EventSink for ProgressBusSink {
             Event::ProgressMessage { step, msg } => {
                 self.update(step, |a| a.msg = Some(msg.clone()))
             }
+            // A checkpoint says the step sealed part of its output and is
+            // still going. It is not progress — it moves no counter — but it
+            // is the one thing a watcher can act on before the step ends, so
+            // it reaches the message line. The absolute position stays
+            // whatever the step last reported.
+            Event::Checkpoint { step, .. } => self.update(step, |a| {
+                a.msg = Some(if a.done > 0 {
+                    format!("committed {} so far", a.done)
+                } else {
+                    "committed a first batch".to_string()
+                })
+            }),
             // Logs, hints and the run summary are the stream's business,
             // not the bus's. The bus answers "what is happening now".
             Event::Log { .. } | Event::Hint { .. } | Event::RunSummary { .. } => {}

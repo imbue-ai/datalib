@@ -11,12 +11,21 @@ use sqlx::sqlite::SqlitePool;
 
 use crate::processor::{Checkpoint, RunCtx};
 
+/// Called with the new version each time a session seals.
+type SealCallback = Box<dyn Fn(&str) + Send + Sync>;
+
 /// A doltlite raw-store session owned by a single download processor. Commits
 /// at [`finish`](RawStoreSession::finish) and exposes an interrupt
 /// [`Checkpoint`] that commits on Ctrl-C — both source-side.
 pub struct RawStoreSession {
     pool: SqlitePool,
     source_name: String,
+    /// Sibling blob CAS, when this source has one. Sealed *before* the
+    /// entities pool, always — see [`RawStoreSession::maybe_checkpoint`].
+    cas_pool: Option<SqlitePool>,
+    checkpointer: std::sync::Mutex<crate::checkpointer::Checkpointer>,
+    /// Told about each seal, so the step can announce it.
+    on_seal: Option<SealCallback>,
 }
 
 impl RawStoreSession {
@@ -24,6 +33,11 @@ impl RawStoreSession {
         let session = Self {
             pool,
             source_name: ctx.name.to_string(),
+            cas_pool: None,
+            checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(
+                ctx.checkpoint_policy(),
+            )),
+            on_seal: None,
         };
         ctx.register_checkpoint(ctx.name, session.checkpoint_hook());
         session
@@ -34,6 +48,58 @@ impl RawStoreSession {
             pool: self.pool.clone(),
             source_name: self.source_name.clone(),
         })
+    }
+
+    /// The sibling blob CAS, so a checkpoint can seal it too.
+    pub fn with_cas(mut self, cas_pool: SqlitePool) -> Self {
+        self.cas_pool = Some(cas_pool);
+        self
+    }
+
+    /// Called with the new version each time this seals, so the step can
+    /// announce it on its event stream.
+    pub fn on_seal(mut self, f: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        self.on_seal = Some(Box::new(f));
+        self
+    }
+
+    /// Tell the session work landed, and seal if it is time.
+    ///
+    /// **Ask this only where the store is consistent.** It never fires on its
+    /// own, because only the caller knows that: a commit landing mid-prune or
+    /// mid-reconcile publishes a store missing data it will have again a
+    /// moment later, and every consumer downstream would act on it.
+    pub async fn wrote(&self, rows: u64) -> Result<()> {
+        {
+            let mut c = self.checkpointer.lock().unwrap();
+            c.wrote(rows);
+            if !c.should_seal() {
+                return Ok(());
+            }
+        }
+        self.seal().await
+    }
+
+    async fn seal(&self) -> Result<()> {
+        // **Blobs before entities, always.** An entity names a blob by its
+        // blake3, so sealing entities first admits a reader pinned at that
+        // commit seeing a row whose bytes are not yet committed — a dangling
+        // attachment. The other order admits only an unreferenced blob, which
+        // is already routine: the CAS is content-addressed and written with
+        // `INSERT OR IGNORE`.
+        if let Some(cas) = self.cas_pool.as_ref() {
+            let msg = format!("checkpoint {}: blobs", self.source_name);
+            crate::doltlite_raw::commit_run(cas, &msg).await?;
+        }
+        let msg = format!("checkpoint {}: entities", self.source_name);
+        let sealed = crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
+        self.checkpointer.lock().unwrap().sealed();
+        // `None` means there was nothing dirty after all; no version moved,
+        // so there is nothing to announce.
+        if let (Some(hash), Some(f)) = (sealed, self.on_seal.as_ref()) {
+            f(&hash);
+        }
+        Ok(())
     }
 
     /// Clean-completion finish: commit the source's `dolt_commit` (appending

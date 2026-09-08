@@ -195,6 +195,7 @@ async fn reset_and_redownload_preserves_data_tables() {
         control: datalib_etl::control::DownloadControl {
             reset_and_redownload: true,
             refetch_blobs: false,
+            checkpoint_cadence: None,
         },
         ..Default::default()
     })

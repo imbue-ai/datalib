@@ -190,6 +190,7 @@ async fn main() {
     let control = datalib_etl::control::DownloadControl {
         reset_and_redownload: cli.reset_and_redownload || env_flag(ENV_RESET_AND_REDOWNLOAD),
         refetch_blobs: cli.refetch_blobs || env_flag(ENV_REFETCH_BLOBS),
+        checkpoint_cadence: None,
     };
 
     let step_io = StepIo { params: cli.params };

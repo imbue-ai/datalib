@@ -21,4 +21,14 @@ pub struct DownloadControl {
     /// hash to the same blake3 and `INSERT OR IGNORE` is a no-op, so
     /// this costs network IO but not disk.
     pub refetch_blobs: bool,
+
+    /// How often a download seals what it has written so far, so a consumer
+    /// can start on it before the whole fetch finishes.
+    ///
+    /// `None` means the default cadence. The dial is the user's — how much
+    /// latency to trade for how much `dolt_log` is their call — but whether
+    /// checkpointing happens *at all* is not, and
+    /// [`reset_and_redownload`](Self::reset_and_redownload) overrides it: see
+    /// `RunCtx::checkpoint_policy`.
+    pub checkpoint_cadence: Option<crate::checkpointer::Cadence>,
 }
