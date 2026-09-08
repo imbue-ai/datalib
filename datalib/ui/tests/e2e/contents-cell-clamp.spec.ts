@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { actOnRowByUuid, expectGridPainted } from "./grid-helpers";
 
 // What this test pins:
 //   The Contents column in the search grid must render long snippets at
@@ -42,42 +43,37 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({
   await expect(
     page.locator('.ag-grid-scrolling-rows [role="row"]').first(),
   ).toBeVisible({ timeout: 10_000 });
+  // A collapsed grid keeps its rows in the DOM but paints nothing, and
+  // a nudge into a zero-height viewport scrolls nowhere. Assert the
+  // paint first so that failure reads as the layout bug it is rather
+  // than as a missing clamp element.
+  await expectGridPainted(page.locator(".ag-root-wrapper").first(), "Explore grid");
 
-  // Scroll the long-snippet row into view. The grid virtualizes both
-  // axes, so the Contents *column* has to be brought into view too —
-  // without that, this spec fails the moment a column is added to its
-  // left, reporting a missing clamp element rather than the layout
-  // change that actually happened.
-  await page.evaluate((uuid) => {
-    const api = (
-      window as unknown as {
-        __fwGridApi?: {
-          ensureNodeVisible: (
-            comparator: (node: { data?: { uuid: string } }) => boolean,
-            position?: string,
-          ) => void;
-          ensureColumnVisible: (col: string) => void;
+  // Reading one cell means bringing the row *and* the Contents column
+  // into view — the grid virtualizes both axes — and re-nudging until
+  // the grid has actually rendered them, which is what
+  // `actOnRowByUuid` is for. A single nudge followed by a plain wait
+  // loses whenever the viewport does not end up where the call asked:
+  // nothing re-asks, and the wait expires against a DOM that will
+  // never contain the cell.
+  const metrics = await actOnRowByUuid(
+    page,
+    longRow!.uuid,
+    async (row) => {
+      const clamp = row.locator(".datalib-clamp-2").first();
+      await expect(clamp).toBeVisible({ timeout: 3_000 });
+      return clamp.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return {
+          clientHeight: el.clientHeight,
+          scrollHeight: el.scrollHeight,
+          lineHeightPx: parseFloat(cs.lineHeight),
+          webkitLineClamp: cs.webkitLineClamp,
         };
-      }
-    ).__fwGridApi;
-    api?.ensureNodeVisible((n) => n.data?.uuid === uuid, "middle");
-    api?.ensureColumnVisible("snippet");
-  }, longRow!.uuid);
-
-  const clamp = page
-    .locator(`[role="row"][row-id="${longRow!.uuid}"] .datalib-clamp-2`)
-    .first();
-  await expect(clamp).toBeVisible();
-
-  const metrics = await clamp.evaluate((el) => {
-    const cs = getComputedStyle(el);
-    return {
-      clientHeight: el.clientHeight,
-      scrollHeight: el.scrollHeight,
-      lineHeightPx: parseFloat(cs.lineHeight),
-      webkitLineClamp: cs.webkitLineClamp,
-    };
-  });
+      });
+    },
+    "snippet",
+  );
 
   // The clamp is engaged: rendered height < natural height.
   expect(
