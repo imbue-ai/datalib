@@ -474,6 +474,15 @@ _RENDER_REACHABLE_LOADERS: dict[str, tuple[str, ...]] = {
         "load_comment_anchors",
         "load_page_markdown",
         "load_comments",
+        "load_user_names",
+        "load_blobs_by_page",
+    ),
+    "datalib/backend/etl/providers/linkedin/src/download/photos.rs": (
+        "load_photo_blobs",
+    ),
+    "datalib/backend/etl/providers/pdf/src/download/db.rs": (
+        "scan_root",
+        "convertible_documents",
     ),
     "datalib/backend/etl/providers/claude/src/download/db.rs": (
         "load_conversations_from",
@@ -565,7 +574,10 @@ def _check_unpinned_render_reads(root: Path) -> int:
     if actual == EXPECTED_UNPINNED_READS:
         total = sum(actual.values())
         if not actual:
-            print("OK: every render read is pinned.")
+            print(
+                f"OK: {len(_RENDER_REACHABLE_LOADERS)} listed loader(s) and every "
+                "render file read a pinned view."
+            )
         else:
             print(
                 f"OK: {total} unpinned render read(s) in "

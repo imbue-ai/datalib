@@ -92,9 +92,15 @@ impl DataProcessor for PdfRender {
         let out_dir = datalib_etl::layout::rendered_md_root(ctx.root, ctx.name);
         // Load first, render second: the document sink borrows `ctx`
         // and is not `Send`, so it must not be alive across an await.
-        let targets = render::load_targets(&self.raw_path)
+        // `None`, not an empty corpus: this list is the membership test the
+        // deletion below uses, so a store we could not read must stop the
+        // pass rather than look like a corpus that lost every document.
+        let Some(targets) = render::load_targets(&self.raw_path)
             .await
-            .context("pdf load render targets")?;
+            .context("pdf load render targets")?
+        else {
+            return Ok("skipped=store-unreadable".to_string());
+        };
 
         let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, ctx.name);
         let cursor = datalib_etl::render_cursor::read_for_params(

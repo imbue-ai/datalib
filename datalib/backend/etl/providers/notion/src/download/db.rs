@@ -362,10 +362,14 @@ impl RawDb {
 
     /// `(user_id, display name)` for every user we resolved.
     pub async fn load_user_names(&self) -> Result<HashMap<String, String>> {
-        let rows = sqlx::query("SELECT id, name FROM users WHERE name IS NOT NULL")
-            .fetch_all(&self.pool)
-            .await
-            .context("select user names")?;
+        // Audited: as `load_comment_anchors`.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT id, name FROM {} WHERE name IS NOT NULL",
+            self.reads().table("users")
+        )))
+        .fetch_all(&self.pool)
+        .await
+        .context("select user names")?;
         let mut out = HashMap::new();
         for r in rows {
             if let (Ok(id), Ok(name)) =
@@ -776,11 +780,15 @@ pub fn block_on_load_all(db_path: &Path, last_render_hash: Option<&str>) -> Resu
 
 /// SQL projection used by [`BlobBundle::load`] to map an image
 /// block's `ref_id` (`"{block_uuid}:image"`) to its CAS `blake3`.
+/// Read through the pinned view and aliased back, the way every other
+/// provider's attachment projection is: `load_blobs_by_page` runs only on
+/// the render path, and a blob edge read from the working set can name a
+/// row the producer has not committed.
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT ref_id, blake3,
            NULL AS content_type,
            NULL AS upstream_name
-      FROM notion_attachments
+      FROM pinned_notion_attachments notion_attachments
      WHERE ref_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 /// Build the per-page BlobBundle map render reads from. Walks every
@@ -797,8 +805,12 @@ async fn load_blobs_by_page(
     // this reads it directly rather than re-deriving the mapping from
     // block payloads the way it had to when blocks were mirrored.
     let mut by_page: HashMap<String, Vec<String>> = HashMap::new();
+    // Pinned, like the projection below it: this runs only on the render
+    // path, and an edge read from the working set can name a slot whose
+    // blob row the producer has not committed.
     let rows = sqlx::query(
-        "SELECT page_id, ref_id FROM notion_attachments WHERE blake3 IS NOT NULL ORDER BY page_id, ref_id",
+        "SELECT page_id, ref_id FROM pinned_notion_attachments \
+         WHERE blake3 IS NOT NULL ORDER BY page_id, ref_id",
     )
     .fetch_all(refs_pool)
     .await

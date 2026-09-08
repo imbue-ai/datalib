@@ -365,7 +365,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         std::env::remove_var(PLAYBACK_ENV);
 
         // The photo landed in CAS, keyed by the connection's uuid.
-        let blobs = load_photo_blobs(&db, &db_path_for(&raw_dir)).await?;
+        let blobs =
+            load_photo_blobs(&db, &db_path_for(&raw_dir), datalib_etl::pin::Reads::Own).await?;
         let (bytes, content_type) = blobs
             .get(&picard_uuid)
             .expect("Picard's photo fetched into CAS");
@@ -437,7 +438,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert_eq!(s1.fetched, 0, "no photos on a playback miss");
         assert!(s1.transient >= 1, "playback miss is transient, got {s1:?}");
         assert!(
-            load_photo_blobs(&db2, &db_path_for(&raw2))
+            load_photo_blobs(&db2, &db_path_for(&raw2), datalib_etl::pin::Reads::Own)
                 .await?
                 .is_empty(),
             "transient miss records nothing"
@@ -458,7 +459,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             "transient miss retried and fetched, got {s2:?}"
         );
         assert!(
-            !load_photo_blobs(&db2, &db_path_for(&raw2))
+            !load_photo_blobs(&db2, &db_path_for(&raw2), datalib_etl::pin::Reads::Own)
                 .await?
                 .is_empty(),
             "photo recorded after retry"
