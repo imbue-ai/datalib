@@ -42,18 +42,9 @@ sh_test(
 # from a host `.venv` populated by `uv run` at test time. That is the
 # whole point: this target sandboxes, needs no network and no host
 # `$HOME`, and remote-caches. See tools/lint_python.py.
-# `no-remote-exec` because ruff's EXE002 ("file is executable but no
-# shebang") reads the file's mode bit, and a remote executor does not
-# preserve it: bazel uploads inputs to the CAS and the worker
-# materializes them executable, so every checked-in `*.py` looks
-# `chmod +x` over there. Measured on the first RBE trial — this target
-# was the only failure in the run, flagging two files that are `100644`
-# in git and `-rw-r--r--` on disk. The finding was an artifact of where
-# the check ran, not of the tree.
-#
-# `no-remote-exec` rather than `no-remote`, so the result still
-# remote-CACHES; only the execution is pinned to a filesystem whose
-# permissions are the real ones.
+# `no-remote-exec`: ruff's EXE002 reads a file's mode bit, and a remote
+# worker materializes every CAS input executable — so it fires on files
+# that are 100644 in git. Cache still applies; only execution is pinned.
 py_test(
     name = "ruff_test",
     size = "small",
