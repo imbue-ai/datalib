@@ -142,6 +142,15 @@ are relative to the repo root.
 - [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md)
   — the live recipe for porting the remaining providers to CAS blobs +
   incremental render.
+- [`docs/dev/incremental_update_framework.md`](docs/dev/incremental_update_framework.md)
+  — *proposal*, nothing built: one shape for the incremental render
+  every provider currently hand-rolls (delete, then upsert, then
+  advance the cursor). Its §2 is an audit of where the twelve
+  cursor-based renderers actually stand and is measurement rather
+  than intent. Read it before adding a renderer: it names the two
+  live holes — a run that cannot diff deletes nothing, and a
+  conversation that produces fewer documents than last time orphans
+  the rest.
 - [`docs/dev/multimodal_retrieval.md`](docs/dev/multimodal_retrieval.md)
   — *proposal*, nothing built: replacing the `qmd_index` step with a
   retrieval layer that takes an arbitrary `grid_rows` metadata
