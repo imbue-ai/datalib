@@ -11,65 +11,125 @@ use sqlx::sqlite::SqlitePool;
 
 use crate::processor::{Checkpoint, RunCtx};
 
-/// Called with the new version each time a session seals.
-type SealCallback = Box<dyn Fn(&str) + Send + Sync>;
-
 /// A doltlite raw-store session owned by a single download processor. Commits
 /// at [`finish`](RawStoreSession::finish) and exposes an interrupt
 /// [`Checkpoint`] that commits on Ctrl-C — both source-side.
 pub struct RawStoreSession {
+    state: Arc<SealState>,
+}
+
+/// What sealing needs, shared between the session and every [`Sealer`] it
+/// hands out. One [`Checkpointer`](crate::checkpointer::Checkpointer) behind
+/// one lock: a source that writes from several tasks still gets one cadence,
+/// not one per task.
+struct SealState {
     pool: SqlitePool,
     source_name: String,
     /// Sibling blob CAS, when this source has one. Sealed *before* the
-    /// entities pool, always — see [`RawStoreSession::maybe_checkpoint`].
+    /// entities pool, always — see [`SealState::seal`].
     cas_pool: Option<SqlitePool>,
     checkpointer: std::sync::Mutex<crate::checkpointer::Checkpointer>,
-    /// Told about each seal, so the step can announce it.
-    on_seal: Option<SealCallback>,
+    /// Where a seal is announced. `Progress` is the channel that already
+    /// crosses from `etl` out to whatever is driving the step, so a
+    /// checkpoint rides it rather than growing a second one.
+    progress: crate::progress::Progress,
+}
+
+/// A cheap, cloneable handle a fetch loop holds so it can seal at its own
+/// batch boundary.
+///
+/// Separate from the session because the session is owned by the processor
+/// and consumed by `finish`, while the loop that knows where the store is
+/// consistent runs in between.
+#[derive(Clone)]
+pub struct Sealer {
+    state: Arc<SealState>,
+}
+
+impl std::fmt::Debug for Sealer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sealer")
+            .field("source", &self.state.source_name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Sealer {
+    /// Tell the session work landed, and seal if it is time.
+    ///
+    /// **Call this only where the store is consistent.** It never fires on
+    /// its own, because only the caller knows that: a commit landing
+    /// mid-prune or mid-reconcile publishes a store missing data it will
+    /// have again a moment later, and every consumer downstream would act
+    /// on it.
+    pub async fn wrote(&self, rows: u64) -> Result<()> {
+        self.state.wrote(rows).await
+    }
 }
 
 impl RawStoreSession {
-    pub async fn open(pool: SqlitePool, _entity_path: PathBuf, ctx: &RunCtx<'_>) -> Self {
+    pub async fn open(pool: SqlitePool, entity_path: PathBuf, ctx: &RunCtx<'_>) -> Self {
+        Self::open_with_blobs(pool, None, entity_path, ctx).await
+    }
+
+    /// As [`open`](Self::open), for a source whose blobs live in a sibling
+    /// CAS file. Taken here rather than set later so the pair a seal has to
+    /// commit is fixed before anyone can seal.
+    pub async fn open_with_blobs(
+        pool: SqlitePool,
+        cas_pool: Option<SqlitePool>,
+        _entity_path: PathBuf,
+        ctx: &RunCtx<'_>,
+    ) -> Self {
         let session = Self {
-            pool,
-            source_name: ctx.name.to_string(),
-            cas_pool: None,
-            checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(
-                ctx.checkpoint_policy(),
-            )),
-            on_seal: None,
+            state: Arc::new(SealState {
+                pool,
+                source_name: ctx.name.to_string(),
+                cas_pool,
+                checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(
+                    ctx.checkpoint_policy(),
+                )),
+                progress: ctx.progress.clone(),
+            }),
         };
         ctx.register_checkpoint(ctx.name, session.checkpoint_hook());
         session
     }
 
+    /// A handle the fetch loop can carry and clone.
+    pub fn sealer(&self) -> Sealer {
+        Sealer {
+            state: self.state.clone(),
+        }
+    }
+
     fn checkpoint_hook(&self) -> Arc<dyn Checkpoint> {
         Arc::new(RawStoreCheckpoint {
-            pool: self.pool.clone(),
-            source_name: self.source_name.clone(),
+            pool: self.state.pool.clone(),
+            source_name: self.state.source_name.clone(),
         })
     }
 
-    /// The sibling blob CAS, so a checkpoint can seal it too.
-    pub fn with_cas(mut self, cas_pool: SqlitePool) -> Self {
-        self.cas_pool = Some(cas_pool);
-        self
-    }
-
-    /// Called with the new version each time this seals, so the step can
-    /// announce it on its event stream.
-    pub fn on_seal(mut self, f: impl Fn(&str) + Send + Sync + 'static) -> Self {
-        self.on_seal = Some(Box::new(f));
-        self
-    }
-
-    /// Tell the session work landed, and seal if it is time.
-    ///
-    /// **Ask this only where the store is consistent.** It never fires on its
-    /// own, because only the caller knows that: a commit landing mid-prune or
-    /// mid-reconcile publishes a store missing data it will have again a
-    /// moment later, and every consumer downstream would act on it.
+    /// Tell the session work landed, and seal if it is time. See
+    /// [`Sealer::wrote`].
     pub async fn wrote(&self, rows: u64) -> Result<()> {
+        self.state.wrote(rows).await
+    }
+
+    /// Clean-completion finish: commit the source's `dolt_commit` (appending
+    /// the `commit=<hash>` suffix to `summary`) and `close()` the pool so
+    /// render can re-open the file. Best-effort commit — a failure logs and
+    /// returns the bare summary.
+    pub async fn finish(self, _ctx: &RunCtx<'_>, summary: String) -> String {
+        let final_summary =
+            commit_with_suffix(&self.state.pool, &self.state.source_name, summary).await;
+        self.state.pool.close().await;
+        final_summary
+    }
+}
+
+impl SealState {
+    async fn wrote(&self, rows: u64) -> Result<()> {
         {
             let mut c = self.checkpointer.lock().unwrap();
             c.wrote(rows);
@@ -96,20 +156,10 @@ impl RawStoreSession {
         self.checkpointer.lock().unwrap().sealed();
         // `None` means there was nothing dirty after all; no version moved,
         // so there is nothing to announce.
-        if let (Some(hash), Some(f)) = (sealed, self.on_seal.as_ref()) {
-            f(&hash);
+        if let Some(hash) = sealed {
+            self.progress.checkpoint(&hash);
         }
         Ok(())
-    }
-
-    /// Clean-completion finish: commit the source's `dolt_commit` (appending
-    /// the `commit=<hash>` suffix to `summary`) and `close()` the pool so
-    /// render can re-open the file. Best-effort commit — a failure logs and
-    /// returns the bare summary.
-    pub async fn finish(self, _ctx: &RunCtx<'_>, summary: String) -> String {
-        let final_summary = commit_with_suffix(&self.pool, &self.source_name, summary).await;
-        self.pool.close().await;
-        final_summary
     }
 }
 

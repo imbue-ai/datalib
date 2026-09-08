@@ -108,6 +108,7 @@ impl DataProcessor for ClaudeDownload {
             project_uuids: self.sync.project_uuids.clone(),
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
+            sealer: Some(session.sealer()),
         })
         .await?;
         let summary = format!(

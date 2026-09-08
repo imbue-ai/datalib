@@ -25,6 +25,8 @@ pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
 pub const ENV_RESET_AND_REDOWNLOAD: &str = "DATALIB_DAG_RESET_AND_REDOWNLOAD";
 /// Set to `1` when the user asked for attachments/blobs to re-fetch.
 pub const ENV_REFETCH_BLOBS: &str = "DATALIB_DAG_REFETCH_BLOBS";
+/// `"<quiet>,<ceiling>"` in seconds — see `config::CheckpointCadence`.
+pub const ENV_CHECKPOINT_CADENCE: &str = "DATALIB_DAG_CHECKPOINT_CADENCE";
 
 /// The final stdout line a subprocess step may emit.
 #[derive(Debug, Default, Deserialize)]
