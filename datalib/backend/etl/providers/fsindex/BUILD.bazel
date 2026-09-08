@@ -28,6 +28,7 @@ rust_library(
     crate_name = "datalib_etl_fsindex",
     edition = "2021",
     proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
         "@datalib_crates//:async-trait",
     ],
     visibility = ["//datalib:__subpackages__"],

@@ -1,5 +1,7 @@
 //! Doltlite-backed raw store for the Notion provider.
 
+use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
@@ -18,7 +20,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 use super::schema_raw::{full_ddl, NotionAttachmentRow, DATA_TABLES};
 
 /// Handle on the raw-store sqlite file. Cheap to clone via the pool.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
     cas: BlobCas,
@@ -157,11 +159,10 @@ impl RawDb {
         &self.cas
     }
 
-    /// Wait for both connections to actually go away, so the store can be
-    /// reopened. Dropping the handle only schedules that.
+    /// Release every store this handle opened, and wait for the
+    /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
-        self.pool.close().await;
-        self.cas.close().await;
+        self.close_all().await;
     }
 
     pub async fn reset(&self) -> Result<()> {

@@ -2,6 +2,11 @@
 //! render code lives in sibling crates named `datalib-etl-<provider>`
 //! (e.g. [`datalib_etl_slack`]). The framework provides:
 
+// `#[derive(RawStoreHandle)]` names `::datalib_etl::…` so provider crates
+// can use it. This makes that path resolve inside this crate too, which is
+// what lets the derive's own test live next to the trait it implements.
+extern crate self as datalib_etl;
+
 pub mod blob_cas;
 pub mod bulk;
 pub mod checkpointer;
@@ -36,5 +41,6 @@ pub mod retry;
 pub mod scope_config;
 pub mod scope_state;
 pub mod section;
+pub mod store_handle;
 pub mod synthesize;
 pub mod title;
