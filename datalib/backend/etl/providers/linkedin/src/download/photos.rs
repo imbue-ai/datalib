@@ -175,6 +175,7 @@ enum Outcome {
 pub async fn load_photo_blobs(
     db: &RawDb,
     db_path: &std::path::Path,
+    reads: datalib_etl::pin::Reads<'_>,
 ) -> Result<std::collections::HashMap<String, (Vec<u8>, Option<String>)>> {
     let pool = db.pool();
     let table_exists: Option<String> =
@@ -189,10 +190,15 @@ pub async fn load_photo_blobs(
     }
 
     // owner_id → blake3 for the rows that actually have bytes.
-    let edges = sqlx::query("SELECT owner_id, blake3 FROM contact_photos WHERE blake3 IS NOT NULL")
-        .fetch_all(pool)
-        .await
-        .context("load contact_photos")?;
+    // Audited: the only interpolation is a table name the caller chose --
+    // a literal, or that literal behind `pinned_`.
+    let edges = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT owner_id, blake3 FROM {} WHERE blake3 IS NOT NULL",
+        reads.table(CONTACT_PHOTOS_TABLE)
+    )))
+    .fetch_all(pool)
+    .await
+    .context("load contact_photos")?;
     if edges.is_empty() {
         return Ok(out);
     }

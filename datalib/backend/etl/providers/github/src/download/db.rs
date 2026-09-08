@@ -1,5 +1,7 @@
 //! Doltlite-backed raw store for the GitHub provider.
 
+use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_macros::RawStoreHandle;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -18,7 +20,7 @@ use super::schema_raw::{
     DATA_TABLES,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
     /// The commit every content read resolves against, or `None` for the
@@ -75,10 +77,10 @@ impl RawDb {
         self.pin.as_ref()
     }
 
-    /// Wait for the connection to actually go away, so the store can be
-    /// reopened. Dropping the handle only schedules that.
+    /// Release every store this handle opened, and wait for the
+    /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
-        self.pool.close().await;
+        self.close_all().await;
     }
 
     pub fn pool(&self) -> &SqlitePool {

@@ -779,29 +779,36 @@ tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \
   //datalib/backend/signal-backup:signal_make_fixture
 ```
 
-**Let CI run the full suite; keep the local loop narrow.** `bazelisk
-test //...` is still the source of truth and still what "build green"
-means — but `imbue-ai/datalib` is public, which makes GitHub's standard
-runners free and unmetered, while your laptop's cores are the scarce
-resource. **A green CI run of `//...` satisfies the rule above; a
-narrower local run does not.** So push the branch and read the run
-rather than burning an afternoon of fans on a cold rebuild.
+**Run the cheap tests locally; let CI run the full suite.** `bazelisk
+test //...` is still the source of truth, but this repo is public, so
+CI's runners are free and unmetered while your laptop's are not. **A
+green CI run of `//...` satisfies that rule; a narrower local run does
+not.** Measured on one warm mac:
 
-Locally, narrow the *bazel* invocation to the package you're touching
-(`bazelisk test //datalib/backend/etl/...`) — don't shell out to
-`cargo` / `pnpm`, which bypass the cache and can disagree with CI.
+| loop | command | cost |
+|---|---|---|
+| lint + typecheck | `bazelisk test //:lint` | **~3s** |
+| every hermetic test | `bazelisk test //... --build_tests_only --test_tag_filters=-no-sandbox,-requires-network,-external,-manual` | **~106s** after edits to a shared crate, **~2s** when nothing moved; 133 of 146 targets |
+| the package you're editing | `bazelisk test //datalib/backend/etl/...` | varies |
+| the whole gate, e2e included | push, and read CI | ~3 min warm / ~20 min cold |
 
-The disk cache is what makes that narrow loop cheap, and it is
-**shared across every worktree** (one absolute path, see `.bazelrc`).
-Size its cap against the number of worktrees you keep live, not against
-one build: when the cap is below their sum they evict each other and
-every worktree switch recompiles what the last one just built. Ten live
-worktrees against a 50G cap was measured doing exactly that. Check with
-`du -sh ~/Library/Caches/bazel-disk-cache` — sitting *at* the cap is the
+Reach for the middle row before pushing. It drops the 13 targets that
+need a host, and `--build_tests_only` stops it building the rest of the
+tree to run them. **Those tag filters belong on that line and nowhere
+else** — never on the full run; the paragraph below says why.
+
+Don't shell out to `cargo` / `pnpm` for any of these — they bypass the
+cache and can disagree with CI.
+
+The disk cache is shared by every worktree (one absolute path, see
+`.bazelrc`), so size its cap against how many you keep live. Below their
+sum they evict each other and every worktree switch recompiles. Check
+`du -sh ~/Library/Caches/bazel-disk-cache`; sitting *at* the cap is the
 symptom.
 
-**Do not add `--test_tag_filters=-manual,-external` to this invocation.**
-The canonical line is the bare `bazelisk test //...`. Filtering on
+**Do not add `--test_tag_filters=-manual,-external` to the FULL run**
+(the last row of the table above — the one whose green is what "build
+green" means). The canonical line is the bare `bazelisk test //...`. Filtering on
 `-external` silently drops `//datalib/ui:e2e_test` (Playwright), which
 lets UI regressions through. (The lint/typecheck gate — `//:lint`, i.e.
 ruff + pyright + vue-tsc — is fully hermetic and carries no tags, so no
@@ -945,27 +952,23 @@ mainly so you can (a) not panic, and (b) decide deliberately whether a
 small helper really belongs in a shared crate — the `rdeps` number is
 the price tag.
 
-**Runs here are bimodal, so ask which mode you are in before asking
-anything else.** A warm run executes 0 tests and finishes in ~3 min; a
-cold one rebuilds ~345 actions and takes ~20. There is almost nothing in
-between, so a rising *median* usually means cold runs got more frequent,
-not that anything got slower. Measured over 09-01 → 09-08, the share of
-cold runs went 7% → ~35% while the cost of a cold run held flat.
+**Runs are bimodal, so ask which mode you are in first.** A warm run
+executes 0 tests and takes ~3 min; a cold one rebuilds ~345 actions and
+takes ~20, with almost nothing in between. A rising *median* therefore
+usually means cold runs got more frequent, not that anything got slower.
+It is **not** the e2e suite: on a 1254s cold run every executed test
+together came to 200s. The rest is opt-mode Rust, and blast radius is
+the only lever on it.
 
-**It is not the e2e suite.** On a 1254s cold run every executed test
-together came to 200s, of which `//datalib/ui:e2e_test` was 94s. The
-other ~1050s is opt-mode Rust compiling, and the only lever on it is
-blast radius.
+A run can also be slow without compiling anything — check whether the
+job *started* late (`created_at` vs the job's `started_at`) before
+reading any of the numbers above. That is runner queueing, and none of
+this applies to it.
 
-The second lever is where those compiles run. `--config=remote`
-(`.bazelrc`) sends them to BuildBuddy remote execution instead of the
-runner's 4 vCPUs; `test.yml` takes it via a `remote_execution` dispatch
-input. It is a **trial switch, not the merge gate** — flip the gate only
-once a dispatch has gone green *and* the usage graph shows what a month
-costs, because the free tier's binding limit is 100 GB/month of cache
-transfer rather than its 80 cores. Note the floor it cannot beat: that
-same 1254s run had a 540s critical path, which is a chain of rustc
-invocations no amount of parallelism shortens.
+`--config=remote` (`.bazelrc`) sends the compiles to BuildBuddy remote
+execution instead of the runner's 4 vCPUs; `test.yml` takes it via a
+`remote_execution` dispatch input. It is a **trial switch, not the merge
+gate** — #324 holds the measurements and the open decision.
 
 Not exercised here, so treat as a pointer rather than a recipe:
 BuildBuddy also has a REST API and a side-by-side invocation compare in

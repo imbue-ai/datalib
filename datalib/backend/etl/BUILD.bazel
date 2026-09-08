@@ -23,6 +23,7 @@ rust_library(
         ":latchkey_curl_impersonate",
     ],
     proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
         "@datalib_crates//:async-trait",
     ],
     deps = [

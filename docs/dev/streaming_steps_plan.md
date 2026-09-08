@@ -229,6 +229,27 @@ is the end-to-end guard: a document written but not committed must not
 reach the grid. It fails without `open_for_reading` even with every read
 pinned, which is the whole point of writing it down here.
 
+**And under streaming it stops being merely wrong and starts failing
+outright.** #327 measured what the two kinds of statement do when they
+contend on one store: ordinary DML retries under a busy handler and
+rides the overlap out, but `dolt_commit` does not — it takes the
+store's sidecar lock once and reports whoever holds it as
+`commit conflict: another connection committed to this branch`, naming
+a commit that need not have happened.
+
+Since `open` commits three times on the way in, a consumer that opened
+a store writably *while the producer was checkpointing* would not
+silently seal a torn batch — it would fail inside `open` itself, at
+`commit schema after DDL`. That is the better failure of the two, and
+it is still a failure the consumer did not cause.
+
+So the read-only open is load-bearing in both directions: it is what
+keeps a consumer from committing the producer's half-written rows, and
+it is what keeps a consumer from colliding with the producer's
+checkpoint at all. A checkpointing producer makes the window this
+happens in the normal case rather than a rare one, which is why this
+had to be true before step 3 shipped rather than after.
+
 ### And a fourth: `to_ref = 'HEAD'` is a moving target
 
 `scan_buckets` samples `new_head` from `dolt_log()` and then runs the
@@ -472,11 +493,12 @@ zero rows, cleanly. So for a doltlite sink:
 - a store without one, or with no file at all, is **unreadable** — the
   consumer skips, and must not sweep.
 
-Today those two collapse into one `None` and render treats both as
-"skip". That is the safe side of the mistake, but still a mistake: a
-source that legitimately drops to zero documents never gets them cleaned
-up. Guaranteeing the schema commit is what separates them — it is P1 for
-doltlite, spelled out. It also hands every downstream step a legitimate,
+These are now separated, which is step 5. The dangerous half was not
+the one this section originally described: a store with tables and no
+committed schema *did* produce a pin, and read as an empty source
+rather than as an unreadable one. `pin::head` refuses it now, and
+`open` verifies its own schema commit took. So a pin means readable,
+and zero rows means zero rows — which is P1 for doltlite, spelled out. It also hands every downstream step a legitimate,
 pinnable, empty input to be tested against, which is the case nobody
 writes a fixture for.
 
@@ -533,6 +555,29 @@ commits would put thousands of entries in `dolt_log` per run"
 ([render.rs](../../datalib/backend/datalib_step/src/render.rs)). A
 20-minute download at 15s granularity adds ~80 commits, which is fine;
 a per-row commit would not be.
+
+### Truncate-and-refill is the case the flag does not cover
+
+`reset_and_redownload` maps to `Policy::Never` because a store mid-wipe
+reads as mass deletion. That is right, and it is not sufficient: three
+providers truncate on **every** run, flag or no flag, because the
+truncate is what makes upstream deletions fall out.
+
+| provider | where |
+|---|---|
+| whatsapp | `download.rs`, `truncate_wa_tables` before the mirror |
+| pdf | `download/mod.rs`, `reset_paths` before the walk |
+| fsindex | `download/mod.rs`, `db.reset()` before the index |
+
+For these, "a write burst went quiet" is not a consistent point — it is
+most likely to be reached while the table is empty. Their only
+consistent point is *after the refill completes*, which for a run that
+rewrites everything is the end of the run. So they take `Never`, or
+they seal once at a boundary they name themselves.
+
+No shared cadence can work this out, which is the real content of "each
+provider needs someone to look at its consistent point": the thing to
+look for is whether the provider empties anything before filling it.
 
 ### The rule that is easy to get wrong
 
@@ -698,11 +743,22 @@ Each of these is a reviewable PR that leaves the tree green.
    progress with no scheduling risk. Answers most of #164 on its own.
 4. ~~**Consumers pin.**~~ Folded into step 2, per above. Done for
    `render -> grid_index`; still to do for `download -> render`.
-5. **The empty-store sentinel.** Guarantee the schema commit, so a
-   readable-but-empty sink stops being indistinguishable from an
-   unreadable one — see [The sink contract](#the-sink-contract). Small,
-   and it has to land after the thirteen reads above, because it changes
-   what a skip means.
+5. ~~**The empty-store sentinel.**~~ **Done.** A store carrying tables
+   but no committed schema now reads as *unreadable* rather than as a
+   source with no rows.
+
+   It was a live deletion bug, not a tidy-up. A doltlite file gets an
+   initialization commit at birth, so `dolt_hashof('HEAD')` answers even
+   for a store that has never committed its tables — and with no
+   `dolt_at_` module for any of them, `install_views` gave every table
+   the empty `WHERE 0` view. The consumer read zero rows, called that a
+   completed walk, and swept the source. Reachable by a download that
+   created its tables and died before its first commit.
+
+   `pin::head` refuses that store; `doltlite_raw::open` checks the
+   schema commit took before handing the pool back; and the `WHERE 0`
+   branch is now only reached for a table genuinely newer than the pin,
+   which is the case it was written for.
 6. **Streaming dispatch.** Needs a way for a step to declare its sink
    snapshot-readable first — P2 above, in the shape `probe` already
    uses — because "can this edge stream at all" is not something the

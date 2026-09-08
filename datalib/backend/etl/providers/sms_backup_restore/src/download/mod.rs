@@ -4,6 +4,8 @@ pub mod parse;
 pub mod schema_raw;
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_macros::RawStoreHandle;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -30,7 +32,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 const SCOPE: &str = "sms_backup_restore/xml";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
     cas: BlobCas,
@@ -72,11 +74,10 @@ impl RawDb {
         &self.cas
     }
 
-    /// Wait for both connections to actually go away, so the store can be
-    /// reopened. Dropping the handle only schedules that.
+    /// Release every store this handle opened, and wait for the
+    /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
-        self.pool.close().await;
-        self.cas.close().await;
+        self.close_all().await;
     }
 
     /// `--reset-and-redownload`. Truncates every entity / edge data

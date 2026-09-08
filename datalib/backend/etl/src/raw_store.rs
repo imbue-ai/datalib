@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 
 use crate::processor::{Checkpoint, RunCtx};
+use crate::store_handle::RawStoreHandle;
 
 /// A doltlite raw-store session owned by a single download processor. Commits
 /// at [`finish`](RawStoreSession::finish) and exposes an interrupt
@@ -22,6 +23,7 @@ pub struct RawStoreSession {
 /// hands out. One [`Checkpointer`](crate::checkpointer::Checkpointer) behind
 /// one lock: a source that writes from several tasks still gets one cadence,
 /// not one per task.
+#[derive(datalib_etl_macros::RawStoreHandle)]
 struct SealState {
     pool: SqlitePool,
     source_name: String,
@@ -114,6 +116,9 @@ impl RawStoreSession {
     /// the `commit=<hash>` suffix to `summary`) and `close()` every store so
     /// render can re-open them. Best-effort commit — a failure logs and
     /// returns the bare summary.
+    ///
+    /// `close_all` is derived from the struct's fields, so the blob CAS
+    /// goes with the entity pool without this having to name either.
     pub async fn finish(self, _ctx: &RunCtx<'_>, summary: String) -> String {
         let final_summary =
             commit_with_suffix(&self.state.pool, &self.state.source_name, summary).await;
@@ -171,18 +176,6 @@ impl SealState {
             self.progress.checkpoint(&hash);
         }
         Ok(())
-    }
-
-    /// Close every store this session owns. The pair with [`seal`], which
-    /// commits to the same set — a source that grows a third store has to
-    /// reach both, and dropping a pool instead of closing it only
-    /// *schedules* the disconnect, which is not the same as the file being
-    /// free for the next opener.
-    async fn close_all(&self) {
-        if let Some(cas) = self.cas_pool.as_ref() {
-            cas.close().await;
-        }
-        self.pool.close().await;
     }
 }
 

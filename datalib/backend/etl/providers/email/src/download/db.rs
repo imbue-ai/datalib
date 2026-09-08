@@ -1,5 +1,7 @@
 //! Open + non-DDL data-manipulation for the JMAP raw store.
 
+use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -25,7 +27,7 @@ pub fn state_scope(account_id: &str, type_name: &str) -> String {
 
 // RawDb
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
     cas: BlobCas,
@@ -48,11 +50,10 @@ impl RawDb {
         &self.cas
     }
 
-    /// Wait for both connections to actually go away, so the store can be
-    /// reopened. Dropping the handle only schedules that.
+    /// Release every store this handle opened, and wait for the
+    /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
-        self.pool.close().await;
-        self.cas.close().await;
+        self.close_all().await;
     }
 
     pub async fn reset(&self) -> Result<()> {

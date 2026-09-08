@@ -4,6 +4,8 @@
 pub mod photos;
 pub mod schema_raw;
 
+use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_macros::RawStoreHandle;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -24,7 +26,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 /// under SQLite's 32k-param ceiling.
 const INSERT_CHUNK: usize = 400;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
 }
@@ -60,10 +62,10 @@ impl RawDb {
         &self.pool
     }
 
-    /// Wait for the connection to actually go away, so the store can be
-    /// reopened. Dropping the handle only schedules that.
+    /// Release every store this handle opened, and wait for the
+    /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
-        self.pool.close().await;
+        self.close_all().await;
     }
 
     pub async fn load_payloads(

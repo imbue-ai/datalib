@@ -351,6 +351,34 @@ async fn open_inner(
     commit_run(&pool, "schema: apply DDL")
         .await
         .context("commit schema after DDL")?;
+    // And check it took, unconditionally.
+    //
+    // A store with tables but no committed schema is the one shape a reader
+    // cannot tell from an empty source — `pin::head` refuses it for exactly
+    // that reason — so an `open` that left one behind says so here, where
+    // the store is still ours, rather than letting a consumer find it and
+    // silently skip.
+    //
+    // Not gated on `has_dolt_extensions`. Every binary that links sqlx links
+    // doltlite (MODULE.bazel routes `libsqlite3-sys` at our static archive),
+    // so a build without the extensions is not a supported configuration —
+    // it is a broken one, and it fails *quietly*: `commit_run` returns
+    // `Ok(None)` so nothing ever commits, `head_commit` returns `Ok(None)`
+    // so the runner content-hashes instead, and `pin::head` returns `None`
+    // so every render skips. A whole pipeline that does nothing and reports
+    // success. This is the first place that would notice, so it does.
+    //
+    // Same predicate the reader uses, not a second copy of it: a store this
+    // says is fine and `pin::head` then refuses would be the worst of both.
+    // A store with no tables at all passes -- nothing creates a view over
+    // it, and a read fails loudly by itself.
+    anyhow::ensure!(
+        crate::pin::carries_committed_schema(&pool).await,
+        "opened {} but its tables are not committed: either the schema \
+         commit did not take, or this binary is not linked against doltlite. \
+         A reader cannot tell either from a source that lost every row.",
+        db_path.display()
+    );
     tracing::info!(
         path = %db_path.display(),
         elapsed_ms = started.elapsed().as_millis() as u64,
