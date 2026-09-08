@@ -173,9 +173,26 @@ runner defaults to `~/data_liberation_manual_e2e_test_data`).
 
 ```bash
 datalib/backend/dag/manual_e2e_run.sh --config   # validate config only: offline, no creds
-datalib/backend/dag/manual_e2e_run.sh            # run + diff against goldens
-datalib/backend/dag/manual_e2e_run.sh --update   # accept new goldens
+datalib/backend/dag/manual_e2e_run.sh            # bake: run the pipeline, write new goldens
 ```
+
+**There is no compare mode, on purpose.** These snapshots are a diff to
+read, not a gate to pass. They record what real upstreams looked like at
+the last bake, and upstream moves whether or not our code does — so a
+comparison run spends three full pipeline passes and real API quota to
+report a diff that was always going to be accepted. The test refuses to
+start without `INSTA_UPDATE` set to a writing mode, before it fetches
+anything, so the waste can't happen by accident.
+
+The snapshots are the eyeball half. The other half does fail the run,
+and is why the exit code still means something: every step must succeed,
+the `data_root` layout is asserted, and run 3's content-stability check
+is a plain `assert!`. Those hold in update mode exactly as they would in
+compare mode.
+
+Read the bake with `git diff` in `$DATALIB_MANUAL_E2E_DIR` — it is a git
+repo, and the commit message is where the triage goes (deliberate /
+accidental / noise, per cluster).
 
 Start with `--config`. It parses the config, builds the graph, and round-trips
 every step's params against the provider schemas in seconds, without touching

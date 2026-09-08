@@ -87,6 +87,8 @@ rust_binary(
 #
 # Don't invoke this target directly — `manual_e2e_run.sh` (next to this BUILD)
 # sets the env var and forwards the creds bazel's env-scrubbing would drop.
+# A `bazel test` of it stops immediately: the test runs only in snapshot-update
+# mode, so the entry point is the `.update` target below.
 #
 # The `data` deps are staged into runfiles and resolved by the test via
 # `runfiles::Runfiles` (NOT `$(rootpath)`-in-env — see the comment in the

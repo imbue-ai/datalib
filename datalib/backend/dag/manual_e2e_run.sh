@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 #
-# Convenience runner for the manual end-to-end live-sync golden test
+# Convenience runner for the manual end-to-end live-sync golden bake
 # (//datalib/backend/dag:manual_e2e_live_sync_golden).
 #
-#   ./manual_e2e_run.sh            # run the pipeline + diff output against snapshots
-#   ./manual_e2e_run.sh --update   # accept the new output into snapshots/
+#   ./manual_e2e_run.sh            # bake: run the pipeline, write snapshots/, read the diff
 #   ./manual_e2e_run.sh --config   # validate the config only (offline, no creds)
+#
+# There is no compare mode, and the test itself refuses to run without
+# INSTA_UPDATE — a comparison costs three pipeline passes against real
+# APIs to report a diff that was always going to be accepted, because
+# upstream moves whether or not our code does. Bake, then read the diff
+# with `git diff` in $DATALIB_MANUAL_E2E_DIR.
+#
+# That is about the snapshots only. The test's assertions — every step
+# succeeded, the data_root layout is what it should be, and a
+# --reset-and-redownload lands byte-identical content — still fail the
+# run, and they are the reason the exit code is worth looking at.
 #
 # This script lives in the code repo (it's code). The test's *data* — the
 # dag.toml, the file-based sources/, and the golden snapshots/ — lives in a
@@ -112,26 +122,20 @@ case "${1:-}" in
       --test_output=all \
       --nocache_test_results
     ;;
-  --update)
+  "" | --update)
     # `bazel run` forwards the client environment, so the exported vars reach
-    # the test process. The test writes .snap files straight into
+    # the test process. The wrapper sets INSTA_UPDATE=always, which is both
+    # what makes the snapshots writable and what the test checks before it
+    # fetches anything. The .snap files land straight in
     # $DATALIB_MANUAL_E2E_DIR/snapshots.
+    #
+    # `--update` is kept as a spelling of the default because it is in every
+    # doc and every shell history that predates the compare mode going away.
     exec bazel run "${TARGET}.update"
     ;;
-  "")
-    # `bazel test` scrubs the environment, so forward the vars we need by name.
-    # (HOME/PATH/USER come through the target's `env_inherit`.)
-    # --test_arg=--ignored because the test is #[ignore] in cargo; without it
-    # the test binary runs zero tests and "passes" trivially.
-    exec bazel test "$TARGET" \
-      --test_arg=--ignored \
-      --test_env=DATALIB_MANUAL_E2E_DIR \
-      --test_env=LATCHKEY_CURL \
-      --test_output=streamed \
-      --nocache_test_results
-    ;;
   *)
-    echo "usage: $(basename "$0") [--update | --config]" >&2
+    echo "usage: $(basename "$0") [--config]" >&2
+    echo "       no argument bakes the goldens; there is no compare mode." >&2
     exit 2
     ;;
 esac
