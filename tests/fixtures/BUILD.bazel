@@ -367,13 +367,15 @@ genrule(
         # a ~3MB tar instead. Measured: 91s -> 0s on the CI critical
         # path.
         #
-        # The exec half stays for a plainer reason than it had before —
-        # the rule no longer needs the network or the host model cache,
-        # so it *could* run remotely, but this repo configures a remote
-        # CACHE only (see `.bazelrc`'s `buildbuddy` config) and has never
-        # run a 300 MB-input, CPU-bound inference action on a remote
-        # executor. Dropping the tag would change nothing today and would
-        # be an untested change the day someone turns on RBE.
+        # The exec half stays, and now for a measurable reason rather
+        # than the absence of an executor. `.bazelrc`'s `remote` config
+        # does configure RBE, so this rule *could* be sent there — but
+        # the free tier's binding limit is 100 GB/month of cache
+        # transfer, and this action's inputs are ~300 MB. A handful of
+        # cold runs a day would spend the monthly budget on one action,
+        # to parallelize work that is already a cache hit whenever the
+        # rendered markdown has not moved. Revisit it against the
+        # BuildBuddy usage graph, not against a hunch.
         "no-remote-exec",
     ],
     visibility = ["//visibility:public"],

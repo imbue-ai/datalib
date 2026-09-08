@@ -140,7 +140,10 @@ rust_test(
         "LIGHTROOM_CATALOG_02": "$(rootpath @lightroom_test_catalog_02//file)",
         "LIGHTROOM_CATALOG_03": "$(rootpath @lightroom_test_catalog_03//file)",
     },
-    tags = ["requires-network"],
+    tags = [
+        "no-remote-exec",
+        "requires-network",
+    ],
     deps = [
         ":datalib_etl_lightroom",
         "//datalib/backend/etl:datalib_etl",

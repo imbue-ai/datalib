@@ -231,6 +231,7 @@ sh_test(
     # already gates it out of hermetic / offline environments;
     # `external` would over-exclude.
     tags = [
+        "no-remote-exec",
         "no-sandbox",
         "requires-network",
     ],
