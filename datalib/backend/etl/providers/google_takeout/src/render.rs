@@ -1,6 +1,7 @@
 //! Render the chat-shaped Takeout feeds into markdown via the shared
 //! chat renderer.
 
+use datalib_etl::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -80,10 +81,10 @@ pub fn render(
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
-) -> Result<()> {
+) -> Result<RenderPass> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(());
+        return Ok(RenderPass::Skipped);
     }
     let (messages, groups, voice_messages, voice_blobs) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
@@ -100,11 +101,6 @@ pub fn render(
                 datalib_etl::pin::install_views(db.pool(), &pin)
                     .await
                     .context("pin the google_takeout raw store for render")?;
-                if let Some(cas_pin) = datalib_etl::pin::head(db.cas().pool()).await? {
-                    datalib_etl::pin::install_views(db.cas().pool(), &cas_pin)
-                        .await
-                        .context("pin the google_takeout CAS for render")?;
-                }
                 let messages = db.load_payloads("chat_messages").await?;
                 // (dir name, group_info payload) — the directory name
                 // carries the space id, which `group_info.json` itself
@@ -152,7 +148,7 @@ pub fn render(
         )?;
         seen.extend(s.documents);
     }
-    Ok(())
+    Ok(RenderPass::Walked)
 }
 
 async fn load_voice_blobs(

@@ -557,11 +557,14 @@ Each of these is a reviewable PR that leaves the tree green.
    dirty working set, that a missing view fails loudly, and that the
    views are connection-scoped — the three assertions the rest of this
    plan rests on.
-2. ~~**The sweep**~~ **done, both edges.** Every render read now names a
-   commit: `render -> grid_index` and all ten providers on
-   `download -> render`. The lint's baseline is gone — check 4 now says
-   "every render read is pinned", and check 5 keeps render off the
-   writable open.
+2. **The sweep**, per edge. Every *literal* `FROM <table>` in render code
+   names a commit. **Not finished**: a shared helper that builds
+   `FROM {table}` at runtime reads content the same way, and no regex over
+   the call site can resolve it — for `google_takeout` and
+   `sms_backup_restore` those helpers are the only content read they do.
+   Check 4 counts them by call site now, and its baseline says how many are
+   left (23, across twelve files). Emptying that dict claimed the edge was
+   done when it was not.
 
    Two things worth carrying forward. **The pin goes ahead of every
    read, not at the scan** — signal loaded `recipients` before diffing,

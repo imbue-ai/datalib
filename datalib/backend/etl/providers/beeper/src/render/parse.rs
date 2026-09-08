@@ -208,18 +208,10 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
         let cas_pool = datalib_etl::doltlite_raw::open_reader(&cas_path)
             .await
             .with_context(|| format!("open CAS for render at {}", cas_path.display()))?;
-        // Its own file, its own HEAD, its own pin.
-        if let Some(cas_pin) = datalib_etl::pin::head(&cas_pool).await? {
-            datalib_etl::pin::install_views(&cas_pool, &cas_pin)
-                .await
-                .context("pin the beeper CAS for render")?;
-        }
-        let rows = sqlx::query(
-            "SELECT blake3, content_type, byte_len FROM pinned_cas_objects cas_objects",
-        )
-        .fetch_all(&cas_pool)
-        .await
-        .context("read cas_objects")?;
+        let rows = sqlx::query("SELECT blake3, content_type, byte_len FROM cas_objects")
+            .fetch_all(&cas_pool)
+            .await
+            .context("read cas_objects")?;
         cas_pool.close().await;
         let mut out: HashMap<String, (Option<String>, Option<i64>)> = HashMap::new();
         for r in &rows {

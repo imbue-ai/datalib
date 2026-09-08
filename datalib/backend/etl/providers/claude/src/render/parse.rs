@@ -224,13 +224,9 @@ async fn parse_doltlite_async(
     };
 
     // Pin before anything reads this store. The diff below and the rows
-
     // behind it have to name one commit, and the `pinned_<table>` views must
-
     // already exist when the diff runs — its bucket query joins live tables.
-
     // No commit at all means nothing has been committed here to render, which
-
     // is emptiness, not a reason to read the working set.
 
     let Some(pin) = datalib_etl::pin::head(&pool).await? else {
@@ -240,16 +236,6 @@ async fn parse_doltlite_async(
     datalib_etl::pin::install_views(&pool, &pin)
         .await
         .context("pin the claude raw store for render")?;
-
-    // The CAS is a separate file with its own HEAD, so it takes its own pin.
-
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        if let Some(cas_pin) = datalib_etl::pin::head(cas_pool).await? {
-            datalib_etl::pin::install_views(cas_pool, &cas_pin)
-                .await
-                .context("pin the claude CAS for render")?;
-        }
-    }
 
     let scan = scan_diff(&pool, last_render_hash, &pin).await?;
 

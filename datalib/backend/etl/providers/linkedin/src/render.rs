@@ -1,6 +1,7 @@
 //! Render LinkedIn's message-shaped feeds into markdown via the shared
 //! chat renderer.
 
+use datalib_etl::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -49,10 +50,10 @@ pub fn render(
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
-) -> Result<()> {
+) -> Result<RenderPass> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(());
+        return Ok(RenderPass::Skipped);
     }
 
     // One open for every table, not one per table: reopening a doltlite
@@ -89,7 +90,7 @@ pub fn render(
         on_doc_complete,
     )?;
     seen.extend(s.documents);
-    Ok(())
+    Ok(RenderPass::Walked)
 }
 
 fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {

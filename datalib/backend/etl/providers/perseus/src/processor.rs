@@ -135,7 +135,8 @@ impl DataProcessor for PerseusRender {
             &mut seen,
         )
         .context("perseus render_all")?;
-        ctx.retain_documents(&seen);
+        // `render_all` has no early return: reaching here means it walked.
+        ctx.retain_documents(datalib_etl::processor::RenderPass::Walked, &seen);
         Ok("rendered".into())
     }
 }

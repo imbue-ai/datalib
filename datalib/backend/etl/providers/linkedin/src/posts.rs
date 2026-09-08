@@ -1,6 +1,7 @@
 //! Render the user's own LinkedIn posts and the comments they left,
 //! grouped into one chat-style thread per post.
 
+use datalib_etl::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -50,10 +51,10 @@ pub fn render_posts(
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
-) -> Result<()> {
+) -> Result<RenderPass> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(());
+        return Ok(RenderPass::Skipped);
     }
 
     let (shares, comments) = tokio::task::block_in_place(|| {
@@ -84,7 +85,7 @@ pub fn render_posts(
         on_doc_complete,
     )?;
     seen.extend(s.documents);
-    Ok(())
+    Ok(RenderPass::Walked)
 }
 
 /// One share + its comments, sharing a post key.

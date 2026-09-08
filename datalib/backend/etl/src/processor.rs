@@ -45,6 +45,25 @@ pub struct PlanContext {
     pub playback_root: Option<std::path::PathBuf>,
 }
 
+/// Whether a render pass actually walked its source's documents.
+///
+/// [`RunCtx::retain_documents`] deletes every document the pass did not name,
+/// which is right after a real walk and catastrophic after a bail: an empty
+/// set from a renderer that never looked is indistinguishable, at the sweep,
+/// from a source that genuinely lost everything. A renderer that returns
+/// early — no store on disk, nothing committed to read — says so with
+/// `Skipped`, and the sweep does not run.
+///
+/// It is a return value rather than a flag the caller sets because the
+/// caller is not the one who knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderPass {
+    /// The source's documents were enumerated; anything unnamed is gone.
+    Walked,
+    /// The pass returned before enumerating anything.
+    Skipped,
+}
+
 /// An opaque "persist what you have" hook. A processor that buffers work into
 /// a store registers one of these at the moment it opens the store; the
 /// orchestrator holds the registered hooks and fires them on SIGINT.
@@ -302,11 +321,75 @@ impl<'a> RunCtx<'a> {
     ///
     /// Calls accumulate: a source with several render processors builds the
     /// set across all of them, and the sweep runs once at the end.
-    pub fn retain_documents(&self, document_uuids: &HashSet<String>) {
+    pub fn retain_documents(&self, pass: RenderPass, document_uuids: &HashSet<String>) {
+        if pass == RenderPass::Skipped {
+            // Nothing walked, so `document_uuids` is empty because nobody
+            // looked — not because the source lost everything. Sweeping on
+            // that deletes the whole source. See [`RenderPass`].
+            tracing::info!(
+                source = %self.name,
+                "render did not walk this source; leaving its documents alone"
+            );
+            return;
+        }
         let Some(sink) = self.retain.as_ref() else {
             return;
         };
         let mut cb = sink.cb.lock().unwrap();
         (cb)(document_uuids);
+    }
+}
+
+#[cfg(test)]
+mod retain_tests {
+    use super::*;
+
+    /// `retain_documents` deletes every document the pass did not name. That
+    /// is right after a walk and catastrophic after a bail: a renderer that
+    /// returned before looking hands over an empty set, which at the sweep is
+    /// indistinguishable from a source that genuinely lost everything.
+    ///
+    /// The triggers are real — no store on disk, or (since render reads
+    /// committed state only) a store with nothing committed. "The dolt
+    /// extensions are missing" must not mean "delete this source".
+    #[test]
+    fn a_pass_that_did_not_walk_does_not_sweep() {
+        let swept: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+        let empty: HashMap<String, String> = HashMap::new();
+        let checkpoints = CheckpointSink::new();
+        let progress = Progress::noop();
+        let control = DownloadControl::default();
+
+        let mut on_doc: Box<DocCallback<'_>> = Box::new(|_| Ok(()));
+        let mut on_remove: Box<RemoveCallback<'_>> = Box::new(|_| Ok(0));
+        let mut on_retain: Box<RetainCallback<'_>> =
+            Box::new(|ids: &HashSet<String>| swept.lock().unwrap().push(ids.len()));
+
+        let ctx = RunCtx::for_render(
+            "src",
+            Path::new("/tmp"),
+            "2026-01-01T00:00:00+00:00",
+            &progress,
+            &control,
+            &empty,
+            &checkpoints,
+            &mut on_doc,
+            &mut on_remove,
+            &mut on_retain,
+        );
+
+        ctx.retain_documents(RenderPass::Skipped, &HashSet::new());
+        assert!(
+            swept.lock().unwrap().is_empty(),
+            "a pass that never walked must not reach the sweep"
+        );
+
+        ctx.retain_documents(RenderPass::Walked, &HashSet::new());
+        assert_eq!(
+            *swept.lock().unwrap(),
+            vec![0],
+            "a real walk that named nothing still sweeps — that is a source \
+             which genuinely lost everything"
+        );
     }
 }
