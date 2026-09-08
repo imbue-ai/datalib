@@ -38,16 +38,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 // `datalib/ui/..` — the workspace root, for the `bazel-bin/...`
 // fallbacks used when this config is loaded outside bazel.
 const workspaceDir = path.resolve(here, "..", "..");
-// Bazel exports TEST_TMPDIR but never TMPDIR, so `tmpdir()` would put
-// these in the user's real temp directory, which nothing reclaims.
-// Recorded as they are minted so `globalTeardown` can remove them.
+// run_e2e.sh hands us one scratch dir per run and prunes old ones, so
+// the roots below land somewhere bounded. Bare `tmpdir()` is the
+// `pnpm exec playwright test` path, where nobody reclaims them at all:
+// bazel exports TEST_TMPDIR but never TMPDIR.
 function mintRoot(prefix: string): string {
-  const parent = process.env.TEST_TMPDIR || tmpdir();
-  const dir = mkdtempSync(path.join(parent, prefix));
-  const minted = JSON.parse(process.env.FW_E2E_MINTED_DIRS ?? "[]") as string[];
-  minted.push(dir);
-  process.env.FW_E2E_MINTED_DIRS = JSON.stringify(minted);
-  return dir;
+  const parent =
+    process.env.FW_E2E_RUN_DIR || process.env.TEST_TMPDIR || tmpdir();
+  return mkdtempSync(path.join(parent, prefix));
 }
 function materializeRoot(prefix: string): string {
   const materializer =
@@ -216,7 +214,6 @@ export default defineConfig({
   fullyParallel: false,
   workers: 4,
   globalSetup: "./tests/e2e/global-setup.ts",
-  globalTeardown: "./tests/e2e/global-teardown.ts",
   outputDir: ARTIFACT_DIR,
   // `list` is what a person watching the terminal reads. `html` is the
   // artifact: a self-contained report that embeds each test's video and
