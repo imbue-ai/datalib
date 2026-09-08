@@ -235,10 +235,13 @@ export async function recordStatuses(page: Page, ids: readonly string[]) {
   await page.evaluate((ids: string[]) => {
     const w = window as unknown as {
       __statusLog?: Record<string, string[]>;
+      __statusTimes?: Record<string, number[]>;
       __sampleStatuses?: () => void;
     };
     const log: Record<string, string[]> = {};
+    const times: Record<string, number[]> = {};
     w.__statusLog = log;
+    w.__statusTimes = times;
     const sample = () => {
       for (const id of ids) {
         const el = document.querySelector(
@@ -257,6 +260,7 @@ export async function recordStatuses(page: Page, ids: readonly string[]) {
           // the word.
           const why = el?.closest("[title]")?.getAttribute("title") ?? "";
           seen.push(why.startsWith(`${s} — `) ? why : s);
+          (times[id] ??= []).push(Date.now());
         }
       }
     };

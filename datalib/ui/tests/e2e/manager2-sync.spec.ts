@@ -30,6 +30,7 @@ import {
   statusOf,
   TERMINAL,
 } from "./grid-helpers";
+import { delayJobList, dumpProbe, instrument } from "./_flake-probe";
 
 // Declared locally rather than pulling in @types/node — same reason as
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
@@ -86,6 +87,8 @@ async function writeConfig(page: Page, text: string) {
 let original = "";
 
 test.beforeEach(async ({ page, request }) => {
+  await instrument(page);
+  await delayJobList(page);
   dataRoot = await resolveDataRoot(request);
   await openManager(page);
   original = await page.locator(".m2-editor").inputValue();
@@ -187,6 +190,7 @@ ${applets()}`;
 
   test("the row shows the sync happening, and never goes backwards", async ({
     page,
+    request,
   }) => {
     await writeConfig(page, config());
 
@@ -278,11 +282,25 @@ ${applets()}`;
       return rank[s];
     };
     for (let i = 1; i < seen.length; i++) {
-      expect(
-        rankOf(seen[i]),
-        `went backwards: ${JSON.stringify(seen)}`,
-      ).toBeGreaterThanOrEqual(rankOf(seen[i - 1]));
+      if (rankOf(seen[i]) < rankOf(seen[i - 1])) {
+        const probe = await dumpProbe(page, request, "backwards", {
+          seen,
+          beforeUp,
+          beforeDown,
+          fullLogUp: await statusLog(page, "pdfs/raw"),
+          fullLogDown: await statusLog(page, "pdfs/rendered_md"),
+        });
+        throw new Error(`went backwards: ${JSON.stringify(seen)}\nPROBE ${probe}`);
+      }
     }
+    // Always leave a probe behind, so a passing run is comparable.
+    await dumpProbe(page, request, "pass", {
+      seen,
+      beforeUp,
+      beforeDown,
+      fullLogUp: await statusLog(page, "pdfs/raw"),
+      fullLogDown: await statusLog(page, "pdfs/rendered_md"),
+    });
 
     // The render step follows the download it depends on: it may not
     // reach a terminal state before its input does. `pdfs/raw` is
