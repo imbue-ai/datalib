@@ -47,9 +47,9 @@ The twelve provider renderers do the same thing by hand, on top of
 three shared primitives ([`render_cursor`](/datalib/backend/etl/src/render_cursor.rs),
 `doltlite_raw::scan_buckets`, `doltlite_raw::buckets_without_rows`) and
 two `RunCtx` sinks (`remove_conversation`, `retain_documents`). Checked
-against `main` at `305d7e79` on 2026-09-08. The pin work (#314, #316,
-#319, #322, #326, #328) has closed most of §3.5 and all of §3.2's
-*bail* hazard; it left this table exactly where it was:
+against `main` at `2ee0e2da` on 2026-09-08. The pin work (#314 through
+#336) has closed §3.5 and all of §3.2's *bail* hazard; it left this
+table exactly where it was:
 
 | provider | cursor | how deletions are found | order | load narrowed |
 |---|---|---|---|---|
@@ -89,6 +89,17 @@ the derivation has three separate failure modes:
   `recipients`; notion and chatgpt list one each. So in a Slack
   workspace where people join, **every run re-renders the whole
   workspace**.
+
+  This has now been measured rather than predicted. #335 caught a live
+  bake failing its stability check because one person's Slack status
+  flipped to "In a meeting" mid-run — four fields, one user — and the
+  fix moved `profile.status_*` and `profile.huddle_*` to the volatile
+  sidecar so they stop counting as content. That removes one *source*
+  of churn and not the amplification: `users` is still a global fanout,
+  so any real edit (a display-name change, a new member) still re-renders
+  every document in the workspace. The commit's own summary — "the render
+  re-runs, and the grid churns" — understates it for exactly that
+  reason.
 - **Many rows → one document.** A page's comments, a PR's reviews. Each
   provider joins these back to the owning entity by hand, and a
   provider that cannot (contacts — one row holds several vCards, so a
@@ -205,6 +216,34 @@ wrote down is the whole rule and is better than the way §3.2 states it
 here: **a sink that cannot answer must say *that*, not hand back an
 empty result and let the consumer draw the conclusion.**
 
+**And the same class keeps producing new instances**, which is the
+argument for making it structural rather than fixing it once per site.
+Since that rule was written down, three more have surfaced:
+
+- **pdf's `load_targets`** (#333). It doubles as the membership test
+  behind `remove_conversation`, so an empty list from a store we could
+  not read deletes everything the diff named. Worth noting how the fix
+  had to be ordered: unpinned it read the working set and so saw *more*
+  than committed, which under-deleted; pinning it *without* also
+  returning `Option` would have inverted that into over-deletion.
+- **A store with tables but no committed schema** (#334). A doltlite
+  file is born with an "Initialize data repository" commit, so
+  `dolt_hashof('HEAD')` resolved, `head` handed back a pin,
+  `install_views` gave every table the empty `WHERE 0` view, the
+  consumer read zero rows and reported a completed walk, and the sweep
+  deleted the source. Nothing in that chain looks like an error, which
+  is why it survived two rounds of work looking straight at it. Reachable
+  by a download that created its tables and died before its first commit.
+- **A writer that never sealed** (#336) — and this one is the limit of
+  the rule as stated. Pinned at the schema commit, "empty source" and
+  "writer wrote and never committed" produce *identical* reads. The sink
+  genuinely cannot tell, so it cannot say. The only difference is a dirty
+  `dolt_status`, which `install_views` now warns on — and that signal
+  stops meaning anything under streaming, where a reader alongside a
+  live writer sees a dirty store legitimately. Whatever replaces it has
+  to come from the producer, not from the reader's inspection of the
+  file.
+
 What is left is the *cold-start* half, untouched: every diff-driven
 provider still does `gone = Vec::new()` when `changed_buckets` is `None`
 — see `github/src/render/parse.rs:255` and the same shape at
@@ -222,13 +261,12 @@ store its producer is still writing. Two things follow for this section:
   exactly the reasoning above.
 - **But the flag is not the condition.** A checkpoint is only safe where
   a run's writes are monotone, and three providers truncate on *every*
-  run regardless of the flag: whatsapp (`download.rs:144`, every backup
-  is a full snapshot), pdf (`download/mod.rs:73`, "the truncate is what
-  makes deletions fall out") and fsindex (`download/mod.rs:192`). Their
-  consistent point is "after the refill completes", not "after a write
-  burst goes quiet". #329 says the other nineteen providers each need
-  someone to look at their consistent point; this is what that look has
-  to find.
+  run regardless of the flag: whatsapp (every backup is a full
+  snapshot), pdf ("the truncate is what makes deletions fall out") and
+  fsindex. Their consistent point is "after the refill completes", not
+  "after a write burst goes quiet". #333 wrote this down beside
+  `Policy::Never` in `checkpointer.rs`, which is where whoever ports the
+  next provider will be looking.
 
 **One caveat, and it is a real one.** The `.md` files are not in the
 transaction. `IndexedMarkdownStore::remove_document` unlinks the file
@@ -331,35 +369,25 @@ CAS pin a reader sampled, and the pinned CAS would then be missing bytes
 the pinned entity points at. Content addressing means there is no version
 of a blob to be wrong about. Said once, on `BlobCas::get`.
 
-**What is left, and the lint says otherwise again.** Check 4 prints
-"every render read is pinned". Its coverage now includes a hand-written
-`_RENDER_REACHABLE_LOADERS` list — loaders that live in `download/db.rs`
-but are called from render — which is the honest fix for a real problem
-and also a list that can go stale. It has:
+**Done, as far as an independent sweep can tell.** #333 pinned the four
+reads this document named plus a fifth the check's own extension found
+(notion `load_user_names`, notion's attachment projection twice, linkedin
+`load_photo_blobs`, pdf `scan_root` and `convertible_documents`), and pdf's
+`open_reader` made the handle-pin move. A transitive sweep over every
+`etl` function reachable from a render file finds nothing left: the two
+apparent hits — chatgpt's `load_conversations`, slack's `load_workspace` —
+are name collisions with local definitions inside each provider's own
+`render/parse.rs`, and the download-side functions of those names are not
+called from render.
 
-| still unpinned on a render path | where |
-|---|---|
-| notion `load_user_names` (`FROM users`) | `notion/src/download/db.rs:365` |
-| notion's `ATTACHMENTS_PROJECTION_SQL` (`FROM notion_attachments`) | `notion/src/download/db.rs:783` |
-| linkedin `load_photo_blobs` (`FROM contact_photos`) | `linkedin/src/download/photos.rs:192` |
-| pdf `scan_root` + `convertible_documents` (`pdf_scan_meta`, `pdf_documents`, `pdf_paths`) | `pdf/src/download/db.rs:130,150` |
-
-The first three are reached from a file the check *does* scan
-(`block_on_load_all`, `connections.rs:68`) through a function it does
-not; pdf's `RawDb::open_reader` is simply not one of the pinning kind
-yet. The two attachment-edge reads are also inconsistent with their own
-siblings — eight providers pin that projection
-(`pinned_claude_attachments`, `pinned_slack_attachments`,
-`pinned_email_blobs`, `pinned_wa_media_files`, …); notion and linkedin
-are the two that do not, so this is a miss rather than a decision.
-
-Naming the reachable loaders by hand is better than the two things it
-replaced — a glob that could not reach them, and a claim that they did
-not exist — but the failure mode is now "a new loader nobody adds to the
-list". The framework's answer is the same one that worked for the pin
-itself: make the *handle* the only way in, so there is no place left for
-a list to be incomplete about. pdf is the remaining provider whose
-`open_reader` has not made that move.
+**And the check now says what it checked.** It prints "7 listed loader(s)
+and every render file read a pinned view" rather than "every render read
+is pinned", because with a hand-written `_RENDER_REACHABLE_LOADERS` list
+the second is exactly what it cannot know. That is the right correction:
+the list is still the weak joint, and the honest failure mode is now
+stated rather than papered over. The structural answer — put the pin on
+the handle so a loader has no way to read unpinned — is what every
+provider has now done, which is why the list has stopped growing.
 
 ## 4. What a provider supplies
 
@@ -396,11 +424,9 @@ Each of these is useful alone, and they are listed cheapest-first.
    behaviour: write the table, and assert (in tests, then in a warning)
    that the documents it names match what `global_fanout_tables` and
    the hand-written unions produce. Only then delete the old paths.
-5. **Finish the pin** (§3.5) — four reads across notion, linkedin and
-   pdf, and then put pdf's `open_reader` on the handle-pin shape so
-   `_RENDER_REACHABLE_LOADERS` has nothing left to be incomplete
-   about. Drop the residual `prior_fingerprints` plumbing from the
-   five providers still threading it while you are there.
+5. ~~**Finish the pin** (§3.5)~~ — done in #333. What remains is the
+   residual `prior_fingerprints` plumbing in the five providers still
+   threading it under the diff, which is cleanup rather than a hole.
 6. **Bring the stragglers on**: beeper (no cursor, no deletions at
    all), sms_backup_restore (deletes after writing), contacts (which
    the deps table unblocks), and the four whole-store providers, whose
