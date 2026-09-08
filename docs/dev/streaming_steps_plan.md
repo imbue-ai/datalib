@@ -493,11 +493,12 @@ zero rows, cleanly. So for a doltlite sink:
 - a store without one, or with no file at all, is **unreadable** — the
   consumer skips, and must not sweep.
 
-Today those two collapse into one `None` and render treats both as
-"skip". That is the safe side of the mistake, but still a mistake: a
-source that legitimately drops to zero documents never gets them cleaned
-up. Guaranteeing the schema commit is what separates them — it is P1 for
-doltlite, spelled out. It also hands every downstream step a legitimate,
+These are now separated, which is step 5. The dangerous half was not
+the one this section originally described: a store with tables and no
+committed schema *did* produce a pin, and read as an empty source
+rather than as an unreadable one. `pin::head` refuses it now, and
+`open` verifies its own schema commit took. So a pin means readable,
+and zero rows means zero rows — which is P1 for doltlite, spelled out. It also hands every downstream step a legitimate,
 pinnable, empty input to be tested against, which is the case nobody
 writes a fixture for.
 
@@ -742,11 +743,22 @@ Each of these is a reviewable PR that leaves the tree green.
    progress with no scheduling risk. Answers most of #164 on its own.
 4. ~~**Consumers pin.**~~ Folded into step 2, per above. Done for
    `render -> grid_index`; still to do for `download -> render`.
-5. **The empty-store sentinel.** Guarantee the schema commit, so a
-   readable-but-empty sink stops being indistinguishable from an
-   unreadable one — see [The sink contract](#the-sink-contract). Small,
-   and it has to land after the thirteen reads above, because it changes
-   what a skip means.
+5. ~~**The empty-store sentinel.**~~ **Done.** A store carrying tables
+   but no committed schema now reads as *unreadable* rather than as a
+   source with no rows.
+
+   It was a live deletion bug, not a tidy-up. A doltlite file gets an
+   initialization commit at birth, so `dolt_hashof('HEAD')` answers even
+   for a store that has never committed its tables — and with no
+   `dolt_at_` module for any of them, `install_views` gave every table
+   the empty `WHERE 0` view. The consumer read zero rows, called that a
+   completed walk, and swept the source. Reachable by a download that
+   created its tables and died before its first commit.
+
+   `pin::head` refuses that store; `doltlite_raw::open` checks the
+   schema commit took before handing the pool back; and the `WHERE 0`
+   branch is now only reached for a table genuinely newer than the pin,
+   which is the case it was written for.
 6. **Streaming dispatch.** Needs a way for a step to declare its sink
    snapshot-readable first — P2 above, in the shape `probe` already
    uses — because "can this edge stream at all" is not something the
