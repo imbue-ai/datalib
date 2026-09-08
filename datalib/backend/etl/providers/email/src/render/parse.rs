@@ -116,14 +116,6 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
     datalib_etl::pin::install_views(&pool, &pin)
         .await
         .context("pin the email raw store for render")?;
-    // The CAS is a separate file with its own HEAD, so it takes its own pin.
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        if let Some(cas_pin) = datalib_etl::pin::head(cas_pool).await? {
-            datalib_etl::pin::install_views(cas_pool, &cas_pin)
-                .await
-                .context("pin the email CAS for render")?;
-        }
-    }
 
     let accounts = load_payloads(&pool, "accounts").await?;
     let mailboxes = load_payloads(&pool, "mailboxes").await?;

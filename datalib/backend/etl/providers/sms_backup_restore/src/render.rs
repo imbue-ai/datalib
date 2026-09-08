@@ -87,11 +87,6 @@ pub fn render(
                 datalib_etl::pin::install_views(db.pool(), &pin)
                     .await
                     .context("pin the sms_backup_restore raw store for render")?;
-                if let Some(cas_pin) = datalib_etl::pin::head(db.cas().pool()).await? {
-                    datalib_etl::pin::install_views(db.cas().pool(), &cas_pin)
-                        .await
-                        .context("pin the sms_backup_restore CAS for render")?;
-                }
                 let messages = db.load_payloads("sms_messages").await?;
                 let calls = db.load_payloads("sms_calls").await?;
                 let blobs = load_blobs(&db, &messages).await?;

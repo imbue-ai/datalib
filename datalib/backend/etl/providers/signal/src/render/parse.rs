@@ -183,14 +183,6 @@ async fn parse_async(
     datalib_etl::pin::install_views(&pool, &pin)
         .await
         .context("pin the signal raw store for render")?;
-    // The CAS is a separate file with its own HEAD, so it takes its own pin.
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        if let Some(cas_pin) = datalib_etl::pin::head(cas_pool).await? {
-            datalib_etl::pin::install_views(cas_pool, &cas_pin)
-                .await
-                .context("pin the signal CAS for render")?;
-        }
-    }
 
     let recipients = load_recipients(&pool).await?;
     let chats = load_chats(&pool).await?;

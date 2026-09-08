@@ -132,7 +132,7 @@ impl DataProcessor for GoogleTakeoutRender {
         // holds is a document whose source is gone. The driver sweeps.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
-        crate::render::render(
+        let pass = crate::render::render(
             &self.raw_path,
             ctx.root,
             &self.name,
@@ -141,7 +141,7 @@ impl DataProcessor for GoogleTakeoutRender {
             &mut on_doc,
             &mut seen,
         )?;
-        ctx.retain_documents(&seen);
+        ctx.retain_documents(pass, &seen);
         Ok("rendered".into())
     }
 }

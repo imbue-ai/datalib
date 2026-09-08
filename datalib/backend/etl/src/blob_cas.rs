@@ -176,6 +176,19 @@ impl BlobCas {
         Ok(())
     }
 
+    /// **The CAS is deliberately not pinned**, unlike every other store a
+    /// render reads.
+    ///
+    /// Content addressing is what makes that safe: a row is keyed by the
+    /// blake3 of its own bytes, so an uncommitted row holds exactly the bytes
+    /// a committed one would. There is no version of a blob to be wrong
+    /// about, so there is nothing for a pin to protect.
+    ///
+    /// Pinning it would be actively worse. Entities are committed *after* the
+    /// blobs they name, so an entities pin can legitimately reference a blob
+    /// committed later than any CAS pin a reader sampled — and the pinned CAS
+    /// would then be missing bytes the pinned entity points at. Read unpinned,
+    /// the CAS is always a superset, which is the safe direction.
     pub async fn get(&self, blake3_hash: &str) -> Result<Option<CasObject>> {
         let row = sqlx::query(
             "SELECT blake3, byte_len, content_type, bytes FROM cas_objects WHERE blake3 = ?",

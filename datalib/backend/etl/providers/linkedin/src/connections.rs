@@ -1,6 +1,7 @@
 //! Render LinkedIn `connections` as first-class contacts through the
 //! shared [`datalib_etl_contact_common`] renderer.
 
+use datalib_etl::processor::RenderPass;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -39,10 +40,10 @@ pub fn render_connections(
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
-) -> Result<()> {
+) -> Result<RenderPass> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(());
+        return Ok(RenderPass::Skipped);
     }
     let (payloads, photos) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
@@ -90,7 +91,7 @@ pub fn render_connections(
         on_doc_complete,
     )?;
     seen.extend(s.documents);
-    Ok(())
+    Ok(RenderPass::Walked)
 }
 
 fn to_contact(p: &Value) -> NormalizedContact {

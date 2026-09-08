@@ -364,11 +364,31 @@ def _check_render_opens_read_only(root: Path) -> int:
 # only go down; a file that reaches zero comes out of the dict. Both
 # directions fail, so the sweep cannot stall silently and new code cannot
 # quietly add a site.
-# Empty, and that is the finished state: every render read now names a
-# commit. It stays as a dict rather than becoming a bare `== 0` so that a
-# provider which genuinely needs an unpinned read has somewhere to say so,
-# with a reason, instead of the check being switched off.
-EXPECTED_UNPINNED_READS: dict[str, int] = {}
+# What is left, and why it is not zero.
+#
+# Every *literal* `FROM <table>` in render code is pinned. These are the calls
+# into shared helpers that build `FROM {table}` at runtime, which no regex over
+# the call site can resolve — and for `google_takeout` and `sms_backup_restore`
+# those helpers are the only content read they do, so an earlier version of
+# this check reported them as finished while every row they render still came
+# from the working set.
+#
+# Emptying this dict claimed the edge was done. It is not: numbers may only go
+# down, and the entry disappears when a provider's helper reads take a pin.
+EXPECTED_UNPINNED_READS: dict[str, int] = {
+    "datalib/backend/etl/providers/beeper/src/render/parse.rs": 1,
+    "datalib/backend/etl/providers/chatgpt/src/render/parse.rs": 1,
+    "datalib/backend/etl/providers/claude/src/render/parse.rs": 2,
+    "datalib/backend/etl/providers/email/src/render/parse.rs": 5,
+    "datalib/backend/etl/providers/github/src/render/parse.rs": 4,
+    "datalib/backend/etl/providers/gitlab/src/render/parse.rs": 1,
+    "datalib/backend/etl/providers/google_takeout/src/render.rs": 3,
+    "datalib/backend/etl/providers/linkedin/src/render.rs": 1,
+    "datalib/backend/etl/providers/signal/src/render/parse.rs": 1,
+    "datalib/backend/etl/providers/slack/src/render/parse.rs": 1,
+    "datalib/backend/etl/providers/sms_backup_restore/src/render.rs": 2,
+    "datalib/backend/etl/providers/whatsapp/src/render/render.rs": 1,
+}
 
 # `pinned_` is the whole point: a view over `dolt_at_<table>`, so reading it
 # is reading committed state. `dolt_*` are the history vtabs (already
@@ -377,9 +397,22 @@ EXPECTED_UNPINNED_READS: dict[str, int] = {}
 _PINNED_OK_PREFIXES = ("pinned_", "dolt_", "pragma_", "sqlite_")
 
 # A table named directly after FROM or JOIN. A `{placeholder}` does not
-# match (it starts with `{`), which is what makes a swept site invisible
+# match (it starts with `{`), which is what makes a pinned site invisible
 # here, and neither does `FROM (` for a subquery.
 _TABLE_READ = re.compile(r"\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*)")
+
+# The other half, and the one that made an earlier version of this check
+# overclaim. A shared helper that interpolates a table name at runtime --
+# `format!("... FROM {table}")` -- reads content the same way, and no regex
+# over the call site can see the table it will name. For two providers those
+# helpers are the *only* content read, so a file could show zero literal
+# reads while every row it renders came from the working set.
+#
+# So they are counted by call site instead. A pinned call passes a name that
+# already carries the prefix; anything else is an unpinned read.
+_HELPER_READ = re.compile(
+    r"\b(load_payloads|load_payloads_with_id|load_children|buckets_without_rows)\s*\("
+)
 
 
 def _render_sources(root: Path) -> list[str]:
@@ -397,6 +430,10 @@ def _unpinned_reads(root: Path, rel: str) -> list[tuple[int, str]]:
         for table in _TABLE_READ.findall(line):
             if not table.startswith(_PINNED_OK_PREFIXES):
                 out.append((lineno, table))
+        for helper in _HELPER_READ.findall(line):
+            # `pinned_` anywhere on the line means the caller named a view.
+            if "pinned_" not in line:
+                out.append((lineno, f"{helper}(...)"))
     return out
 
 
@@ -411,7 +448,10 @@ def _check_unpinned_render_reads(root: Path) -> int:
         if not actual:
             print("OK: every render read is pinned.")
         else:
-            print(f"OK: {total} unpinned render read(s), matching the baseline.")
+            print(
+                f"OK: {total} unpinned render read(s) left, matching the baseline "
+                "(all of them through runtime-table helpers)."
+            )
         return 0
 
     added = {
