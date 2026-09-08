@@ -55,7 +55,23 @@ pub struct UserRow {
 /// top-level `updated` epoch on every user object; it churns across
 /// re-fetches without reflecting a state change, so it must not live in
 /// the content payload that drives `dolt_diff_users`.
-pub const USER_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"]];
+///
+/// The `profile.status_*` and `profile.huddle_*` fields say what the
+/// person is doing at this instant, and a mirror that keeps only the
+/// latest value is keeping a random sample of it. A calendar
+/// integration flipping someone to "In a meeting" would otherwise read
+/// as a modified user: re-rendered, re-indexed, and churning the grid.
+/// Nothing in the tree reads them.
+pub const USER_VOLATILE_PATHS: &[dr::VolatilePath] = &[
+    &["updated"],
+    &["profile", "status_text"],
+    &["profile", "status_text_canonical"],
+    &["profile", "status_emoji"],
+    &["profile", "status_emoji_display_info"],
+    &["profile", "status_expiration"],
+    &["profile", "huddle_state"],
+    &["profile", "huddle_state_expiration_ts"],
+];
 
 /// `channels` — one row per Slack chat surface: public channel,
 /// private channel, DM, or MPIM.
@@ -257,4 +273,58 @@ pub fn full_ddl() -> Vec<String> {
         out.push(dr::bookkeeping_ddl_for(table));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn user_with_status(text: &str, emoji: &str, expiration: i64) -> serde_json::Value {
+        json!({
+            "id": "U0239BBA55M",
+            "name": "picard",
+            "updated": 1788879000,
+            "profile": {
+                "real_name": "Jean-Luc Picard",
+                "title": "Captain",
+                "status_text": text,
+                "status_text_canonical": text,
+                "status_emoji": emoji,
+                "status_emoji_display_info": if emoji.is_empty() { json!([]) } else { json!([{"emoji_name": "tea"}]) },
+                "status_expiration": expiration,
+            },
+        })
+    }
+
+    /// A person whose Slack status moved — and nothing else — must land
+    /// the same content payload, or `dolt_diff_users` calls them
+    /// modified, the render re-runs, and the grid churns.
+    ///
+    /// The manual-e2e bake caught this for real on 2026-09-08: a
+    /// calendar integration flipped someone to "In a meeting" between
+    /// two runs four minutes apart, and the `--reset-and-redownload`
+    /// stability check failed on four `profile.status_*` paths.
+    #[test]
+    fn a_status_change_does_not_move_the_content_payload() {
+        let quiet = user_with_status("", "", 0);
+        let busy = user_with_status("In a meeting • Google Calendar", ":tea:", 1788879000);
+
+        let (quiet_base, quiet_volatile) = dr::split_volatile(&quiet, USER_VOLATILE_PATHS);
+        let (busy_base, busy_volatile) = dr::split_volatile(&busy, USER_VOLATILE_PATHS);
+
+        assert_eq!(
+            quiet_base, busy_base,
+            "the status fields reached the content payload"
+        );
+        assert_ne!(
+            quiet_volatile, busy_volatile,
+            "the status went nowhere — it belongs in the sidecar, not dropped"
+        );
+        assert_eq!(
+            busy_base["profile"]["title"], "Captain",
+            "the split took more than the status"
+        );
+    }
 }
