@@ -733,14 +733,26 @@ tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \
   //datalib/backend/signal-backup:signal_make_fixture
 ```
 
-**Default to `bazelisk test //...` for any "are tests passing?" question.**
-It's the source of truth: it runs Rust, cross-language goldens, and the
-Playwright e2e suite in one shot, the same way CI does. Bazel's action
-cache makes re-runs cheap — unchanged targets are served from cache, so
-iterating costs only what you actually touched. For a tight inner loop,
-narrow the *bazel* invocation to the package you're touching
+**Let CI run the full suite; keep the local loop narrow.** `bazelisk
+test //...` is still the source of truth and still what "build green"
+means — but `imbue-ai/datalib` is public, which makes GitHub's standard
+runners free and unmetered, while your laptop's cores are the scarce
+resource. **A green CI run of `//...` satisfies the rule above; a
+narrower local run does not.** So push the branch and read the run
+rather than burning an afternoon of fans on a cold rebuild.
+
+Locally, narrow the *bazel* invocation to the package you're touching
 (`bazelisk test //datalib/backend/etl/...`) — don't shell out to
 `cargo` / `pnpm`, which bypass the cache and can disagree with CI.
+
+The disk cache is what makes that narrow loop cheap, and it is
+**shared across every worktree** (one absolute path, see `.bazelrc`).
+Size its cap against the number of worktrees you keep live, not against
+one build: when the cap is below their sum they evict each other and
+every worktree switch recompiles what the last one just built. Ten live
+worktrees against a 50G cap was measured doing exactly that. Check with
+`du -sh ~/Library/Caches/bazel-disk-cache` — sitting *at* the cap is the
+symptom.
 
 **Do not add `--test_tag_filters=-manual,-external` to this invocation.**
 The canonical line is the bare `bazelisk test //...`. Filtering on
@@ -872,7 +884,8 @@ which is the point of writing this down. `rdeps` says how much of the
 tree a file's crate is upstream of:
 
 ```bash
-bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))'   # 67 test targets
+bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))'   # 80 test targets
+bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'  # 96 — two thirds of the suite
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl/providers/slack:datalib_etl_slack))'  # 12
 bazelisk query 'kind(".*_test", rdeps(//..., //tests/fixtures:ingested_tng))'       # 3, incl. the 42s e2e suite
 ```
@@ -885,6 +898,28 @@ cache is warm and later PRs drop back to ~3m. It is worth knowing about
 mainly so you can (a) not panic, and (b) decide deliberately whether a
 small helper really belongs in a shared crate — the `rdeps` number is
 the price tag.
+
+**Runs here are bimodal, so ask which mode you are in before asking
+anything else.** A warm run executes 0 tests and finishes in ~3 min; a
+cold one rebuilds ~345 actions and takes ~20. There is almost nothing in
+between, so a rising *median* usually means cold runs got more frequent,
+not that anything got slower. Measured over 09-01 → 09-08, the share of
+cold runs went 7% → ~35% while the cost of a cold run held flat.
+
+**It is not the e2e suite.** On a 1254s cold run every executed test
+together came to 200s, of which `//datalib/ui:e2e_test` was 94s. The
+other ~1050s is opt-mode Rust compiling, and the only lever on it is
+blast radius.
+
+The second lever is where those compiles run. `--config=remote`
+(`.bazelrc`) sends them to BuildBuddy remote execution instead of the
+runner's 4 vCPUs; `test.yml` takes it via a `remote_execution` dispatch
+input. It is a **trial switch, not the merge gate** — flip the gate only
+once a dispatch has gone green *and* the usage graph shows what a month
+costs, because the free tier's binding limit is 100 GB/month of cache
+transfer rather than its 80 cores. Note the floor it cannot beat: that
+same 1254s run had a 540s critical path, which is a chain of rustc
+invocations no amount of parallelism shortens.
 
 Not exercised here, so treat as a pointer rather than a recipe:
 BuildBuddy also has a REST API and a side-by-side invocation compare in
@@ -910,6 +945,16 @@ Two things hide this, so check rather than assume:
 ```bash
 grep -c buildbuddy .bazelrc.user 2>/dev/null || echo "no .bazelrc.user in THIS workspace"
 ```
+
+**Even with the key, a mac shares almost nothing with CI.** An action's
+cache key covers its toolchain and target, so a darwin-arm64 rustc
+action and CI's linux-x86_64 one are different actions and neither can
+hit the other's entry. Locally the remote cache buys you sharing with
+your *own* other worktrees and machines, plus repository fetches through
+the remote downloader — not a replay of CI's work. For the same reason
+`.bazelrc`'s `remote` config (BuildBuddy remote *execution*) is CI-only:
+the autodetected cc toolchain is generated from the client host, so
+driving Linux executors from a mac hands them a darwin toolchain.
 
 The `processes:` line settles it either way. A run on the remote cache
 names it — CI's reads `4070 remote cache hit, …`. A local run without

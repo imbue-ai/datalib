@@ -133,6 +133,7 @@ rust_test(
     tags = [
         "external",  # talks to chatgpt.com
         "manual",
+        "no-remote-exec",
         "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
     ],
     deps = [

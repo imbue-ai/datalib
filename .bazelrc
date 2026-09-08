@@ -166,8 +166,18 @@ test  --disk_cache=~/Library/Caches/bazel-disk-cache
 # `gc_idle_delay` (default 5m), evicting least-recently-used entries
 # down to the cap. It is not on the critical path of a build, and a
 # build that needs an evicted entry simply rebuilds it.
-build --experimental_disk_cache_gc_max_size=50G
-test  --experimental_disk_cache_gc_max_size=50G
+#
+# Size it against the number of worktrees you keep, not against one
+# build. This is a shared store and every live `.claude/worktrees/*`
+# clone holds a working set in it; when the cap is smaller than their
+# sum they evict each other continuously and every worktree switch
+# recompiles what the last one just built. 50G was measured pegged at
+# exactly 50G with ten worktrees live, which is that failure — the
+# inner loop goes cold and the laptop's fans stay on. Raise it when
+# `du -sh ~/Library/Caches/bazel-disk-cache` sits at the cap and the
+# volume has room.
+build --experimental_disk_cache_gc_max_size=150G
+test  --experimental_disk_cache_gc_max_size=150G
 
 # BuildBuddy remote cache + build event service. Opt-in via
 # `--config=buildbuddy` on `build` / `test`; the API key lives in
@@ -223,6 +233,66 @@ build:buildbuddy --remote_upload_local_results=true
 # bazel just downloads from the origin URL itself.
 build:buildbuddy --experimental_remote_downloader=grpcs://imbue.buildbuddy.io
 build:buildbuddy --experimental_remote_downloader_local_fallback=true
+
+# BuildBuddy remote EXECUTION, on top of the cache above. Opt-in via
+# `--config=remote`. CI-only, and the reason is toolchain resolution
+# rather than policy: the C/C++ half of this build resolves through
+# bazel's autodetected `local_config_cc`, which is generated from the
+# CLIENT host. Run this from a mac and bazel hands a darwin cc
+# toolchain to a Linux executor. `test.yml` runs *inside* the same
+# devcontainer image the executors run, so there the client and the
+# worker agree — which is what makes it safe there and nowhere else.
+#
+# The problem it solves is not the critical path, which is a chain of
+# rustc invocations no core count shortens. It is the queue behind it:
+# a full-rebuild CI run executes ~345 sandboxed actions against a
+# 4-vCPU runner, and measures 1254s elapsed against a 540s critical
+# path. Everything above that 540s floor is waiting for a core.
+#
+# `--jobs=80` matches the core ceiling on BuildBuddy's free tier. Going
+# higher does not buy anything the plan will actually schedule.
+#
+# `--remote_download_toplevel` is here to protect the OTHER free-tier
+# limit, which is the one that actually binds: 100 GB/month of cache
+# transfer. Under remote execution every intermediate output would
+# otherwise round-trip to the client. Toplevel keeps the rlibs and
+# object files on the far side and materializes only what a person or
+# a test consumes. Watch the usage graph at imbue.buildbuddy.io before
+# assuming a month of this stays inside the free tier.
+#
+# PRECONDITION: `ghcr.io/imbue-ai/datalib_devcontainer` must be a
+# PUBLIC package. The executors pull it anonymously — there are no
+# registry credentials here on purpose, this being an open project —
+# and a private package answers an anonymous pull with 403, which
+# surfaces as an image-pull failure on every remote action rather than
+# as anything that names the cause.
+#
+# The image is a default exec property rather than a
+# `platform(exec_properties = ...)` so that a caller can override or
+# extend it from the command line without editing a BUILD file.
+#
+# This config layers ON TOP of `buildbuddy` and deliberately does not
+# pull it in itself. Both `.bazelrc.user` and CI's `prepare-bazel`
+# already carry a plain `build --config=buildbuddy`, and expanding it a
+# second time here earns bazel's "expanded more than once" warning and
+# double-counts every repeatable flag inside it. There is nothing to
+# lose by leaving it out: remote execution needs the API key, the key
+# only ever arrives via `.bazelrc.user`, and that same file turns
+# `buildbuddy` on.
+build:remote --remote_executor=grpcs://imbue.buildbuddy.io
+build:remote --remote_default_exec_properties=OSFamily=Linux
+build:remote --remote_default_exec_properties=Arch=amd64
+build:remote --remote_default_exec_properties=container-image=docker://ghcr.io/imbue-ai/datalib_devcontainer:latest
+build:remote --remote_download_toplevel
+build:remote --jobs=80
+
+# A `no-sandbox` target is host-dependent by definition — it reads a
+# keyring, binds a loopback port, or runs a program out of the ambient
+# environment. Shipping one to a remote worker cannot be correct, so
+# every such target also carries `no-remote-exec`, which keeps
+# execution local while still allowing remote CACHE hits. The tag is on
+# the targets rather than expressed here as a strategy regex so that it
+# travels with the target that earned it.
 
 # Fully-static musl release builds. Selects the musl platform for the
 # TARGET configuration only: build scripts, proc macros, and genrule

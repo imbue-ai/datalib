@@ -121,6 +121,7 @@ rust_test(
     tags = [
         "external",  # talks to api.notion.com
         "manual",
+        "no-remote-exec",
         "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
     ],
     deps = [
