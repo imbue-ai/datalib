@@ -143,6 +143,7 @@ async fn conv_uuids_scopes_conversations_not_projects() {
     );
     assert_eq!(s.project_docs_fetched, 3, "and their knowledge docs");
 
+    seal(&raw).await;
     let parsed = parse(&raw, None).expect("parse the raw store");
     assert_eq!(
         parsed.project_name_by_uuid.get(PROJECT).map(String::as_str),
@@ -179,6 +180,21 @@ async fn conv_uuids_scopes_conversations_not_projects() {
     assert_eq!(s3.projects_fetched, 0, "the off switch still works");
 }
 
+/// Commit what a `fetch` wrote, the way the processor's `RawStoreSession`
+/// does in production. Render pins HEAD, so an uncommitted row is invisible
+/// to it — without this these tests assert against the working set, which is
+/// the bug the pinning work exists to remove.
+async fn seal(raw: &std::path::Path) {
+    let db =
+        datalib_etl::doltlite_raw::open(&datalib_etl_claude::download::db::db_path_for(raw), &[])
+            .await
+            .expect("open to commit");
+    datalib_etl::doltlite_raw::commit_run(&db, "test: claude fetch")
+        .await
+        .expect("commit the fetch");
+    db.close().await;
+}
+
 async fn round_trip_and_only_refetch_when_upstream_moves() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
@@ -199,6 +215,7 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
     assert_eq!(s1.project_docs_skipped, 0);
 
     // ── The doltlite → render read path ───────────────────────────
+    seal(&raw).await;
     let parsed = parse(&raw, None).expect("parse the raw store");
     assert_eq!(parsed.projects.len(), 2, "both projects should render");
     let p = parsed
@@ -292,6 +309,7 @@ async fn project_uuids_bounds_the_walk() {
     assert_eq!(s.projects_fetched, 1, "only the named project is stored");
     assert_eq!(s.project_docs_fetched, 2, "and only its docs");
 
+    seal(&raw).await;
     let parsed = parse(&raw, None).expect("parse the raw store");
     let uuids: Vec<&str> = parsed
         .projects
@@ -326,6 +344,7 @@ async fn projects_can_be_disabled() {
     assert_eq!(s.project_docs_fetched, 0);
     assert_eq!(s.errors, 0);
 
+    seal(&raw).await;
     let parsed = parse(&raw, None).expect("parse the raw store");
     assert!(parsed.projects.is_empty(), "no projects should be stored");
     assert!(
