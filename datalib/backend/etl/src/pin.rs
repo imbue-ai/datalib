@@ -114,13 +114,15 @@ impl Reads<'_> {
 /// commit the diff did not see. This is for the consumers that do no diff at
 /// all, and for a sibling store (a blob CAS) with a HEAD of its own.
 pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
-    let commit: Option<String> =
-        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            // No `dolt_log` at all is a build without the extensions, which
-            // reads the same as a store with nothing committed: no pin.
-            .unwrap_or(None);
+    // `dolt_hashof` resolves the ref, rather than ordering `dolt_log()` by a
+    // `date` that only has second resolution -- checkpointing commits several
+    // times a second, so ties are the normal case, not the edge one.
+    let commit: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+        .fetch_optional(pool)
+        .await
+        // No `dolt_hashof` at all is a build without the extensions, which
+        // reads the same as a store with nothing committed: no pin.
+        .unwrap_or(None);
     Pin::from_scan(commit.as_deref())
 }
 
@@ -394,6 +396,59 @@ mod view_tests {
             vec!["committed".to_string()],
             "the pinned view must show the committed row and not the in-flight one"
         );
+    }
+
+    /// `dolt_log().date` has one-second resolution, so a burst of commits --
+    /// which is what checkpointing produces -- gives several rows one
+    /// timestamp. Ordering by it leaves the winner to an unspecified tiebreak;
+    /// `head` must name the actual HEAD every time.
+    #[tokio::test]
+    async fn head_tracks_head_through_a_burst_of_same_second_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(
+            &dir.path().join("burst.doltlite_db"),
+            &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT)"],
+        )
+        .await
+        .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+
+        for i in 0..8 {
+            sqlx::query("INSERT INTO entities VALUES (?, 'x')")
+                .bind(format!("e{i}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+            let sealed = crate::doltlite_raw::commit_run(&pool, &format!("batch {i}"))
+                .await
+                .unwrap()
+                .unwrap();
+
+            let pin = head(&pool)
+                .await
+                .unwrap()
+                .expect("a sealed store has a head");
+            assert_eq!(
+                pin.commit(),
+                sealed,
+                "head must name the commit just sealed, not a same-second sibling"
+            );
+
+            // And the pin has to carry every row committed so far -- naming the
+            // right hash is only half of it.
+            // Safe: `pin.commit()` is validated hex, and the table name is a
+            // literal -- the same argument `install_views` makes.
+            let seen: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM dolt_at_entities('{}')",
+                pin.commit()
+            )))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(seen, i64::from(i) + 1, "pin at batch {i} lost rows");
+        }
     }
 
     /// Pinned views are per-connection state. The design leans on that in two

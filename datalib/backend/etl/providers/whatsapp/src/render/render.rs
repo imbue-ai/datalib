@@ -170,12 +170,9 @@ async fn scan_diff(
 )> {
     let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
 
-    let new_head: Option<String> =
-        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
+    let new_head: Option<String> = datalib_etl::pin::head(&pool)
+        .await?
+        .map(|p| p.commit().to_string());
 
     // Both refs, or neither: with no commit to scan *to* there is nothing
     // committed to diff against, and cold-starting is the only honest answer.
