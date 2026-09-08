@@ -162,8 +162,13 @@ impl IndexedMarkdownStore {
     }
 
     pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
+        // `markdowns.rendered_at` is one of the times `--now` is
+        // documented to pin, and the pinned value is already in hand.
+        // Left to sample its own clock, every document in a run
+        // disagreed with every other by microseconds.
+        let now = (!self.now.is_empty()).then_some(self.now.as_str());
         blocking(async {
-            crate::grid_index::apply_one(&self.write_lock, out_dir, md, None)
+            crate::grid_index::apply_one(&self.write_lock, out_dir, md, now)
                 .await
                 .with_context(|| format!("apply {}", md.markdown_uuid))?;
             self.sweep_problems(&md.markdown_uuid, &md.problems).await

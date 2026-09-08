@@ -1191,16 +1191,40 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let order_by = if columns.iter().any(|c| c == "id") {
-            "ORDER BY id"
+        // A table's primary key is its identity, so ordering by it keeps
+        // a row in place across bakes and lets a content change read as a
+        // change rather than as a delete plus an insert somewhere else.
+        // `grid_rows`, `markdowns` and `source_measurements` all land here
+        // — none of them has an `id` column, so before this they were
+        // dumped in whatever order the store handed back.
+        let mut pk_cols: Vec<(i64, String)> = info
+            .iter()
+            .filter_map(|r| {
+                let pos = r.try_get::<i64, _>("pk").unwrap_or(0);
+                let name = r.try_get::<String, _>("name").ok()?;
+                (pos > 0 && name != "volatile_payload").then_some((pos, name))
+            })
+            .collect();
+        pk_cols.sort();
+        let order_by = if !pk_cols.is_empty() {
+            format!(
+                "ORDER BY {}",
+                pk_cols
+                    .iter()
+                    .map(|(_, c)| format!("\"{c}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else if columns.iter().any(|c| c == "id") {
+            "ORDER BY id".to_string()
         } else if columns.iter().any(|c| c == "run_id") {
-            "ORDER BY run_id"
+            "ORDER BY run_id".to_string()
         } else if columns.iter().any(|c| c == "scope") {
-            "ORDER BY scope"
+            "ORDER BY scope".to_string()
         } else if columns.iter().any(|c| c == "endpoint") {
-            "ORDER BY endpoint"
+            "ORDER BY endpoint".to_string()
         } else {
-            ""
+            String::new()
         };
         let q = format!("SELECT {select_list} FROM \"{t}\" {order_by}");
         // Same: `select_list` is built from the columns just introspected and
@@ -1260,6 +1284,14 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
             }
             row_vals.push(Value::Object(obj));
         }
+        // No key to order by — lightroom's `Ag*` tables, mirrored from
+        // Adobe's catalog, declare none. Sort by the rendered row so the
+        // dump is at least a function of the contents rather than of the
+        // order the store happened to return them in.
+        if order_by.is_empty() {
+            row_vals.sort_by_cached_key(|v| v.to_string());
+        }
+
         // Table-scoped redaction, applied here because this is the one place
         // that knows the table name for certain (see `TABLE_VOLATILE_KEYS`).
         if let Some((_, keys)) = TABLE_VOLATILE_KEYS.iter().find(|(name, _)| *name == t) {
