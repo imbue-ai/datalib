@@ -103,6 +103,12 @@ impl ProgressSink for EmitterSink {
             msg: msg.to_string(),
         });
     }
+    fn checkpoint(&self, version: &str) {
+        self.emitter.event(&Event::Checkpoint {
+            step: self.step.clone(),
+            version: version.to_string(),
+        });
+    }
     fn finish(&self, msg: &str) {
         self.emitter.event(&Event::Log {
             step: self.step.clone(),

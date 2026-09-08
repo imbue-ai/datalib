@@ -92,6 +92,10 @@ pub struct FetchOptions {
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (`--reset-and-redownload`, etc).
     pub control: datalib_etl::control::DownloadControl,
+    /// Seals what has been written so far, so render can start on the early
+    /// conversations while the rest are still arriving. `None` -- the
+    /// default, and what every test uses -- commits once at the end.
+    pub sealer: Option<datalib_etl::raw_store::Sealer>,
 }
 
 impl FetchOptions {
@@ -109,6 +113,7 @@ impl FetchOptions {
             conv_uuids: Vec::new(),
             projects: true,
             project_uuids: Vec::new(),
+            sealer: None,
             progress: Default::default(),
             control: Default::default(),
         }
@@ -510,6 +515,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                             &now,
                         )
                         .await;
+                        // The store is consistent here and nowhere earlier:
+                        // the conversation row and the blobs it names have
+                        // both landed. Sealing between the two would publish
+                        // a message pointing at bytes no reader can resolve.
+                        if let Some(sealer) = opts.sealer.as_ref() {
+                            sealer.wrote(1).await;
+                        }
                         if opts.sleep_between > Duration::ZERO {
                             sleep(opts.sleep_between).await;
                         }

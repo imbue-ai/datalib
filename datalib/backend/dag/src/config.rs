@@ -44,6 +44,53 @@ pub struct DagConfig {
     /// a request for its prefix arrives. Empty is normal.
     #[serde(default)]
     pub applets: Vec<AppletEntry>,
+    /// How often a step seals what it has written, so a consumer can see it
+    /// before the step finishes. Omitted means the step's own default.
+    #[serde(default)]
+    pub checkpoint_cadence: Option<CheckpointCadence>,
+}
+
+/// The latency/history tradeoff, in seconds, as a person writes it in
+/// `config.toml`.
+///
+/// Plain numbers rather than the `etl` type they become: the runner does not
+/// link `etl`, and does not need to — it forwards this to the step, which
+/// owns what a checkpoint *is*.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointCadence {
+    /// Seal once writes have been quiet this long.
+    pub quiet_for_secs: f64,
+    /// Seal anyway once this long has passed since the last commit, however
+    /// busy the writer is.
+    pub at_most_every_secs: f64,
+}
+
+impl CheckpointCadence {
+    /// The wire form: `"<quiet>,<ceiling>"`, seconds. One env var rather
+    /// than two, so a step reads the pair or neither.
+    pub fn encode(&self) -> String {
+        format!("{},{}", self.quiet_for_secs, self.at_most_every_secs)
+    }
+
+    /// `None` for anything this build cannot read — a malformed value from a
+    /// newer config is not a reason to fail the run, and the step's default
+    /// cadence is a safe answer.
+    pub fn decode(s: &str) -> Option<Self> {
+        let (q, c) = s.split_once(',')?;
+        let quiet_for_secs: f64 = q.trim().parse().ok()?;
+        let at_most_every_secs: f64 = c.trim().parse().ok()?;
+        if !(quiet_for_secs.is_finite() && at_most_every_secs.is_finite())
+            || quiet_for_secs < 0.0
+            || at_most_every_secs < 0.0
+        {
+            return None;
+        }
+        Some(Self {
+            quiet_for_secs,
+            at_most_every_secs,
+        })
+    }
 }
 
 /// One applet instance. Deliberately a subset of [`StepEntry`]: an applet
@@ -388,6 +435,8 @@ struct RawConfig {
     steps: Vec<toml::Spanned<toml::Value>>,
     #[serde(default)]
     applets: Vec<toml::Spanned<toml::Value>>,
+    #[serde(default)]
+    checkpoint_cadence: Option<CheckpointCadence>,
 }
 
 /// One entry on its way in: where it sits in the file, and what it
@@ -807,6 +856,7 @@ fn entries_of(text: &str) -> Entries {
             binary_dir: raw.binary_dir,
             steps,
             applets,
+            checkpoint_cadence: raw.checkpoint_cadence,
         },
         specs,
         spans,
@@ -914,6 +964,45 @@ impl DagConfig {
             binary_dir: None,
             steps: Vec::new(),
             applets: Vec::new(),
+            checkpoint_cadence: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod cadence_tests {
+    use super::CheckpointCadence;
+
+    #[test]
+    fn a_cadence_survives_the_trip_through_the_env_var() {
+        let c = CheckpointCadence {
+            quiet_for_secs: 2.5,
+            at_most_every_secs: 15.0,
+        };
+        assert_eq!(CheckpointCadence::decode(&c.encode()), Some(c));
+    }
+
+    /// A value this build cannot read is `None`, never a guess: the step
+    /// falls back to its own default and logs, rather than checkpointing on
+    /// a cadence nobody asked for.
+    #[test]
+    fn an_unreadable_cadence_is_none() {
+        for bad in [
+            "",
+            "2",
+            "2,",
+            ",15",
+            "two,fifteen",
+            "-1,15",
+            "2,-1",
+            "nan,15",
+            "inf,15",
+        ] {
+            assert_eq!(
+                CheckpointCadence::decode(bad),
+                None,
+                "{bad:?} must not parse"
+            );
         }
     }
 }
