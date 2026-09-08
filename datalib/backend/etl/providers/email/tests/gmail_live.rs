@@ -6,42 +6,62 @@
 //! Live Gmail REST API download test.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
-use datalib_etl_email::download::gmail_api::{self, FetchOptions};
+use datalib_etl_email::download::gmail_api::{self, FetchOptions, FetchSummary};
 use datalib_etl_email::download::{db_path_for, RawDb};
-use datalib_etl_email_config::EmailGmailApi;
 
 fn test_label() -> String {
     std::env::var("DATALIB_GMAIL_TEST_LABEL").unwrap_or_else(|_| "datalib".to_string())
 }
 
-fn opts(root: &std::path::Path, label: &str) -> FetchOptions {
-    FetchOptions {
-        db_path: root.to_path_buf(),
-        config: EmailGmailApi {
-            // Leave `account` unset: latchkey resolves the single stored
-            // account on its own, and hard-coding an address here would
-            // make the test author's mailbox a prerequisite.
-            ..Default::default()
-        },
-        only_labels: vec![label.to_string()],
-        ..Default::default()
-    }
+/// A second label for the union test, which needs two that overlap only
+/// partially. Both defaults are small; override if this account's don't
+/// hold what the test asserts.
+fn second_test_label() -> String {
+    std::env::var("DATALIB_GMAIL_TEST_LABEL_2").unwrap_or_else(|_| "Starred".to_string())
+}
+
+/// The store is the caller's to open and close — `fetch` never opens one.
+async fn mirror(root: &Path, labels: &[&str], budget: Option<usize>) -> FetchSummary {
+    let db = RawDb::open(&db_path_for(root)).await.expect("open raw db");
+    // `config.account` left unset: latchkey resolves the single stored
+    // account on its own, and hard-coding an address here would make the
+    // test author's mailbox a prerequisite.
+    let mut opts = FetchOptions::new(db.clone());
+    opts.db_path = root.to_path_buf();
+    opts.only_labels = labels.iter().map(|l| (*l).to_string()).collect();
+    opts.config.message_budget = budget;
+    let out = gmail_api::fetch(opts).await;
+    db.close().await;
+    out.expect("gmail fetch failed — is `latchkey auth browser google-gmail` done?")
+}
+
+async fn mirrored_gmail_ids(root: &Path) -> BTreeSet<String> {
+    let db = RawDb::open(&db_path_for(root)).await.expect("open raw db");
+    let ids: Vec<String> = sqlx::query_scalar("SELECT gmail_id FROM gmail_messages")
+        .fetch_all(db.pool())
+        .await
+        .expect("read gmail_messages");
+    db.close().await;
+    ids.into_iter().collect()
+}
+
+fn scratch(prefix: &str) -> std::path::PathBuf {
+    tempfile::TempDir::with_prefix(prefix)
+        .expect("create tempdir")
+        .keep()
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn gmail_live_one_label_roundtrip() {
     let label = test_label();
-    let tmp = tempfile::TempDir::with_prefix("gmail-live-")
-        .expect("create tempdir")
-        .keep();
+    let tmp = scratch("gmail-live-");
     eprintln!("[test] mirroring label {label:?} into {}", tmp.display());
 
     // ── run 1: full sync of the label ───────────────────────────────
-    let first = gmail_api::fetch(opts(&tmp, &label))
-        .await
-        .expect("gmail fetch failed — is `latchkey auth browser google-gmail` done?");
+    let first = mirror(&tmp, &[&label], None).await;
     eprintln!("[test] run 1: {first:?}");
 
     assert!(
@@ -172,9 +192,7 @@ async fn gmail_live_one_label_roundtrip() {
     db.close().await;
 
     // ── run 2: incremental, and a no-op ─────────────────────────────
-    let second = gmail_api::fetch(opts(&tmp, &label))
-        .await
-        .expect("second gmail fetch failed");
+    let second = mirror(&tmp, &[&label], None).await;
     eprintln!("[test] run 2: {second:?}");
 
     assert!(
@@ -230,20 +248,12 @@ async fn gmail_live_budget_limited_backfill_makes_progress() {
     const MAX_RUNS: usize = 20;
 
     let label = test_label();
-    let tmp = tempfile::TempDir::with_prefix("gmail-live-budget-")
-        .expect("create tempdir")
-        .keep();
+    let tmp = scratch("gmail-live-budget-");
 
     // What the whole label holds, so we know what "done" means.
-    let total = {
-        let probe = tempfile::TempDir::with_prefix("gmail-live-probe-")
-            .expect("create tempdir")
-            .keep();
-        gmail_api::fetch(opts(&probe, &label))
-            .await
-            .expect("probe fetch failed")
-            .emails_upserted
-    };
+    let total = mirror(&scratch("gmail-live-probe-"), &[&label], None)
+        .await
+        .emails_upserted;
     assert!(
         total > BUDGET,
         "label {label:?} has {total} messages; need more than the {BUDGET}-message \
@@ -253,9 +263,7 @@ async fn gmail_live_budget_limited_backfill_makes_progress() {
     let mut runs = 0;
     let mut written = 0;
     loop {
-        let mut o = opts(&tmp, &label);
-        o.config.message_budget = Some(BUDGET);
-        let s = gmail_api::fetch(o).await.expect("budgeted fetch failed");
+        let s = mirror(&tmp, &[&label], Some(BUDGET)).await;
         runs += 1;
         eprintln!(
             "[test] budget run {runs}: +{} emails, exhausted={}, full_sync={}, units={}",
@@ -291,9 +299,7 @@ async fn gmail_live_budget_limited_backfill_makes_progress() {
     );
 
     // And now that it has caught up, it should go incremental.
-    let after = gmail_api::fetch(opts(&tmp, &label))
-        .await
-        .expect("post-backfill fetch failed");
+    let after = mirror(&tmp, &[&label], None).await;
     assert!(
         !after.full_sync,
         "once the backfill completes, the cursor should be stored and the next run \
@@ -302,4 +308,50 @@ async fn gmail_live_budget_limited_backfill_makes_progress() {
     assert_eq!(after.emails_upserted, 0, "the catch-up run wrote new rows");
 
     eprintln!("[test] ok: {total} messages backfilled over {runs} runs of {BUDGET}");
+}
+
+/// Two labels means "carrying **either**", against the real API.
+///
+/// The one-label tests above cannot see this: with a single label
+/// Gmail's intersecting `labelIds` and the union we want are the same
+/// set. Mirror each label alone, mirror both together, and require the
+/// third to be exactly the union of the first two.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn gmail_live_two_labels_mirror_their_union() {
+    let (a, b) = (test_label(), second_test_label());
+    assert_ne!(a, b, "the two test labels must differ");
+
+    let root_a = scratch("gmail-live-a-");
+    let root_b = scratch("gmail-live-b-");
+    let root_both = scratch("gmail-live-both-");
+
+    mirror(&root_a, &[&a], None).await;
+    mirror(&root_b, &[&b], None).await;
+    mirror(&root_both, &[&a, &b], None).await;
+
+    let ids_a = mirrored_gmail_ids(&root_a).await;
+    let ids_b = mirrored_gmail_ids(&root_b).await;
+    let ids_both = mirrored_gmail_ids(&root_both).await;
+    eprintln!(
+        "[test] {a:?}={} {b:?}={} together={}",
+        ids_a.len(),
+        ids_b.len(),
+        ids_both.len(),
+    );
+
+    // Without this the assertion below still holds under intersecting
+    // semantics, and the test would pass while proving nothing.
+    assert!(
+        !ids_a.is_subset(&ids_b) && !ids_b.is_subset(&ids_a),
+        "neither {a:?} nor {b:?} may contain the other, or a union and an \
+         intersection are indistinguishable — set DATALIB_GMAIL_TEST_LABEL / \
+         DATALIB_GMAIL_TEST_LABEL_2 to two labels that overlap only partly",
+    );
+
+    let union: BTreeSet<String> = ids_a.union(&ids_b).cloned().collect();
+    assert_eq!(
+        ids_both, union,
+        "mirroring {a:?} and {b:?} together did not produce their union",
+    );
 }

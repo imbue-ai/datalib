@@ -305,7 +305,8 @@ command = "datalib-step download email"
 # Mailbox label filter. Labels are POSIX-like paths into the folder
 # tree (Fastmail forbids `/` in a label, so a `/` is always a
 # parent/child separator); matching is EXACT — `Work` does NOT pull
-# in `Work/Projects`, list nested labels explicitly. Omit or leave
+# in `Work/Projects`, list nested labels explicitly. Several labels
+# UNION — a message under any one of them is mirrored. Omit or leave
 # empty for "everything". The render-side counterpart
 # (`only_render_labels`) lives on the render step below.
 only_extract_labels = []          # extract only these mailboxes; empty = all
@@ -345,10 +346,12 @@ id = "gmail/raw"
 command = "datalib-step download email"
 
 [steps.params]
-# Same exact-match label paths as every other mode. System labels are
-# normalized to Takeout's spelling ("Inbox", not "INBOX") so one Gmail
-# account ingested via Takeout and via the API shares its mailbox rows
-# instead of doubling them.
+# Same exact-match, union-across-labels filter as every other mode.
+# System labels are normalized to Takeout's spelling ("Inbox", not
+# "INBOX") so one Gmail account ingested via Takeout and via the API
+# shares its mailbox rows instead of doubling them. Listing several
+# labels here costs one `messages.list` walk each, because Gmail's own
+# `labelIds` parameter intersects rather than unions.
 only_extract_labels = []
 
 # Which stored latchkey identity this source mirrors. Every source whose
@@ -397,7 +400,8 @@ command = "datalib-step download email"
 [steps.params]
 # Same label filter as JMAP mode — here it matches the Gmail labels
 # in each message's `X-Gmail-Labels` header (already `Parent/Child`
-# paths for nested labels). Exact match; empty = everything.
+# paths for nested labels). Exact match, union across labels;
+# empty = everything.
 only_extract_labels = []          # ingest only messages carrying these labels
 
 [steps.params.common]

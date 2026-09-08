@@ -430,27 +430,48 @@ async fn full_sync(
     label_ids: &[String],
     summary: &mut FetchSummary,
 ) -> Result<Option<BTreeSet<String>>> {
-    let mut token: Option<String> = None;
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    loop {
-        throttle.acquire(api::UNITS_MESSAGES_LIST).await;
-        let page = api::list_messages(
-            state.user_id,
-            state.latchkey,
-            token.as_deref(),
-            LIST_PAGE_SIZE,
-            label_ids,
-        )
-        .await?;
-        seen.extend(page.ids.iter().cloned());
-        fetch_ids(state, throttle, &page.ids, opts, summary).await?;
-        if summary.budget_exhausted {
-            return Ok(None);
+    for label_id in enumeration_walks(label_ids) {
+        let mut token: Option<String> = None;
+        loop {
+            throttle.acquire(api::UNITS_MESSAGES_LIST).await;
+            let page = api::list_messages(
+                state.user_id,
+                state.latchkey,
+                token.as_deref(),
+                LIST_PAGE_SIZE,
+                label_id,
+            )
+            .await?;
+            // A message under two configured labels is listed by both
+            // walks; `seen` is what keeps the second listing free.
+            let fresh: Vec<String> = page
+                .ids
+                .into_iter()
+                .filter(|id| seen.insert(id.clone()))
+                .collect();
+            fetch_ids(state, throttle, &fresh, opts, summary).await?;
+            if summary.budget_exhausted {
+                return Ok(None);
+            }
+            match page.next_page_token {
+                Some(t) => token = Some(t),
+                None => break,
+            }
         }
-        match page.next_page_token {
-            Some(t) => token = Some(t),
-            None => return Ok(Some(seen)),
-        }
+    }
+    Ok(Some(seen))
+}
+
+// `only_extract_labels` means "carrying **any** of these", and Gmail's
+// `messages.list` cannot express that in one request: repeated `labelIds`
+// intersect. So one walk per label, unioned here. No labels configured is
+// one unrestricted walk.
+fn enumeration_walks(label_ids: &[String]) -> Vec<Option<&str>> {
+    if label_ids.is_empty() {
+        vec![None]
+    } else {
+        label_ids.iter().map(|id| Some(id.as_str())).collect()
     }
 }
 
@@ -701,6 +722,29 @@ mod tests {
         assert_ne!(state_scope("a@x"), state_scope("b@x"));
         // Must not collide with the JMAP path's keys in the same table.
         assert!(state_scope("a@x").starts_with("gmail:"));
+    }
+
+    /// Three configured labels are three enumerations. Asking for them
+    /// in one request returns the intersection, which for most label sets
+    /// is empty — the mirror then downloads nothing and reports success.
+    #[test]
+    fn walks_each_configured_label_separately() {
+        let labels = vec![
+            "INBOX".to_string(),
+            "STARRED".to_string(),
+            "L_7".to_string(),
+        ];
+        assert_eq!(
+            enumeration_walks(&labels),
+            vec![Some("INBOX"), Some("STARRED"), Some("L_7")],
+        );
+    }
+
+    /// No filter is one walk that names no label — not zero walks, which
+    /// would mirror nothing at all.
+    #[test]
+    fn walks_the_whole_mailbox_when_no_label_is_configured() {
+        assert_eq!(enumeration_walks(&[]), vec![None]);
     }
 
     /// A 404 from history.list is the documented "cursor aged out"
