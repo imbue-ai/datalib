@@ -92,7 +92,7 @@ impl DataProcessor for ClaudeDownload {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
-            db: Some(db),
+            db,
             latchkey: self.latchkey.clone(),
             // users.json is expected alongside the raw store (playback seeds it).
             export_dir: Some(self.raw_path.clone()),
@@ -153,7 +153,7 @@ impl DataProcessor for ClaudeExportIngest {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::export::ingest(download::export::IngestOptions {
             db_path: self.raw_path.clone(),
-            db: Some(db),
+            db,
             input_path: self.input_path.clone(),
             // The run-pinned `now`, so every bookkeeping stamp this
             // ingest writes agrees with the rest of the run.

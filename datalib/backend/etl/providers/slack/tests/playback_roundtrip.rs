@@ -5,7 +5,7 @@ use std::path::Path;
 
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_slack::download::{block_on_load_all, db_path_for, fetch, FetchOptions};
+use datalib_etl_slack::download::{block_on_load_all, db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_slack::synthesize::SlackSynth;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -86,6 +86,10 @@ async fn slack_synth_playback_extract_roundtrip() {
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
+    // Open the store here and close it before `block_on_load_all`
+    // reads it back: a second live connection to one file makes the
+    // `dolt_commit`s inside `open` fail with "commit conflict".
+    let db = RawDb::open(&db_path_for(&out)).await.unwrap();
     let summary = fetch(FetchOptions {
         db_path: out.clone(),
         channels: None,
@@ -93,10 +97,11 @@ async fn slack_synth_playback_extract_roundtrip() {
         refresh_window_days: 0,
         members_only: false,
         media: false,
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap();
+    .await;
+    db.close().await;
+    let summary = summary.unwrap();
     assert_eq!(summary.messages, 1);
 
     // Inspect the resulting doltlite DB: one workspace, one channel,

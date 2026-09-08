@@ -21,15 +21,18 @@ async fn chatgpt_live_single_conv_snapshot() {
         .keep();
     eprintln!("[test] downloading to {}", tmp.display());
 
+    let db = chatgpt::RawDb::open(&db_path_for(&tmp)).await.unwrap();
     let opts = chatgpt::FetchOptions {
         db_path: tmp.clone(),
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,
         conv_uuids: vec![TARGET_ID.to_string()],
-        ..Default::default()
+        ..chatgpt::FetchOptions::new(db.clone())
     };
-    chatgpt::fetch(opts).await.expect("chatgpt fetch failed");
+    let r = chatgpt::fetch(opts).await;
+    db.close().await;
+    r.expect("chatgpt fetch failed");
 
     let db_path = db_path_for(&tmp);
     let raw = block_on_load_all(&db_path).expect("load db");

@@ -85,7 +85,7 @@ impl DataProcessor for SlackDownload {
         }
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
-            db: Some(db),
+            db,
             channels: self.sync.channels.clone(),
             since: self
                 .sync

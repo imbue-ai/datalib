@@ -69,10 +69,13 @@ async fn run_extract(
     beeper_data_dir: PathBuf,
     sources: Vec<&str>,
 ) -> Result<FetchSummary> {
-    let committed_path = db_path.clone();
+    // One handle for the whole pass, the way the processor's
+    // `RawStoreSession` holds one: a second live connection to the same
+    // store makes one of the two `dolt_commit`s fail.
+    let db = download::RawDb::open(&download::db_path_for(&db_path)).await?;
     let summary = download::fetch(FetchOptions {
         db_path,
-        db: None,
+        db: db.clone(),
         sources: sources.into_iter().map(String::from).collect(),
         beeper_data_dir: Some(beeper_data_dir),
         media: true,
@@ -80,11 +83,10 @@ async fn run_extract(
         control: Default::default(),
     })
     .await?;
-    // Commit what the fetch wrote, the way the processor's `RawStoreSession`
-    // does in production. Render reads committed state only, so a store left
+    // Commit what the fetch wrote, the way the processor does in
+    // production. Render reads committed state only, so a store left
     // dirty here renders as empty — correct, and not what this test is about.
-    let db = datalib_etl::doltlite_raw::open(&committed_path, &[]).await?;
-    datalib_etl::doltlite_raw::commit_run(&db, "test: beeper fetch").await?;
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: beeper fetch").await?;
     db.close().await;
     Ok(summary)
 }

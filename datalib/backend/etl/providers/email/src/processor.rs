@@ -147,7 +147,7 @@ impl DataProcessor for EmailDownload {
             ExtractMode::Jmap(sync) => {
                 let s = download::fetch(download::FetchOptions {
                     db_path: self.raw_path.clone(),
-                    db: Some(db),
+                    db,
                     hostname: sync.hostname.clone(),
                     latchkey: self.latchkey.clone(),
                     account_id: sync.account_id.clone(),
@@ -173,7 +173,7 @@ impl DataProcessor for EmailDownload {
             ExtractMode::GmailApi(gmail) => {
                 let s = download::gmail_api::fetch(download::gmail_api::FetchOptions {
                     db_path: self.raw_path.clone(),
-                    db: Some(db),
+                    db,
                     config: gmail.clone(),
                     latchkey: self.latchkey.clone(),
                     only_labels: self.only_extract_labels.clone(),
@@ -207,7 +207,7 @@ impl DataProcessor for EmailDownload {
                     db_path: self.raw_path.clone(),
                     cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
                         .await?,
-                    db: Some(db),
+                    db,
                     input_path: input_path.clone(),
                     account_id_override: account_config.account_id.clone(),
                     account_config: download::mbox::MboxAccountConfig {

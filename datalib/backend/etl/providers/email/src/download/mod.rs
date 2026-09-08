@@ -125,22 +125,20 @@ const EMAIL_GET_PROPERTIES: &[&str] = &[
     "attachments",
 ];
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct FetchOptions {
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
     /// Either an explicit `.doltlite_db` file or the per-source directory;
     /// the shared `db_path_for` helper places the entity db inside as
-    /// `entities.doltlite_db` (the dir is created if needed). Ignored
-    /// for opening when `db` is `Some`.
+    /// `entities.doltlite_db` (the dir is created if needed).
     pub db_path: PathBuf,
-    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
-    /// instead of opening from `db_path`. Mirrors the pattern on the
-    /// other providers' FetchOptions — sync opens the pool once for
-    /// the post-download commit hook, then hands it back into fetch so
-    /// the same writer process holds the file lock through the run.
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     pub hostname: String,
     pub account_id: Option<String>,
     /// Skip stored `state` tokens and re-enumerate via `Email/query`.
@@ -164,6 +162,26 @@ pub struct FetchOptions {
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (`--reset-and-redownload`, etc).
     pub control: datalib_etl::control::DownloadControl,
+}
+
+impl FetchOptions {
+    /// Every field defaulted except the store, which has none to give:
+    /// it is a live handle the caller opens and closes.
+    pub fn new(db: RawDb) -> Self {
+        Self {
+            latchkey: LatchkeySettings::default(),
+            db_path: PathBuf::new(),
+            db,
+            hostname: String::new(),
+            account_id: None,
+            full_resync: false,
+            only_mailbox_labels: Vec::new(),
+            blob_size_limit_bytes: None,
+            blob_download_concurrency: None,
+            progress: datalib_etl::progress::Progress::noop(),
+            control: datalib_etl::control::DownloadControl::default(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -205,13 +223,7 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db = match opts.db.clone() {
-        Some(d) => d,
-        None => {
-            let db_path = db_path_for(&opts.db_path);
-            RawDb::open(&db_path).await?
-        }
-    };
+    let db = opts.db.clone();
 
     if opts.control.reset_and_redownload {
         db.reset().await?;

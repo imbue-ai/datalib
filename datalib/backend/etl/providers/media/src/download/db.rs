@@ -79,6 +79,12 @@ impl RawDb {
         Ok(Self { pool })
     }
 
+    /// Wait for the connections to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }

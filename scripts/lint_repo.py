@@ -299,7 +299,55 @@ def main() -> int:
     rc |= _check_module_lock_committed(root)
     rc |= _check_unpinned_render_reads(root)
     rc |= _check_render_opens_read_only(root)
+    rc |= _check_download_takes_a_store(root)
     return rc
+
+
+# --- Check 6: a download takes the store, it does not open one -------
+#
+# Two live connections to one `.doltlite_db` make each other's
+# `dolt_commit` fail -- `dolt_commit` takes the store lock without waiting
+# and reports whoever holds it as "commit conflict: another connection
+# committed to this branch". `doltlite_raw::open` commits three times on
+# the way in, so a second opener fails there, in `open` itself.
+#
+# The old shape had every `fetch` take `db: Option<RawDb>` and open its
+# own store when the caller passed `None`. That pool was never closed, so
+# a caller that then read the store back overlapped with it -- and since
+# sqlx closes connections on a background task, whether the two actually
+# collided came down to timing. It passed on a quiet laptop and failed on
+# a loaded CI runner.
+#
+# So the handle is now an input: one opener per store, and it is whoever
+# also closes it. This keeps it that way.
+_OPTIONAL_STORE_FIELD = re.compile(r"\bpub db: Option<\s*RawDb\s*>")
+
+
+def _check_download_takes_a_store(root: Path) -> int:
+    bad: list[str] = []
+    for rel in _git_ls_files(root, "datalib/backend/etl/providers"):
+        if not rel.endswith(".rs") or "/src/download" not in rel:
+            continue
+        text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if _OPTIONAL_STORE_FIELD.search(line):
+                bad.append(f"{rel}:{lineno}: {line.strip()}")
+    if not bad:
+        print("OK: every download takes its store as an input.")
+        return 0
+    print("ERROR: a download options struct opens its own store:", file=sys.stderr)
+    for b in bad:
+        print(f"  - {b}", file=sys.stderr)
+    print(
+        "\nAn optional store handle means `fetch` opens one when the caller\n"
+        "passes None, and nothing closes it. A caller that then reads the\n"
+        "store back has two live connections on one file, and one of the\n"
+        "two `dolt_commit`s fails with `commit conflict`.\n"
+        "Make the field `pub db: RawDb` and let the caller own it.\n"
+        "See datalib/backend/etl/README.md.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 # --- Check 5: render must not open a store writably ------------------

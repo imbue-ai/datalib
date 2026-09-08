@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 use datalib_etl_slack::download::{
-    self as slack, FetchOptions, DEFAULT_REFRESH_WINDOW_DAYS, DEFAULT_SINCE,
+    self as slack, db_path_for, FetchOptions, RawDb, DEFAULT_REFRESH_WINDOW_DAYS, DEFAULT_SINCE,
 };
 use datalib_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
@@ -87,6 +87,9 @@ async fn main() -> Result<()> {
         );
     }
 
+    // The one writer: this process opens the store, hands the handle to
+    // `fetch`, and closes it below.
+    let db = RawDb::open(&db_path_for(&args.out)).await?;
     let opts = FetchOptions {
         db_path: args.out.clone(),
         channels,
@@ -96,7 +99,7 @@ async fn main() -> Result<()> {
         media: args.media,
         dms: args.dms,
         dm_users: (!args.dm_users.is_empty()).then(|| args.dm_users.clone()),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     };
 
     // Root span: every downstream span hangs off this, and OTLP gets a
@@ -108,7 +111,9 @@ async fn main() -> Result<()> {
         media = opts.media,
         dms = opts.dms,
     );
-    let summary = slack::fetch(opts).instrument(span).await?;
+    let summary = slack::fetch(opts).instrument(span).await;
+    db.close().await;
+    let summary = summary?;
 
     info!(
         event = "slack_download_complete",

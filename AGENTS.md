@@ -627,12 +627,24 @@ what it *did*.
 
 ## One open per doltlite file, and close it before the next
 
-Every pool against a `.doltlite_db` is `max_connections(1)`, so a second
-pool on a file that is already open does not fail — it **waits**. Overlap
-two and the run blocks on a file lock instead of erroring, which is the
-shape a hang takes here.
+Every pool against a `.doltlite_db` is `max_connections(1)`. Two pools on
+one file are two connections, and they contend over the store's lock —
+but the two kinds of statement contend *differently*, which is why this
+bug has two faces:
 
-Two rules follow, and neither is optional:
+- **Ordinary reads and writes wait.** They retry under a busy handler, so
+  overlapping pools show up as a run that blocks on a file lock rather
+  than erroring. That is the shape a hang takes here.
+- **`dolt_commit` does not wait.** It takes the lock once and, if a peer
+  holds it, fails immediately with `commit conflict: another connection
+  committed to this branch. Please retry your transaction.` The message
+  names a commit that need not have happened — read it as "someone else
+  has this store open right now".
+
+`doltlite_raw::open` commits on the way in, so an overlapping *open* fails
+inside `open` itself, reported as `commit schema after DDL`.
+
+Three rules follow, and none is optional:
 
 - **Open the store once per pass.** If a stage needs to load rows, run a
   `dolt_diff` scan and probe for missing ids, all three go on the one
@@ -641,18 +653,25 @@ Two rules follow, and neither is optional:
 - **`close().await` before the next open**, on the error path too.
   Dropping the handle only *schedules* the disconnect, so a `?` between
   two opens leaves them overlapping.
+- **A download takes the store as an input.** Every provider's
+  `FetchOptions` carries `pub db: RawDb`; `fetch` never opens one, and
+  whoever opened it closes it. `lint_repo.py`'s check 6 enforces this.
+  See `datalib/backend/etl/README.md` for what the `Option<RawDb>` this
+  replaced actually cost.
 
 Render additionally reads through `open_reader`, never `open`: the write
 path rescue-commits, reconciles the schema and commits with `-Am`, which
 is three writes to a store the render step does not own. `lint_repo.py`'s
-check 5 enforces that half; nothing enforces the two rules above.
+check 5 enforces that half; nothing enforces the first two rules above.
 
 **Expect this to pass locally and fail on CI.** Whether overlapping pools
 actually collide depends on timing and on the filesystem's locking, so a
 mac laptop and a Linux CI container disagree readily. A render path that
 opened three pools per pass ran in 10s here and hit the 300s timeout on
-`//tests/fixtures:ingested_tng_test` there (#311). If a doltlite-touching
-change is green locally and times out in CI, count the opens first.
+`//tests/fixtures:ingested_tng_test` there (#311). A download that opened
+its own pool and never closed it produced intermittent `commit conflict`
+failures across the doltlite-heavy targets (#323). If a doltlite-touching
+change is green locally and red or slow in CI, count the opens first.
 
 ## Git: prefer merges over rebases
 

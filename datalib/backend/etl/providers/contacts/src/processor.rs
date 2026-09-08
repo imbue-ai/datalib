@@ -98,7 +98,7 @@ impl DataProcessor for CarddavDownload {
             DownloadMode::Server(sync) => {
                 let s = download::fetch(download::FetchOptions {
                     db_path: self.raw_path.clone(),
-                    db: Some(db),
+                    db,
                     server_url: sync.server_url.clone(),
                     addressbooks: sync.addressbooks.clone(),
                     latchkey: self.latchkey.clone(),
@@ -122,7 +122,7 @@ impl DataProcessor for CarddavDownload {
             } => {
                 let s = download::vcf_dir::fetch(download::vcf_dir::FetchOptions {
                     db_path: self.raw_path.clone(),
-                    db: Some(db),
+                    db,
                     input_path: input_path.clone(),
                     cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
                         .await?,

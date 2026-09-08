@@ -27,10 +27,10 @@ async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
     let db = RawDb::open(&db_path).await.unwrap();
     mbox::fetch(mbox::FetchOptions {
         db_path: db_path.clone(),
-        db: Some(db.clone()),
         input_path: mbox_path,
         account_id_override: Some("enterprise".to_string()),
         ..mbox::FetchOptions::new(
+            db.clone(),
             FingerprintCache::open(&tmp.path().join("fp.sqlite"))
                 .await
                 .unwrap(),
@@ -125,10 +125,10 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     let db2 = RawDb::open(&db_path).await.unwrap();
     mbox::fetch(mbox::FetchOptions {
         db_path: db_path.clone(),
-        db: Some(db2.clone()),
         input_path: fixture_path(),
         account_id_override: Some("enterprise".to_string()),
         ..mbox::FetchOptions::new(
+            db2.clone(),
             FingerprintCache::open(&_tmp.path().join("fp.sqlite"))
                 .await
                 .unwrap(),
@@ -156,11 +156,11 @@ async fn mbox_only_labels_filters_extraction() {
     let db = RawDb::open(&db_path).await.unwrap();
     mbox::fetch(mbox::FetchOptions {
         db_path: db_path.clone(),
-        db: Some(db.clone()),
         input_path: fixture_path(),
         account_id_override: Some("enterprise".to_string()),
         only_labels: vec!["Sent".to_string()],
         ..mbox::FetchOptions::new(
+            db.clone(),
             FingerprintCache::open(&tmp.path().join("fp.sqlite"))
                 .await
                 .unwrap(),

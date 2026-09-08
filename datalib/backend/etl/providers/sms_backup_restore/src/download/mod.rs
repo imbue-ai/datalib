@@ -107,11 +107,13 @@ impl RawDb {
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    /// Doltlite database path. Ignored for opening when `db` is `Some`.
+    /// Doltlite database path.
     pub db_path: PathBuf,
-    /// Pre-opened raw DB (the orchestrator opens it so the post-download
-    /// commit hits the same pool).
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     /// Root of the user's export (the directory holding `sms-*.xml` /
     /// `calls-*.xml`). A single file path is also accepted.
     pub input_path: PathBuf,
@@ -134,10 +136,7 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&db_path_for(&opts.db_path)).await?,
-    };
+    let db = opts.db.clone();
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }

@@ -40,9 +40,14 @@ fn collect_by_ext(root: &std::path::Path, ext: &str) -> BTreeMap<String, String>
 }
 
 async fn ingest_fixture(raw: &Path) {
+    let db = datalib_etl_claude::download::RawDb::open(
+        &datalib_etl_claude::download::db::db_path_for(raw),
+    )
+    .await
+    .expect("open raw store");
     ingest(IngestOptions {
         db_path: raw.to_path_buf(),
-        db: None,
+        db: db.clone(),
         input_path: fixture_dir(),
         now: "2026-09-04T00:00:00-07:00".to_string(),
         progress: Default::default(),
@@ -50,6 +55,9 @@ async fn ingest_fixture(raw: &Path) {
     })
     .await
     .expect("ingest the TNG export");
+    // Closed, not dropped: whatever reads this store next is a second
+    // connection until this one is actually gone.
+    db.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

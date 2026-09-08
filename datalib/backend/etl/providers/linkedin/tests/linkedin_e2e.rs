@@ -115,7 +115,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
-            db: Some(db.clone()),
+            db: db.clone(),
             input_path: export.clone(),
             fetch_photos: false,
             photo_max_consecutive_failures: 50,
@@ -350,7 +350,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
-            db: Some(db.clone()),
+            db: db.clone(),
             input_path: export.clone(),
             fetch_photos: true,
             photo_max_consecutive_failures: 50,
@@ -411,7 +411,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let db2 = RawDb::open(&db_path_for(&raw2)).await?;
         download::fetch(FetchOptions {
             db_path: raw2.clone(),
-            db: Some(db2.clone()),
+            db: db2.clone(),
             input_path: export.clone(),
             fetch_photos: false,
             photo_max_consecutive_failures: 50,
@@ -473,7 +473,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let db3 = RawDb::open(&db_path_for(&raw3)).await?;
         download::fetch(FetchOptions {
             db_path: raw3.clone(),
-            db: Some(db3.clone()),
+            db: db3.clone(),
             input_path: export.clone(),
             fetch_photos: false,
             photo_max_consecutive_failures: 50,

@@ -38,7 +38,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
-            db: Some(db.clone()),
+            db: db.clone(),
             input_path: fixture_root(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
             progress: Progress::noop(),
@@ -90,7 +90,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // a byte, because neither file's stat moved.
         let again = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
-            db: Some(db.clone()),
+            db: db.clone(),
             input_path: fixture_root(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
             progress: Progress::noop(),

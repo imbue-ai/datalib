@@ -77,7 +77,7 @@ async fn scans_tng_tree() {
     let db = RawDb::open(&db_path).await.unwrap();
     let summary = download::fetch(FetchOptions {
         db_path: db_path.clone(),
-        db: Some(db.clone()),
+        db: db.clone(),
         source_id: "fsindex-tng".to_string(),
         root: root.clone(),
         target_doltlite_branch: None,

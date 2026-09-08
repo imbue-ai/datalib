@@ -13,7 +13,7 @@ use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 use tracing::{info, instrument, warn};
 
-use super::db::{db_path_for, RawDb};
+use super::db::RawDb;
 use super::schema_raw::{
     ConversationRow as ConversationRowSchema, ProjectDocRow, ProjectRow, UserRow,
 };
@@ -25,11 +25,13 @@ const DELETE_CHUNK: usize = 400;
 #[derive(Debug, Clone)]
 pub struct IngestOptions {
     /// Path to the doltlite database file, or the per-source raw
-    /// directory holding it. Ignored for opening when `db` is `Some`.
+    /// directory holding it.
     pub db_path: PathBuf,
-    /// Pre-opened raw DB. The step driver pre-opens so the
-    /// post-download commit runs on the same connection.
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     /// The unpacked export directory (`common.input_path`).
     pub input_path: PathBuf,
     /// Run timestamp, shared by every `<table>_bookkeeping.fetched_at`
@@ -51,18 +53,7 @@ pub struct IngestSummary {
 
 #[instrument(skip_all, fields(export = %opts.input_path.display()))]
 pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
-    let db_path = db_path_for(&opts.db_path);
-    // `owned` is "we opened this pool, so we close it" — see the close
-    // below.
-    let (db, owned) = match opts.db.clone() {
-        Some(db) => (db, false),
-        None => (
-            RawDb::open(&db_path)
-                .await
-                .with_context(|| format!("open raw db {}", db_path.display()))?,
-            true,
-        ),
-    };
+    let db = opts.db.clone();
 
     // Each run replaces the snapshot wholesale anyway (upsert + prune),
     // so a reset only changes how the intermediate diff reads. Do it
@@ -78,13 +69,6 @@ pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
     let mut summary = IngestSummary::default();
     let result = ingest_all(&db, &opts, &mut summary).await;
     run.finish(&result, &summary).await;
-    // Close the pool if — and only if — we opened it. A caller that
-    // handed us a `db` owns its lifetime (the processor shares one pool
-    // with its `RawStoreSession`, which closes it in `finish`); a
-    // caller that did not gets a pool nothing would ever close.
-    if owned {
-        db.pool().close().await;
-    }
     result?;
     Ok(summary)
 }
@@ -376,6 +360,7 @@ async fn prune_to(
 
 #[cfg(test)]
 mod tests {
+    use super::super::db::db_path_for;
     use super::*;
     use serde_json::json;
     use std::collections::HashMap;
@@ -400,10 +385,17 @@ mod tests {
         std::fs::write(p, serde_json::to_string_pretty(v).unwrap()).unwrap();
     }
 
-    fn opts(export: &Path, raw: &Path) -> IngestOptions {
+    /// One store per test, opened once and handed to every `ingest`
+    /// call: a second live connection to the same file would make one
+    /// of the two `dolt_commit`s fail.
+    async fn open_raw(raw: &Path) -> RawDb {
+        RawDb::open(&db_path_for(raw)).await.unwrap()
+    }
+
+    fn opts(db: &RawDb, export: &Path, raw: &Path) -> IngestOptions {
         IngestOptions {
             db_path: raw.to_path_buf(),
-            db: None,
+            db: db.clone(),
             input_path: export.to_path_buf(),
             now: NOW.to_string(),
             progress: Default::default(),
@@ -451,7 +443,8 @@ mod tests {
             }),
         );
 
-        let s = ingest(opts(ex.path(), raw.path())).await.unwrap();
+        let db = open_raw(raw.path()).await;
+        let s = ingest(opts(&db, ex.path(), raw.path())).await.unwrap();
         assert_eq!(
             (
                 s.users,
@@ -463,7 +456,6 @@ mod tests {
             (1, 2, 1, 1, 0)
         );
 
-        let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
         assert_eq!(dump(db.pool(), "conversations").await.len(), 2);
         assert_eq!(
             db.first_user_uuid().await.unwrap().as_deref(),
@@ -483,6 +475,7 @@ mod tests {
         // export-shaped.
         let convs = db.load_conversations().await.unwrap();
         assert!(convs.iter().all(|c| c.org_uuid.is_none()));
+        db.close().await;
     }
 
     /// A bulk export is a complete snapshot, so an id it stops
@@ -497,17 +490,17 @@ mod tests {
             "conversations.json",
             &json!([conv("c1", "First"), conv("c2", "Second")]),
         );
-        ingest(opts(ex.path(), raw.path())).await.unwrap();
+        let db = open_raw(raw.path()).await;
+        ingest(opts(&db, ex.path(), raw.path())).await.unwrap();
 
         write(
             ex.path(),
             "conversations.json",
             &json!([conv("c1", "First")]),
         );
-        let s = ingest(opts(ex.path(), raw.path())).await.unwrap();
+        let s = ingest(opts(&db, ex.path(), raw.path())).await.unwrap();
         assert_eq!(s.pruned, 1, "c2 vanished from the export");
 
-        let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
         let ids: Vec<String> = db
             .load_conversations()
             .await
@@ -525,6 +518,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(orphans, 0, "bookkeeping sidecar outlived its row");
+        db.close().await;
     }
 
     /// Pruning is per-table and gated on the file being there, so a
@@ -543,13 +537,14 @@ mod tests {
             "projects/bridge.json",
             &json!({"uuid": "p1", "name": "Bridge Ops"}),
         );
-        ingest(opts(ex.path(), raw.path())).await.unwrap();
+        let db = open_raw(raw.path()).await;
+        ingest(opts(&db, ex.path(), raw.path())).await.unwrap();
 
         std::fs::remove_dir_all(ex.path().join("projects")).unwrap();
-        let s = ingest(opts(ex.path(), raw.path())).await.unwrap();
+        let s = ingest(opts(&db, ex.path(), raw.path())).await.unwrap();
         assert_eq!(s.pruned, 0);
-        let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
         assert_eq!(dump(db.pool(), "projects").await.len(), 1);
+        db.close().await;
     }
 
     /// Pointing the source at the wrong directory says so, rather than
@@ -558,11 +553,13 @@ mod tests {
     async fn a_directory_without_conversations_json_fails_loudly() {
         let ex = tempfile::tempdir().unwrap();
         let raw = tempfile::tempdir().unwrap();
-        let err = ingest(opts(ex.path(), raw.path()))
+        let db = open_raw(raw.path()).await;
+        let err = ingest(opts(&db, ex.path(), raw.path()))
             .await
             .expect_err("no conversations.json");
         let err = format!("{err:#}");
         assert!(err.contains("conversations.json"), "{err}");
         assert!(err.contains("input_path"), "{err}");
+        db.close().await;
     }
 }
