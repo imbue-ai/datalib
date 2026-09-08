@@ -47,7 +47,7 @@ struct Args {
     include_tables: Vec<String>,
 
     /// Mirror each table's declared primary key verbatim instead of
-    /// preferring a stable `id_global` UNIQUE column. See `INGEST.md`
+    /// preferring a stable `id_global` UNIQUE column. See `DOWNLOAD.md`
     /// §"When the primary key changes".
     #[arg(long)]
     declared_keys: bool,

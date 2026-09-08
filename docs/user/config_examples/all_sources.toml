@@ -803,7 +803,7 @@ inputs = ["media/raw"]
 #
 # DOWNLOAD-ONLY: it renders nothing yet (a photo isn't chat-shaped), so
 # there is no render step — query the raw store directly. See
-# datalib/backend/etl/providers/lightroom/INGEST.md.
+# datalib/backend/etl/providers/lightroom/DOWNLOAD.md.
 #
 # The engine is not Lightroom-specific: any app whose data format is a
 # SQLite file (Quicken for Mac, Apple Photos, …) works with the same step,
@@ -824,6 +824,18 @@ command = "datalib-step download lightroom"
 # row rather than as every row deleted and re-added. Set to [] to mirror
 # each table's declared key verbatim.
 # stable_key_columns = ["id_global"]
+#
+# A table with no `id_global` keeps its own declared key (`id_local` for
+# most of them), and a table the source left keyless stays keyless — those
+# are the cloud-sync bookkeeping tables, which have no candidate column at
+# all. doltlite still versions a keyless table, by row multiset, so you see
+# every change; you just see it as added/removed rather than modified.
+#
+# Pin a key yourself when you know one the source didn't declare. An empty
+# list forces a table keyless. Be sure before you use this: the key is
+# applied as a real PRIMARY KEY, so a value that turns out not to be unique
+# fails the whole run, not just that table.
+# primary_keys = { AgOzSpaceIds = ["ozCatalogId", "ozSpaceId"] }
 #
 # Table / column filters. Globs, `*` and `?` only.
 # include_tables = ["*"]

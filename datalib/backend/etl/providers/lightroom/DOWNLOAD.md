@@ -140,18 +140,52 @@ asserts this, and was watched producing
 `["added" ×4, "removed" ×4]` against a build with the rewrite disabled
 before being believed.
 
-On a stock catalog, 27 of 133 tables get the rewrite. The rest fall
-through:
+### Every table's outcome, and why
 
-- declared key, when there's no stable candidate (`AgLibraryKeywordImage`
-  has `id_local` and nothing else);
-- **keyless**, when the source table has no key either (`AgOzSpaceIds`).
-  doltlite versions keyless tables by row multiset, which is the honest
-  representation of a table that has no identity of its own.
+Counts below are measured on the four test catalogs `tests/real_catalogs.rs`
+fetches (113 tables each), so you can reproduce them. A different
+Lightroom version has a different table count — what carries across is
+the rule, not the numbers.
+
+| mirror key | tables | why |
+| --- | --- | --- |
+| `id_global` | 26 | the source has a single-column UNIQUE index on it, so the rewrite fires |
+| `id_local` | 53 | the table has no `id_global` column, and `id_local` is its declared key |
+| another declared column | 12 | `image`, `collection`, `fileId`, `version`… — whatever the source declared |
+| **keyless** | 22 | the source table has no key, and no candidate column to make one from |
+
+The middle two rows are the declared-key fallback, and it is *complete*
+rather than best-effort: **79 tables carry an `id_local` column, and in
+every one of them `id_local` is already the sole declared `PRIMARY
+KEY`.** So there is no table where a stable-looking column sits unused —
+26 of those 79 also have `id_global` and prefer it, the other 53 keep
+`id_local`, and the fallback reaches all of them without a special case.
+
+The 22 keyless tables are the Adobe cloud-sync bookkeeping
+(`AgOzSpaceIds`, `AgPendingOzAssets`, `Migrated*`, …), and the reason
+they stay keyless is worth being precise about: **they have no
+`id_local` column either.** Their columns are things like `(ozCatalogId,
+ozSpaceId)` — so "just use `id_local` when there's no `id_global`" is
+already what happens above, and there is nothing left for it to key
+here. Only a *composite* natural key would work, and the source does not
+declare one. doltlite versions a keyless table by row multiset, which is
+the honest representation of a table with no identity of its own: you
+still see every change, classified as `added`/`removed` rather than
+`modified`.
+
+Note that all 22 are `Ag*`- or `Migrated*`-prefixed (19 and 3). A glance
+at that list reads as "the Ag* tables have no primary keys", which is
+wrong and has been believed: of the catalog's 93 `Ag*` tables, 19 are
+keyless and the other 74 are keyed — 47 on `id_local`, 18 on
+`id_global`, 9 on another declared column.
 
 Set `stable_key_columns = []` to mirror declared keys verbatim, or use
 `primary_keys = { Table = ["a", "b"] }` to pin one explicitly (an empty
-list forces keyless).
+list forces keyless). The override is also the way to give a keyless
+table a composite key if you know one holds — but the mirror will not
+guess for you, and a wrong guess fails the whole run rather than that
+one table: `rebuild_table` creates the table with the key and then does
+`INSERT … SELECT`, so a duplicate aborts the ingest.
 
 ## The XMP question
 
