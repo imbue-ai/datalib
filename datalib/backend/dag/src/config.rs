@@ -970,6 +970,44 @@ impl DagConfig {
 }
 
 #[cfg(test)]
+mod cadence_tests {
+    use super::CheckpointCadence;
+
+    #[test]
+    fn a_cadence_survives_the_trip_through_the_env_var() {
+        let c = CheckpointCadence {
+            quiet_for_secs: 2.5,
+            at_most_every_secs: 15.0,
+        };
+        assert_eq!(CheckpointCadence::decode(&c.encode()), Some(c));
+    }
+
+    /// A value this build cannot read is `None`, never a guess: the step
+    /// falls back to its own default and logs, rather than checkpointing on
+    /// a cadence nobody asked for.
+    #[test]
+    fn an_unreadable_cadence_is_none() {
+        for bad in [
+            "",
+            "2",
+            "2,",
+            ",15",
+            "two,fifteen",
+            "-1,15",
+            "2,-1",
+            "nan,15",
+            "inf,15",
+        ] {
+            assert_eq!(
+                CheckpointCadence::decode(bad),
+                None,
+                "{bad:?} must not parse"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

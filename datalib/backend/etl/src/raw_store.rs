@@ -62,7 +62,7 @@ impl Sealer {
     /// mid-prune or mid-reconcile publishes a store missing data it will
     /// have again a moment later, and every consumer downstream would act
     /// on it.
-    pub async fn wrote(&self, rows: u64) -> Result<()> {
+    pub async fn wrote(&self, rows: u64) {
         self.state.wrote(rows).await
     }
 }
@@ -110,12 +110,6 @@ impl RawStoreSession {
         })
     }
 
-    /// Tell the session work landed, and seal if it is time. See
-    /// [`Sealer::wrote`].
-    pub async fn wrote(&self, rows: u64) -> Result<()> {
-        self.state.wrote(rows).await
-    }
-
     /// Clean-completion finish: commit the source's `dolt_commit` (appending
     /// the `commit=<hash>` suffix to `summary`) and `close()` the pool so
     /// render can re-open the file. Best-effort commit — a failure logs and
@@ -129,18 +123,36 @@ impl RawStoreSession {
 }
 
 impl SealState {
-    async fn wrote(&self, rows: u64) -> Result<()> {
-        {
+    fn wrote(&self, rows: u64) -> impl std::future::Future<Output = ()> + '_ {
+        let due = {
             let mut c = self.checkpointer.lock().unwrap();
             c.wrote(rows);
-            if !c.should_seal() {
-                return Ok(());
+            c.should_seal()
+        };
+        async move {
+            if !due {
+                return;
+            }
+            // **The run does not fail because a checkpoint did not.** The
+            // rows are already on disk and `finish` will commit them; a
+            // checkpoint only decides how early a consumer may see them.
+            // Loud, though -- a checkpoint that never lands means streaming
+            // silently stops happening, which is the shape of failure
+            // AGENTS.md's "prefer failing loudly" section is about.
+            if let Err(e) = self.seal().await {
+                tracing::warn!(
+                    source = %self.source_name,
+                    error = %format!("{e:#}"),
+                    "checkpoint commit failed; the rows stay pending until the run's final commit",
+                );
             }
         }
-        self.seal().await
     }
 
     async fn seal(&self) -> Result<()> {
+        // Counted as done whatever happens below, so a store that cannot
+        // commit is retried on the next cadence rather than on every row.
+        self.checkpointer.lock().unwrap().sealed();
         // **Blobs before entities, always.** An entity names a blob by its
         // blake3, so sealing entities first admits a reader pinned at that
         // commit seeing a row whose bytes are not yet committed — a dangling
@@ -153,7 +165,6 @@ impl SealState {
         }
         let msg = format!("checkpoint {}: entities", self.source_name);
         let sealed = crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
-        self.checkpointer.lock().unwrap().sealed();
         // `None` means there was nothing dirty after all; no version moved,
         // so there is nothing to announce.
         if let Some(hash) = sealed {
@@ -197,5 +208,135 @@ async fn commit_with_suffix(pool: &SqlitePool, source_name: &str, summary: Strin
             );
             summary
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn store(path: &std::path::Path) -> SqlitePool {
+        crate::doltlite_raw::open(
+            path,
+            &["CREATE TABLE IF NOT EXISTS rows_t (id TEXT PRIMARY KEY)"],
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn commits(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    fn state(pool: SqlitePool, cas: Option<SqlitePool>, p: crate::progress::Progress) -> SealState {
+        SealState {
+            pool,
+            source_name: "t".into(),
+            cas_pool: cas,
+            checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(
+                crate::checkpointer::Policy::Every(crate::checkpointer::Cadence {
+                    quiet_for: std::time::Duration::ZERO,
+                    at_most_every: std::time::Duration::ZERO,
+                }),
+            )),
+            progress: p,
+        }
+    }
+
+    /// A source whose blobs live in a sibling file must have *both* sealed.
+    /// Sealing only the entities store publishes a row naming bytes no
+    /// reader can resolve — which is exactly what shipped: `open_with_blobs`
+    /// existed, and claude, which has a CAS, was calling `open`.
+    #[tokio::test]
+    async fn a_seal_commits_the_blob_store_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let entities = store(&dir.path().join("entities.doltlite_db")).await;
+        let cas = store(&dir.path().join("blobs.doltlite_db")).await;
+        if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
+            return;
+        }
+        let (before_e, before_c) = (commits(&entities).await, commits(&cas).await);
+
+        sqlx::query("INSERT INTO rows_t VALUES ('e')")
+            .execute(&entities)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO rows_t VALUES ('b')")
+            .execute(&cas)
+            .await
+            .unwrap();
+
+        state(
+            entities.clone(),
+            Some(cas.clone()),
+            crate::progress::Progress::noop(),
+        )
+        .seal()
+        .await
+        .unwrap();
+
+        assert_eq!(commits(&entities).await, before_e + 1, "entities must seal");
+        assert_eq!(
+            commits(&cas).await,
+            before_c + 1,
+            "the blob store must seal too, or a checkpoint publishes dangling attachments"
+        );
+    }
+
+    /// The version announced has to be the commit the seal just made —
+    /// that string is what a consumer pins to.
+    #[tokio::test]
+    async fn a_seal_announces_the_commit_it_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let entities = store(&dir.path().join("entities.doltlite_db")).await;
+        if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
+            return;
+        }
+        sqlx::query("INSERT INTO rows_t VALUES ('e')")
+            .execute(&entities)
+            .await
+            .unwrap();
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        struct S(Arc<std::sync::Mutex<Vec<String>>>);
+        impl crate::progress::ProgressSink for S {
+            fn checkpoint(&self, v: &str) {
+                self.0.lock().unwrap().push(v.to_string());
+            }
+        }
+        let progress = crate::progress::Progress::new(Arc::new(S(seen.clone())));
+
+        state(entities.clone(), None, progress)
+            .seal()
+            .await
+            .unwrap();
+
+        let announced = seen.lock().unwrap().clone();
+        let head = crate::pin::head(&entities).await.unwrap().unwrap();
+        assert_eq!(
+            announced,
+            vec![head.commit().to_string()],
+            "the announced version must be the new HEAD"
+        );
+    }
+
+    /// A store that cannot commit must not be retried on every single row.
+    #[tokio::test]
+    async fn a_failed_seal_waits_for_the_next_cadence_rather_than_every_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let entities = store(&dir.path().join("entities.doltlite_db")).await;
+        if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
+            return;
+        }
+        let st = state(entities.clone(), None, crate::progress::Progress::noop());
+        // A seal that finds nothing dirty still counts as done.
+        st.seal().await.unwrap();
+        assert!(
+            !st.checkpointer.lock().unwrap().should_seal(),
+            "seal() must mark the checkpointer sealed even when it commits nothing"
+        );
     }
 }

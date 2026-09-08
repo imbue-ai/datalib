@@ -525,7 +525,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         // both landed. Sealing between the two would publish
                         // a message pointing at bytes no reader can resolve.
                         if let Some(sealer) = opts.sealer.as_ref() {
-                            sealer.wrote(1).await?;
+                            sealer.wrote(1).await;
                         }
                         if opts.sleep_between > Duration::ZERO {
                             sleep(opts.sleep_between).await;
