@@ -22,6 +22,11 @@ use super::schema_raw::{full_ddl, NotionAttachmentRow, DATA_TABLES};
 pub struct RawDb {
     pool: SqlitePool,
     cas: BlobCas,
+    /// The commit every content read resolves against, or `None` for the
+    /// download step reading back what it just wrote. Set once, at open:
+    /// a pin belongs to a connection, not to a call, because the
+    /// `pinned_<table>` views it installs live on that connection.
+    pin: Option<datalib_etl::pin::Pin>,
 }
 
 /// One row for [`RawDb::upsert_pages`]. `payload` is `None` for a
@@ -100,11 +105,36 @@ impl RawDb {
     /// No DDL, so a store the current downloader has not touched keeps
     /// whatever columns it has; probe with `column_exists` and fall back
     /// where that matters.
-    pub async fn open_reader(db_path: &Path) -> Result<Self> {
-        Ok(Self {
-            pool: datalib_etl::doltlite_raw::open_reader(db_path).await?,
+    /// **`None` means the store cannot be read**, not that it is empty —
+    /// no commit to pin, or a build without the dolt extensions. See the
+    /// plan's "The sink contract".
+    pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
+        let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
+        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+            pool.close().await;
+            return Ok(None);
+        };
+        datalib_etl::pin::install_views(&pool, &pin)
+            .await
+            .context("pin the notion raw store for render")?;
+        Ok(Some(Self {
+            pool,
             cas: BlobCas::open_reader(&blob_cas::cas_path_for(db_path)).await?,
-        })
+            pin: Some(pin),
+        }))
+    }
+
+    /// How this handle reads content. Every content query goes through
+    /// it, so a reader cannot accidentally read the working set.
+    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
+        match self.pin.as_ref() {
+            Some(p) => datalib_etl::pin::Reads::At(p),
+            None => datalib_etl::pin::Reads::Own,
+        }
+    }
+
+    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
+        self.pin.as_ref()
     }
 
     pub async fn open(db_path: &Path) -> Result<Self> {
@@ -112,7 +142,11 @@ impl RawDb {
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
         let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
+        Ok(Self {
+            pool,
+            cas,
+            pin: None,
+        })
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -393,9 +427,12 @@ impl RawDb {
 
     /// `(block_id, anchor text)` for every block a comment hangs off.
     pub async fn load_comment_anchors(&self) -> Result<HashMap<String, String>> {
-        let rows = sqlx::query(
-            "SELECT id, plain_text FROM comment_anchors WHERE plain_text IS NOT NULL AND plain_text <> ''",
-        )
+        // Audited: the only interpolation is a table name this handle
+        // chose -- a literal, or that literal behind `pinned_`.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT id, plain_text FROM {} WHERE plain_text IS NOT NULL AND plain_text <> ''",
+            self.reads().table("comment_anchors")
+        )))
         .fetch_all(&self.pool)
         .await
         .context("select comment anchors")?;
@@ -427,7 +464,7 @@ impl RawDb {
     }
 
     pub async fn load_pages(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "pages").await
+        dr::load_payloads(&self.pool, self.reads(), "pages").await
     }
 
     /// Child pages linked from `page_id`'s stored body.
@@ -451,10 +488,14 @@ impl RawDb {
 
     /// Every stored page body, as `(page_id, markdown)`.
     pub async fn load_page_markdown(&self) -> Result<Vec<(String, String)>> {
-        let rows = sqlx::query("SELECT id, markdown FROM page_markdown ORDER BY id")
-            .fetch_all(&self.pool)
-            .await
-            .context("select page_markdown")?;
+        // Audited: as `load_comment_anchors`.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT id, markdown FROM {} ORDER BY id",
+            self.reads().table("page_markdown")
+        )))
+        .fetch_all(&self.pool)
+        .await
+        .context("select page_markdown")?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
             let (Ok(id), Ok(md)) = (
@@ -469,9 +510,11 @@ impl RawDb {
     }
 
     pub async fn load_comments(&self) -> Result<Vec<(Value, Option<String>)>> {
-        let rows = sqlx::query(
-            "SELECT json(payload) AS payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY id",
-        )
+        // Audited: as `load_comment_anchors`.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT json(payload) AS payload, page_id FROM {} WHERE payload IS NOT NULL ORDER BY id",
+            self.reads().table("comments")
+        )))
         .fetch_all(&self.pool)
         .await
         .context("select comments")?;
@@ -647,13 +690,18 @@ pub fn block_on_load_all(db_path: &Path, last_render_hash: Option<&str>) -> Resu
     let last = last_render_hash.map(str::to_string);
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let db = RawDb::open_reader(&path).await?;
+            // `open_reader` pins to HEAD and installs the views, so every
+            // load below and the diff all name one commit.
+            let Some(db) = RawDb::open_reader(&path).await? else {
+                return Ok(Default::default());
+            };
             let loaded = async {
-                let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
-                    return Ok(Default::default());
-                };
-                datalib_etl::pin::install_views(db.pool(), &pin).await?;
-                let scan = scan_changed_pages(db.pool(), last.as_deref(), &pin).await?;
+                let pin = db
+                    .pin()
+                    .expect("open_reader returns a pinned handle")
+                    .clone();
+                let pin = &pin;
+                let scan = scan_changed_pages(db.pool(), last.as_deref(), pin).await?;
 
                 // A bucket the diff named whose `pages` row is gone is a
                 // page Notion no longer has. Asked of the store, not
@@ -664,7 +712,7 @@ pub fn block_on_load_all(db_path: &Path, last_render_hash: Option<&str>) -> Resu
                     Some(changed) => {
                         let pages = dr::buckets_without_rows(
                             db.pool(),
-                            datalib_etl::pin::Reads::At(&pin),
+                            datalib_etl::pin::Reads::At(pin),
                             changed,
                             &[("pages", "id")],
                         )
@@ -677,7 +725,7 @@ pub fn block_on_load_all(db_path: &Path, last_render_hash: Option<&str>) -> Resu
                         .await?;
                         let discussions = dr::buckets_without_rows(
                             db.pool(),
-                            datalib_etl::pin::Reads::At(&pin),
+                            datalib_etl::pin::Reads::At(pin),
                             &touched,
                             &[("comments", "discussion_id")],
                         )

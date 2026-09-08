@@ -55,6 +55,17 @@ async fn ingest_fixture(raw: &Path) {
     })
     .await
     .expect("ingest the TNG export");
+
+    // Commit what the ingest wrote, the way the processor's
+    // `RawStoreSession` does in production. Render pins HEAD, so an
+    // uncommitted row is invisible to it.
+    //
+    // On the handle the ingest already holds: reopening here would be a
+    // second live connection to the store, and one of the two commits
+    // would fail with `commit conflict`.
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: claude ingest")
+        .await
+        .expect("commit the ingest");
     // Closed, not dropped: whatever reads this store next is a second
     // connection until this one is actually gone.
     db.close().await;
