@@ -23,6 +23,7 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
         "@datalib_crates//:async-trait",
     ],
     deps = [
