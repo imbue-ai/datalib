@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
+use anyhow::Context;
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::grid_index::RenderedMarkdown;
@@ -31,7 +32,7 @@ pub const RENDER_VERSION: u32 = 2;
 /// falls back to `cas_objects`.
 const SMS_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
             NULL AS content_type, NULL AS upstream_name \
-     FROM sms_attachments \
+     FROM pinned_sms_attachments sms_attachments \
      WHERE ref_name IN ({placeholders}) AND blake3 IS NOT NULL";
 
 fn ns() -> Uuid {
@@ -77,7 +78,23 @@ pub fn render(
     let (messages, calls, blobs) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open_reader(&db_path).await?;
+            // Pin before reading, and pin the CAS too — separate file,
+            // separate HEAD. No commit means nothing has been committed here
+            // to render, which is emptiness rather than a reason to read the
+            // working set.
+            let pin = datalib_etl::pin::head(db.pool()).await?;
             let loaded = async {
+                let Some(pin) = pin else {
+                    return anyhow::Ok(Default::default());
+                };
+                datalib_etl::pin::install_views(db.pool(), &pin)
+                    .await
+                    .context("pin the sms_backup_restore raw store for render")?;
+                if let Some(cas_pin) = datalib_etl::pin::head(db.cas().pool()).await? {
+                    datalib_etl::pin::install_views(db.cas().pool(), &cas_pin)
+                        .await
+                        .context("pin the sms_backup_restore CAS for render")?;
+                }
                 let messages = db.load_payloads("sms_messages").await?;
                 let calls = db.load_payloads("sms_calls").await?;
                 let blobs = load_blobs(&db, &messages).await?;
