@@ -60,18 +60,34 @@ need_runfile() {
   printf '%s\n' "$out"
 }
 
-# Temp dirs this script mints, removed by one EXIT trap. Several of them
-# and only one `trap ... EXIT` slot, so they are named here rather than
-# each installing a handler that would silently replace the other's.
-STAGE_DIR=""
-BIN_STAGE=""
-RUNTIME_STAGE=""
-cleanup() {
-  [[ -n "$STAGE_DIR" ]] && rm -rf "$STAGE_DIR"
-  [[ -n "$BIN_STAGE" ]] && rm -rf "$BIN_STAGE"
-  [[ -n "$RUNTIME_STAGE" ]] && rm -rf "$RUNTIME_STAGE"
-  return 0
-}
+# One scratch dir per run, holding this script's staging dirs and every
+# data root playwright mints. It is kept after the run on purpose: a
+# failed run's doltlite stores are the first thing you want to open, and
+# a delete at exit could not be relied on anyway, because this script
+# ends by `exec`ing playwright and an exec'd process runs no EXIT trap.
+#
+# What bounds it is the prune below, at startup rather than at exit —
+# the same trick bazel plays with TEST_TMPDIR and pytest with tmp_path.
+# Under `bazel test` the parent *is* TEST_TMPDIR, which bazel wipes on
+# the target's next run, so only the `bazel run` case prunes here.
+RUNS_KEPT=3
+SCRATCH_PARENT="${TEST_TMPDIR:-${TMPDIR:-/tmp}}"
+# `date -u`: the prune below sorts on this name, and a local clock runs
+# backwards for an hour at a DST fall-back.
+FW_E2E_RUN_DIR="$(mktemp -d "$SCRATCH_PARENT/datalib-e2e-run.$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+export FW_E2E_RUN_DIR
+if [[ -z "${TEST_TMPDIR:-}" && -z "${FW_E2E_KEEP_ROOTS:-}" ]]; then
+  # The names carry a timestamp, so a plain sort is oldest-first.
+  drop=$(( $(ls -d "$SCRATCH_PARENT"/datalib-e2e-run.* 2>/dev/null | wc -l) - RUNS_KEPT ))
+  ls -d "$SCRATCH_PARENT"/datalib-e2e-run.* 2>/dev/null | sort | while IFS= read -r stale; do
+    (( drop-- > 0 )) || break
+    rm -rf "$stale"
+  done
+fi
+
+# Fires on the early-exit paths only, for the `exec` reason above. Those
+# are setup failures, with nothing in the run dir worth keeping.
+cleanup() { rm -rf "$FW_E2E_RUN_DIR"; return 0; }
 trap cleanup EXIT
 
 # Which browser engines to provision. Both by default: the suite has a
@@ -141,12 +157,8 @@ else
   # runfiles tree has the specs and configs as symlinks back to
   # bazel-out / source, so we rehome the test inputs into a tempdir
   # as real files (rsync -L resolves symlinks during the copy).
-  # Explicit `XXXXXX` template rather than `-t datalib-e2e-stage`: BSD mktemp
-  # (macOS) treats `-t` as a prefix and tolerates a template with no X's,
-  # but GNU mktemp (Linux/CI) reads the arg as a literal template and
-  # aborts with "too few X's in template 'datalib-e2e-stage'". The full
-  # `$TMPDIR/...XXXXXX` form is accepted identically by both.
-  STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/datalib-e2e-stage.XXXXXX")"
+  STAGE_DIR="$FW_E2E_RUN_DIR/stage"
+  mkdir -p "$STAGE_DIR"
   rsync -aL \
     --exclude node_modules \
     --exclude e2e_test \
@@ -213,7 +225,8 @@ export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
 # instead, which is why they have never needed this. Symlinks rather
 # than a copy_to_directory dep: bazel names each output after its target
 # (`datalib_step`, `datalib_dag_bin`), and the rename is the whole point.
-BIN_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/datalib-e2e-bin.XXXXXX")"
+BIN_STAGE="$FW_E2E_RUN_DIR/bin"
+mkdir -p "$BIN_STAGE"
 APPLET_BIN_RUNFILE="$(need_runfile "${FW_E2E_APPLET_BIN_RLOC:-}" -x)"
 for pair in \
   "datalib-step:$STEP_BIN_RUNFILE" \
@@ -308,7 +321,7 @@ if [[ ! -d "$QMD_STORE" ]]; then
   exit 1
 fi
 
-RUNTIME_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/datalib-e2e-runtime.XXXXXX")"
+RUNTIME_STAGE="$FW_E2E_RUN_DIR/runtime"
 mkdir -p "$RUNTIME_STAGE/node/bin" "$RUNTIME_STAGE/qmd/$QMD_VERSION"
 ln -sfn "$NODE_BIN_RUNFILE" "$RUNTIME_STAGE/node/bin/node"
 ln -sfn "$QMD_STORE" "$RUNTIME_STAGE/qmd/$QMD_VERSION/node_modules"
