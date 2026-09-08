@@ -38,11 +38,22 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 // `datalib/ui/..` — the workspace root, for the `bazel-bin/...`
 // fallbacks used when this config is loaded outside bazel.
 const workspaceDir = path.resolve(here, "..", "..");
+// Bazel exports TEST_TMPDIR but never TMPDIR, so `tmpdir()` would put
+// these in the user's real temp directory, which nothing reclaims.
+// Recorded as they are minted so `globalTeardown` can remove them.
+function mintRoot(prefix: string): string {
+  const parent = process.env.TEST_TMPDIR || tmpdir();
+  const dir = mkdtempSync(path.join(parent, prefix));
+  const minted = JSON.parse(process.env.FW_E2E_MINTED_DIRS ?? "[]") as string[];
+  minted.push(dir);
+  process.env.FW_E2E_MINTED_DIRS = JSON.stringify(minted);
+  return dir;
+}
 function materializeRoot(prefix: string): string {
   const materializer =
     process.env.FW_E2E_MATERIALIZE_TNG_ROOT ||
     path.join(workspaceDir, "bazel-bin/tests/fixtures/materialize_tng_root");
-  const root = mkdtempSync(path.join(tmpdir(), prefix));
+  const root = mintRoot(prefix);
   execFileSync(materializer, [root], { stdio: "inherit" });
   return root;
 }
@@ -71,7 +82,7 @@ const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 function emptyRoot(): string {
   const existing = process.env.FW_E2E_EMPTY_ROOT;
   if (existing) return existing;
-  const root = mkdtempSync(path.join(tmpdir(), "datalib-e2e-empty-"));
+  const root = mintRoot("datalib-e2e-empty-");
   process.env.FW_E2E_EMPTY_ROOT = root;
   return root;
 }
@@ -86,7 +97,7 @@ process.env.FW_E2E_EMPTY_URL = EMPTY_URL;
 function onboardingRoot(): string {
   const existing = process.env.FW_E2E_ONBOARDING_ROOT;
   if (existing) return existing;
-  const root = mkdtempSync(path.join(tmpdir(), "datalib-e2e-onboarding-"));
+  const root = mintRoot("datalib-e2e-onboarding-");
   process.env.FW_E2E_ONBOARDING_ROOT = root;
   return root;
 }
@@ -114,7 +125,7 @@ process.env.FW_E2E_PDF_LATECOMER = path.join(
 function pdfScanDir(): string {
   const existing = process.env.FW_E2E_PDF_SCAN_DIR;
   if (existing) return existing;
-  const dir = mkdtempSync(path.join(tmpdir(), "datalib-e2e-pdfs-"));
+  const dir = mintRoot("datalib-e2e-pdfs-");
   for (const f of ["captains_log.pdf", "captains_log_v2.pdf"]) {
     copyFileSync(path.join(PDF_CORPUS, f), path.join(dir, f));
   }
@@ -134,7 +145,7 @@ function signalBackupDir(): string | undefined {
   // source tree). The spec skips its Signal half rather than failing,
   // the same way the sync spec skips without its step binary.
   if (!SIGNAL_MAKE_FIXTURE || !SIGNAL_SPEC) return undefined;
-  const dir = mkdtempSync(path.join(tmpdir(), "datalib-e2e-signal-"));
+  const dir = mintRoot("datalib-e2e-signal-");
   execFileSync(SIGNAL_MAKE_FIXTURE, [SIGNAL_SPEC, dir], { stdio: "pipe" });
   process.env.FW_E2E_SIGNAL_BACKUP_DIR = dir;
   return dir;
@@ -205,6 +216,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 4,
   globalSetup: "./tests/e2e/global-setup.ts",
+  globalTeardown: "./tests/e2e/global-teardown.ts",
   outputDir: ARTIFACT_DIR,
   // `list` is what a person watching the terminal reads. `html` is the
   // artifact: a self-contained report that embeds each test's video and

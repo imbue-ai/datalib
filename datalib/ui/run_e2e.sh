@@ -60,9 +60,13 @@ need_runfile() {
   printf '%s\n' "$out"
 }
 
-# Temp dirs this script mints, removed by one EXIT trap. Several of them
-# and only one `trap ... EXIT` slot, so they are named here rather than
-# each installing a handler that would silently replace the other's.
+# Temp dirs this script mints. Several of them and only one
+# `trap ... EXIT` slot, so they are named here rather than each
+# installing a handler that would silently replace the other's.
+#
+# The trap covers the early-exit paths only: this script ends by
+# `exec`ing playwright, and an exec'd process never runs it. What
+# reclaims them on the normal path is TEST_TMPDIR, which bazel owns.
 STAGE_DIR=""
 BIN_STAGE=""
 RUNTIME_STAGE=""
@@ -146,7 +150,7 @@ else
   # but GNU mktemp (Linux/CI) reads the arg as a literal template and
   # aborts with "too few X's in template 'datalib-e2e-stage'". The full
   # `$TMPDIR/...XXXXXX` form is accepted identically by both.
-  STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/datalib-e2e-stage.XXXXXX")"
+  STAGE_DIR="$(mktemp -d "${TEST_TMPDIR:-${TMPDIR:-/tmp}}/datalib-e2e-stage.XXXXXX")"
   rsync -aL \
     --exclude node_modules \
     --exclude e2e_test \
@@ -213,7 +217,7 @@ export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
 # instead, which is why they have never needed this. Symlinks rather
 # than a copy_to_directory dep: bazel names each output after its target
 # (`datalib_step`, `datalib_dag_bin`), and the rename is the whole point.
-BIN_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/datalib-e2e-bin.XXXXXX")"
+BIN_STAGE="$(mktemp -d "${TEST_TMPDIR:-${TMPDIR:-/tmp}}/datalib-e2e-bin.XXXXXX")"
 APPLET_BIN_RUNFILE="$(need_runfile "${FW_E2E_APPLET_BIN_RLOC:-}" -x)"
 for pair in \
   "datalib-step:$STEP_BIN_RUNFILE" \
@@ -308,7 +312,7 @@ if [[ ! -d "$QMD_STORE" ]]; then
   exit 1
 fi
 
-RUNTIME_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/datalib-e2e-runtime.XXXXXX")"
+RUNTIME_STAGE="$(mktemp -d "${TEST_TMPDIR:-${TMPDIR:-/tmp}}/datalib-e2e-runtime.XXXXXX")"
 mkdir -p "$RUNTIME_STAGE/node/bin" "$RUNTIME_STAGE/qmd/$QMD_VERSION"
 ln -sfn "$NODE_BIN_RUNFILE" "$RUNTIME_STAGE/node/bin/node"
 ln -sfn "$QMD_STORE" "$RUNTIME_STAGE/qmd/$QMD_VERSION/node_modules"
