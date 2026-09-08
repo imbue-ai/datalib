@@ -314,6 +314,57 @@ mod view_tests {
         );
     }
 
+    /// The guarantee every pinned render now rests on, stated once against a
+    /// store shaped like a provider's: a row written but not committed must
+    /// not be visible through the views, and one that *was* committed must.
+    ///
+    /// Each provider gets this property by construction — it opens with
+    /// `open_reader`, pins, installs the views, and reads `pinned_<table>`,
+    /// and the repo lint refuses a render read that does not. This test is
+    /// what makes that chain mean something: if `install_views` ever stopped
+    /// excluding the working set, every provider would silently start
+    /// rendering half-written rows and no provider test would notice, because
+    /// none of them writes uncommitted data on purpose.
+    #[tokio::test]
+    async fn an_uncommitted_row_is_invisible_through_the_views() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(
+            &dir.path().join("provider.doltlite_db"),
+            &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT)"],
+        )
+        .await
+        .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+        sqlx::query("INSERT INTO entities VALUES ('committed', 'a')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let commit = crate::doltlite_raw::commit_run(&pool, "one entity")
+            .await
+            .unwrap()
+            .unwrap();
+        // The shape a download mid-run leaves behind.
+        sqlx::query("INSERT INTO entities VALUES ('in-flight', 'b')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        install_views(&pool, &Pin::at(&commit).unwrap())
+            .await
+            .unwrap();
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM pinned_entities ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            ids,
+            vec!["committed".to_string()],
+            "the pinned view must show the committed row and not the in-flight one"
+        );
+    }
+
     /// Pinned views are per-connection state. The design leans on that in two
     /// directions: installing them once when a store is opened covers every
     /// later query on that pool, and they cannot leak into anyone else's view

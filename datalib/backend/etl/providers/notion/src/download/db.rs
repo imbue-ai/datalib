@@ -573,10 +573,12 @@ impl RawDb {
 async fn scan_changed_pages(
     pool: &sqlx::SqlitePool,
     last_render_hash: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
 ) -> Result<dr::DiffScan> {
     dr::scan_buckets(
         pool,
         last_render_hash,
+        pin,
         &dr::DiffScanSpec {
             global_fanout_tables: &["users"],
             bucket_query: "
@@ -647,7 +649,11 @@ pub fn block_on_load_all(db_path: &Path, last_render_hash: Option<&str>) -> Resu
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open_reader(&path).await?;
             let loaded = async {
-                let scan = scan_changed_pages(db.pool(), last.as_deref()).await?;
+                let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+                    return Ok(Default::default());
+                };
+                datalib_etl::pin::install_views(db.pool(), &pin).await?;
+                let scan = scan_changed_pages(db.pool(), last.as_deref(), &pin).await?;
 
                 // A bucket the diff named whose `pages` row is gone is a
                 // page Notion no longer has. Asked of the store, not

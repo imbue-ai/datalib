@@ -364,16 +364,11 @@ def _check_render_opens_read_only(root: Path) -> int:
 # only go down; a file that reaches zero comes out of the dict. Both
 # directions fail, so the sweep cannot stall silently and new code cannot
 # quietly add a site.
-EXPECTED_UNPINNED_READS: dict[str, int] = {
-    # Still to pin: these four do no `dolt_diff` scan at all, so they have no
-    # commit in hand and need a HEAD lookup added before they can pin.
-    "datalib/backend/etl/providers/beeper/src/render/parse.rs": 6,
-    "datalib/backend/etl/providers/yolink/src/render/parse.rs": 5,
-    "datalib/backend/etl/providers/google_takeout/src/render.rs": 1,
-    "datalib/backend/etl/providers/sms_backup_restore/src/render.rs": 1,
-    # whatsapp scans, but by hand rather than through `scan_buckets`.
-    "datalib/backend/etl/providers/whatsapp/src/render/parse.rs": 7,
-}
+# Empty, and that is the finished state: every render read now names a
+# commit. It stays as a dict rather than becoming a bare `== 0` so that a
+# provider which genuinely needs an unpinned read has somewhere to say so,
+# with a reason, instead of the check being switched off.
+EXPECTED_UNPINNED_READS: dict[str, int] = {}
 
 # `pinned_` is the whole point: a view over `dolt_at_<table>`, so reading it
 # is reading committed state. `dolt_*` are the history vtabs (already
@@ -413,7 +408,10 @@ def _check_unpinned_render_reads(root: Path) -> int:
     }
     if actual == EXPECTED_UNPINNED_READS:
         total = sum(actual.values())
-        print(f"OK: {total} unpinned render read(s), matching the baseline.")
+        if not actual:
+            print("OK: every render read is pinned.")
+        else:
+            print(f"OK: {total} unpinned render read(s), matching the baseline.")
         return 0
 
     added = {

@@ -557,32 +557,26 @@ Each of these is a reviewable PR that leaves the tree green.
    dirty working set, that a missing view fails loudly, and that the
    views are connection-scoped — the three assertions the rest of this
    plan rests on.
-2. **The sweep**, per edge — and note it can no longer be split from
-   step 4 the way this plan first had it. With `Pin` carrying no
-   "unpinned" state, a renamed query fails until the views exist, so the
-   rename and the pinning land together. That is the right shape: a
-   rename you cannot half-do.
-   - ~~`render -> grid_index`~~ **done.** The 3 sites in
-     `indexed_markdown.rs::documents_matching`, plus `open_reader` /
-     `open_for_reading` and the `to_ref = ?2` fix.
-   - `download -> render`: the opens are **done** — every render path now
-     reads through `open_reader`, whether it was hand-rolling a read-only
-     pool before (eight providers, sixteen copies of the same three lines,
-     none of which disabled connection recycling — so a recycled connection
-     would have dropped the pinned views) or genuinely opening writable
-     (contacts, google_takeout, linkedin, notion, pdf, sms_backup_restore,
-     and beeper's CAS). Check 5 in `lint_repo.py` keeps it that way; it
-     found beeper on its first run. The 48 query sites plus the 2 in
-     `blob_cas.rs` still need pinning.
+2. ~~**The sweep**~~ **done, both edges.** Every render read now names a
+   commit: `render -> grid_index` and all ten providers on
+   `download -> render`. The lint's baseline is gone — check 4 now says
+   "every render read is pinned", and check 5 keeps render off the
+   writable open.
 
-   A caution for that work, found while surveying: **the 48 is what the
-   lint can see.** There are ~145 more bare-table reads in `download/`
-   files. Most are the download step reading its own store and must stay
-   unpinned, but render calls into some of them — notion's render goes
-   through `block_on_load_all` in `download/db.rs`, whose SQL the check
-   never looks at. Each provider's pinning PR has to audit which of its
-   `download/db.rs` readers render actually calls, and record the answer
-   by adding that file to the lint rather than in someone's memory.
+   Two things worth carrying forward. **The pin goes ahead of every
+   read, not at the scan** — signal loaded `recipients` before diffing,
+   so a pin placed at the scan was already too late. And **the view is
+   aliased back to the table's name** (`JOIN pinned_chat_items
+   chat_items`), because renaming the table alone breaks every qualified
+   column reference that used the old name; aliasing makes the rename
+   additive instead.
+
+   `scan_buckets` no longer samples HEAD itself: the caller pins first
+   and hands it the commit. That is what lets a bucket query join
+   pinned views, and it removes the second HEAD sample that could
+   disagree with the first.
+
+
 3. **Producer checkpoints.** `Checkpointer` (debounce + ceiling, skip
    when clean, cadence from config), the two commit seams with **blobs
    committed before entities**, checkpointing disabled for

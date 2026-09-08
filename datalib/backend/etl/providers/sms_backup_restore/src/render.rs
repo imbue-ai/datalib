@@ -95,7 +95,7 @@ pub fn render(
                 let messages = db.load_payloads("sms_messages").await?;
                 let calls = db.load_payloads("sms_calls").await?;
                 let blobs = load_blobs(&db, &messages).await?;
-                let scan = scan_diff(db.pool(), last_render_hash).await?;
+                let scan = scan_diff(db.pool(), last_render_hash, &pin).await?;
                 anyhow::Ok((messages, calls, blobs, scan))
             }
             .await;
@@ -186,10 +186,12 @@ pub struct RenderOutcome {
 async fn scan_diff(
     pool: &sqlx::SqlitePool,
     last_render_hash: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
 ) -> Result<datalib_etl::doltlite_raw::DiffScan> {
     datalib_etl::doltlite_raw::scan_buckets(
         pool,
         last_render_hash,
+        pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             global_fanout_tables: &[],
             bucket_query: "
