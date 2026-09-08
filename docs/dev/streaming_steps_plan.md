@@ -406,10 +406,11 @@ then reported a completed walk, which swept the source. The guard was
 there and testing the right thing — the empty value leaked past it from
 an inner block.
 
-### P2. Readable *while the writer is still running*
+### P2. Can you be read from while being written to?
 
-> A consumer can take a stable, self-consistent view of the sink while
-> the producer is mid-write.
+That is the whole question, and it is the one a sink has to answer for
+itself. A "yes" means a consumer can take a stable, self-consistent view
+while the producer is still writing.
 
 **Most sinks do not have this, and none of them have it by accident.**
 It is what makes an edge streamable at all, and it is a real property of

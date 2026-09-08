@@ -226,8 +226,13 @@ async fn parse_doltlite_async(
     // Pin before anything reads this store. The diff below and the rows
     // behind it have to name one commit, and the `pinned_<table>` views must
     // already exist when the diff runs — its bucket query joins live tables.
-    // No commit at all means nothing has been committed here to render, which
-    // is emptiness, not a reason to read the working set.
+    //
+    // No commit means the store cannot be read, which is *not* the same as
+    // the source holding nothing; reading the working set instead would be
+    // worse than either. Claude never hands its rendered set to
+    // `retain_documents`, so returning an empty parse here deletes nothing —
+    // a provider that swept would have to skip instead. See the plan's
+    // "The sink contract".
 
     let Some(pin) = datalib_etl::pin::head(&pool).await? else {
         return Ok(ParsedExport::default());
@@ -246,8 +251,9 @@ async fn parse_doltlite_async(
     let users =
         datalib_etl::doltlite_raw::load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "users")
             .await?;
-    let first_user_uuid = db::first_user_uuid_from(&pool).await?;
-    let all_convs = db::load_conversations_from(&pool).await?;
+    let first_user_uuid =
+        db::first_user_uuid_from(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
+    let all_convs = db::load_conversations_from(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     let total = all_convs.len();
 
     let (filtered, docs_skipped) = match &scan.changed_buckets {
@@ -275,7 +281,7 @@ async fn parse_doltlite_async(
     // `project_name_by_uuid` is loaded unfiltered, though — an unchanged
     // conversation that *is* being re-rendered (because something else
     // in its bucket moved) still has to resolve its project's name.
-    let all_projects = load_project_rows(&pool).await?;
+    let all_projects = load_project_rows(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     parsed.project_name_by_uuid = name_index(&all_projects);
     parsed.projects = match &scan.changed_buckets {
         None => all_projects,
@@ -349,14 +355,17 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
 
 /// Load every project out of the raw store and hang its knowledge
 /// documents off it. Two queries total, not one per project.
-async fn load_project_rows(pool: &SqlitePool) -> Result<Vec<ProjectRow>> {
-    let projects = db::load_projects_from(pool).await?;
+async fn load_project_rows(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+) -> Result<Vec<ProjectRow>> {
+    let projects = db::load_projects_from(pool, reads).await?;
     if projects.is_empty() {
         return Ok(Vec::new());
     }
     let mut docs_by_project: std::collections::HashMap<String, Vec<ProjectDocRow>> =
         std::collections::HashMap::new();
-    for d in db::load_project_docs_from(pool).await? {
+    for d in db::load_project_docs_from(pool, reads).await? {
         docs_by_project
             .entry(d.project_uuid.clone())
             .or_default()

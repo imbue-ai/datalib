@@ -19,6 +19,11 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
+    /// The commit every content read resolves against, or `None` for the
+    /// download step reading back what it just wrote. Set once, at open:
+    /// a pin belongs to a connection, not to a call, because the
+    /// `pinned_<table>` views it installs live on that connection.
+    pin: Option<datalib_etl::pin::Pin>,
 }
 
 impl RawDb {
@@ -26,14 +31,41 @@ impl RawDb {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
+        Ok(Self { pool, pin: None })
     }
 
-    /// Read-only open, for render. See github's twin and #312.
-    pub async fn open_reader(db_path: &Path) -> Result<Self> {
-        Ok(Self {
-            pool: dr::open_reader(db_path).await?,
-        })
+    /// Read-only open, for render, pinned to the store's current HEAD.
+    /// See github's twin and #312.
+    ///
+    /// **`None` means the store cannot be read**, not that it is empty —
+    /// no commit to pin, or a build without the dolt extensions. See the
+    /// plan's "The sink contract".
+    pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
+        let pool = dr::open_reader(db_path).await?;
+        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+            pool.close().await;
+            return Ok(None);
+        };
+        datalib_etl::pin::install_views(&pool, &pin)
+            .await
+            .context("pin the gitlab raw store for render")?;
+        Ok(Some(Self {
+            pool,
+            pin: Some(pin),
+        }))
+    }
+
+    /// How this handle reads content. Every content query goes through
+    /// it, so a reader cannot accidentally read the working set.
+    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
+        match self.pin.as_ref() {
+            Some(p) => datalib_etl::pin::Reads::At(p),
+            None => datalib_etl::pin::Reads::Own,
+        }
+    }
+
+    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
+        self.pin.as_ref()
     }
 
     /// Wait for the connection to actually go away, so the store can be
@@ -63,10 +95,13 @@ impl RawDb {
     }
 
     pub async fn load_self_identity(&self) -> Result<Option<Value>> {
-        let row = sqlx::query(
-            "SELECT json(payload) AS payload FROM self_identity \
+        // Audited: the only interpolation is a table name this handle
+        // chose -- a literal, or that literal behind `pinned_`.
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT json(payload) AS payload FROM {} \
              WHERE payload IS NOT NULL ORDER BY id LIMIT 1",
-        )
+            self.reads().table("self_identity")
+        )))
         .fetch_optional(&self.pool)
         .await
         .context("select self_identity")?;
@@ -125,10 +160,12 @@ impl RawDb {
     // ── loads ───────────────────────────────────────────────────────
 
     pub async fn load_merge_requests(&self) -> Result<Vec<LoadedMergeRequest>> {
-        let rows = sqlx::query(
+        // Audited: as `load_self_identity`.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, project_full_path, mr_iid, json(payload) AS payload
-             FROM merge_requests WHERE payload IS NOT NULL ORDER BY id",
-        )
+             FROM {} WHERE payload IS NOT NULL ORDER BY id",
+            self.reads().table("merge_requests")
+        )))
         .fetch_all(&self.pool)
         .await
         .context("select merge_requests")?;
@@ -152,10 +189,12 @@ impl RawDb {
     }
 
     pub async fn load_discussions(&self) -> Result<Vec<LoadedDiscussion>> {
-        let rows = sqlx::query(
+        // Audited: as `load_self_identity`.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, project_full_path, mr_iid, discussion_id, json(payload) AS payload
-             FROM discussions WHERE payload IS NOT NULL ORDER BY id",
-        )
+             FROM {} WHERE payload IS NOT NULL ORDER BY id",
+            self.reads().table("discussions")
+        )))
         .fetch_all(&self.pool)
         .await
         .context("select discussions")?;

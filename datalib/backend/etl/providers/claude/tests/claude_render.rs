@@ -50,6 +50,18 @@ async fn ingest_fixture(raw: &Path) {
     })
     .await
     .expect("ingest the TNG export");
+
+    // Commit what the ingest wrote, the way the processor's
+    // `RawStoreSession` does in production. Render pins HEAD, so an
+    // uncommitted row is invisible to it.
+    let db =
+        datalib_etl::doltlite_raw::open(&datalib_etl_claude::download::db::db_path_for(raw), &[])
+            .await
+            .expect("open to commit");
+    datalib_etl::doltlite_raw::commit_run(&db, "test: claude ingest")
+        .await
+        .expect("commit the ingest");
+    db.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

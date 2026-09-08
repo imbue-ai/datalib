@@ -73,14 +73,17 @@ pub fn parse(db_path: &Path) -> Result<Option<ParsedContacts>> {
     let path = db_path.to_path_buf();
     let rows = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let db = RawDb::open_reader(&path).await?;
+            let Some(db) = RawDb::open_reader(&path).await? else {
+                return Ok(None);
+            };
             let rows = db.load_all_for_render_and_index_md().await;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             db.close().await;
-            rows
+            rows.map(Some)
         })
     })?;
+    let Some(rows) = rows else { return Ok(None) };
     Ok(Some(parse_loaded(rows)))
 }
 

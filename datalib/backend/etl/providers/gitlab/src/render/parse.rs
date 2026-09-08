@@ -142,19 +142,19 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
         let last = last_render_hash.map(str::to_string);
         let path = db_path.clone();
         tokio::runtime::Handle::current().block_on(async move {
-            let db = RawDb::open_reader(&path).await?;
-            // Pin before reading: `read_everything` loads content and then
-            // diffs, and both have to name one commit.
-            let pin = datalib_etl::pin::head(db.pool()).await?;
-            let out = match &pin {
-                None => Ok(Default::default()),
-                Some(pin) => {
-                    datalib_etl::pin::install_views(db.pool(), pin)
-                        .await
-                        .context("pin the gitlab raw store for render")?;
-                    read_everything(&db, last.as_deref(), pin).await
-                }
+            // `open_reader` pins to HEAD and installs the views, so the
+            // loads and the diff below all name one commit. `None` means
+            // the store cannot be read at all; gitlab never hands its
+            // rendered set to `retain_documents`, so an empty result here
+            // deletes nothing.
+            let Some(db) = RawDb::open_reader(&path).await? else {
+                return Ok(Default::default());
             };
+            let pin = db
+                .pin()
+                .expect("open_reader returns a pinned handle")
+                .clone();
+            let out = read_everything(&db, last.as_deref(), &pin).await;
             // Closed before returning, on the error path too.
             db.close().await;
             out

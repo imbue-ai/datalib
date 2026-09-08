@@ -18,6 +18,11 @@ use super::schema_raw::{full_ddl, DATA_TABLES};
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
+    /// The commit every content read resolves against, or `None` for the
+    /// download step reading back what it just wrote. Set once, at open:
+    /// a pin belongs to a connection, not to a call, because the
+    /// `pinned_<table>` views it installs live on that connection.
+    pin: Option<datalib_etl::pin::Pin>,
 }
 
 /// One contact row served to the render pass. The vCard text is
@@ -44,17 +49,40 @@ impl RawDb {
     /// No DDL, so a store the current downloader has not touched keeps
     /// whatever columns it has; probe with `column_exists` and fall back
     /// where that matters.
-    pub async fn open_reader(db_path: &Path) -> Result<Self> {
-        Ok(Self {
-            pool: datalib_etl::doltlite_raw::open_reader(db_path).await?,
-        })
+    /// **`None` means the store cannot be read**, not that it holds no
+    /// contacts — no commit to pin, or a build without the dolt
+    /// extensions. The caller sweeps every document this pass did not
+    /// name, so handing back an empty read here would delete every
+    /// contact the source has. See the plan's "The sink contract".
+    pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
+        let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
+        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+            pool.close().await;
+            return Ok(None);
+        };
+        datalib_etl::pin::install_views(&pool, &pin)
+            .await
+            .context("pin the contacts raw store for render")?;
+        Ok(Some(Self {
+            pool,
+            pin: Some(pin),
+        }))
+    }
+
+    /// How this handle reads content. Every content query goes through
+    /// it, so a reader cannot accidentally read the working set.
+    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
+        match self.pin.as_ref() {
+            Some(p) => datalib_etl::pin::Reads::At(p),
+            None => datalib_etl::pin::Reads::Own,
+        }
     }
 
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
+        Ok(Self { pool, pin: None })
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -241,16 +269,22 @@ impl RawDb {
     /// whether the row landed via CardDAV sync-collection or
     /// [`super::vcf_dir::fetch`].
     pub async fn load_all_for_render_and_index_md(&self) -> Result<Vec<LoadedRawContact>> {
-        let rows = sqlx::query(
+        // Audited: the only interpolations are table names this handle
+        // chose -- literals, or those literals behind `pinned_`. The
+        // aliases keep the qualified column references working, since a
+        // pinned read renames the table out from under them.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT c.id AS id,
                     c.uid AS uid,
                     c.href AS href,
                     json_extract(c.payload, '$.vcard') AS vcard,
                     COALESCE(a.display_name, a.href) AS addressbook_label
-             FROM contacts c
-             LEFT JOIN addressbooks a ON a.id = c.addressbook_id
+             FROM {} c
+             LEFT JOIN {} a ON a.id = c.addressbook_id
              ORDER BY c.addressbook_id, c.id",
-        )
+            self.reads().table("contacts"),
+            self.reads().table("addressbooks")
+        )))
         .fetch_all(&self.pool)
         .await
         .context("select contacts for render")?;

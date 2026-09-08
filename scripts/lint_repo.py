@@ -381,16 +381,7 @@ def _check_render_opens_read_only(root: Path) -> int:
 # mandatory `Reads`, so every call site answers "whose store is this?" and
 # the compiler will not let it be skipped. This dict is now only for a render
 # read that must genuinely be unpinned — and there are none.
-EXPECTED_UNPINNED_READS: dict[str, int] = {
-    # Render-reachable loaders that still read the working set. Each is a
-    # bespoke query in a `download/db.rs`, so pinning one means threading a
-    # `Reads` through it and updating its render call site.
-    "datalib/backend/etl/providers/notion/src/download/db.rs": 3,
-    "datalib/backend/etl/providers/claude/src/download/db.rs": 3,
-    "datalib/backend/etl/providers/gitlab/src/download/db.rs": 3,
-    "datalib/backend/etl/providers/github/src/download/db.rs": 2,
-    "datalib/backend/etl/providers/contacts/src/download/db.rs": 2,
-}
+EXPECTED_UNPINNED_READS: dict[str, int] = {}
 
 # `pinned_` is the whole point: a view over `dolt_at_<table>`, so reading it
 # is reading committed state. `dolt_*` are the history vtabs (already
@@ -509,6 +500,11 @@ def _loader_reads(text: str, loaders: tuple[str, ...]) -> list[tuple[int, str]]:
                     and table not in _UNPINNED_BY_DESIGN
                 ):
                     out.append((base + offset, f"{fn}: {table}"))
+            # A render-reachable loader must take the mode from its caller,
+            # never name it. `Reads::Own` elsewhere in these files is the
+            # download step reading what it wrote, which is correct.
+            if _OWN_READ.search(line):
+                out.append((base + offset, f"{fn}: Reads::Own"))
     return out
 
 
