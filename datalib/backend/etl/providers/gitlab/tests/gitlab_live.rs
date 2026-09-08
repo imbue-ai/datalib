@@ -35,8 +35,14 @@ async fn gitlab_live_single_mr_snapshot() {
         ..FetchOptions::new(db.clone())
     };
     let r = gitlab::fetch(opts).await;
+    // Seal what `fetch` wrote before anything reads it, the way the
+    // download step's `RawStoreSession::finish` does. `fetch` writes rows
+    // but commits nothing, and the render-side loader below reads at a
+    // pinned commit — so without this it sees an empty store.
+    let sealed = datalib_etl::doltlite_raw::commit_run(db.pool(), "gitlab_live: download").await;
     db.close().await;
     r.expect("gitlab fetch failed");
+    sealed.expect("seal the raw store");
 
     let parsed = parse_api_dir(&tmp, None).expect("parse_api_dir");
     assert_eq!(parsed.merge_requests.len(), 1, "expected exactly one MR");

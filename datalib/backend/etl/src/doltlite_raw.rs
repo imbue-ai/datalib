@@ -367,16 +367,16 @@ async fn open_inner(
     // so the runner content-hashes instead, and `pin::head` returns `None`
     // so every render skips. A whole pipeline that does nothing and reports
     // success. This is the first place that would notice, so it does.
-    let committed: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM pragma_module_list WHERE name LIKE 'dolt_at_%'")
-            .fetch_one(&pool)
-            .await
-            .unwrap_or(0);
+    //
+    // Same predicate the reader uses, not a second copy of it: a store this
+    // says is fine and `pin::head` then refuses would be the worst of both.
+    // A store with no tables at all passes -- nothing creates a view over
+    // it, and a read fails loudly by itself.
     anyhow::ensure!(
-        committed > 0,
-        "opened {} but no table is committed: either the schema commit did \
-         not take, or this binary is not linked against doltlite. A reader \
-         cannot tell either from a source that lost every row.",
+        crate::pin::carries_committed_schema(&pool).await,
+        "opened {} but its tables are not committed: either the schema \
+         commit did not take, or this binary is not linked against doltlite. \
+         A reader cannot tell either from a source that lost every row.",
         db_path.display()
     );
     tracing::info!(
