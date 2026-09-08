@@ -105,12 +105,22 @@ pub fn render_all(
                 let h = tokio::runtime::Handle::current();
                 h.block_on(datalib_etl::doltlite_raw::open_reader(&db_path))
             })?;
+            // Its own pool, so its own pin: this asks which chats are gone at
+            // a commit, not in whatever the writer is part-way through.
             let gone = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(doltlite_raw::buckets_without_rows(
-                    &pool,
-                    set,
-                    &[("wa_chat", "chat_jid")],
-                ))
+                tokio::runtime::Handle::current().block_on(async {
+                    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+                        return Ok::<_, anyhow::Error>(Vec::new());
+                    };
+                    datalib_etl::pin::install_views(&pool, &pin).await?;
+                    doltlite_raw::buckets_without_rows(
+                        &pool,
+                        datalib_etl::pin::Reads::At(&pin),
+                        set,
+                        &[("wa_chat", "chat_jid")],
+                    )
+                    .await
+                })
             })?;
             for jid in &gone {
                 on_chat_gone(jid)?;

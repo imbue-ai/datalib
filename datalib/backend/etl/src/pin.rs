@@ -75,6 +75,37 @@ impl Pin {
     }
 }
 
+/// Whose store a read is against.
+///
+/// The helpers that build a query around a table name — `load_payloads` and
+/// friends — are used from both sides of a store: the download step reads the
+/// store it is writing, and render reads somebody else's. Those want opposite
+/// things. The owner wants its own working set, which is the whole point of
+/// having one. Everyone else must read committed state, or they see rows the
+/// writer has not finished with.
+///
+/// A regex cannot tell those apart at the call site, and a default would pick
+/// one of them silently. So the parameter is mandatory: every caller answers
+/// the question, and `Own` is greppable when you want to audit the answers.
+#[derive(Debug, Clone, Copy)]
+pub enum Reads<'a> {
+    /// This process owns the store and is reading what it wrote.
+    Own,
+    /// Somebody else owns it: read at `pin`, through the views
+    /// [`install_views`] created.
+    At(&'a Pin),
+}
+
+impl Reads<'_> {
+    /// The name this read should use for `table`.
+    pub fn table(&self, table: &str) -> String {
+        match self {
+            Reads::Own => table.to_string(),
+            Reads::At(_) => format!("{VIEW_PREFIX}{table}"),
+        }
+    }
+}
+
 /// The commit this store is at now, or `None` when it has no commits.
 ///
 /// For a consumer driven by [`crate::doltlite_raw::scan_buckets`], prefer the

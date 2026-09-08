@@ -1087,6 +1087,7 @@ pub struct DiffScanSpec<'a> {
 /// Table and column names are interpolated; callers pass trusted identifiers.
 pub async fn buckets_without_rows(
     pool: &sqlx::SqlitePool,
+    reads: crate::pin::Reads<'_>,
     bucket_ids: &std::collections::HashSet<String>,
     id_columns: &[(&str, &str)],
 ) -> Result<Vec<String>> {
@@ -1097,6 +1098,7 @@ pub async fn buckets_without_rows(
     let ids: Vec<&String> = bucket_ids.iter().collect();
     for (table, column) in id_columns {
         for chunk in ids.chunks(crate::bulk::SQL_CHUNK) {
+            let table = reads.table(table);
             let mut sql = format!("SELECT DISTINCT {column} FROM {table} WHERE {column} IN (");
             crate::bulk::push_placeholder_list(&mut sql, chunk.len());
             sql.push(')');
@@ -1276,9 +1278,14 @@ pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
+pub async fn load_payloads(
+    pool: &SqlitePool,
+    reads: crate::pin::Reads<'_>,
+    table: &str,
+) -> Result<Vec<Value>> {
     // `json(payload)` so we get text back whether the column holds a JSONB
     // blob or a JSON text literal.
+    let table = reads.table(table);
     let sql = format!(
         "SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
     );
@@ -1299,7 +1306,12 @@ pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>>
     Ok(out)
 }
 
-pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec<(String, Value)>> {
+pub async fn load_payloads_with_id(
+    pool: &SqlitePool,
+    reads: crate::pin::Reads<'_>,
+    table: &str,
+) -> Result<Vec<(String, Value)>> {
+    let table = reads.table(table);
     let sql = format!(
         "SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
     );

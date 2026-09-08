@@ -427,7 +427,7 @@ impl RawDb {
     }
 
     pub async fn load_pages(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, "pages").await
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "pages").await
     }
 
     /// Child pages linked from `page_id`'s stored body.
@@ -662,9 +662,13 @@ pub fn block_on_load_all(db_path: &Path, last_render_hash: Option<&str>) -> Resu
                 // may simply be one whose body never arrived.
                 let (vanished_pages, vanished_discussions) = match scan.changed_buckets.as_ref() {
                     Some(changed) => {
-                        let pages =
-                            dr::buckets_without_rows(db.pool(), changed, &[("pages", "id")])
-                                .await?;
+                        let pages = dr::buckets_without_rows(
+                            db.pool(),
+                            datalib_etl::pin::Reads::At(&pin),
+                            changed,
+                            &[("pages", "id")],
+                        )
+                        .await?;
                         let touched = scan_touched_discussions(
                             db.pool(),
                             last.as_deref(),
@@ -673,6 +677,7 @@ pub fn block_on_load_all(db_path: &Path, last_render_hash: Option<&str>) -> Resu
                         .await?;
                         let discussions = dr::buckets_without_rows(
                             db.pool(),
+                            datalib_etl::pin::Reads::At(&pin),
                             &touched,
                             &[("comments", "discussion_id")],
                         )

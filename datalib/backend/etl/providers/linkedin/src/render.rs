@@ -62,11 +62,23 @@ pub fn render(
     let by_table = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open_reader(&db_path).await?;
+            // Read at a commit: this store belongs to the download step, and
+            // nothing committed means nothing to render from.
+            let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+                db.close().await;
+                return Ok(Default::default());
+            };
+            datalib_etl::pin::install_views(db.pool(), &pin).await?;
             let mut loaded = Vec::new();
             for table in message_tables() {
                 // A feed the user didn't export has no table; treat a
                 // load error as "absent" rather than failing the render.
-                loaded.push((table, db.load_payloads(table).await.unwrap_or_default()));
+                loaded.push((
+                    table,
+                    db.load_payloads(datalib_etl::pin::Reads::At(&pin), table)
+                        .await
+                        .unwrap_or_default(),
+                ));
             }
             db.close().await;
             Ok::<_, anyhow::Error>(loaded)

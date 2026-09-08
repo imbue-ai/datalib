@@ -105,11 +105,11 @@ impl RawDb {
     /// The `orgs` rows we already have, as raw payloads — what a warm
     /// [`Self::sweep_age`] hit serves instead of re-listing upstream.
     pub async fn load_orgs(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, "orgs").await
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "orgs").await
     }
 
     pub async fn load_users(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, "users").await
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "users").await
     }
 
     pub async fn first_user_uuid(&self) -> Result<Option<String>> {

@@ -207,6 +207,7 @@ async fn read_everything(
         Some(changed) => {
             datalib_etl::doltlite_raw::buckets_without_rows(
                 db.pool(),
+                datalib_etl::pin::Reads::At(pin),
                 changed,
                 &[("merge_requests", "id")],
             )

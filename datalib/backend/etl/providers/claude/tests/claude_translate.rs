@@ -30,6 +30,20 @@ async fn parses_tng_api_fixture() {
     })
     .await
     .expect("ingest");
+    // Commit what the ingest wrote, the way the processor's `RawStoreSession`
+    // does in production: render reads committed state only.
+    {
+        let db = datalib_etl::doltlite_raw::open(
+            &datalib_etl_claude::download::db::db_path_for(raw.path()),
+            &[],
+        )
+        .await
+        .expect("open to commit");
+        datalib_etl::doltlite_raw::commit_run(&db, "test: claude ingest")
+            .await
+            .expect("commit the ingest");
+        db.close().await;
+    }
     let parsed = parse(raw.path(), None).expect("parse");
 
     assert!(!parsed.accounts.is_empty(), "expected accounts");
