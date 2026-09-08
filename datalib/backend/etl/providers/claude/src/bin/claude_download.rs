@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use datalib_etl_claude::download::{self as claude, FetchOptions, DEFAULT_OVERLAP, SLEEP_BETWEEN};
+use datalib_etl_claude::download::{
+    self as claude, db_path_for, FetchOptions, RawDb, DEFAULT_OVERLAP, SLEEP_BETWEEN,
+};
 use datalib_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
 
@@ -71,6 +73,9 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "claude-download")?;
 
+    // The one writer: this process opens the store, hands the handle to
+    // `fetch`, and closes it below.
+    let db = RawDb::open(&db_path_for(&args.out)).await?;
     let opts = FetchOptions {
         db_path: args.out.clone(),
         export_dir: args.export_dir.clone(),
@@ -80,11 +85,13 @@ async fn main() -> Result<()> {
         conv_uuids: args.conv_uuids.clone(),
         projects: !args.no_projects,
         project_uuids: args.project_uuids.clone(),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     };
 
     let span = info_span!("claude_download", out = %args.out.display());
-    let summary = claude::fetch(opts).instrument(span).await?;
+    let summary = claude::fetch(opts).instrument(span).await;
+    db.close().await;
+    let summary = summary?;
     info!(
         event = "claude_download_complete",
         total = summary.total,

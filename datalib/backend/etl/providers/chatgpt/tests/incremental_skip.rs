@@ -6,7 +6,7 @@ use std::time::Duration;
 use chrono::DateTime;
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_chatgpt::download::{fetch, FetchOptions};
+use datalib_etl_chatgpt::download::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -32,17 +32,21 @@ async fn run_fetch_since(
     out_db: &std::path::Path,
     since: Option<&str>,
 ) -> datalib_etl_chatgpt::download::FetchSummary {
-    fetch(FetchOptions {
+    // Open here and close before the store is read back: a second
+    // live connection to one file makes a `dolt_commit` fail.
+    let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
+    let s = fetch(FetchOptions {
         db_path: out_db.to_path_buf(),
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,
         since: since.map(String::from),
         conv_uuids: Vec::new(),
-        ..Default::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap()
+    .await;
+    db.close().await;
+    s.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -35,7 +35,11 @@ const FLUSH_BATCH: usize = 200;
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
     pub db_path: PathBuf,
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     pub config: EmailGmailApi,
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block. `google-gmail` routinely holds
@@ -50,11 +54,13 @@ pub struct FetchOptions {
     pub control: DownloadControl,
 }
 
-impl Default for FetchOptions {
-    fn default() -> Self {
+impl FetchOptions {
+    /// Every field defaulted except the store, which has none to give:
+    /// it is a live handle the caller opens and closes.
+    pub fn new(db: RawDb) -> Self {
         Self {
             db_path: PathBuf::new(),
-            db: None,
+            db,
             config: EmailGmailApi::default(),
             latchkey: LatchkeySettings::default(),
             only_labels: Vec::new(),
@@ -92,10 +98,7 @@ fn state_scope(account_id: &str) -> String {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&super::db::db_path_for(&opts.db_path)).await?,
-    };
+    let db = opts.db.clone();
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }

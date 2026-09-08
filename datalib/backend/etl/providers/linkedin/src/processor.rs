@@ -68,7 +68,7 @@ impl DataProcessor for LinkedinDownload {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
-            db: Some(db),
+            db,
             input_path: self.input_path.clone(),
             fetch_photos: self.fetch_photos,
             // Piggyback the shared give-up knob: stop the photo sweep after

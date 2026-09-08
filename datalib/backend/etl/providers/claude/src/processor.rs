@@ -89,10 +89,19 @@ impl DataProcessor for ClaudeDownload {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = download::db_path_for(&self.raw_path);
         let db = download::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
+        // The CAS goes in too. claude stores attachment bytes in a sibling
+        // file, so a checkpoint that sealed only the entities store would
+        // publish a message naming blobs no reader can resolve yet.
+        let session = datalib_etl::raw_store::RawStoreSession::open_with_blobs(
+            db.pool().clone(),
+            Some(db.cas().pool().clone()),
+            entity_db,
+            ctx,
+        )
+        .await;
         let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
-            db: Some(db),
+            db,
             latchkey: self.latchkey.clone(),
             // users.json is expected alongside the raw store (playback seeds it).
             export_dir: Some(self.raw_path.clone()),
@@ -108,6 +117,7 @@ impl DataProcessor for ClaudeDownload {
             project_uuids: self.sync.project_uuids.clone(),
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
+            sealer: Some(session.sealer()),
         })
         .await?;
         let summary = format!(
@@ -153,7 +163,7 @@ impl DataProcessor for ClaudeExportIngest {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::export::ingest(download::export::IngestOptions {
             db_path: self.raw_path.clone(),
-            db: Some(db),
+            db,
             input_path: self.input_path.clone(),
             // The run-pinned `now`, so every bookkeeping stamp this
             // ingest writes agrees with the rest of the run.

@@ -119,6 +119,13 @@ mod tests {
         }])
         .await
         .unwrap();
+        // Sealed before render reads it, exactly as the download step does:
+        // render pins HEAD, so an uncommitted row is invisible to it. Without
+        // this the test asserts against the working set, which is the bug the
+        // pinning work exists to remove.
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test fixture")
+            .await
+            .unwrap();
         // Closed, not dropped: `parse_api_dir` reopens this store.
         db.close().await;
 
@@ -144,6 +151,13 @@ mod tests {
         }])
         .await
         .unwrap();
+        // Sealed before render reads it, exactly as the download step does:
+        // render pins HEAD, so an uncommitted row is invisible to it. Without
+        // this the test asserts against the working set, which is the bug the
+        // pinning work exists to remove.
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test fixture")
+            .await
+            .unwrap();
         // Closed, not dropped: `parse_api_dir` reopens this store.
         db.close().await;
         let parsed = parse_api_dir(&db_file, None).unwrap();

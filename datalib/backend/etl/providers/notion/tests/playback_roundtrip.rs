@@ -109,10 +109,9 @@ async fn notion_synth_playback_extract_roundtrip() {
     let out = RawDb::open(&out_db).await.unwrap();
     let summary = fetch(FetchOptions {
         db_path: out_db.clone(),
-        db: Some(out.clone()),
         subtree_pages: vec![pid.to_string()],
         sleep_between: Duration::ZERO,
-        ..FetchOptions::default()
+        ..FetchOptions::new(out.clone())
     })
     .await
     .unwrap();

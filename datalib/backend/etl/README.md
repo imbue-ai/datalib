@@ -86,27 +86,52 @@ branch would silently start writing to `main` after 30 minutes and report
 success — and multi-million-entry scans reach that window.
 
 Any other code opening a `SqlitePool` against a `.doltlite_db` must do the
-same — and one pool, not two. Size 1 is necessary, not sufficient: a store
-guards itself with a lock it never waits on, so whichever connection is
-holding it makes the other one's `dolt_commit` fail. The message that comes
-back, `commit conflict: another connection committed to this branch`, names
-a commit that need not have happened; read it as "someone else has this
-store open right now".
+same — and one pool, not two. Size 1 is necessary, not sufficient. A second
+pool shares the first's working set, so an `-Am` commit through either
+sweeps up whatever the other has in flight; and while the two are actually
+mid-write they contend for a lock `dolt_commit` takes without waiting, so
+one of them fails with `commit conflict: another connection committed to
+this branch`. The message names a commit that need not have happened; read
+it as "someone else is writing this store right now".
 
-That makes a second pool a timing bug rather than an immediate one, and a
-pool you dropped is not yet a pool that is gone: sqlx closes its connections
-on a background task, so a store reopened right after the previous handle
-went out of scope can still find the old connection there.
+An idle peer costs neither of those —
+`//datalib/backend/etl:doltlite_two_process_test` measures a second
+read-write open landing in ~2ms with both pools then committing — which is
+what makes a second pool a timing bug rather than an immediate one. And a
+pool you dropped is not yet a pool that is gone: sqlx closes its
+connections on a background task, so a store reopened right after the
+previous handle went out of scope can still find the old connection
+there.
 
 So there are two ways to be right, and dropping a handle is neither. Hold
-one handle for as long as the store is in use — that is what `fetch`'s
-`db: Option<RawDb>` is for, and a caller that also wants to read the store
-afterwards should pass its own handle in. Or, where a fresh connection is
-the point — proving a cursor survived the pool that wrote it, or mirroring
-a binary that opens the store per run — `await` a `close()` before the next
-`open`. Every `RawDb` that a caller reopens has one; it closes the blob CAS
+one handle for as long as the store is in use. Or, where a fresh connection
+is the point — proving a cursor survived the pool that wrote it, or
+mirroring a binary that opens the store per run — `await` a `close()`
+before the next `open`. Every `RawDb` has one; it closes the blob CAS
 alongside the entity pool, which the older `db.pool().clone()` /
 `pool.close()` idiom silently left open.
+
+### A download takes the store; it never opens one
+
+Every provider's `FetchOptions` carries `pub db: RawDb` — a live handle,
+not a path and not an `Option`. **Whoever opens a store closes it**, and
+for a download that is always the caller: the step's processor, the
+provider's `*_download` binary, or the test. `fetch` borrows it for the
+run and returns.
+
+The rule is there because the alternative was tried. `db` used to be
+`Option<RawDb>`, and `fetch` opened its own store when the caller passed
+`None`. That pool was never closed, so a caller which then read the store
+back — every download test does — had two live connections on one file,
+and one of the two `dolt_commit`s could fail. Because sqlx closes
+connections on a background task, whether the two actually collided came
+down to timing: green on a quiet laptop, intermittently red on a loaded CI
+runner, always at `commit schema after DDL` inside the second `open`.
+
+`scripts/lint_repo.py`'s check 6 keeps the field non-optional, and
+`two_live_pools_on_one_store_break_each_others_commits` in
+`doltlite_raw.rs` pins the underlying behavior: two pools committing in
+lockstep on one store, and one of them gets `commit conflict`.
 
 ## Schema self-healing, and why the DDL runs in two passes
 

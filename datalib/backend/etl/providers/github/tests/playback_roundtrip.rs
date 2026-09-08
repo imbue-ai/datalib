@@ -8,7 +8,7 @@ use datalib_etl::event_store::{diff_and_save, make_record};
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_github::download::{
-    block_on_load_all, db_path_for, fetch, FetchOptions, ENTITY_ISSUE_COMMENT, ENTITY_PR,
+    block_on_load_all, db_path_for, fetch, FetchOptions, RawDb, ENTITY_ISSUE_COMMENT, ENTITY_PR,
     ENTITY_PR_REVIEW, ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF,
 };
 use datalib_etl_github::synthesize::GithubSynth;
@@ -79,15 +79,19 @@ async fn github_synth_playback_extract_roundtrip() {
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
+    // The test owns the store: one connection for the download and the
+    // assertions both, because two is what breaks a doltlite file.
+    let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         db_path: out_db.clone(),
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
-        ..FetchOptions::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap();
+    .await;
+    db.close().await;
+    let summary = summary.unwrap();
     assert_eq!(summary.new_prs, 1);
     assert_eq!(summary.new_issue_comments, 1);
     assert_eq!(summary.new_reviews, 1);

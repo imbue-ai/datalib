@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
-use super::db::{db_path_for, EmailRow, RawDb};
+use super::db::{EmailRow, RawDb};
 use super::envelope::{self, header_text, strip_angle};
 use super::labels::{mailbox_id, map_label, split_gmail_labels, LabelMap};
 use super::schema_raw::{AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow};
@@ -46,9 +46,11 @@ pub struct MboxAccountConfig {
 pub struct FetchOptions {
     /// Doltlite database path. Ignored when `db` is `Some`.
     pub db_path: PathBuf,
-    /// Pre-opened raw DB (sync orchestrator populates this so the
-    /// post-download commit hits the same pool).
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     /// `.mbox` file (or directory containing `*.mbox` files).
     pub input_path: PathBuf,
     /// Host-wide fingerprint cache — the shared answer to "did this
@@ -75,13 +77,14 @@ pub struct FetchOptions {
 }
 
 impl FetchOptions {
-    /// Every field defaulted except the fingerprint cache, which has
-    /// none to give: it is a handle to a real file on this host.
-    pub fn new(cache: FingerprintCache) -> Self {
+    /// Every field defaulted except the two live handles, which have
+    /// none to give: the store the caller opens and closes, and this
+    /// host's fingerprint cache.
+    pub fn new(db: RawDb, cache: FingerprintCache) -> Self {
         Self {
             cache,
             db_path: PathBuf::new(),
-            db: None,
+            db,
             input_path: PathBuf::new(),
             account_id_override: None,
             account_config: MboxAccountConfig::default(),
@@ -117,20 +120,39 @@ const K_ONLY_LABELS: &str = "only_extract_labels";
 const K_BLOB_CAP: &str = "blob_size_limit_bytes";
 const K_ACCOUNT: &str = "account";
 
-fn scope_config_blob(opts: &FetchOptions) -> Value {
+/// The config knobs a stored scope record is compared against. Split
+/// out of [`FetchOptions`] so the comparison can be exercised without a
+/// live store handle.
+struct ScopeInputs<'a> {
+    only_labels: &'a [String],
+    blob_size_limit_bytes: Option<u64>,
+    account_config: &'a MboxAccountConfig,
+}
+
+impl FetchOptions {
+    fn scope_inputs(&self) -> ScopeInputs<'_> {
+        ScopeInputs {
+            only_labels: &self.only_labels,
+            blob_size_limit_bytes: self.blob_size_limit_bytes,
+            account_config: &self.account_config,
+        }
+    }
+}
+
+fn scope_config_blob(inputs: &ScopeInputs<'_>) -> Value {
     // Sorted so a reordered config list isn't mistaken for a change.
-    let mut labels: Vec<&str> = opts.only_labels.iter().map(String::as_str).collect();
+    let mut labels: Vec<&str> = inputs.only_labels.iter().map(String::as_str).collect();
     labels.sort_unstable();
     json!({
         K_ONLY_LABELS: labels,
-        K_BLOB_CAP: opts.blob_size_limit_bytes,
+        K_BLOB_CAP: inputs.blob_size_limit_bytes,
         // The account row is derived wholly from these, so comparing the
         // rendered values is exactly right.
         K_ACCOUNT: {
-            "account_id": opts.account_config.account_id,
-            "display_name": opts.account_config.display_name,
-            "email_address": opts.account_config.email_address,
-            "is_personal": opts.account_config.is_personal,
+            "account_id": inputs.account_config.account_id,
+            "display_name": inputs.account_config.display_name,
+            "email_address": inputs.account_config.email_address,
+            "is_personal": inputs.account_config.is_personal,
         },
     })
 }
@@ -145,7 +167,7 @@ struct Adjustments {
 }
 
 impl Adjustments {
-    fn plan(prior: Option<&Value>, opts: &FetchOptions) -> Self {
+    fn plan(prior: Option<&Value>, inputs: &ScopeInputs<'_>) -> Self {
         let mut out = Self::default();
         let Some(prior) = prior else {
             // Every store predating this record. Adopt, do nothing.
@@ -156,7 +178,7 @@ impl Adjustments {
         match datalib_etl::scope_config::filter_widened(
             Some(prior),
             K_ONLY_LABELS,
-            &opts.only_labels,
+            inputs.only_labels,
         ) {
             FilterChange::Unchanged => {}
             FilterChange::WidenedToAll => {
@@ -180,17 +202,17 @@ impl Adjustments {
         if datalib_etl::scope_config::limit_relaxed(
             Some(prior),
             K_BLOB_CAP,
-            opts.blob_size_limit_bytes,
+            inputs.blob_size_limit_bytes,
         ) {
             out.reingest_files = true;
             info!(
                 event = "mbox_blob_limit_relaxed",
-                limit = ?opts.blob_size_limit_bytes,
+                limit = ?inputs.blob_size_limit_bytes,
                 "re-reading mbox files for previously-oversize attachments",
             );
         }
 
-        let cur_account = scope_config_blob(opts);
+        let cur_account = scope_config_blob(inputs);
         if prior.get(K_ACCOUNT) != cur_account.get(K_ACCOUNT) {
             // Deliberately does NOT set `reingest_files`: the account row
             // is written by `flush_account_and_lookups`, which doesn't
@@ -207,10 +229,7 @@ impl Adjustments {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&db_path_for(&opts.input_path)).await?,
-    };
+    let db = opts.db.clone();
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }
@@ -240,10 +259,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     // Diff the scope-affecting params against the ones that produced the
     // current checkpoints.
-    let scope_cfg = scope_config_blob(&opts);
+    let scope_cfg = scope_config_blob(&opts.scope_inputs());
     let prior_scope_cfg =
         datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
-    let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts);
+    let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts.scope_inputs());
 
     let known_blobs = db.loaded_blob_ids().await?;
 
@@ -1087,19 +1106,17 @@ mod tests {
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
         let db = RawDb::open(&db_path).await.unwrap();
-        let pool = db.pool().clone();
         let summary = fetch(FetchOptions {
             db_path: db_path.clone(),
-            db: Some(db),
             input_path: path,
-            ..FetchOptions::new(test_cache().await)
+            ..FetchOptions::new(db.clone(), test_cache().await)
         })
         .await
         .unwrap();
-        // Close the writer pool before re-opening — doltlite has one
-        // writer per file; without an explicit close the second open
-        // races the writes-in-flight and sees an empty working tree.
-        pool.close().await;
+        // Close before re-opening — doltlite has one writer per file;
+        // without an explicit close the second open races the
+        // writes-in-flight and sees an empty working tree.
+        db.close().await;
         assert_eq!(summary.emails_upserted, 2);
         assert_eq!(summary.threads_upserted, 1);
         assert!(summary.mailboxes_upserted >= 2); // Inbox + Sent
@@ -1145,17 +1162,15 @@ mod tests {
         let mut summaries: Vec<FetchSummary> = Vec::new();
         for _ in 0..2 {
             let db = RawDb::open(&db_path).await.unwrap();
-            let pool = db.pool().clone();
             let s = fetch(FetchOptions {
                 db_path: db_path.clone(),
-                db: Some(db),
                 input_path: path.clone(),
-                ..FetchOptions::new(test_cache().await)
+                ..FetchOptions::new(db.clone(), test_cache().await)
             })
             .await
             .unwrap();
             summaries.push(s);
-            pool.close().await;
+            db.close().await;
         }
         let db = RawDb::open(&db_path).await.unwrap();
         assert_eq!(db.load_emails().await.unwrap().len(), 2);
@@ -1182,18 +1197,23 @@ mod tests {
         assert_eq!(stamped, 1);
     }
 
-    async fn run_once(db_path: &Path, path: &Path, opts: FetchOptions) -> FetchSummary {
+    /// `build` gets the store handle this run opens, and returns the
+    /// options for it. The handle is closed here, so no two runs
+    /// overlap on one file.
+    async fn run_once(
+        db_path: &Path,
+        path: &Path,
+        build: impl FnOnce(RawDb) -> FetchOptions,
+    ) -> FetchSummary {
         let db = RawDb::open(db_path).await.unwrap();
-        let pool = db.pool().clone();
         let s = fetch(FetchOptions {
             db_path: db_path.to_path_buf(),
-            db: Some(db),
             input_path: path.to_path_buf(),
-            ..opts
+            ..build(db.clone())
         })
         .await
         .unwrap();
-        pool.close().await;
+        db.close().await;
         s
     }
 
@@ -1206,30 +1226,23 @@ mod tests {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
 
         // Only the `Sent` message is in scope. (Msg two carries
         // `Inbox,Sent`; msg one carries `Inbox,Starred,Unread`.)
-        let first = run_once(
-            &db_path,
-            &path,
-            FetchOptions {
-                only_labels: vec!["Sent".into()],
-                ..FetchOptions::new(test_cache().await)
-            },
-        )
+        let first = run_once(&db_path, &path, |db| FetchOptions {
+            only_labels: vec!["Sent".into()],
+            ..FetchOptions::new(db, cache.clone())
+        })
         .await;
         assert_eq!(first.emails_upserted, 1, "only the Sent message");
 
         // Widen to include Inbox. The file is byte-identical, so the
         // (size, mtime) checkpoint alone would skip it forever.
-        let second = run_once(
-            &db_path,
-            &path,
-            FetchOptions {
-                only_labels: vec!["Sent".into(), "Inbox".into()],
-                ..FetchOptions::new(test_cache().await)
-            },
-        )
+        let second = run_once(&db_path, &path, |db| FetchOptions {
+            only_labels: vec!["Sent".into(), "Inbox".into()],
+            ..FetchOptions::new(db, cache.clone())
+        })
         .await;
         assert_eq!(
             second.emails_upserted, 2,
@@ -1245,16 +1258,13 @@ mod tests {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
 
-        run_once(&db_path, &path, FetchOptions::new(test_cache().await)).await;
-        let second = run_once(
-            &db_path,
-            &path,
-            FetchOptions {
-                only_labels: vec!["Sent".into()],
-                ..FetchOptions::new(test_cache().await)
-            },
-        )
+        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        let second = run_once(&db_path, &path, |db| FetchOptions {
+            only_labels: vec!["Sent".into()],
+            ..FetchOptions::new(db, cache.clone())
+        })
         .await;
         // The store is already a superset; re-reading would produce
         // nothing. This is the case a config *hash* would get wrong.
@@ -1274,21 +1284,18 @@ mod tests {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
 
-        run_once(&db_path, &path, FetchOptions::new(test_cache().await)).await;
+        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
 
-        let second = run_once(
-            &db_path,
-            &path,
-            FetchOptions {
-                account_config: MboxAccountConfig {
-                    display_name: Some("Work Gmail".into()),
-                    is_personal: Some(false),
-                    ..Default::default()
-                },
-                ..FetchOptions::new(test_cache().await)
+        let second = run_once(&db_path, &path, |db| FetchOptions {
+            account_config: MboxAccountConfig {
+                display_name: Some("Work Gmail".into()),
+                is_personal: Some(false),
+                ..Default::default()
             },
-        )
+            ..FetchOptions::new(db, cache.clone())
+        })
         .await;
         assert_eq!(
             second.emails_upserted, 0,
@@ -1309,13 +1316,13 @@ mod tests {
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
         let cache = test_cache().await;
-        let opts = || FetchOptions {
+        let opts = |db| FetchOptions {
             only_labels: vec!["Inbox".into()],
-            ..FetchOptions::new(cache.clone())
+            ..FetchOptions::new(db, cache.clone())
         };
-        assert_eq!(run_once(&db_path, &path, opts()).await.emails_upserted, 2);
-        assert_eq!(run_once(&db_path, &path, opts()).await.emails_upserted, 0);
-        assert_eq!(run_once(&db_path, &path, opts()).await.emails_upserted, 0);
+        assert_eq!(run_once(&db_path, &path, opts).await.emails_upserted, 2);
+        assert_eq!(run_once(&db_path, &path, opts).await.emails_upserted, 0);
+        assert_eq!(run_once(&db_path, &path, opts).await.emails_upserted, 0);
     }
 }
 
@@ -1324,12 +1331,29 @@ mod scope_config_tests {
     use super::*;
     use serde_json::json;
 
-    async fn opts(labels: &[&str], cap: Option<u64>, account: MboxAccountConfig) -> FetchOptions {
-        FetchOptions {
+    /// The knobs under test, with no store handle: these cases are
+    /// about the scope-record comparison, which never touches one.
+    struct Inputs {
+        only_labels: Vec<String>,
+        blob_size_limit_bytes: Option<u64>,
+        account_config: MboxAccountConfig,
+    }
+
+    impl Inputs {
+        fn as_scope(&self) -> ScopeInputs<'_> {
+            ScopeInputs {
+                only_labels: &self.only_labels,
+                blob_size_limit_bytes: self.blob_size_limit_bytes,
+                account_config: &self.account_config,
+            }
+        }
+    }
+
+    fn opts(labels: &[&str], cap: Option<u64>, account: MboxAccountConfig) -> Inputs {
+        Inputs {
             only_labels: labels.iter().map(|s| s.to_string()).collect(),
             blob_size_limit_bytes: cap,
             account_config: account,
-            ..FetchOptions::new(test_cache().await)
         }
     }
 
@@ -1344,21 +1368,24 @@ mod scope_config_tests {
     async fn absent_record_plans_nothing() {
         // Every mbox store predating this record. Must not re-read a
         // multi-gigabyte export on upgrade.
-        let o = opts(&["Sent"], Some(1000), named(None)).await;
+        let o_owned = opts(&["Sent"], Some(1000), named(None));
+        let o = o_owned.as_scope();
         assert_eq!(Adjustments::plan(None, &o), Adjustments::default());
     }
 
     #[tokio::test]
     async fn unchanged_config_plans_nothing() {
-        let o = opts(&["Sent"], Some(1000), named(Some("Work"))).await;
+        let o_owned = opts(&["Sent"], Some(1000), named(Some("Work")));
+        let o = o_owned.as_scope();
         let prior = scope_config_blob(&o);
         assert_eq!(Adjustments::plan(Some(&prior), &o), Adjustments::default());
     }
 
     #[tokio::test]
     async fn label_order_is_not_a_change() {
-        let prior = scope_config_blob(&opts(&["Sent", "Inbox"], None, named(None)).await);
-        let o = opts(&["Inbox", "Sent"], None, named(None)).await;
+        let prior = scope_config_blob(&opts(&["Sent", "Inbox"], None, named(None)).as_scope());
+        let o_owned = opts(&["Inbox", "Sent"], None, named(None));
+        let o = o_owned.as_scope();
         assert_eq!(Adjustments::plan(Some(&prior), &o), Adjustments::default());
     }
 
@@ -1366,10 +1393,10 @@ mod scope_config_tests {
 
     #[tokio::test]
     async fn widened_labels_reingest_files() {
-        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).await);
+        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).as_scope());
         let plan = Adjustments::plan(
             Some(&prior),
-            &opts(&["Sent", "Inbox"], None, named(None)).await,
+            &opts(&["Sent", "Inbox"], None, named(None)).as_scope(),
         );
         assert!(plan.reingest_files);
         assert!(!plan.refresh_account);
@@ -1380,8 +1407,8 @@ mod scope_config_tests {
         // `[]` means "no filter", so it is the *widest* setting: moving
         // to `["Sent"]` shrinks scope even though the list grew. Caught
         // by `narrowing_labels_does_not_reingest` before this existed.
-        let prior = scope_config_blob(&opts(&[], None, named(None)).await);
-        let plan = Adjustments::plan(Some(&prior), &opts(&["Sent"], None, named(None)).await);
+        let prior = scope_config_blob(&opts(&[], None, named(None)).as_scope());
+        let plan = Adjustments::plan(Some(&prior), &opts(&["Sent"], None, named(None)).as_scope());
         assert_eq!(plan, Adjustments::default());
     }
 
@@ -1389,9 +1416,10 @@ mod scope_config_tests {
     async fn removing_the_filter_reingests() {
         // The mirror image: dropping to `[]` admits every label, and the
         // naive set-difference reading would see no addition at all.
-        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).await);
+        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).as_scope());
         assert!(
-            Adjustments::plan(Some(&prior), &opts(&[], None, named(None)).await).reingest_files
+            Adjustments::plan(Some(&prior), &opts(&[], None, named(None)).as_scope())
+                .reingest_files
         );
     }
 
@@ -1399,27 +1427,28 @@ mod scope_config_tests {
     async fn narrowed_labels_are_a_noop() {
         // The store is already a superset. A hash-based record would
         // re-read the whole export here and produce nothing.
-        let prior = scope_config_blob(&opts(&["Sent", "Inbox"], None, named(None)).await);
-        let plan = Adjustments::plan(Some(&prior), &opts(&["Sent"], None, named(None)).await);
+        let prior = scope_config_blob(&opts(&["Sent", "Inbox"], None, named(None)).as_scope());
+        let plan = Adjustments::plan(Some(&prior), &opts(&["Sent"], None, named(None)).as_scope());
         assert_eq!(plan, Adjustments::default());
     }
 
     #[tokio::test]
     async fn relaxed_blob_cap_reingests_files() {
-        let prior = scope_config_blob(&opts(&[], Some(1000), named(None)).await);
+        let prior = scope_config_blob(&opts(&[], Some(1000), named(None)).as_scope());
         assert!(
-            Adjustments::plan(Some(&prior), &opts(&[], Some(5000), named(None)).await)
+            Adjustments::plan(Some(&prior), &opts(&[], Some(5000), named(None)).as_scope())
                 .reingest_files
         );
         assert!(
-            Adjustments::plan(Some(&prior), &opts(&[], None, named(None)).await).reingest_files
+            Adjustments::plan(Some(&prior), &opts(&[], None, named(None)).as_scope())
+                .reingest_files
         );
     }
 
     #[tokio::test]
     async fn tightened_blob_cap_is_a_noop() {
-        let prior = scope_config_blob(&opts(&[], Some(5000), named(None)).await);
-        let plan = Adjustments::plan(Some(&prior), &opts(&[], Some(1000), named(None)).await);
+        let prior = scope_config_blob(&opts(&[], Some(5000), named(None)).as_scope());
+        let plan = Adjustments::plan(Some(&prior), &opts(&[], Some(1000), named(None)).as_scope());
         assert_eq!(plan, Adjustments::default());
     }
 
@@ -1430,10 +1459,10 @@ mod scope_config_tests {
         // The account row is written by `flush_account_and_lookups`,
         // which never reads a message — so this must cost one UPSERT,
         // not a re-read of the whole export.
-        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).await);
+        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).as_scope());
         let plan = Adjustments::plan(
             Some(&prior),
-            &opts(&["Sent"], None, named(Some("Work"))).await,
+            &opts(&["Sent"], None, named(Some("Work"))).as_scope(),
         );
         assert!(plan.refresh_account);
         assert!(
@@ -1444,10 +1473,10 @@ mod scope_config_tests {
 
     #[tokio::test]
     async fn account_and_labels_can_both_move() {
-        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).await);
+        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).as_scope());
         let plan = Adjustments::plan(
             Some(&prior),
-            &opts(&["Sent", "Inbox"], None, named(Some("Work"))).await,
+            &opts(&["Sent", "Inbox"], None, named(Some("Work"))).as_scope(),
         );
         assert!(plan.reingest_files);
         assert!(plan.refresh_account);
@@ -1455,7 +1484,7 @@ mod scope_config_tests {
 
     #[tokio::test]
     async fn blob_shape_is_the_scope_affecting_subset() {
-        let obj = scope_config_blob(&opts(&["Sent"], Some(7), named(Some("Work"))).await);
+        let obj = scope_config_blob(&opts(&["Sent"], Some(7), named(Some("Work"))).as_scope());
         let obj = obj.as_object().unwrap();
         assert_eq!(obj.len(), 3, "unexpected keys: {obj:?}");
         assert_eq!(obj[K_ONLY_LABELS], json!(["Sent"]));

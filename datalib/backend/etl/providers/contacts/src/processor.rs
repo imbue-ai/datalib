@@ -98,7 +98,7 @@ impl DataProcessor for CarddavDownload {
             DownloadMode::Server(sync) => {
                 let s = download::fetch(download::FetchOptions {
                     db_path: self.raw_path.clone(),
-                    db: Some(db),
+                    db,
                     server_url: sync.server_url.clone(),
                     addressbooks: sync.addressbooks.clone(),
                     latchkey: self.latchkey.clone(),
@@ -122,7 +122,7 @@ impl DataProcessor for CarddavDownload {
             } => {
                 let s = download::vcf_dir::fetch(download::vcf_dir::FetchOptions {
                     db_path: self.raw_path.clone(),
-                    db: Some(db),
+                    db,
                     input_path: input_path.clone(),
                     cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
                         .await?,
@@ -168,6 +168,10 @@ impl DataProcessor for CarddavRender {
         let db_path = download::db_path_for(&self.raw_path);
         let parsed = parse::parse(&db_path)
             .with_context(|| format!("carddav parse {}", db_path.display()))?;
+        let Some(parsed) = parsed else {
+            // No store yet: nothing was walked, so the sweep must not run.
+            return Ok("no raw store yet".into());
+        };
 
         // This renderer walks the whole raw store every run, so the set it
         // considered is the complete one: anything else the render store
@@ -184,7 +188,9 @@ impl DataProcessor for CarddavRender {
             &mut seen,
         )
         .context("carddav render_all")?;
-        // `render_all` has no early return: reaching here means it walked.
+        // `render_all` itself has no early return, and the one bail above
+        // returned already — so reaching here means the store was there and
+        // this pass walked all of it.
         ctx.retain_documents(datalib_etl::processor::RenderPass::Walked, &seen);
         Ok("rendered".into())
     }

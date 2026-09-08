@@ -13,7 +13,7 @@ use datalib_etl::event_store::{diff_and_save, make_record};
 use datalib_etl::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
 use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_github::download::{
-    block_on_load_all, db_path_for, fetch, FetchOptions, ENTITY_ISSUE_COMMENT, ENTITY_PR,
+    block_on_load_all, db_path_for, fetch, FetchOptions, RawDb, ENTITY_ISSUE_COMMENT, ENTITY_PR,
     ENTITY_SELF,
 };
 use datalib_etl_github::synthesize::GithubSynth;
@@ -73,16 +73,19 @@ fn build_events(api: &Path, comment_ids: &[i64]) {
 }
 
 async fn run(out_db: &Path) -> usize {
-    fetch(FetchOptions {
+    // The test owns the store: one connection for the download and the
+    // assertions both, because two is what breaks a doltlite file.
+    let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
+    let out = fetch(FetchOptions {
         db_path: out_db.to_path_buf(),
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
-        ..FetchOptions::default()
+        ..FetchOptions::new(db.clone())
     })
-    .await
-    .unwrap()
-    .pruned
+    .await;
+    db.close().await;
+    out.unwrap().pruned
 }
 
 fn stored_comment_ids(out_db: &Path) -> Vec<i64> {

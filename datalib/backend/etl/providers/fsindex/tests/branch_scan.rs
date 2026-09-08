@@ -15,6 +15,7 @@ fn write(root: &Path, rel: &str, body: &str) {
 }
 
 fn opts(
+    db: &RawDb,
     db_path: &Path,
     root: &Path,
     id: &str,
@@ -23,7 +24,7 @@ fn opts(
 ) -> FetchOptions {
     FetchOptions {
         db_path: db_path.to_path_buf(),
-        db: None,
+        db: db.clone(),
         source_id: id.to_string(),
         root: root.to_path_buf(),
         target_doltlite_branch: branch.map(str::to_string),
@@ -48,8 +49,7 @@ async fn scan_and_commit(
     if let Some(branch) = branch {
         db.checkout_branch(branch).await.unwrap();
     }
-    let mut o = opts(db_path, root, id, branch, cache.clone());
-    o.db = Some(db.clone());
+    let o = opts(&db, db_path, root, id, branch, cache.clone());
     // `fetch` re-applies the checkout on the same pooled connection;
     // doing it here too matches the binary, which opens the db itself.
     download::fetch(o).await.unwrap();

@@ -39,12 +39,13 @@ pub struct FetchOptions {
     pub latchkey: LatchkeySettings,
     /// Path to the doltlite database file. The entity db lives inside
     /// the per-source directory as `entities.doltlite_db` (the dir is
-    /// created if needed). Ignored for opening when `db` is `Some`.
+    /// created if needed).
     pub db_path: PathBuf,
-    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
-    /// instead of opening from `db_path`. See the matching field on
-    /// the other providers' FetchOptions for rationale.
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     pub scopes: Vec<String>,
     pub refresh_window_days: u32,
     pub max_mrs: Option<usize>,
@@ -60,12 +61,14 @@ pub struct FetchOptions {
     pub control: datalib_etl::control::DownloadControl,
 }
 
-impl Default for FetchOptions {
-    fn default() -> Self {
+impl FetchOptions {
+    /// Every field defaulted except the store, which has none to give:
+    /// it is a live handle the caller opens and closes.
+    pub fn new(db: RawDb) -> Self {
         Self {
             latchkey: LatchkeySettings::default(),
             db_path: PathBuf::new(),
-            db: None,
+            db,
             scopes: DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect(),
             refresh_window_days: 30,
             max_mrs: None,
@@ -284,19 +287,13 @@ const SCOPE_CONFIG_KEY: &str = "gitlab:download";
 /// `max_mrs` / `targets` / `full_sync` are per-run knobs and one-off
 /// overrides, so recording them would make a smoke run read as a config
 /// change to the next real sync.
-fn scope_config_blob(opts: &FetchOptions) -> Value {
-    datalib_etl::scope_state::refresh_window_blob(opts.refresh_window_days)
+fn scope_config_blob(refresh_window_days: u32) -> Value {
+    datalib_etl::scope_state::refresh_window_blob(refresh_window_days)
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db_path = db_path_for(&opts.db_path);
     let _ = datalib_etl::latchkey::ensure_curl_dispatch();
-    let db = match opts.db.clone() {
-        Some(db) => db,
-        None => RawDb::open(&db_path)
-            .await
-            .with_context(|| format!("open raw db {}", db_path.display()))?,
-    };
+    let db = opts.db.clone();
     if opts.control.reset_and_redownload {
         tracing::info!(event = "gitlab_reset_and_redownload");
         db.reset().await.context("reset raw db before redownload")?;
@@ -317,7 +314,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // current cursors. `None` (fresh store, or one written before
     // `sync_scope_config` existed) means no adjustment — see the module
     // docs on `scope_config`.
-    let scope_cfg = scope_config_blob(&opts);
+    let scope_cfg = scope_config_blob(opts.refresh_window_days);
     let prior_scope_cfg =
         datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
 
@@ -486,23 +483,14 @@ mod scope_config_tests {
     use datalib_etl::scope_state::REFRESH_WINDOW_KEY;
     use serde_json::json;
 
-    fn opts(window: u32, targets: Vec<(String, u32)>) -> FetchOptions {
-        FetchOptions {
-            refresh_window_days: window,
-            targets,
-            ..Default::default()
-        }
-    }
-
     #[test]
     fn blob_records_only_the_refresh_window() {
         // Per-run budgets and one-off overrides must stay out: a
         // `--max-mrs 5` smoke run must not read as a config change to
         // the next real sync.
-        let mut o = opts(30, vec![]);
-        o.max_mrs = Some(5);
-        o.full_sync = true;
-        let blob = scope_config_blob(&o);
+        // `max_mrs` / `full_sync` are per-run overrides; only the
+        // window reaches the blob, so passing it alone is the point.
+        let blob = scope_config_blob(30);
         assert_eq!(blob, json!({ REFRESH_WINDOW_KEY: 30 }));
     }
 
@@ -511,7 +499,7 @@ mod scope_config_tests {
         // The blob this provider writes is the same shape
         // `since_for_scope` reads back — the pairing the whole scheme
         // depends on.
-        let blob = scope_config_blob(&opts(30, vec![]));
+        let blob = scope_config_blob(30);
         let mut state = std::collections::HashMap::new();
         state.insert("s".to_string(), "2026-06-01T00:00:00Z".to_string());
         // Unchanged window: cursor stands.

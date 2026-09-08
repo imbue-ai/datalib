@@ -116,6 +116,7 @@ rust_test(
     tags = [
         "external",  # talks to real provider APIs (slack, github, notion, …)
         "manual",
+        "no-remote-exec",
         "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
     ],
     deps = [

@@ -176,6 +176,9 @@ async fn main() -> Result<()> {
     if refetch_blobs {
         child_env.insert(subprocess::ENV_REFETCH_BLOBS.into(), "1".into());
     }
+    if let Some(cadence) = cfg.checkpoint_cadence {
+        child_env.insert(subprocess::ENV_CHECKPOINT_CADENCE.into(), cadence.encode());
+    }
 
     if !sync_only.is_empty() {
         let fringe = graph.fringe_ids();

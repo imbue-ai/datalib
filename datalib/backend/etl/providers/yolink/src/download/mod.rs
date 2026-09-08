@@ -154,6 +154,12 @@ impl RawDb {
         let pool = dr::open(db_path, &slices).await?;
         Ok(Self { pool })
     }
+    /// Wait for the connections to actually go away, so the store can be
+    /// reopened. Dropping the handle only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
@@ -193,7 +199,11 @@ async fn upsert_readings(pool: &SqlitePool, device: &str, readings: &[Reading]) 
 
 pub struct FetchOptions {
     pub db_path: PathBuf,
-    pub db: Option<RawDb>,
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: two live connections to
+    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
+    /// `datalib/backend/etl/README.md`.
+    pub db: RawDb,
     pub sync: YolinkSync,
     pub progress: Progress,
     pub control: DownloadControl,
@@ -217,9 +227,8 @@ const SCOPE_CONFIG_KEY: &str = "yolink:download";
 /// Blob key. Named so writer and reader can't drift.
 const K_DEVICE_STARTS: &str = "device_starts";
 
-fn scope_config_blob(opts: &FetchOptions) -> serde_json::Value {
-    let starts: std::collections::BTreeMap<&str, &str> = opts
-        .sync
+fn scope_config_blob(sync: &YolinkSync) -> serde_json::Value {
+    let starts: std::collections::BTreeMap<&str, &str> = sync
         .devices
         .iter()
         .map(|d| (d.name.as_str(), d.start.as_str()))
@@ -241,11 +250,8 @@ fn prior_start_for(prior: Option<&serde_json::Value>, name: &str) -> Option<Stri
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Built before `opts.db` is moved out below.
-    let scope_cfg = scope_config_blob(&opts);
-    let db = match opts.db {
-        Some(d) => d,
-        None => RawDb::open(&db_path_for(&opts.db_path)).await?,
-    };
+    let scope_cfg = scope_config_blob(&opts.sync);
+    let db = opts.db;
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }
@@ -630,23 +636,17 @@ mod scope_config_tests {
         }
     }
 
-    fn opts_with(devices: Vec<YolinkDevice>) -> FetchOptions {
-        FetchOptions {
-            db_path: std::path::PathBuf::new(),
-            db: None,
-            sync: YolinkSync {
-                overlap_minutes: None,
-                window_days: None,
-                devices,
-            },
-            progress: Progress::noop(),
-            control: DownloadControl::default(),
+    fn sync_with(devices: Vec<YolinkDevice>) -> YolinkSync {
+        YolinkSync {
+            overlap_minutes: None,
+            window_days: None,
+            devices,
         }
     }
 
     #[test]
     fn blob_records_starts_keyed_by_device_name() {
-        let blob = scope_config_blob(&opts_with(vec![dev("freezer", "2024-01-01")]));
+        let blob = scope_config_blob(&sync_with(vec![dev("freezer", "2024-01-01")]));
         assert_eq!(blob, json!({"device_starts": {"freezer": "2024-01-01"}}));
     }
 
@@ -654,9 +654,9 @@ mod scope_config_tests {
     fn blob_omits_pagination_knobs() {
         // `overlap_minutes` / `window_days` are re-applied every run, so
         // recording them would only provoke pointless re-walks.
-        let mut o = opts_with(vec![dev("freezer", "2024-01-01")]);
-        o.sync.overlap_minutes = Some(99);
-        o.sync.window_days = Some(3);
+        let mut o = sync_with(vec![dev("freezer", "2024-01-01")]);
+        o.overlap_minutes = Some(99);
+        o.window_days = Some(3);
         let obj = scope_config_blob(&o);
         let obj = obj.as_object().unwrap();
         assert_eq!(obj.len(), 1);

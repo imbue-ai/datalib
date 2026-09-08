@@ -31,6 +31,23 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// A step sealed part of its output and is still running.
+    ///
+    /// `version` is the same kind of string the terminal `outcome` reports —
+    /// a content version the step vouches for — so a consumer comparing them
+    /// needs no new vocabulary. There is no `path`: a step has exactly one
+    /// output, and its id *is* that path.
+    ///
+    /// **A checkpoint is a hint, never an obligation.** A consumer that
+    /// ignores every one of them does a single pass at the end and is
+    /// correct, just later. That is what keeps a dropped notification a
+    /// performance question rather than a correctness one, and it is worth
+    /// protecting: the moment something *needs* these to be right, we have
+    /// built Kafka's worst failure mode into our own storage engine.
+    Checkpoint {
+        step: StepId,
+        version: String,
+    },
     /// Total expected work units, if known (`None` → indeterminate).
     ProgressLength {
         step: StepId,

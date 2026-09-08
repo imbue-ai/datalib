@@ -299,7 +299,55 @@ def main() -> int:
     rc |= _check_module_lock_committed(root)
     rc |= _check_unpinned_render_reads(root)
     rc |= _check_render_opens_read_only(root)
+    rc |= _check_download_takes_a_store(root)
     return rc
+
+
+# --- Check 6: a download takes the store, it does not open one -------
+#
+# Two live connections to one `.doltlite_db` make each other's
+# `dolt_commit` fail -- `dolt_commit` takes the store lock without waiting
+# and reports whoever holds it as "commit conflict: another connection
+# committed to this branch". `doltlite_raw::open` commits three times on
+# the way in, so a second opener fails there, in `open` itself.
+#
+# The old shape had every `fetch` take `db: Option<RawDb>` and open its
+# own store when the caller passed `None`. That pool was never closed, so
+# a caller that then read the store back overlapped with it -- and since
+# sqlx closes connections on a background task, whether the two actually
+# collided came down to timing. It passed on a quiet laptop and failed on
+# a loaded CI runner.
+#
+# So the handle is now an input: one opener per store, and it is whoever
+# also closes it. This keeps it that way.
+_OPTIONAL_STORE_FIELD = re.compile(r"\bpub db: Option<\s*RawDb\s*>")
+
+
+def _check_download_takes_a_store(root: Path) -> int:
+    bad: list[str] = []
+    for rel in _git_ls_files(root, "datalib/backend/etl/providers"):
+        if not rel.endswith(".rs") or "/src/download" not in rel:
+            continue
+        text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if _OPTIONAL_STORE_FIELD.search(line):
+                bad.append(f"{rel}:{lineno}: {line.strip()}")
+    if not bad:
+        print("OK: every download takes its store as an input.")
+        return 0
+    print("ERROR: a download options struct opens its own store:", file=sys.stderr)
+    for b in bad:
+        print(f"  - {b}", file=sys.stderr)
+    print(
+        "\nAn optional store handle means `fetch` opens one when the caller\n"
+        "passes None, and nothing closes it. A caller that then reads the\n"
+        "store back has two live connections on one file, and one of the\n"
+        "two `dolt_commit`s fails with `commit conflict`.\n"
+        "Make the field `pub db: RawDb` and let the caller own it.\n"
+        "See datalib/backend/etl/README.md.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 # --- Check 5: render must not open a store writably ------------------
@@ -321,6 +369,11 @@ _WRITABLE_OPEN = re.compile(
 def _check_render_opens_read_only(root: Path) -> int:
     bad: list[str] = []
     for rel in _render_sources(root):
+        # A `download/db.rs` is a download file that render calls into. Its
+        # opens are the download step's, and the download step owns the store
+        # it is writing -- only check 4 has anything to say about these.
+        if rel in _RENDER_REACHABLE_LOADERS:
+            continue
         text = (root / rel).read_text(encoding="utf-8", errors="replace")
         # Test modules build the stores they then read, so they need `open`.
         body = text.split("#[cfg(test)]")[0]
@@ -407,23 +460,65 @@ _TABLE_READ = re.compile(r"\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*)")
 _OWN_READ = re.compile(r"Reads::Own\b")
 
 
+# Loaders that live in `download/db.rs` but are called from render. Their SQL
+# is bespoke rather than going through a `Reads`-taking helper, so neither the
+# regex nor the compiler sees them -- which is how this check printed "every
+# render read is pinned" twice while five providers read their whole content
+# from the working set.
+#
+# Listing them by hand is unsatisfying, and it is still better than the two
+# things it replaced: a file glob that could not reach them, and a claim that
+# they did not exist. An entry leaves when its loader takes a pin.
+_RENDER_REACHABLE_LOADERS: dict[str, tuple[str, ...]] = {
+    "datalib/backend/etl/providers/notion/src/download/db.rs": (
+        "load_comment_anchors",
+        "load_page_markdown",
+        "load_comments",
+    ),
+    "datalib/backend/etl/providers/claude/src/download/db.rs": (
+        "load_conversations_from",
+        "first_user_uuid_from",
+    ),
+    "datalib/backend/etl/providers/github/src/download/db.rs": (
+        "load_self_identity",
+        "load_pull_requests",
+        "load_children",
+    ),
+    "datalib/backend/etl/providers/gitlab/src/download/db.rs": (
+        "load_self_identity",
+        "load_merge_requests",
+        "load_discussions",
+    ),
+    "datalib/backend/etl/providers/contacts/src/download/db.rs": (
+        "load_all_for_render_and_index_md",
+    ),
+}
+
+
 def _render_sources(root: Path) -> list[str]:
     # Most providers keep render under `src/render*`, but not all: linkedin
     # renders from `src/posts.rs` and `src/connections.rs`, which is how two
     # writable opens and five unpinned reads sat outside this check.
     extra = ("/src/posts.rs", "/src/connections.rs")
-    return [
+    files = [
         p
         for p in _git_ls_files(root, "datalib/backend/etl/providers")
         if p.endswith(".rs")
         and "/tests/" not in p
         and ("/src/render" in p or p.endswith(extra))
     ]
+    return files + [f for f in _RENDER_REACHABLE_LOADERS if (root / f).is_file()]
 
 
 def _unpinned_reads(root: Path, rel: str) -> list[tuple[int, str]]:
-    out: list[tuple[int, str]] = []
     text = (root / rel).read_text(encoding="utf-8", errors="replace")
+    # For a `download/db.rs` only the render-reachable loaders count: the rest
+    # of that file is the download step reading the store it is writing, which
+    # must stay unpinned.
+    if rel in _RENDER_REACHABLE_LOADERS:
+        return _loader_reads(text, _RENDER_REACHABLE_LOADERS[rel])
+
+    out: list[tuple[int, str]] = []
     for lineno, line in enumerate(text.splitlines(), 1):
         for table in _TABLE_READ.findall(line):
             if (
@@ -433,6 +528,31 @@ def _unpinned_reads(root: Path, rel: str) -> list[tuple[int, str]]:
                 out.append((lineno, table))
         if _OWN_READ.search(line):
             out.append((lineno, "Reads::Own"))
+    return out
+
+
+def _loader_reads(text: str, loaders: tuple[str, ...]) -> list[tuple[int, str]]:
+    """Unpinned table reads inside the named functions only."""
+    out: list[tuple[int, str]] = []
+    for fn in loaders:
+        start = text.find(f"fn {fn}")
+        if start < 0:
+            continue
+        end = text.find("\n    }\n", start)
+        body = text[start : end if end > 0 else len(text)]
+        base = text[:start].count("\n") + 1
+        for offset, line in enumerate(body.splitlines()):
+            for table in _TABLE_READ.findall(line):
+                if (
+                    not table.startswith(_PINNED_OK_PREFIXES)
+                    and table not in _UNPINNED_BY_DESIGN
+                ):
+                    out.append((base + offset, f"{fn}: {table}"))
+            # A render-reachable loader must take the mode from its caller,
+            # never name it. `Reads::Own` elsewhere in these files is the
+            # download step reading what it wrote, which is correct.
+            if _OWN_READ.search(line):
+                out.append((base + offset, f"{fn}: Reads::Own"))
     return out
 
 
@@ -447,7 +567,11 @@ def _check_unpinned_render_reads(root: Path) -> int:
         if not actual:
             print("OK: every render read is pinned.")
         else:
-            print(f"OK: {total} unpinned render read(s), matching the baseline.")
+            print(
+                f"OK: {total} unpinned render read(s) in "
+                f"{len(actual)} file(s), matching the baseline -- "
+                "still to pin, not yet safe to stream from."
+            )
         return 0
 
     added = {

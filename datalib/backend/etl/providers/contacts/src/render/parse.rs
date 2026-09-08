@@ -59,26 +59,32 @@ pub struct ParsedContacts {
     pub contacts: Vec<ParsedContact>,
 }
 
-/// Load every contact from the raw doltlite store at `db_path` and
-/// parse each vCard. Returns an empty [`ParsedContacts`] when the
-/// store is absent or empty — render paths shouldn't fail hard
-/// when the upstream download hasn't run yet.
-pub fn parse(db_path: &Path) -> Result<ParsedContacts> {
+/// Load every contact from the raw doltlite store at `db_path` and parse each
+/// vCard. `None` when the store is absent — a render path must not fail hard
+/// because the download has not run yet.
+///
+/// **`None`, not an empty [`ParsedContacts`].** The caller sweeps every
+/// document this pass did not name, and an empty parse is indistinguishable
+/// at the sweep from a source that lost every contact it had.
+pub fn parse(db_path: &Path) -> Result<Option<ParsedContacts>> {
     if !db_path.exists() {
-        return Ok(ParsedContacts::default());
+        return Ok(None);
     }
     let path = db_path.to_path_buf();
     let rows = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let db = RawDb::open_reader(&path).await?;
+            let Some(db) = RawDb::open_reader(&path).await? else {
+                return Ok(None);
+            };
             let rows = db.load_all_for_render_and_index_md().await;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             db.close().await;
-            rows
+            rows.map(Some)
         })
     })?;
-    Ok(parse_loaded(rows))
+    let Some(rows) = rows else { return Ok(None) };
+    Ok(Some(parse_loaded(rows)))
 }
 
 pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
@@ -344,8 +350,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_missing_db_returns_empty_silently() {
+    /// An absent store is `None`, not an empty parse. The caller sweeps
+    /// every document this pass did not name, so "no store yet" and "the
+    /// source lost every contact" must not look the same to it.
+    fn parse_missing_db_reads_as_absent_not_empty() {
         let parsed = parse(Path::new("/this/does/not/exist.doltlite_db")).unwrap();
-        assert_eq!(parsed.contacts.len(), 0);
+        assert!(parsed.is_none());
     }
 }

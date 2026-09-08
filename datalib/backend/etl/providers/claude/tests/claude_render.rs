@@ -40,9 +40,14 @@ fn collect_by_ext(root: &std::path::Path, ext: &str) -> BTreeMap<String, String>
 }
 
 async fn ingest_fixture(raw: &Path) {
+    let db = datalib_etl_claude::download::RawDb::open(
+        &datalib_etl_claude::download::db::db_path_for(raw),
+    )
+    .await
+    .expect("open raw store");
     ingest(IngestOptions {
         db_path: raw.to_path_buf(),
-        db: None,
+        db: db.clone(),
         input_path: fixture_dir(),
         now: "2026-09-04T00:00:00-07:00".to_string(),
         progress: Default::default(),
@@ -50,6 +55,20 @@ async fn ingest_fixture(raw: &Path) {
     })
     .await
     .expect("ingest the TNG export");
+
+    // Commit what the ingest wrote, the way the processor's
+    // `RawStoreSession` does in production. Render pins HEAD, so an
+    // uncommitted row is invisible to it.
+    //
+    // On the handle the ingest already holds: reopening here would be a
+    // second live connection to the store, and one of the two commits
+    // would fail with `commit conflict`.
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: claude ingest")
+        .await
+        .expect("commit the ingest");
+    // Closed, not dropped: whatever reads this store next is a second
+    // connection until this one is actually gone.
+    db.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
