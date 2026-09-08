@@ -670,7 +670,7 @@ mac laptop and a Linux CI container disagree readily. A render path that
 opened three pools per pass ran in 10s here and hit the 300s timeout on
 `//tests/fixtures:ingested_tng_test` there (#311). A download that opened
 its own pool and never closed it produced intermittent `commit conflict`
-failures across the doltlite-heavy targets (#323). If a doltlite-touching
+failures across the doltlite-heavy targets (#327). If a doltlite-touching
 change is green locally and red or slow in CI, count the opens first.
 
 ## Git: prefer merges over rebases
