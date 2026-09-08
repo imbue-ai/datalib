@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
+use datalib_etl::render_cursor;
 use datalib_etl::title::Title;
 use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
@@ -303,12 +304,22 @@ pub fn render_github(
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name.
-    seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
+    tracing::info!(
+        source = stanza,
+        scan_elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64),
+        changed_buckets = parsed
+            .scan
+            .changed_buckets
+            .as_ref()
+            .map(|s| s.len() as i64)
+            .unwrap_or(-1),
+        prs = parsed.pull_requests.len(),
+        skipped = parsed.docs_skipped,
+        cold_start = parsed.scan.changed_buckets.is_none(),
+        "[render] github dolt_diff scan"
+    );
     // Group comments by PR.
     let mut by_pr: std::collections::HashMap<(String, u32), Vec<CommentRow>> = Default::default();
     for c in &parsed.comments {
@@ -324,9 +335,6 @@ pub fn render_github(
         let fingerprint = fingerprint_for_pr(pr, &comments);
         let md_rel = pr_qmd_path_rel(stanza, &pr.repo_full_name, pr.pr_number);
         let md_path = root.join(&md_rel);
-        // Before the skip, so an unchanged PR reads as present rather than
-        // as one this run stopped producing.
-        seen.insert(pr.uuid.clone());
 
         if prior_fingerprints.get(&pr.uuid).map(String::as_str) == Some(fingerprint.as_str())
             && md_path.exists()
@@ -352,6 +360,21 @@ pub fn render_github(
         })?;
         summary.rendered += 1;
         progress.inc(1);
+    }
+
+    // Last, and only on the way out: a cursor written before the documents
+    // land would tell the next run it had already consumed work this one
+    // did not finish. Left unwritten when HEAD was unreadable, which
+    // cold-starts the next run — the safe direction.
+    if let Some(head) = parsed.scan.new_head.as_deref() {
+        let cursor_path = render_cursor::cursor_path(root, stanza);
+        render_cursor::write(
+            &cursor_path,
+            head,
+            parsed.scan.scan_elapsed,
+            &render_cursor::no_params(),
+        )
+        .with_context(|| format!("write github render cursor {}", cursor_path.display()))?;
     }
     Ok(summary)
 }

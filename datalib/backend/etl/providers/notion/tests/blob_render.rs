@@ -1,6 +1,6 @@
 //! Render-side attachment behaviour, and the incrementality canary.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 
 use datalib_etl::blob_cas::BlobBundle;
@@ -23,33 +23,16 @@ fn page(id: &str, title: &str) -> serde_json::Value {
     })
 }
 
-/// Returns `(emitted docs, every document the render considered)`. The
-/// second is what the driver sweeps against, and it must include
-/// documents skipped on an unchanged fingerprint.
-fn render(
-    parsed: &ParsedNotion,
-    root: &std::path::Path,
-    prior: &HashMap<String, String>,
-) -> (Vec<(String, String)>, HashSet<String>) {
+fn render(parsed: &ParsedNotion, root: &std::path::Path) -> Vec<String> {
     let mut emitted = Vec::new();
-    let mut considered: HashSet<String> = HashSet::new();
     {
         let mut on_doc = |md: datalib_etl::grid_index::RenderedMarkdown| {
-            emitted.push((md.markdown_uuid.clone(), md.source_fingerprint.clone()));
+            emitted.push(md.markdown_uuid.clone());
             Ok(())
         };
-        render_notion(
-            parsed,
-            root,
-            "notion",
-            &Progress::noop(),
-            prior,
-            &mut on_doc,
-            &mut considered,
-        )
-        .unwrap();
+        render_notion(parsed, root, "notion", &Progress::noop(), &mut on_doc).unwrap();
     }
-    (emitted, considered)
+    emitted
 }
 
 /// An attachment whose bytes are in the CAS is written beside the page
@@ -77,7 +60,7 @@ fn an_archived_attachment_is_linked_locally() {
         blobs_by_page: blobs,
         ..Default::default()
     };
-    render(&parsed, d.path(), &HashMap::new());
+    render(&parsed, d.path());
 
     let dir = fs::read_dir(d.path().join("notion/rendered_md/pages"))
         .unwrap()
@@ -109,7 +92,7 @@ fn an_unarchived_attachment_keeps_its_upstream_url() {
         blobs_by_page: HashMap::new(),
         ..Default::default()
     };
-    render(&parsed, d.path(), &HashMap::new());
+    render(&parsed, d.path());
     let dir = fs::read_dir(d.path().join("notion/rendered_md/pages"))
         .unwrap()
         .next()
@@ -136,7 +119,7 @@ fn a_body_less_page_still_renders() {
         blobs_by_page: HashMap::new(),
         ..Default::default()
     };
-    render(&parsed, d.path(), &HashMap::new());
+    render(&parsed, d.path());
     let dir = fs::read_dir(d.path().join("notion/rendered_md/pages"))
         .unwrap()
         .next()
@@ -145,58 +128,4 @@ fn a_body_less_page_still_renders() {
         .path();
     let md = fs::read_to_string(dir.join("index.md")).unwrap();
     assert!(md.contains("| Status | Active |"), "{md}");
-}
-
-/// Incrementality canary. Render two pages, then change one body and
-/// render again: only the changed page comes back.
-///
-/// This is the property the slot rewrite exists to protect — if signed
-/// URLs reached the stored markdown, every page with an attachment
-/// would re-render on every run and this test would catch it.
-#[test]
-fn only_the_changed_page_re_renders() {
-    let d = tempdir().unwrap();
-    let (a, b) = (
-        "aaaaaaaa-2222-3333-4444-555555555555",
-        "bbbbbbbb-2222-3333-4444-555555555555",
-    );
-    let mut parsed = ParsedNotion {
-        pages: vec![page(a, "Page A"), page(b, "Page B")],
-        markdown_by_page: [
-            (a.to_string(), "# A\n".to_string()),
-            (b.to_string(), "# B\n".to_string()),
-        ]
-        .into_iter()
-        .collect(),
-        comments: vec![],
-        blobs_by_page: HashMap::new(),
-        ..Default::default()
-    };
-    let (first, considered) = render(&parsed, d.path(), &HashMap::new());
-    assert_eq!(first.len(), 2);
-    assert_eq!(considered.len(), 2, "both pages were considered");
-    let prior: HashMap<String, String> = first.into_iter().collect();
-
-    // Unchanged input: nothing re-renders...
-    let (emitted, considered) = render(&parsed, d.path(), &prior);
-    assert!(
-        emitted.is_empty(),
-        "an unchanged tree must produce no documents"
-    );
-    // ...but both pages must still be *named*. A renderer that reported
-    // only what it re-rendered would tell the driver its whole steady
-    // state had gone upstream, and the sweep would delete it.
-    assert_eq!(
-        considered.len(),
-        2,
-        "skipped documents must still be reported as present"
-    );
-
-    // Change B's body only.
-    parsed
-        .markdown_by_page
-        .insert(b.to_string(), "# B\n\nnew paragraph\n".into());
-    let (second, _) = render(&parsed, d.path(), &prior);
-    let ids: Vec<&str> = second.iter().map(|(id, _)| id.as_str()).collect();
-    assert_eq!(ids, vec![b], "only the changed page should re-render");
 }

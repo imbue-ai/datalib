@@ -123,24 +123,48 @@ impl DataProcessor for GithubRender {
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render_github};
-        let parsed = parse_api_dir(&self.raw_path)
-            .with_context(|| format!("github parse {}", self.raw_path.display()))?;
-        // This renderer walks the whole raw store every run, so the set it
-        // considered is the complete one: anything else the render store
-        // holds is a document whose source is gone. The driver sweeps.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, ctx.name);
+        let cursor = datalib_etl::render_cursor::read_for_params(
+            &cursor_path,
+            &datalib_etl::render_cursor::no_params(),
+        )
+        .with_context(|| format!("read github render cursor {}", cursor_path.display()))?;
+        let parsed = parse_api_dir(
+            &self.raw_path,
+            cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
+        )
+        .with_context(|| format!("github parse {}", self.raw_path.display()))?;
+
+        // Deletions are named, not swept. This renderer is narrowed by the
+        // diff above, so the documents it emitted are only the ones that
+        // *changed* — handing that set to `retain_documents` would delete
+        // every PR that merely held still. That swap is the load-bearing
+        // half of putting a renderer on a cursor, and getting it wrong
+        // empties the source on the first quiet run.
+        let mut dropped = 0usize;
+        for bucket in &parsed.vanished_buckets {
+            let Some((repo, num)) = bucket.rsplit_once('#') else {
+                continue;
+            };
+            let Ok(num) = num.parse::<u32>() else {
+                continue;
+            };
+            dropped += ctx.remove_conversation(&crate::render::parse::github_pr_uuid(repo, num))?;
+        }
+
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_github(
+        let s = render_github(
             &parsed,
             ctx.root,
             ctx.name,
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
-            &mut seen,
         )
         .context("render_github")?;
-        ctx.retain_documents(&seen);
-        Ok("rendered".into())
+        Ok(format!(
+            "rendered={} skipped={} dropped={}",
+            s.rendered, parsed.docs_skipped, dropped
+        ))
     }
 }

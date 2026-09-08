@@ -33,7 +33,7 @@ async fn gitlab_live_single_mr_snapshot() {
     };
     gitlab::fetch(opts).await.expect("gitlab fetch failed");
 
-    let parsed = parse_api_dir(&tmp).expect("parse_api_dir");
+    let parsed = parse_api_dir(&tmp, None).expect("parse_api_dir");
     assert_eq!(parsed.merge_requests.len(), 1, "expected exactly one MR");
     let mr = &parsed.merge_requests[0];
 
@@ -50,7 +50,6 @@ async fn gitlab_live_single_mr_snapshot() {
             docs.push(doc);
             Ok(())
         },
-        &mut std::collections::HashSet::new(),
     )
     .expect("render_gitlab failed");
 

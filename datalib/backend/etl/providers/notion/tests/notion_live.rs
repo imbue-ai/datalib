@@ -32,7 +32,7 @@ async fn notion_live_single_page_snapshot() {
     };
     notion::fetch(opts).await.expect("notion fetch failed");
 
-    let parsed = parse_api_dir(&tmp).expect("parse_api_dir");
+    let parsed = parse_api_dir(&tmp, None).expect("parse_api_dir");
     assert_eq!(parsed.pages.len(), 1, "expected exactly one page");
 
     let p = &parsed.pages[0];

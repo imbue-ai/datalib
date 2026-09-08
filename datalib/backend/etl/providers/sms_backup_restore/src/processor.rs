@@ -94,22 +94,44 @@ impl DataProcessor for SmsRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        // This renderer walks the whole raw store every run, so the set it
-        // considered is the complete one: anything else the render store
-        // holds is a document whose source is gone. The driver sweeps.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
+        let cursor = datalib_etl::render_cursor::read_for_params(
+            &cursor_path,
+            &datalib_etl::render_cursor::no_params(),
+        )
+        .with_context(|| format!("read sms render cursor {}", cursor_path.display()))?;
+
         let mut on_doc = |md| ctx.emit_doc(md);
-        crate::render::render(
+        let outcome = crate::render::render(
             &self.raw_path,
             ctx.root,
             &self.name,
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
-            &mut seen,
+            cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
         )
         .context("sms_backup_restore render")?;
-        ctx.retain_documents(&seen);
-        Ok("rendered".into())
+
+        // Named, not swept: the render above is narrowed by the diff, so
+        // what it emitted is only what changed.
+        let mut dropped = 0usize;
+        for chat_uuid in &outcome.vanished {
+            dropped += ctx.remove_conversation(chat_uuid)?;
+        }
+
+        if let Some(head) = outcome.new_head.as_deref() {
+            datalib_etl::render_cursor::write(
+                &cursor_path,
+                head,
+                outcome.scan_elapsed,
+                &datalib_etl::render_cursor::no_params(),
+            )
+            .with_context(|| format!("write sms render cursor {}", cursor_path.display()))?;
+        }
+        Ok(format!(
+            "rendered={} skipped={} dropped={}",
+            outcome.rendered, outcome.skipped, dropped
+        ))
     }
 }

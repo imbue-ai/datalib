@@ -66,10 +66,6 @@ pub fn render_targets(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name.
-    seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary {
         converted: 0,
@@ -87,11 +83,6 @@ pub fn render_targets(
         progress.inc(1);
         let md_path = md_path_for(out_dir, &t.blake3);
         let doc_uuid = grid_rows::document_uuid(&t.blake3);
-        // Before both the skip and the conversion, so neither an unchanged
-        // document nor one whose conversion failed reads as deleted. A
-        // failed render is a document we could not rewrite, not one the
-        // corpus lost.
-        seen.insert(doc_uuid.clone());
 
         // The fingerprint IS the content hash. That is the whole payoff
         // of content identity: a document that has not changed cannot
@@ -131,10 +122,6 @@ pub async fn render(
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name.
-    seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderSummary> {
     let targets = load_targets(raw_dir).await?;
     render_targets(
@@ -144,7 +131,6 @@ pub async fn render(
         progress,
         prior_fingerprints,
         on_doc_complete,
-        seen,
     )
 }
 
@@ -298,4 +284,62 @@ mod tests {
         assert_eq!(yaml_str(r#"a"b"#), r#""a\"b""#);
         assert_eq!(yaml_str(r"a\b"), r#""a\\b""#);
     }
+}
+
+/// What the `dolt_diff` scan found, for a caller that will narrow its
+/// target list with it.
+#[derive(Debug, Clone, Default)]
+pub struct PdfScan {
+    /// `Some(set)` → convert only documents whose blake3 is in it.
+    /// `None` → cold start: convert everything the corpus holds.
+    pub changed: Option<std::collections::HashSet<String>>,
+    pub new_head: Option<String>,
+    pub elapsed: Option<std::time::Duration>,
+}
+
+/// Ask the raw store which documents moved since `last_render_hash`.
+///
+/// The bucket is the document's blake3, which is also its identity and its
+/// render fingerprint — for this provider "changed" and "different
+/// document" are the same statement. `pdf_paths` joins the union because a
+/// file appearing at a new path is how a document enters the corpus, even
+/// when its bytes were already known.
+pub async fn scan_changed(raw_dir: &Path, last_render_hash: Option<&str>) -> Result<PdfScan> {
+    let db_path = crate::download::db_path_for(raw_dir);
+    if !db_path.exists() {
+        return Ok(PdfScan::default());
+    }
+    // Read-only, and closed before returning: `load_targets` ran just
+    // before this against the same file, and a second pool overlapping the
+    // first is the "database is locked" hazard `open_reader`'s docs name.
+    let db = RawDb::open_reader(&db_path).await?;
+    let scan = datalib_etl::doltlite_raw::scan_buckets(
+        db.pool(),
+        last_render_hash,
+        &datalib_etl::doltlite_raw::DiffScanSpec {
+            // `pdf_scan_meta` records where the scan ran, which no
+            // rendered document reads.
+            global_fanout_tables: &[],
+            bucket_query: "
+                SELECT DISTINCT blake3 FROM (
+                    SELECT coalesce(to_blake3, from_blake3) AS blake3
+                      FROM dolt_diff_pdf_documents
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_blake3, from_blake3)
+                      FROM dolt_diff_pdf_paths
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                )
+                WHERE blake3 IS NOT NULL
+            ",
+        },
+    )
+    .await;
+    db.close().await;
+    let scan = scan?;
+    Ok(PdfScan {
+        changed: scan.changed_buckets,
+        new_head: scan.new_head,
+        elapsed: scan.scan_elapsed,
+    })
 }
