@@ -379,59 +379,105 @@ the only path.
 ## The sink contract
 
 Everything above is written in doltlite's vocabulary — commits, pins,
-`dolt_at_`. That is an implementation, not the contract. A step's sink
-is whatever it writes: a doltlite store today, and we should not build
-so that it is always one.
+`dolt_at_`. That is an implementation, not the contract. A step's sink is
+whatever it writes, and the tree already holds sinks that are not
+doltlite stores: `qmd_index` writes an FTS5 index under
+`unified_index/qmd/`, and the applet reads it.
 
-The contract a sink owes a consumer is two sentences:
+Two **separate** properties. Conflating them is a mistake — the first
+draft of this section did, and it produced a contract that was simply
+false for half our sinks.
 
-> **A sink can always be read, and it may be empty.** "I could not read
-> it" and "I read it and there was nothing there" are different answers,
-> and a sink must never return the first when it means the second.
+### P1. "Absent" and "empty" are different answers
 
-That distinction is the whole of it, and getting it wrong is expensive
-in one direction only. A consumer that reads an empty sink concludes the
-source currently holds nothing — which, for render, means every document
-that source used to have is gone, and `retain_documents` deletes them.
-So a sink that cannot answer must say *that*, not hand back an empty
-result and let the consumer draw the conclusion.
+> A sink must never report "there is nothing here" when it means "I
+> could not read this."
 
-We have already shipped that bug once. `pin::head()` returns `None` when
-a store has no usable commit; five render paths turned it into an empty
-result set and then reported a completed walk, which swept the source.
-The guard was there and tested the right thing — the empty value leaked
-past it from an inner block.
+**Every sink owes this, always**, streaming or not. It is what makes
+deletion safe, and it is expensive in one direction only: a consumer
+that reads an empty sink concludes the source holds nothing, and for
+render that means every document it used to have is gone, so it deletes
+them. A sink that cannot answer must say *that*, and let the consumer
+skip.
 
-**How doltlite honors it.** A store gets an "Initialize data repository"
-commit when the file is created, before any DDL — so a store's log is
-never empty, but that first commit carries no tables, and pinning it
-gives a reader a pin that cannot resolve any of them. What makes a store
-readable is the *schema commit*: `open` runs the DDL and commits with
-`-Am`, and a reader pinned there gets `pinned_<table>` over zero rows,
-cleanly. So:
+We shipped that bug. `pin::head()` returns `None` when a store has no
+usable commit; five render paths turned it into an empty result set and
+then reported a completed walk, which swept the source. The guard was
+there and testing the right thing — the empty value leaked past it from
+an inner block.
+
+### P2. Readable *while the writer is still running*
+
+> A consumer can take a stable, self-consistent view of the sink while
+> the producer is mid-write.
+
+**Most sinks do not have this, and none of them have it by accident.**
+It is what makes an edge streamable at all, and it is a real property of
+the storage engine, not something a step can promise by being careful:
+
+- **doltlite has it.** A commit is immutable and a reader pins one, so
+  the producer can keep committing without the reader's view moving.
+  That is the whole basis of the §"The hazard" work.
+- **An FTS5 index rewritten in place does not.** Nor does a directory of
+  markdown files a step is still emitting, nor a CSV being appended to,
+  nor anything that mutates a file readers are holding open. For these,
+  a consumer must wait for the producer to finish. The edge stays a
+  barrier, exactly as it is today.
+
+So P2 is a **per-sink capability that has to be declared, and its
+default is "no"**. An undeclared sink is treated as un-streamable and
+its edge keeps today's finish-then-start behavior. This is the one place
+in this plan where a silent fallback would be actively dangerous: the
+failure mode is not a slow read but a consumer acting on a torn one, and
+it would be invisible in exactly the way `AGENTS.md` §"Fallbacks" warns
+about.
+
+**We do not distinguish these today.** There is no sink-kind concept
+anywhere in the tree: a step declares `outputs` as paths, the runner
+derives edges from path overlap, and nothing records whether an output
+can be read mid-write. Building that distinction is a prerequisite for
+step 6, not a detail inside it — and until it exists, streaming stays
+hand-enabled on edges we have checked one at a time.
+
+**The shape to copy is `probe`.** `datalib-step probe <source_type>`
+already exists as a *utility, not a pipeline step*: it asks a provider
+what a set of credentials can reach, prints one JSON object on stdout,
+writes nothing, and needs no data root
+([`probe.rs`](../../datalib/backend/datalib_step/src/probe.rs)). It
+answers a question about the **source**, and only `email` implements it
+— so it is not the thing we need. But it is the right shape for the
+thing we need, and the precedent matters more than the code: the runner
+asks the *step* a question only the step can answer, rather than the
+config asserting it on the step's behalf.
+
+That is the argument for making P2 a question a step answers about its
+own output, not a boolean in `config.toml`. Whoever writes the sink
+knows whether it can be read mid-write; the person editing a config does
+not, and a wrong answer there is silent. It also keeps third-party steps
+honest by default — a step that does not answer is un-streamable, which
+is the safe direction.
+
+### What doltlite has today, measured
+
+A store gets an "Initialize data repository" commit when the file is
+created, so its log is never empty — but that commit carries no tables,
+and a reader pinned there cannot resolve any of them. The commit that
+makes a store readable is the *schema commit*: `open` runs the DDL and
+commits with `-Am`, and a reader pinned there gets `pinned_<table>` over
+zero rows, cleanly. So for a doltlite sink:
 
 - a store with a schema commit is **readable, possibly empty** — and a
-  consumer that finds zero rows may act on that, sweeps included;
+  consumer finding zero rows may act on that, sweeps included;
 - a store without one, or with no file at all, is **unreadable** — the
   consumer skips, and must not sweep.
 
-Today those two collapse into one `None`, and render treats both as
-"skip". That is the safe side of the mistake, but it is still a
-mistake: a source that legitimately drops to zero documents never gets
-them cleaned up. Making the schema commit a *guaranteed* sentinel is
-what separates them, and it is worth doing — after the reads in
-`EXPECTED_UNPINNED_READS` are pinned, since it changes what a skip
-means.
-
-The sentinel earns its keep a second way: it gives every downstream step
-a legitimate, pinnable, empty input to be tested against. Processing an
-empty dataset should always work, and that is the case nobody writes a
-fixture for.
-
-**For a non-doltlite sink**, the contract is the same two sentences and
-the mechanism is its own. A sink that cannot distinguish "absent" from
-"empty" has not met it, and a consumer reading such a sink cannot be
-allowed to delete on an empty read.
+Today those two collapse into one `None` and render treats both as
+"skip". That is the safe side of the mistake, but still a mistake: a
+source that legitimately drops to zero documents never gets them cleaned
+up. Guaranteeing the schema commit is what separates them — it is P1 for
+doltlite, spelled out. It also hands every downstream step a legitimate,
+pinnable, empty input to be tested against, which is the case nobody
+writes a fixture for.
 
 ## Producer side: chunked commits
 
@@ -656,10 +702,13 @@ Each of these is a reviewable PR that leaves the tree green.
    unreadable one — see [The sink contract](#the-sink-contract). Small,
    and it has to land after the thirteen reads above, because it changes
    what a skip means.
-6. **Streaming dispatch.** The scheduler change — in-flight tracking
-   with checkpoints dropped rather than queued, and the separate
-   streaming slot — for `render → grid_index` only. Measure the latency
-   change before widening.
+6. **Streaming dispatch.** Needs a way for a step to declare its sink
+   snapshot-readable first — P2 above, in the shape `probe` already
+   uses — because "can this edge stream at all" is not something the
+   scheduler can infer from paths. Then the scheduler change: in-flight
+   tracking with checkpoints dropped rather than queued, and the
+   separate streaming slot, for `render → grid_index` only. Measure the
+   latency change before widening.
 7. **`download → render`.** Turn the capability on for the second edge.
 8. **The UI frame.**
 
