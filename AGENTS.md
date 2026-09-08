@@ -627,10 +627,19 @@ what it *did*.
 
 ## One open per doltlite file, and close it before the next
 
-Every pool against a `.doltlite_db` is `max_connections(1)`, so a second
-pool on a file that is already open does not fail — it **waits**. Overlap
-two and the run blocks on a file lock instead of erroring, which is the
-shape a hang takes here.
+Every pool against a `.doltlite_db` is `max_connections(1)`, and doltlite's
+working set lives in the **file** rather than in the connection. A second
+pool is therefore not a second view of the store; it is a second handle on
+one shared uncommitted tree, and a `dolt_commit('-Am')` through either one
+sweeps up whatever the other has in flight.
+
+**The open itself does not wait.** Measured on macOS with doltlite 0.50.3
+by `//datalib/backend/etl:doltlite_two_process_test`: a second read-write
+pool on an already-open file opens in ~2ms and both pools then commit, and
+a read-only pool alongside a live writer — opened in either order — costs
+each other nothing. What overlap costs you is the shared working set above,
+plus contention while two pools are actually mid-write. So a hang here is
+not the open blocking; it is two writers on one tree.
 
 Two rules follow, and neither is optional:
 
@@ -651,8 +660,10 @@ check 5 enforces that half; nothing enforces the two rules above.
 actually collide depends on timing and on the filesystem's locking, so a
 mac laptop and a Linux CI container disagree readily. A render path that
 opened three pools per pass ran in 10s here and hit the 300s timeout on
-`//tests/fixtures:ingested_tng_test` there (#311). If a doltlite-touching
-change is green locally and times out in CI, count the opens first.
+`//tests/fixtures:ingested_tng_test` there (#311). The measurements above
+are macOS only, and that is exactly the platform this warning says not to
+trust: if a doltlite-touching change is green locally and times out in CI,
+count the opens first.
 
 ## Git: prefer merges over rebases
 
