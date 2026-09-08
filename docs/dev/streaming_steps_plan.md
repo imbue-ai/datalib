@@ -229,6 +229,27 @@ is the end-to-end guard: a document written but not committed must not
 reach the grid. It fails without `open_for_reading` even with every read
 pinned, which is the whole point of writing it down here.
 
+**And under streaming it stops being merely wrong and starts failing
+outright.** #327 measured what the two kinds of statement do when they
+contend on one store: ordinary DML retries under a busy handler and
+rides the overlap out, but `dolt_commit` does not — it takes the
+store's sidecar lock once and reports whoever holds it as
+`commit conflict: another connection committed to this branch`, naming
+a commit that need not have happened.
+
+Since `open` commits three times on the way in, a consumer that opened
+a store writably *while the producer was checkpointing* would not
+silently seal a torn batch — it would fail inside `open` itself, at
+`commit schema after DDL`. That is the better failure of the two, and
+it is still a failure the consumer did not cause.
+
+So the read-only open is load-bearing in both directions: it is what
+keeps a consumer from committing the producer's half-written rows, and
+it is what keeps a consumer from colliding with the producer's
+checkpoint at all. A checkpointing producer makes the window this
+happens in the normal case rather than a rare one, which is why this
+had to be true before step 3 shipped rather than after.
+
 ### And a fourth: `to_ref = 'HEAD'` is a moving target
 
 `scan_buckets` samples `new_head` from `dolt_log()` and then runs the
