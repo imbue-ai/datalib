@@ -555,6 +555,29 @@ commits would put thousands of entries in `dolt_log` per run"
 20-minute download at 15s granularity adds ~80 commits, which is fine;
 a per-row commit would not be.
 
+### Truncate-and-refill is the case the flag does not cover
+
+`reset_and_redownload` maps to `Policy::Never` because a store mid-wipe
+reads as mass deletion. That is right, and it is not sufficient: three
+providers truncate on **every** run, flag or no flag, because the
+truncate is what makes upstream deletions fall out.
+
+| provider | where |
+|---|---|
+| whatsapp | `download.rs`, `truncate_wa_tables` before the mirror |
+| pdf | `download/mod.rs`, `reset_paths` before the walk |
+| fsindex | `download/mod.rs`, `db.reset()` before the index |
+
+For these, "a write burst went quiet" is not a consistent point — it is
+most likely to be reached while the table is empty. Their only
+consistent point is *after the refill completes*, which for a run that
+rewrites everything is the end of the run. So they take `Never`, or
+they seal once at a boundary they name themselves.
+
+No shared cadence can work this out, which is the real content of "each
+provider needs someone to look at its consistent point": the thing to
+look for is whether the provider empties anything before filling it.
+
 ### The rule that is easy to get wrong
 
 **A run that wipes and re-ingests must not checkpoint at all.** Not

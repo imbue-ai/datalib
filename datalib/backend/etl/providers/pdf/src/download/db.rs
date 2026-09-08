@@ -34,6 +34,11 @@ pub struct PrevCache {
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
+    /// The commit every content read resolves against, or `None` for the
+    /// download step reading back what it just wrote. Set once, at open:
+    /// a pin belongs to a connection, not to a call, because the
+    /// `pinned_<table>` views it installs live on that connection.
+    pin: Option<datalib_etl::pin::Pin>,
 }
 
 impl RawDb {
@@ -49,17 +54,45 @@ impl RawDb {
     /// No DDL, so a store the current downloader has not touched keeps
     /// whatever columns it has; probe with `column_exists` and fall back
     /// where that matters.
-    pub async fn open_reader(db_path: &Path) -> Result<Self> {
-        Ok(Self {
-            pool: dr::open_reader(db_path).await?,
-        })
+    /// **`None` means the store cannot be read**, not that the corpus is
+    /// empty — no commit to pin, or a build without the dolt extensions.
+    /// The distinction is load-bearing here: `load_targets` doubles as the
+    /// membership test behind `remove_conversation`, so an empty result
+    /// deletes every document the diff named. See the plan's "The sink
+    /// contract".
+    pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
+        let pool = dr::open_reader(db_path).await?;
+        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+            pool.close().await;
+            return Ok(None);
+        };
+        datalib_etl::pin::install_views(&pool, &pin)
+            .await
+            .context("pin the pdf raw store for render")?;
+        Ok(Some(Self {
+            pool,
+            pin: Some(pin),
+        }))
+    }
+
+    /// How this handle reads content. Every content query goes through it,
+    /// so a reader cannot accidentally read the working set.
+    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
+        match self.pin.as_ref() {
+            Some(p) => datalib_etl::pin::Reads::At(p),
+            None => datalib_etl::pin::Reads::Own,
+        }
+    }
+
+    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
+        self.pin.as_ref()
     }
 
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
+        Ok(Self { pool, pin: None })
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -132,10 +165,15 @@ impl RawDb {
     }
 
     pub async fn scan_root(&self) -> Result<Option<PathBuf>> {
-        let row = sqlx::query("SELECT abs_root FROM pdf_scan_meta ORDER BY id LIMIT 1")
-            .fetch_optional(&self.pool)
-            .await
-            .context("read pdf_scan_meta")?;
+        // Audited: the only interpolation is a table name this handle chose
+        // -- a literal, or that literal behind `pinned_`.
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT abs_root FROM {} ORDER BY id LIMIT 1",
+            self.reads().table("pdf_scan_meta")
+        )))
+        .fetch_optional(&self.pool)
+        .await
+        .context("read pdf_scan_meta")?;
         Ok(row.map(|r| PathBuf::from(r.get::<String, _>("abs_root"))))
     }
 
@@ -152,7 +190,11 @@ impl RawDb {
     }
 
     pub async fn convertible_documents(&self, root: &Path) -> Result<Vec<RenderTarget>> {
-        let rows = sqlx::query(
+        // Audited: the only interpolations are table names this handle
+        // chose -- literals, or those literals behind `pinned_`. The aliases
+        // keep the qualified column references working, since a pinned read
+        // renames the table out from under them.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT d.blake3      AS blake3,
                     d.title       AS title,
                     d.author      AS author,
@@ -162,13 +204,15 @@ impl RawDb {
                     d.doc_modified_at AS doc_modified_at,
                     MIN(p.id)     AS rel_path,
                     COUNT(p.id)   AS copy_count
-               FROM pdf_documents d
-               JOIN pdf_paths p ON p.blake3 = d.blake3
+               FROM {} d
+               JOIN {} p ON p.blake3 = d.blake3
               WHERE d.has_encoding_issues = 0
                 AND d.page_count > d.ocr_page_count
               GROUP BY d.blake3
               ORDER BY d.blake3",
-        )
+            self.reads().table("pdf_documents"),
+            self.reads().table("pdf_paths")
+        )))
         .fetch_all(&self.pool)
         .await
         .context("select convertible documents")?;
