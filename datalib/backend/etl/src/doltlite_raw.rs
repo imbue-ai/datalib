@@ -351,6 +351,25 @@ async fn open_inner(
     commit_run(&pool, "schema: apply DDL")
         .await
         .context("commit schema after DDL")?;
+    // And check it took. A store with tables but no committed schema is the
+    // one shape a reader cannot tell from an empty source — `pin::head`
+    // refuses it for exactly that reason — so an `open` that somehow left
+    // one behind should say so here, where the store is still ours, rather
+    // than let a consumer discover it and skip.
+    if has_dolt_extensions(&pool).await {
+        let committed: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pragma_module_list WHERE name LIKE 'dolt_at_%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(0);
+        anyhow::ensure!(
+            committed > 0,
+            "open left {} with tables but no committed schema; a reader cannot \
+             distinguish that from a source that lost every row",
+            db_path.display()
+        );
+    }
     tracing::info!(
         path = %db_path.display(),
         elapsed_ms = started.elapsed().as_millis() as u64,

@@ -123,6 +123,9 @@ pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
         // No `dolt_hashof` at all is a build without the extensions, which
         // reads the same as a store with nothing committed: no pin.
         .unwrap_or(None);
+    if commit.is_some() && !carries_committed_schema(pool).await {
+        return Ok(None);
+    }
     Pin::from_scan(commit.as_deref())
 }
 
@@ -139,6 +142,44 @@ pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
 /// commit to pin to is already in trouble — the store has nothing committed —
 /// and building views over the bare tables would answer that by handing back
 /// the working set, which is the failure this module exists to prevent.
+/// Whether any commit in this store carries a schema.
+///
+/// A doltlite file gets an "Initialize data repository" commit when it is
+/// created, before any DDL — so `dolt_hashof('HEAD')` answers for a store
+/// whose tables have never been committed at all. That is the dangerous
+/// shape, because it does not look like an error anywhere:
+///
+/// - `head` returns a real hash, so the store reads as pinnable;
+/// - `install_views` finds the tables in `sqlite_master` but no `dolt_at_`
+///   module for them, so every view becomes the empty `WHERE 0` one;
+/// - the consumer reads zero rows and reports a *completed* walk;
+/// - and `retain_documents` deletes every document the source had.
+///
+/// It is reachable: a download that created its tables and wrote rows, then
+/// died before its first commit, leaves exactly this.
+///
+/// A store that has committed anything has a `dolt_at_<table>` module per
+/// committed table, so their total absence *while tables exist* is the
+/// signal. A store with no tables at all needs no answer here — nothing
+/// creates a view, and the read fails loudly on its own.
+async fn carries_committed_schema(pool: &sqlx::SqlitePool) -> bool {
+    let tables: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    if tables == 0 {
+        return true;
+    }
+    let modules: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM pragma_module_list WHERE name LIKE 'dolt_at_%'")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+    modules > 0
+}
+
 pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> {
     // `sqlite_*` are the engine's own bookkeeping tables; SQLite refuses to
     // create a view over some of them, and a reader has no business in them.
@@ -162,8 +203,14 @@ pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> 
     for t in &tables {
         // A table with no `dolt_at_` module did not exist at this commit, so
         // its pinned contents are empty. `WHERE 0` keeps the view's columns
-        // while returning nothing, which is the honest answer: there is no
-        // committed state, and the uncommitted rows are not ours to read.
+        // while returning nothing.
+        //
+        // That is only honest because `head` has already refused the store
+        // where *nothing* is committed. Here some other table is committed,
+        // so this one is genuinely newer than the pin and genuinely empty at
+        // it. Without that check the same branch would quietly turn "this
+        // store has never been committed" into "this source has no rows",
+        // which is what makes a consumer delete everything.
         let body = if pinnable.contains(t.as_str()) {
             format!("SELECT * FROM dolt_at_{t}('{commit}')")
         } else {
@@ -449,6 +496,90 @@ mod view_tests {
             .unwrap();
             assert_eq!(seen, i64::from(i) + 1, "pin at batch {i} lost rows");
         }
+    }
+
+    /// The shape that deletes a source: tables written, nothing committed.
+    ///
+    /// A doltlite file has an initialization commit from birth, so
+    /// `dolt_hashof('HEAD')` answers even here — and every `dolt_at_` module
+    /// is absent, so `install_views` would give each table the empty
+    /// `WHERE 0` view. The consumer then reads zero rows, calls that a
+    /// completed walk, and sweeps every document the source had.
+    ///
+    /// `head` must say `None` — "I cannot read this" — rather than hand back
+    /// a pin that reads as an empty source.
+    #[tokio::test]
+    async fn a_store_whose_tables_were_never_committed_is_not_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        // Deliberately not `doltlite_raw::open`: that commits the schema on
+        // the way in, which is the guarantee. This reproduces a download
+        // that created its tables and died before its first commit.
+        let path = dir.path().join("half.doltlite_db");
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&path)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+        sqlx::query("CREATE TABLE entities (id TEXT PRIMARY KEY, body TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO entities VALUES ('a', 'x')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // The store does have a commit -- the one it was born with.
+        let born_with: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or(None);
+        assert!(
+            born_with.is_some(),
+            "precondition: doltlite gives a new file an initialization commit, \
+             which is why this case cannot be caught by asking for a hash"
+        );
+
+        assert!(
+            head(&pool).await.unwrap().is_none(),
+            "a store whose schema has never been committed must read as \
+             unreadable, not as a source that lost all its rows"
+        );
+    }
+
+    /// The other half: a store that *has* committed its schema and holds no
+    /// rows is readable and empty. A consumer may act on that — including
+    /// deleting what the source no longer has.
+    #[tokio::test]
+    async fn a_committed_but_empty_store_is_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(
+            &dir.path().join("empty.doltlite_db"),
+            &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT)"],
+        )
+        .await
+        .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+
+        let pin = head(&pool)
+            .await
+            .unwrap()
+            .expect("open commits the schema, so the store is readable");
+        install_views(&pool, &pin).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM pinned_entities")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "readable and empty, which is a different answer");
     }
 
     /// Pinned views are per-connection state. The design leans on that in two
