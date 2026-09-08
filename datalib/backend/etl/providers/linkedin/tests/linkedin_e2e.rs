@@ -86,7 +86,9 @@ fn build_export(root: &Path) -> Result<()> {
 }
 
 async fn rows(db: &RawDb, table: &str) -> Vec<serde_json::Value> {
-    db.load_payloads(table).await.unwrap_or_default()
+    db.load_payloads(datalib_etl::pin::Reads::Own, table)
+        .await
+        .unwrap_or_default()
 }
 
 #[test]
@@ -122,6 +124,9 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         })
         .await
         .context("fetch")?;
+        // Commit, the way the processor does in production: render reads
+        // committed state only.
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: linkedin fetch").await?;
 
         // 6 CSVs + 1 articles batch = 7 "files".
         assert_eq!(summary.files, 7, "files (6 csv + articles)");
@@ -354,6 +359,9 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         })
         .await
         .context("fetch with photos")?;
+        // Commit, the way the processor does in production: render reads
+        // committed state only.
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: linkedin fetch").await?;
         std::env::remove_var(PLAYBACK_ENV);
 
         // The photo landed in CAS, keyed by the connection's uuid.
@@ -411,6 +419,9 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             control: Default::default(),
         })
         .await?;
+        // Commit, the way the processor does in production: render reads
+        // committed state only.
+        datalib_etl::doltlite_raw::commit_run(db2.pool(), "test: linkedin fetch").await?;
 
         let empty_pb = tmp.path().join("empty_pb");
         fs::create_dir_all(&empty_pb)?;
@@ -470,6 +481,9 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             control: Default::default(),
         })
         .await?;
+        // Commit, the way the processor does in production: render reads
+        // committed state only.
+        datalib_etl::doltlite_raw::commit_run(db3.pool(), "test: linkedin fetch").await?;
         std::env::set_var(PLAYBACK_ENV, &empty_pb);
         let g = download::photos::fetch_connection_photos(
             &db3,

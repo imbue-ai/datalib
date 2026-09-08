@@ -73,7 +73,10 @@ pub async fn fetch_connection_photos(
     // The connections table may be absent (user excluded it) — nothing
     // to do. load_payloads errors on a missing table, so treat that as
     // empty.
-    let connections = db.load_payloads("connections").await.unwrap_or_default();
+    let connections = db
+        .load_payloads(datalib_etl::pin::Reads::Own, "connections")
+        .await
+        .unwrap_or_default();
     if connections.is_empty() {
         return Ok(PhotoSummary::default());
     }

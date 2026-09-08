@@ -55,7 +55,10 @@ async fn maps_reviews_lands_two_rows() {
     let (_work, summary, db_path) = run_all().await;
     assert_eq!(summary.maps_reviews, 2);
     let db = RawDb::open(&db_path).await.unwrap();
-    let rows = db.load_payloads("maps_reviews").await.unwrap();
+    let rows = db
+        .load_payloads(datalib_etl::pin::Reads::Own, "maps_reviews")
+        .await
+        .unwrap();
     assert_eq!(rows.len(), 2);
     let names: Vec<String> = rows
         .iter()
@@ -82,7 +85,10 @@ async fn maps_photo_lands_row_and_blob() {
     let (_work, summary, db_path) = run_all().await;
     assert_eq!(summary.maps_photos, 1);
     let db = RawDb::open(&db_path).await.unwrap();
-    let rows = db.load_payloads("maps_photos").await.unwrap();
+    let rows = db
+        .load_payloads(datalib_etl::pin::Reads::Own, "maps_photos")
+        .await
+        .unwrap();
     assert_eq!(rows.len(), 1);
     // blake3 column populated from JPEG bytes.
     let blake3: Option<String> = sqlx::query_scalar("SELECT blake3 FROM maps_photos WHERE id = ?")

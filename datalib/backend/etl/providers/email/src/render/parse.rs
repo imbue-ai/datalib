@@ -117,9 +117,9 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         .await
         .context("pin the email raw store for render")?;
 
-    let accounts = load_payloads(&pool, "accounts").await?;
-    let mailboxes = load_payloads(&pool, "mailboxes").await?;
-    let threads = load_payloads(&pool, "threads").await?;
+    let accounts = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "accounts").await?;
+    let mailboxes = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "mailboxes").await?;
+    let threads = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "threads").await?;
 
     // ── Phase 1: which threads changed since last_render_hash? ────
     let scan = scan_diff(&pool, last_render_hash, &pin).await?;
@@ -184,6 +184,7 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
             let gone: std::collections::HashSet<String> =
                 datalib_etl::doltlite_raw::buckets_without_rows(
                     &pool,
+                    datalib_etl::pin::Reads::At(&pin),
                     &ids,
                     &[("threads", "id"), ("emails", "thread_id")],
                 )
@@ -375,7 +376,12 @@ async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, Stri
     Ok(out)
 }
 
-async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
+async fn load_payloads(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+    table: &str,
+) -> Result<Vec<Value>> {
+    let table = reads.table(table);
     let sql = format!("SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
     // Audited: `table` is a literal at both callsites.
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))

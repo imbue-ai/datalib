@@ -196,6 +196,7 @@ async fn parse_doltlite_async(
         Some(changed) => {
             datalib_etl::doltlite_raw::buckets_without_rows(
                 &pool,
+                datalib_etl::pin::Reads::At(&pin),
                 changed,
                 &[("messages", "thread_root_uuid")],
             )

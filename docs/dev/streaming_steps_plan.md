@@ -557,27 +557,20 @@ Each of these is a reviewable PR that leaves the tree green.
    dirty working set, that a missing view fails loudly, and that the
    views are connection-scoped — the three assertions the rest of this
    plan rests on.
-2. **The sweep**, per edge. Every *literal* `FROM <table>` in render code
-   names a commit. **Not finished**: a shared helper that builds
-   `FROM {table}` at runtime reads content the same way, and no regex over
-   the call site can resolve it — for `google_takeout` and
-   `sms_backup_restore` those helpers are the only content read they do.
-   Check 4 counts them by call site now, and its baseline says how many are
-   left (23, across twelve files). Emptying that dict claimed the edge was
-   done when it was not.
+2. ~~**The sweep**~~ **done, both edges, and enforced rather than
+   asserted.** Every render read names a commit.
 
-   Two things worth carrying forward. **The pin goes ahead of every
-   read, not at the scan** — signal loaded `recipients` before diffing,
-   so a pin placed at the scan was already too late. And **the view is
-   aliased back to the table's name** (`JOIN pinned_chat_items
-   chat_items`), because renaming the table alone breaks every qualified
-   column reference that used the old name; aliasing makes the rename
-   additive instead.
+   The literal `FROM <table>` half was a rename. The other half could not
+   be: a shared helper building `FROM {table}` at runtime reads content the
+   same way, and no regex over the call site can resolve it — for two
+   providers those helpers were their *only* content read, so the check
+   reported them finished while every row came from the working set.
 
-   `scan_buckets` no longer samples HEAD itself: the caller pins first
-   and hands it the commit. That is what lets a bucket query join
-   pinned views, and it removes the second HEAD sample that could
-   disagree with the first.
+   Those helpers take a mandatory `Reads` now: `Own` for the download step
+   reading what it wrote, `At(&pin)` for everyone else. The compiler asks
+   the question at every call, which is what makes the empty baseline mean
+   something. `Reads::Own` in render code is what the lint watches for, and
+   the blob CAS is the one documented exemption.
 
 
 3. **Producer checkpoints.** `Checkpointer` (debounce + ceiling, skip
