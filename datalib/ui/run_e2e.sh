@@ -5,8 +5,10 @@
 #
 #   * `bazel run //datalib/ui:e2e`  (BUILD_WORKSPACE_DIRECTORY set)
 #       Interactive dev workflow. Uses the source-tree `datalib/ui/`
-#       directly so spec edits round-trip without a rebuild. Requires a
-#       working source-tree `node_modules` (run `pnpm install` once).
+#       directly so spec edits round-trip without a rebuild. The
+#       source-tree `node_modules` is installed from the same
+#       pnpm-lock.yaml Bazel builds from, so both modes run one
+#       Playwright and one set of browser builds.
 #
 #   * `bazel test //datalib/ui:e2e_test`  (no BUILD_WORKSPACE_DIRECTORY)
 #       Hermetic-ish: Playwright runs from the runfiles tree, against
@@ -117,9 +119,16 @@ if [[ -n "$WORKSPACE" ]]; then
   # shellcheck source=../../scripts/ensure_pnpm.sh
   source "$UI_DIR/../../scripts/ensure_pnpm.sh"
 
-  if [[ ! -d "$UI_DIR/node_modules" ]]; then
-    (cd "$UI_DIR" && pnpm install)
-  fi
+  # Every time, not just when node_modules is missing. Playwright picks
+  # its browser build from the installed @playwright/test, so a tree
+  # left behind by an older lockfile silently runs a DIFFERENT browser
+  # than `bazel test` and CI do — 1.59.1 pins webkit-2272 where 1.62.1
+  # pins webkit-2336. That divergence is invisible and it is exactly
+  # the kind that makes a spec "flaky in `bazel run` only".
+  # `--frozen-lockfile` so a package.json edit that has not been
+  # re-locked fails here rather than putting the two modes back out of
+  # step.
+  (cd "$UI_DIR" && pnpm install --frozen-lockfile)
   # shellcheck disable=SC2086  # E2E_BROWSERS is a deliberate word list
   (cd "$UI_DIR" && pnpm exec playwright install $E2E_BROWSERS >/dev/null)
   PLAYWRIGHT_CMD=(pnpm exec playwright test)
