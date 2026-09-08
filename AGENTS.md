@@ -154,7 +154,8 @@ are relative to the repo root.
   than intent. Read it before adding a renderer: it names the two
   live holes — a run that cannot diff deletes nothing, and a
   conversation that produces fewer documents than last time orphans
-  the rest.
+  the rest — and its §3.2 has the monotonicity condition a provider
+  must meet before it can checkpoint mid-run.
 - [`docs/dev/multimodal_retrieval.md`](docs/dev/multimodal_retrieval.md)
   — *proposal*, nothing built: replacing the `qmd_index` step with a
   retrieval layer that takes an arbitrary `grid_rows` metadata

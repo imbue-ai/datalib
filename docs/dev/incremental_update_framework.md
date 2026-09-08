@@ -47,9 +47,9 @@ The twelve provider renderers do the same thing by hand, on top of
 three shared primitives ([`render_cursor`](/datalib/backend/etl/src/render_cursor.rs),
 `doltlite_raw::scan_buckets`, `doltlite_raw::buckets_without_rows`) and
 two `RunCtx` sinks (`remove_conversation`, `retain_documents`). Checked
-against `main` at `e22ee639` on 2026-09-08 — after #314, #316 and #319,
-which moved §3.5 a long way and left the rest of this table where it
-was:
+against `main` at `305d7e79` on 2026-09-08. The pin work (#314, #316,
+#319, #322, #326, #328) has closed most of §3.5 and all of §3.2's
+*bail* hazard; it left this table exactly where it was:
 
 | provider | cursor | how deletions are found | order | load narrowed |
 |---|---|---|---|---|
@@ -192,33 +192,43 @@ merely cheap, for two reasons worth stating out loud:
   nothing. Worth an explicit test, because this is the property the
   whole idea rests on.
 
-**Half of this landed as #316, from the wrong direction.** That commit
-answers the *symptom* — a renderer that bailed handed an empty set to
-`retain_documents` and swept the source away — with
-`RenderPass::{Walked, Skipped}`, a mandatory return value the sweep
-refuses to act on when it says `Skipped`. That is the right shape: the
-caller is not the one who knows, and the enum makes the compiler ask.
-Two triggers are still live behind it, both verified on `main`:
+**The *bail* half of this is now closed** (#316, #322), and by the route
+the framework wants. #316 gave the sweep a `RenderPass::{Walked, Skipped}`
+it must be handed — a return value, not a flag, because the caller is not
+the one who knows. #322 then fixed what the guard was still being lied
+to about: five render paths turned "cannot read this store" into an empty
+result set from an inner block and fell through reporting `Walked`, so
+the value leaked past a guard that was testing the right thing. They
+carry `Option` all the way out now, and contacts' `parse` returns
+`Option<ParsedContacts>` rather than an empty one. The sentence #322
+wrote down is the whole rule and is better than the way §3.2 states it
+here: **a sink that cannot answer must say *that*, not hand back an
+empty result and let the consumer draw the conclusion.**
 
-- **The no-commit path still reports `Walked`.** google_takeout and all
-  three linkedin feeds convert `pin::head() == None` into
-  `Ok(Default::default())` from an inner async block, then fall through
-  to `Ok(RenderPass::Walked)` at the end of the function. Only the
-  `!db_path.exists()` early return was converted to `Skipped`. So the
-  trigger #316's own message calls out — "a store with nothing
-  committed", "a build without the dolt extensions" — still sweeps.
-- **contacts bails in `parse`, not in `render_all`.** Its call site says
-  "`render_all` has no early return: reaching here means it walked",
-  which is true of `render_all` and not of the pass:
-  `render/parse.rs::parse` returns `ParsedContacts::default()` when the
-  store is absent, and the sweep then runs on an empty set. (perseus,
-  which carries the same comment, really is safe — its `parse` fails on
-  a missing directory and `bail!`s on an empty one.)
+What is left is the *cold-start* half, untouched: every diff-driven
+provider still does `gone = Vec::new()` when `changed_buckets` is `None`
+— see `github/src/render/parse.rs:255` and the same shape at
+`notion/src/download/db.rs:736` — and then advances the cursor anyway.
+A deletion inside a window we could not diff is still never revisited.
 
-Both go away under the rule above, which is why the rule is worth
-having: "cannot read the source" resolves to a *full pass*, and a full
-pass that genuinely finds nothing is a source that genuinely lost
-everything. There is then no third state for a provider to get wrong.
+**And checkpointing has just made the "partial store" case real.** #329
+lets a download seal mid-fetch, so render can now legitimately read a
+store its producer is still writing. Two things follow for this section:
+
+- The reset carve-out is right and narrower than it looks.
+  `RunCtx::checkpoint_policy` returns `Policy::Never` under
+  `reset_and_redownload`, because a store mid-truncate-and-refill is
+  indistinguishable from a source that lost most of its data. That is
+  exactly the reasoning above.
+- **But the flag is not the condition.** A checkpoint is only safe where
+  a run's writes are monotone, and three providers truncate on *every*
+  run regardless of the flag: whatsapp (`download.rs:144`, every backup
+  is a full snapshot), pdf (`download/mod.rs:73`, "the truncate is what
+  makes deletions fall out") and fsindex (`download/mod.rs:192`). Their
+  consistent point is "after the refill completes", not "after a write
+  burst goes quiet". #329 says the other nineteen providers each need
+  someone to look at their consistent point; this is what that look has
+  to find.
 
 **One caveat, and it is a real one.** The `.md` files are not in the
 transaction. `IndexedMarkdownStore::remove_document` unlinks the file
@@ -288,68 +298,68 @@ doc recommended and nobody implemented: with the cursor in the store,
 
 ### 3.5 Readers always pin
 
-Mostly done, across #314, #316 and #319 — and the way it was finished is
-worth copying, because the first two attempts to declare it finished were
-both wrong and the third one changed the mechanism instead of the claim.
+Substantially done across #314, #316, #319, #322, #326 and #328, and the
+shape it settled into is the one to copy elsewhere.
 
-**What landed.** #314 put the pin ahead of every read rather than at the
-scan (right: signal loads `recipients` and `chats` *before* it diffs) and
-stopped `scan_buckets` sampling HEAD itself, taking the caller's pin
-instead, so the diff and the rows behind it name one commit by
-construction. Views are aliased back to their own names
-(`JOIN pinned_chat_items chat_items`) so qualified column references keep
-resolving. #319 then closed the hole a regex could never see: the shared
-helpers that build `FROM {table}` at runtime — `load_payloads`,
-`load_payloads_with_id`, `buckets_without_rows` — now take a **mandatory**
-[`pin::Reads`](/datalib/backend/etl/src/pin.rs), `Own` for the store's
-owner and `At(&pin)` for everyone else. The compiler asks at every call
-and the answer is greppable. That is the right fix: the question ("whose
-store is this?") genuinely has two answers, the download side wants its
-own working set, and no check over a call site could have told them apart.
+**The pin lives on the handle.** `RawDb::open_reader` samples HEAD,
+installs the `pinned_<table>` views and keeps the pin; every loader reads
+through `self.reads()`. That is where the guarantee actually holds — the
+views are per-connection, so a pin was never a per-call property, and the
+earlier `Reads::At(pin)` signature promised one it could not provide.
+There is now no constructor for an unpinned reader.
 
-**And the CAS is deliberately unpinned, which is better than what I
-suggested.** I said wire the CAS pin up; #316 removed it instead, and the
-argument on `BlobCas::get` is correct — entities are committed *after* the
-blobs they name, so an entities pin can reference a blob committed later
-than any CAS pin a reader sampled, and the pinned CAS would be missing
-bytes the pinned entity points at. Read unpinned it is always a superset.
-Content addressing means there is no version of a blob to be wrong about.
+**`open_reader` returns `Option`, and `None` means "cannot be read".**
+That is the sink contract of §3.2 spelled out in a type rather than left
+to a comment, and it is what stops an unreadable store reading as an
+empty one.
 
-**What is left, and the lint says otherwise.** Check 4 prints "every
-render read is pinned" and `EXPECTED_UNPINNED_READS` is empty. Four
-providers still read their content from the working set, because their
-loaders are bespoke SQL in `download/db.rs` — a file
-[`lint_repo.py`](/scripts/lint_repo.py)'s `_render_sources` does not
-scan, and one the mandatory `Reads` parameter never reached:
+**And there is finally evidence, in two processes.**
+`//datalib/backend/etl:doltlite_two_process_test` (#328) has a real
+writer committing into a `.doltlite_db` while a separate process opens
+it read-only, pins, and reads `pinned_entities`. It covers both open
+orders, requires at least two of the writer's commits to land inside the
+reader's sample window so a quiet store cannot pass, and was verified to
+fail — counts climbing from 5 to 59 — when the read is pointed at
+`entities`. Every single-process test in `pin.rs` was structurally
+incapable of answering this, because doltlite's working set and its
+chunk-store lock are per *file*.
 
-| provider | read unpinned by render | where |
-|---|---|---|
-| notion | `pages` (through a `Reads::Own` call site), `users`, `comment_anchors`, `page_markdown`, `comments` | `download/db.rs` |
-| claude | `conversations`, `users`, `projects`, `project_docs` | `download/db.rs` |
-| github | `self_identity`, `pull_requests`, `load_children` × 3 | `download/db.rs` |
-| gitlab | `self_identity`, `merge_requests`, `discussions` | `download/db.rs` |
+**The CAS is deliberately unpinned, and that is better than what this
+document first suggested.** Entities are committed *after* the blobs they
+name, so an entities pin can reference a blob committed later than any
+CAS pin a reader sampled, and the pinned CAS would then be missing bytes
+the pinned entity points at. Content addressing means there is no version
+of a blob to be wrong about. Said once, on `BlobCas::get`.
 
-For all four that is essentially their whole content read. #314's body
-named github, gitlab and notion as "the obvious next PR"; #319's says
-"the last 23 unpinned render reads" and empties the baseline, so the
-open item stopped being tracked between one commit and the next. Two
-details worth knowing when picking it up:
+**What is left, and the lint says otherwise again.** Check 4 prints
+"every render read is pinned". Its coverage now includes a hand-written
+`_RENDER_REACHABLE_LOADERS` list — loaders that live in `download/db.rs`
+but are called from render — which is the honest fix for a real problem
+and also a list that can go stale. It has:
 
-- **notion's is the sharper case**, because the parameter did reach it
-  and got the wrong answer: `RawDb::load_pages` passes `Reads::Own`, and
-  render calls it. The check greps `Reads::Own` only inside render files,
-  so an owner-read helper called *from* render is invisible.
-- **#319's message says github's `load_children` now takes a `Reads`.**
-  It does not — only the three `doltlite_raw` helpers were converted.
+| still unpinned on a render path | where |
+|---|---|
+| notion `load_user_names` (`FROM users`) | `notion/src/download/db.rs:365` |
+| notion's `ATTACHMENTS_PROJECTION_SQL` (`FROM notion_attachments`) | `notion/src/download/db.rs:783` |
+| linkedin `load_photo_blobs` (`FROM contact_photos`) | `linkedin/src/download/photos.rs:192` |
+| pdf `scan_root` + `convertible_documents` (`pdf_scan_meta`, `pdf_documents`, `pdf_paths`) | `pdf/src/download/db.rs:130,150` |
 
-**One trap in the API itself.** `Reads::At(pin)` ignores the pin and just
-prefixes the table name; the commit a read actually lands on was fixed by
-whichever `install_views` ran on that connection. One pin per pool is the
-real model and the pools are one connection wide, so it is correct today
-— but the signature promises a per-call guarantee it does not provide,
-and a second `install_views` at a different commit would silently
-redirect every `Reads::At` on that pool. Worth either enforcing (refuse a
-second install at a different pin) or saying plainly on the type.
+The first three are reached from a file the check *does* scan
+(`block_on_load_all`, `connections.rs:68`) through a function it does
+not; pdf's `RawDb::open_reader` is simply not one of the pinning kind
+yet. The two attachment-edge reads are also inconsistent with their own
+siblings — eight providers pin that projection
+(`pinned_claude_attachments`, `pinned_slack_attachments`,
+`pinned_email_blobs`, `pinned_wa_media_files`, …); notion and linkedin
+are the two that do not, so this is a miss rather than a decision.
+
+Naming the reachable loaders by hand is better than the two things it
+replaced — a glob that could not reach them, and a claim that they did
+not exist — but the failure mode is now "a new loader nobody adds to the
+list". The framework's answer is the same one that worked for the pin
+itself: make the *handle* the only way in, so there is no place left for
+a list to be incomplete about. pdf is the remaining provider whose
+`open_reader` has not made that move.
 
 ## 4. What a provider supplies
 
@@ -377,18 +387,19 @@ Each of these is useful alone, and they are listed cheapest-first.
    full pass atomic.
 2. **Make the full pass real** (§3.2) — delete-all + upsert-all + the
    post-commit file sweep. This closes the "cold start deletes nothing"
-   hole on its own, before any deps table exists, and retires
-   `RenderPass` along with the two triggers still slipping past it.
+   hole on its own, before any deps table exists, and subsumes
+   `RenderPass`: a pass that cannot read its source is a pass that
+   walked nothing, which is the same statement `Skipped` makes today.
 3. **Scoped retain per bucket** (§3.3). Small, and fixes the four
    periodizing providers.
 4. **`render_deps`** (§3.1). The big one. Land it behind the existing
    behaviour: write the table, and assert (in tests, then in a warning)
    that the documents it names match what `global_fanout_tables` and
    the hand-written unions produce. Only then delete the old paths.
-5. **Finish the pin** (§3.5) — notion, claude, github and gitlab read
-   their content through `download/db.rs`, which neither the check nor
-   the mandatory `Reads` reached. Restore the baseline entry while it
-   is true. Drop the residual `prior_fingerprints` plumbing from the
+5. **Finish the pin** (§3.5) — four reads across notion, linkedin and
+   pdf, and then put pdf's `open_reader` on the handle-pin shape so
+   `_RENDER_REACHABLE_LOADERS` has nothing left to be incomplete
+   about. Drop the residual `prior_fingerprints` plumbing from the
    five providers still threading it while you are there.
 6. **Bring the stragglers on**: beeper (no cursor, no deletions at
    all), sms_backup_restore (deletes after writing), contacts (which
@@ -399,9 +410,12 @@ Each of these is useful alone, and they are listed cheapest-first.
 
 - **Column-level diffs.** Bucket-grained is enough; `render_deps`
   already makes the grain as fine as it usefully gets.
-- **Streaming.** Everything here assumes render reads a finished store.
-  It is compatible with `streaming_steps_plan.md` — pinning is what
-  makes it so — but does not depend on it.
+- **Streaming.** Everything here works whether or not render reads a
+  finished store, and since #329 claude's download seals mid-fetch, so
+  sometimes it does not. Pinning (§3.5) is what makes that safe. The
+  one place the two designs meet is §3.2's note on monotonicity: a
+  provider that truncates within a run has no safe mid-run seal, and
+  the framework's full pass is what a consumer of one should do.
 - **The download side.** "What did upstream delete" is a different
   question there, answered by re-enumeration and
   [`prune.rs`](/datalib/backend/etl/src/prune.rs). Unchanged.
