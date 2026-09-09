@@ -119,10 +119,47 @@ Reach for the simplest existing provider that's shaped like yours,
    `config_examples_test` schema check, so a new source is only covered
    by that test if it appears there too.
 
+7. Write `providers/<name>/DOWNLOAD.md`, and `TRANSLATE.md` too if the
+   provider has a render side. See
+   [Every provider documents itself, in the same place](#every-provider-documents-itself-in-the-same-place).
+
 Grid index needs no per-provider changes — the `grid_index` step
 (`datalib-step grid_index`, `build_grid_index` in
 `etl/src/grid_index.rs`) picks up the new source's store on its next
 run.
+
+### Every provider documents itself, in the same place
+
+A provider's documentation lives beside its code, under a name that is
+the same for every provider: **`DOWNLOAD.md`** for the ingest side and
+**`TRANSLATE.md`** for the render side. That consistency is the whole
+point — it is what lets a reader (or an agent) find a provider's docs by
+convention instead of by searching, so nothing has to maintain an index
+of them and no provider gets forgotten by one.
+
+Cover at least these, because they are the questions people actually
+arrive with:
+
+- **Where the data comes from**, and what auth it needs.
+- **What one run does**, and what a *second* run costs — the
+  incrementality story, including what makes a record look changed.
+- **The store's shape**: the tables written, and **what keys each one**.
+  Say it even when the answer is "the source's own key", and say it
+  especially when some tables end up keyless — an unexplained keyless
+  table reads as a bug to the next person, and has.
+- **What the provider deliberately does not do**, and the known gaps.
+- **How to inspect the result** — real `datalib-doltlite` queries against
+  the store, not a description of them.
+
+Prefer measurements over adjectives, and say which input you measured on
+so the next person can reproduce the number rather than wonder whether
+it went stale.
+
+This is the rule for new providers, not yet a description of all of
+them: several of the earlier ones ship no `DOWNLOAD.md`, and the render
+side is documented more thinly than the download side across the board.
+`ls datalib/backend/etl/providers/*/*.md` is the current state. Adding
+one to a provider you are already working in is a welcome thing to do.
 
 ### Worked examples beyond the chat shape
 
