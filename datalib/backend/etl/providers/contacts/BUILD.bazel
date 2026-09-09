@@ -29,13 +29,10 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:base64",
-        "@datalib_crates//:chrono",
         "@datalib_crates//:quick-xml",
-        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:thiserror",
-        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
     ],
@@ -47,6 +44,7 @@ rust_test(
     crate = ":datalib_etl_contacts",
     edition = "2021",
     deps = [
+        "@datalib_crates//:tokio",
         "@datalib_crates//:tempfile",
     ],
 )

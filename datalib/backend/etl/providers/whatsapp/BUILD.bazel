@@ -29,18 +29,12 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",
-        "//datalib/backend/time:datalib_time",
         "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:serde",
-        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
-        "@datalib_crates//:thiserror",
-        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
-        "@datalib_crates//:walkdir",
     ],
 )
 
@@ -52,7 +46,6 @@ rust_binary(
     # tree; mirrors signal_make_fixture's visibility.
     visibility = ["//visibility:public"],
     deps = [
-        ":datalib_etl_whatsapp",
         "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
@@ -69,6 +62,7 @@ rust_test(
     crate = ":datalib_etl_whatsapp",
     edition = "2021",
     deps = [
+        "@datalib_crates//:tokio",
         "@datalib_crates//:tempfile",
     ],
 )

@@ -21,19 +21,16 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
-        "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:chrono",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
     ],
 )
@@ -80,7 +77,6 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_unified_index",
-        "//datalib/backend/core:datalib_core",
         "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",

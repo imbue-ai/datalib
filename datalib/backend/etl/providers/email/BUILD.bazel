@@ -42,18 +42,14 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
-        "@datalib_crates//:clap",
-        "@datalib_crates//:htmd",
         "@datalib_crates//:mail-parser",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
         "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
-        "@datalib_crates//:uuid",
     ],
 )
 
@@ -66,8 +62,6 @@ rust_binary(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         ":datalib_etl_email",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
@@ -81,6 +75,9 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_email",
     edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
 )
 
 rust_test(
@@ -99,10 +96,8 @@ rust_test(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
     ],
 )
 
@@ -137,7 +132,6 @@ rust_test(
     deps = [
         ":datalib_etl_email",
         "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
@@ -155,13 +149,6 @@ rust_test(
         "JMAP_FIXTURE_DIR": "datalib/backend/etl/providers/email/tests/fixtures",
     },
     deps = [
-        ":datalib_etl_email",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
     ],
 )
 
@@ -184,8 +171,6 @@ rust_test(
     deps = [
         ":datalib_etl_email",
         "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
-        "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
@@ -209,11 +194,6 @@ rust_test(
         "no-sandbox",
     ],
     deps = [
-        ":datalib_etl_email",
-        "@datalib_crates//:insta",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
     ],
 )
 

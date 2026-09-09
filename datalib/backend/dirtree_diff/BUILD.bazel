@@ -17,7 +17,6 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],
 )
@@ -34,7 +33,6 @@ rust_binary(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",

@@ -489,3 +489,33 @@ build --@rules_rust//rust/settings:clippy.toml=//datalib/backend:clippy.toml
 # `disallowed-macros` table relied on being warned (then promoted to
 # error by `-D warnings`) — same here.
 build --@rules_rust//:clippy_flags=-Dwarnings,-Wclippy::disallowed_macros
+
+# A `deps` entry the crate never uses is an error, everywhere under
+# `datalib/`. rustc is handed the exact `--extern` set by bazel and
+# knows which ones it resolved a path through, so this is the same
+# check IWYU does for C++ headers without any of the guessing — there
+# is no include graph to reconstruct and no mapping file to maintain.
+#
+# **It has to be `per_crate_rustc_flag`, not `extra_rustc_flag`.** The
+# global form also lands on third-party compiles — measured with
+# `bazel aquery`, 92 of them for a single leaf target — and we cannot
+# fix an upstream crate's dep list. The `datalib/` prefix scopes it to
+# first-party: 0 of 303 third-party actions carry it.
+#
+# `-D` rather than `-W` is deliberate. The `-Dwarnings` above is
+# `clippy_flags`, so it reaches the clippy aspect and not plain rustc;
+# relying on it to promote a `-W` here would make the gate depend on
+# which action happened to run.
+#
+# Two things to know when this fires:
+#
+#   * A dep used only under `#[cfg(test)]` is reported unused on the
+#     library, because the library build does not compile that code.
+#     Move it from the `rust_library`'s `deps` to those of the
+#     `rust_test` that names it with `crate = `, which is where it was
+#     really needed. Sixteen deps moved that way when this landed.
+#   * A dep that is genuinely needed but never named — a linker
+#     artifact, say — is kept with `use <crate> as _;` in the crate
+#     root, which is what rustc's own help text suggests. Nothing in
+#     this tree needs that today.
+build --@rules_rust//:per_crate_rustc_flag=datalib/@-Dunused-crate-dependencies

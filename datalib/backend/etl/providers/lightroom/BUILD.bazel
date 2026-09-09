@@ -41,7 +41,6 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],
 )

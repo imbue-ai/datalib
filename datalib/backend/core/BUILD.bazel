@@ -13,17 +13,10 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/app_schema:app_schema",
-        "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/time:datalib_time",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:chrono",
-        "@datalib_crates//:serde",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:serde_yaml",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:thiserror",
-        "@datalib_crates//:tokio",
         "@datalib_crates//:uuid",
     ],
 )
@@ -34,6 +27,7 @@ rust_test(
     crate = ":datalib_core",
     edition = "2021",
     deps = [
+        "@datalib_crates//:tokio",
         "@datalib_crates//:tempfile",
     ],
 )

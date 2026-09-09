@@ -24,20 +24,10 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",
-        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         # Sentence-level alignment via Ancient-Greek-BERT runs through
         # candle-transformers; weights are pulled lazily by hf-hub and
         # tokenized by `tokenizers`. See `src/translate/align/embed.rs`.
-        "@datalib_crates//:candle-core",
-        "@datalib_crates//:candle-nn",
-        "@datalib_crates//:candle-transformers",
-        "@datalib_crates//:chrono",
-        "@datalib_crates//:hf-hub",
-        "@datalib_crates//:quick-xml",
-        "@datalib_crates//:serde",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tokenizers",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
@@ -72,7 +62,6 @@ rust_test(
         "//datalib/backend/etl/providers/perseus_render:datalib_etl_perseus_render",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
-        "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
     ],
 )

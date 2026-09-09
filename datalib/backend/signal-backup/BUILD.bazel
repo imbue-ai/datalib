@@ -50,11 +50,8 @@ rust_library(
         "@datalib_crates//:hkdf",
         "@datalib_crates//:hmac",
         "@datalib_crates//:prost",
-        "@datalib_crates//:serde",
-        "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:subtle",
-        "@datalib_crates//:thiserror",
     ],
 )
 
@@ -110,7 +107,6 @@ rust_test(
     tags = ["manual"],
     deps = [
         ":datalib_signal_backup",
-        "@datalib_crates//:anyhow",
     ],
 )
 
