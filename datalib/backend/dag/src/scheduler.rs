@@ -284,6 +284,16 @@ impl Runner {
         // Seeded from the spec (how an in-process step declares it) and
         // overwritten by a `Capabilities` signal (how a subprocess does).
         let mut streams: Vec<bool> = graph.steps.iter().map(|s| s.streams_output).collect();
+        // The input versions each running step was dispatched against.
+        //
+        // Snapshotted at dispatch, not read back at completion, and that is
+        // the whole point: a streaming pass runs *while its producers are
+        // still going*, so by the time it finishes `versions` may name
+        // versions it never saw. Recording those would have it claim to have
+        // consumed a producer whose output it read before that producer had
+        // written anything -- and the final pass would then find nothing
+        // changed, skip, and leave that source out of the index entirely.
+        let mut consumed: Vec<HashMap<String, String>> = vec![HashMap::new(); n];
         let mut streaming_ready: VecDeque<usize> = VecDeque::new();
         let mut streaming_running = 0usize;
 
@@ -350,6 +360,15 @@ impl Runner {
                         running += 1;
                         in_flight[i] = true;
                         dispatched = true;
+                        consumed[i] = graph.resolved_inputs[i]
+                            .iter()
+                            .filter_map(|a| {
+                                versions
+                                    .get(a.as_str())
+                                    .map(|v| (a.as_str().to_string(), v.clone()))
+                            })
+                            .collect();
+
                         mark_running(&mut state, &graph.steps[i].id, &now_stamp());
                         let run = graph.steps[i].run.clone();
                         let retry = self.retry.clone();
@@ -388,6 +407,15 @@ impl Runner {
                         in_flight[i] = true;
                         early[i] = true;
                         dispatched = true;
+                        consumed[i] = graph.resolved_inputs[i]
+                            .iter()
+                            .filter_map(|a| {
+                                versions
+                                    .get(a.as_str())
+                                    .map(|v| (a.as_str().to_string(), v.clone()))
+                            })
+                            .collect();
+
                         mark_running(&mut state, &graph.steps[i].id, &now_stamp());
                         let run = graph.steps[i].run.clone();
                         let retry = self.retry.clone();
@@ -551,14 +579,9 @@ impl Runner {
                                 versions.insert(path.clone(), v.clone());
                                 changed_now.insert(path.clone(), moved);
                             }
-                            let input_versions = graph.resolved_inputs[i]
-                                .iter()
-                                .filter_map(|a| {
-                                    versions
-                                        .get(a.as_str())
-                                        .map(|v| (a.as_str().to_string(), v.clone()))
-                                })
-                                .collect();
+                            // What this pass was dispatched against, not what
+                            // is current now -- see `consumed`.
+                            let input_versions = consumed[i].clone().into_iter().collect();
                             state.steps.insert(
                                 spec.id.clone(),
                                 StepState {

@@ -1074,19 +1074,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index: markdowns_read=2 markdowns_loaded=2 markdowns_skipped=0 markdowns_removed=0 rows_inserted=9"
-    },
-    {
-      "message": "datalib-step grid_index: markdowns_read=21 markdowns_loaded=21 markdowns_skipped=0 markdowns_removed=0 rows_inserted=102"
-    },
-    {
-      "message": "datalib-step grid_index: markdowns_read=22 markdowns_loaded=22 markdowns_skipped=0 markdowns_removed=0 rows_inserted=90"
-    },
-    {
-      "message": "datalib-step grid_index: markdowns_read=25 markdowns_loaded=25 markdowns_skipped=0 markdowns_removed=0 rows_inserted=108"
-    },
-    {
-      "message": "datalib-step grid_index: markdowns_read=6 markdowns_loaded=6 markdowns_skipped=0 markdowns_removed=0 rows_inserted=36"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=76 markdowns_read=76 markdowns_removed=0 markdowns_skipped=0 rows_inserted=345"
     }
   ],
   "grid_rows": [
@@ -7154,7 +7142,7 @@ expression: snapshot
   ],
   "summary": {
     "documents_count": 76,
-    "dolt_log_count": 6,
+    "dolt_log_count": 2,
     "grid_rows_count": 199,
     "storage_rows_count": 146
   }

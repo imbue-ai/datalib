@@ -204,21 +204,53 @@ async fn snapshot_grid_rows_and_documents() {
         .collect();
 
     // ── dolt_log ─────────────────────────────────────────────────
-    // doltlite stamps every `dolt_commit` call into `dolt_log`. The
-    // grid_index step issues exactly ONE commit per run for the
-    // index DB (see datalib_step::grid_index);
-    // that, plus doltlite's own "Initialize data repository" boot
-    // commit, is what we expect to see here. Snapshotting the
-    // commit-message column catches:
+    // doltlite stamps every `dolt_commit` call into `dolt_log`.
+    //
+    // `grid_index` commits once per *pass*, and since `render` streams it
+    // runs a pass whenever a source seals or finishes. **How the work
+    // splits across those passes is timing, not behavior** — it moves with
+    // machine speed, so pinning it here would make this golden fail on a
+    // slower box while nothing was wrong. It did: 2/21/22/25/6 locally
+    // against 2/33/35 on CI, for the same 76 documents.
+    //
+    // So the passes are folded into one row carrying the totals. Those are
+    // the claim worth making — every document was read exactly once, and
+    // all of them were — and they hold whatever the tranching.
     let log_rows = sqlx::query("SELECT message FROM dolt_log() ORDER BY date ASC, message ASC")
         .fetch_all(&pool)
         .await
         .expect("read dolt_log");
 
-    let dolt_log: Vec<serde_json::Value> = log_rows
-        .iter()
-        .map(|r| json!({"message": r.try_get::<String, _>("message").ok()}))
-        .collect();
+    let mut dolt_log: Vec<serde_json::Value> = Vec::new();
+    let mut totals: std::collections::BTreeMap<String, i64> = Default::default();
+    let mut passes = 0usize;
+    for r in &log_rows {
+        let Some(msg) = r.try_get::<String, _>("message").ok() else {
+            continue;
+        };
+        let Some(fields) = msg.strip_prefix("datalib-step grid_index: ") else {
+            dolt_log.push(json!({ "message": msg }));
+            continue;
+        };
+        passes += 1;
+        for kv in fields.split_whitespace() {
+            if let Some((k, v)) = kv.split_once('=') {
+                if let Ok(n) = v.parse::<i64>() {
+                    *totals.entry(k.to_string()).or_default() += n;
+                }
+            }
+        }
+    }
+    if passes > 0 {
+        let summed = totals
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        dolt_log.push(json!({
+            "message": format!("datalib-step grid_index (all passes summed): {summed}")
+        }));
+    }
 
     // Storage rows are summarized rather than enumerated. They are 43%
     // of the rows and none of this golden's purpose — it exists to
@@ -264,7 +296,9 @@ async fn snapshot_grid_rows_and_documents() {
             "grid_rows_count": grid_rows.len(),
             "storage_rows_count": storage.len(),
             "documents_count": documents.len(),
-            "dolt_log_count": dolt_log.len(),
+            // Deliberately the *folded* length: the raw count moves with
+        // how many passes streaming happened to take.
+        "dolt_log_count": dolt_log.len(),
         },
         "grid_rows": grid_rows,
         "storage_rows": storage_rows,
