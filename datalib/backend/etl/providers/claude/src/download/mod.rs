@@ -60,10 +60,6 @@ pub struct FetchOptions {
     /// source's `latchkey_settings:` block. Default = the only stored
     /// account for the service.
     pub latchkey: LatchkeySettings,
-    /// Only names the store in this run's tracing span; the download
-    /// itself works through `db`. Kept for that alone — nothing here
-    /// opens it, and nothing should.
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -104,7 +100,6 @@ impl FetchOptions {
     pub fn new(db: RawDb) -> Self {
         Self {
             latchkey: LatchkeySettings::default(),
-            db_path: PathBuf::new(),
             db,
             export_dir: None,
             overlap: 0,
@@ -160,7 +155,9 @@ pub struct FetchSummary {
     pub forbidden_retry_recoveries: u64,
 }
 
-#[instrument(skip_all, fields(db = %opts.db_path.display()))]
+#[instrument(skip_all, fields(
+    db = %opts.db.pool().connect_options().get_filename().display()
+))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_dispatch();
     let db = opts.db.clone();

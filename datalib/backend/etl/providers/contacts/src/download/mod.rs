@@ -8,8 +8,6 @@ pub mod vcf_dir;
 
 pub use db::{db_path_for, RawDb};
 
-use std::path::PathBuf;
-
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::http::LatchkeySettings;
@@ -25,10 +23,6 @@ pub struct FetchOptions {
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
-    /// The per-source directory, resolved to the entity db so the inline
-    /// photo CAS lands beside it. The download works through `db`; this
-    /// is here for the sibling path and nothing else.
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -145,8 +139,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Lift inline vCard photos into the per-source CAS (consistent
     // contact_photos shape). Best-effort: a CAS hiccup shouldn't fail an
     // otherwise-good contacts sync.
-    if let Err(e) = photos::lift_photos_to_cas(&db, &db_path_for(&opts.db_path)).await {
-        warn!(event = "carddav_photo_lift_failed", error = %e);
+    // Through the handle's own CAS, so nothing here opens a second
+    // store. `None` is a reader, which never reaches this path.
+    if let Some(cas) = db.cas() {
+        if let Err(e) = photos::lift_photos_to_cas(&db, cas).await {
+            warn!(event = "carddav_photo_lift_failed", error = %e);
+        }
     }
 
     Ok(summary)

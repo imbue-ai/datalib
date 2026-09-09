@@ -4,6 +4,7 @@
 pub mod photos;
 pub mod schema_raw;
 
+use datalib_etl::blob_cas::{cas_path_for, BlobCas};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,17 @@ const INSERT_CHUNK: usize = 400;
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
+    /// Connection profile photos. Opened with the handle rather than
+    /// from a path at the call site, so there is one opener per store
+    /// and `close_all` reaches it.
+    ///
+    /// `Some` on the download path even when `fetch_photos` is off — a
+    /// handle whose store set depends on a config flag is one nobody
+    /// can reason about, and an empty CAS file costs nothing. `None`
+    /// only on a reader whose store predates any photo fetch, since
+    /// opening a missing file read-only is an error and creating it
+    /// would be a write render does not own.
+    cas: Option<BlobCas>,
 }
 
 impl RawDb {
@@ -48,14 +60,30 @@ impl RawDb {
     /// whatever columns it has; probe with `column_exists` and fall back
     /// where that matters.
     pub async fn open_reader(db_path: &Path) -> Result<Self> {
+        let cas_path = cas_path_for(db_path);
+        let cas = if cas_path.is_file() {
+            Some(BlobCas::open_reader(&cas_path).await?)
+        } else {
+            None
+        };
         Ok(Self {
             pool: datalib_etl::doltlite_raw::open_reader(db_path).await?,
+            cas,
         })
     }
 
     pub async fn open(db_path: &Path) -> Result<Self> {
         let pool = dr::open(db_path, &[]).await?;
-        Ok(Self { pool })
+        let cas = BlobCas::open(&cas_path_for(db_path)).await?;
+        Ok(Self {
+            pool,
+            cas: Some(cas),
+        })
+    }
+
+    /// `None` only on a reader whose store has no CAS file — see the field.
+    pub fn cas(&self) -> Option<&BlobCas> {
+        self.cas.as_ref()
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -79,10 +107,6 @@ impl RawDb {
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    /// The per-source directory, resolved to the entity db for the
-    /// sibling CAS path. The download works through `db`; this is here
-    /// for that derivation and nothing else.
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -167,11 +191,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Photo fetch runs after the snapshot is committed (it needs the
     // `connections` rows persisted) and is a no-op unless enabled. Each
     // connection is fetched at most once across runs.
-    if opts.fetch_photos {
-        let db_path = db_path_for(&opts.db_path);
+    // Through the handle's own CAS, so nothing here opens a second
+    // store. `None` is a reader, which never reaches a fetch.
+    if let (true, Some(cas)) = (opts.fetch_photos, db.cas()) {
         match photos::fetch_connection_photos(
             &db,
-            &db_path,
+            cas,
             &opts.progress,
             opts.photo_max_consecutive_failures,
         )

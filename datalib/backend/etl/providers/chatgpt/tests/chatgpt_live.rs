@@ -23,7 +23,6 @@ async fn chatgpt_live_single_conv_snapshot() {
 
     let db = chatgpt::RawDb::open(&db_path_for(&tmp)).await.unwrap();
     let opts = chatgpt::FetchOptions {
-        db_path: tmp.clone(),
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,

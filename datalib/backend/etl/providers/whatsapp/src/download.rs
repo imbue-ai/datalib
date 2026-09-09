@@ -52,20 +52,18 @@ pub struct IngestSummary {
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
-    /// Path on disk of the doltlite file the pool wraps. Kept so
-    /// `datalib_etl::blob_cas::cas_path_for` can derive the
-    /// sibling CAS file location without the caller threading two
-    /// paths around in parallel.
-    db_path: PathBuf,
+    /// Media bytes. Opened with the handle rather than from a path
+    /// further down, so there is one opener per store and `close_all`
+    /// reaches it — the handle used to carry the *path* instead, and
+    /// the open happened three call levels away.
+    cas: BlobCas,
 }
 
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         let pool = doltlite_raw::open(db_path, ALL_DDL).await?;
-        Ok(Self {
-            pool,
-            db_path: db_path.to_path_buf(),
-        })
+        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
+        Ok(Self { pool, cas })
     }
 
     /// Release every store this handle opened, and wait for the
@@ -78,8 +76,8 @@ impl RawDb {
         &self.pool
     }
 
-    pub fn db_path(&self) -> &Path {
-        &self.db_path
+    pub fn cas(&self) -> &BlobCas {
+        &self.cas
     }
 }
 
@@ -90,7 +88,10 @@ pub async fn ingest(
     cache: &FingerprintCache,
 ) -> Result<IngestSummary> {
     let db = RawDb::open(target_db_path).await?;
-    fetch(backup_dir, root_key, &db, cache).await
+    let out = fetch(backup_dir, root_key, &db, cache).await;
+    // This opened the handle, so this closes it.
+    db.close().await;
+    out
 }
 
 /// Variant of [`ingest`] that takes an already-open [`RawDb`]. Used by
@@ -102,14 +103,14 @@ pub async fn fetch(
     db: &RawDb,
     cache: &FingerprintCache,
 ) -> Result<IngestSummary> {
-    fetch_with_pool(backup_dir, root_key, db.pool().clone(), db.db_path(), cache).await
+    fetch_with_pool(backup_dir, root_key, db.pool().clone(), db.cas(), cache).await
 }
 
 async fn fetch_with_pool(
     backup_dir: &Path,
     root_key: &[u8; 32],
     dst_pool: SqlitePool,
-    target_db_path: &Path,
+    cas: &BlobCas,
     cache: &FingerprintCache,
 ) -> Result<IngestSummary> {
     // `backup_dir` lives inside the `sync:` block (not on
@@ -164,7 +165,7 @@ async fn fetch_with_pool(
 
     let media_root = backup_dir.join("Media");
     if media_root.is_dir() {
-        mirror_media_files(&dst_pool, target_db_path, &media_root, cache, &mut summary).await?;
+        mirror_media_files(&dst_pool, cas, &media_root, cache, &mut summary).await?;
     } else {
         tracing::info!(
             media_root = %media_root.display(),
@@ -770,7 +771,7 @@ async fn mirror_message_add_on_reaction(
 /// WhatsApp's own scratch state, not message media.
 async fn mirror_media_files(
     dst: &SqlitePool,
-    target_db_path: &Path,
+    cas: &BlobCas,
     media_root: &Path,
     cache: &FingerprintCache,
     summary: &mut IngestSummary,
@@ -811,11 +812,9 @@ async fn mirror_media_files(
     tx.commit().await.context("commit wa_media_files tx")?;
     summary.media_files = scan.files.len() as u64;
 
-    // Bytes: only for hashes the CAS does not already hold.
-    let cas_path = blob_cas::cas_path_for(target_db_path);
-    let cas = BlobCas::open(&cas_path)
-        .await
-        .with_context(|| format!("open blob_cas at {}", cas_path.display()))?;
+    // Bytes: only for hashes the CAS does not already hold. Through the
+    // caller's handle: opening one here would be a second opener for a
+    // store the handle already owns.
     let known: HashSet<String> = sqlx::query_scalar("SELECT blake3 FROM cas_objects")
         .fetch_all(cas.pool())
         .await
@@ -845,15 +844,12 @@ async fn mirror_media_files(
         pending_bytes += bytes.len() as u64;
         pending.push((hex, bytes, mime_from_ext(&f.path)));
         if pending_bytes >= PUT_BATCH_BYTES {
-            put_media_batch(&cas, &pending).await?;
+            put_media_batch(cas, &pending).await?;
             pending.clear();
             pending_bytes = 0;
         }
     }
-    put_media_batch(&cas, &pending).await?;
-    // Closed, not dropped: the next open of this store is a second
-    // connection until this one is actually gone.
-    cas.close().await;
+    put_media_batch(cas, &pending).await?;
 
     Ok(())
 }

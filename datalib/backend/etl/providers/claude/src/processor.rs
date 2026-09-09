@@ -100,7 +100,6 @@ impl DataProcessor for ClaudeDownload {
         )
         .await;
         let s = download::fetch(download::FetchOptions {
-            db_path: self.raw_path.clone(),
             db,
             latchkey: self.latchkey.clone(),
             // users.json is expected alongside the raw store (playback seeds it).

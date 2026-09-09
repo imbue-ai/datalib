@@ -91,7 +91,6 @@ async fn slack_synth_playback_extract_roundtrip() {
     // `dolt_commit`s inside `open` fail with "commit conflict".
     let db = RawDb::open(&db_path_for(&out)).await.unwrap();
     let summary = fetch(FetchOptions {
-        db_path: out.clone(),
         channels: None,
         since: "2024-01-01".into(),
         refresh_window_days: 0,

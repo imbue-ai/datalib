@@ -67,7 +67,6 @@ impl DataProcessor for LinkedinDownload {
         let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
-            db_path: self.raw_path.clone(),
             db,
             input_path: self.input_path.clone(),
             fetch_photos: self.fetch_photos,
