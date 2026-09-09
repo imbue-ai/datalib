@@ -773,9 +773,22 @@ Each of these is a reviewable PR that leaves the tree green.
    deadlocked, and precisely in the case the feature exists for, with
    every ordinary slot busy.
 
-   `datalib-step` does not declare the capability yet, so nothing
-   streams in a real pipeline. Turning it on is the next step, and it
-   wants the latency measured before it widens.
+   **Turned on for `render -> grid_index`.** A render step declares the
+   capability on its event stream (`Event::Capabilities`, announced at
+   start) and seals at document boundaries on the user's cadence.
+
+   Announced rather than probed. The plan said to run each command a
+   second time with `--capabilities`; a third-party step that ignores
+   unknown flags would then start its real work. A step is already going
+   to run, so it says this on the way past — one event, no second
+   process.
+
+   **Not yet measured on real data, which is the open item.** With the
+   default cadence (quiet for 2s, ceiling 15s) a render that finishes in
+   under two seconds never checkpoints at all, so most fixture-sized
+   sources stream nothing. That the mechanism works is covered by
+   synthetic steps and one subprocess-boundary test; what it buys on a
+   real mirror is not.
 7. **`download → render`.** Turn the capability on for the second edge.
 8. **The UI frame.**
 

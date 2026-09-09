@@ -281,6 +281,9 @@ impl Runner {
         let mut final_pass_owed: Vec<bool> = vec![false; n];
         let mut early: Vec<bool> = vec![false; n];
         let mut warned_not_streaming: Vec<bool> = vec![false; n];
+        // Seeded from the spec (how an in-process step declares it) and
+        // overwritten by a `Capabilities` signal (how a subprocess does).
+        let mut streams: Vec<bool> = graph.steps.iter().map(|s| s.streams_output).collect();
         let mut streaming_ready: VecDeque<usize> = VecDeque::new();
         let mut streaming_running = 0usize;
 
@@ -433,9 +436,25 @@ impl Runner {
                         .expect("a live task implies a joinable one")
                         .context("step task panicked")?)
                 }
-                Some(cp) = checkpoints.recv() => {
+                Some(signal) = checkpoints.recv() => {
                     'checkpoint: {
-                        let Some(p) = graph.steps.iter().position(|st| st.id == cp.step) else {
+                        let (step, version) = match signal {
+                            crate::step::StepSignal::Capabilities {
+                                step,
+                                streams_output,
+                            } => {
+                                if let Some(p) =
+                                    graph.steps.iter().position(|st| st.id == step)
+                                {
+                                    streams[p] = streams_output;
+                                }
+                                break 'checkpoint;
+                            }
+                            crate::step::StepSignal::Checkpoint { step, version } => {
+                                (step, version)
+                            }
+                        };
+                        let Some(p) = graph.steps.iter().position(|st| st.id == step) else {
                             break 'checkpoint;
                         };
                         // The producer's output is readable up to here.
@@ -452,15 +471,19 @@ impl Runner {
                         // makes this design cheap: streaming is the ordinary
                         // staleness rules evaluated earlier, and they only
                         // work if both kinds of version are comparable.
-                        let version = format!("{}:{}", graph.fingerprints[p], cp.version);
-                        let moved = versions.get(&out) != Some(&version);
-                        versions.insert(out.clone(), version);
+                        let qualified = format!("{}:{}", graph.fingerprints[p], version);
+                        let moved = versions.get(&out) != Some(&qualified);
+                        versions.insert(out.clone(), qualified);
                         changed_now.insert(out, moved);
+                        // The event carries what the step said, not the
+                        // qualified form: the qualification is the runner's
+                        // bookkeeping, and a reader of the stream should see
+                        // the version the step vouched for.
                         self.sink.emit(&Event::Checkpoint {
-                            step: cp.step.clone(),
-                            version: cp.version.clone(),
+                            step: step.clone(),
+                            version,
                         });
-                        if !graph.steps[p].streams_output {
+                        if !streams[p] {
                             // Sealed a sink it says nobody may read early.
                             // Not fatal -- the version is still good and
                             // worth recording -- but the step contradicts
@@ -470,7 +493,7 @@ impl Runner {
                             if !warned_not_streaming[p] {
                                 warned_not_streaming[p] = true;
                                 self.sink.emit(&Event::Log {
-                                    step: cp.step.clone(),
+                                    step: step.clone(),
                                     level: crate::events::LogLevel::Warn,
                                     msg: "checkpointed but does not declare \
                                           streams_output; no consumer will be \
@@ -1470,6 +1493,108 @@ mod tests {
             passes.load(Ordering::SeqCst) >= 2,
             "the consumer must have run early, while all four slots were held"
         );
+    }
+
+    /// The `render -> grid_index` shape specifically: several producers
+    /// that both checkpoint *and* finish at about the same moment.
+    ///
+    /// Two different code paths can make the fan-in ready — a checkpoint
+    /// (streaming dispatch) and `release_dependents` when the last producer
+    /// goes terminal — and they can fire in the same scheduler iteration.
+    /// The consumer writes one doltlite store, so two instances of it is a
+    /// second writer on one file, which this repo forbids everywhere.
+    ///
+    /// The barrier makes the collision reliable rather than hoping for it:
+    /// neither producer returns until both have reached the end.
+    #[tokio::test]
+    async fn producers_finishing_together_still_run_the_fan_in_one_at_a_time() {
+        let root = tempfile::tempdir().unwrap();
+        let concurrent = Arc::new(AtomicU32::new(0));
+        let max_seen = Arc::new(AtomicU32::new(0));
+        let passes = Arc::new(AtomicU32::new(0));
+        // 2 producers; `wait()` releases only when both have arrived.
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+        let render = |name: &str, barrier: Arc<tokio::sync::Barrier>| {
+            StepSpec::new(
+                format!("{name}/rendered_md"),
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let barrier = barrier.clone();
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("data.md"), "rows").unwrap();
+                        // Seal once, then finish in lockstep with the other
+                        // producer so the checkpoint-driven dispatch and the
+                        // deps-satisfied dispatch race each other.
+                        ctx.checkpoint("v1");
+                        barrier.wait().await;
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "final")],
+                        })
+                    }
+                }),
+            )
+            .streams_output()
+        };
+
+        let grid_index = {
+            let (concurrent, max_seen, passes) =
+                (concurrent.clone(), max_seen.clone(), passes.clone());
+            StepSpec::new(
+                "unified_index/grid",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (concurrent, max_seen, passes) =
+                        (concurrent.clone(), max_seen.clone(), passes.clone());
+                    async move {
+                        let now = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_seen.fetch_max(now, Ordering::SeqCst);
+                        passes.fetch_add(1, Ordering::SeqCst);
+                        // Long enough that an overlapping dispatch overlaps.
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("index.txt"), "x").unwrap();
+                        concurrent.fetch_sub(1, Ordering::SeqCst);
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            )
+            .input("slack/rendered_md")
+            .input("email/rendered_md")
+        };
+
+        let graph = Graph::build(vec![
+            render("slack", barrier.clone()),
+            render("email", barrier),
+            grid_index,
+        ])
+        .unwrap();
+        let report = tokio::time::timeout(Duration::from_secs(10), runner(root.path()).run(&graph))
+            .await
+            .expect("the fan-in must not deadlock when both producers finish together")
+            .unwrap();
+
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            1,
+            "two instances of the fan-in ran at once; it writes one store, \
+             and single-writer-per-file forbids that"
+        );
+        // It has to actually run: the final pass sees "final", which no
+        // checkpoint reported, so the index is never left stale.
+        assert!(
+            passes.load(Ordering::SeqCst) >= 1,
+            "the fan-in never ran at all"
+        );
+        let idx = report
+            .steps
+            .iter()
+            .find(|s| s.id == "unified_index/grid")
+            .unwrap();
+        assert!(idx.status.is_ok(), "{:?}", idx.status);
     }
 
     /// The pleasing half of the design: an early pass records its

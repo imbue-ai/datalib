@@ -31,6 +31,25 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// What this step's *sink* can do, announced once as it starts.
+    ///
+    /// Separate from [`Event::Checkpoint`], and deliberately: a step may
+    /// seal for durability — so a killed run keeps what it had — without
+    /// its output being safe to read while it is still being written.
+    /// Those are different claims, and collapsing them would let a
+    /// consumer read a sink that cannot be read.
+    ///
+    /// Announced rather than probed. The alternative was running each
+    /// step's command a second time with a `--capabilities` flag, which
+    /// for a third-party step that ignores unknown flags would start the
+    /// real work. A step is already going to run; it can say this on the
+    /// way past.
+    Capabilities {
+        step: StepId,
+        /// P2 of the sink contract in `docs/dev/streaming_steps_plan.md`:
+        /// may a consumer read this output while it is being written?
+        streams_output: bool,
+    },
     /// A step sealed part of its output and is still running.
     ///
     /// `version` is the same kind of string the terminal `outcome` reports —

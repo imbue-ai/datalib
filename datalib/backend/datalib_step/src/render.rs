@@ -19,7 +19,14 @@ pub async fn run(
     data_root: &Path,
     now: &str,
     emitter: &Emitter,
+    control: &datalib_etl::control::DownloadControl,
 ) -> Result<Vec<OutputClaim>> {
+    // A render store is a doltlite store, and a consumer that pins a commit
+    // reads a stable view of it while this step keeps writing. That is P2 of
+    // the sink contract, and it is what lets `grid_index` start before this
+    // finishes. Said before any work, so the runner knows by the time the
+    // first checkpoint arrives.
+    emitter.declare_streams_output(true);
     let progress = emitter.progress();
     let rendered_root = data_root.join(&planned.name).join("rendered_md");
     // Skip state and renderer versions come from the store: two indexed
@@ -65,6 +72,11 @@ pub async fn run(
     // still needs the source's name for its message.
     let source_name = planned.name.clone();
     let data_root = data_root.to_path_buf();
+    // Owned, not borrowed: the render runs on a blocking thread that
+    // outlives this frame.
+    let control = control.clone();
+    let control_cadence = control.checkpoint_cadence;
+    let planned_name = planned.name.clone();
     let docs_in = docs.clone();
     let removed_in = removed.clone();
     // `Progress` is a cheap clone; the render task takes one and this
@@ -82,7 +94,10 @@ pub async fn run(
     let versions_after =
         tokio::task::spawn_blocking(move || -> Result<(BTreeSet<u32>, HashMap<String, i64>)> {
             let checkpoints = CheckpointSink::new();
-            let control = datalib_etl::control::DownloadControl::default();
+            // The user's latency/history dial, the same one downloads take.
+            let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(
+                datalib_etl::checkpointer::Policy::Every(control_cadence.unwrap_or_default()),
+            );
             // Every finished document goes into the per-source store. The
             // providers already hand us a `RenderedMarkdown` carrying its
             // rows, edges, fingerprint, version and problems through
@@ -94,6 +109,30 @@ pub async fn run(
                     .put_document(&data_root, &md)
                     .with_context(|| format!("store document {}", md.markdown_uuid))?;
                 docs_in.fetch_add(1, Ordering::SeqCst);
+                // **Between documents is the only consistent point.** A
+                // document is rows plus edges plus markdown, written as a
+                // group; sealing inside `put_document` would publish a
+                // fraction of one. Here the store is whole.
+                //
+                // What a consumer reading such a commit may still see is a
+                // document this run is about to sweep -- the retain sweep
+                // runs after every processor. That is stale, not torn: the
+                // sweep's deletions reach the consumer through the same
+                // diff on its next pass.
+                checkpointer.wrote(1);
+                if checkpointer.should_seal() {
+                    let sealed = store.commit(&format!(
+                        "render {}: checkpoint at {} document(s)",
+                        planned_name,
+                        docs_in.load(Ordering::SeqCst)
+                    ))?;
+                    checkpointer.sealed();
+                    // `None` means nothing was dirty after all, so no
+                    // version moved and there is nothing to announce.
+                    if let Some(hash) = sealed {
+                        progress.checkpoint(&hash);
+                    }
+                }
                 Ok(())
             };
             // The other half of the sink: a conversation the raw store no

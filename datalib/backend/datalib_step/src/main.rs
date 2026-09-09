@@ -291,7 +291,7 @@ async fn run(
                 data_root,
             )?;
             let source_type = planned.source_type;
-            let res = render::run(planned, data_root, now, emitter).await;
+            let res = render::run(planned, data_root, now, emitter, control).await;
             hints::emit_auth_hint_on_failure(emitter, source_type, &res);
             res
         }
