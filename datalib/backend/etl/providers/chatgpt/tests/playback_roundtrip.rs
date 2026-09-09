@@ -53,7 +53,6 @@ async fn chatgpt_synth_playback_extract_roundtrip() {
     // live connection to one file makes a `dolt_commit` fail.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let summary = fetch(FetchOptions {
-        db_path: out_db.clone(),
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,

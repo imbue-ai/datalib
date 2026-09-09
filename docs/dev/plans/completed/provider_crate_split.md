@@ -7,7 +7,7 @@ build disagreed with the proposal, the proposal is corrected in place
 and the correction is marked.
 
 The rules this leaves behind are in
-[`AGENTS.md`](../../../AGENTS.md#download-and-render-are-separate-crates).
+[`AGENTS.md`](../../../../AGENTS.md#download-and-render-are-separate-crates).
 This file is the reasoning and the measurements.
 
 ## The problem, in one sentence

@@ -108,7 +108,6 @@ async fn run(
 ) -> FetchSummary {
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
     let mut o = FetchOptions {
-        db_path: raw.to_path_buf(),
         export_dir: Some(api.to_path_buf()),
         overlap: 0,
         sleep_between: Duration::ZERO,

@@ -69,6 +69,17 @@ pub struct Runner {
     /// pinned `DATALIB_DAG_NOW`. A step's own `env:` entries win
     /// on key collision.
     pub child_env: Arc<BTreeMap<String, String>>,
+    /// How many *streaming* passes may run at once, on top of
+    /// [`parallelism`](Self::parallelism).
+    ///
+    /// Its own budget rather than a share of `parallelism`, and the reason
+    /// is the case this feature exists for: with `parallelism` at 4 and
+    /// four downloads running, a streaming pass competing for the same
+    /// slots never runs, and nothing reaches the UI until every download
+    /// finishes. `parallelism` bounds long network-bound fetches; a
+    /// streaming pass is bounded incremental work over a delta, already
+    /// capped at one instance per step.
+    pub streaming_parallelism: usize,
 }
 
 impl Runner {
@@ -76,6 +87,7 @@ impl Runner {
         Self {
             data_root: data_root.into(),
             parallelism: 4,
+            streaming_parallelism: 1,
             sink: Arc::new(NoopSink),
             retry: RetryPolicy::default(),
             only_fringe: None,
@@ -251,6 +263,27 @@ impl Runner {
         let mut running = 0usize;
         let mut set: JoinSet<(usize, u32, Result<StepOutcome, StepError>)> = JoinSet::new();
 
+        // ── streaming dispatch ────────────────────────────────────────
+        // A producer that seals partial output announces it here; a
+        // consumer of a streaming edge is then dispatched against that
+        // partial output rather than waiting for the producer to finish.
+        let (cp_tx, mut checkpoints) = tokio::sync::mpsc::unbounded_channel();
+        let checkpoint = crate::step::CheckpointSink::new(cp_tx);
+        // At most one instance of a step in flight, ever. Single-writer-
+        // per-file is load-bearing throughout this repo, and a fan-in like
+        // `grid_index` is poked by every source, so a second poke arriving
+        // mid-pass is the common case rather than the rare one.
+        let mut in_flight: Vec<bool> = vec![false; n];
+        // Set when a step's deps all finished while an early pass of it was
+        // still running: its final pass is owed, and is queued when that
+        // pass lands. Without this the step would be dropped from `ready`
+        // and the run would never terminate it.
+        let mut final_pass_owed: Vec<bool> = vec![false; n];
+        let mut early: Vec<bool> = vec![false; n];
+        let mut warned_not_streaming: Vec<bool> = vec![false; n];
+        let mut streaming_ready: VecDeque<usize> = VecDeque::new();
+        let mut streaming_running = 0usize;
+
         loop {
             // Dispatch as many ready steps as parallelism allows.
             // Skip/block decisions are made inline (no slot consumed);
@@ -258,7 +291,23 @@ impl Runner {
             let mut dispatched = false;
             while running < self.parallelism {
                 let Some(i) = ready.pop_front() else { break };
-                match self.decide(graph, &state, &status, &runnable, &versions, i) {
+                // An early pass of this same step is still running. Hold
+                // the final pass until it lands rather than starting a
+                // second writer against one tree.
+                if in_flight[i] {
+                    final_pass_owed[i] = true;
+                    continue;
+                }
+                match self.decide(
+                    graph,
+                    &state,
+                    &status,
+                    &runnable,
+                    &versions,
+                    i,
+                    &checkpoint,
+                    false,
+                ) {
                     Decision::Skip { status: st } => {
                         // The output keeps its last-recorded version,
                         // and if there isn't one we say so. There is
@@ -296,6 +345,7 @@ impl Runner {
                     }
                     Decision::Run { ctx } => {
                         running += 1;
+                        in_flight[i] = true;
                         dispatched = true;
                         mark_running(&mut state, &graph.steps[i].id, &now_stamp());
                         let run = graph.steps[i].run.clone();
@@ -308,6 +358,49 @@ impl Runner {
                             (i, attempts, res)
                         });
                     }
+                }
+            }
+
+            // Streaming passes get their own budget rather than competing
+            // for `parallelism` — see `Runner::streaming_parallelism`.
+            while streaming_running < self.streaming_parallelism {
+                let Some(i) = streaming_ready.pop_front() else {
+                    break;
+                };
+                if in_flight[i] || status[i].is_some() {
+                    continue;
+                }
+                match self.decide(
+                    graph,
+                    &state,
+                    &status,
+                    &runnable,
+                    &versions,
+                    i,
+                    &checkpoint,
+                    true,
+                ) {
+                    Decision::Run { ctx } => {
+                        streaming_running += 1;
+                        in_flight[i] = true;
+                        early[i] = true;
+                        dispatched = true;
+                        mark_running(&mut state, &graph.steps[i].id, &now_stamp());
+                        let run = graph.steps[i].run.clone();
+                        let retry = self.retry.clone();
+                        let sink = self.sink.clone();
+                        let child_env = self.child_env.clone();
+                        set.spawn(async move {
+                            let (attempts, res) =
+                                invoke_with_retry(&run, ctx, &retry, &sink, &child_env).await;
+                            (i, attempts, res)
+                        });
+                    }
+                    // Nothing moved for this consumer yet, or the run did
+                    // not ask for it. Either way an early pass has nothing
+                    // to do and the decision is not terminal — the final
+                    // pass will ask again when the deps are actually done.
+                    Decision::Skip { .. } | Decision::Block { .. } => {}
                 }
             }
 
@@ -325,15 +418,96 @@ impl Runner {
                 state.save(&self.data_root).context("save dag state")?;
             }
 
-            if running == 0 {
+            if running == 0 && streaming_running == 0 {
                 break;
             }
-            let (i, attempts, res) = set
-                .join_next()
-                .await
-                .expect("running > 0 implies a joinable task")
-                .context("step task panicked")?;
-            running -= 1;
+            // A checkpoint sends us back to the dispatch phase rather
+            // than back to waiting. Staying here was a deadlock: with
+            // every ordinary slot busy, the consumer a checkpoint just
+            // made ready could not be dispatched until some *other* step
+            // finished -- which is exactly the situation streaming exists
+            // to fix.
+            let completed = tokio::select! {
+                joined = set.join_next() => {
+                    Some(joined
+                        .expect("a live task implies a joinable one")
+                        .context("step task panicked")?)
+                }
+                Some(cp) = checkpoints.recv() => {
+                    'checkpoint: {
+                        let Some(p) = graph.steps.iter().position(|st| st.id == cp.step) else {
+                            break 'checkpoint;
+                        };
+                        // The producer's output is readable up to here.
+                        // Recorded exactly the way a completed pass records
+                        // it, which is what lets the consumer's ordinary
+                        // staleness check do the rest.
+                        let out = graph.steps[p].output().as_str().to_string();
+                        // Qualified with the producer's fingerprint, exactly
+                        // as `resolve_outputs` does for a completed pass.
+                        // Recording the bare version instead puts checkpoints
+                        // in a different namespace from outcomes, so the
+                        // consumer's final pass always sees its input as
+                        // moved and re-runs -- which loses the property that
+                        // makes this design cheap: streaming is the ordinary
+                        // staleness rules evaluated earlier, and they only
+                        // work if both kinds of version are comparable.
+                        let version = format!("{}:{}", graph.fingerprints[p], cp.version);
+                        let moved = versions.get(&out) != Some(&version);
+                        versions.insert(out.clone(), version);
+                        changed_now.insert(out, moved);
+                        self.sink.emit(&Event::Checkpoint {
+                            step: cp.step.clone(),
+                            version: cp.version.clone(),
+                        });
+                        if !graph.steps[p].streams_output {
+                            // Sealed a sink it says nobody may read early.
+                            // Not fatal -- the version is still good and
+                            // worth recording -- but the step contradicts
+                            // its own declaration, and ignoring that
+                            // silently would hide why streaming never
+                            // happens.
+                            if !warned_not_streaming[p] {
+                                warned_not_streaming[p] = true;
+                                self.sink.emit(&Event::Log {
+                                    step: cp.step.clone(),
+                                    level: crate::events::LogLevel::Warn,
+                                    msg: "checkpointed but does not declare \
+                                          streams_output; no consumer will be \
+                                          dispatched early"
+                                        .to_string(),
+                                });
+                            }
+                            break 'checkpoint;
+                        }
+                        for &c in &graph.dependents[p] {
+                            // Dropped, not queued: a checkpoint for a step
+                            // already running is subsumed by the next one,
+                            // or by the final pass. Queueing them would
+                            // build a backlog of passes over data that has
+                            // already moved on.
+                            if in_flight[c] || status[c].is_some() {
+                                continue;
+                            }
+                            if !streaming_ready.contains(&c) {
+                                streaming_ready.push_back(c);
+                            }
+                        }
+                    }
+                    None
+                }
+            };
+            let Some((i, attempts, res)) = completed else {
+                continue;
+            };
+            in_flight[i] = false;
+            let was_early = early[i];
+            if was_early {
+                early[i] = false;
+                streaming_running -= 1;
+            } else {
+                running -= 1;
+            }
             attempts_taken[i] = attempts;
 
             let spec = &graph.steps[i];
@@ -423,6 +597,38 @@ impl Runner {
                     }
                 }
             };
+            // An early pass is not terminal. It has recorded its output
+            // versions and its `input_versions` above, exactly as a normal
+            // pass does — which is the whole trick: the final pass, when
+            // the deps really are done, meets the ordinary staleness
+            // predicate and is *skipped* if nothing moved after the last
+            // checkpoint. Streaming is the existing rules evaluated
+            // earlier, not a second set of them.
+            if was_early {
+                if let StepStatus::Failed { .. } = st {
+                    // Not fatal here. The final pass will run the step
+                    // again and report properly; failing the run on a
+                    // partial read would make streaming strictly worse
+                    // than not streaming.
+                    self.sink.emit(&Event::Log {
+                        step: graph.steps[i].id.clone(),
+                        level: crate::events::LogLevel::Warn,
+                        msg: format!(
+                            "streaming pass failed, deferring to the final pass: {}",
+                            errors[i].as_deref().unwrap_or("")
+                        ),
+                    });
+                    errors[i] = None;
+                }
+                // Its deps finished while it was running, so the final
+                // pass it is owed was held back rather than dispatched.
+                if final_pass_owed[i] {
+                    final_pass_owed[i] = false;
+                    ready.push_back(i);
+                }
+                state.save(&self.data_root).context("save dag state")?;
+                continue;
+            }
             self.finish(
                 graph,
                 &mut state,
@@ -510,6 +716,7 @@ impl Runner {
         scope
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn decide(
         &self,
         graph: &Graph,
@@ -518,12 +725,20 @@ impl Runner {
         runnable: &[bool],
         versions: &HashMap<String, String>,
         i: usize,
+        checkpoint: &crate::step::CheckpointSink,
+        early: bool,
     ) -> Decision {
         // Subtree poisoning: any non-ok dependency blocks this step.
         for &d in &graph.deps[i] {
-            let dep_status = status[d]
-                .as_ref()
-                .expect("ready step implies all deps terminal");
+            // An early pass is dispatched *because* a dependency is still
+            // running, so "no status yet" is the normal case here rather
+            // than the impossible one. A dependency that has already
+            // finished badly still blocks: a checkpoint from one producer
+            // is no reason to read another producer's failed output.
+            let Some(dep_status) = status[d].as_ref() else {
+                debug_assert!(early, "a ready step implies all deps terminal");
+                continue;
+            };
             if !dep_status.is_ok() {
                 return Decision::Block {
                     on: graph.steps[d].id.clone(),
@@ -609,6 +824,7 @@ impl Runner {
                 } else {
                     changed_inputs
                 },
+                checkpoint: checkpoint.clone(),
                 progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
             },
         }
@@ -968,6 +1184,352 @@ mod tests {
         fn run_count(&self, id: &str) -> u32 {
             self.runs[id].load(Ordering::SeqCst)
         }
+    }
+
+    // ── streaming dispatch ────────────────────────────────────────────
+    //
+    // Synthetic steps only: a "producer" that checkpoints on demand and a
+    // "consumer" that counts its passes. No store, no provider, no
+    // subprocess — the scheduler's rules are what is under test, and
+    // anything real would make a failure ambiguous between the two.
+
+    /// A producer that seals `checkpoints` times, re-announcing each seal
+    /// until a consumer pass has actually observed it.
+    ///
+    /// The re-announcing is not test scaffolding — it is what a real
+    /// producer does, and it is required by the design: a checkpoint that
+    /// arrives while the consumer is already running is **dropped**, so a
+    /// producer that announced once and waited would wait forever. Modeling
+    /// that is what makes these assertions deterministic instead of timing
+    /// dependent.
+    fn streaming_producer(name: &str, batches: u32, passes: Arc<AtomicU32>) -> StepSpec {
+        StepSpec::new(
+            format!("{name}/raw"),
+            StepRun::in_process(move |ctx: StepCtx| {
+                let passes = passes.clone();
+                async move {
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    for k in 0..batches {
+                        std::fs::write(dir.join("data.txt"), format!("batch{k}")).unwrap();
+                        while passes.load(Ordering::SeqCst) < k + 1 {
+                            ctx.checkpoint(&format!("v{k}"));
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                    }
+                    std::fs::write(dir.join("data.txt"), "final").unwrap();
+                    let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                    Ok(StepOutcome {
+                        outputs: vec![ArtifactState::versioned(&pat, "final")],
+                    })
+                }
+            }),
+        )
+        .streams_output()
+    }
+
+    /// Counts its passes; that count is the only thing the tests assert on.
+    fn counting_consumer(id: &str, input: &str, passes: Arc<AtomicU32>) -> StepSpec {
+        StepSpec::new(
+            id.to_string(),
+            StepRun::in_process(move |ctx: StepCtx| {
+                let passes = passes.clone();
+                async move {
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("out.txt"), "x").unwrap();
+                    passes.fetch_add(1, Ordering::SeqCst);
+                    Ok(StepOutcome::default())
+                }
+            }),
+        )
+        .input(input)
+    }
+
+    /// The point of the whole feature: a consumer runs *before* its
+    /// producer has finished, once per checkpoint, plus a final pass.
+    #[tokio::test]
+    async fn a_checkpoint_dispatches_the_consumer_before_the_producer_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+        let graph = Graph::build(vec![
+            streaming_producer("slack", 3, passes.clone()),
+            counting_consumer("unified_index/grid", "slack/raw", passes.clone()),
+        ])
+        .unwrap();
+
+        let rec = Arc::new(Recorder::default());
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = r.run(&graph).await.unwrap();
+
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        // Three checkpoints each dispatched a pass. The fourth is the
+        // final one, which runs because the producer's real output
+        // version ("final") differs from the last checkpoint's.
+        assert_eq!(
+            passes.load(Ordering::SeqCst),
+            4,
+            "expected one pass per checkpoint plus the final pass"
+        );
+        let checkpoints = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, Event::Checkpoint { .. }))
+            .count();
+        assert_eq!(checkpoints, 3, "every checkpoint reaches the event stream");
+    }
+
+    /// Without the capability nothing streams, and the consumer runs once.
+    /// This is the guard that keeps a sink which cannot be read mid-write
+    /// from being read mid-write.
+    #[tokio::test]
+    async fn a_producer_that_does_not_declare_streams_output_dispatches_nobody_early() {
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+        // Same producer, capability removed. One batch only: with no early
+        // dispatch its re-announce loop would never see a pass, so the
+        // producer must not depend on one.
+        let mut producer = StepSpec::new(
+            "slack/raw",
+            StepRun::in_process(move |ctx: StepCtx| async move {
+                let dir = ctx.path_str(&ctx.step_id);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("data.txt"), "batch0").unwrap();
+                for k in 0..3 {
+                    ctx.checkpoint(&format!("v{k}"));
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                Ok(StepOutcome {
+                    outputs: vec![ArtifactState::versioned(&pat, "final")],
+                })
+            }),
+        );
+        producer.streams_output = false;
+        let graph = Graph::build(vec![
+            producer,
+            counting_consumer("unified_index/grid", "slack/raw", passes.clone()),
+        ])
+        .unwrap();
+
+        let rec = Arc::new(Recorder::default());
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = r.run(&graph).await.unwrap();
+
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert_eq!(
+            passes.load(Ordering::SeqCst),
+            1,
+            "no capability means no early dispatch: one final pass only"
+        );
+        // And it says why, rather than ignoring the checkpoints silently.
+        let warned = rec.0.lock().unwrap().iter().any(|e| {
+            matches!(e, Event::Log { msg, level: crate::events::LogLevel::Warn, .. }
+                if msg.contains("streams_output"))
+        });
+        assert!(
+            warned,
+            "a checkpoint on a non-streaming sink must be reported"
+        );
+    }
+
+    /// At most one instance of a step in flight. `grid_index` is a fan-in
+    /// that every source pokes, so two producers checkpointing at once is
+    /// the ordinary case — and a second dispatch would put two writers on
+    /// one tree, which single-writer-per-file forbids everywhere here.
+    #[tokio::test]
+    async fn two_producers_checkpointing_never_run_the_consumer_twice_at_once() {
+        let root = tempfile::tempdir().unwrap();
+        let concurrent = Arc::new(AtomicU32::new(0));
+        let max_seen = Arc::new(AtomicU32::new(0));
+        let passes = Arc::new(AtomicU32::new(0));
+
+        let consumer = {
+            let concurrent = concurrent.clone();
+            let max_seen = max_seen.clone();
+            let passes = passes.clone();
+            StepSpec::new(
+                "unified_index/grid",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (concurrent, max_seen, passes) =
+                        (concurrent.clone(), max_seen.clone(), passes.clone());
+                    async move {
+                        let now = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_seen.fetch_max(now, Ordering::SeqCst);
+                        passes.fetch_add(1, Ordering::SeqCst);
+                        // Long enough that a second dispatch would overlap.
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("out.txt"), "x").unwrap();
+                        concurrent.fetch_sub(1, Ordering::SeqCst);
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            )
+            .input("slack/raw")
+            .input("email/raw")
+        };
+
+        // Both producers checkpoint repeatedly with no handshake, so the
+        // consumer is poked far more often than it can run.
+        let chatty = |name: &str| {
+            StepSpec::new(
+                format!("{name}/raw"),
+                StepRun::in_process(move |ctx: StepCtx| async move {
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    for k in 0..25 {
+                        std::fs::write(dir.join("data.txt"), format!("b{k}")).unwrap();
+                        ctx.checkpoint(&format!("v{k}"));
+                        tokio::time::sleep(Duration::from_millis(2)).await;
+                    }
+                    let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                    Ok(StepOutcome {
+                        outputs: vec![ArtifactState::versioned(&pat, "final")],
+                    })
+                }),
+            )
+            .streams_output()
+        };
+
+        let graph = Graph::build(vec![chatty("slack"), chatty("email"), consumer]).unwrap();
+        let report = runner(root.path()).run(&graph).await.unwrap();
+
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            1,
+            "two instances of one step ran at once; single-writer-per-file forbids it"
+        );
+        // Checkpoints arriving while it runs are dropped, not queued, so
+        // the pass count stays far below the 50 checkpoints emitted.
+        let n = passes.load(Ordering::SeqCst);
+        assert!(
+            n < 50,
+            "checkpoints must be dropped while the consumer runs, not queued (ran {n} times)"
+        );
+    }
+
+    /// A streaming pass must not wait behind `parallelism`. With every
+    /// ordinary slot occupied by producers, a consumer that competed for
+    /// those slots would never run — losing the whole point of the
+    /// feature in exactly the case it exists for.
+    #[tokio::test]
+    async fn a_streaming_pass_runs_even_when_every_ordinary_slot_is_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+
+        // One producer streams; the others just occupy slots until the
+        // streaming consumer has run.
+        let mut specs = vec![streaming_producer("slack", 1, passes.clone())];
+        for name in ["email", "github", "notion"] {
+            // Their own signal, not the producer's semaphore: the producer
+            // *consumes* a permit, so sharing one made this a race rather
+            // than a wait.
+            let ran = passes.clone();
+            specs.push(StepSpec::new(
+                format!("{name}/raw"),
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let ran = ran.clone();
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("data.txt"), "x").unwrap();
+                        // Hold the ordinary slot until the streaming pass
+                        // has actually run. If streaming competed for these
+                        // slots, this would never return.
+                        while ran.load(Ordering::SeqCst) == 0 {
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            ));
+        }
+        specs.push(counting_consumer(
+            "unified_index/grid",
+            "slack/raw",
+            passes.clone(),
+        ));
+        let graph = Graph::build(specs).unwrap();
+
+        let mut r = runner(root.path());
+        r.parallelism = 4; // exactly the number of producers
+        let report = tokio::time::timeout(Duration::from_secs(10), r.run(&graph))
+            .await
+            .expect("a streaming pass competing for ordinary slots would deadlock here")
+            .unwrap();
+
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(
+            passes.load(Ordering::SeqCst) >= 2,
+            "the consumer must have run early, while all four slots were held"
+        );
+    }
+
+    /// The pleasing half of the design: an early pass records its
+    /// `input_versions` the ordinary way, so the final pass meets the
+    /// existing staleness predicate and is *skipped* when nothing moved
+    /// after the last checkpoint. Streaming is the same rules, earlier.
+    #[tokio::test]
+    async fn the_final_pass_is_skipped_when_the_last_checkpoint_saw_everything() {
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+
+        // Reports the *same* version it last checkpointed, so by the time
+        // the producer exits the consumer has already seen everything.
+        let producer = StepSpec::new(
+            "slack/raw",
+            StepRun::in_process({
+                let passes = passes.clone();
+                move |ctx: StepCtx| {
+                    let passes = passes.clone();
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("data.txt"), "all-of-it").unwrap();
+                        while passes.load(Ordering::SeqCst) == 0 {
+                            ctx.checkpoint("v-final");
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "v-final")],
+                        })
+                    }
+                }
+            }),
+        )
+        .streams_output();
+
+        let graph = Graph::build(vec![
+            producer,
+            counting_consumer("unified_index/grid", "slack/raw", passes.clone()),
+        ])
+        .unwrap();
+        let report = runner(root.path()).run(&graph).await.unwrap();
+
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert_eq!(
+            passes.load(Ordering::SeqCst),
+            1,
+            "the early pass consumed the final version, so the final pass had nothing to do"
+        );
+        let consumer = report
+            .steps
+            .iter()
+            .find(|s| s.id == "unified_index/grid")
+            .unwrap();
+        assert!(
+            matches!(consumer.status, StepStatus::SkippedUpToDate),
+            "the final pass should be skipped by the ordinary staleness rule, got {:?}",
+            consumer.status
+        );
     }
 
     #[tokio::test]

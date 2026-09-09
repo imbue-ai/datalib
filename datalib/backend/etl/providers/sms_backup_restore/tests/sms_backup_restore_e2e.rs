@@ -37,7 +37,6 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // the assertions, because two is what breaks a doltlite file.
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = download::fetch(FetchOptions {
-            db_path: raw_dir.clone(),
             db: db.clone(),
             input_path: fixture_root(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
@@ -89,7 +88,6 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // re-ingests — and the host cache answers without re-reading
         // a byte, because neither file's stat moved.
         let again = download::fetch(FetchOptions {
-            db_path: raw_dir.clone(),
             db: db.clone(),
             input_path: fixture_root(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,

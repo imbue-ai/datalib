@@ -36,7 +36,6 @@ async fn mirrors_the_union_of_the_configured_labels() {
     std::env::set_var(PLAYBACK_ENV, &playback);
     let db = RawDb::open(&db_path_for(&root)).await.expect("open raw db");
     let mut opts = FetchOptions::new(db.clone());
-    opts.db_path = root.clone();
     opts.only_labels = vec!["datalib".to_string(), "travel".to_string()];
     let summary = gmail_api::fetch(opts).await;
     db.close().await;

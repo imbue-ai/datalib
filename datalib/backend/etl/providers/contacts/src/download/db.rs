@@ -1,5 +1,6 @@
 //! Doltlite-backed raw store for the CardDAV provider.
 
+use datalib_etl::blob_cas::{cas_path_for, BlobCas};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
@@ -20,6 +21,12 @@ use super::schema_raw::{full_ddl, DATA_TABLES};
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
+    /// The sibling store for inline vCard `PHOTO` bytes. `Some` on the
+    /// download path, which is the only side that touches it — render
+    /// decodes photos straight out of the payload. Opened with the
+    /// handle rather than from a path at the call site, so there is one
+    /// opener per store and `close_all` reaches it.
+    cas: Option<BlobCas>,
     /// The commit every content read resolves against, or `None` for the
     /// download step reading back what it just wrote. Set once, at open:
     /// a pin belongs to a connection, not to a call, because the
@@ -67,6 +74,7 @@ impl RawDb {
             .context("pin the contacts raw store for render")?;
         Ok(Some(Self {
             pool,
+            cas: None,
             pin: Some(pin),
         }))
     }
@@ -84,7 +92,20 @@ impl RawDb {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool, pin: None })
+        // `db_path` is the entity db file, never the per-source directory:
+        // `cas_path_for` derives the sibling via `.parent()`, so a directory
+        // here would leak the CAS into the shared `raw/` root.
+        let cas = BlobCas::open(&cas_path_for(db_path)).await?;
+        Ok(Self {
+            pool,
+            cas: Some(cas),
+            pin: None,
+        })
+    }
+
+    /// `None` on a reader — see the field.
+    pub fn cas(&self) -> Option<&BlobCas> {
+        self.cas.as_ref()
     }
 
     pub fn pool(&self) -> &SqlitePool {

@@ -57,7 +57,6 @@ impl DataProcessor for SignalDownload {
         let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
-            db_path: self.raw_path.clone(),
             db,
             cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             snapshot_root: self.sync.snapshot_dir.clone(),

@@ -226,7 +226,7 @@ Different upstreams expose different surfaces for "what changed since X", and th
 
 That is what makes [`AGENTS.md`'s "give a bag an order before storing it"](/AGENTS.md) an architectural rule rather than a tidiness one: an API that returns a set in a different order each time will, left alone, manufacture a diff out of nothing — and the symptom is not an error but a pipeline that quietly stops being incremental. The same reasoning covers the `*_VOLATILE_PATHS` mechanism (drop a per-fetch stamp that carries no information) and any future rule of that shape: canonical field order, stable number formatting, excluded bookkeeping. When you add one, say which of the two it is — **sorting keeps the signal and removes the noise; declaring a field volatile throws the signal away too** — because the two look interchangeable and are not.
 
-The property this protects is what a consumer actually buys with a cursor; [`toolchain_for_agents.md`](data_lib_as_a_library/toolchain_for_agents.md#the-incremental-contract-is-a-capability-not-a-protocol) makes the case for it as the thing datalib offers anyone building on it.
+The property this protects is what a consumer actually buys with a cursor; [`toolchain_for_agents.md`](plans/data_lib_as_a_library/toolchain_for_agents.md#the-incremental-contract-is-a-capability-not-a-protocol) makes the case for it as the thing datalib offers anyone building on it.
 
 ## Wire-fidelity of the raw store
 The raw store preserves the **semantic content** of upstream responses verbatim — every field, every value, with no loss and no pre-shaping into our internal model. The on-disk *encoding* of that content is a separate question; we pick whichever encoding is human-readable and inspectable. Concretely:
@@ -272,7 +272,7 @@ provider's copy is not under your control.
 
 It is also the good side of a property we criticize elsewhere.
 "doltlite never deletes anything" is a real cost for
-[derived intermediates](data_lib_as_a_library/toolchain_for_agents.md),
+[derived intermediates](plans/data_lib_as_a_library/toolchain_for_agents.md),
 which we could always rebuild. On the raw store it is the feature.
 
 ### What is on disk today

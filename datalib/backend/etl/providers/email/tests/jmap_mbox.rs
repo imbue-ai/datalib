@@ -26,7 +26,6 @@ async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
     let db_path = tmp.path().join("e.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
     mbox::fetch(mbox::FetchOptions {
-        db_path: db_path.clone(),
         input_path: mbox_path,
         account_id_override: Some("enterprise".to_string()),
         ..mbox::FetchOptions::new(
@@ -124,7 +123,6 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     db.close().await;
     let db2 = RawDb::open(&db_path).await.unwrap();
     mbox::fetch(mbox::FetchOptions {
-        db_path: db_path.clone(),
         input_path: fixture_path(),
         account_id_override: Some("enterprise".to_string()),
         ..mbox::FetchOptions::new(
@@ -155,7 +153,6 @@ async fn mbox_only_labels_filters_extraction() {
     let db_path = tmp.path().join("e.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
     mbox::fetch(mbox::FetchOptions {
-        db_path: db_path.clone(),
         input_path: fixture_path(),
         account_id_override: Some("enterprise".to_string()),
         only_labels: vec!["Sent".to_string()],

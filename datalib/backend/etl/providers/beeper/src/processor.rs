@@ -56,7 +56,6 @@ impl DataProcessor for BeeperDownload {
         let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
-            db_path: self.raw_path.clone(),
             db,
             sources: self.sync.sources.clone(),
             beeper_data_dir: self.sync.beeper_data_dir.clone(),

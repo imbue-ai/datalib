@@ -30,7 +30,6 @@ async fn gitlab_live_single_mr_snapshot() {
         .await
         .unwrap();
     let opts = FetchOptions {
-        db_path: tmp.clone(),
         targets: vec![(proj.clone(), iid)],
         ..FetchOptions::new(db.clone())
     };

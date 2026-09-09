@@ -49,12 +49,12 @@ we want to stream.
 
 | piece | where | state |
 |---|---|---|
-| commit-diff scan from a stored cursor to HEAD | [`doltlite_raw.rs::scan_buckets`](../../datalib/backend/etl/src/doltlite_raw.rs) | built, shared |
+| commit-diff scan from a stored cursor to HEAD | [`doltlite_raw.rs::scan_buckets`](../../../datalib/backend/etl/src/doltlite_raw.rs) | built, shared |
 | render consuming the raw store that way | `providers/{slack,chatgpt,claude,signal,email}_render/src/render/parse.rs` | built, 5 providers |
-| durable render offset | [`render_cursor.rs`](../../datalib/backend/etl/src/render_cursor.rs) (`_render_cursor.json`) | built |
-| `grid_index` consuming render stores that way | [`grid_index.rs`](../../datalib/backend/etl/render/src/grid_index.rs) | built |
+| durable render offset | [`render_cursor.rs`](../../../datalib/backend/etl/src/render_cursor.rs) (`_render_cursor.json`) | built |
+| `grid_index` consuming render stores that way | [`grid_index.rs`](../../../datalib/backend/etl/render/src/grid_index.rs) | built |
 | durable per-source index offset | `source_cursors` table in the grid store | built |
-| a step reporting a content version per output | [`step_protocol.md`](step_protocol.md), `Event`/`outcome` | built |
+| a step reporting a content version per output | [`step_protocol.md`](../step_protocol.md), `Event`/`outcome` | built |
 | the raw store's version is already a commit-hash pair | `download.rs::raw_store_version` → `entities:<h> blobs:<h>` | built |
 | partial output recorded on failure | `StepError::outputs` → `state.output_versions` | built |
 | an interrupt-time commit hook per store | `CheckpointSink`, `RawStoreSession::checkpoint_hook` | built |
@@ -67,11 +67,11 @@ exists — it just only fires on SIGINT.
 ## What is actually missing
 
 1. **Producers commit once.** `RawStoreSession::finish` on the download
-   side, one `store.commit()` at [`render.rs`](../../datalib/backend/datalib_step/src/render.rs)
+   side, one `store.commit()` at [`render.rs`](../../../datalib/backend/datalib_step/src/render.rs)
    for a whole render. Nothing commits on a timer.
 2. **There is no notification.** Nothing on the event stream says "I
    committed"; `outcome` is terminal and last-one-wins in
-   [`subprocess.rs`](../../datalib/backend/dag/src/subprocess.rs).
+   [`subprocess.rs`](../../../datalib/backend/dag/src/subprocess.rs).
 3. **The scheduler runs each step exactly once per run**, and only after
    every dependency has reached a terminal state.
 4. **Consumers read content from the working set.** This is the one that
@@ -278,13 +278,13 @@ The two edges are wildly different in size, which is why the order of
 work below starts where it does.
 
 `render → grid_index` is **three** sites, all in
-[`indexed_markdown.rs::documents_matching`](../../datalib/backend/etl/render/src/indexed_markdown.rs)
+[`indexed_markdown.rs::documents_matching`](../../../datalib/backend/etl/render/src/indexed_markdown.rs)
 — `markdowns`, `grid_rows`, `edges` — in one shared file.
 
 `download → render` is **48**, across 10 provider crates: slack 9,
 email 8, whatsapp 7, beeper 6, signal 6, yolink 5, chatgpt 4, claude 1,
 google_takeout 1, sms_backup_restore 1. Attachment bytes ride along:
-[`blob_cas.rs::BlobBundle::load`](../../datalib/backend/etl/src/blob_cas.rs)
+[`blob_cas.rs::BlobBundle::load`](../../../datalib/backend/etl/src/blob_cas.rs)
 is two more sites in one shared file, on this edge rather than the
 other, and its per-provider projection SQL is among the 48.
 
@@ -304,7 +304,7 @@ Two things a hand count missed:
 A 48-site sweep where one miss is a silent tearing bug needs an
 enforceable shape, not care. Both halves of that are now built.
 
-**The helper** is [`datalib_etl::pin`](../../datalib/backend/etl/src/pin.rs).
+**The helper** is [`datalib_etl::pin`](../../../datalib/backend/etl/src/pin.rs).
 `install_views` creates one `pinned_<table>` view per table over
 `dolt_at_<table>('<hash>')`, once per connection, and a query reads the
 view:
@@ -465,7 +465,7 @@ hand-enabled on edges we have checked one at a time.
 already exists as a *utility, not a pipeline step*: it asks a provider
 what a set of credentials can reach, prints one JSON object on stdout,
 writes nothing, and needs no data root
-([`probe.rs`](../../datalib/backend/datalib_step/src/probe.rs)). It
+([`probe.rs`](../../../datalib/backend/datalib_step/src/probe.rs)). It
 answers a question about the **source**, and only `email` implements it
 — so it is not the thing we need. But it is the right shape for the
 thing we need, and the precedent matters more than the code: the runner
@@ -507,7 +507,7 @@ writes a fixture for.
 The seam already exists in both places:
 
 - **Download.** `RawStoreSession` already owns a commit hook it fires on
-  SIGINT ([`raw_store.rs`](../../datalib/backend/etl/src/raw_store.rs)).
+  SIGINT ([`raw_store.rs`](../../../datalib/backend/etl/src/raw_store.rs)).
   Give it a `maybe_checkpoint()` the provider calls at its natural batch
   boundary; it commits and returns the hash when the budget is spent and
   does nothing otherwise. The entities store and the blob CAS are
@@ -515,7 +515,7 @@ The seam already exists in both places:
   already the pair `entities:<h> blobs:<h>` — so both commit, and the
   checkpoint carries the pair, exactly as the final outcome does.
 - **Render.** The `put_document` callback at
-  [`render.rs:85`](../../datalib/backend/datalib_step/src/render.rs) is
+  [`render.rs:85`](../../../datalib/backend/datalib_step/src/render.rs) is
   the boundary; `IndexedMarkdownStore::commit` is already public.
 
 ### Cadence
@@ -552,7 +552,7 @@ env vars remain only for tests.
 The cost of getting the dial wrong is `dolt_log` size. The existing
 one-commit-per-render rule is there precisely because "per-document
 commits would put thousands of entries in `dolt_log` per run"
-([render.rs](../../datalib/backend/datalib_step/src/render.rs)). A
+([render.rs](../../../datalib/backend/datalib_step/src/render.rs)). A
 20-minute download at 15s granularity adds ~80 commits, which is fine;
 a per-row commit would not be.
 
@@ -591,7 +591,7 @@ consumer would faithfully propagate that.
 Three cases, and the first two are the same case:
 
 - **`reset_and_redownload`** truncates every data and bookkeeping table
-  and re-fetches ([`control.rs`](../../datalib/backend/etl/src/control.rs)).
+  and re-fetches ([`control.rs`](../../../datalib/backend/etl/src/control.rs)).
   Checkpointing is disabled for the whole run when
   `DATALIB_DAG_RESET_AND_REDOWNLOAD` is set.
 - **Prune-to-snapshot** on the export-shaped ingests (the
@@ -630,7 +630,7 @@ exits.
 
 The smallest change that delivers the whole thing.
 
-Today [`scheduler.rs`](../../datalib/backend/dag/src/scheduler.rs) keeps
+Today [`scheduler.rs`](../../../datalib/backend/dag/src/scheduler.rs) keeps
 `remaining_deps[i]`, pushes `i` onto `ready` when it hits zero, and sets
 `status[i]` exactly once. The change:
 
@@ -697,7 +697,7 @@ whole change and should be the visible proof it works.
 Each of these is a reviewable PR that leaves the tree green.
 
 1. ~~**The lint and the helper.**~~ **Done.**
-   [`etl/src/pin.rs`](../../datalib/backend/etl/src/pin.rs) (`Pin`, the
+   [`etl/src/pin.rs`](../../../datalib/backend/etl/src/pin.rs) (`Pin`, the
    `install_views`, the `pinned_<table>` naming, the empty view for a
    table absent at the pin, and no unpinned path at all) and check 4 in
    `scripts/lint_repo.py`,
@@ -759,13 +759,23 @@ Each of these is a reviewable PR that leaves the tree green.
    schema commit took before handing the pool back; and the `WHERE 0`
    branch is now only reached for a table genuinely newer than the pin,
    which is the case it was written for.
-6. **Streaming dispatch.** Needs a way for a step to declare its sink
-   snapshot-readable first — P2 above, in the shape `probe` already
-   uses — because "can this edge stream at all" is not something the
-   scheduler can infer from paths. Then the scheduler change: in-flight
-   tracking with checkpoints dropped rather than queued, and the
-   separate streaming slot, for `render → grid_index` only. Measure the
-   latency change before widening.
+6. ~~**Streaming dispatch.**~~ **Built in the scheduler, not yet turned
+   on for any real step.** A producer declares `streams_output`, its
+   checkpoints reach the run loop, and a consumer is dispatched against
+   partial output on its own budget. Five tests over synthetic steps.
+
+   Two things the build corrected. A checkpoint's version has to be
+   recorded **fingerprint-qualified**, the way `resolve_outputs` records
+   an outcome — otherwise checkpoints and outcomes live in different
+   namespaces, every final pass sees its input as moved, and the "same
+   rules, evaluated earlier" property is lost. And handling a checkpoint
+   has to return to the *dispatch* phase rather than back to waiting: it
+   deadlocked, and precisely in the case the feature exists for, with
+   every ordinary slot busy.
+
+   `datalib-step` does not declare the capability yet, so nothing
+   streams in a real pipeline. Turning it on is the next step, and it
+   wants the latency measured before it widens.
 7. **`download → render`.** Turn the capability on for the second edge.
 8. **The UI frame.**
 

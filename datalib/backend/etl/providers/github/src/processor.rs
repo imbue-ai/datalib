@@ -62,7 +62,6 @@ impl DataProcessor for GithubDownload {
             .collect::<Result<Vec<_>>>()
             .context("parse github pull_requests refs")?;
         let s = download::fetch(download::FetchOptions {
-            db_path: self.raw_path.clone(),
             latchkey: self.latchkey.clone(),
             // Same fix as gitlab: don't force full_sync, so discovery narrows
             // via saved `sync_scope_state`. Unlike gitlab, github's per-PR

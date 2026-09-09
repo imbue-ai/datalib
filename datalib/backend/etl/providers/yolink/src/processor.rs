@@ -47,7 +47,6 @@ impl DataProcessor for YolinkDownload {
         let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
-            db_path: self.raw_path.clone(),
             db,
             sync: self.sync.clone(),
             progress: ctx.progress.clone(),

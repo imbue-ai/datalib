@@ -5,7 +5,7 @@
 as a description of the tree. Where it says "today", that was checked
 against that commit; where it says "would", nothing exists.
 
-**Depends on** [`provider_crate_split.md`](provider_crate_split.md),
+**Depends on** [`provider_crate_split.md`](completed/provider_crate_split.md),
 **which has now landed** — so the column-type vocabulary this design
 introduces no longer sits upstream of every downloader.
 
@@ -259,7 +259,7 @@ button opens a Vue modal.
 **The wizard stays a modal**, opened by a row action, exactly as now.
 Its multi-step credential-and-probe flow is genuinely not tabular, and
 pretending otherwise would cost more than it buys. See
-[`source_wizard.md`](../source_wizard.md).
+[`source_wizard.md`](source_wizard.md).
 
 ### 6. Publishing changes, per dataset
 
@@ -319,7 +319,7 @@ Each step is independently useful, which matters because the later
 ones are the speculative ones.
 
 1. **The crate split** —
-   [`provider_crate_split.md`](provider_crate_split.md). Done.
+   [`provider_crate_split.md`](completed/provider_crate_split.md). Done.
 2. **`system/pipeline.sqlite`.** Replace `dag_state.json` and
    `progress.sqlite`; `GET /api/dag` reads the new store. No UI change
    yet — this is a pure substitution, verified by the existing tests.

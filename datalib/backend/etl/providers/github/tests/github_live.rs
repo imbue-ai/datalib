@@ -30,7 +30,6 @@ async fn github_live_single_pr_snapshot() {
         .await
         .unwrap();
     let opts = FetchOptions {
-        db_path: tmp.clone(),
         targets: vec![(repo.clone(), num)],
         ..FetchOptions::new(db.clone())
     };

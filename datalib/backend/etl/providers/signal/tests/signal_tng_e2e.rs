@@ -115,7 +115,6 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // same store makes one of the two `dolt_commit`s fail.
     let db = download::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&raw_db_path)).await?;
     let summary = download::fetch(FetchOptions {
-        db_path: raw_db_path.clone(),
         db: db.clone(),
         cache,
         snapshot_root: snapshot_root.clone(),

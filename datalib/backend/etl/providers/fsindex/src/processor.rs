@@ -61,7 +61,6 @@ impl DataProcessor for FsindexDownload {
         let s = download::fetch(download::FetchOptions {
             // Unused when `db` is Some (fetch reuses the open handle); kept for
             // the standalone-open path's signature.
-            db_path: self.raw_path.clone(),
             db,
             source_id: self.source_id.clone(),
             root: self.root.clone(),

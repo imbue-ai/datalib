@@ -69,7 +69,6 @@ impl DataProcessor for SlackDownload {
             db.attach_event_tape(tape);
         }
         let s = download::fetch(download::FetchOptions {
-            db_path: self.raw_path.clone(),
             db,
             channels: self.sync.channels.clone(),
             since: self

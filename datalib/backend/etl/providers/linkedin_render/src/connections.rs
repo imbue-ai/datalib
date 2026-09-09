@@ -65,7 +65,7 @@ pub fn render_connections(
                 .await
                 .unwrap_or_default();
             // Photos, if any were fetched, keyed by connection_uuid.
-            let photos = load_photo_blobs(&db, &db_path, datalib_etl::pin::Reads::At(&pin))
+            let photos = load_photo_blobs(&db, datalib_etl::pin::Reads::At(&pin))
                 .await
                 .unwrap_or_default();
             // Closed, not dropped: the next open of this store is a

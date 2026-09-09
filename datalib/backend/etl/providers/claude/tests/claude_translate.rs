@@ -28,7 +28,6 @@ async fn parses_tng_api_fixture() {
     .await
     .expect("open raw store");
     ingest(IngestOptions {
-        db_path: raw.path().to_path_buf(),
         db: db.clone(),
         input_path: fixture_dir(),
         now: "2026-09-04T00:00:00-07:00".to_string(),

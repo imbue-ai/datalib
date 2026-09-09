@@ -133,7 +133,6 @@ async fn run_fetch(out: &Path, refresh_window_days: i64) -> usize {
     // inside `open` fail with "commit conflict".
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
     let s = fetch(FetchOptions {
-        db_path: out.to_path_buf(),
         channels: None,
         since: SINCE.into(),
         refresh_window_days,

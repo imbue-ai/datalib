@@ -53,7 +53,6 @@ impl DataProcessor for ChatgptDownload {
         let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::fetch(download::FetchOptions {
-            db_path: self.raw_path.clone(),
             db,
             latchkey: self.latchkey.clone(),
             max_pages: self.sync.max_pages.map(|v| v as usize),

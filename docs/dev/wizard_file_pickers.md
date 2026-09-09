@@ -90,7 +90,7 @@ necessarily local: it is a path on the machine running the *backend*,
 which in the browser-served case need not be the user's machine at all.
 
 The fix is a server-side browse endpoint (`GET /api/fs/browse`,
-sketched in [`source_wizard.md`](source_wizard.md)) — the backend
+sketched in [`source_wizard.md`](plans/source_wizard.md)) — the backend
 enumerating its own filesystem, which is the only party that can. It
 does not exist today. Until it does, a browser user types the path, and
 `pickPath` returns `unavailable` rather than pretending.
@@ -194,7 +194,7 @@ landed:
   `desktop.ts` and `externalLinks.ts` both invoke through it, each with
   its own capability file. What was missing was a capability and an npm
   package, not a bridge.
-- [`source_wizard.md`](source_wizard.md)'s section on local-path
+- [`source_wizard.md`](plans/source_wizard.md)'s section on local-path
   sources concluded "**a backend-served browse endpoint**, not a native
   dialog", with the dialog as a later enhancement layered on top. That
   ordering was inverted: in the app — which is how this ships, and how

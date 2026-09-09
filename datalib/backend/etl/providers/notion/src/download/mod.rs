@@ -7,7 +7,6 @@ pub mod schema_raw;
 pub mod slots;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -24,10 +23,6 @@ pub struct FetchOptions {
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
-    /// Path to the doltlite database file. The entity db lives inside
-    /// the per-source directory as `entities.doltlite_db` (the dir is
-    /// created if needed).
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -64,7 +59,6 @@ impl FetchOptions {
     /// it is a live handle the caller opens and closes.
     pub fn new(db: RawDb) -> Self {
         FetchOptions {
-            db_path: PathBuf::new(),
             db,
             latchkey: LatchkeySettings::default(),
             subtree_pages: Vec::new(),

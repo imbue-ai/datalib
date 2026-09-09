@@ -46,7 +46,6 @@ async fn ingest_fixture(raw: &Path) {
     .await
     .expect("open raw store");
     ingest(IngestOptions {
-        db_path: raw.to_path_buf(),
         db: db.clone(),
         input_path: fixture_dir(),
         now: "2026-09-04T00:00:00-07:00".to_string(),

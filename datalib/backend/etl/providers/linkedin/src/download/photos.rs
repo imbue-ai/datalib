@@ -2,7 +2,7 @@
 //! CAS, mapped by a `contact_photos` edge row.
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::{cas_path_for, BlobCas};
+use datalib_etl::blob_cas::BlobCas;
 use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService};
 use datalib_etl::progress::Progress;
 use serde::Serialize;
@@ -66,7 +66,7 @@ pub struct PhotoSummary {
 
 pub async fn fetch_connection_photos(
     db: &RawDb,
-    db_path: &std::path::Path,
+    cas: &BlobCas,
     progress: &Progress,
     max_consecutive_failures: u64,
 ) -> Result<PhotoSummary> {
@@ -100,10 +100,6 @@ pub async fn fetch_connection_photos(
             .into_iter()
             .map(|r| r.get::<String, _>("owner_id"))
             .collect();
-
-    let cas = BlobCas::open(&cas_path_for(db_path))
-        .await
-        .context("open linkedin CAS")?;
 
     let mut summary = PhotoSummary::default();
     let mut consecutive_failures: u64 = 0;
@@ -174,7 +170,6 @@ enum Outcome {
 /// fetched (the table won't exist). Never fails on a missing table.
 pub async fn load_photo_blobs(
     db: &RawDb,
-    db_path: &std::path::Path,
     reads: datalib_etl::pin::Reads<'_>,
 ) -> Result<std::collections::HashMap<String, (Vec<u8>, Option<String>)>> {
     let pool = db.pool();
@@ -202,23 +197,23 @@ pub async fn load_photo_blobs(
     if edges.is_empty() {
         return Ok(out);
     }
-    let cas = BlobCas::open(&cas_path_for(db_path))
-        .await
-        .context("open linkedin CAS")?;
+    // A reader whose store never had a photo fetched has no CAS file, so
+    // there are no bytes to resolve — the edges above say the same thing
+    // whenever it is genuinely absent.
+    let Some(cas) = db.cas() else {
+        return Ok(out);
+    };
     let loaded = async {
         for row in edges {
             let owner_id: String = row.get("owner_id");
             let blake3: String = row.get("blake3");
-            if let Some((bytes, content_type)) = load_cas_bytes(&cas, &blake3).await? {
+            if let Some((bytes, content_type)) = load_cas_bytes(cas, &blake3).await? {
                 out.insert(owner_id, (bytes, content_type));
             }
         }
         Ok(out)
     }
     .await;
-    // Closed, not dropped: the next open of this store is a second
-    // connection until this one is actually gone.
-    cas.close().await;
     loaded
 }
 

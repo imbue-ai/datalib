@@ -156,7 +156,17 @@ pub(crate) async fn run_subprocess(
             }
             Ok(v) => match serde_json::from_value::<Event>(v) {
                 // Forward, re-tagged with the authoritative id.
-                Ok(ev) => sink.emit(&retag(ev, &ctx.step_id)),
+                Ok(ev) => {
+                    // A checkpoint also goes to the scheduler, not just to
+                    // the event stream: it is the one event that changes
+                    // what the runner does next rather than only what it
+                    // displays. Same sink an in-process step calls, so
+                    // both kinds of step announce a seal one way.
+                    if let Event::Checkpoint { version, .. } = &ev {
+                        ctx.checkpoint(version);
+                    }
+                    sink.emit(&retag(ev, &ctx.step_id))
+                }
                 Err(_) => forward_text(sink, ctx, &line),
             },
             Err(_) => forward_text(sink, ctx, &line),

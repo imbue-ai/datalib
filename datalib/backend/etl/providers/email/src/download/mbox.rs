@@ -44,8 +44,6 @@ pub struct MboxAccountConfig {
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    /// Doltlite database path. Ignored when `db` is `Some`.
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -83,7 +81,6 @@ impl FetchOptions {
     pub fn new(db: RawDb, cache: FingerprintCache) -> Self {
         Self {
             cache,
-            db_path: PathBuf::new(),
             db,
             input_path: PathBuf::new(),
             account_id_override: None,
@@ -1107,7 +1104,6 @@ mod tests {
         let db_path = work.path().join("e.doltlite_db");
         let db = RawDb::open(&db_path).await.unwrap();
         let summary = fetch(FetchOptions {
-            db_path: db_path.clone(),
             input_path: path,
             ..FetchOptions::new(db.clone(), test_cache().await)
         })
@@ -1163,7 +1159,6 @@ mod tests {
         for _ in 0..2 {
             let db = RawDb::open(&db_path).await.unwrap();
             let s = fetch(FetchOptions {
-                db_path: db_path.clone(),
                 input_path: path.clone(),
                 ..FetchOptions::new(db.clone(), test_cache().await)
             })
@@ -1207,7 +1202,6 @@ mod tests {
     ) -> FetchSummary {
         let db = RawDb::open(db_path).await.unwrap();
         let s = fetch(FetchOptions {
-            db_path: db_path.to_path_buf(),
             input_path: path.to_path_buf(),
             ..build(db.clone())
         })

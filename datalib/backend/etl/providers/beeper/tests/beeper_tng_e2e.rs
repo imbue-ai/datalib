@@ -74,7 +74,6 @@ async fn run_extract(
     // store makes one of the two `dolt_commit`s fail.
     let db = download::RawDb::open(&download::db_path_for(&db_path)).await?;
     let summary = download::fetch(FetchOptions {
-        db_path,
         db: db.clone(),
         sources: sources.into_iter().map(String::from).collect(),
         beeper_data_dir: Some(beeper_data_dir),

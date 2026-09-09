@@ -36,7 +36,6 @@ async fn run_fetch_since(
     // live connection to one file makes a `dolt_commit` fail.
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
     let s = fetch(FetchOptions {
-        db_path: out_db.to_path_buf(),
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,

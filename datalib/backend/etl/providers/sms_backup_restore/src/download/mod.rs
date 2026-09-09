@@ -108,8 +108,6 @@ impl RawDb {
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    /// Doltlite database path.
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See

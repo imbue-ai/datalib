@@ -176,7 +176,7 @@ pub struct RenderOutcome {
 /// Attachments are deliberately *not* in the union. Naming their
 /// conversation needs a join back to `sms_messages`, and a plain read of a
 /// content table from render code is what
-/// `docs/dev/streaming_steps_plan.md` is working off — the repo lint
+/// `docs/dev/plans/streaming_steps_plan.md` is working off — the repo lint
 /// ratchets that count down and refuses new ones. The miss it costs is
 /// narrow: this provider parses local XML, so a message and its attachment
 /// land in the same commit and the message row already names the bucket. A
