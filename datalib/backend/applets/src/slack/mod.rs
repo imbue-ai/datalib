@@ -162,7 +162,7 @@ fn scan(tree: &Path) -> (Channels, Vec<String>) {
     // JSON. The renderer writes its rows into the source's
     // `indexed_markdown.doltlite_db` now, so the six columns this card
     // needs are a `SELECT`.
-    let store_path = datalib_etl::indexed_markdown::path_for(tree);
+    let store_path = datalib_etl_render::indexed_markdown::path_for(tree);
     if !store_path.is_file() {
         // No store: either nothing has rendered yet (the card shows its
         // first-run message) or the tree is elsewhere. Both are an empty
@@ -217,7 +217,7 @@ fn read_rows(
     // `blocking` copes with both situations this applet is in: no
     // ambient runtime when serving (a plain blocking TCP accept loop),
     // and an ambient one under test.
-    datalib_etl::indexed_markdown::blocking(async {
+    datalib_etl_render::indexed_markdown::blocking(async {
         let pool = datalib_etl::doltlite_raw::open_derived(store, &[]).await?;
         let rows = sqlx::query(
             "SELECT channel, markdown_uuid, message_index, \
@@ -450,8 +450,8 @@ mod tests {
     use datalib_schema::providers::Provider;
 
     fn write_thread(dir: &Path, md: &str, channel: &str, when: &str, msgs: &[(&str, &str)]) {
-        use datalib_etl::grid_index::RenderedMarkdown;
-        use datalib_etl::indexed_markdown::IndexedMarkdownStore;
+        use datalib_etl_render::grid_index::RenderedMarkdown;
+        use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
         use datalib_schema::grid_rows::GridRow;
 
         let row = |uuid: &str, index: Option<i64>, author: &str, text: &str| {
@@ -504,8 +504,8 @@ mod tests {
     /// Like [`write_thread`], but the caller supplies each message's
     /// index explicitly — so a test can insert them out of order.
     fn write_thread_rows(dir: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
-        use datalib_etl::grid_index::RenderedMarkdown;
-        use datalib_etl::indexed_markdown::IndexedMarkdownStore;
+        use datalib_etl_render::grid_index::RenderedMarkdown;
+        use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
         use datalib_schema::grid_rows::GridRow;
 
         let rows: Vec<GridRow> = msgs
@@ -751,7 +751,7 @@ mod tests {
         // authoritative, which is the worse failure.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
-            datalib_etl::indexed_markdown::path_for(tmp.path()),
+            datalib_etl_render::indexed_markdown::path_for(tmp.path()),
             "not a doltlite database",
         )
         .unwrap();

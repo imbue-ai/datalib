@@ -1,0 +1,310 @@
+//! Read the whole YoLink raw store into memory for the renderer, and
+//! decide up front whether there is anything to do.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use sqlx::sqlite::SqlitePool;
+use sqlx::Row;
+
+use datalib_etl_yolink::download::db_path_for;
+
+/// Outcome of a parse attempt.
+pub enum Parsed {
+    /// The store's HEAD matches the render cursor: the single rendered
+    /// page is already current. Carries the hash purely for logging —
+    /// the cursor file already holds it, so nothing needs rewriting.
+    UpToDate { head: String },
+    /// The store moved (or there was no usable cursor). Everything the
+    /// document needs, loaded.
+    Fresh(Box<ParsedYolink>),
+}
+
+/// One row of `yolink_devices`, plus its observed extent.
+#[derive(Debug, Clone)]
+pub struct DeviceRow {
+    /// `yolink_devices.id` — the config-chosen name, stable across runs.
+    pub name: String,
+    /// `temperature_humidity` | `watermeter`.
+    pub kind: String,
+    /// Earliest timepoint the fetcher will ever walk back to.
+    pub start_ms: i64,
+    /// High-water mark from the last successful fetch; `None` before the
+    /// first window landed a reading.
+    pub last_ts_ms: Option<i64>,
+    /// SECRET — half of the per-device signed-URL credential pair. Never
+    /// render it, never log it. Kept on the struct so a future consumer
+    /// that legitimately needs it (a re-fetch, say) doesn't have to
+    /// re-open the store, and so the omission from the document is a
+    /// visible decision rather than an accident of the query.
+    pub family_device_id: String,
+}
+
+/// All readings for one (device, metric) pair, ascending by timestamp.
+/// Values are **as stored** — conversion to SI happens in the renderer,
+/// through [`crate::render::units`].
+#[derive(Debug, Clone)]
+pub struct Series {
+    pub device: String,
+    pub metric: String,
+    /// Unix milliseconds, ascending.
+    pub ts_ms: Vec<i64>,
+    /// Raw stored values, parallel to `ts_ms`.
+    pub values: Vec<f64>,
+}
+
+/// One `dolt_log()` entry — the store's own account of how it got here.
+#[derive(Debug, Clone)]
+pub struct CommitRow {
+    pub hash: String,
+    pub date: String,
+    pub message: String,
+}
+
+/// Everything the single rendered document is built from.
+#[derive(Debug, Clone)]
+pub struct ParsedYolink {
+    /// HEAD at scan time, to stamp into the cursor after a successful
+    /// render. `None` when `dolt_log()` is unavailable (stock
+    /// libsqlite3) — then the cursor stays unwritten and the next run
+    /// re-renders, which is the safe direction.
+    pub head: Option<String>,
+    /// Wall-clock cost of the HEAD lookup, recorded in the cursor so the
+    /// "is the scan getting slower?" question stays answerable.
+    pub scan_elapsed: Option<Duration>,
+    pub devices: Vec<DeviceRow>,
+    /// Sorted by (device, metric) so the document and the plot legends
+    /// are stable run to run.
+    pub series: Vec<Series>,
+    /// `dolt_log()`, newest first.
+    pub commits: Vec<CommitRow>,
+    /// `sync_scope_config` rows: what the download step was configured
+    /// to fetch, as of `updated_at`.
+    pub scope_config: Vec<ScopeConfigRow>,
+    /// Reading rows whose last fetch attempt recorded an error.
+    pub reading_errors: i64,
+    /// Total rows in `yolink_readings` (equals the summed series
+    /// lengths; kept separately so a mismatch is detectable).
+    pub reading_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScopeConfigRow {
+    pub scope: String,
+    pub config: String,
+    pub updated_at: String,
+}
+
+pub fn parse(raw_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> {
+    let db_path = db_path_for(raw_path);
+    if !db_path.exists() {
+        anyhow::bail!(
+            "yolink raw store not found at {} — run the download step first",
+            db_path.display()
+        );
+    }
+    // The render phase is driven by `futures`' executor, which enters no
+    // tokio context of its own; `block_in_place` + the ambient handle is
+    // the same shape every other provider's parse uses.
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(async move { parse_async(&db_path, last_render_hash).await })
+    })
+}
+
+async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> {
+    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
+        .await
+        .with_context(|| format!("open yolink doltlite for render {}", db_path.display()))?;
+
+    // The HEAD lookup this already did *is* the pin, so it does both jobs
+    // now: it decides whether the cursor is current, and it is the commit
+    // every read below is taken at. No commit means nothing has been
+    // committed here to render, which is emptiness rather than a reason to
+    // read whatever is sitting in the working set.
+    let started = std::time::Instant::now();
+    let pin = datalib_etl::pin::head(&pool).await?;
+    let scan_elapsed = Some(started.elapsed());
+    let Some(pin) = pin else {
+        return Ok(Parsed::Fresh(Box::new(ParsedYolink {
+            head: None,
+            scan_elapsed,
+            devices: Vec::new(),
+            series: Vec::new(),
+            commits: Vec::new(),
+            scope_config: Vec::new(),
+            reading_errors: 0,
+            reading_count: 0,
+        })));
+    };
+    datalib_etl::pin::install_views(&pool, &pin)
+        .await
+        .context("pin the yolink raw store for render")?;
+    let head = Some(pin.commit().to_string());
+
+    if let (Some(head), Some(last)) = (head.as_deref(), last_render_hash) {
+        if head == last {
+            return Ok(Parsed::UpToDate {
+                head: head.to_string(),
+            });
+        }
+    }
+
+    let devices = load_devices(&pool).await?;
+    let series = load_series(&pool).await?;
+    let commits = load_commits(&pool).await;
+    let scope_config = load_scope_config(&pool).await;
+    let reading_errors: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pinned_yolink_readings_bookkeeping yolink_readings_bookkeeping WHERE last_error IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(0);
+    let reading_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pinned_yolink_readings yolink_readings")
+            .fetch_one(&pool)
+            .await
+            .context("count yolink_readings")?;
+
+    Ok(Parsed::Fresh(Box::new(ParsedYolink {
+        head,
+        scan_elapsed,
+        devices,
+        series,
+        commits,
+        scope_config,
+        reading_errors,
+        reading_count,
+    })))
+}
+
+async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
+    let rows = sqlx::query(
+        "SELECT id, kind, start_ms, last_ts_ms, family_device_id \
+           FROM pinned_yolink_devices yolink_devices ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load yolink_devices")?;
+    Ok(rows
+        .into_iter()
+        .map(|r| DeviceRow {
+            name: r.get::<String, _>("id"),
+            kind: r.get::<String, _>("kind"),
+            start_ms: r.get::<i64, _>("start_ms"),
+            last_ts_ms: r.get::<Option<i64>, _>("last_ts_ms"),
+            family_device_id: r.get::<String, _>("family_device_id"),
+        })
+        .collect())
+}
+
+/// One pass over `yolink_readings`, ordered so each (device, metric)
+/// run is contiguous and ascending in time — the exact order both the
+/// plot traces and the per-device stats want, so neither has to sort.
+/// The `yolink_readings_by_device_ts` index covers the leading two
+/// columns of the ORDER BY.
+async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
+    let rows = sqlx::query(
+        "SELECT device_name, metric, ts_ms, value \
+           FROM pinned_yolink_readings yolink_readings ORDER BY device_name, metric, ts_ms",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load yolink_readings")?;
+
+    let mut out: Vec<Series> = Vec::new();
+    for r in rows {
+        let device: String = r.get("device_name");
+        let metric: String = r.get("metric");
+        let ts_ms: i64 = r.get("ts_ms");
+        let value: f64 = r.get("value");
+        match out.last_mut() {
+            Some(s) if s.device == device && s.metric == metric => {
+                s.ts_ms.push(ts_ms);
+                s.values.push(value);
+            }
+            _ => out.push(Series {
+                device,
+                metric,
+                ts_ms: vec![ts_ms],
+                values: vec![value],
+            }),
+        }
+    }
+    Ok(out)
+}
+
+/// `dolt_log()`, newest first. Best-effort: a store opened through a
+/// libsqlite3 without doltlite's SQL surface has no commit log, and a
+/// missing provenance section is not worth failing a render over.
+async fn load_commits(pool: &SqlitePool) -> Vec<CommitRow> {
+    let Ok(rows) = sqlx::query(
+        "SELECT commit_hash, date, message FROM dolt_log() ORDER BY date DESC LIMIT 50",
+    )
+    .fetch_all(pool)
+    .await
+    else {
+        return Vec::new();
+    };
+    rows.into_iter()
+        .map(|r| CommitRow {
+            hash: r.get::<String, _>("commit_hash"),
+            date: r.get::<String, _>("date"),
+            message: r.get::<String, _>("message"),
+        })
+        .collect()
+}
+
+async fn load_scope_config(pool: &SqlitePool) -> Vec<ScopeConfigRow> {
+    let Ok(rows) =
+        sqlx::query("SELECT scope, config, updated_at FROM pinned_sync_scope_config sync_scope_config ORDER BY scope")
+            .fetch_all(pool)
+            .await
+    else {
+        return Vec::new();
+    };
+    rows.into_iter()
+        .map(|r| ScopeConfigRow {
+            scope: r.get::<String, _>("scope"),
+            config: r.get::<String, _>("config"),
+            updated_at: r.get::<String, _>("updated_at"),
+        })
+        .collect()
+}
+
+impl ParsedYolink {
+    pub fn series_by_device(&self) -> BTreeMap<&str, Vec<&Series>> {
+        let mut out: BTreeMap<&str, Vec<&Series>> = BTreeMap::new();
+        for s in &self.series {
+            out.entry(s.device.as_str()).or_default().push(s);
+        }
+        out
+    }
+
+    pub fn latest_ts_ms(&self) -> Option<i64> {
+        self.series
+            .iter()
+            .filter_map(|s| s.ts_ms.last())
+            .max()
+            .copied()
+    }
+
+    pub fn earliest_ts_ms(&self) -> Option<i64> {
+        self.series
+            .iter()
+            .filter_map(|s| s.ts_ms.first())
+            .min()
+            .copied()
+    }
+}
+
+impl Series {
+    pub fn len(&self) -> usize {
+        self.ts_ms.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.ts_ms.is_empty()
+    }
+}

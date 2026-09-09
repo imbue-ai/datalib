@@ -105,7 +105,7 @@ Reach for the simplest existing provider that's shaped like yours,
    manifest list in `MODULE.bazel`.
 4. Implement `download::fetch(...)` and `<name>::render::...`. The
    render side hands each finished document to `ctx.emit_doc` as a
-   [`RenderedMarkdown`](../../datalib/backend/etl/src/grid_index.rs);
+   [`RenderedMarkdown`](../../datalib/backend/etl/render/src/grid_index.rs);
    the render step writes it into that source's store.
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
    (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
@@ -119,20 +119,22 @@ Reach for the simplest existing provider that's shaped like yours,
    `config_examples_test` schema check, so a new source is only covered
    by that test if it appears there too.
 
-7. Write `providers/<name>/DOWNLOAD.md`, and `TRANSLATE.md` too if the
-   provider has a render side. See
+7. Write `providers/<name>/DOWNLOAD.md`, and
+   `providers/<name>_render/TRANSLATE.md` too if the provider has a
+   render side. See
    [Every provider documents itself, in the same place](#every-provider-documents-itself-in-the-same-place).
 
 Grid index needs no per-provider changes — the `grid_index` step
 (`datalib-step grid_index`, `build_grid_index` in
-`etl/src/grid_index.rs`) picks up the new source's store on its next
+`etl/render/src/grid_index.rs`) picks up the new source's store on its next
 run.
 
 ### Every provider documents itself, in the same place
 
 A provider's documentation lives beside its code, under a name that is
-the same for every provider: **`DOWNLOAD.md`** for the ingest side and
-**`TRANSLATE.md`** for the render side. That consistency is the whole
+the same for every provider: **`DOWNLOAD.md`** in the download crate,
+and **`TRANSLATE.md`** in the `_render` crate beside the code it
+describes. That consistency is the whole
 point — it is what lets a reader (or an agent) find a provider's docs by
 convention instead of by searching, so nothing has to maintain an index
 of them and no provider gets forgotten by one.

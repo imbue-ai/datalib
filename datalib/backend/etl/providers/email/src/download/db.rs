@@ -422,7 +422,7 @@ pub struct LoadedRaw {
 
 /// Synchronous loader for tests / ad-hoc callers that want every
 /// entity table at once. Production render calls
-/// `crate::render::parse::parse(..., last_render_hash)` instead.
+/// `datalib_etl_email_render::render::parse::parse(..., last_render_hash)` instead.
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {

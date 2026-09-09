@@ -1,0 +1,12 @@
+[package]
+name = "datalib-table"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_table"
+path = "src/lib.rs"
+
+[dependencies]
+sqlx = { workspace = true }

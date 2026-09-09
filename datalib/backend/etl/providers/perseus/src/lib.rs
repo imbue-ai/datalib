@@ -1,6 +1,7 @@
-//! Perseus Digital Library provider for [`datalib_etl`]: renders
-//! the TEI editions of classical works into the stanza's
-//! `<stanza>/rendered_md/` tree + its render store.
+//! Perseus Digital Library provider for [`datalib_etl`]: the download
+//! half — the TEI editions of classical works. Rendering them into the
+//! source's `rendered_md/` tree lives in
+//! [`datalib_etl_perseus_render`].
 
 use std::sync::OnceLock;
 
@@ -8,7 +9,6 @@ use uuid::Uuid;
 
 pub mod download;
 pub mod processor;
-pub mod render;
 
 /// Frozen UUIDv5 seed string. Despite the name carrying `perseus-grc2`,
 /// this is just a stable namespace prefix for *every* row PK in this
@@ -18,7 +18,7 @@ pub mod render;
 pub const TLG0003_TLG001: &str = "urn:cts:greekLit:tlg0003.tlg001.perseus-grc2";
 
 /// CTS work URN (no edition suffix). `__cts__.xml` edition `urn`s are
-/// `<this>.<edition-id>`, which [`crate::render::parse`] strips to
+/// `<this>.<edition-id>`, which [`datalib_etl_perseus_render::render::parse`] strips to
 /// recover the edition id.
 pub const WORK_URN: &str = "urn:cts:greekLit:tlg0003.tlg001";
 
@@ -82,7 +82,7 @@ pub fn paragraph_uuid(book_n: &str, ch_n: &str, sec_n: &str, version: &str) -> S
 }
 
 /// Anchor UUID for one sentence within a section. The renderer wraps
-/// each sentence (split by [`crate::render::align::split`]) in its
+/// each sentence (split by [`datalib_etl_perseus_render::render::align::split`]) in its
 /// own `<span data-section-uuid="…">` using this UUID; the
 /// bilingual-alignment `edges` rows reference these as
 /// `src_anchor_uuid` / `dst_anchor_uuid` so the UI can highlight the

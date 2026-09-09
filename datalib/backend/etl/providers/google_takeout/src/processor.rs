@@ -5,14 +5,12 @@
 //! store (open/commit/checkpoint); the orchestrator only drives `run`.
 
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use datalib_etl_google_takeout_config::GoogleTakeoutRenderConfig;
 use datalib_etl_google_takeout_config::{GoogleTakeoutConfig, GoogleTakeoutSync};
 
 use crate::download;
@@ -29,20 +27,6 @@ pub fn plan_download(
         raw_path,
         input_path,
         sync: sync_flags(config.sync.unwrap_or_default()),
-    })])
-}
-
-/// Render wave: always present (renders whatever is in the raw store).
-pub fn plan_render(
-    ctx: PlanContext,
-    config: GoogleTakeoutRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
-    let name = ctx.name;
-    let raw_path = config.common.raw_path().to_path_buf();
-    Ok(vec![Box::new(GoogleTakeoutRender {
-        id: format!("google_takeout/{name}/render"),
-        raw_path,
-        name,
     })])
 }
 
@@ -103,44 +87,5 @@ impl DataProcessor for GoogleTakeoutDownload {
             s.parse_errors,
         );
         Ok(session.finish(ctx, summary).await)
-    }
-}
-
-struct GoogleTakeoutRender {
-    id: String,
-    raw_path: PathBuf,
-    name: String,
-}
-
-#[async_trait]
-impl DataProcessor for GoogleTakeoutRender {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn render_version(&self) -> Option<u32> {
-        Some(crate::render::RENDER_VERSION)
-    }
-
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        // Only the chat-shaped feeds (Google Chat / Google Voice) render; the
-        // other feeds stay queryable in the raw store.
-        let prior: &HashMap<String, String> = ctx.prior_fingerprints;
-        // This renderer walks the whole raw store every run, so the set it
-        // considered is the complete one: anything else the render store
-        // holds is a document whose source is gone. The driver sweeps.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut on_doc = |md| ctx.emit_doc(md);
-        let pass = crate::render::render(
-            &self.raw_path,
-            ctx.root,
-            &self.name,
-            ctx.progress,
-            prior,
-            &mut on_doc,
-            &mut seen,
-        )?;
-        ctx.retain_documents(pass, &seen);
-        Ok("rendered".into())
     }
 }

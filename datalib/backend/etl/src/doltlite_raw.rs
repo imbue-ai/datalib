@@ -489,10 +489,7 @@ async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInf
     cols
 }
 
-pub(crate) async fn declared_column_names(
-    create_sql: &str,
-    table: &str,
-) -> Result<BTreeSet<String>> {
+pub async fn declared_column_names(create_sql: &str, table: &str) -> Result<BTreeSet<String>> {
     Ok(declared_columns(create_sql, table)
         .await?
         .into_iter()
@@ -501,10 +498,7 @@ pub(crate) async fn declared_column_names(
 }
 
 /// Empty when the table does not exist, matching [`table_columns`].
-pub(crate) async fn actual_column_names(
-    pool: &SqlitePool,
-    table: &str,
-) -> Result<BTreeSet<String>> {
+pub async fn actual_column_names(pool: &SqlitePool, table: &str) -> Result<BTreeSet<String>> {
     Ok(table_columns(pool, table)
         .await?
         .into_iter()
@@ -512,7 +506,7 @@ pub(crate) async fn actual_column_names(
         .collect())
 }
 
-pub(crate) fn parse_create_table_name(sql: &str) -> Option<String> {
+pub fn parse_create_table_name(sql: &str) -> Option<String> {
     let s = sql.trim_start();
     if !s.get(..12)?.eq_ignore_ascii_case("CREATE TABLE") {
         return None;

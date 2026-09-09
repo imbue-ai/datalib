@@ -432,7 +432,7 @@ pub struct LoadedRaw {
 
 /// Synchronous helper for tests that want a snapshot of every entity
 /// table at a fixed point in time. Production render uses
-/// `crate::render::parse::parse(..., last_render_hash)` instead;
+/// `datalib_etl_claude_render::render::parse::parse(..., last_render_hash)` instead;
 /// this one ignores the cursor and loads everything. Attachment bytes
 /// are NOT loaded here — tests that need them load a `BlobBundle`
 /// via `BlobBundle::load(...)` directly.

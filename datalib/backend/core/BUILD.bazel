@@ -15,7 +15,6 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/runtime:datalib_runtime",
-        "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",

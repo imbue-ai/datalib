@@ -1,12 +1,10 @@
-//! JMAP provider for [`datalib_etl`]: Download (raw API capture into
-//! a single doltlite db) and Render (raw → per-thread markdown +
-//! `grid_rows` sidecars). The Load step is provider-agnostic and lives
-//! at [`datalib_etl::load`].
+//! Email provider for [`datalib_etl`]: the download half — JMAP, the
+//! Gmail API, or an `.mbox` on disk, all writing one deduped raw store.
+//! Rendering lives in [`datalib_etl_email_render`].
 
 pub mod download;
 pub mod mailbox_labels;
 pub mod probe;
 pub mod processor;
-pub mod render;
 
 pub use download::db;

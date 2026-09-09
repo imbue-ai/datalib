@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use datalib_etl_chatgpt::render::parse::parse_api_dir;
-use datalib_etl_chatgpt::render::render::render_all;
+use datalib_etl_chatgpt_render::render::parse::parse_api_dir;
+use datalib_etl_chatgpt_render::render::render::render_all;
 
 fn fixture_dir() -> PathBuf {
     // Bazel sets `CHATGPT_FIXTURE_DIR` to a runfiles-relative path
@@ -72,8 +72,8 @@ fn renders_tng_fixture() {
     insta::assert_snapshot!("tng_rendered_docs", docs_bundle(&docs));
 }
 
-fn docs_bundle(docs: &[datalib_etl::grid_index::RenderedMarkdown]) -> String {
-    let mut sorted: Vec<&datalib_etl::grid_index::RenderedMarkdown> = docs.iter().collect();
+fn docs_bundle(docs: &[datalib_etl_render::grid_index::RenderedMarkdown]) -> String {
+    let mut sorted: Vec<&datalib_etl_render::grid_index::RenderedMarkdown> = docs.iter().collect();
     sorted.sort_by(|a, b| a.markdown_uuid.cmp(&b.markdown_uuid));
     let mut out = String::new();
     for d in sorted {

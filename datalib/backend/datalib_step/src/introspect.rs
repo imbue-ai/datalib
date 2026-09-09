@@ -35,7 +35,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 
-use datalib_etl::grid_index::RenderedMarkdown;
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_id::{entity_id_str, IdNamespace, Scope};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};

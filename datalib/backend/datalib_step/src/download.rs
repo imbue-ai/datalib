@@ -1,12 +1,11 @@
 //! The download step driver: one source's download wave.
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::processor::{CheckpointSink, RunCtx};
 
-use crate::dispatch::PlannedSource;
+use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
 
 pub async fn run(
@@ -16,8 +15,14 @@ pub async fn run(
     control: &datalib_etl::control::DownloadControl,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
+    let Wave::Download(processors) = &planned.processors else {
+        anyhow::bail!(
+            "the download driver was handed source {:?}'s render wave",
+            planned.name
+        );
+    };
     anyhow::ensure!(
-        !planned.processors.is_empty(),
+        !processors.is_empty(),
         "source {:?} (type={}) has no download work — it needs a `sync:` block \
          (or a staged input_path for file-backed sources)",
         planned.name,
@@ -49,18 +54,16 @@ pub async fn run(
              stay in doltlite history)",
         );
     }
-    let empty_fingerprints: HashMap<String, String> = HashMap::new();
     let guard = datalib_etl::retry::RetryGuard::from_params(&planned.download_params);
 
     let body = async {
-        for proc in &planned.processors {
-            let ctx = RunCtx::for_download(
+        for proc in processors {
+            let ctx = RunCtx::new(
                 &planned.name,
                 &planned.raw_path,
                 now,
                 &progress,
                 &control,
-                &empty_fingerprints,
                 &checkpoints,
                 metrics.clone(),
                 diagnostics.clone(),

@@ -22,9 +22,7 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/google_takeout_config:datalib_etl_google_takeout_config",
-        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/obs:datalib_obs",
-        "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
@@ -52,6 +50,7 @@ rust_test(
     deps = [
         ":datalib_etl_google_takeout",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

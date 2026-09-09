@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }
+datalib-etl-render = { path = "../../render" }
 datalib-etl-macros = { path = "../../macros" }
 datalib-time = { path = "../../../time" }
 datalib-signal-backup = { path = "../../../signal-backup" }
@@ -25,7 +26,6 @@ chrono = { workspace = true }
 sha2 = { workspace = true }
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 uuid = { workspace = true }
-datalib-schema = { path = "../../../schema" }
 
 [dev-dependencies]
 tempfile = "3"

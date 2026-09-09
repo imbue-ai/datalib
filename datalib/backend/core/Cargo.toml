@@ -10,7 +10,6 @@ path = "src/lib.rs"
 
 [dependencies]
 app-schema = { path = "../app_schema" }
-datalib-schema = { path = "../schema" }
 datalib-obs = { path = "../obs" }
 datalib-runtime = { path = "../runtime" }
 datalib-time = { path = "../time" }

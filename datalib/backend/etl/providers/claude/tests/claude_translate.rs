@@ -4,7 +4,7 @@
 //! integration test tagged `manual` and is run via `cargo test`.
 
 use datalib_etl_claude::download::export::{ingest, IngestOptions};
-use datalib_etl_claude::render::parse::{parse, shred};
+use datalib_etl_claude_render::render::parse::{parse, shred};
 use std::collections::HashSet;
 use std::path::PathBuf;
 

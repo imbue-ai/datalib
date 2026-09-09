@@ -1,8 +1,6 @@
-//! LinkedIn data-export ("takeout") provider.
+//! LinkedIn data-export ("takeout") provider: the download half.
+//! Rendering lives in [`datalib_etl_linkedin_render`].
 
-pub mod connections;
 pub mod download;
-pub mod posts;
 pub mod processor;
-pub mod render;
 pub mod synthesize;

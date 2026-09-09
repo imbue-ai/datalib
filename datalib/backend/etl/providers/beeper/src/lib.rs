@@ -1,8 +1,7 @@
-//! Beeper provider for [`datalib_etl`]: Download (raw Matrix API
-//! capture from `matrix.beeper.com`) and Render (raw → markdown +
-//! grid_rows sidecars, dispatched per bridge network).
+//! Beeper provider for [`datalib_etl`]: the download half — raw Matrix
+//! API capture from `matrix.beeper.com`. Rendering lives in
+//! [`datalib_etl_beeper_render`].
 
 pub mod download;
 pub mod processor;
-pub mod render;
 pub mod synthesize;

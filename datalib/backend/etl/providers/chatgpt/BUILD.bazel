@@ -29,9 +29,7 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",
-        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/id:datalib_id",
-        "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
@@ -57,6 +55,7 @@ rust_binary(
     deps = [
         ":datalib_etl_chatgpt",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
@@ -73,6 +72,7 @@ rust_test(
     deps = [
         ":datalib_etl_chatgpt",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -87,6 +87,7 @@ rust_test(
     deps = [
         ":datalib_etl_chatgpt",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
@@ -116,6 +117,7 @@ rust_test(
     },
     deps = [
         ":datalib_etl_chatgpt",
+        "//datalib/backend/etl/providers/chatgpt_render:datalib_etl_chatgpt_render",
     ],
 )
 
@@ -159,7 +161,9 @@ rust_test(
     deps = [
         "@datalib_crates//:serde_json",
         ":datalib_etl_chatgpt",
+        "//datalib/backend/etl/providers/chatgpt_render:datalib_etl_chatgpt_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:insta",
         "@datalib_crates//:tempfile",
     ],
