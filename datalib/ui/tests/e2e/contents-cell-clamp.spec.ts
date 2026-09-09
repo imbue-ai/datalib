@@ -62,7 +62,7 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({
     async (row) => {
       const clamp = row.locator(".datalib-clamp-2").first();
       await expect(clamp).toBeVisible({ timeout: 3_000 });
-      return clamp.evaluate((el) => {
+      const m = await clamp.evaluate((el) => {
         const cs = getComputedStyle(el);
         return {
           clientHeight: el.clientHeight,
@@ -71,6 +71,20 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({
           webkitLineClamp: cs.webkitLineClamp,
         };
       });
+      // A clamped element always has height. Measuring 0 means the node
+      // had no layout when `evaluate` ran — the grid recycles row DOM on
+      // both axes, so the node `toBeVisible` accepted can be re-used or
+      // re-laid-out a tick later. Throw, so `actOnRowByUuid`'s retry
+      // re-scrolls and measures again: returning the degenerate reading
+      // escapes the retry and surfaces below as a clamp bug that isn't
+      // one.
+      if (m.clientHeight === 0 || m.lineHeightPx === 0) {
+        throw new Error(
+          `clamp element measured ${m.clientHeight}px tall (line-height ` +
+            `${m.lineHeightPx}px) — not laid out yet`,
+        );
+      }
+      return m;
     },
     "snippet",
   );
