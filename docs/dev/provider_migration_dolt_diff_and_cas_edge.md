@@ -130,7 +130,6 @@ A small JSON file at `<out_dir>/<stanza>/rendered_md/_render_cursor.json`.
 ```json
 {
   "last_rendered_hash": "k7v9...",
-  "last_scan_ms": 12,
   "last_render_at": "2026-06-11T17:44:32-07:00"
 }
 ```
@@ -138,9 +137,6 @@ A small JSON file at `<out_dir>/<stanza>/rendered_md/_render_cursor.json`.
 - `last_rendered_hash`: the doltlite HEAD that the previous run
   successfully completed against. Used as `from_ref` for the next
   run's `dolt_diff_<table>` query.
-- `last_scan_ms`: how long the previous run's dolt_diff union query
-  took. Omitted (`None`) on cold start (no diff was issued). Logged
-  on every render so users can watch how the prolly-tree diff scales.
 - `last_render_at`: RFC 3339 stamp of when the cursor was written.
 
 Single-writer assumption. No locking, no atomic-rename dance.

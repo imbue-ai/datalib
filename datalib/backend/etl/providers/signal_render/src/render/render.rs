@@ -110,7 +110,7 @@ pub fn render_all(
     // right behavior since we have no way to anchor the diff.
     if let Some(head) = parsed.scan.new_head.as_deref() {
         let cursor_path = render_cursor::cursor_path(out_dir, source_name);
-        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed, render_params)
+        render_cursor::write(&cursor_path, head, render_params)
             .with_context(|| format!("write signal render cursor {}", cursor_path.display()))?;
     }
     Ok(summary)

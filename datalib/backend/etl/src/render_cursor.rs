@@ -1,11 +1,8 @@
 //! Per-source render cursor stored as a small JSON file at the root of
 //! the rendered-md directory for one provider+source pair. Tracks the
-//! doltlite commit hash the renderer successfully processed last time,
-//! plus the wall-clock cost of the most recent `dolt_diff_<table>`
-//! scan so we can see how the diff query scales as the raw store grows.
+//! doltlite commit hash the renderer successfully processed last time.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -17,12 +14,6 @@ pub struct RenderCursor {
     /// Doltlite HEAD commit at the time of the last successful render.
     /// Used as `from_ref` in the next run's `dolt_diff_<table>` union.
     pub last_rendered_hash: String,
-    /// Wall-clock milliseconds the previous run's `dolt_diff` union
-    /// query took. `None` on the first cursor write (cold-start render
-    /// did no diff). Kept here so users can eyeball "is the prolly-tree
-    /// diff getting slower?" without having to scrape sync logs.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub last_scan_ms: Option<u64>,
     /// RFC 3339 timestamp of when we last wrote the cursor — i.e. when
     /// the most recent successful render completed. Informational.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -81,16 +72,7 @@ pub fn no_params() -> serde_json::Value {
     serde_json::json!({})
 }
 
-/// Write a cursor with the new commit hash, the scan duration from the
-/// run that's about to be persisted, and the render params that run
-/// used. Caller passes `scan_elapsed = None` on cold-start renders (no
-/// diff query happened).
-pub fn write(
-    path: &Path,
-    hash: &str,
-    scan_elapsed: Option<Duration>,
-    params: &serde_json::Value,
-) -> Result<()> {
+pub fn write(path: &Path, hash: &str, params: &serde_json::Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("mkdir -p {}", parent.display()))?;
@@ -98,7 +80,6 @@ pub fn write(
     let last_render_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let body = serde_json::to_string_pretty(&RenderCursor {
         last_rendered_hash: hash.to_string(),
-        last_scan_ms: scan_elapsed.map(|d| d.as_millis() as u64),
         last_render_at: Some(last_render_at),
         params: Some(params.clone()),
     })
@@ -112,13 +93,12 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn round_trip_with_scan_ms() {
+    fn round_trip() {
         let td = tempfile::tempdir().unwrap();
         let p = cursor_path(td.path(), "my-source");
-        write(&p, "abc123", Some(Duration::from_millis(42)), &json!({})).unwrap();
+        write(&p, "abc123", &json!({})).unwrap();
         let read_back = read(&p).unwrap().unwrap();
         assert_eq!(read_back.last_rendered_hash, "abc123");
-        assert_eq!(read_back.last_scan_ms, Some(42));
         assert!(read_back.last_render_at.is_some());
     }
 
@@ -133,7 +113,7 @@ mod tests {
     fn params_change_invalidates_the_cursor() {
         let td = tempfile::tempdir().unwrap();
         let p = cursor_path(td.path(), "src");
-        write(&p, "h", None, &json!({"period": "month"})).unwrap();
+        write(&p, "h", &json!({"period": "month"})).unwrap();
         assert!(read_for_params(&p, &json!({"period": "month"}))
             .unwrap()
             .is_some());
@@ -163,17 +143,5 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let p = cursor_path(td.path(), "nope");
         assert!(read_for_params(&p, &json!({})).unwrap().is_none());
-    }
-
-    #[test]
-    fn cold_start_scan_ms_is_omitted() {
-        let td = tempfile::tempdir().unwrap();
-        let p = cursor_path(td.path(), "src");
-        write(&p, "h", None, &json!({})).unwrap();
-        let s = std::fs::read_to_string(&p).unwrap();
-        assert!(
-            !s.contains("last_scan_ms"),
-            "cold-start cursor should omit last_scan_ms, got:\n{s}"
-        );
     }
 }
