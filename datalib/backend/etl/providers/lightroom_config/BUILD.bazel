@@ -1,8 +1,8 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# Schema-only config crate for lightroom (Program A goal #1).
+# Schema-only config crate for lightroom.
 # Bazel-only by design (no Cargo.toml). See
-# docs/dev/archived/data_processor_and_config_refactor.md §4.3.
+# AGENTS.md, "Why each provider has a <p>_config crate".
 rust_library(
     name = "datalib_etl_lightroom_config",
     srcs = glob(["src/**/*.rs"]),

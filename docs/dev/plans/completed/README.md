@@ -11,8 +11,8 @@ Where a doc goes when it stops being a plan:
 |---|---|
 | still intended, not built | [`docs/dev/plans/`](../) |
 | **landed, recently** | **here** |
-| landed long ago, or superseded by a later design | [`docs/dev/archived/`](../../archived/) |
 | the best current explanation of how something works | `docs/dev/`, rewritten as reference |
+| no longer worth keeping | deleted — git history has it |
 
 The last row is the one worth pausing on. A completed plan that people
 would genuinely read to *learn the system* belongs in `docs/dev/` as a

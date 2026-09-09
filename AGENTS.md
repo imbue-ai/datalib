@@ -18,15 +18,15 @@ banner:
 | | |
 |---|---|
 | [`plans/`](docs/dev/plans/) | intended, not built |
-| [`plans/completed/`](docs/dev/plans/completed/) | landed recently, kept as the record of what was decided |
-| [`archived/`](docs/dev/archived/) | landed long ago, or superseded by a later design |
+| [`plans/completed/`](docs/dev/plans/completed/) | landed, kept as the record of what was decided |
 
-A plan that lands moves to `plans/completed/`, and later to
-`archived/` once it is old news. The exception is a plan somebody
-would read to *learn how the system works*: rewrite that one as
-reference and put it directly under `docs/dev/`. The entries below
-stay grouped by topic, so a plan sits beside the reference doc it
-relates to.
+A plan that lands moves to `plans/completed/`. The exception is a plan
+somebody would read to *learn how the system works*: rewrite that one
+as reference and put it directly under `docs/dev/`. When a completed
+plan stops being worth keeping, **delete it** — git has it, and a
+directory of obsolete prose is a liability here rather than an asset.
+The entries below stay grouped by topic, so a plan sits beside the
+reference doc it relates to.
 
 **Pipeline / sync engine**
 
@@ -226,12 +226,6 @@ relates to.
   commented `<name>.download` + `<name>.render` step pair per source,
   in the steps format).
 
-**Historical** — [`docs/dev/archived/`](docs/dev/archived/) holds
-point-in-time plans and audits (each with an "Archived" banner). Don't
-treat them as current reference. A plan that landed recently is one
-directory over, in
-[`docs/dev/plans/completed/`](docs/dev/plans/completed/).
-
 ## Prose can be stale — verify claims against the tree
 
 The docs above, `TODO.md`, and this repo's commit messages are unusually
@@ -381,9 +375,26 @@ datalib/
 tests/         goldens under tests/__snapshots__/ (Bazel-driven).
 tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
 docs/          dev/ architecture notes; user/ guides + config_examples/;
-               dev/archived/ historical plans.
+               dev/plans/ intended work, dev/plans/completed/ landed.
 third-party/   vendored upstream code (see below).
 ```
+
+### Why each provider has a `<p>_config` crate
+
+A provider's config schema lives in its own crate, holding the serde
+structs and nothing else — no download code, no render code. That lets
+anything needing to *understand* a config link the schema without
+linking the machinery that acts on it, and it keeps the dependency rule
+structural rather than merely intended.
+
+They are **Bazel-only by design — no `Cargo.toml`**. A first-party
+crate that uses only third-party dependencies the workspace already has
+needs just a `BUILD.bazel` under `rules_rust`, so the crate
+proliferation is close to free.
+
+Three of them (`chatgpt_config`, `perseus_config`, `slack_config`) are
+missing the comment their siblings carry; the convention applies to
+them just the same.
 
 ## The sync pipeline in one paragraph
 
