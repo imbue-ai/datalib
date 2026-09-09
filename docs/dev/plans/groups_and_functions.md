@@ -431,17 +431,24 @@ the one the UI review asked for and depends on 1 only.
 
 Recorded so the reasoning is not lost, not so it is built.
 
-- **Bootstrap from an export, then sync by API.** Two *steps* writing
-  one raw store stays disallowed (one writer per doltlite file). Two
-  *methods* in one ingest step is a different thing, and decision 5
-  makes it writable: `[steps.params.export]` (Local) with `path` and
-  `once = true`, followed by `[steps.params.api]` (Origin); the row
-  reads "Download". The step ingests the
-  export when the store is empty, records it in `sync_runs`, and never
-  re-ingests unless the path changes. `once` matters because the
-  export ingest prunes the store to its own snapshot (Claude
-  `DOWNLOAD.md`, "Bootstrapping from an export"), so re-running it over
-  an API-extended store deletes what the API added.
+- **Bootstrap from an export, then sync by API.** Not config. A step
+  describes a steady state, and "read this export once, then never
+  again" is a one-time action; encoding it as a params table with a
+  `once` key puts state where config belongs. The repo already has the
+  right shape for one-shot operations — `DATALIB_DAG_RESET_AND_REDOWNLOAD`
+  and `REFETCH_BLOBS` are flags on a run, not keys in the file — and a
+  bootstrap is the same kind of thing. So: the group is configured for
+  its steady state only (`[steps.params.api]`), and seeding it is a
+  job, run from the Manage screen or as
+  `datalib-step import --into claude/ingest --from ~/export`, while
+  the pipeline is not running so the one-writer rule holds. It adds
+  what is missing and never prunes; afterwards the ordinary ingest
+  step continues from what is now in the store. The `export` method
+  table stays for the person who only has an export: that is a steady
+  state, the export is the truth, and pruning to its snapshot is
+  correct there. The destructive edge in Claude's `DOWNLOAD.md`
+  ("Bootstrapping from an export") only exists because one code path
+  serves both jobs today.
 - **A download that consumes an ingest.** LinkedIn ingests an
   export's CSVs and then, when `fetch_photos` is on, fetches each
   connection's public profile photo into the same raw store
