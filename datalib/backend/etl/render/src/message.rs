@@ -83,15 +83,6 @@ pub fn display_ts(date_ms: Option<i64>) -> String {
     datalib_time::display_ts_from_unix_millis(date_ms)
 }
 
-/// The compact form, for the few places that want the text without the
-/// surrounding `<time>` element (a system-event line, say).
-pub fn short_ts(date_ms: Option<i64>) -> String {
-    match date_ms.and_then(IsoOffsetTimestamp::from_unix_millis) {
-        Some(t) => datalib_time::short_ts(&t),
-        None => display_ts(date_ms),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

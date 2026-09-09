@@ -28,7 +28,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::message::{short_ts, MessageHeader};
+use datalib_etl_render::message::{timestamp_html, MessageHeader};
 use datalib_etl_render::section::msg_div_open;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
@@ -385,7 +385,7 @@ fn render_orphan_reactions(s: &mut String, doc: &NormalizedDoc) {
                 uuid = r.reaction_uuid,
                 emoji = r.emoji,
                 who = escape_text(&r.reactor_display),
-                ts = short_ts(r.date_ms),
+                ts = timestamp_html(r.date_ms),
             ));
         }
     }
@@ -426,7 +426,7 @@ fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatIte
                 .unwrap_or("(system event)");
             s.push_str(&format!(
                 "*<small>{ts} — system: {summary}</small>*\n\n",
-                ts = short_ts(item.date_ms)
+                ts = timestamp_html(item.date_ms)
             ));
             s.push_str("</div>\n\n");
             return;
@@ -931,7 +931,7 @@ mod tests {
         assert!(problems.is_empty(), "unexpected drops: {problems:?}");
         rows
     }
-    use crate::types::{NormalizedAttachment, NormalizedReaction};
+    use crate::types::{NormalizedAttachment, NormalizedReaction, OrphanReactions};
 
     fn mk_chat() -> NormalizedChat {
         NormalizedChat {
@@ -1175,6 +1175,50 @@ mod tests {
             "{md}"
         );
         assert!(!md.contains("<script>"), "{md}");
+    }
+
+    /// Every stamp in a rendered document is hoverable, not just the
+    /// one in a message header. A system line and an orphan reaction
+    /// each state their instant to the second in `title`, where the
+    /// short form on screen has only minutes.
+    #[test]
+    fn every_timestamp_carries_the_full_instant() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].kind = ItemKind::System;
+        chat.buckets[0].items[0].system_note = Some("Worf joined".to_string());
+        chat.buckets[0].orphan_reactions = vec![OrphanReactions {
+            target_native_id: "gone-upstream".to_string(),
+            reactions: vec![NormalizedReaction {
+                reaction_uuid: "55555555-5555-5555-5555-555555555555".to_string(),
+                reactor_display: "Will Riker".to_string(),
+                emoji: "\u{1fae1}".to_string(),
+                // Ten seconds after the message, which only the long
+                // form is precise enough to say.
+                date_ms: Some(12442118410000),
+                source_ref: None,
+            }],
+        }];
+        let md = render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test \u{b7} Bridge Crew",
+            "Test \u{b7} Bridge Crew (2364-04)",
+            "fp",
+        );
+
+        assert!(
+            md.contains(
+                "*<small><time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00+00:00\" \
+                 title=\"2364-04-11 00:00:00 UTC\">Sat Apr 11th, 2364 at 00:00</time> \
+                 \u{2014} system: Worf joined</small>*"
+            ),
+            "system line lost its hoverable instant:\n{md}"
+        );
+        assert!(
+            md.contains("title=\"2364-04-11 00:00:10 UTC\">Sat Apr 11th, 2364 at 00:00</time>)"),
+            "orphan reaction lost its hoverable instant:\n{md}"
+        );
     }
 
     fn aside_item(uuid: &str, text: &str) -> NormalizedChatItem {
