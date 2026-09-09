@@ -503,19 +503,14 @@ impl Runner {
                             }
                             break 'checkpoint;
                         }
-                        for &c in &graph.dependents[p] {
-                            // Dropped, not queued: a checkpoint for a step
-                            // already running is subsumed by the next one,
-                            // or by the final pass. Queueing them would
-                            // build a backlog of passes over data that has
-                            // already moved on.
-                            if in_flight[c] || status[c].is_some() {
-                                continue;
-                            }
-                            if !streaming_ready.contains(&c) {
-                                streaming_ready.push_back(c);
-                            }
-                        }
+                        enqueue_streaming_consumers(
+                            graph,
+                            p,
+                            &remaining_deps,
+                            &in_flight,
+                            &status,
+                            &mut streaming_ready,
+                        );
                     }
                     None
                 }
@@ -652,6 +647,7 @@ impl Runner {
                 state.save(&self.data_root).context("save dag state")?;
                 continue;
             }
+            let st_was_ok = st.is_ok();
             self.finish(
                 graph,
                 &mut state,
@@ -662,6 +658,25 @@ impl Runner {
                 attempts,
             );
             release_dependents(graph, &mut remaining_deps, &mut ready, i);
+            // **Finishing is the last checkpoint.** A producer that goes
+            // terminal has published everything it will, so a consumer of a
+            // streaming edge can start on it now rather than waiting for the
+            // producer's slowest sibling. Without this, several renders
+            // feeding `grid_index` means none of the fast ones reach the
+            // grid until the slowest is done -- which for a mirror with one
+            // big source is nearly the whole run. It also matters more than
+            // the checkpoint path does, because a render that finishes
+            // inside the cadence never checkpoints at all.
+            if streams[i] && st_was_ok {
+                enqueue_streaming_consumers(
+                    graph,
+                    i,
+                    &remaining_deps,
+                    &in_flight,
+                    &status,
+                    &mut streaming_ready,
+                );
+            }
             // Persist after every terminal step so a crash mid-run
             // keeps the completed steps' bookkeeping.
             state.save(&self.data_root).context("save dag state")?;
@@ -819,6 +834,15 @@ impl Runner {
                 let before = prev.input_versions.get(a.as_str());
                 match (now, before) {
                     (Some(nv), Some(bv)) if nv == bv => {}
+                    // An early pass runs *because* some producers are still
+                    // going, so their inputs have no version yet. That means
+                    // "has not reported", not "moved" — and calling it moved
+                    // makes every early dispatch look stale, so a
+                    // steady-state run where nothing changed would still run
+                    // the consumer once per producer, each pass reading
+                    // nothing. For the ordinary pass the same shape really is
+                    // suspicious, and stays treated as changed.
+                    (None, Some(_)) if early => {}
                     // Newly declared input, version moved, or (defensively)
                     // no current version — treat as changed.
                     _ => changed_inputs.push(a.clone()),
@@ -987,6 +1011,42 @@ fn resolve_outputs(
         }
     };
     Ok(vec![(path.to_string(), format!("{fingerprint}:{v}"))])
+}
+
+/// Queue a producer's consumers for an *early* pass.
+///
+/// Called from the two places a producer can make one worth running: it
+/// checkpointed, or it finished while a sibling is still going.
+///
+/// Three guards, all of them load-bearing:
+///
+/// - `remaining_deps == 0` means the consumer is already headed for its
+///   ordinary dispatch, and an early pass would only make that one redundant.
+///   Defensive rather than load-bearing: removing it does not fail any test,
+///   because the ordinary dispatch runs first in the same iteration and the
+///   in-flight guard then swallows the early one. Kept because relying on
+///   that ordering is not something the next reader should have to work out.
+/// - already in flight: a second instance is a second writer on one tree, and
+///   the notification is **dropped, not queued** -- the next one, or the final
+///   pass, subsumes it. Queueing would build a backlog of passes over data
+///   that has already moved on.
+/// - already terminal: nothing left to tell it.
+fn enqueue_streaming_consumers(
+    graph: &Graph,
+    producer: usize,
+    remaining_deps: &[usize],
+    in_flight: &[bool],
+    status: &[Option<StepStatus>],
+    streaming_ready: &mut VecDeque<usize>,
+) {
+    for &c in &graph.dependents[producer] {
+        if remaining_deps[c] == 0 || in_flight[c] || status[c].is_some() {
+            continue;
+        }
+        if !streaming_ready.contains(&c) {
+            streaming_ready.push_back(c);
+        }
+    }
 }
 
 fn release_dependents(
@@ -1595,6 +1655,175 @@ mod tests {
             .find(|s| s.id == "unified_index/grid")
             .unwrap();
         assert!(idx.status.is_ok(), "{:?}", idx.status);
+    }
+
+    /// A producer *finishing* should start the fan-in, not just a
+    /// checkpoint from one.
+    ///
+    /// With several renders feeding `grid_index`, the fast ones are done
+    /// long before the slow one. Waiting for `remaining_deps` to reach zero
+    /// means none of their documents reach the grid until the slowest
+    /// source finishes — which for a mirror with one big source is nearly
+    /// the whole run.
+    ///
+    /// Neither producer checkpoints here, deliberately: this is about the
+    /// completion path on its own. A render that finishes in under the
+    /// cadence never checkpoints at all, so this is the common case rather
+    /// than an exotic one.
+    #[tokio::test]
+    async fn a_finished_producer_starts_the_fan_in_before_its_slow_sibling() {
+        let root = tempfile::tempdir().unwrap();
+        let slow_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Was the slow producer still running the first time the fan-in ran?
+        let ran_early = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let passes = Arc::new(AtomicU32::new(0));
+
+        let fast = StepSpec::new(
+            "fast/rendered_md",
+            StepRun::in_process(move |ctx: StepCtx| async move {
+                let dir = ctx.path_str(&ctx.step_id);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("data.md"), "rows").unwrap();
+                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                Ok(StepOutcome {
+                    outputs: vec![ArtifactState::versioned(&pat, "fast-v1")],
+                })
+            }),
+        )
+        .streams_output();
+
+        let slow = {
+            let slow_done = slow_done.clone();
+            let passes = passes.clone();
+            StepSpec::new(
+                "slow/rendered_md",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (slow_done, passes) = (slow_done.clone(), passes.clone());
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("data.md"), "rows").unwrap();
+                        // Stay running until the fan-in has had a pass, so
+                        // the assertion does not depend on sleep lengths.
+                        for _ in 0..400 {
+                            if passes.load(Ordering::SeqCst) > 0 {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        slow_done.store(true, std::sync::atomic::Ordering::SeqCst);
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
+                        })
+                    }
+                }),
+            )
+            .streams_output()
+        };
+
+        let grid_index = {
+            let (slow_done, ran_early, passes) =
+                (slow_done.clone(), ran_early.clone(), passes.clone());
+            StepSpec::new(
+                "unified_index/grid",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (slow_done, ran_early, passes) =
+                        (slow_done.clone(), ran_early.clone(), passes.clone());
+                    async move {
+                        if passes.fetch_add(1, Ordering::SeqCst) == 0
+                            && !slow_done.load(std::sync::atomic::Ordering::SeqCst)
+                        {
+                            ran_early.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("index.txt"), "x").unwrap();
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            )
+            .input("fast/rendered_md")
+            .input("slow/rendered_md")
+        };
+
+        let graph = Graph::build(vec![fast, slow, grid_index]).unwrap();
+        let report = tokio::time::timeout(Duration::from_secs(15), runner(root.path()).run(&graph))
+            .await
+            .expect("the fan-in never ran, so the slow producer never returned")
+            .unwrap();
+
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(
+            ran_early.load(std::sync::atomic::Ordering::SeqCst),
+            "the fan-in waited for every producer: a source that finished early \
+             contributed nothing until the slowest one was done"
+        );
+    }
+
+    /// A second run where nothing moved must not run the fan-in at all.
+    ///
+    /// This is the steady-state case, and it is the one streaming can
+    /// quietly ruin: if an early pass leaves the consumer's recorded
+    /// `input_versions` incomplete, the next run sees the missing entries as
+    /// movement and re-runs the consumer once per producer — every run,
+    /// forever, each pass reading nothing.
+    #[tokio::test]
+    async fn a_second_run_with_nothing_moved_does_not_run_the_fan_in() {
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+
+        let producer = |name: &str| {
+            StepSpec::new(
+                format!("{name}/rendered_md"),
+                StepRun::in_process(move |ctx: StepCtx| async move {
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("data.md"), "rows").unwrap();
+                    let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                    // Same version both runs: nothing moved.
+                    Ok(StepOutcome {
+                        outputs: vec![ArtifactState::versioned(&pat, "stable")],
+                    })
+                }),
+            )
+            .streams_output()
+        };
+        let build = || {
+            Graph::build(vec![
+                producer("a"),
+                producer("b"),
+                producer("c"),
+                counting_consumer("unified_index/grid", "a/rendered_md", passes.clone())
+                    .input("b/rendered_md")
+                    .input("c/rendered_md"),
+            ])
+            .unwrap()
+        };
+
+        let r1 = runner(root.path()).run(&build()).await.unwrap();
+        assert!(r1.steps.iter().all(|s| s.status.is_ok()), "{r1:#?}");
+        let after_first = passes.load(Ordering::SeqCst);
+        assert!(after_first >= 1, "the fan-in never ran on the first run");
+
+        let r2 = runner(root.path()).run(&build()).await.unwrap();
+        assert!(r2.steps.iter().all(|s| s.status.is_ok()), "{r2:#?}");
+        assert_eq!(
+            passes.load(Ordering::SeqCst),
+            after_first,
+            "nothing moved, so the second run must not run the fan-in at all \
+             -- not an early pass, not a final one"
+        );
+        let idx = r2
+            .steps
+            .iter()
+            .find(|s| s.id == "unified_index/grid")
+            .unwrap();
+        assert!(
+            matches!(idx.status, StepStatus::SkippedUpToDate),
+            "expected the fan-in to be skipped up-to-date, got {:?}",
+            idx.status
+        );
     }
 
     /// The pleasing half of the design: an early pass records its

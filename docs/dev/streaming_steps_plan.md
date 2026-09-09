@@ -783,12 +783,22 @@ Each of these is a reviewable PR that leaves the tree green.
    to run, so it says this on the way past — one event, no second
    process.
 
-   **Not yet measured on real data, which is the open item.** With the
-   default cadence (quiet for 2s, ceiling 15s) a render that finishes in
-   under two seconds never checkpoints at all, so most fixture-sized
-   sources stream nothing. That the mechanism works is covered by
-   synthetic steps and one subprocess-boundary test; what it buys on a
-   real mirror is not.
+   **A producer finishing is the last checkpoint.** Waiting for
+   `remaining_deps` to reach zero meant a source that finished early
+   contributed nothing until the slowest one was done — which for a
+   mirror with one big source is nearly the whole run. It matters more
+   than the checkpoint path does, because a render that finishes inside
+   the cadence never checkpoints at all.
+
+   That is what makes it visible in the TNG fixture, where `grid_index`
+   went from one pass over 76 documents to five passes of 2, 21, 22, 25
+   and 6 — the same 76 documents and the same 345 rows, delivered in
+   installments. The cost is on the other side of the ledger: the index
+   store's `dolt_log` went from 2 commits to 6.
+
+   **What is still not measured is latency.** The fixture shows work
+   arriving incrementally; it does not say what that is worth on a real
+   mirror, which is what should be known before `download -> render`.
 7. **`download → render`.** Turn the capability on for the second edge.
 8. **The UI frame.**
 
