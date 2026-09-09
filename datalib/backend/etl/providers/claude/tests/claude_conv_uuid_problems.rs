@@ -65,7 +65,6 @@ fn detail_answers(playback: &std::path::Path, status: u16) {
 async fn run(raw: &std::path::Path, api: &std::path::Path) -> FetchSummary {
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
     let o = FetchOptions {
-        db_path: raw.to_path_buf(),
         export_dir: Some(api.to_path_buf()),
         overlap: 0,
         sleep_between: Duration::ZERO,
