@@ -1,7 +1,7 @@
 # Design: a data-centric UI
 
 **Status: proposal, nothing built.** Written 2026-09-09 against
-`a4752fb5`. Per [`AGENTS.md`](../../AGENTS.md), don't cite this file
+`a4752fb5`. Per [`AGENTS.md`](../../../AGENTS.md), don't cite this file
 as a description of the tree. Where it says "today", that was checked
 against that commit; where it says "would", nothing exists.
 
@@ -39,11 +39,11 @@ to get the scope wrong.
 - **The card system.** A card is a JS expression evaluated into its own
   shadow root, hosted by a layout that owns placement and chrome. Three
   layouts, a cross-card bus, host commands, a new-card gallery. See
-  [`cards.md`](cards.md) and `ui/src/cards/types.ts`.
+  [`cards.md`](../cards.md) and `ui/src/cards/types.ts`.
 - **Applets.** Any program can contribute card components *and* the
   endpoints behind them, declared in `config.toml`. `unified_index` is
   the precedent for an endpoints-only applet. See
-  [`applets.md`](applets.md).
+  [`applets.md`](../applets.md).
 - **A live channel.** One SSE connection for the whole page, carrying
   payload-free `root` frames (`config_changed`, `dag_changed`,
   `frontend_changed`) that mean "ask again". `ui/src/live.ts` explains
@@ -259,7 +259,7 @@ button opens a Vue modal.
 **The wizard stays a modal**, opened by a row action, exactly as now.
 Its multi-step credential-and-probe flow is genuinely not tabular, and
 pretending otherwise would cost more than it buys. See
-[`source_wizard.md`](source_wizard.md).
+[`source_wizard.md`](../source_wizard.md).
 
 ### 6. Publishing changes, per dataset
 

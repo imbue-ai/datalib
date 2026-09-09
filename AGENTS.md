@@ -161,7 +161,7 @@ are relative to the repo root.
 - [`docs/dev/cards.md`](docs/dev/cards.md) — the card system (custom
   views, component library); [`docs/dev/dactal.md`](docs/dev/dactal.md)
   — the dactal view bridge.
-- [`docs/dev/data_centric_ui.md`](docs/dev/data_centric_ui.md) —
+- [`docs/dev/plans/data_centric_ui.md`](docs/dev/plans/data_centric_ui.md) —
   *proposal*, nothing built: one typed table viewer plus the markdown
   one, with column types declared by whoever serves the rows, and the
   Manage screen ported onto it as an ordinary card. Depends on the
@@ -195,7 +195,7 @@ are relative to the repo root.
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites;
   [`docs/dev/coverage.md`](docs/dev/coverage.md) — coverage runs.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
-- [`docs/dev/provider_crate_split.md`](docs/dev/provider_crate_split.md)
+- [`docs/dev/plans/provider_crate_split.md`](docs/dev/plans/provider_crate_split.md)
   — *proposal*, nothing built: separating download from render so a
   render-schema change stops rebuilding every downloader. Measured —
   `datalib_etl` has a direct edge to `datalib_schema`, so splitting the

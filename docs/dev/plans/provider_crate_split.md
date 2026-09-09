@@ -2,7 +2,7 @@
 
 **Status: proposal, nothing built.** Written 2026-09-09 against
 `a4752fb5`. Every measurement below was taken from that tree; per
-[`AGENTS.md`](../../AGENTS.md), don't cite this file as a description
+[`AGENTS.md`](../../../AGENTS.md), don't cite this file as a description
 of what exists. When a stage lands, rewrite the section it makes real.
 
 This is the prerequisite for
@@ -185,7 +185,7 @@ argument.
 ## One piece of stale prose to fix along the way
 
 `AGENTS.md`'s doc map describes
-[`step_identity.md`](step_identity.md) as a *proposal* of which
+[`step_identity.md`](../step_identity.md) as a *proposal* of which
 "nothing in it is built". **It shipped.** `config.rs`'s `StepEntry`
 has no `outputs` field at all — the fields are `id`, `name`, `inputs`,
 `command`, `params`, `env`, `code_version`; `inputs` holds step ids;
