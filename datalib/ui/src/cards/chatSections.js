@@ -63,6 +63,29 @@ export function metaHost(el) {
 }
 
 /**
+ * Add a control to the end of a header's controls, but ahead of the
+ * source-link arrow — `↗` reads as "and here is the thing itself", so
+ * it belongs last however many controls accumulate before it. The
+ * renderer emits it inline at the end of the header, which is why this
+ * inserts rather than appends.
+ * @param {HTMLElement} host
+ * @param {string} separator
+ * @param {HTMLElement} control
+ */
+function addHeaderControl(host, separator, control) {
+  const link = host.querySelector(":scope > .source-link");
+  if (!link) {
+    host.append(document.createTextNode(separator), control);
+    return;
+  }
+  link.before(
+    document.createTextNode(separator),
+    control,
+    document.createTextNode(" "),
+  );
+}
+
+/**
  * Give every `[data-section-uuid]` a button that copies its uuid, and
  * the page title one that copies the document's.
  * @param {HTMLElement} root
@@ -92,7 +115,7 @@ export function injectCopyUuidButtons(root) {
     if (!uuid) continue;
     const btn = button(uuid, "Copy section ID");
     const host = metaHost(el);
-    if (host) host.append(document.createTextNode(" · "), btn);
+    if (host) addHeaderControl(host, " · ", btn);
     else el.prepend(btn);
   }
 
@@ -100,7 +123,7 @@ export function injectCopyUuidButtons(root) {
     if (el.querySelector(":scope > button.copy-uuid")) continue;
     const uuid = el.getAttribute("data-page-title-uuid") ?? "";
     if (!uuid) continue;
-    el.append(document.createTextNode(" "), button(uuid, "Copy page ID"));
+    addHeaderControl(el, " ", button(uuid, "Copy page ID"));
   }
 }
 
