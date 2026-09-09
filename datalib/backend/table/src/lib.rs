@@ -1,4 +1,12 @@
-// The row-struct write contract, shared by both schema families.
+//! The row-struct write contract: one trait, implemented by every row
+//! struct that a bulk INSERT/UPSERT helper can write.
+//!
+//! Its own crate, with `sqlx` as its only dependency, because both
+//! schema families (`datalib_schema`'s render tables and `app_schema`'s
+//! server tables) implement it and every provider's *download* side
+//! needs it. Left in `datalib_schema`, this fifty-line trait was the
+//! only thing making downloaders rebuild when a `grid_rows` column
+//! moved. Keep the dependency list empty but for `sqlx`.
 
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;

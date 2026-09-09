@@ -14,7 +14,6 @@ rust_library(
         "src/render_problems.rs",
         "src/source_cursors.rs",
         "src/measurements.rs",
-        "src/bulk.rs",
     ],
     crate_name = "datalib_schema",
     edition = "2021",
@@ -23,6 +22,8 @@ rust_library(
     ],
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        # `PortableTable` emits `impl ::datalib_table::BulkUpsertable`.
+        "//datalib/backend/table:datalib_table",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",

@@ -32,6 +32,7 @@ rust_library(
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/table:datalib_table",
         "//datalib/backend/source_common:datalib_source_common",
 
         "@datalib_crates//:anyhow",

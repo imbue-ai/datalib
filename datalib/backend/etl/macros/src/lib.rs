@@ -925,7 +925,7 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
         /// Generated write path, so the render schema binds its columns
         /// the same way the raw stores do. `datalib_etl::bulk`'s helpers
         /// take any `BulkUpsertable`.
-        impl ::datalib_schema::bulk::BulkUpsertable for #struct_name {
+        impl ::datalib_table::BulkUpsertable for #struct_name {
             const TABLE: &'static str = #table_lit;
             const ID_COLUMN: &'static str = #pk_lit;
             const TYPED_COLUMNS: &'static [&'static str] = &[#(#typed_col_lits),*];
