@@ -78,6 +78,15 @@ render side is exactly a function of it. `SourceType` becomes that
 list; `claude_export` leaves it, and the `_api` suffixes go with it
 since they were naming the method.
 
+A method table implies `function = "ingest"`, and the function is
+still written. The two have different readers: the runner composes the
+id and names the directory from `function` before anything runs, and
+it never looks inside `params`, so inferring the function would mean
+teaching it provider vocabulary — and only for the one function that
+has methods. `datalib-step` knows both facts, so it fails a step
+loudly when they disagree: a method table on a `render_markdown` step,
+or an `ingest` step with no method table.
+
 **6. Only the group has a name.** A step's label is derived, never
 written: "Render markdown" and "Grid index" from the function, and for
 an `ingest` step "Download" when any of its method tables reaches an
