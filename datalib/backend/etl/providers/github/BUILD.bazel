@@ -23,18 +23,15 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
-        "@datalib_crates//:clap",
         "@datalib_crates//:once_cell",
         "@datalib_crates//:regex",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
         "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:urlencoding",
-        "@datalib_crates//:uuid",
     ],
 )
 
@@ -45,8 +42,6 @@ rust_binary(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         ":datalib_etl_github",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
@@ -60,6 +55,9 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_github",
     edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
 )
 
 rust_test(
@@ -70,7 +68,6 @@ rust_test(
     deps = [
         ":datalib_etl_github",
         "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -85,7 +82,6 @@ rust_test(
     deps = [
         ":datalib_etl_github",
         "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

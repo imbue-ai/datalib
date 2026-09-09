@@ -34,7 +34,6 @@ rust_library(
         "@datalib_crates//:serde_json",
         "@datalib_crates//:shlex",
         "@datalib_crates//:strum",
-        "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
         "@datalib_crates//:walkdir",    ],

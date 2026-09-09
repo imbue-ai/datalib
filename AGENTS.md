@@ -903,8 +903,9 @@ green" means). The canonical line is the bare `bazelisk test //...`. Filtering o
 `-external` silently drops `//datalib/ui:e2e_test` (Playwright), which
 lets UI regressions through. (The lint/typecheck gate — `//:lint`, i.e.
 ruff + pyright + vue-tsc — is fully hermetic and carries no tags, so no
-filter can drop it; clippy and fmt ride the always-on rustfmt aspect and
-always-on clippy aspect.) If a test is host- or
+filter can drop it; clippy, fmt and the unused-dependency check ride
+the always-on rustfmt aspect, the always-on clippy aspect and
+`per_crate_rustc_flag` respectively — see the `.bazelrc` comments.) If a test is host- or
 network-dependent it's tagged `requires-network` and/or `no-sandbox`,
 which Bazel respects on its own — `external` is reserved for tests
 that hit third-party services you don't want CI talking to. Prefer
@@ -1352,6 +1353,28 @@ The TypeScript side mirrors these as string-literal unions in
 `datalib/ui/src/api.ts` (`DagRunState`, `SyncTaskState`, `SyncJobState`,
 `ConnectState`). They are hand-kept in step with the Rust — there is no
 generator — so change both halves together.
+
+## A `deps` entry you don't use is a build error
+
+Every `deps` / `proc_macro_deps` entry under `datalib/` must actually be
+used by the crate that names it. rustc is handed the exact `--extern`
+set by bazel and knows which ones it resolved a path through, so this
+needs no separate tool — one `.bazelrc` line turns it on, and the
+comment there explains why it must be `per_crate_rustc_flag` rather
+than `extra_rustc_flag` (the global form also lands on third-party
+crates, whose dep lists we cannot fix).
+
+Two things to know when it fires:
+
+- **A dep used only under `#[cfg(test)]` is reported unused on the
+  library**, because the library build never compiles that code. Move
+  it from the `rust_library`'s `deps` to the `rust_test` that names the
+  library with `crate = `. That is where it was really needed, so the
+  graph gets more accurate rather than merely shorter.
+- **A dep that is genuinely needed but never named** — a linker
+  artifact, say — is kept with `use <crate> as _;` in the crate root,
+  which is what rustc's own help text suggests. Nothing here needs that
+  today.
 
 ## Fallbacks: prefer failing loudly to succeeding quietly
 

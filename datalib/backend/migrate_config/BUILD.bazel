@@ -107,7 +107,6 @@ rust_test(
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
         "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
         "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",
-        "//datalib/backend/etl/providers/media_config:datalib_etl_media_config",
         "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",
         "//datalib/backend/etl/providers/signal_config:datalib_etl_signal_config",
         "@datalib_crates//:runfiles",

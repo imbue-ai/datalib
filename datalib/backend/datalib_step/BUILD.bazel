@@ -16,7 +16,6 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//datalib/backend/core:datalib_core",
-        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
@@ -87,13 +86,12 @@ rust_binary(
         "@datalib_crates//:blake3",
         "@datalib_crates//:clap",
         "@datalib_crates//:futures",
-        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
-        "@datalib_crates//:walkdir",    ],
+    ],
 )
 
 rust_test(

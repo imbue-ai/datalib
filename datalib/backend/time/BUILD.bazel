@@ -13,7 +13,6 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
-        "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde",
         "@datalib_crates//:thiserror",

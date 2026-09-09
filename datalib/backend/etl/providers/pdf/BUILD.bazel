@@ -27,19 +27,12 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",
-        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
-        "@datalib_crates//:hex",
         "@datalib_crates//:lopdf",
         "@datalib_crates//:pdf-inspector",
-        "@datalib_crates//:serde",
-        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
-        "@datalib_crates//:url",
-        "@datalib_crates//:uuid",
     ],
 )
 
@@ -48,7 +41,10 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_pdf",
     edition = "2021",
-    deps = ["@datalib_crates//:tempfile"],
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
 )
 
 # End-to-end: scan the fixture corpus, then render it, asserting on the

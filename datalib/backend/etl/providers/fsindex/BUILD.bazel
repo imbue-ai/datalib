@@ -39,7 +39,6 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:futures",
-        "@datalib_crates//:hex",
         "@datalib_crates//:ignore",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_yaml",
@@ -47,7 +46,6 @@ rust_library(
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
-        "@datalib_crates//:walkdir",
     ],
 )
 

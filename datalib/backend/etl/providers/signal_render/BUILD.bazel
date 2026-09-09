@@ -12,7 +12,6 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     proc_macro_deps = [
-        "//datalib/backend/etl/macros:datalib_etl_macros",
         "@datalib_crates//:async-trait",
     ],
     deps = [
@@ -24,17 +23,10 @@ rust_library(
         "//datalib/backend/signal-backup:datalib_signal_backup",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:blake3",
-        "@datalib_crates//:chrono",
-        "@datalib_crates//:prost",
-        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
-        "@datalib_crates//:uuid",
     ],
 )
 
