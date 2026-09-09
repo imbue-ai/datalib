@@ -5,7 +5,7 @@
 //! makes a killed run keep what it had. This decides *when*; the commit
 //! itself belongs to whoever owns the store.
 //!
-//! See `docs/dev/streaming_steps_plan.md`.
+//! See `docs/dev/plans/streaming_steps_plan.md`.
 
 use std::time::{Duration, Instant};
 

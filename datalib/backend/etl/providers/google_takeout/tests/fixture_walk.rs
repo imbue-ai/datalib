@@ -1,6 +1,6 @@
 //! End-to-end fixture walk: point the extractor at the checked-in
 //! TNG-themed Takeout tree and assert each feed lands the rows
-//! `docs/dev/archived/google_takeout_ingestion.md` promises.
+//! the provider's DOWNLOAD.md promises.
 
 use std::path::{Path, PathBuf};
 
@@ -23,9 +23,8 @@ fn fixture_root() -> PathBuf {
 }
 
 /// A temp cache per run: tests must never touch this host's real one.
-async fn opts(work: &Path, db_path: &Path, db: &RawDb, sync: SyncFlags) -> FetchOptions {
+async fn opts(work: &Path, db: &RawDb, sync: SyncFlags) -> FetchOptions {
     FetchOptions {
-        db_path: db_path.to_path_buf(),
         db: db.clone(),
         input_path: fixture_root(),
         cache: FingerprintCache::open(&work.join("fingerprints.sqlite"))
@@ -41,7 +40,7 @@ async fn run_all() -> (tempfile::TempDir, download::FetchSummary, PathBuf) {
     let work = tempfile::tempdir().unwrap();
     let db_path = work.path().join("gt.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
-    let summary = download::fetch(opts(work.path(), &db_path, &db, SyncFlags::all()).await)
+    let summary = download::fetch(opts(work.path(), &db, SyncFlags::all()).await)
         .await
         .unwrap();
     // Closed, not dropped: every caller reopens this store, and a
@@ -198,7 +197,7 @@ async fn second_run_skips_via_file_checkpoint() {
     // the first run mean every file's fingerprint matches and the
     // walkers short-circuit.
     let db = RawDb::open(&db_path).await.unwrap();
-    let summary2 = download::fetch(opts(work.path(), &db_path, &db, SyncFlags::all()).await)
+    let summary2 = download::fetch(opts(work.path(), &db, SyncFlags::all()).await)
         .await
         .unwrap();
     db.close().await;
@@ -218,7 +217,7 @@ async fn sync_flags_default_disables_everything() {
     let db_path = work.path().join("gt.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
     // Default SyncFlags has every feed off.
-    let summary = download::fetch(opts(work.path(), &db_path, &db, SyncFlags::default()).await)
+    let summary = download::fetch(opts(work.path(), &db, SyncFlags::default()).await)
         .await
         .unwrap();
     db.close().await;

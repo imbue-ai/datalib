@@ -32,11 +32,6 @@ fn dirs_home() -> Option<PathBuf> {
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    /// Path to the doltlite database we write into. [`db_path_for`]
-    /// places the entity db inside the per-source directory as
-    /// `entities.doltlite_db` (the dir is created if needed).
-    ///
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -62,7 +57,6 @@ impl FetchOptions {
     /// it is a live handle the caller opens and closes.
     pub fn new(db: RawDb) -> Self {
         Self {
-            db_path: PathBuf::new(),
             db,
             sources: Vec::new(),
             beeper_data_dir: None,
@@ -89,7 +83,9 @@ pub struct FetchSummary {
     pub events_orphaned: usize,
 }
 
-#[instrument(skip_all, fields(db = %opts.db_path.display()))]
+#[instrument(skip_all, fields(
+    db = %opts.db.pool().connect_options().get_filename().display()
+))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if opts.sources.is_empty() {
         anyhow::bail!("no sources configured; set e.g. `sources: [\"signal\", \"googlechat\"]`");

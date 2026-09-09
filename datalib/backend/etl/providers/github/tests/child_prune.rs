@@ -77,7 +77,6 @@ async fn run(out_db: &Path) -> usize {
     // assertions both, because two is what breaks a doltlite file.
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
     let out = fetch(FetchOptions {
-        db_path: out_db.to_path_buf(),
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,

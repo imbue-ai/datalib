@@ -150,7 +150,6 @@ async fn reset_and_redownload_preserves_data_tables() {
     // live connection to one file makes a `dolt_commit` fail.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let s1 = fetch(FetchOptions {
-        db_path: out_db.clone(),
         export_dir: Some(api.clone()),
         overlap: 0,
         sleep_between: Duration::ZERO,
@@ -194,7 +193,6 @@ async fn reset_and_redownload_preserves_data_tables() {
     // live connection to one file makes a `dolt_commit` fail.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let s2 = fetch(FetchOptions {
-        db_path: out_db.clone(),
         export_dir: Some(api.clone()),
         overlap: 0,
         sleep_between: Duration::ZERO,

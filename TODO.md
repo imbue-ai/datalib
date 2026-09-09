@@ -58,7 +58,7 @@
   `unified_index::qmd::index_state::file_sha256_hex` re-reads and
   re-hashes every rendered file the grid asks about, purely to match
   qmd's key. Unifying on blake3 collapses that — and the proposed
-  `markdowns.md_sha256` column in `docs/dev/qmd_index_ui.md` becomes a
+  `markdowns.md_sha256` column in `docs/dev/plans/qmd_index_ui.md` becomes a
   blake3 column we may already be able to derive.
   **Not actionable while we consume `@tobilu/qmd` from the registry**
   (`DEFAULT_QMD_VERSION` in `runtime/src/qmd.rs`): the digest is

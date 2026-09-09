@@ -73,7 +73,6 @@ async fn main() -> Result<()> {
     // `fetch`, and closes it below.
     let db = RawDb::open(&db_path_for(&args.out)).await?;
     let opts = FetchOptions {
-        db_path: args.out.clone(),
         scopes,
         refresh_window_days: args.refresh_window_days,
         max_prs: args.max_prs,

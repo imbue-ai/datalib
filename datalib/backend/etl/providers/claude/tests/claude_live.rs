@@ -25,7 +25,6 @@ async fn claude_live_single_conv_snapshot() {
         .await
         .unwrap();
     let opts = claude::FetchOptions {
-        db_path: tmp.clone(),
         export_dir: None,
         overlap: 0,
         sleep_between: Duration::ZERO,

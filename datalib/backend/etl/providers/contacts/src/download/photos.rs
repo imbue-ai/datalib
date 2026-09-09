@@ -3,16 +3,17 @@
 
 use anyhow::{Context, Result};
 use base64::Engine;
-use datalib_etl::blob_cas::{cas_path_for, BlobCas};
+use datalib_etl::blob_cas::BlobCas;
 use sqlx::Row;
 
 use super::api::vcard_all;
 use super::db::RawDb;
 
 /// Decode + store every not-yet-lifted contact's inline photo. Returns
-/// the number of photos newly written to CAS. `entity_db_path` is the
-/// contacts entity db; its CAS sibling is derived via [`cas_path_for`].
-pub async fn lift_photos_to_cas(db: &RawDb, entity_db_path: &std::path::Path) -> Result<usize> {
+/// the number of photos newly written to CAS. The CAS comes from the
+/// caller's handle: opening one here would be a second opener for a
+/// store the handle already owns.
+pub async fn lift_photos_to_cas(db: &RawDb, cas: &BlobCas) -> Result<usize> {
     let pool = db.pool();
     // Contacts lacking a contact_photos row. The vCard is unwrapped from
     // the `{"vcard": …}` envelope on the SQL side, same as render.
@@ -27,10 +28,6 @@ pub async fn lift_photos_to_cas(db: &RawDb, entity_db_path: &std::path::Path) ->
     if rows.is_empty() {
         return Ok(0);
     }
-
-    let cas = BlobCas::open(&cas_path_for(entity_db_path))
-        .await
-        .context("open contacts CAS")?;
 
     let mut stored = 0usize;
     let lifted = async {
@@ -65,9 +62,6 @@ pub async fn lift_photos_to_cas(db: &RawDb, entity_db_path: &std::path::Path) ->
         Ok(stored)
     }
     .await;
-    // Closed, not dropped: the next open of this store is a second
-    // connection until this one is actually gone.
-    cas.close().await;
     lifted
 }
 

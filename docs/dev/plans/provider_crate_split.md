@@ -185,8 +185,10 @@ argument.
 ## One piece of stale prose to fix along the way
 
 `AGENTS.md`'s doc map describes
-[`step_identity.md`](../step_identity.md) as a *proposal* of which
-"nothing in it is built". **It shipped.** `config.rs`'s `StepEntry`
+[`step_identity.md`](completed/step_identity.md) as a *proposal* of which
+"nothing in it is built". **It shipped**, and the doc itself says so —
+its banner reads "Status: built (2026-08-31)". It is only the doc
+map's summary that is wrong. `config.rs`'s `StepEntry`
 has no `outputs` field at all — the fields are `id`, `name`, `inputs`,
 `command`, `params`, `env`, `code_version`; `inputs` holds step ids;
 and `config.rs` synthesizes `--outputs` for the child as "the single
@@ -194,8 +196,8 @@ tree its id names, so steps written against the old contract keep
 working". The shipped config examples confirm it
 (`id = "claude_chats/raw"`, `id = "unified_index/grid"`).
 
-Correct both `AGENTS.md`'s entry and `step_identity.md`'s own banner
-as part of stage 1. It matters beyond tidiness: **a step now has
+Correct the doc-map entry as part of stage 1; the doc it points at
+needs nothing. It matters beyond tidiness: **a step now has
 exactly one output tree, named by its id**, and
 [`data_centric_ui.md`](data_centric_ui.md) relies on that fact to
 decide where a step's run log lives.

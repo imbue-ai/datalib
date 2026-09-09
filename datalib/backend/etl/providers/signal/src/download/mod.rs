@@ -21,8 +21,6 @@ const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    /// Doltlite database path. Ignored when `db` is `Some`.
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See

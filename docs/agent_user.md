@@ -37,7 +37,7 @@ index database), then two shared fan-in steps —
 The split is by writer: `unified_index/` is produced by the pipeline
 and fully derived, `system/` is the server's own state. Canonical
 definition — the constants both sides read — is
-[`datalib/backend/core/src/layout.rs`](/datalib/backend/core/src/layout.rs).
+[`datalib/backend/runtime/src/layout.rs`](/datalib/backend/runtime/src/layout.rs).
 
 Ten binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API

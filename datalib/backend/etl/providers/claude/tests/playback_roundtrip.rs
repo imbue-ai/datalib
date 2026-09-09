@@ -66,7 +66,6 @@ async fn claude_synth_playback_extract_roundtrip() {
     // live connection to one file makes a `dolt_commit` fail.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let summary = fetch(FetchOptions {
-        db_path: out_db.clone(),
         // Point export_dir at our input snapshot so users.json gets
         // ingested before the listing pass needs account_uuid.
         export_dir: Some(api.clone()),
@@ -105,7 +104,6 @@ async fn claude_synth_playback_extract_roundtrip() {
     // live connection to one file makes a `dolt_commit` fail.
     let db = RawDb::open(&db_path_for(&since_db)).await.unwrap();
     let summary = fetch(FetchOptions {
-        db_path: since_db.clone(),
         export_dir: Some(api.clone()),
         since: Some("2025-01-02".to_string()),
         ..FetchOptions::new(db.clone())
@@ -126,7 +124,6 @@ async fn claude_synth_playback_extract_roundtrip() {
     // live connection to one file makes a `dolt_commit` fail.
     let db = RawDb::open(&db_path_for(&since_db)).await.unwrap();
     let summary = fetch(FetchOptions {
-        db_path: since_db.clone(),
         export_dir: Some(api.clone()),
         since: Some("2024-12-01".to_string()),
         ..FetchOptions::new(db.clone())

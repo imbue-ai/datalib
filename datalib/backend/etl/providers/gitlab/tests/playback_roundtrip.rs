@@ -68,7 +68,6 @@ async fn gitlab_synth_playback_extract_roundtrip() {
     // assertions both, because two is what breaks a doltlite file.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let summary = fetch(FetchOptions {
-        db_path: out_db.clone(),
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,

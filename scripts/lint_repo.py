@@ -395,7 +395,7 @@ def _check_render_opens_read_only(root: Path) -> int:
         "\n`open` rescue-commits, reconciles the schema and commits with -Am --\n"
         "three writes to a store the render step does not own. Use the\n"
         "read-only path instead: `open_reader`.\n"
-        "See docs/dev/streaming_steps_plan.md.",
+        "See docs/dev/plans/streaming_steps_plan.md.",
         file=sys.stderr,
     )
     return 1
@@ -416,7 +416,7 @@ def _check_render_opens_read_only(root: Path) -> int:
 # connection, so a query changes from `FROM users` to `FROM pinned_users`
 # and nothing else. The fix is across ~50 sites in ten crates, and one
 # missed site is a silent data bug -- so this is a ratchet rather than a
-# review question. See `docs/dev/streaming_steps_plan.md`.
+# review question. See `docs/dev/plans/streaming_steps_plan.md`.
 #
 # `EXPECTED_UNPINNED_READS` is the baseline being worked off. Numbers may
 # only go down; a file that reaches zero comes out of the dict. Both
@@ -610,7 +610,7 @@ def _check_unpinned_render_reads(root: Path) -> int:
             "rows the producer has not committed. Read the pinned view instead:\n"
             "`FROM pinned_<table>`, with `datalib_etl::pin::install_views` called\n"
             "once where the store is opened for reading.\n"
-            "See docs/dev/streaming_steps_plan.md.",
+            "See docs/dev/plans/streaming_steps_plan.md.",
             file=sys.stderr,
         )
 

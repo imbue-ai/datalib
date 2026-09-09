@@ -96,7 +96,6 @@ async fn main() -> Result<()> {
     // here so we can stamp a final summary line on it after the scan.
     let progress = Progress::indicatif_message_only(source_id.clone());
     let opts = FetchOptions {
-        db_path: args.db.clone(),
         db: db.clone(),
         source_id: source_id.clone(),
         root: args.root.clone(),

@@ -116,7 +116,7 @@ the first is the obvious one:
   merely correct — the alternative, a `WHERE updated_at > ?` scan or a
   Rust-computed hash tree, costs O(data) every time. (The tree learned
   this the expensive way; see
-  [dolt_diff supersedes per-bucket fingerprints](../data_architecture_ingestion.md#dolt_diff-supersedes-per-bucket-fingerprints).)
+  [dolt_diff supersedes per-bucket fingerprints](../../data_architecture_ingestion.md#dolt_diff-supersedes-per-bucket-fingerprints).)
 - **The state and the change feed are the same object.** In a
   table-plus-changelog architecture the two can disagree: a consumer
   reads an event whose row isn't there yet, or finds a row no event
@@ -158,7 +158,7 @@ What is unusual is the **operating point**, on two axes:
    store, the render output, the problem log, and the DAG's own
    content-versioning — so consumer cursors, step versions and audit
    history are one mechanism rather than four. See
-   [`data_architecture_parse_and_render.md` §2](../data_architecture_parse_and_render.md#where-this-is-heading-the-artifact-becomes-a-database)
+   [`data_architecture_parse_and_render.md` §2](../../data_architecture_parse_and_render.md#where-this-is-heading-the-artifact-becomes-a-database)
    for the half of that which is still aspiration.
 
 And the benefit that gets undersold: this is normally pitched on
@@ -456,11 +456,11 @@ already has.
 
 - [`data_handling_practices.md`](data_handling_practices.md) — the
   companion this depends on.
-- [`step_protocol.md`](../step_protocol.md) — Surface A is a packaging
+- [`step_protocol.md`](../../step_protocol.md) — Surface A is a packaging
   exercise on top of it.
 - [`multimodal_retrieval.md`](../multimodal_retrieval.md) — the
   retrieval design §4's corpus would give a number to.
-- [`applets.md`](../applets.md) — the mechanism behind Surface C.
+- [`applets.md`](../../applets.md) — the mechanism behind Surface C.
 - [`/datalib/backend/etl/providers/pdf/src/download/schema_raw.rs`](/datalib/backend/etl/providers/pdf/src/download/schema_raw.rs)
   — the content-vs-path identity argument, and the template Surface B
   should be built from.

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Manager2 — the Manage tab inverted, per docs/dev/source_wizard.md.
+// Manager2 — the Manage tab inverted, per docs/dev/plans/source_wizard.md.
 //
 // Account and Documents are absent rather than faked: they need the latchkey
 // endpoints and the unified_index applet respectively, and the layout forbids

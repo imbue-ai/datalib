@@ -2,7 +2,7 @@
 
 > **Archived 2026-09-07 — built, and not current reference.** The
 > rewrite this argues for shipped; the provider's own
-> [`DOWNLOAD.md`](../../../datalib/backend/etl/providers/notion/DOWNLOAD.md)
+> [`DOWNLOAD.md`](../../../../datalib/backend/etl/providers/notion/DOWNLOAD.md)
 > is the live description of how it behaves, and this is the argument
 > for why it behaves that way. Where the two disagree, that one is
 > newer. §8's "not built" list was accurate the day this was written

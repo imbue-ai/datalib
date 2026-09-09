@@ -76,7 +76,6 @@ async fn scans_tng_tree() {
     // assertions both, because two is what breaks a doltlite file.
     let db = RawDb::open(&db_path).await.unwrap();
     let summary = download::fetch(FetchOptions {
-        db_path: db_path.clone(),
         db: db.clone(),
         source_id: "fsindex-tng".to_string(),
         root: root.clone(),
