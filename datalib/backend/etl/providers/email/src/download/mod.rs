@@ -11,7 +11,6 @@ pub mod schema_raw;
 pub mod session;
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -130,10 +129,6 @@ pub struct FetchOptions {
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
-    /// Either an explicit `.doltlite_db` file or the per-source directory;
-    /// the shared `db_path_for` helper places the entity db inside as
-    /// `entities.doltlite_db` (the dir is created if needed).
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -170,7 +165,6 @@ impl FetchOptions {
     pub fn new(db: RawDb) -> Self {
         Self {
             latchkey: LatchkeySettings::default(),
-            db_path: PathBuf::new(),
             db,
             hostname: String::new(),
             account_id: None,

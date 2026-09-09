@@ -5,7 +5,7 @@
 rewritten to describe the tree. Everything from
 [Writing it](#writing-it-selective-re-index-is-a-job) onward is still a
 proposal. Per
-[`AGENTS.md`](../../AGENTS.md), don't cite this file as a description of
+[`AGENTS.md`](../../../AGENTS.md), don't cite this file as a description of
 the tree — it describes work we intend to do. Every claim about *current*
 behavior below carries a `file:line`; those were checked against the tree
 on 2026-08-27. When a slice lands, rewrite the section it makes real and

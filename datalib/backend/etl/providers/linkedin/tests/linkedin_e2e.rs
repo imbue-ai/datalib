@@ -114,7 +114,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // file.
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = download::fetch(FetchOptions {
-            db_path: raw_dir.clone(),
             db: db.clone(),
             input_path: export.clone(),
             fetch_photos: false,
@@ -349,7 +348,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         std::env::set_var(PLAYBACK_ENV, &playback);
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         download::fetch(FetchOptions {
-            db_path: raw_dir.clone(),
             db: db.clone(),
             input_path: export.clone(),
             fetch_photos: true,
@@ -365,8 +363,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         std::env::remove_var(PLAYBACK_ENV);
 
         // The photo landed in CAS, keyed by the connection's uuid.
-        let blobs =
-            load_photo_blobs(&db, &db_path_for(&raw_dir), datalib_etl::pin::Reads::Own).await?;
+        let blobs = load_photo_blobs(&db, datalib_etl::pin::Reads::Own).await?;
         let (bytes, content_type) = blobs
             .get(&picard_uuid)
             .expect("Picard's photo fetched into CAS");
@@ -411,7 +408,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         fs::create_dir_all(&raw2)?;
         let db2 = RawDb::open(&db_path_for(&raw2)).await?;
         download::fetch(FetchOptions {
-            db_path: raw2.clone(),
             db: db2.clone(),
             input_path: export.clone(),
             fetch_photos: false,
@@ -429,7 +425,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         std::env::set_var(PLAYBACK_ENV, &empty_pb);
         let s1 = download::photos::fetch_connection_photos(
             &db2,
-            &db_path_for(&raw2),
+            db2.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
             50,
         )
@@ -438,7 +434,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert_eq!(s1.fetched, 0, "no photos on a playback miss");
         assert!(s1.transient >= 1, "playback miss is transient, got {s1:?}");
         assert!(
-            load_photo_blobs(&db2, &db_path_for(&raw2), datalib_etl::pin::Reads::Own)
+            load_photo_blobs(&db2, datalib_etl::pin::Reads::Own)
                 .await?
                 .is_empty(),
             "transient miss records nothing"
@@ -448,7 +444,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         std::env::set_var(PLAYBACK_ENV, &playback);
         let s2 = download::photos::fetch_connection_photos(
             &db2,
-            &db_path_for(&raw2),
+            db2.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
             50,
         )
@@ -459,7 +455,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             "transient miss retried and fetched, got {s2:?}"
         );
         assert!(
-            !load_photo_blobs(&db2, &db_path_for(&raw2), datalib_etl::pin::Reads::Own)
+            !load_photo_blobs(&db2, datalib_etl::pin::Reads::Own)
                 .await?
                 .is_empty(),
             "photo recorded after retry"
@@ -473,7 +469,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         fs::create_dir_all(&raw3)?;
         let db3 = RawDb::open(&db_path_for(&raw3)).await?;
         download::fetch(FetchOptions {
-            db_path: raw3.clone(),
             db: db3.clone(),
             input_path: export.clone(),
             fetch_photos: false,
@@ -488,7 +483,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         std::env::set_var(PLAYBACK_ENV, &empty_pb);
         let g = download::photos::fetch_connection_photos(
             &db3,
-            &db_path_for(&raw3),
+            db3.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
             1, // give up after a single consecutive failure
         )

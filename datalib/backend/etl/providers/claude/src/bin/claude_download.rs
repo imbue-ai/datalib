@@ -77,7 +77,6 @@ async fn main() -> Result<()> {
     // `fetch`, and closes it below.
     let db = RawDb::open(&db_path_for(&args.out)).await?;
     let opts = FetchOptions {
-        db_path: args.out.clone(),
         export_dir: args.export_dir.clone(),
         overlap: args.overlap,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),

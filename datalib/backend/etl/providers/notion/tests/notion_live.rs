@@ -29,7 +29,6 @@ async fn notion_live_single_page_snapshot() {
         .await
         .unwrap();
     let opts = FetchOptions {
-        db_path: tmp.clone(),
         page: Some(page.clone()),
         ..FetchOptions::new(db.clone())
     };

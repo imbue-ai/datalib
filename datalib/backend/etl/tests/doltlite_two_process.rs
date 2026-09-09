@@ -3,7 +3,7 @@
 //! order of opening?
 //!
 //! This is the premise the streaming-steps design rests on
-//! (`docs/dev/streaming_steps_plan.md`), and it cannot be checked from inside
+//! (`docs/dev/plans/streaming_steps_plan.md`), and it cannot be checked from inside
 //! one process. Doltlite's working set lives in the *file* and is shared
 //! across processes, and its chunk-store lock is a BSD `flock` on that file,
 //! so two pools in one process share state that two processes do not. The

@@ -13,7 +13,7 @@ the ones that changed are called out where they sit.
 Related: [#171](https://github.com/imbue-ai/datalib/issues/171)
 (`grid_rows` needs `source_name` before the sources grid can count rows
 per source). Per
-[`AGENTS.md`](../../AGENTS.md), don't cite this file as a description of
+[`AGENTS.md`](../../../AGENTS.md), don't cite this file as a description of
 the tree — it describes work we intend to do. When the first slice
 lands, rewrite the sections it makes real and delete the rest.
 
@@ -800,7 +800,7 @@ misreports credential state.
 > endpoint first, native dialog as a later enhancement — was inverted,
 > and the native dialog is now **built**: in the desktop app every
 > `kind: "path"` field opens a real OS picker
-> ([`wizard_file_pickers.md`](wizard_file_pickers.md)). The premise
+> ([`wizard_file_pickers.md`](../wizard_file_pickers.md)). The premise
 > below is also wrong as written: the UI *does* have Tauri IPC
 > (`ui/src/desktop.ts`, `ui/src/externalLinks.ts`). What survives is
 > the browser-served half — `GET /api/fs/browse` still does not exist,

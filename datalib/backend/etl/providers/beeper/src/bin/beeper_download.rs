@@ -51,7 +51,6 @@ async fn main() -> Result<()> {
     // `fetch`, and closes it below.
     let db = RawDb::open(&db_path_for(&args.out)).await?;
     let opts = FetchOptions {
-        db_path: args.out.clone(),
         sources: args.sources.clone(),
         beeper_data_dir: args.beeper_data_dir.clone(),
         media: args.media,

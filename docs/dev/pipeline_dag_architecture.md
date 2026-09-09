@@ -14,7 +14,7 @@
 > names producer step ids. Edges are declared, not computed; the glob
 > machinery, the single-writer pass and the synthesized staged-source
 > steps are all deleted. See
-> [`step_identity.md`](step_identity.md) for what replaced them and why.
+> [`step_identity.md`](plans/completed/step_identity.md) for what replaced them and why.
 > Everything else here — the step contract, incrementality, the skip and
 > retry rules, subtree poisoning — is unchanged and still current.
 
@@ -131,7 +131,7 @@ ArtifactRef is a path or glob under data\_root. The DAG is not declared explicit
 > step reference and an artifact path, and there is nothing left to
 > compute. The reason for the change was not elegance: six separate
 > places had grown their own string-splitting to recover "which source
-> is this" from a path. See [`step_identity.md`](step_identity.md).
+> is this" from a path. See [`step_identity.md`](plans/completed/step_identity.md).
 
 The contract a node honors, beyond reading inputs and writing outputs:
 

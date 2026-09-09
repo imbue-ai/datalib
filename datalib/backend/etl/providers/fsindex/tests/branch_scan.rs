@@ -16,14 +16,12 @@ fn write(root: &Path, rel: &str, body: &str) {
 
 fn opts(
     db: &RawDb,
-    db_path: &Path,
     root: &Path,
     id: &str,
     branch: Option<&str>,
     cache: FingerprintCache,
 ) -> FetchOptions {
     FetchOptions {
-        db_path: db_path.to_path_buf(),
         db: db.clone(),
         source_id: id.to_string(),
         root: root.to_path_buf(),
@@ -49,7 +47,7 @@ async fn scan_and_commit(
     if let Some(branch) = branch {
         db.checkout_branch(branch).await.unwrap();
     }
-    let o = opts(&db, db_path, root, id, branch, cache.clone());
+    let o = opts(&db, root, id, branch, cache.clone());
     // `fetch` re-applies the checkout on the same pooled connection;
     // doing it here too matches the binary, which opens the db itself.
     download::fetch(o).await.unwrap();

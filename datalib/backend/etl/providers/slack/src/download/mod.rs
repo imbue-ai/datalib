@@ -6,7 +6,6 @@ pub mod schema_raw;
 pub mod shapes;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -1017,7 +1016,6 @@ pub struct FetchOptions {
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -1045,7 +1043,6 @@ impl FetchOptions {
     /// it is a live handle the caller opens and closes.
     pub fn new(db: RawDb) -> Self {
         Self {
-            db_path: PathBuf::new(),
             db,
             latchkey: LatchkeySettings::default(),
             channels: None,
@@ -1071,7 +1068,9 @@ pub struct FetchSummary {
     pub media: BTreeMap<String, usize>,
 }
 
-#[instrument(skip_all, fields(db = %opts.db_path.display()))]
+#[instrument(skip_all, fields(
+    db = %opts.db.pool().connect_options().get_filename().display()
+))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_dispatch();
     let db = opts.db.clone();

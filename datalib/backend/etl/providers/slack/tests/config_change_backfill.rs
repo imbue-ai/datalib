@@ -109,7 +109,6 @@ async fn run_fetch(out: &Path, since: &str) {
     // inside `open` fail with "commit conflict".
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
     let r = fetch(FetchOptions {
-        db_path: out.to_path_buf(),
         channels: None,
         since: since.into(),
         refresh_window_days: 0,

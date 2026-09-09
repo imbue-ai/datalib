@@ -108,7 +108,6 @@ async fn notion_synth_playback_extract_roundtrip() {
     // assertions both, because two is what breaks a doltlite file.
     let out = RawDb::open(&out_db).await.unwrap();
     let summary = fetch(FetchOptions {
-        db_path: out_db.clone(),
         subtree_pages: vec![pid.to_string()],
         sleep_between: Duration::ZERO,
         ..FetchOptions::new(out.clone())

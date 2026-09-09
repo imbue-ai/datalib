@@ -9,7 +9,7 @@ pluggable vector spaces, and a bounded bytes-at-rest budget.
 previous draft has been checked against the code and against a real data
 root; several were wrong and are corrected inline. Claims about `qmd` and
 `sqlite-vec` are still largely from their documentation — those are
-marked. Per [`AGENTS.md`](../../AGENTS.md), treat an unmarked "we now do
+marked. Per [`AGENTS.md`](../../../AGENTS.md), treat an unmarked "we now do
 X" as verified and a marked one as not.
 
 ---
@@ -66,7 +66,7 @@ Every friction point traces back to its origin as a personal-notes tool:
 
 Forking was rejected: datalib consumes QMD as a pinned npm package
 (`DEFAULT_QMD_VERSION` in
-[`runtime/src/qmd.rs`](../../datalib/backend/runtime/src/qmd.rs)),
+[`runtime/src/qmd.rs`](../../../datalib/backend/runtime/src/qmd.rs)),
 so a fork forces datalib onto that fork, and the files needing permanent
 ownership (`store.ts` search SQL, the indexing path) are exactly the ones
 churning upstream.
@@ -239,7 +239,7 @@ silently invalidates every offset. So the fingerprint must also cover:
 
 Both columns exist on `markdowns`, and both are **write-only today.**
 `compute_row_set_hash` runs at
-[`grid_index.rs:777`](../../datalib/backend/etl/src/grid_index.rs) and
+[`grid_index.rs:777`](../../../datalib/backend/etl/src/grid_index.rs) and
 `format!("{RENDERER_VERSION}.{}", md.render_version)` at `:778`; both are
 `INSERT`ed at `:796` and never selected again outside tests. The only
 render-skip reader is `load_fingerprints` (`:676`), which selects
@@ -365,7 +365,7 @@ text, ≈9×** — before a single email is ingested.
 Two mechanisms deserve naming because both are one-line facts in the
 code:
 
-- [`blob_cas.rs:642`](../../datalib/backend/etl/src/blob_cas.rs)
+- [`blob_cas.rs:642`](../../../datalib/backend/etl/src/blob_cas.rs)
   `materialize_to_dir` is a plain `std::fs::write` into
   `<page_dir>/blobs/`, deduplicated **only within one page bundle**. An
   image attached to N threads is written N times.
@@ -388,7 +388,7 @@ contentless (`content=''`, with `contentless_delete=1`), and store chunk
 `(markdown_uuid, byte_offset, byte_len)` rather than chunk text. Snippets
 are computed in Rust by reading the canonical `.md` for the ~20 rows that
 survive fusion — which is exactly what
-[`db.rs::snippet`](../../datalib/backend/unified_index/src/db.rs) already
+[`db.rs::snippet`](../../../datalib/backend/unified_index/src/db.rs) already
 does for the grid today (240-char window centred on the first match).
 *Removes copies 4 and 5: 12.85 MB in the measured corpus.*
 
@@ -406,7 +406,7 @@ plausibly the best value-per-line item in the document. Mail text and
 
 **D3 — attachments live in the CAS only.** Stop materializing
 `<page_dir>/blobs/`. The `asset` endpoint
-([`applets/src/unified_index/mod.rs:585`](../../datalib/backend/applets/src/unified_index/mod.rs))
+([`applets/src/unified_index/mod.rs:585`](../../../datalib/backend/applets/src/unified_index/mod.rs))
 already resolves `markdown_uuid` + a relative path and already has a
 path-traversal guard; point its resolution at a CAS `blake3` instead of a
 sibling file. Cross-document dedup comes free.
@@ -424,13 +424,13 @@ this is the largest single line.*
 this already exist: the renderer emits
 `<div id="m-{uuid}" data-section-uuid="{uuid}">` wrappers delimiting
 exactly these spans, and
-[`qmd/mapping.rs:194`](../../datalib/backend/unified_index/src/qmd/mapping.rs)
+[`qmd/mapping.rs:194`](../../../datalib/backend/unified_index/src/qmd/mapping.rs)
 already reads the `.md` back off disk to resolve a hit line to a section
 uuid. *Removes copy 3: 6.34 MB.*
 
 > **This is the risky one, and it should be staged last.** The grid's
 > free-text filter is `LOWER(text) LIKE ?` with a `%needle%` bind
-> ([`db.rs:184`](../../datalib/backend/unified_index/src/db.rs)) — a full
+> ([`db.rs:184`](../../../datalib/backend/unified_index/src/db.rs)) — a full
 > scan over `grid_rows.text`. Spans cannot serve that, so the grid's
 > free-text path must move onto the retrieval layer's FTS. That is a
 > better query, not a worse one, but it couples the grid to a component
@@ -568,7 +568,7 @@ new copy either.
 
 New step `mail_index` (later `media_index`), downstream of `grid_index`,
 writing to its **own** sidecar SQLite. Contract is in
-[`docs/dev/step_protocol.md`](step_protocol.md).
+[`docs/dev/step_protocol.md`](../step_protocol.md).
 
 Three reasons for a sidecar:
 
@@ -589,7 +589,7 @@ datalib is Bazel, Python, and Rust. Leaving QMD is the opportunity to
 
 The previous draft proposed Python via `llama-cpp-python`. Worth
 re-examining: everything in the shipping path is Rust, and
-[`AGENTS.md`](../../AGENTS.md) is explicit that "Python is only used for
+[`AGENTS.md`](../../../AGENTS.md) is explicit that "Python is only used for
 fixture / test-pipeline tooling and scripts." A Python step is legal
 under the step protocol — any executable is — but it would be the first
 Python in the shipping path, and it would need its own runtime staging
@@ -625,7 +625,7 @@ their answers, because the answers are the useful part.
 |---|---|---|
 | 1 | What `grid_rows` key corresponds to a rendered document? | **`markdown_uuid`**, confirmed. It is the FK into `markdowns`, whose `md_path` column holds the path relative to the data root; `/applet/unified_index/chat/{markdown_uuid}` resolves through it. Note `grid_rows.qmd_path` is a *denormalized duplicate* of `markdowns.md_path` (the schema documents the invariant that they must be byte-equal, and that `markdowns` is preferred). |
 | 2 | Can a plain SQLite client read these stores? | **Split answer.** The qmd index is a plain SQLite file and stock `sqlite3` reads it (verified — every measurement in §4.2 came from stock `sqlite3` + `dbstat` on a copy). The `.doltlite_db` stores are **not** SQLite-file-compatible and need a doltlite-linked shell (`bazelisk build //third-party/doltlite:doltlite`). So the prefilter cannot be a plain `ATTACH`; the retrieval step must link doltlite (which every Rust binary in the tree already does) or the filter must be resolved through the existing repo layer. |
-| 3 | Which paths are current? | **`unified_index/grid/db.doltlite_db` and `unified_index/qmd/index.sqlite`.** [`core/src/layout.rs`](../../datalib/backend/core/src/layout.rs) is the source of truth and the live data root matches it. The tree diagram in `docs/agent_user.md` said `backend_index/db.doltlite_db` when this audit ran; it was fixed afterwards and now names `unified_index/grid/`. |
+| 3 | Which paths are current? | **`unified_index/grid/db.doltlite_db` and `unified_index/qmd/index.sqlite`.** [`runtime/src/layout.rs`](../../../datalib/backend/runtime/src/layout.rs) is the source of truth and the live data root matches it. The tree diagram in `docs/agent_user.md` said `backend_index/db.doltlite_db` when this audit ran; it was fixed afterwards and now names `unified_index/grid/`. |
 | 4 | Actual thread count and post-quote-strip token volume for the mail corpus. | **Still open, and now blocking.** `fastmail/raw` is 976 KB in the measured root — the corpus is not ingested. This gates the stage-2 representation choice (§3.4), the `render_mode` decision (§4.5), and the embedding schedule (§8). **Est. 2h once a mailbox is actually pulled.** |
 
 New item:
@@ -782,7 +782,7 @@ And one found here rather than in the changelog:
 ## Appendix B: Sources
 
 **Verified against this tree** (2026-09-01): `schema/src/grid_rows.rs`,
-`schema/src/markdowns.rs`, `core/src/layout.rs`,
+`schema/src/markdowns.rs`, `runtime/src/layout.rs`,
 `etl/src/blob_cas.rs`, `etl/providers/email/src/download/schema_raw.rs`,
 `etl/providers/email/src/render/`, `unified_index/src/db.rs`,
 `unified_index/src/dolt_repo.rs`, `unified_index/src/qmd/*`,
