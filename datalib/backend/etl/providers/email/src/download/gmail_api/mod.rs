@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
+use datalib_etl::download_problems::{self, DownloadProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
@@ -88,6 +89,10 @@ pub struct FetchSummary {
     pub budget_exhausted: bool,
     /// True when a stored cursor had aged out and we re-enumerated.
     pub full_sync: bool,
+    /// Configured labels this account does not have. Reported rather
+    /// than fatal: one misspelling costs that label, not the run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<DownloadProblem>,
 }
 
 fn state_scope(account_id: &str) -> String {
@@ -180,12 +185,16 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
     // is narrowed server-side. Doing it client-side would mean paying
     // `messages.get`'s 20 quota units for every message in the account
     // to keep a handful — see `api::list_messages`.
-    let filter_label_ids = index.ids_for_names(&opts.only_labels)?;
+    let resolved = index.ids_for_names(&opts.only_labels)?;
+    let filter_label_ids = resolved.resolved;
+    summary.problems = resolved.problems;
+    download_problems::report(&summary.problems);
     if !opts.only_labels.is_empty() {
         info!(
             event = "gmail_label_filter",
             labels = ?opts.only_labels,
             ids = ?filter_label_ids,
+            unresolved = summary.problems.len(),
             "restricting enumeration server-side",
         );
     }

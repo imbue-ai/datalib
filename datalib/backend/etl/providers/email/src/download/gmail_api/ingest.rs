@@ -8,7 +8,12 @@ use datalib_etl::blob_cas::blake3_hex;
 use super::super::envelope::{self, TransportFacts};
 use super::super::labels::{self, LabelMap};
 use super::super::schema_raw::EmailRow;
+use super::super::K_ONLY_EXTRACT_LABELS;
 use super::api::{GmailMessage, Label};
+use datalib_etl::download_problems;
+
+/// What `only_extract_labels` resolved to.
+pub type ResolvedLabels = download_problems::Resolution<String>;
 
 /// Resolved label metadata, built once per run from `users.labels.list`.
 #[derive(Debug, Clone, Default)]
@@ -104,25 +109,39 @@ impl LabelIndex {
         (mailbox_ids, keywords.into_iter().collect())
     }
 
-    pub fn ids_for_names(&self, names: &[String]) -> anyhow::Result<Vec<String>> {
-        let mut out = Vec::with_capacity(names.len());
-        for name in names {
-            let found = self.by_id.values().find(|l| {
-                let canonical = if l.is_system {
-                    labels::canonical_name(&l.name)
-                } else {
-                    l.name.clone()
-                };
-                canonical == *name || l.name == *name
-            });
-            match found {
-                Some(label) => out.push(label.id.clone()),
-                None => anyhow::bail!(
-                    "email `only_extract_labels` names {name:?}, which is not a label on this \
-                     Gmail account. Known labels: {}",
-                    self.known_names().join(", ")
-                ),
-            }
+    /// Resolve configured label names to Gmail ids, keeping the ones
+    /// that resolve and reporting the ones that do not.
+    ///
+    /// Errors only when *nothing* resolved, because an empty `labelIds`
+    /// means "every message in the account" — turning a targeted mirror
+    /// into a full one is not a partial result, it is the wrong run.
+    pub fn ids_for_names(&self, names: &[String]) -> anyhow::Result<ResolvedLabels> {
+        let out = download_problems::resolve_configured(K_ONLY_EXTRACT_LABELS, names, |name| {
+            self.by_id
+                .values()
+                .find(|l| {
+                    let canonical = if l.is_system {
+                        labels::canonical_name(&l.name)
+                    } else {
+                        l.name.clone()
+                    };
+                    canonical == name || l.name == name
+                })
+                .map(|l| l.id.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "not a label on this Gmail account. Known labels: {}",
+                        self.known_names().join(", ")
+                    )
+                })
+        });
+        if out.nothing_resolved() {
+            anyhow::bail!(
+                "email `only_extract_labels` names {} label(s), none of which exist on this \
+                 Gmail account; refusing to fall back to mirroring everything. Known labels: {}",
+                names.len(),
+                self.known_names().join(", ")
+            );
         }
         Ok(out)
     }
@@ -311,33 +330,60 @@ mod tests {
     fn resolves_configured_names_to_gmail_label_ids() {
         let idx = index();
         assert_eq!(
-            idx.ids_for_names(&["Work/Projects".into()]).unwrap(),
+            idx.ids_for_names(&["Work/Projects".into()])
+                .unwrap()
+                .resolved,
             vec!["Label_7".to_string()]
         );
         // Written the canonical (Takeout) way, matched against Gmail's
         // ALL-CAPS system name.
-        assert_eq!(idx.ids_for_names(&["Inbox".into()]).unwrap(), vec!["INBOX"]);
+        assert_eq!(
+            idx.ids_for_names(&["Inbox".into()]).unwrap().resolved,
+            vec!["INBOX"]
+        );
         // Written Gmail's way, also matched.
-        assert_eq!(idx.ids_for_names(&["INBOX".into()]).unwrap(), vec!["INBOX"]);
+        assert_eq!(
+            idx.ids_for_names(&["INBOX".into()]).unwrap().resolved,
+            vec!["INBOX"]
+        );
     }
 
-    /// An empty `labelIds` filter means "every message in the account",
-    /// so a typo must fail loudly rather than quietly turning a targeted
-    /// mirror into a full one.
+    /// One typo costs that label, not the run: the labels that do
+    /// resolve are still enumerated, and the typo is reported.
     #[test]
-    fn refuses_a_label_name_that_matches_nothing() {
+    fn keeps_the_labels_that_resolve_and_reports_the_one_that_does_not() {
+        let out = index()
+            .ids_for_names(&["Inbox".into(), "Datalib".into(), "Work/Projects".into()])
+            .unwrap();
+        assert_eq!(out.resolved, vec!["INBOX", "Label_7"]);
+        assert_eq!(out.problems.len(), 1, "{:?}", out.problems);
+        let p = &out.problems[0];
+        assert_eq!(p.value, "Datalib");
+        assert_eq!(p.setting, "only_extract_labels");
+        // The detail has to say what the options were.
+        assert!(p.detail.contains("Work/Projects"), "{}", p.detail);
+    }
+
+    /// The one case that stays fatal. An empty `labelIds` means "every
+    /// message in the account", so a filter where *nothing* resolved
+    /// must not fall through to mirroring the whole mailbox.
+    #[test]
+    fn refuses_a_filter_in_which_no_name_matches() {
         let err = index()
-            .ids_for_names(&["Datalib".into()])
+            .ids_for_names(&["Datalib".into(), "Nope".into()])
             .unwrap_err()
             .to_string();
-        assert!(err.contains("Datalib"), "{err}");
-        // The message has to say what the options were.
+        assert!(err.contains("none of which exist"), "{err}");
         assert!(err.contains("Work/Projects"), "{err}");
     }
 
+    /// No filter configured is not the same as a filter that matched
+    /// nothing — this one legitimately means "the whole account".
     #[test]
     fn resolves_nothing_for_an_empty_filter() {
-        assert!(index().ids_for_names(&[]).unwrap().is_empty());
+        let out = index().ids_for_names(&[]).unwrap();
+        assert!(out.resolved.is_empty());
+        assert!(out.problems.is_empty());
     }
 
     /// A label id the list call didn't return still files the message

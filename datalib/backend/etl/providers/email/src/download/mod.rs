@@ -180,6 +180,10 @@ impl FetchOptions {
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct FetchSummary {
+    /// Configured mailbox paths this account does not have. Reported
+    /// rather than fatal, the same as every other provider's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<datalib_etl::download_problems::DownloadProblem>,
     pub account_id: String,
     pub mailboxes_upserted: usize,
     pub mailboxes_destroyed: usize,
@@ -196,8 +200,9 @@ pub struct FetchSummary {
 /// Matches the `jmap:` prefix the state tokens use.
 const SCOPE_CONFIG_KEY: &str = "jmap:download";
 
-/// Blob key. Named so writer and reader can't drift.
-const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
+/// Blob key. Named so writer and reader can't drift, and the config key
+/// a [`datalib_etl::download_problems::DownloadProblem`] names.
+pub(crate) const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
 
 /// The subset of [`FetchOptions`] that decides which data lands on disk.
 /// Only the label filter qualifies: `hostname`/`account_id` re-key the
@@ -356,13 +361,16 @@ async fn run_sync(
         None
     } else {
         let resolved = crate::mailbox_labels::resolve(&mailbox_nodes, &opts.only_mailbox_labels);
-        if !resolved.unmatched.is_empty() {
-            warn!(
-                event = "jmap_label_filter_unmatched",
-                unmatched = ?resolved.unmatched,
-                "only_extract_labels matched no mailbox; check spelling / parent path",
-            );
+        for spec in &resolved.unmatched {
+            summary
+                .problems
+                .push(datalib_etl::download_problems::DownloadProblem::not_found(
+                    K_ONLY_EXTRACT_LABELS,
+                    spec,
+                    "no mailbox with this label path; check spelling / parent path",
+                ));
         }
+        datalib_etl::download_problems::report(&summary.problems);
         info!(
             event = "jmap_label_filter",
             requested = opts.only_mailbox_labels.len(),

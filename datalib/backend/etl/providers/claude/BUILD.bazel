@@ -102,6 +102,22 @@ rust_test(
 # End-to-end coverage for the Claude Projects mirror: synthesize →
 # download → doltlite → render::parse. The insta golden only exercises
 # the legacy JSON-tree parse path, which is not what production runs.
+# A targeted conv_uuids fetch must tell a refusal apart from an absence.
+# Hermetic: synthesized fixtures replayed through DATALIB_HTTP_PLAYBACK.
+rust_test(
+    name = "claude_conv_uuid_problems",
+    srcs = ["tests/claude_conv_uuid_problems.rs"],
+    crate_root = "tests/claude_conv_uuid_problems.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_claude",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 rust_test(
     name = "claude_projects",
     srcs = ["tests/claude_projects.rs"],

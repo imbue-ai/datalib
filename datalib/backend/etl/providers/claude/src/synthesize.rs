@@ -9,8 +9,10 @@ use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
-const BASE: &str = "https://claude.ai/api";
-const DETAIL_QUERY: &str =
+/// Public so a test can name the exact URL a fixture answers,
+/// rather than keeping a copy that can drift from this one.
+pub const BASE: &str = "https://claude.ai/api";
+pub const DETAIL_QUERY: &str =
     "tree=True&rendering_mode=messages&render_all_tools=true&consistency=strong";
 
 pub struct ClaudeSynth {
