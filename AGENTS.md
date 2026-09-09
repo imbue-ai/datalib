@@ -11,13 +11,22 @@ custom step), start with [`agent_user.md`](docs/agent_user.md) instead.
 Start here when a task touches an area you don't already know. All paths
 are relative to the repo root.
 
-Anything under [`docs/dev/plans/`](docs/dev/plans/) describes work we
-intend to do rather than the tree, so read its banner before citing it
-for anything. A doc leaves `plans/` when it is built and has been
-rewritten to describe what shipped; a doc that is finished *and*
-superseded goes to `docs/dev/archived/` instead. The entries below stay
-grouped by topic, so a plan sits beside the reference doc it relates
-to.
+**Only the docs directly under `docs/dev/` describe the tree.** Three
+subdirectories hold things that do not, and each says so in its own
+banner:
+
+| | |
+|---|---|
+| [`plans/`](docs/dev/plans/) | intended, not built |
+| [`plans/completed/`](docs/dev/plans/completed/) | landed recently, kept as the record of what was decided |
+| [`archived/`](docs/dev/archived/) | landed long ago, or superseded by a later design |
+
+A plan that lands moves to `plans/completed/`, and later to
+`archived/` once it is old news. The exception is a plan somebody
+would read to *learn how the system works*: rewrite that one as
+reference and put it directly under `docs/dev/`. The entries below
+stay grouped by topic, so a plan sits beside the reference doc it
+relates to.
 
 **Pipeline / sync engine**
 
@@ -30,11 +39,11 @@ to.
   — the design history behind that: why a DAG at all, the node contract
   as it was proposed, the implementation decisions and the open
   questions.
-- [`docs/dev/step_identity.md`](docs/dev/step_identity.md) — *proposal*:
-  making a step's `id` the path it writes, so `inputs` name step ids and
-  the six places that recover an identity by splitting a string go away.
-  Nothing in it is built; the `name` / `id` split that did ship is in
-  `plans/source_wizard.md`.
+- [`docs/dev/plans/completed/step_identity.md`](docs/dev/plans/completed/step_identity.md)
+  — **built (2026-08-31)**: a step's `id` *is* the one tree it writes,
+  `inputs` name step ids, and `outputs` is gone from the config
+  entirely. Read it for why; it was written as the design and kept as
+  the explanation.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
   *proposal*, nothing built: letting a consumer step start before its
   producer finishes. Splits the two meanings an edge carries today
@@ -219,8 +228,9 @@ to.
 
 **Historical** — [`docs/dev/archived/`](docs/dev/archived/) holds
 point-in-time plans and audits (each with an "Archived" banner). Don't
-treat them as current reference. `docs/dev/plans/` is the live version
-of the same idea: not yet built rather than no longer true.
+treat them as current reference. A plan that landed recently is one
+directory over, in
+[`docs/dev/plans/completed/`](docs/dev/plans/completed/).
 
 ## Prose can be stale — verify claims against the tree
 

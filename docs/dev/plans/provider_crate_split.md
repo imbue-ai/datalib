@@ -185,7 +185,7 @@ argument.
 ## One piece of stale prose to fix along the way
 
 `AGENTS.md`'s doc map describes
-[`step_identity.md`](../step_identity.md) as a *proposal* of which
+[`step_identity.md`](completed/step_identity.md) as a *proposal* of which
 "nothing in it is built". **It shipped**, and the doc itself says so —
 its banner reads "Status: built (2026-08-31)". It is only the doc
 map's summary that is wrong. `config.rs`'s `StepEntry`

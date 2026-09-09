@@ -6,6 +6,11 @@ written, and may reference layouts, APIs, or conventions that have since
 changed. For the current design, see the live docs under `docs/dev/` (start
 with [`data_architecture_ingestion.md`](../data_architecture_ingestion.md)).
 
+A plan that landed **recently** is filed under
+[`docs/dev/plans/completed/`](../plans/completed/) instead; this
+directory is for the older ones and for anything a later design has
+superseded.
+
 | Doc | What it was |
 |-----|-------------|
 | [`data_architecture_audit.md`](data_architecture_audit.md) | ETL codebase audit produced 2026-06-09; several findings already marked superseded. |
@@ -16,5 +21,4 @@ with [`data_architecture_ingestion.md`](../data_architecture_ingestion.md)).
 | [`pipeline_dag_runner.md`](pipeline_dag_runner.md) | Program B plan: the processing DAG. Implemented as `datalib-dag`/`datalib-step` under different names — see [`pipeline_dag_architecture.md`](../pipeline_dag_architecture.md). |
 | [`port_provider_to_signal_pattern.md`](port_provider_to_signal_pattern.md) | Per-provider recipe for the Signal/email raw-store pattern (anthropic, chatgpt, whatsapp — all ported). Superseded by [`provider_migration_dolt_diff_and_cas_edge.md`](../provider_migration_dolt_diff_and_cas_edge.md). |
 | [`port_whatsapp_to_dolt_diff_incremental.md`](port_whatsapp_to_dolt_diff_incremental.md) | WhatsApp's CAS + `dolt_diff` incremental-render port plan, since landed (via the shared `render_cursor` variant). |
-| [`notion_redesign.md`](notion_redesign.md) | The case for rebuilding the Notion provider on the API Notion has now, and the live-workspace measurements behind it. Landed; see the provider's [`DOWNLOAD.md`](../../../datalib/backend/etl/providers/notion/DOWNLOAD.md). |
 | [`google_takeout_ingestion.md`](google_takeout_ingestion.md) | Design draft for the Google Takeout provider (raw-extract-only scope); the built provider has since grown a render phase and a Google Voice feed. |
