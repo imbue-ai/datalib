@@ -44,6 +44,20 @@ reference doc it relates to.
   `inputs` name step ids, and `outputs` is gone from the config
   entirely. Read it for why; it was written as the design and kept as
   the explanation.
+- [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md)
+  — *agreed design (2026-09-09), nothing built*: one row per source in
+  the Manage screen, done by making the grouping a config entity. A
+  `[[groups]]` table with `id`/`name`/`type`; a step is `(group,
+  function)` with its id composed and never written; the tree is named
+  after the function (`ingest`, `render_markdown`); `type` is the
+  data type and the fetch method is a params table, each declared
+  `Origin` or `Local`, which is what makes a row read "Download" or
+  "Import". The crates still say "download" until the mechanical
+  rename in its slice 5. Read it before
+  touching step ids, the wizard, or `datalib-step`'s dispatch. It
+  reverses the "ungrouping" section of `step_identity.md` and fixes a
+  real bug: `datalib-step` ignores the declared tree and writes a
+  hardcoded `<name>/raw`.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
   *proposal*, nothing built: letting a consumer step start before its
   producer finishes. Splits the two meanings an edge carries today
