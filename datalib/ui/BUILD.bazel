@@ -355,3 +355,66 @@ vitest_bin.vitest_test(
         ":vitest_inputs",
     ],
 )
+
+# The chat-markdown preview: the sample corpus rendered to one
+# interactive HTML page. The page is checked in as a golden
+# (`tests/goldens/chat_preview.html`) so reviewing a chat layout change
+# is "open this file in a browser" rather than "build a data root", and
+# `:chat_preview_test` regenerates it so the checked-in copy cannot go
+# stale.
+
+# Staged into bazel-out so node resolves `markdown-it` / `highlight.js`
+# by walking up from the script to the rules_js-linked `:node_modules`
+# beside it. A runfiles symlink back to the source tree would resolve to
+# a directory with no node_modules above it. The .vue files ride along
+# because the test reads its CSS from them.
+copy_to_bin(
+    name = "chat_preview_script",
+    srcs = ["tools/chat_preview.mjs"],
+)
+
+# The card CSS and the decoration module the page is built from. Staged
+# rather than read from the source tree so `:chat_preview_test` stays
+# sandboxable.
+copy_to_bin(
+    name = "chat_preview_sources",
+    srcs = [
+        "src/App.vue",
+        "src/cards/ChatBody.ce.vue",
+        "src/cards/DocCard.ce.vue",
+        "src/cards/chatSections.js",
+    ],
+)
+
+_CHAT_PREVIEW_DATA = [
+    ":chat_preview_sources",
+    ":chat_preview_script",
+    ":node_modules",
+    "tests/goldens/chat_preview.html",
+    "//datalib/backend/etl/chat-common:render_chat_samples",
+    "@nodejs_host//:node_bin",
+]
+
+_CHAT_PREVIEW_ENV = {
+    "FW_GOLDEN_RLOC": "$(rlocationpath tests/goldens/chat_preview.html)",
+    "FW_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+    "FW_PREVIEW_JS_RLOC": "$(rlocationpath :chat_preview_script)",
+    "FW_SAMPLES_BIN_RLOC": "$(rlocationpath //datalib/backend/etl/chat-common:render_chat_samples)",
+}
+
+sh_binary(
+    name = "chat_preview",
+    srcs = ["run_chat_preview.sh"],
+    data = _CHAT_PREVIEW_DATA,
+    env = _CHAT_PREVIEW_ENV,
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "chat_preview_test",
+    size = "small",
+    srcs = ["run_chat_preview.sh"],
+    data = _CHAT_PREVIEW_DATA,
+    env = _CHAT_PREVIEW_ENV,
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)

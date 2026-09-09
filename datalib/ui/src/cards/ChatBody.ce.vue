@@ -20,6 +20,14 @@ import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import type { EdgeOut } from "@/api";
 import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "./asset_urls";
+// Shared with `tools/chat_preview.mjs`, which inlines this same file so
+// the preview page behaves like the app rather than imitating it.
+import {
+  decorateLongMessages,
+  injectCopyUuidButtons,
+  openEnclosingDetails,
+  scrollSectionToTop,
+} from "./chatSections.js";
 
 const props = defineProps<{
   body: string;
@@ -134,69 +142,6 @@ const html = computed(() =>
   md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }),
 );
 const root = ref<HTMLElement | null>(null);
-
-function injectCopyUuidButtons() {
-  if (!root.value) return;
-  // Scan every section the renderer marks with `data-section-uuid`:
-  // top-level message wrappers AND the nested block sections we emit
-  // for tool_use / tool_result / thinking. The uuid the button copies
-  // is the attribute value as-is (prefixed `tu-`/`tr-`/`th-` for
-  // blocks, bare for messages) — that's the form the grid row carries
-  // and the deeplink consumes, so "copy section ID" round-trips.
-  for (const el of root.value.querySelectorAll<HTMLElement>(
-    "div[data-section-uuid], section[data-section-uuid]",
-  )) {
-    if (el.querySelector(":scope > .msg-meta .copy-uuid, :scope > p .copy-uuid, :scope > .copy-uuid"))
-      continue;
-    const uuid = el.getAttribute("data-section-uuid") ?? "";
-    if (!uuid) continue;
-    // Prefer the explicit `.msg-meta` div (slack). Otherwise use the first
-    // <p><em>…</em></p> emitted as the markdown italic meta line
-    // (github/gitlab/claude/chatgpt). Block sections rarely have
-    // either — they fall through to a header-position button.
-    let host: HTMLElement | null = el.querySelector(":scope > .msg-meta");
-    if (!host) {
-      for (const p of el.querySelectorAll<HTMLElement>(":scope > p")) {
-        if (p.firstElementChild?.tagName === "EM" && p.children.length === 1) {
-          host = p;
-          break;
-        }
-      }
-    }
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "copy-uuid";
-    btn.dataset.uuid = uuid;
-    btn.title = `Copy section ID (${uuid})`;
-    btn.setAttribute("aria-label", "Copy section ID");
-    btn.textContent = "🆔";
-    if (host) {
-      host.append(document.createTextNode(" · "), btn);
-    } else {
-      // No meta line — drop the button at the top of the section.
-      el.prepend(btn);
-    }
-  }
-  // Page-title H1 emitted by the Rust `Title` helper: walk
-  // `[data-page-title-uuid]` and append a copy-id button at the end
-  // of the H1, after the source-link arrow if present. Same button
-  // styling + clipboard handler as the section buttons above.
-  for (const el of root.value.querySelectorAll<HTMLElement>(
-    "[data-page-title-uuid]",
-  )) {
-    if (el.querySelector(":scope > button.copy-uuid")) continue;
-    const uuid = el.getAttribute("data-page-title-uuid") ?? "";
-    if (!uuid) continue;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "copy-uuid";
-    btn.dataset.uuid = uuid;
-    btn.title = `Copy page ID (${uuid})`;
-    btn.setAttribute("aria-label", "Copy page ID");
-    btn.textContent = "🆔";
-    el.append(document.createTextNode(" "), btn);
-  }
-}
 
 async function onCopyClick(ev: MouseEvent) {
   const btn = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>(
@@ -336,21 +281,19 @@ function applySelection() {
   );
   if (!target) return;
   target.classList.add("selected");
-  // Set scrollTop on the known scrollport directly instead of calling
-  // target.scrollIntoView: scrollIntoView silently no-ops on
-  // same-conversation prop changes in Chromium (probably racing layout
-  // re-flow), and the user reported "nothing changes when I click
-  // around inside one thread" as a result.
-  const pane = target.closest(".chat-preview") as HTMLElement | null;
-  if (pane) {
-    pane.scrollTop +=
-      target.getBoundingClientRect().top - pane.getBoundingClientRect().top;
-  }
+  openEnclosingDetails(target);
+  // A clamped message shows only its first screenful, so a selection
+  // deeper than that would be highlighted where nobody can see it.
+  target.closest(".msg--clamped")?.classList.remove("msg--clamped");
+  scrollSectionToTop(target);
 }
 
 watch(html, async () => {
   await nextTick();
-  injectCopyUuidButtons();
+  if (root.value) {
+    injectCopyUuidButtons(root.value);
+    decorateLongMessages(root.value);
+  }
   decorateEdgeSources();
   applySelection();
   applyHoverDst();
@@ -380,7 +323,10 @@ watch(
   },
 );
 onMounted(() => {
-  injectCopyUuidButtons();
+  if (root.value) {
+    injectCopyUuidButtons(root.value);
+    decorateLongMessages(root.value);
+  }
   decorateEdgeSources();
   applySelection();
   applyHoverDst();
@@ -399,6 +345,24 @@ onMounted(() => {
 </template>
 
 <style>
+/* An unbroken token longer than the pane — a hash, a base64 blob, a
+   URL with no slashes to break at — otherwise runs off the edge of its
+   card and is simply not readable. `break-word` (not `anywhere`) so
+   only the token that would overflow gets broken, and intrinsic widths
+   are left alone. */
+.chat-body {
+  overflow-wrap: break-word;
+}
+/* A table wider than the pane scrolls itself rather than pushing the
+   column out. `width: max-content` keeps it from stretching to fill
+   when it is narrow. */
+.chat-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 /* Per-message wrappers emitted by ingest. Unscoped on purpose so the rules
    reach inside `v-html`. */
 .chat-body .msg {
@@ -406,6 +370,20 @@ onMounted(() => {
   padding: 0.5rem 0.75rem;
   border-left: 3px solid transparent;
   margin: 0.5rem 0;
+}
+/* Every outermost item — a message, or a whole run of tool steps — is a
+   card, so where one ends and the next begins is drawn rather than
+   inferred from whitespace. Nested block sections (tool_use, thinking)
+   stay flat inside their parent; only direct children of the body get
+   the box. Declared BEFORE the per-provider rules below so their
+   `border-left-color` still wins. */
+.chat-body > .msg,
+.chat-body > details.tool-group {
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--datalib-card-bg, #fafafa);
+  margin: 0.4rem 0;
 }
 .chat-body .msg--claude {
   border-left-color: var(--datalib-accent, #6366f1);
@@ -456,11 +434,110 @@ onMounted(() => {
 .chat-body .msg--thinking {
   border-left-color: #94a3b8;
 }
+/* A message too tall to scroll past comfortably shows its first
+   screenful and says so. `--clamped` is toggled by the button
+   `decorateLongMessages` appends; `--long` stays for as long as the
+   message is long, which is what the sticky header keys off. */
+.chat-body > .msg.msg--clamped {
+  max-height: 22rem;
+  overflow: hidden;
+  position: relative;
+}
+.chat-body > .msg.msg--clamped::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 5rem;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--datalib-card-bg, #fafafa)
+  );
+  pointer-events: none;
+}
+.chat-body > .msg.msg--clamped.selected::after {
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--datalib-hover, #f0f0f0)
+  );
+}
+.chat-body > .msg > button.msg-expand {
+  display: block;
+  margin: 0.4rem auto 0;
+  padding: 0.1rem 0.6rem;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--datalib-muted, #94a3b8);
+  background: var(--datalib-input-bg, #fff);
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.chat-body > .msg > button.msg-expand:hover {
+  color: inherit;
+}
+.chat-body > .msg.msg--clamped > button.msg-expand {
+  position: absolute;
+  left: 50%;
+  bottom: 0.4rem;
+  transform: translateX(-50%);
+  z-index: 2;
+  margin: 0;
+}
+/* While you are inside a long message its header stays put, so the
+   author, the time and the jump controls are never something you have
+   to scroll back up for. Only long messages: pinning every header
+   would leave a stack of them on screen. The negative margins let the
+   pinned bar cover the card's full width rather than letting content
+   slide through the padding beside it. */
+.chat-body > .msg.msg--long > h2:has(> .msg-author) {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--datalib-card-bg, #fafafa);
+  margin: -0.5rem -0.75rem 0.15rem;
+  padding: 0.3rem 0.75rem 0.25rem;
+}
+.chat-body > .msg.msg--long.selected > h2:has(> .msg-author) {
+  background: var(--datalib-hover, #f0f0f0);
+}
+/* Only while it is actually pinned: an edge and a shadow, so the line
+   of text passing beneath the bar reads as passing beneath it rather
+   than as having gone missing. `.is-stuck` is set by the observer in
+   `chatSections.js`. */
+.chat-body > .msg.msg--long > h2.is-stuck {
+  border-bottom: 1px solid var(--datalib-border, #d8d8d8);
+  box-shadow: 0 4px 6px -4px rgba(0, 0, 0, 0.35);
+}
+.chat-body .msg-nav {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 0.15rem;
+}
+.chat-body button.msg-jump {
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0.15rem 0.35rem;
+  color: var(--datalib-muted, #94a3b8);
+  background: transparent;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.chat-body button.msg-jump:hover {
+  color: inherit;
+  background: var(--datalib-hover, #f0f0f0);
+}
 .chat-body .msg.selected {
-  background: var(--datalib-card-bg, #1f2937);
-  border-left-width: 4px;
-  /* `outline` (not border) so moving the selection doesn't reflow. */
+  background: var(--datalib-hover, #f0f0f0);
+  border-color: var(--datalib-accent, #6366f1);
+  /* `outline` (not a thicker border) so moving the selection doesn't
+     reflow; the negative offset lays it over the card's own edge so
+     the two read as one highlighted border rather than two rings. */
   outline: 2px solid var(--datalib-accent, #6366f1);
+  outline-offset: -1px;
 }
 /* Inline span baked by ingest for sub-section edge anchors (today
    only: perseus first-word wrappers). When the span happens to also
@@ -517,32 +594,94 @@ onMounted(() => {
   color: inherit;
   text-decoration: underline;
 }
+/* The chat-common message header. It is a real `## ` heading because
+   qmd cuts its chunks at the best nearby break point and scores an h2
+   far above a blank line — so the heading is what makes every message
+   start a preferred chunk boundary. On screen it should read as
+   Slack's one-line "Name  time", not as a document section, hence the
+   reset below. `:has()` keeps it off an h2 that came from the message
+   *body* (someone pasting markdown with their own headings). */
+.chat-body .msg h2:has(> .msg-author) {
+  font-size: 1em;
+  font-weight: 400;
+  line-height: 1.3;
+  margin: 0 0 0.15rem;
+  padding: 0;
+  border: none;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.chat-body .msg-author {
+  font-weight: 600;
+}
+.chat-body .msg-ts {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--datalib-muted, #94a3b8);
+  /* The full instant is in `title`; say so with the cursor. */
+  cursor: help;
+}
+/* A run of adjacent tool steps, folded into one line until asked for. */
+.chat-body details.tool-group {
+  margin: 0.35rem 0;
+}
+.chat-body details.tool-group > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--datalib-muted, #94a3b8);
+  list-style-position: outside;
+}
+.chat-body details.tool-group > summary {
+  padding: 0.35rem 0.6rem;
+}
+.chat-body details.tool-group[open] > summary {
+  border-bottom: 1px solid var(--datalib-border, #d8d8d8);
+}
+/* Inside a group every step has the same author and near-identical
+   time, so the header is there for its anchor and its copy button, not
+   to be read. */
+.chat-body details.tool-group .msg h2:has(> .msg-author) {
+  font-size: 0.8em;
+  opacity: 0.7;
+}
 .chat-body button.copy-uuid {
+  /* The 🆔 glyph is a saturated purple that outshouts the message it
+     sits next to; grey it out so it reads as a control rather than as
+     content. The `copied` / `copy-failed` states below re-colour on
+     purpose, so they drop the filter. */
+  filter: grayscale(1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   vertical-align: baseline;
-  padding: 0 0.25rem;
+  padding: 0;
   margin: 0;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
+  border: none;
   color: inherit;
   font: inherit;
+  /* The glyph is a control, not text: smaller than what it sits beside. */
+  font-size: 0.75em;
   line-height: 1;
   cursor: pointer;
-  opacity: 0.7;
+  opacity: 0.55;
 }
+/* Opacity only. A hover border would draw a box a different shape from
+   the glyph inside it, which reads as the control changing rather than
+   as it lighting up. */
 .chat-body button.copy-uuid:hover {
   opacity: 1;
-  border-color: var(--datalib-muted, #94a3b8);
 }
 .chat-body button.copy-uuid.copied {
   color: #16a34a;
   opacity: 1;
+  filter: none;
 }
 .chat-body button.copy-uuid.copy-failed {
   color: #dc2626;
   opacity: 1;
+  filter: none;
 }
 </style>

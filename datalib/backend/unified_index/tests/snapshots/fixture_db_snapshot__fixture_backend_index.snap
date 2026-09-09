@@ -13,7 +13,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "564bf57cab0c4086cab58d6a3a04c2a41af211e18dea6dc6c0ebf6a36bc5e6c3",
-      "source_fingerprint": "407842378ccf5b59047cfd1a4eedfa6cc8fa70facf471df77f3e1541ab45998b",
+      "source_fingerprint": "2495389e275e900db04c15f2ead34fc92befe1e4e0dd2b081fbf4725bdd4aed2",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:11:40+00:00"
@@ -83,7 +83,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "0e22496f7ee3a1228f41968499a0a84aae69b837f2d5fc96a214f79075948b18",
-      "source_fingerprint": "4a2c9ca5bc0d4f268c9799b5b6b86b959641f2e2be0a5734f0a67fb5a26e9572",
+      "source_fingerprint": "21317687b240c867478cb675451fbd3e9618617069561a937c84959d985e4506",
       "source_name": "sms-backup-restore",
       "title": "Deanna Troi",
       "updated_at": "2369-04-14T20:30:00+00:00"
@@ -97,7 +97,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "c9191487bd8a2e4a3aa1a23d7da57dfd2597d6421ba8665346661f5fc9a9d749",
-      "source_fingerprint": "37607ec2a006ff4f8c31277dfacd8670a446e1a6d9f4849d5ff48cd598a89993",
+      "source_fingerprint": "85dc8be43b62ea936f873f3b8a065f6a49fb1e8729a4be3b015809b255072034",
       "source_name": "slack",
       "title": "@William T. Riker",
       "updated_at": "2369-05-28T15:21:41+00:00"
@@ -111,7 +111,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.6",
       "row_set_hash": "8f2f52d27d3d6a96b56c599ff5487661f67d03a890c0a81f14647fb4a7633ec9",
-      "source_fingerprint": "cd6722b38e3b823d31f4f41d863a603d9278c3356def7f24a3a184c20b0b8f79",
+      "source_fingerprint": "212e914df05c67f6ee4d47cb003b7f5a019bc9bf22d2c85c2fdff91bb6e0b98a",
       "source_name": "claude-api",
       "title": "Tricorder Image Diagnostic",
       "updated_at": "2369-04-15T08:30:45+00:00"
@@ -125,7 +125,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "f08a07688280680b9ce53c9075da5fcaa92d851e782b988bc7f30f3beecbaa6f",
-      "source_fingerprint": "fd26e777b5390fdf9a502f311e93070369a223b3116f71fe8a15ea4223559594",
+      "source_fingerprint": "2c3eae04043c480036e1969143733e4a94b3cfcebcd7acdf4e51cb7be4f75f53",
       "source_name": "sms-backup-restore",
       "title": "Jean-Luc Picard",
       "updated_at": "2369-04-15T09:03:00+00:00"
@@ -153,7 +153,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "11e99d6c05b826ae0a83e3d0b2e42f0f54eb03fc93c1258f01b9ff7a3c2f8b7b",
-      "source_fingerprint": "017348e4a0e0165bb3528ff3821c7ce3e1392a3eb1d8782f649a84c8e7b8ec1a",
+      "source_fingerprint": "d1c826665e8e71213ddfc36340a6252e1e26d5a7a8097ff58787b936d6878870",
       "source_name": "google-takeout",
       "title": "Jean-Luc Picard, William Riker",
       "updated_at": "2025-03-05T21:34:00+00:00"
@@ -167,7 +167,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "58e98d1b454c04bb2b75ac9628b74fed6d07bb9bf8edca974f8353dfc3944f88",
-      "source_fingerprint": "69528f51525bdddbe8a72d6d41f6087dace9481c49982baaac7d11a0c1207b59",
+      "source_fingerprint": "67c37dd0e93dcec393c4facf13cea118880e0a952dea43505b3f660cb7fab172",
       "source_name": "google-takeout",
       "title": "+15550900",
       "updated_at": "2364-03-04T20:00:00+00:00"
@@ -181,7 +181,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.6",
       "row_set_hash": "1cb5c88216dcfe1a12eea317c87a066c235210f51fa4e43b6d779bcf2a3f9a70",
-      "source_fingerprint": "4888cba9a0da884a586fb1e6d3b0ef49f377ef6a71543ae065f508966eae24e5",
+      "source_fingerprint": "89faf360d86529f5174b3df601f64ae3c2dfcc8c0d610a5bbe8c05af30b11e25",
       "source_name": "claude-api",
       "title": "Stellar Cartography",
       "updated_at": null
@@ -223,7 +223,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.7",
       "row_set_hash": "14f00c2ed0c06a32c98bdacbb131307d583a08243eb13b5e08b3e8a250a82509",
-      "source_fingerprint": "e29ceeebfe31f59565560b765aa534af16bd305bee7d79a196e1653f07e59255",
+      "source_fingerprint": "8d74b3b2e45e9a2b99c0b4081bc42375563585ec6d73a7c691c200762f74fac0",
       "source_name": "chatgpt-api",
       "title": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
       "updated_at": "2370-10-26T08:05:00+00:00"
@@ -237,7 +237,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "ba19cd8757199e42f3f53913c00fbb8c8c34f2f3eb80b0b8c8a9328e49e4e949",
-      "source_fingerprint": "6fc073c985fa2e883672a1a521a254c92d55e4204464a1f473e18be02a460c35",
+      "source_fingerprint": "a716be8de79fad3cc7382fe71d2f1f443a0af8a044cdaf5f24aa56cb39d65bcc",
       "source_name": "sms-backup-restore",
       "title": "Worf",
       "updated_at": "2369-04-15T10:01:00+00:00"
@@ -251,7 +251,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "1fe7b509b5f232c9119352ca91be9bfbcf4ab29febde6d1cd4ad69d46da2432c",
-      "source_fingerprint": "4a2b5a46d47fd00304fe5a277d3d64dae07baa122b191273a32c314752746295",
+      "source_fingerprint": "fa8bc2598ebf3dc9475ab0da804d4f246a38594b010c8bc72c4681922941acbf",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:20:00+00:00"
@@ -307,7 +307,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.7",
       "row_set_hash": "394e4fde241d3abc829623370a9d6d8349e7973494528a66855498088fc0e16a",
-      "source_fingerprint": "74ca491e2f0da2d990fcb0a7fa01bd00ce61ae53c87529b4a6c1518880f1c838",
+      "source_fingerprint": "f8cf2e43e478aebac64e1f6528cf900369701095ba822501b04e872c3176ab51",
       "source_name": "chatgpt-api",
       "title": "Sonnet on a Cat Named Spot",
       "updated_at": "2370-10-24T08:05:00+00:00"
@@ -321,7 +321,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "4030a8397daef7785cb2034fa3775065615f1f6185b08ce08cbcdd1e77de3f58",
-      "source_fingerprint": "4b1375346d62077011c06cbffde418935d128738b191ce46462907ebbd9a37ad",
+      "source_fingerprint": "2c401dbf92b0dcf78360bc9a035de6b2869bcb085fac7b56490e949ee64c484d",
       "source_name": "slack",
       "title": "@William T. Riker, Worf",
       "updated_at": "2369-05-28T15:21:44+00:00"
@@ -349,7 +349,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "6df9a54670db811e02796516463234469f88d471b7e048764c343ae1e1dc58cf",
-      "source_fingerprint": "b8556d8690717b51069aae183396dccc2f0a0bc7f698a18c4a0da2d8389b955c",
+      "source_fingerprint": "ffc1aefb2687dc2f51962c518e83b3084544e09c7d7b5ecfced6e512c08724ca",
       "source_name": "slack",
       "title": "#engineering",
       "updated_at": "2369-05-28T15:15:00+00:00"
@@ -447,7 +447,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "c10289edf3fa18a47f145142850b0828722d4fe344876151c7dfb6656f436f77",
-      "source_fingerprint": "805a3f1b8e5cc459c4206eadaf8c23e2ebf715e76c9ddf0851ab7c6d1a29197a",
+      "source_fingerprint": "4124718a9a5e20914f8fca4be4a65ac60941caf3e83044e9cab49dff1d309959",
       "source_name": "linkedin",
       "title": "Jean-Luc Picard, William Riker",
       "updated_at": "2369-04-10T09:06:30+00:00"
@@ -461,7 +461,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "b7466e0519339e973015c7c242885cb40d77f42ac8a4bca42efbde1cd7437f0d",
-      "source_fingerprint": "4c2c6794591c9d6e2c1246dba5709e49d5b158e8825f8a36d3fcde1063fee751",
+      "source_fingerprint": "7b843daa85e51bc67b224671a1b38dcc8f03703e57d3f8f7caa9a01e9717b79a",
       "source_name": "slack",
       "title": "@William T. Riker",
       "updated_at": "2369-05-28T15:21:40+00:00"
@@ -489,7 +489,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.4",
       "row_set_hash": "8cc309ccd3d9ebd20581b3db45bd5dc25ee105769dcbdc0e203358d104b6c078",
-      "source_fingerprint": "2fc7aa07347356746b245b7317f8b3080ce3dfdbc4fcaae4b1554a9270d12323",
+      "source_fingerprint": "7c73045b9987cb367f5e26620a9f77128928100f9a07734d47febb9d121decdb",
       "source_name": "whatsapp",
       "title": "Bridge Crew",
       "updated_at": "2364-04-11T00:08:20+00:00"
@@ -573,7 +573,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "8fe864c6a08da377ed4f21707c5f994025a477d5114d428f7623bd5fd6147546",
-      "source_fingerprint": "da59442cc0a50839f728066be0db1e302a86fc1899fb10030868b7a51eb9d52d",
+      "source_fingerprint": "e87e1e791cd56728e1d5558b41b9b4fca5c55bb232fc1e8e08d85517c7bc57a6",
       "source_name": "tng_email",
       "title": "Captain's Log — Stardate 80124.1",
       "updated_at": "2026-01-07T14:00:00+00:00"
@@ -601,7 +601,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "024e9d7f799d50f96e6eb8f1b5621293a8e95b15a6e13c9ccec1b9010fe52366",
-      "source_fingerprint": "e5d9258b3d06d5ae5d0590d53bd6949bc2318aaf58022bec10509879f90bd7ca",
+      "source_fingerprint": "242ec8cb6487c372391303ec1f8465e6c4422adb8bc92b797be727216e0e4e4a",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:13:20+00:00"
@@ -615,7 +615,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.4",
       "row_set_hash": "40b7c5e7307fdcf1062c6ab8639321e268e2a840e5b1af419ef38f3c591f584f",
-      "source_fingerprint": "4064879215a4117b44bf22e57e1dead042a49e76664d2c1e7d8b39c3edbf6681",
+      "source_fingerprint": "f3a9bb9c2e15bc9d1b1aa459a48d1ff18b2ffaa04b86505264ff7bd23e4a7603",
       "source_name": "whatsapp",
       "title": "+17015550102",
       "updated_at": "2364-04-11T00:09:00+00:00"
@@ -629,7 +629,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "87fafde5d3f9bc96d708402ed2f888c77706340ebd4c5bc6f2e2967efd6d02f5",
-      "source_fingerprint": "7f5331ccbb52d1740dde9ab558b6594b5c711a3ab71f888a22f92d19d9293eab",
+      "source_fingerprint": "f3ac0d187036f5e0a00dd84d8d2da20c65e44bf7d880c19fcb5ea3d5a4d21db7",
       "source_name": "slack",
       "title": "@William T. Riker, Worf",
       "updated_at": "2369-05-28T15:21:43+00:00"
@@ -685,7 +685,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "cfdb2a923e88ab53a79c4e3cc83b3325dbfc6d83f7935ba65ace9f16cdb71086",
-      "source_fingerprint": "4d47d690b16ef2b7ff68591fe0f22dda1e0a3a05c785d874f655cf42d1771458",
+      "source_fingerprint": "afb4c2c3b6b8baa938c568f4f47df36ba5ef4caccceb81a7463a0e20272c5d84",
       "source_name": "tng_email",
       "title": "Your shore leave awaits!",
       "updated_at": "2026-01-06T08:00:00+00:00"
@@ -727,7 +727,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.6",
       "row_set_hash": "07b9edc351421cedfc0281b47913384f6d8d5b1c55e70e10ec068083999a9b52",
-      "source_fingerprint": "d4ed6a205d84191e5bdbdadce5829e70161652e006f4d3acafcf6e6e341fcdaa",
+      "source_fingerprint": "f9c43038506309eb368ef048d72b44cd52d5458280f631e54bb5a9fa3d356b75",
       "source_name": "claude-api",
       "title": "Bridge Operations",
       "updated_at": "2364-03-02T11:30:00+00:00"
@@ -783,7 +783,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "7ac405482595b8094ee9a86f4f7f5b0a68bd91cab838531a8367759c3b38ed2a",
-      "source_fingerprint": "5af510e411b340d1aa3263f3663bd6242963e8da27b9a585691dbb0b1e3a87f8",
+      "source_fingerprint": "34408d4bcc683237239b2175f3042dc39ad5285a1ec96b933a4768b14fe0ddee",
       "source_name": "tng_email",
       "title": "Mission Briefing — Sector 001",
       "updated_at": "2026-01-05T11:15:00+00:00"
@@ -797,7 +797,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "93eeaf57cce150208e14ed04a622c055847b96c3e062a719b448b923254c418a",
-      "source_fingerprint": "a2ac3fd8dfa19c135e9dc9fd21b3a03603e32970ece9574d3f70e6258f87989f",
+      "source_fingerprint": "7fe532f520cf60e800ea9fbbdd56dfb50098acf4367180f192efa93bc002fc16",
       "source_name": "google-takeout",
       "title": "Wesley Crusher",
       "updated_at": "2364-03-03T19:00:00+00:00"
@@ -853,7 +853,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.7",
       "row_set_hash": "a12fa8b766d035da1ffadd10c11a3a8f4203e8de9306c98d23611de640d04201",
-      "source_fingerprint": "20f434637065959005d61e15bd863004cb110748c655db230bee2c693355f68e",
+      "source_fingerprint": "85785f1d64664ae92e17a8070cd5c1b62ac441ae6605a5b11e31ced0717b43d5",
       "source_name": "chatgpt-api",
       "title": "Polynomial Fit for Sensor Calibration",
       "updated_at": "2370-10-25T08:05:20+00:00"
@@ -867,7 +867,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "98f13e30b4d91b03345a55e9aedbcca89533ce925d294e7083e0093c177b7d18",
-      "source_fingerprint": "a65e4152f9785c38e472679924c9daf49b18cc6842170a1603413ebfb5d24147",
+      "source_fingerprint": "1493e3281d8474b01a577dfd5c9495e9f14284002de861fbf05f53ab2c25f5b3",
       "source_name": "google-takeout",
       "title": "Jean-Luc Picard",
       "updated_at": "2364-03-02T18:00:00+00:00"
@@ -881,7 +881,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "8be085995ab714f215ef66121e49d8a29dcdcd1a3b7569b0716ca6600e580cc3",
-      "source_fingerprint": "309e2493c4caab1550d90cad9c82cb477b6a8059db153cbc9f0abfe352b95e27",
+      "source_fingerprint": "bdc2ced76c938710009dba35c1492255c8c8c778cadfb571d244ca0e15afacff",
       "source_name": "slack",
       "title": "#ten-forward",
       "updated_at": "2369-05-28T15:18:20+00:00"
@@ -923,7 +923,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "639ce322e0f0e661fbb1d69e5459c90797c336197b12a787789032e3d3d76d61",
-      "source_fingerprint": "123dc38e249fe50f3ffae73f22c2b026ac07c9851318ddc44226b98186128e84",
+      "source_fingerprint": "073699116fda6f8c195635b9ee2def77ad99c15d77f85b1057c8b22631fec753",
       "source_name": "slack",
       "title": "@Lt. Cmdr. Data",
       "updated_at": "2369-05-28T15:21:42+00:00"
@@ -951,7 +951,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "7438c53cb4951d02c09d829fcf6db33a87d738bd129a4a099026e2c5cf73916c",
-      "source_fingerprint": "aa8e4b2d37327f0a98d917e18f3bac882f2e477103d3422a89ea432330288266",
+      "source_fingerprint": "7a283791d2d17b90930218676ed90e65a75455fede7229c9d6641b9e8b23d09d",
       "source_name": "google-takeout",
       "title": "Jean-Luc Picard, William Riker",
       "updated_at": "2025-02-11T11:33:35+00:00"
@@ -993,7 +993,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.6",
       "row_set_hash": "4ce0a33be62f0b6230642ea53c45fcff76bac8be76a258cb1b7bc0ef09b6d3ad",
-      "source_fingerprint": "c116500eac4eda30ca3b28e89e7db495e02cfdb675e45620b23335e2bb9bdc91",
+      "source_fingerprint": "24d956547aabd5f85baca416aaa6f90f08a873d51db860513261424b59e3fc27",
       "source_name": "claude-api",
       "title": "Borg Encryption Signature Lookup",
       "updated_at": "2369-04-16T09:01:30+00:00"
@@ -1007,7 +1007,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "cf55396fe78a0c8d1df7fb49530a5e3938446415a0bf9b005647a66f7ba0e74d",
-      "source_fingerprint": "45b98923cf7fa636baa283ac0e4c024d2a790801c5cdfb7d406e43687c6af9dc",
+      "source_fingerprint": "3fa3978cfb10d1a5840823a5e818201be3b6b72e184d07ecd4133833db3ca98e",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:18:20+00:00"
@@ -1035,7 +1035,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.5",
       "row_set_hash": "58835e895ec583ebbc70b862f4172e3f8ce0bb1c00d573a3214c96e04a1ad627",
-      "source_fingerprint": "b34cecfee22bedb6e32aeb596670a1d8050f926850f7faafc65a077852127a0f",
+      "source_fingerprint": "ec9bd4716135ee51fa08dc2e8fdef5f8bf1a9f7cb2e3325b5a8c63a860a169f0",
       "source_name": "tng_email",
       "title": "Bridge status display",
       "updated_at": "2026-01-07T09:00:00+00:00"
@@ -1049,7 +1049,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.6",
       "row_set_hash": "aa685ae80eebb333e15727dbc04760da43ff56af193d77da4e331e9453f8a36f",
-      "source_fingerprint": "479f9cb07bddda21a28faef2d32fe0931581d77b0a1dea67b03fd880884ae00c",
+      "source_fingerprint": "cb972add65c788fc9d52b47385d0dc650fac5a6376699268f804718590d304d4",
       "source_name": "claude-api",
       "title": "Klingon Diplomatic Greeting Drafting",
       "updated_at": "2369-04-14T10:02:00+00:00"

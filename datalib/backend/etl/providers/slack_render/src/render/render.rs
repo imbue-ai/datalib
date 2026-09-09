@@ -235,6 +235,7 @@ fn build_item(
             msg_id.entity_kind,
             msg_id.natural_key.clone(),
         )),
+        is_aside: false,
     }
 }
 

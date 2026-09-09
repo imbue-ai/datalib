@@ -98,7 +98,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-15T08:30:45+00:00"
     }
   ],
-  "source_fingerprint": "cd6722b38e3b823d31f4f41d863a603d9278c3356def7f24a3a184c20b0b8f79"
+  "source_fingerprint": "212e914df05c67f6ee4d47cb003b7f5a019bc9bf22d2c85c2fdff91bb6e0b98a"
 }
 === 2efdd321-ada2-5000-911f-feb635f27954 ===
 {
@@ -226,7 +226,7 @@ expression: docs_bundle(&docs)
       "when_ts": null
     }
   ],
-  "source_fingerprint": "4888cba9a0da884a586fb1e6d3b0ef49f377ef6a71543ae065f508966eae24e5"
+  "source_fingerprint": "89faf360d86529f5174b3df601f64ae3c2dfcc8c0d610a5bbe8c05af30b11e25"
 }
 === bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0 ===
 {
@@ -384,7 +384,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2364-03-02T11:30:00+00:00"
     }
   ],
-  "source_fingerprint": "d4ed6a205d84191e5bdbdadce5829e70161652e006f4d3acafcf6e6e341fcdaa"
+  "source_fingerprint": "f9c43038506309eb368ef048d72b44cd52d5458280f631e54bb5a9fa3d356b75"
 }
 === ecb57e3b-24ce-546b-9201-61bf610b0783 ===
 {
@@ -602,7 +602,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-16T09:01:30+00:00"
     }
   ],
-  "source_fingerprint": "c116500eac4eda30ca3b28e89e7db495e02cfdb675e45620b23335e2bb9bdc91"
+  "source_fingerprint": "24d956547aabd5f85baca416aaa6f90f08a873d51db860513261424b59e3fc27"
 }
 === f6cad624-37b7-5673-af29-80ba9aac61a5 ===
 {
@@ -820,5 +820,5 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-14T10:02:00+00:00"
     }
   ],
-  "source_fingerprint": "479f9cb07bddda21a28faef2d32fe0931581d77b0a1dea67b03fd880884ae00c"
+  "source_fingerprint": "cb972add65c788fc9d52b47385d0dc650fac5a6376699268f804718590d304d4"
 }

@@ -178,6 +178,16 @@ reference doc it relates to.
 - [`docs/dev/cards.md`](docs/dev/cards.md) — the card system (custom
   views, component library); [`docs/dev/dactal.md`](docs/dev/dactal.md)
   — the dactal view bridge.
+- [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md)
+  — **read before changing how a chat message looks**: the one markdown
+  layout all eight chat providers render through. Why the message
+  header has to stay an `h2` (qmd cuts its chunks there), how a run of
+  tool calls folds into one collapsed `<details>`, and `LAYOUT_VERSION`
+  — the one number to bump so all eight re-render. It also points at
+  `bazelisk run //datalib/ui:chat_preview`, which rewrites
+  `datalib/ui/tests/goldens/chat_preview.html`: the sample corpus drawn
+  through the app's own markdown-it and card CSS, so a layout change is
+  reviewed by opening a file rather than by building a data root.
 - [`docs/dev/plans/data_centric_ui.md`](docs/dev/plans/data_centric_ui.md) —
   *proposal*, nothing built: one typed table viewer plus the markdown
   one, with column types declared by whoever serves the rows, and the

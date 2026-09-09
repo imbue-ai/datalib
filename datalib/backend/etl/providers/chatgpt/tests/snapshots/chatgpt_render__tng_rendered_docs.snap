@@ -98,7 +98,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-26T08:05:00+00:00"
     }
   ],
-  "source_fingerprint": "e29ceeebfe31f59565560b765aa534af16bd305bee7d79a196e1653f07e59255"
+  "source_fingerprint": "8d74b3b2e45e9a2b99c0b4081bc42375563585ec6d73a7c691c200762f74fac0"
 }
 === 62b1d972-57f0-5b4c-a81b-805d6c650bde ===
 {
@@ -256,7 +256,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-24T08:05:00+00:00"
     }
   ],
-  "source_fingerprint": "74ca491e2f0da2d990fcb0a7fa01bd00ce61ae53c87529b4a6c1518880f1c838"
+  "source_fingerprint": "f8cf2e43e478aebac64e1f6528cf900369701095ba822501b04e872c3176ab51"
 }
 === d1f64243-f79a-5057-a85b-b5f6908ecf52 ===
 {
@@ -384,5 +384,5 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-25T08:05:20+00:00"
     }
   ],
-  "source_fingerprint": "20f434637065959005d61e15bd863004cb110748c655db230bee2c693355f68e"
+  "source_fingerprint": "85785f1d64664ae92e17a8070cd5c1b62ac441ae6605a5b11e31ced0717b43d5"
 }

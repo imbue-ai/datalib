@@ -406,8 +406,19 @@ watch(
 .chat-preview {
   height: 100%;
   overflow-y: auto;
-  padding: 0.75rem 1rem;
+  /* No padding at the *top*. A sticky message header stops at the
+     scrollport's padding edge, while the content behind it keeps
+     scrolling up through that padding and stays visible — so a top
+     padding shows a sliver of text floating above the pinned bar. The
+     gap comes back below as padding on the first child, where it
+     scrolls away with the content instead. */
+  padding: 0 1rem 0.75rem;
   box-sizing: border-box;
+}
+.chat-preview > .empty,
+.chat-preview > .error,
+.chat-header {
+  padding-top: 0.75rem;
 }
 .chat-header h2 {
   margin: 0 0 0.25rem;
@@ -511,7 +522,12 @@ watch(
   margin: 0.4rem 0;
 }
 .markdown-body pre {
-  background: var(--datalib-code-bg, #0d1117);
+  /* Fixed dark, not `--datalib-code-bg`: the highlight theme we inject
+     is github-*dark* and does not switch with the app's, so painting a
+     code block on the light-mode token left dark-theme token colors on
+     a near-white background. Inline `code` below is unhighlighted and
+     does follow the theme. */
+  background: #0d1117;
   color: #e6edf3;
   padding: 0.6rem 0.75rem;
   border-radius: 4px;

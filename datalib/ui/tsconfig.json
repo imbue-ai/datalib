@@ -7,6 +7,9 @@
     "strict": true,
     "jsx": "preserve",
     "resolveJsonModule": true,
+    // `src/cards/chatSections.js` is plain JS so the chat-preview tool can
+    // inline the very same file the app imports.
+    "allowJs": true,
     "isolatedModules": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
