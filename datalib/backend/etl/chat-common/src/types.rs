@@ -161,17 +161,20 @@ impl UpstreamRef {
     }
 }
 
-/// Reactions that landed in this bucket but whose target message did
-/// not — the reactor got there in April, the message is in March.
+/// Reactions to a message the mirror does not have.
 ///
-/// They cannot hang off an item, because the item is in another
-/// document, so the renderer lists them at the end under the id of what
-/// they reacted to. Dropping them instead would lose a real event with
-/// nothing to say it happened.
+/// **Not** "a message in another period" — a provider that buckets by
+/// period is expected to file a reaction under its *target's* period,
+/// not its own, so a reaction to a March message lands in the March
+/// document however late it arrived. What is left over is the case
+/// nothing can place: the target event is not in the store at all,
+/// because it was never downloaded or it belongs to another
+/// conversation. The renderer lists those at the end rather than
+/// dropping a real event with nothing to say it happened.
 #[derive(Debug, Clone, Serialize)]
 pub struct OrphanReactions {
     /// The upstream's id for the message being reacted to. Shown as-is:
-    /// it lives in a different document, so there is no anchor to link.
+    /// there is nothing to link it to.
     pub target_native_id: String,
     pub reactions: Vec<NormalizedReaction>,
 }
@@ -187,7 +190,8 @@ pub struct NormalizedDoc {
     pub markdown_uuid: String,
     pub items: Vec<NormalizedChatItem>,
     /// Empty for every provider that buckets a whole chat into one
-    /// document, which is most of them.
+    /// document, which is most of them, and empty for a period-bucketed
+    /// one whose targets all resolve.
     pub orphan_reactions: Vec<OrphanReactions>,
 }
 

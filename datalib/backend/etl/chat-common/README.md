@@ -88,9 +88,15 @@ worth knowing about before you invent a fourth:
 - **`NormalizedChat::path_prefix`** puts a segment between
   `rendered_md/` and the chat's directory. Beeper's `<network>/`, so
   two upstreams bridged into one stanza stay apart on disk.
-- **`NormalizedDoc::orphan_reactions`** carries reactions whose target
-  message is in a *different* period's document. Any period-bucketed
-  source can produce them; only beeper does today.
+- **`NormalizedDoc::orphan_reactions`** carries reactions to a message
+  the mirror does not have. A period-bucketed provider is expected to
+  file a reaction under its *target's* period rather than its own — a
+  reaction to a March message belongs in the March document however
+  late it arrived, and beeper's parse resolves that against every event
+  in the store. What is left is the case nothing can place: the target
+  was never downloaded. Only beeper produces these today, and the TNG
+  fixture has none, so this is the one path here that nothing
+  exercises.
 
 One `NormalizedChat` per *bucket* rather than per chat is the idiom for
 a period-bucketed source (beeper, signal): attachment bundles are keyed

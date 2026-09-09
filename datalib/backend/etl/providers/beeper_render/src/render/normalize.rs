@@ -91,9 +91,13 @@ fn to_chat(room: &Room, doc: &DocBucket) -> NormalizedChat {
     let items: Vec<NormalizedChatItem> =
         doc.messages.iter().map(|m| to_item(room, doc, m)).collect();
 
-    // Reactions whose target is not one of this bucket's messages: the
-    // message is in another period's document, so they get listed at
-    // the end rather than dropped.
+    // Reactions whose target is not one of this bucket's messages.
+    //
+    // Parse already routes a reaction to its *target's* period bucket,
+    // resolving the target against every event in the store — so this
+    // is not "the message is in another document". It is the case
+    // nothing can place: the target event is not in the store at all,
+    // and parse fell back to filing the reaction under its own period.
     let known: std::collections::HashSet<&str> = doc
         .messages
         .iter()

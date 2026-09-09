@@ -358,13 +358,13 @@ fn render_markdown(
     s
 }
 
-/// Reactions whose target message is in a different document, listed at
-/// the end under the upstream id of what they reacted to.
+/// Reactions the provider could not place on any message in this
+/// document, listed at the end under the upstream id they name.
 fn render_orphan_reactions(s: &mut String, doc: &NormalizedDoc) {
     if doc.orphan_reactions.is_empty() {
         return;
     }
-    s.push_str("---\n\n## Reactions to messages outside this period\n\n");
+    s.push_str("---\n\n## Reactions to messages not in this mirror\n\n");
     for group in &doc.orphan_reactions {
         s.push_str(&format!(
             "- target `{}`:\n",
