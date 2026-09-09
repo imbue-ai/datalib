@@ -95,6 +95,9 @@ impl EventSink for ProgressBusSink {
             // is the one thing a watcher can act on before the step ends, so
             // it reaches the message line. The absolute position stays
             // whatever the step last reported.
+            // Nothing to show: a capability is about what the step
+            // *can* do, not about progress.
+            Event::Capabilities { .. } => {}
             Event::Checkpoint { step, .. } => self.update(step, |a| {
                 a.msg = Some(if a.done > 0 {
                     format!("committed {} so far", a.done)

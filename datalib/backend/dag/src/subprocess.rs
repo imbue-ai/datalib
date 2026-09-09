@@ -162,8 +162,12 @@ pub(crate) async fn run_subprocess(
                     // what the runner does next rather than only what it
                     // displays. Same sink an in-process step calls, so
                     // both kinds of step announce a seal one way.
-                    if let Event::Checkpoint { version, .. } = &ev {
-                        ctx.checkpoint(version);
+                    match &ev {
+                        Event::Checkpoint { version, .. } => ctx.checkpoint(version),
+                        Event::Capabilities { streams_output, .. } => {
+                            ctx.declare_streams_output(*streams_output)
+                        }
+                        _ => {}
                     }
                     sink.emit(&retag(ev, &ctx.step_id))
                 }
@@ -238,6 +242,10 @@ fn retag(ev: Event, id: &str) -> Event {
             error,
         },
         Event::Checkpoint { version, .. } => Event::Checkpoint { step: id, version },
+        Event::Capabilities { streams_output, .. } => Event::Capabilities {
+            step: id,
+            streams_output,
+        },
         Event::ProgressLength { total, .. } => Event::ProgressLength { step: id, total },
         Event::ProgressInc { delta, .. } => Event::ProgressInc { step: id, delta },
         Event::ProgressMessage { msg, .. } => Event::ProgressMessage { step: id, msg },
@@ -360,6 +368,72 @@ mod tests {
             matches!(e, Event::Log { level: LogLevel::Warn, msg, .. } if msg.contains("no version"))
         });
         assert!(warned, "the step author needs to hear about it");
+    }
+
+    #[tokio::test]
+    async fn a_subprocess_declares_streaming_on_the_wire_and_a_consumer_runs_early() {
+        let root = tempfile::tempdir().unwrap();
+        let passes = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        // A real child process: the capability and the checkpoints cross
+        // stdout as NDJSON, which is the path a `datalib-step render` takes.
+        // It re-announces until the consumer has run, because a checkpoint
+        // arriving while the consumer is busy is dropped by design.
+        let producer = StepSpec::new(
+            "slack/rendered_md",
+            sh(r#"
+                out="$DATALIB_DAG_DATA_ROOT/slack/rendered_md"
+                mkdir -p "$out"
+                echo rows > "$out/data.md"
+                echo '{"event":"capabilities","step":"me","streams_output":true}'
+                i=0
+                while [ $i -lt 200 ]; do
+                    echo '{"event":"checkpoint","step":"me","version":"v1"}'
+                    if [ -f "$DATALIB_DAG_DATA_ROOT/consumed" ]; then break; fi
+                    sleep 0.05
+                    i=$((i+1))
+                done
+                echo '{"event":"outcome","outputs":[{"path":"slack/rendered_md","version":"final"}]}'
+            "#),
+        );
+
+        let consumer = {
+            let passes = passes.clone();
+            StepSpec::new(
+                "unified_index/grid",
+                StepRun::in_process(move |ctx: crate::step::StepCtx| {
+                    let passes = passes.clone();
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("index.txt"), "x").unwrap();
+                        passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        // Tells the producer it may stop re-announcing.
+                        std::fs::write(ctx.data_root.join("consumed"), "1").unwrap();
+                        Ok(crate::step::StepOutcome::default())
+                    }
+                }),
+            )
+            .input("slack/rendered_md")
+        };
+
+        let g = Graph::build(vec![producer, consumer]).unwrap();
+        let rep = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            Runner::new(root.path()).run(&g),
+        )
+        .await
+        .expect("a declared-streaming subprocess must not deadlock")
+        .unwrap();
+
+        assert!(rep.all_ok(), "{rep:#?}");
+        // One early pass driven by the wire checkpoint, plus the final
+        // pass for the version no checkpoint reported.
+        assert!(
+            passes.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "the consumer never ran early: the capability or the checkpoint \
+             did not survive the subprocess boundary"
+        );
     }
 
     #[tokio::test]

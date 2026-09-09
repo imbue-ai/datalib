@@ -69,6 +69,16 @@ impl Emitter {
         self.line(&serde_json::Value::Object(m));
     }
 
+    /// Say whether this step's output may be read while it is being
+    /// written. The runner uses it to decide whether a checkpoint may
+    /// dispatch a consumer early; see `Event::Capabilities`.
+    pub fn declare_streams_output(&self, streams_output: bool) {
+        self.event(&Event::Capabilities {
+            step: self.step.clone(),
+            streams_output,
+        });
+    }
+
     pub fn progress(&self) -> Progress {
         Progress::new(Arc::new(EmitterSink {
             emitter: self.clone(),

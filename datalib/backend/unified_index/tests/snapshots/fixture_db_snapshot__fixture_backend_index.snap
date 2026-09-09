@@ -1074,7 +1074,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index: markdowns_read=76 markdowns_loaded=76 markdowns_skipped=0 markdowns_removed=0 rows_inserted=345"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=76 markdowns_read=76 markdowns_removed=0 markdowns_skipped=0 rows_inserted=345"
     }
   ],
   "grid_rows": [

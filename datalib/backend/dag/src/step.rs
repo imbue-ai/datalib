@@ -163,17 +163,20 @@ impl std::fmt::Debug for StepRun {
 /// [`CheckpointSink::disconnected`] is a working sink that drops
 /// everything — which is what a step invoked outside the scheduler gets.
 #[derive(Clone, Default, Debug)]
-pub struct CheckpointSink(Option<tokio::sync::mpsc::UnboundedSender<Checkpoint>>);
+pub struct CheckpointSink(Option<tokio::sync::mpsc::UnboundedSender<StepSignal>>);
 
-/// A producer sealed its output at `version`.
+/// Something a running step tells the scheduler, as opposed to the event
+/// stream. These change what the runner *does* next, not just what it shows.
 #[derive(Debug, Clone)]
-pub struct Checkpoint {
-    pub step: StepId,
-    pub version: String,
+pub enum StepSignal {
+    /// What this step's sink can do. Sent once, as the step starts.
+    Capabilities { step: StepId, streams_output: bool },
+    /// The step sealed its output at `version` and is still running.
+    Checkpoint { step: StepId, version: String },
 }
 
 impl CheckpointSink {
-    pub fn new(tx: tokio::sync::mpsc::UnboundedSender<Checkpoint>) -> Self {
+    pub fn new(tx: tokio::sync::mpsc::UnboundedSender<StepSignal>) -> Self {
         Self(Some(tx))
     }
 
@@ -183,14 +186,26 @@ impl CheckpointSink {
         Self(None)
     }
 
+    pub fn send(&self, step: &StepId, version: &str) {
+        self.signal(StepSignal::Checkpoint {
+            step: step.clone(),
+            version: version.to_string(),
+        });
+    }
+
+    /// Say what this step's sink can do. See [`StepSignal::Capabilities`].
+    pub fn declare(&self, step: &StepId, streams_output: bool) {
+        self.signal(StepSignal::Capabilities {
+            step: step.clone(),
+            streams_output,
+        });
+    }
+
     /// Best-effort. A closed receiver means the run is already tearing
     /// down, and a producer should not fail because nobody is listening.
-    pub fn send(&self, step: &StepId, version: &str) {
+    fn signal(&self, s: StepSignal) {
         if let Some(tx) = self.0.as_ref() {
-            let _ = tx.send(Checkpoint {
-                step: step.clone(),
-                version: version.to_string(),
-            });
+            let _ = tx.send(s);
         }
     }
 }
@@ -237,6 +252,13 @@ impl StepCtx {
     /// [`StepSpec::streams_output`].
     pub fn checkpoint(&self, version: &str) {
         self.checkpoint.send(&self.step_id, version);
+    }
+
+    /// Announce whether this step's output may be read while it is being
+    /// written. Subprocess steps say it on the wire; the scheduler forwards
+    /// it here. See [`StepSpec::streams_output`].
+    pub fn declare_streams_output(&self, streams: bool) {
+        self.checkpoint.declare(&self.step_id, streams);
     }
 }
 

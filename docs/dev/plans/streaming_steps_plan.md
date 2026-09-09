@@ -502,6 +502,48 @@ and zero rows means zero rows — which is P1 for doltlite, spelled out. It also
 pinnable, empty input to be tested against, which is the case nobody
 writes a fixture for.
 
+## Sample what you consumed before you consume it
+
+The rule that the whole design's incrementality rests on, and the one that
+cost a source before it was written down:
+
+> A step's record of what it consumed must be sampled **when it is
+> dispatched**, never read back from live state when it finishes.
+
+Without streaming the two are the same, because every pass runs after all
+its producers are terminal and nothing moves underneath it. A streaming
+pass runs *while its producers are still going*, and that is exactly when
+the difference bites: a producer can finish during the pass, and a record
+taken at the end then names a version the pass never read. The consumer's
+next pass finds nothing changed, is skipped up to date, and that
+producer's documents never arrive. In the TNG fixture that silently
+dropped a whole source, two runs in six.
+
+**Which direction to err.** Over-claiming loses data, silently and
+permanently — nothing downstream ever looks wrong, there is just less of
+it. Under-claiming costs one redundant pass. So when in doubt, record
+less than you think you consumed.
+
+**How it is enforced.** The snapshot travels *with the task*: it is taken
+at dispatch, moved into the spawned future, and handed back with the
+result. The completion path has it in hand and has no reason to consult
+the live map — and if someone reverts to consulting it, the carried value
+becomes unused and the build fails on `unused variable: consumed`. That
+is the guard worth having, because this is a mistake that reads as
+correct.
+
+`a_pass_may_not_claim_a_producer_that_finished_after_it_started` forces
+the interleaving rather than racing for it: the consumer reads before its
+late producer is unblocked, then stays alive until that producer has
+finished. It fails deterministically without the fix.
+
+**The same shape lives anywhere a cursor is written.** A render cursor, a
+`source_cursors` row, a fetch checkpoint — each records "I have consumed
+up to here", and each must name a point sampled before the work, not
+after. The ones in this tree do: `grid_index` advances a source cursor to
+the commit it *pinned* before reading, and the render cursor is written
+after the work but names the head the scan sampled before it.
+
 ## Producer side: chunked commits
 
 The seam already exists in both places:
@@ -773,9 +815,32 @@ Each of these is a reviewable PR that leaves the tree green.
    deadlocked, and precisely in the case the feature exists for, with
    every ordinary slot busy.
 
-   `datalib-step` does not declare the capability yet, so nothing
-   streams in a real pipeline. Turning it on is the next step, and it
-   wants the latency measured before it widens.
+   **Turned on for `render -> grid_index`.** A render step declares the
+   capability on its event stream (`Event::Capabilities`, announced at
+   start) and seals at document boundaries on the user's cadence.
+
+   Announced rather than probed. The plan said to run each command a
+   second time with `--capabilities`; a third-party step that ignores
+   unknown flags would then start its real work. A step is already going
+   to run, so it says this on the way past — one event, no second
+   process.
+
+   **A producer finishing is the last checkpoint.** Waiting for
+   `remaining_deps` to reach zero meant a source that finished early
+   contributed nothing until the slowest one was done — which for a
+   mirror with one big source is nearly the whole run. It matters more
+   than the checkpoint path does, because a render that finishes inside
+   the cadence never checkpoints at all.
+
+   That is what makes it visible in the TNG fixture, where `grid_index`
+   went from one pass over 76 documents to five passes of 2, 21, 22, 25
+   and 6 — the same 76 documents and the same 345 rows, delivered in
+   installments. The cost is on the other side of the ledger: the index
+   store's `dolt_log` went from 2 commits to 6.
+
+   **What is still not measured is latency.** The fixture shows work
+   arriving incrementally; it does not say what that is worth on a real
+   mirror, which is what should be known before `download -> render`.
 7. **`download → render`.** Turn the capability on for the second edge.
 8. **The UI frame.**
 

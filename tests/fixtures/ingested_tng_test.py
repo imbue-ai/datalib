@@ -918,11 +918,20 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # happened *after* paying to read every document from every
         # store. Asserting on it would pass either way and prove
         # nothing.
+        # Every pass, not one pass: since `render` streams, a producer
+        # finishing can dispatch `grid_index` before its siblings are done,
+        # so a run has one pass per source whose version moved plus the
+        # final one. What must hold either way is that each of them reads
+        # nothing — that is the claim, and it does not depend on how many
+        # times the step was dispatched.
+        reads2 = self._grid_index_reads(run2.stderr)
+        self.assertTrue(reads2, "run 2 recorded no grid_index pass at all")
         self.assertEqual(
-            self._grid_index_reads(run2.stderr),
-            [0],
-            "run 2's grid_index must read 0 documents: nothing changed, "
-            "so every source's dolt_diff should have come back empty",
+            set(reads2),
+            {0},
+            "every one of run 2's grid_index passes must read 0 documents: "
+            "nothing changed, so every source's dolt_diff should have come "
+            f"back empty (got {reads2})",
         )
         self.assertEqual(
             self._signal_cursor(), cursor1, "run 2 must not disturb signal's cursor"
