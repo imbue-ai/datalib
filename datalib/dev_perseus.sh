@@ -52,27 +52,35 @@ cat > "$ROOT/config.toml" <<EOF
 data_root = "$ROOT"
 binary_dir = "$BIN_DIR"
 
+[[groups]]
+id = "perseus"
+type = "perseus"
+
 [[steps]]
-id = "perseus.render"
+group = "perseus"
+function = "rendered_md"
 command = "datalib-step render perseus"
-outputs = ["perseus/rendered_md"]
 [steps.params.common]
 input_path = "$PERSEUS_FIXTURE_DIR"
 
-[[steps]]
-id = "grid_index"
-command = "datalib-step grid_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/grid"]
+[[groups]]
+id = "unified_index"
 
 [[steps]]
-id = "qmd_index"
+group = "unified_index"
+function = "grid"
+command = "datalib-step grid_index"
+inputs = ["perseus/rendered_md"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd"
 command = "datalib-step qmd_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/qmd"]
+inputs = ["perseus/rendered_md"]
 
 # Serves the grid, the document view and the document picker.
 [[applets]]
+group = "unified_index"
 id = "unified_index"
 command = "datalib-applet unified_index"
 EOF

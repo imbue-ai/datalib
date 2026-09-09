@@ -67,7 +67,7 @@ fi
 if [[ ! -f "$DATALIB_MANUAL_E2E_DIR/dag.toml" ]]; then
   echo "error: no dag.toml in $DATALIB_MANUAL_E2E_DIR" >&2
   echo "       that dir must hold the DAG-format config (dag.toml), sources/, and snapshots/." >&2
-  echo "       Pre-TOML dir? Convert once: datalib-migrate-config \"$DATALIB_MANUAL_E2E_DIR/dag.yaml\" -o \"$DATALIB_MANUAL_E2E_DIR/dag.toml\"" >&2
+  echo "       Written before [[groups]]? Rewrite once: datalib-migrate-config \"$DATALIB_MANUAL_E2E_DIR/dag.toml\" --force" >&2
   exit 1
 fi
 
@@ -116,8 +116,9 @@ case "${1:-}" in
     # deny_unknown_fields and so are most download configs, but `email`,
     # `fsindex`, `linkedin` and `sms_backup_restore` are permissive — a
     # misplaced knob on those parses clean here and fails during the live run.
-    exec bazel test //datalib/backend/migrate_config:config_examples_test \
+    exec bazel test //datalib/backend/datalib_step:datalib_step_unittests \
       --test_arg=--ignored \
+      --test_arg=manual_e2e_config_loads_and_plans \
       --test_env=DATALIB_MANUAL_E2E_DIR \
       --test_output=all \
       --nocache_test_results

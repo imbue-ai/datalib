@@ -124,29 +124,3 @@ async fn init_never_clobbers_an_existing_config() {
         mine
     );
 }
-
-/// A root with a pre-TOML `config.yaml` is a migration waiting to
-/// happen, not a fresh install. Writing an empty `config.toml` beside
-/// it would silence the migration hint (`legacy_yaml_path` goes quiet
-/// as soon as a TOML config exists) and leave the user with an empty
-/// library plus a file full of sources nothing reads.
-#[tokio::test]
-async fn init_refuses_a_root_that_still_needs_migrating() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("config.yaml"), "sources: []\n").unwrap();
-    let app = router(state(tmp.path()).await);
-
-    let (status, init) = call(&app, "POST", "/api/config/init").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(init["created"], false, "{init:?}");
-    let msg = init["error"].as_str().expect("a reason, not silence");
-    assert!(msg.contains("config.yaml"), "{msg}");
-    // The exact program string is resolved (absolute path inside a
-    // bundle, bare name otherwise), so match the stem, not the whole
-    // command.
-    assert!(msg.contains("migrate"), "{msg}");
-    assert!(
-        !tmp.path().join("config.toml").exists(),
-        "config.toml must not have been written"
-    );
-}

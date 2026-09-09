@@ -1,9 +1,11 @@
 // Read-only view of the `[[steps]]` tables in a DAG config.toml text,
 // for the Sources table that sits next to the raw editor. A source is
 // any step with no declared `inputs` — a fringe step, exactly what the
-// runner's `--sync` can target — shown by its step id. Nothing about
-// the step's command matters here; the derivation is fully generic
-// (and mirrors the backend's in http/src/lib.rs `load_dag_config`).
+// runner's `--sync` can target — shown by its step id, composed as
+// `<group>/<function>` for a grouped step and written for a custom one.
+// Nothing about the step's command matters here; the derivation is
+// fully generic (and mirrors the backend's in http/src/lib.rs
+// `load_dag_config`).
 // Each row carries the character range covering its step entry so the
 // table's "Locate config" button can select it in the editor. The
 // text itself is the single source of truth — there is no fragment
@@ -12,7 +14,7 @@
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 
 export type SourceRow = {
-  /// The step's `id` ("" for malformed entries).
+  /// The step's id ("" for malformed entries).
   id: string;
   /// [start, end) character offsets covering the step entry.
   start: number;
@@ -62,8 +64,17 @@ export function listSources(text: string): SourceRow[] {
     // own; it gets a zero range, which the UI reads as "not locatable"
     // rather than selecting some unrelated span.
     const [start, end] = ranges.get(i) ?? [0, 0];
-    const id = (step as { id?: unknown } | null)?.id;
-    rows.push({ id: typeof id === "string" ? id : "", start, end });
+    rows.push({ id: stepId(step), start, end });
   });
   return rows;
+}
+
+/// The id the loader composes for a step: `<group>/<function>`, else the
+/// written `id`, else "" for an entry that declares neither.
+function stepId(step: unknown): string {
+  const t = step as { id?: unknown; group?: unknown; function?: unknown } | null;
+  if (typeof t?.group === "string" && typeof t.function === "string") {
+    return `${t.group}/${t.function}`;
+  }
+  return typeof t?.id === "string" ? t.id : "";
 }

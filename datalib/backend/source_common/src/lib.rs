@@ -1,5 +1,5 @@
 //! Schema-only foundation crate shared by every provider `*-config`
-//! crate (and by the retired stanza schema in `migrate_config`).
+//! crate.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

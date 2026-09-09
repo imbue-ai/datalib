@@ -1,9 +1,9 @@
 
 
-Configs here are TOML, in the steps format — each step is a
-`[[steps]]` table with an explicit `command`, and edges are derived
-from artifact paths. See the header comment of `dag_example.toml` and
-`docs/dev/step_protocol.md`.
+Configs here are TOML: a `[[groups]]` entry per source, `[[steps]]`
+tables declared as `group` + `function` with an explicit `command`, and
+edges from each step's declared `inputs`. See the header comment of
+`dag_example.toml` and `docs/dev/step_protocol.md`.
 
 ## Running a config
 
@@ -32,6 +32,6 @@ need to point the runner at it by hand — `datalib/backend/dag/manual_e2e_run.s
 does that, and `--config` validates it offline. See
 [`/docs/dev/testing.md`](/docs/dev/testing.md).
 
-That config predates the TOML switch: convert it once with
-`datalib-migrate-config <path>/dag.yaml -o <path>/dag.toml` (and repoint
-`manual_e2e_run.sh`), since `datalib-dag` no longer reads YAML.
+If that config predates `[[groups]]`, rewrite it once with
+`datalib-migrate-config <path>/dag.toml --force`; the original is kept
+beside it as `dag.toml.orig`.

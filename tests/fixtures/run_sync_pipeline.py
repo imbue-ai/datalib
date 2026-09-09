@@ -310,12 +310,19 @@ def main() -> int:
         render_params_line = (
             f"\nparams = {_toml_value(render_params)}" if render_params else ""
         )
-        # A step's id is the tree it writes, so there is no `outputs`.
+        # One group per source; each step is `group` + `function`, and its
+        # id — the tree it writes — is composed from the two.
+        group_block = f"""[[groups]]
+id = "{name}"
+type = "{type_str}"
+
+"""
         download_block = (
             ""
             if name in PRESEEDED_RAW
             else f"""[[steps]]
-id = "{name}/raw"
+group = "{name}"
+function = "raw"
 command = "datalib-step download {type_str}"
 params = {params}
 
@@ -326,17 +333,23 @@ params = {params}
         # makes it a fringe step the runner always runs.
         inputs_line = "" if name in PRESEEDED_RAW else f'\ninputs = ["{name}/raw"]'
         steps.append(
-            download_block
+            group_block
+            + download_block
             + f"""[[steps]]
-id = "{name}/rendered_md"
+group = "{name}"
+function = "rendered_md"
 command = "datalib-step render {type_str}"{inputs_line}{render_params_line}"""
         )
     # The fan-in names its inputs; there is no glob to stand in for
     # "every render step".
     rendered = ", ".join(f'"{n}/rendered_md"' for n in sources)
     steps.append(
-        f"""[[steps]]
-id = "unified_index/grid"
+        f"""[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid"
 command = "datalib-step grid_index"
 inputs = [{rendered}]"""
     )

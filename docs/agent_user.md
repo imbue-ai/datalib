@@ -10,10 +10,11 @@ codebase itself, see [`AGENTS.md`](../AGENTS.md).
 ## The mental model
 
 Everything lives under one **data root** directory. A sync is a DAG of
-steps run by `datalib-dag`: per source a `<name>.download` step (fetch
-raw data) and a `<name>.render` step (raw → markdown + a per-source
-index database), then two shared fan-in steps —
-`grid_index` (SQL index) and `qmd_index` (semantic search index):
+steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
+`<group>/raw` step (fetch raw data) and a `<group>/rendered_md` step
+(raw → markdown + a per-source index database), then two shared fan-in
+steps under the `unified_index` group — `grid` (SQL index) and `qmd`
+(semantic search index):
 
 ```
 <data_root>/
@@ -48,8 +49,8 @@ by the http gateway), `latchkey-curl-dispatch` +
 see "Reading the mirrored data" below), `datalib-fsindex` (the
 directory-tree scanner, also reachable as a step) and
 `datalib-dirtree-diff` (diffs two of its scans into one HTML page),
-and `datalib-migrate-config` (one-shot conversion of a pre-TOML
-`config.yaml`; see below). The authoritative list is the `:dist`
+and `datalib-migrate-config` (rewrites a `config.toml` from a retired
+shape; see below). The authoritative list is the `:dist`
 filegroup in
 [`datalib/backend/BUILD.bazel`](/datalib/backend/BUILD.bazel).
 End-to-end setup walkthrough:
@@ -57,23 +58,23 @@ End-to-end setup walkthrough:
 
 ## Configuring sources
 
-`<data_root>/config.toml` is TOML: one `[[steps]]` table per step,
-declaring the steps directly; edges are derived from input/output
-paths, never written by hand. Top-level keys (`data_root`,
-`binary_dir`) go above the first `[[steps]]`, and a step's `params`
-sub-tables come after its plain keys — a `[…]` header ends the table it
-appears in.
+`<data_root>/config.toml` is TOML: a `[[groups]]` entry per source (an
+`id`, a `name`, a `type`), one `[[steps]]` table per step declared as
+`group` + `function` — its id, `<group>/<function>`, is composed rather
+than written — and `inputs` naming the steps it reads by that id.
+Top-level keys (`data_root`, `binary_dir`) go above the first `[[…]]`
+header, and a step's `params` sub-tables come after its plain keys — a
+`[…]` header ends the table it appears in.
 
 - **Complete commented example:**
   [`configs/dag_example.toml`](../configs/dag_example.toml).
 - **Per-source knobs and step pairs**:
   [`docs/user/config_examples/all_sources.toml`](user/config_examples/all_sources.toml)
-  — one commented `<name>.download` + `<name>.render` step pair per
-  supported source, in the steps format, ready to copy. (Two pre-TOML
-  `config.yaml` formats still exist in the wild — a YAML steps config
-  and the older stanza-based `sources:` one. Neither is read by
-  anything any more: convert once with `datalib-migrate-config
-  <data_root>`, which is the only program that still knows them.)
+  — one commented group with its `raw` + `rendered_md` step pair per
+  supported source, ready to copy. (A `config.toml` written before
+  `[[groups]]` existed is rewritten once with `datalib-migrate-config
+  <data_root> --force`, the only program that still knows that shape.
+  Pre-TOML `config.yaml` roots are set up again from the app.)
 - **Credentials**: web-API sources authenticate through
   [`latchkey`](https://github.com/imbue-ai/latchkey). Per-source
   walkthroughs for getting cookies/tokens/exports:
@@ -234,8 +235,8 @@ Pick the surface that fits the question:
   <data_root>/config.toml` lists every problem with a line number;
   `PUT /api/config` (or the Setup tab) returns the same list in
   `diagnostics` and writes nothing. A data root still holding a
-  pre-TOML `config.yaml` reads as unconfigured — run
-  `datalib-migrate-config <data_root>` first.
+  pre-TOML `config.yaml` reads as unconfigured — set it up again from
+  the app.
 - **A step that silently stopped running**: check `diagnostics` on
   `GET /api/config`, or `--check`. A config with one unusable entry
   still loads — that entry is dropped and everything else runs — so a

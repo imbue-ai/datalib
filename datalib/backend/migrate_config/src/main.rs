@@ -4,21 +4,23 @@
 // a legitimate exception to the workspace-wide macro ban.
 #![allow(clippy::disallowed_macros)]
 
-//! `datalib-migrate-config` — convert a pre-TOML `config.yaml` into the
-//! `config.toml` the pipeline reads today.
+//! `datalib-migrate-config` — rewrite a `config.toml` from a shape the
+//! runner no longer accepts into the one it does.
 
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 
 const USAGE: &str = "\
-usage: datalib-migrate-config <data-root|config.yaml> [-o OUT] [--stdout] [--force]
+usage: datalib-migrate-config <data-root|config.toml> [-o OUT] [--stdout] [--force]
 
-  <data-root|config.yaml>  A data root (its config.yaml is used) or the
-                           legacy config file itself.
+  <data-root|config.toml>  A data root (its config.toml is used) or the
+                           config file itself.
   -o, --output OUT         Write here instead of <input dir>/config.toml.
   --stdout                 Print the converted config; write nothing.
-  --force                  Overwrite the output file if it exists.
+  --force                  Overwrite the output file if it exists. Rewriting
+                           a config in place keeps the original beside it as
+                           config.toml.orig.
   -h, --help               Show this message.";
 
 fn main() -> Result<()> {
@@ -65,10 +67,7 @@ fn run() -> Result<()> {
         // The data-root case is the one worth explaining: the user
         // pointed at a directory and we looked inside it.
         if arg.is_dir() {
-            bail!(
-                "no legacy config at {} — nothing to migrate",
-                input.display()
-            );
+            bail!("no config at {} — nothing to migrate", input.display());
         }
         bail!("{} does not exist", input.display());
     }
@@ -91,12 +90,28 @@ fn run() -> Result<()> {
             out.display()
         );
     }
+    let in_place = same_file(&input, &out);
+    if in_place {
+        let orig = out.with_extension("toml.orig");
+        std::fs::copy(&input, &orig)
+            .with_context(|| format!("keep the original as {}", orig.display()))?;
+        eprintln!("kept the original as {}", orig.display());
+    }
     std::fs::write(&out, &converted).with_context(|| format!("write {}", out.display()))?;
 
     eprintln!("migrated {} -> {}", input.display(), out.display());
-    eprintln!(
-        "Review it, then remove {} once you're happy.",
-        input.display()
-    );
+    if !in_place {
+        eprintln!(
+            "Review it, then remove {} once you're happy.",
+            input.display()
+        );
+    }
     Ok(())
+}
+
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }

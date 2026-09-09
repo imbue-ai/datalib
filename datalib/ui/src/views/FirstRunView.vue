@@ -12,12 +12,6 @@ const router = useRouter();
 const busy = ref(false);
 const error = ref<string | null>(null);
 
-// A pre-TOML config.yaml in this root is not a fresh install — it's a
-// migration waiting to happen, and writing an empty config.toml beside
-// it would strand the sources it declares. The backend refuses too;
-// this just doesn't offer the button.
-const legacy = props.config.legacy_yaml_path;
-
 async function initialize() {
   busy.value = true;
   error.value = null;
@@ -43,48 +37,34 @@ async function initialize() {
 <template>
   <section class="first-run">
     <div class="card">
-      <template v-if="legacy">
-        <h2>This folder holds an older config</h2>
-        <p>
-          <code>{{ legacy }}</code> is a pre-TOML config. Datalib reads
-          <code>config.toml</code> now, so this folder has to be converted
-          before the app can open it — starting an empty library here would
-          leave the sources in that file unread.
-        </p>
-        <p class="label">Run this once, then reopen the app:</p>
-        <pre class="cmd">{{ config.legacy_migrate_cmd }}</pre>
-      </template>
-
-      <template v-else>
-        <h2>Set up a data library</h2>
-        <p>
-          This folder is empty — there is no data library in it yet:
-          <code class="root">{{ config.path }}</code>
-        </p>
-        <p>Initializing writes that one config file, and nothing else. It:</p>
-        <ul>
-          <li>
-            declares the two index steps every source feeds — the grid index
-            and the semantic vector index
-          </li>
-          <li>
-            declares the <code>Unified Index</code> applet, which is what
-            actually serves the table, search and document views
-          </li>
-          <li>
-            adds <strong>no data sources</strong>: nothing is downloaded, no
-            account is contacted, and nothing outside this folder is touched.
-          </li>
-        </ul>
-        <p>
-          Then you pick your first data source — a Slack export, a Claude
-          export, a folder of PDFs — on the Manage screen this opens next.
-        </p>
-        <p v-if="error" class="error" role="alert">{{ error }}</p>
-        <button class="primary" :disabled="busy" @click="initialize">
-          {{ busy ? "Initializing…" : "Initialize empty data library" }}
-        </button>
-      </template>
+      <h2>Set up a data library</h2>
+      <p>
+        This folder is empty — there is no data library in it yet:
+        <code class="root">{{ config.path }}</code>
+      </p>
+      <p>Initializing writes that one config file, and nothing else. It:</p>
+      <ul>
+        <li>
+          declares the two index steps every source feeds — the grid index
+          and the semantic vector index
+        </li>
+        <li>
+          declares the <code>Unified Index</code> applet, which is what
+          actually serves the table, search and document views
+        </li>
+        <li>
+          adds <strong>no data sources</strong>: nothing is downloaded, no
+          account is contacted, and nothing outside this folder is touched.
+        </li>
+      </ul>
+      <p>
+        Then you pick your first data source — a Slack export, a Claude
+        export, a folder of PDFs — on the Manage screen this opens next.
+      </p>
+      <p v-if="error" class="error" role="alert">{{ error }}</p>
+      <button class="primary" :disabled="busy" @click="initialize">
+        {{ busy ? "Initializing…" : "Initialize empty data library" }}
+      </button>
     </div>
   </section>
 </template>

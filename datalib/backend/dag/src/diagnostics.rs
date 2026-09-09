@@ -47,14 +47,16 @@ impl Severity {
     }
 }
 
-/// Which kind of `[[…]]` array an entry came from. Steps and applets
-/// are separate namespaces — an applet writes no artifacts, so an
-/// applet id and a step id never collide and are never checked against
-/// each other. (The scaffold relies on this: its `unified_index`
-/// applet sits beside its `unified_index/grid` step.)
+/// Which kind of `[[…]]` array an entry came from. The three are
+/// separate namespaces: a group id is one path segment, a step id is
+/// `<group>/<function>` or a verbatim path, and an applet writes no
+/// artifacts at all — so none is ever checked against another. (The
+/// scaffold relies on this: its `unified_index` group, its
+/// `unified_index` applet and its `unified_index/grid` step coexist.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {
+    Group,
     Step,
     Applet,
 }
@@ -62,6 +64,7 @@ pub enum EntryKind {
 impl EntryKind {
     pub fn label(self) -> &'static str {
         match self {
+            EntryKind::Group => "group",
             EntryKind::Step => "step",
             EntryKind::Applet => "applet",
         }
@@ -72,13 +75,20 @@ impl EntryKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EntryRef {
     pub kind: EntryKind,
-    /// Position in the `[[steps]]` / `[[applets]]` array, 0-based —
-    /// the only identity a malformed entry has.
+    /// Position in the `[[groups]]` / `[[steps]]` / `[[applets]]` array,
+    /// 0-based — the only identity a malformed entry has.
     pub index: Option<usize>,
     pub id: Option<String>,
 }
 
 impl EntryRef {
+    pub fn group(index: usize, id: Option<String>) -> Self {
+        EntryRef {
+            kind: EntryKind::Group,
+            index: Some(index),
+            id,
+        }
+    }
     pub fn step(index: usize, id: Option<String>) -> Self {
         EntryRef {
             kind: EntryKind::Step,

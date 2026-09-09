@@ -1,20 +1,14 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# `datalib-migrate-config` — the one-shot converter from a pre-TOML
-# `config.yaml` to the `config.toml` the pipeline reads today.
+# `datalib-migrate-config` — rewrites a `config.toml` from a shape the
+# runner no longer accepts into the one it does.
 #
-# This package is where every legacy config schema lives, and the only
-# place in the tree that still links a YAML parser. Keeping it out of
-# `datalib-dag` / `datalib-http` is the point: the shipping programs
-# accept exactly one format, so a shape we stopped writing can't widen
-# what a running pipeline will load.
-#
-# Two legacy formats, told apart by content:
-#   * the current steps schema written in YAML — a reserialization;
-#   * the retired stanza-based `sources:` schema (`legacy_stanza.rs`) —
-#     a real translation into download/render step pairs. Each arm of
-#     its `SourceConfig` is a newtype over a provider `*_config` crate
-#     (issue #41: provider config defined exactly once).
+# This package is the one place a retired config shape is understood.
+# Keeping it out of `datalib-dag` / `datalib-http` is the point: the
+# shipping programs accept exactly one shape, so a shape we stopped
+# writing can't widen what a running pipeline will load. It holds one
+# rewrite at a time (today: ungrouped steps → `[[groups]]`); the next
+# one replaces it.
 rust_library(
     name = "datalib_migrate_config",
     srcs = glob(
@@ -25,34 +19,9 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/dag:datalib_dag",
-        "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
-        "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
-        "//datalib/backend/etl/providers/carddav_config:datalib_etl_carddav_config",
-        "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",
-        "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
-        "//datalib/backend/etl/providers/fsindex_config:datalib_etl_fsindex_config",
-        "//datalib/backend/etl/providers/lightroom_config:datalib_etl_lightroom_config",
-        "//datalib/backend/etl/providers/github_config:datalib_etl_github_config",
-        "//datalib/backend/etl/providers/gitlab_config:datalib_etl_gitlab_config",
-        "//datalib/backend/etl/providers/google_takeout_config:datalib_etl_google_takeout_config",
-        "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
-        "//datalib/backend/etl/providers/notion_config:datalib_etl_notion_config",
-        "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",
-        "//datalib/backend/etl/providers/media_config:datalib_etl_media_config",
-        "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",
-        "//datalib/backend/etl/providers/signal_config:datalib_etl_signal_config",
-        "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
-        "//datalib/backend/etl/providers/sms_backup_restore_config:datalib_etl_sms_backup_restore_config",
-        "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",
-        "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
-        "//datalib/backend/source_common:datalib_source_common",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
-        "@datalib_crates//:serde_yaml",
-        "@datalib_crates//:thiserror",
         "@datalib_crates//:toml",
     ],
 )
@@ -76,40 +45,5 @@ rust_binary(
     deps = [
         ":datalib_migrate_config",
         "@datalib_crates//:anyhow",
-    ],
-)
-
-# Validates the checked-in `docs/user/config_examples/*.toml` (the
-# current TOML steps format): each file must load + graph-build like the
-# runner would, every `datalib-step download <type>` step's params must
-# round-trip into `SourceConfig`, and render params must match the
-# provider's `<P>RenderConfig` — so the docs can't drift from the real
-# schemas.
-#
-# It lives in this package because `SourceConfig` does: the retired
-# stanza envelope is dead, but its `type:`-tagged union is still the one
-# mapping from a source type string to that provider's config schema,
-# which is exactly what validating documented examples needs.
-rust_test(
-    name = "config_examples_test",
-    srcs = ["tests/config_examples.rs"],
-    data = [
-        "//configs:dag_example.toml",
-        "//docs/user/config_examples:all_sources.toml",
-        "//docs/user/config_examples:claude_only.toml",
-        "//docs/user/config_examples:sample_config.toml",
-    ],
-    edition = "2021",
-    deps = [
-        ":datalib_migrate_config",
-        "//datalib/backend/dag:datalib_dag",
-        "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
-        "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
-        "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
-        "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",
-        "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",
-        "//datalib/backend/etl/providers/signal_config:datalib_etl_signal_config",
-        "@datalib_crates//:runfiles",
-        "@datalib_crates//:toml",
     ],
 )

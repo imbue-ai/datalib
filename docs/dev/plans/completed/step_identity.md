@@ -205,6 +205,16 @@ avoided rather than handled.
 
 ## UI: ungrouping, and the chained wizard
 
+**Reversed by [`groups_and_functions.md`](../groups_and_functions.md)
+(2026-09-09).** This section argued that a source should not be a
+grouping because the grouping was never a config entity; that plan made
+it one — a `[[groups]]` entry, with a step declared as `group` +
+`function` and its id composed from the two — and the reasoning below
+about the wizard's `stemOf` split is what its slice 4 deletes. The
+per-step rows, the chained render dialog and the fan-in wiring described
+here are what the tree has until that slice lands, with the name and the
+type now read off the group. Kept as written for the record.
+
 Sources stop being a grouping. Every `[[steps]]` entry is one row, so a
 render step is independently editable, runnable, and visible in the
 disk-usage column — which is a better picture of where bytes go than one

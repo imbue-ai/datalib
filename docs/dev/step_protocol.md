@@ -14,17 +14,30 @@ poisoning) is in `pipeline_dag_architecture.md`.
 
 ## The config entry
 
-The config is TOML; each step is one `[[steps]]` table.
+The config is TOML. A step is one `[[steps]]` table, filed under a
+`[[groups]]` entry: the step names its group and the function it
+performs there, and its id — the one tree it writes — is composed as
+`<group>/<function>` rather than written.
 
 ```toml
+[[groups]]
+id = "weather"
+name = "Weather at SFO"
+
 [[steps]]
-id = "weather.download"
+group = "weather"
+function = "raw"
 command = "fetch-weather --station KSFO"   # split shell-style
-outputs = ["weather/raw"]
 env = { WEATHER_DEBUG = "1" }              # extra child environment
 [steps.params]                             # arbitrary TOML, yours
 units = "metric"
 ```
+
+That step's id is `weather/raw`, so it writes `<data_root>/weather/raw/`
+and another step reads it with `inputs = ["weather/raw"]`. A step
+outside any group is also legal — `id = "weather/raw"` written
+verbatim, no `group` or `function` — and is the shape for a one-off
+executable that belongs to no source.
 
 Sub-tables like `[steps.params]` must come after the step's plain keys:
 in TOML a table header ends the table it appears in, so everything
@@ -49,23 +62,26 @@ declared fields to your argv, each only when present/non-empty:
 | flag | value |
 | --- | --- |
 | `--params <json>` | the entry's `params` subtree, converted TOML → JSON (TOML dates/times arrive as their string form) |
-| `--inputs <json>` | the entry's `inputs` patterns, as a JSON string array |
-| `--outputs <json>` | the entry's `outputs` paths, as a JSON string array |
+| `--inputs <json>` | the entry's `inputs`, as a JSON string array |
 
 So the entry above runs
-`fetch-weather --station KSFO --params {"units":"metric"} --outputs ["weather/raw"]`.
-A command that takes no flags at all still works — declare no params
-and it only ever sees `--inputs`/`--outputs`, which it may ignore (a
-`sh -c 'script'` step receives them as `$0`/positional args and can
-drop them).
+`fetch-weather --station KSFO --params {"units":"metric"}`. A command
+that takes no flags at all still works — declare no params and no
+inputs and it sees nothing extra (a `sh -c 'script'` step receives
+whatever is appended as `$0`/positional args and can drop them). There
+is no `--outputs`: the one tree a step writes is its id, which arrives
+in the environment.
 
 **Environment** — the identity/context channel:
 
 | variable | meaning |
 | --- | --- |
-| `DATALIB_DAG_STEP` | this step's config `id` |
+| `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/raw`) |
+| `DATALIB_DAG_GROUP` | the group it is filed under (`weather`); unset for a step outside any group |
+| `DATALIB_DAG_GROUP_TYPE` | the group's `type`, when it declares one |
+| `DATALIB_DAG_FUNCTION` | what this step does within its group (`raw`); unset for a step outside any group |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
-| `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root — wildcards in `inputs` are already expanded against producer outputs |
+| `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty when there is no last success to compare against (never completed, or the step's own config changed) — do all your work |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `DATALIB_DAG_RESET_AND_REDOWNLOAD` | `1` when the user asked for a from-scratch re-fetch — honor it if you fetch from an origin, ignore otherwise |
@@ -78,9 +94,9 @@ values on collision).
 
 These are what the scheduler's correctness rests on:
 
-* **Write only under your declared `outputs`.** No two steps'
-  outputs may overlap; edges are derived purely from one step's
-  outputs matching another's inputs.
+* **Write only under your own tree** — the one `DATALIB_DAG_STEP`
+  names. No two steps write one tree; the loader refuses a config where
+  two ids coincide or nest.
 * **Be idempotent.** Retries and re-runs simply invoke you again; a
   re-run over unchanged inputs must be safe (and ideally cheap).
 * **Commit outputs atomically.** Don't leave a torn tree on the
@@ -246,9 +262,8 @@ A shell step, no protocol at all (scheduler hashes the output tree):
 
 ```toml
 [[steps]]
-id = "notes.import"
+id = "notes/raw"
 command = "sh -c 'mkdir -p notes/raw && cp -R \"$HOME/notes/.\" notes/raw/'"
-outputs = ["notes/raw"]
 ```
 
 A python step using inputs + progress + outcome:
@@ -260,9 +275,9 @@ import hashlib, json, os, pathlib, sys
 inputs = [p for p in os.environ["DATALIB_DAG_INPUTS"].split("\n") if p]
 changed = set(os.environ["DATALIB_DAG_CHANGED_INPUTS"].split("\n"))
 root = pathlib.Path(os.environ["DATALIB_DAG_DATA_ROOT"])
+out = os.environ["DATALIB_DAG_STEP"]   # the one tree this step writes
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
 params = json.loads(args.get("--params", "{}"))
-outputs = json.loads(args["--outputs"])
 
 def emit(obj): print(json.dumps(obj), flush=True)
 
@@ -276,26 +291,32 @@ for src in inputs:
 # store with its own commit hash should report that instead; this
 # digest is the generic fallback for a plain file tree.
 h = hashlib.blake2b(digest_size=16)
-for f in sorted((root / outputs[0]).rglob("*")):
+for f in sorted((root / out).rglob("*")):
     if f.is_file():
-        h.update(str(f.relative_to(root / outputs[0])).encode())
+        h.update(str(f.relative_to(root / out)).encode())
         h.update(f.read_bytes())
 
 emit({"event": "outcome",
-      "outputs": [{"path": outputs[0], "version": h.hexdigest()}]})
+      "outputs": [{"path": out, "version": h.hexdigest()}]})
 ```
 
 ## How `datalib-step` fits
 
 The built-in step types are just one binary implementing this
 protocol: `datalib-step download|render <provider>` (plus
-`grid_index` / `qmd_index`). It derives its source name from the first
-`--outputs` entry (`slack/raw` → `slack`), reads `--params` as the
-provider's **phase-specific** config — the download step carries the
-provider's download config (`common` envelope, `sync` block, …),
-the render step only the render knobs (nothing for most providers;
-beeper/signal `period`, perseus `alignment_pairs`, email
+`grid_index` / `qmd_index`). It takes its source name from the first
+segment of `DATALIB_DAG_STEP` (`slack/raw` → `slack`), reads
+`--params` as the provider's **phase-specific** config — the download
+step carries the provider's download config (`common` envelope, `sync`
+block, …), the render step only the render knobs (nothing for most
+providers; beeper/signal `period`, perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`
 and the reset env vars, checkpoints on SIGINT, and emits versions
 where it has them (the grid index claims its dolt commit hash). Use
 it as the reference implementation.
+
+It does not yet read `DATALIB_DAG_GROUP_TYPE` or `DATALIB_DAG_FUNCTION`:
+the provider is still the word on its command line, and the tree it
+writes is still `<name>/raw` or `<name>/rendered_md` — which is why
+those are the function names a config uses today. See
+[`plans/groups_and_functions.md`](plans/groups_and_functions.md).

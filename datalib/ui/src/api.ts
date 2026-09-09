@@ -295,11 +295,15 @@ export type Severity = "fatal" | "rejected" | "blocked" | "warning";
 
 export type Diagnostic = {
   severity: Severity;
-  // Which `[[steps]]` / `[[applets]]` entry, when it is about one.
-  // `id` is null when the id itself is what's broken; `index` is null
-  // for problems raised after loading, where the array position has
-  // already shifted and the id is the identity.
-  entry: { kind: "step" | "applet"; index: number | null; id: string | null } | null;
+  // Which `[[groups]]` / `[[steps]]` / `[[applets]]` entry, when it is
+  // about one. `id` is null when the id itself is what's broken; `index`
+  // is null for problems raised after loading, where the array position
+  // has already shifted and the id is the identity.
+  entry: {
+    kind: "group" | "step" | "applet";
+    index: number | null;
+    id: string | null;
+  } | null;
   message: string;
   // What to do about it — kept separate so it can be rendered as
   // secondary text rather than glued onto the message.
@@ -340,21 +344,13 @@ export type ConfigResponse = {
   // an `npx -y latchkey@<pin>` fallback. Spliced into the Setup tab's
   // copy-pasteable credential snippets.
   latchkey_cli: string;
-  // Absolute path of a pre-TOML config.yaml sitting in this root, when
-  // there is one and no config.toml yet. Purely a signpost: nothing
-  // server-side reads it.
-  legacy_yaml_path: string | null;
-  // The exact command that converts it, set whenever legacy_yaml_path
-  // is. Backend-resolved, because in the packaged desktop app the
-  // migrator lives inside the bundle rather than on $PATH.
-  legacy_migrate_cmd: string | null;
 };
 
 export type SaveConfigResponse = {
   // Whether the text is acceptable — and, for a save, whether it was
-  // written. True only for a config with no problems at all: the PUT
-  // door is stricter than the loader on purpose, so that "saved" keeps
-  // meaning "saved clean".
+  // written. True only when every entry loads: the PUT door is stricter
+  // than the loader on purpose, so that "saved" keeps meaning "saved
+  // with nothing dropped". A warning leaves it true.
   ok: boolean;
   // The first diagnostic, for a caller that wants one line.
   error: string | null;
@@ -393,8 +389,7 @@ export function fetchConfigScaffold(signal?: AbortSignal): Promise<ConfigRespons
 
 // What POST /api/config/init did. `created` is false both when a
 // config was already there (`text` is that file, `error` null) and when
-// the backend refused — today only for a root holding a pre-TOML
-// config.yaml, where starting empty would strand the user's sources.
+// the backend refused, in which case `error` says why.
 export type InitConfigResponse = {
   created: boolean;
   path: string;

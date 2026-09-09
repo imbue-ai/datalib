@@ -200,44 +200,61 @@ c. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
 
 ## 3. Configuration
 
-The running config lives at `config.toml` in your data_root, and it's a
-**steps** config: each source becomes a `<name>.download` +
-`<name>.render` step pair, plus two shared index steps that fan in over
-everything rendered. A one-source config looks like this:
+The running config lives at `config.toml` in your data_root. Each
+source is a **group** with a `raw` + `rendered_md` step pair under it,
+plus two shared index steps that fan in over everything rendered. A
+one-source config looks like this:
 
 ```toml
 data_root = "~/datalib"
 
+[[groups]]
+id = "claude"
+name = "Claude"
+type = "claude_api"
+
 [[steps]]
-id = "claude.download"
+group = "claude"
+function = "raw"
 command = "datalib-step download claude_api"
-outputs = ["claude/raw"]
 [steps.params]
 sync = {}
 
 [[steps]]
-id = "claude.render"
+group = "claude"
+function = "rendered_md"
 command = "datalib-step render claude_api"
 inputs = ["claude/raw"]
-outputs = ["claude/rendered_md"]
+
+[[groups]]
+id = "unified_index"
 
 [[steps]]
-id = "grid_index"
+group = "unified_index"
+function = "grid"
 command = "datalib-step grid_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/grid"]
+inputs = ["claude/rendered_md"]
 
 [[steps]]
-id = "qmd_index"
+group = "unified_index"
+function = "qmd"
 command = "datalib-step qmd_index"
-inputs = ["**/rendered_md"]
-outputs = ["unified_index/qmd"]
+inputs = ["claude/rendered_md"]
+
+[[applets]]
+group = "unified_index"
+id = "unified_index"
+command = "datalib-applet unified_index"
 ```
 
-Two TOML rules worth knowing before you hand-edit: `data_root` has to
-come *above* the first `[[steps]]`, and within a step the `params`
-sub-table comes last — anything you write after a `[…]` header belongs
-to that header's table until the next one.
+A source is a `[[groups]]` entry with a `type`, plus its steps: each
+step says which group it belongs to and what it does there, and the
+pair names a directory — `claude/raw`, `claude/rendered_md` — that the
+next step's `inputs` refer to. Two TOML rules worth knowing before you
+hand-edit: `data_root` has to come *above* the first `[[…]]` header,
+and within a step the `params` sub-table comes last — anything you
+write after a `[…]` header belongs to that header's table until the
+next one.
 
 You normally don't write this by hand — the app's **Setup** tab
 scaffolds it for you (next step). If you'd rather hand-edit, copy
@@ -259,18 +276,18 @@ just one source's step pair) straight into `<data_root>/config.toml`:
   — every supported source type with realistic defaults (including
   both input modes for email and contacts).
 
-(Upgrading from an earlier datalib? Nothing reads `config.yaml` any
-more — in either of its old shapes, the YAML steps format or the much
-older stanza-based `sources:` one. Convert it once:
+(Upgrading from an earlier datalib? A `config.toml` written before
+`[[groups]]` existed — steps carrying `id = "claude/raw"` and no
+`group` — is rewritten once:
 
 ```sh
-datalib-migrate-config ~/datalib     # writes ~/datalib/config.toml
+datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml
 ```
 
-It auto-detects which of the two you have, writes `config.toml` beside
-the old file, and refuses to overwrite an existing one. Your
-`config.yaml` is left untouched; review the result, then delete it.
-Comments from the old file don't carry over.)
+It keeps the original beside the result as `config.toml.orig`. Comments
+from the old file don't carry over, so review the result. A much older
+root with only a `config.yaml` is not convertible any more: set it up
+again from the app.)
 
 Credentials are not in the config — downloaders that need them use `latchkey` at runtime.
 

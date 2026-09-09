@@ -1,9 +1,7 @@
-// Quick-add source templates for the Sources tab. Each body is a pair
-// of adjacent `[[steps]]` tables appended to the DAG config: the
-// source's download step plus its render step. Each step is a
-// `command` invoking `datalib-step`; the subcommand names the
-// provider, so params carry no `type` tag, and the source name comes
-// from the step's first output ("slack/raw" → slack; see
+// Quick-add source templates for the Sources tab. Each body is one
+// `[[groups]]` entry plus its two `[[steps]]` tables appended to the
+// DAG config: the source's download step and its render step, each
+// declared as `group` + `function` so its id is composed (see
 // `datalib_dag::config`). Params are per-phase: the download step
 // carries the provider's download config; the render step needs none
 // for any of these providers (render-side knobs like beeper's
@@ -17,12 +15,12 @@ function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
-// The standard download+render step pair for one source, preceded by a
-// light divider so sources stay visually separated in the raw file.
-// `params` is the download step's `[steps.params]` body — written as
-// TOML sub-table headers, so it must come last within its step.
+// One source: its group, then the download+render step pair, preceded
+// by a light divider so sources stay visually separated in the raw
+// file. `params` is the download step's `[steps.params]` body — written
+// as TOML sub-table headers, so it must come last within its step.
 // `preamble` (optional) is comment lines placed between the divider
-// and the steps.
+// and the group.
 function stepPair(
   name: string,
   type: string,
@@ -31,16 +29,22 @@ function stepPair(
 ): string {
   const divider = `# ── ${name} ${"─".repeat(Math.max(4, 66 - name.length))}`;
   // Instruction preambles get a closing divider so the guidance reads
-  // as its own block, visually separate from the steps below.
+  // as its own block, visually separate from the entries below.
   const preambleBlock = preamble ? `${preamble}# ${"─".repeat(70)}\n` : "";
   return `${divider}
-${preambleBlock}[[steps]]
-id = "${name}/raw"
+${preambleBlock}[[groups]]
+id = "${name}"
+type = "${type}"
+
+[[steps]]
+group = "${name}"
+function = "raw"
 command = "datalib-step download ${type}"
 ${params}
 
 [[steps]]
-id = "${name}/rendered_md"
+group = "${name}"
+function = "rendered_md"
 command = "datalib-step render ${type}"
 inputs = ["${name}/raw"]`;
 }

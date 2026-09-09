@@ -72,9 +72,13 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   expect(box!.width, "the also-render card collapsed to its checkbox").toBeGreaterThan(200);
   await wizard(page).getByText("Review the TOML this writes").click();
   const preview = wizard(page).locator(".wiz-review pre");
-  await expect(preview).toContainText('id = "personal-claude/raw"');
+  // The name lands on the group; the two steps are written as
+  // `group` + `function` and carry none.
+  await expect(preview).toContainText('id = "personal-claude"');
   await expect(preview).toContainText('name = "Personal Claude"');
-  await expect(preview).toContainText('id = "personal-claude/rendered_md"');
+  await expect(preview).toContainText('type = "claude_api"');
+  await expect(preview).toContainText('function = "raw"');
+  await expect(preview).toContainText('function = "rendered_md"');
   await expect(preview).toContainText('inputs = ["personal-claude/raw"]');
 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
@@ -100,7 +104,7 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   // wiring is covered in source_steps.test.ts against a config that has
   // fan-ins.
   const text = await editor.inputValue();
-  expect(text.match(/"personal-claude\/rendered_md"/g)).toHaveLength(1);
+  expect(text.match(/group = "personal-claude"\nfunction = "rendered_md"/g)).toHaveLength(1);
 
   // Edit the fetch step: name free, id fixed, and renaming leaves the
   // id alone — the property that keeps the index's paths honest.
@@ -113,11 +117,13 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Claude Archive.")).toBeVisible();
 
-  // The render step keeps its own name: they are separate steps, and
-  // renaming one is not renaming the other.
+  // The name belongs to the group, so renaming the source renames both
+  // rows: the render step's label is the same name said again.
   await expect(row(page, "personal-claude/rendered_md")).toContainText(
-    "Personal Claude (render markdown)",
+    "Claude Archive (render markdown)",
   );
+  await expect(editor).toHaveValue(/name = "Claude Archive"/);
+  await expect(editor).not.toHaveValue(/Personal Claude/);
 });
 
 test("declining the checkbox writes one step, and the row action adds the other", async ({
@@ -139,7 +145,8 @@ test("declining the checkbox writes one step, and the row action adds the other"
   await row(page, "fetch-only/raw").getByRole("button", { name: "Render to markdown" }).click();
   await expect(idField(page)).toHaveCount(0);
   await expect(wizard(page)).toContainText("fetch-only/rendered_md");
-  await expect(nameField(page)).toHaveValue("Fetch Only (render markdown)");
+  // No name box: the render step's label comes from the group's name.
+  await expect(nameField(page)).toHaveCount(0);
   await wizard(page).getByRole("button", { name: "Add render step" }).click();
 
   await expect(row(page, "fetch-only/rendered_md")).toBeVisible();
@@ -190,9 +197,10 @@ test("a provider whose render step has options writes the sibling id, not the st
   });
   await wizard(page).getByRole("button", { name: "Add source" }).click();
 
-  // The second dialog, freshly mounted: its own name default, and the
-  // sibling id — neither inherited from the dialog that just closed.
-  await expect(nameField(page)).toHaveValue("Signal Work (render markdown)");
+  // The second dialog, freshly mounted: the sibling id, not inherited
+  // from the dialog that just closed. No name box — a render step's
+  // label is derived from its group's name.
+  await expect(nameField(page)).toHaveCount(0);
   await expect(wizard(page)).toContainText("signal-work/rendered_md");
   await wizard(page).getByRole("button", { name: "Add render step" }).click();
 
@@ -200,12 +208,11 @@ test("a provider whose render step has options writes the sibling id, not the st
   await expect(stepMark(page, "signal-work/rendered_md")).toHaveAttribute("aria-label", "Render");
 
   const text = await editor.inputValue();
-  expect(text).toContain('id = "signal-work/rendered_md"');
+  expect(text).toContain('group = "signal-work"\nfunction = "rendered_md"');
   expect(text).toContain('inputs = ["signal-work/raw"]');
-  // The stem, as a step id of its own, is the bug. `signal-work/raw`
-  // and `signal-work/rendered_md` both start with it, so the match has
-  // to be anchored on the closing quote.
-  expect(text).not.toContain('id = "signal-work"');
+  // One group, written once, by the first dialog — the second wrote a
+  // step under it and nothing else.
+  expect(text.match(/id = "signal-work"/g)).toHaveLength(1);
 });
 
 test("deleting a fetch step takes its render step with it", async ({ page }) => {

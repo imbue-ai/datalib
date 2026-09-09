@@ -7,13 +7,44 @@ and the open questions are in
 and the contract a step author needs is
 [`docs/dev/step_protocol.md`](../../../docs/dev/step_protocol.md).
 
+## A step is (group, function); its id is composed
+
+A `[[groups]]` entry is the container a person thinks of as one thing —
+"Work Slack" — with an `id`, a `name` and, for a source, a `type`. A
+`[[steps]]` entry names the group it belongs to and the function it
+performs there, and the loader composes its id as `<group>/<function>`.
+Nothing writes that id and nothing downstream splits it: it is the tree
+the step writes, the key its state is recorded under, and what another
+step's `inputs` name. Both halves are permanent — a step never changes
+group and a fetch never becomes a render — so the composed id is stable
+by construction. The group's `name` is the half that is free to change:
+it is never forwarded to a step and never fingerprinted, so a rename
+re-runs nothing. Its `type` is forwarded and fingerprinted, so changing
+it re-runs every step under the group.
+
+A step outside any group is a custom executable and writes its `id`
+verbatim. That is the only place a step id is written.
+
+Every step under a group gets the two halves and the type in its
+environment — `DATALIB_DAG_GROUP`, `DATALIB_DAG_FUNCTION`,
+`DATALIB_DAG_GROUP_TYPE` — beside the composed `DATALIB_DAG_STEP`.
+Today the built-in `datalib-step` still dispatches on its argv and
+writes `<name>/raw` or `<name>/rendered_md` from the first segment of
+the step id; the functions are therefore named `raw` and `rendered_md`
+(and `grid`, `qmd`) so that the composed id and the tree the step writes
+agree. Dispatching on the environment and naming the tree after the
+function is the next slice of
+[`docs/dev/plans/groups_and_functions.md`](../../../docs/dev/plans/groups_and_functions.md).
+
 ## The graph is declared, not derived
 
 Step A → step B iff B names A's id in its `inputs`. A step's id is also the
 one tree it writes, so an input is simultaneously a step reference and an
 artifact path, and nothing has to be matched against anything.
 
-Validation is correspondingly small: ids are unique, every input names a
+Validation is correspondingly small: group ids are one segment and
+unique, a grouped step's group exists and its function is one segment,
+composed and verbatim ids are unique and un-nested, every input names a
 declared step, no step consumes its own output, no cycles.
 
 **A step that breaks one of those is left out of the graph, not carried in
@@ -132,6 +163,15 @@ The four severities say what a problem *costs*:
 `Rejected` and `Blocked` have the same consequence for the scheduler and
 deliberately different consequences for what the reader is told. Merging
 them would be the cheaper code and the worse error message.
+
+A group whose id is bad costs the group *and* every step under it, and
+those steps are `Blocked`, not `Rejected`: nothing is wrong with them,
+and the fix is on the group's line. The two warnings today are a group
+nothing is filed under and a `name` written on a grouped step, whose
+label comes from the group. A warning passes the strict door too
+(`config::parse`, and the `PUT /api/config` behind the editor): it
+changes nothing about what runs, and refusing it would make the editor
+unable to save a config the app is happily running on.
 
 Every located diagnostic carries a **byte span** into the config text, not a
 line number: the terminal wants `file:line:col` plus an excerpt and the UI

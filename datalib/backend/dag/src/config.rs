@@ -1,27 +1,28 @@
-//! The DAG config file, `config.toml`: `[[steps]]` the scheduler runs, and
-//! `[[applets]]` the http gateway spawns on demand. This module parses and
-//! validates both; only steps reach the scheduler.
+//! The DAG config file, `config.toml`: `[[groups]]` the entries are filed
+//! under, `[[steps]]` the scheduler runs, and `[[applets]]` the http
+//! gateway spawns on demand. This module parses and validates all three;
+//! only steps reach the scheduler.
 //!
 //! `configs/dag_example.toml` is a complete commented example, and
 //! `docs/dev/step_protocol.md` is the contract a step command implements.
 //!
-//! Two things about the format bite people. Top-level `data_root` /
-//! `binary_dir` must be written *above* the first `[[steps]]`, since
-//! everything after a table header belongs to that table. And a step's `id`
-//! is its identity — path-safe, unique, and the string the directory
-//! structure is formed from — so changing it is a migration rather than an
-//! edit; `name` carries the half that is safe to change.
+//! A step's identity is `(group, function)`, and its id is composed from
+//! the two — `<group>/<function>` — never written. That id is the tree the
+//! step writes and the key its state is recorded under, so both halves are
+//! permanent; the group's `name` is the half that is safe to change. A step
+//! outside any group is a custom executable and writes its `id` verbatim.
 //!
-//! This is the only config format the runner accepts; older roots are
-//! converted out of band by `datalib-migrate-config`.
+//! Top-level `data_root` / `binary_dir` must be written *above* the first
+//! `[[…]]` header, since everything after a table header belongs to that
+//! table.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use crate::diagnostics::{Diagnostic, EntryRef, Severity};
+use crate::diagnostics::{Diagnostic, EntryKind, EntryRef, Severity};
 use crate::graph::Graph;
 use crate::step::{StepRun, StepSpec};
 
@@ -36,6 +37,10 @@ pub struct DagConfig {
     /// can name binaries bare. See [`resolve_binary_dir`] for the fallback.
     #[serde(default)]
     pub binary_dir: Option<PathBuf>,
+    /// The containers steps and applets are filed under. A source is a group
+    /// with a `type`; the unified index is a group without one.
+    #[serde(default)]
+    pub groups: Vec<GroupEntry>,
     /// A config with no steps yet is valid — it just runs nothing.
     #[serde(default)]
     pub steps: Vec<StepEntry>,
@@ -56,7 +61,7 @@ pub struct DagConfig {
 /// Plain numbers rather than the `etl` type they become: the runner does not
 /// link `etl`, and does not need to — it forwards this to the step, which
 /// owns what a checkpoint *is*.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckpointCadence {
     /// Seal once writes have been quiet this long.
@@ -93,17 +98,42 @@ impl CheckpointCadence {
     }
 }
 
+/// One `[[groups]]` entry: the thing a person thinks of as "Work Slack".
+/// Its `id` is one path segment and the directory every step under it
+/// writes into; its `name` is free text nothing depends on.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupEntry {
+    pub id: String,
+    /// What every screen shows. Never forwarded to a step and never
+    /// fingerprinted, so a rename re-runs nothing.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The kind of data this group mirrors (`slack_api`, `email`, …), which
+    /// is what makes it a *source*. Forwarded to every step under the group
+    /// and folded into their fingerprints. Absent for a group that mirrors
+    /// nothing, such as the unified index.
+    #[serde(default)]
+    pub r#type: Option<String>,
+}
+
 /// One applet instance. Deliberately a subset of [`StepEntry`]: an applet
-/// declares no `inputs`/`outputs` because it is not scheduled and owns no
-/// artifacts. There is no `title` either — the label the gallery shows is
-/// written by the applet itself into its namespace metadata.
+/// declares no `inputs` because it is not scheduled and owns no artifacts.
+/// There is no `title` either — the label the gallery shows is written by
+/// the applet itself into its namespace metadata.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppletEntry {
     /// Instance name. Doubles as the mount prefix (`/applet/<id>/`) *and* as
     /// an identifier injected into card-source scope, so it is restricted to
-    /// what JavaScript accepts as a variable name.
+    /// what JavaScript accepts as a variable name. Not composed from the
+    /// group: it has to be globally unique on its own.
     pub id: String,
+    /// The group this applet is filed under on the Manage screen. Only a
+    /// filing: an applet writes no tree and is never an `inputs` target, so
+    /// nothing else reads it.
+    #[serde(default)]
+    pub group: Option<String>,
     /// The command to run, split shell-style, resolved the same way a step's
     /// is (`binary_dir`, then `PATH`).
     pub command: String,
@@ -124,25 +154,29 @@ impl AppletEntry {
     }
 }
 
+/// One `[[steps]]` entry with its id settled. [`StepTable`] is the entry as
+/// written; this is what the rest of the crate sees, so nothing downstream
+/// has to know how an id came to be.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "StepTable")]
 pub struct StepEntry {
+    /// The tree this step writes and the key its state is recorded under.
+    /// `<group>/<function>` for a grouped step, the written `id` otherwise.
     pub id: String,
-    /// What to call this step on screen. Free text, freely changed: the runner
-    /// never reads it and it is absent from
-    /// [`StepSpec::fingerprint_material`], so renaming re-runs nothing.
-    ///
-    /// **`name` and `id` are two halves of one identity, and only this half is
-    /// malleable** — the directory structure is formed from the `id`, so
-    /// changing that moves data on disk and strands recorded paths. Written
-    /// only when it differs from the `id`.
-    #[serde(default)]
+    /// The `[[groups]]` entry this step belongs to. `None` for a custom step
+    /// that wrote a verbatim `id`.
+    pub group: Option<String>,
+    /// What this step does within its group. Always present with `group`
+    /// and never without it.
+    pub function: Option<String>,
+    /// Free text the runner never reads. On a grouped step the label comes
+    /// from the group and the function, so a `name` here is reported as
+    /// probably unintended; on an ungrouped step it is the only label.
     pub name: Option<String>,
     /// The ids of the steps this one reads. A step id *is* the tree that step
     /// writes, so an entry here is both a step reference and an artifact path.
     /// A directory staged by hand is named by `params.common.input_path`
     /// instead, and is not an artifact the DAG knows about.
-    #[serde(default)]
     pub inputs: Vec<String>,
     /// The command to run, split shell-style into an argv. The child's cwd is
     /// `data_root`, so a relative multi-component argv[0] resolves against the
@@ -150,16 +184,99 @@ pub struct StepEntry {
     pub command: String,
     /// Arbitrary step parameters, forwarded verbatim as JSON via
     /// `--params`.
-    #[serde(default)]
     pub params: Option<toml::Value>,
     /// Extra environment for the child process.
-    #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// Version of the step's own behavior, for steps whose output can change
     /// without their command line changing. Bumping it re-runs the step once,
     /// even though none of its inputs moved.
-    #[serde(default)]
     pub code_version: Option<String>,
+}
+
+/// A `[[steps]]` table exactly as a person writes it. Either `group` and
+/// `function` or `id`; the split is settled in `TryFrom` below so a
+/// mis-written entry is refused with the key it is about.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StepTable {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    function: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    inputs: Vec<String>,
+    command: String,
+    #[serde(default)]
+    params: Option<toml::Value>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    code_version: Option<String>,
+}
+
+impl TryFrom<StepTable> for StepEntry {
+    type Error = String;
+
+    fn try_from(t: StepTable) -> std::result::Result<Self, String> {
+        let id = match (&t.id, &t.group, &t.function) {
+            (None, Some(g), Some(f)) => format!("{g}/{f}"),
+            (Some(id), None, None) => id.clone(),
+            (Some(_), Some(_), _) | (Some(_), None, Some(_)) => {
+                return Err(
+                    "`id` cannot be written on a step that has `group` or `function`: the \
+                     id of a grouped step is composed as `<group>/<function>`, so remove \
+                     `id` (or, for a custom step outside any group, remove the other two)"
+                        .to_string(),
+                )
+            }
+            (None, Some(_), None) => {
+                return Err(
+                    "missing field `function`: a step under a group says what it does \
+                     there, and that word names the directory it writes"
+                        .to_string(),
+                )
+            }
+            (None, None, Some(_)) => {
+                return Err(
+                    "missing field `group`: `function` only means something within a group"
+                        .to_string(),
+                )
+            }
+            (None, None, None) => {
+                return Err(
+                    "missing field `group`: a step is `group` + `function`, or a custom \
+                     step with a verbatim `id`"
+                        .to_string(),
+                )
+            }
+        };
+        Ok(StepEntry {
+            id,
+            group: t.group,
+            function: t.function,
+            name: t.name,
+            inputs: t.inputs,
+            command: t.command,
+            params: t.params,
+            env: t.env,
+            code_version: t.code_version,
+        })
+    }
+}
+
+/// The id a `[[steps]]` table would get, read off the raw TOML so a step
+/// that fails to deserialize can still be named in its diagnostic.
+fn raw_step_id(value: &toml::Value) -> Option<String> {
+    let s = |k: &str| value.get(k).and_then(|v| v.as_str());
+    match (s("id"), s("group"), s("function")) {
+        (Some(id), _, _) => Some(id.to_string()),
+        (None, Some(g), Some(f)) => Some(format!("{g}/{f}")),
+        _ => None,
+    }
 }
 
 pub fn root_config_path(data_root: &Path) -> PathBuf {
@@ -169,13 +286,14 @@ pub fn root_config_path(data_root: &Path) -> PathBuf {
 /// The canonical config filename.
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
-/// Parse config text, strictly: the first problem is an error. For
-/// `datalib-migrate-config` and `PUT /api/config`, which must not write a
-/// config with a known problem. Anything reporting to a human wants
-/// [`parse_graded`].
+/// Parse config text, strictly: the first problem that drops an entry is an
+/// error. For callers that must not act on a config with a known problem.
+/// A warning passes — it drops nothing, and a strict caller acting on the
+/// file gets exactly what the graded loader would have run. Anything
+/// reporting to a human wants [`parse_graded`].
 pub fn parse(text: &str) -> Result<DagConfig> {
     let (cfg, diagnostics) = parse_graded(text);
-    if let Some(d) = diagnostics.first() {
+    if let Some(d) = diagnostics.iter().find(|d| d.severity.drops_the_entry()) {
         bail!("{}", d.describe());
     }
     Ok(cfg)
@@ -183,8 +301,7 @@ pub fn parse(text: &str) -> Result<DagConfig> {
 
 /// Whether this text is TOML that could be a config at all — the file-level
 /// question only, with no opinion on whether the config is *valid*
-/// ([`check_text`]'s job). It has to answer yes for a converted config that
-/// still has a problem in it, or `datalib-migrate-config` re-converts one.
+/// ([`check_text`]'s job).
 pub fn is_toml(text: &str) -> bool {
     !parse_graded(text)
         .1
@@ -243,29 +360,34 @@ fn valid_id_segment(seg: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
+const SEGMENT_RULE: &str = "letters, digits, `.`, `_`, `-`, not starting with `-`, and \
+                            never `.` or `..`";
+
 pub fn validate_steps(cfg: &DagConfig) -> Result<()> {
-    let (_, diags) = accept_steps(
-        candidates(&cfg.steps, EntryRef::step, |e| Some(e.id.clone())),
-        None,
-    );
-    if let Some(d) = diags.first() {
+    let accepted = accept_entries(cfg_candidates(cfg), None);
+    if let Some(d) = accepted
+        .diagnostics
+        .iter()
+        .find(|d| d.severity.drops_the_entry())
+    {
         bail!("{}", d.describe());
     }
     Ok(())
 }
 
-/// The strict view of [`accept_steps`]. Note what this does *not* do: it
+/// The strict view of [`accept_entries`]. Note what this does *not* do: it
 /// resolves nothing between steps, so an `inputs` entry naming no declared
 /// step passes here and is caught by [`crate::Graph::build`].
 pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
-    let (accepted, diags) = accept_steps(
-        candidates(&cfg.steps, EntryRef::step, |e| Some(e.id.clone())),
-        None,
-    );
-    if let Some(d) = diags.first() {
+    let accepted = accept_entries(cfg_candidates(cfg), None);
+    if let Some(d) = accepted
+        .diagnostics
+        .iter()
+        .find(|d| d.severity.drops_the_entry())
+    {
         bail!("{}", d.describe());
     }
-    Ok(accepted.into_iter().map(|(_, spec)| spec).collect())
+    Ok(accepted.steps.into_iter().map(|(_, spec)| spec).collect())
 }
 
 /// A step's `params` subtree as the JSON the child gets on `--params`.
@@ -432,6 +554,8 @@ struct RawConfig {
     #[serde(default)]
     binary_dir: Option<PathBuf>,
     #[serde(default)]
+    groups: Vec<toml::Spanned<toml::Value>>,
+    #[serde(default)]
     steps: Vec<toml::Spanned<toml::Value>>,
     #[serde(default)]
     applets: Vec<toml::Spanned<toml::Value>>,
@@ -440,8 +564,8 @@ struct RawConfig {
 }
 
 /// One entry on its way in: where it sits in the file, and what it
-/// deserialized to. Generic so steps and applets share the bookkeeping — but
-/// not the rules, which are not the same rules.
+/// deserialized to. Generic so groups, steps and applets share the
+/// bookkeeping — but not the rules, which are not the same rules.
 struct Candidate<T> {
     entry: T,
     reference: EntryRef,
@@ -488,11 +612,156 @@ fn candidates<T: Clone>(
         .collect()
 }
 
-/// Every step rule decidable from the `[[steps]]` array alone, applied entry
-/// by entry, dropping what fails and saying why. Ids must be well-formed
-/// (an id is the tree the step writes), unique (they key the persisted
-/// scheduler state), un-nested, and outside `system/`; the command must be
-/// runnable and `params` must be JSON-able.
+/// Every entry on its way in, plus which groups anything *wrote* under.
+struct Candidates {
+    groups: Vec<Candidate<GroupEntry>>,
+    steps: Vec<Candidate<StepEntry>>,
+    applets: Vec<Candidate<AppletEntry>>,
+    /// Every `group = …` written on a step or an applet, counted before
+    /// anything is dropped: a group whose only step was rejected is still a
+    /// group somebody meant to fill, and calling it empty would send them to
+    /// the wrong entry.
+    named: BTreeSet<String>,
+}
+
+/// The strict door's candidates, from an already-deserialized config.
+fn cfg_candidates(cfg: &DagConfig) -> Candidates {
+    let mut named = BTreeSet::new();
+    named.extend(cfg.steps.iter().filter_map(|s| s.group.clone()));
+    named.extend(cfg.applets.iter().filter_map(|a| a.group.clone()));
+    Candidates {
+        groups: candidates(&cfg.groups, EntryRef::group, |g| Some(g.id.clone())),
+        steps: candidates(&cfg.steps, EntryRef::step, |e| Some(e.id.clone())),
+        applets: candidates(&cfg.applets, EntryRef::applet, |a| Some(a.id.clone())),
+        named,
+    }
+}
+
+/// What survived the entry rules, and what each problem cost.
+struct Accepted {
+    groups: Vec<GroupEntry>,
+    steps: Vec<(StepEntry, StepSpec)>,
+    applets: Vec<AppletEntry>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// Every rule decidable without the graph, applied entry by entry, dropping
+/// what fails and saying why. Groups first, because a step's rules depend on
+/// which groups exist; steps and applets after, each against that list.
+fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
+    let mut diags = Vec::new();
+    let (groups, group_diags) = accept_groups(c.groups, &c.named, text);
+    let dropped_groups: BTreeSet<String> = group_diags
+        .iter()
+        .filter(|d| d.severity.drops_the_entry())
+        .filter_map(|d| d.id().map(str::to_string))
+        .collect();
+    diags.extend(group_diags);
+
+    let by_id: BTreeMap<&str, &GroupEntry> = groups.iter().map(|g| (g.id.as_str(), g)).collect();
+    let (steps, step_diags) = accept_steps(c.steps, &by_id, &dropped_groups, text);
+    diags.extend(step_diags);
+
+    let (applets, applet_diags) = accept_applets(c.applets, text);
+    diags.extend(applet_diags);
+    for a in &applets {
+        if let Some(g) = &a.group {
+            if !by_id.contains_key(g.as_str()) {
+                // A warning, not a rejection: the group is only where the
+                // Manage screen files the applet, and a wrong filing is not a
+                // reason to take the grid down.
+                let reference = EntryRef::applet(usize::MAX, Some(a.id.clone()));
+                let d = Diagnostic::new(
+                    Severity::Warning,
+                    format!("group {g:?} names no declared group; the applet is shown ungrouped"),
+                )
+                .at_entry(reference);
+                diags.push(d);
+            }
+        }
+    }
+
+    Accepted {
+        groups,
+        steps,
+        applets,
+        diagnostics: diags,
+    }
+}
+
+/// The group rules. An id is one directory name, so it is one segment and
+/// not `system`; ids are unique, the earlier entry keeping a contested one. A
+/// group nothing names is kept, with a warning: it is probably a source
+/// somebody deleted the steps of and forgot.
+fn accept_groups(
+    candidates: Vec<Candidate<GroupEntry>>,
+    named: &BTreeSet<String>,
+    text: Option<&str>,
+) -> (Vec<GroupEntry>, Vec<Diagnostic>) {
+    let mut accepted = Vec::with_capacity(candidates.len());
+    let mut diags = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
+    for c in candidates {
+        let id = c.entry.id.clone();
+        if !valid_id_segment(&id) {
+            diags.push(c.diag(
+                Severity::Rejected,
+                text,
+                Some("id"),
+                format!(
+                    "group id {id:?} is not a usable directory name. Every step under a \
+                     group writes into `<group id>/`, so the id must be one portable \
+                     filename — {SEGMENT_RULE} — with no `/` in it."
+                ),
+            ));
+            continue;
+        }
+        if id == SYSTEM_DIR {
+            diags.push(c.diag(
+                Severity::Rejected,
+                text,
+                Some("id"),
+                format!(
+                    "group id {SYSTEM_DIR:?} is reserved for the runner's and the server's \
+                     own state; every step under it would write there."
+                ),
+            ));
+            continue;
+        }
+        if !seen.insert(id.clone()) {
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    Some("id"),
+                    format!(
+                        "duplicate group id {id:?}. Steps name their group by this id, so \
+                         two groups sharing one would both claim every step under it."
+                    ),
+                )
+                .with_help("the earlier entry keeps this id; give this one a distinct one"),
+            );
+            continue;
+        }
+        if !named.contains(&id) {
+            diags.push(c.diag(
+                Severity::Warning,
+                text,
+                None,
+                format!("group {id:?} has no steps and no applets under it"),
+            ));
+        }
+        accepted.push(c.entry);
+    }
+    (accepted, diags)
+}
+
+/// The step rules, applied entry by entry. A grouped step's `function` must
+/// be one directory name and its group must exist; a custom step's `id` must
+/// be a usable path. Every step's id is unique, un-nested with every other,
+/// and outside `system/`; the command must be runnable and `params` must be
+/// JSON-able.
 ///
 /// The nesting rule is the load-bearing one: two steps under one tree is two
 /// writers on one `.doltlite_db`, whose working set is shared across
@@ -502,6 +771,8 @@ fn candidates<T: Clone>(
 /// [`crate::Graph::build_graded`], the first place the full id set exists.
 fn accept_steps(
     candidates: Vec<Candidate<StepEntry>>,
+    groups: &BTreeMap<&str, &GroupEntry>,
+    dropped_groups: &BTreeSet<String>,
     text: Option<&str>,
 ) -> (Vec<(StepEntry, StepSpec)>, Vec<Diagnostic>) {
     let mut accepted: Vec<(StepEntry, StepSpec)> = Vec::with_capacity(candidates.len());
@@ -510,25 +781,89 @@ fn accept_steps(
 
     for c in candidates {
         let id = c.entry.id.clone();
-        if id.is_empty() || !id.split('/').all(valid_id_segment) {
-            diags.push(c.diag(
-                Severity::Rejected,
-                text,
-                Some("id"),
-                format!(
-                    "id {id:?} is not a usable directory name. An id is the directory the \
-                     step writes, so every `/`-separated segment must be a portable \
-                     filename — letters, digits, `.`, `_`, `-`, not starting with `-`, and \
-                     never `.` or `..`."
-                ),
-            ));
-            continue;
+        let mut group_type: Option<&str> = None;
+        match (&c.entry.group, &c.entry.function) {
+            (Some(g), Some(f)) => {
+                if !valid_id_segment(f) {
+                    diags.push(c.diag(
+                        Severity::Rejected,
+                        text,
+                        Some("function"),
+                        format!(
+                            "function {f:?} is not a usable directory name. A step writes \
+                             `<group>/<function>/`, so the function must be one portable \
+                             filename — {SEGMENT_RULE} — with no `/` in it."
+                        ),
+                    ));
+                    continue;
+                }
+                match groups.get(g.as_str()) {
+                    Some(group) => group_type = group.r#type.as_deref(),
+                    None if dropped_groups.contains(g) => {
+                        diags.push(
+                            c.diag(
+                                Severity::Blocked,
+                                text,
+                                Some("group"),
+                                format!(
+                                    "cannot run: its group {g:?} was itself dropped from this \
+                                     config"
+                                ),
+                            )
+                            .with_help(format!(
+                                "nothing is wrong with this step — fix group {g:?} and this one \
+                                 runs again"
+                            )),
+                        );
+                        continue;
+                    }
+                    None => {
+                        diags.push(
+                            c.diag(
+                                Severity::Rejected,
+                                text,
+                                Some("group"),
+                                format!("group {g:?} names no declared group"),
+                            )
+                            .with_help(format!(
+                                "declare it with a `[[groups]]` entry whose `id` is {g:?}. \
+                                 Declared groups: {}",
+                                id_list(groups.keys().copied())
+                            )),
+                        );
+                        continue;
+                    }
+                }
+            }
+            _ => {
+                if id.is_empty() || !id.split('/').all(valid_id_segment) {
+                    diags.push(c.diag(
+                        Severity::Rejected,
+                        text,
+                        Some("id"),
+                        format!(
+                            "id {id:?} is not a usable directory name. An id is the directory \
+                             the step writes, so every `/`-separated segment must be a portable \
+                             filename — {SEGMENT_RULE}."
+                        ),
+                    ));
+                    continue;
+                }
+            }
         }
+        // Where the composed-vs-written distinction stops mattering: every
+        // rule below is about the id itself. A grouped step's id has no key
+        // of its own to point at, so its diagnostics land on the header.
+        let id_key = if c.entry.group.is_some() {
+            None
+        } else {
+            Some("id")
+        };
         if id == SYSTEM_DIR || id.starts_with(&format!("{SYSTEM_DIR}/")) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
-                Some("id"),
+                id_key,
                 format!(
                     "id {id:?} writes under {SYSTEM_DIR:?}, which is reserved for the \
                      runner's and the server's own state."
@@ -541,7 +876,7 @@ fn accept_steps(
                 c.diag(
                     Severity::Rejected,
                     text,
-                    Some("id"),
+                    id_key,
                     format!(
                         "duplicate id {id:?}. A step's id is both its bookkeeping key and the \
                          tree it writes, so two steps sharing one would overwrite each \
@@ -559,7 +894,7 @@ fn accept_steps(
                 c.diag(
                     Severity::Rejected,
                     text,
-                    Some("id"),
+                    id_key,
                     format!(
                         "id {id:?} is nested with step {other:?}: one of these trees contains \
                          the other, so both steps write the same files. A step's id *is* the \
@@ -567,14 +902,26 @@ fn accept_steps(
                     ),
                 )
                 .with_help(
-                    "move one of them out from under the other — sibling ids like \
-                     `name/raw` and `name/rendered_md` are the usual shape",
+                    "move one of them out from under the other — sibling functions under one \
+                     group, like `raw` and `rendered_md`, are the usual shape",
                 ),
             );
             continue;
         }
+        if c.entry.group.is_some() && c.entry.name.is_some() {
+            diags.push(
+                c.diag(
+                    Severity::Warning,
+                    text,
+                    Some("name"),
+                    "`name` on a grouped step is not shown: a step's label comes from its \
+                     group's name and its function",
+                )
+                .with_help("name the group instead, in its `[[groups]]` entry"),
+            );
+        }
 
-        let spec = match spec_of(&c.entry) {
+        let spec = match spec_of(&c.entry, group_type) {
             Ok(spec) => spec,
             Err(e) => {
                 diags.push(c.diag(Severity::Rejected, text, Some("command"), format!("{e:#}")));
@@ -591,7 +938,17 @@ fn nests_with(a: &str, b: &str) -> bool {
     a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
 
-fn spec_of(e: &StepEntry) -> Result<StepSpec> {
+/// The declared group ids, for a diagnostic that has to say what the valid
+/// choices were.
+fn id_list<'a>(ids: impl Iterator<Item = &'a str>) -> String {
+    let all: Vec<&str> = ids.collect();
+    if all.is_empty() {
+        return "(none — this config declares no groups)".to_string();
+    }
+    all.join(", ")
+}
+
+fn spec_of(e: &StepEntry, group_type: Option<&str>) -> Result<StepSpec> {
     let mut argv = shlex::split(&e.command)
         .with_context(|| format!("command {:?} has unbalanced quoting", e.command))?;
     if argv.is_empty() {
@@ -607,10 +964,6 @@ fn spec_of(e: &StepEntry) -> Result<StepSpec> {
         argv.push("--inputs".to_string());
         argv.push(serde_json::to_string(&e.inputs).expect("string vec → JSON"));
     }
-    // A child still receives `--outputs`, now with the single tree its id
-    // names, so steps written against the old contract keep working.
-    argv.push("--outputs".to_string());
-    argv.push(serde_json::to_string(&[&e.id]).expect("string vec → JSON"));
 
     let mut spec = StepSpec::new(
         &e.id,
@@ -620,6 +973,9 @@ fn spec_of(e: &StepEntry) -> Result<StepSpec> {
         },
     );
     spec.code_version = e.code_version.clone();
+    spec.group = e.group.clone();
+    spec.group_type = group_type.map(str::to_string);
+    spec.function = e.function.clone();
     for i in &e.inputs {
         spec.inputs.push(crate::ArtifactPath::parse(i)?);
     }
@@ -733,11 +1089,53 @@ struct Entries {
     /// step id → byte range of the `[[steps]]` header. Includes dropped
     /// steps: a graph diagnostic naming one still wants somewhere to point.
     spans: BTreeMap<String, std::ops::Range<usize>>,
-    /// The ids this pass threw out. Handed to graph assembly so a step whose
-    /// input names one of them is told its input was *dropped* rather than
-    /// that it never existed — different sentences, different entries to fix.
+    /// The step ids this pass threw out. Handed to graph assembly so a step
+    /// whose input names one of them is told its input was *dropped* rather
+    /// than that it never existed — different sentences, different entries
+    /// to fix.
     dropped: BTreeSet<String>,
     diagnostics: Vec<Diagnostic>,
+}
+
+/// Deserialize one `[[…]]` array entry by entry, so one bad key costs one
+/// entry. The id is read off the raw value rather than the deserialized
+/// entry, because a rejected entry still has to be nameable.
+fn deserialize_each<T: for<'de> Deserialize<'de>>(
+    text: &str,
+    raw: Vec<toml::Spanned<toml::Value>>,
+    make_ref: fn(usize, Option<String>) -> EntryRef,
+    id_of: fn(&toml::Value) -> Option<String>,
+    diags: &mut Vec<Diagnostic>,
+    mut on_raw: impl FnMut(&toml::Value, std::ops::Range<usize>),
+) -> Vec<Candidate<T>> {
+    let mut out = Vec::with_capacity(raw.len());
+    for (i, spanned) in raw.into_iter().enumerate() {
+        let span = spanned.span();
+        let value = spanned.into_inner();
+        on_raw(&value, span.clone());
+        let id = id_of(&value);
+        let reference = make_ref(i, id);
+        match value.try_into::<T>() {
+            Ok(entry) => out.push(Candidate {
+                entry,
+                reference,
+                span: Some(span),
+            }),
+            Err(e) => {
+                let message = e.message().trim().to_string();
+                let at = match complained_about(&message) {
+                    Some(key) => key_span(text, span, key),
+                    None => span,
+                };
+                diags.push(
+                    Diagnostic::new(Severity::Rejected, message)
+                        .at_entry(reference)
+                        .at_span(text, at),
+                )
+            }
+        }
+    }
+    out
 }
 
 /// Deserialize every entry on its own and apply every rule that does not
@@ -765,86 +1163,68 @@ fn entries_of(text: &str) -> Entries {
 
     let mut diags = Vec::new();
     let mut spans: BTreeMap<String, std::ops::Range<usize>> = BTreeMap::new();
+    let mut named: BTreeSet<String> = BTreeSet::new();
 
-    // Each entry deserialized on its own, so one bad key costs one entry. The
-    // id is read off the raw value rather than the deserialized entry, because
-    // a rejected entry still has to be nameable.
-    let mut step_candidates = Vec::with_capacity(raw.steps.len());
-    for (i, spanned) in raw.steps.into_iter().enumerate() {
-        let span = spanned.span();
-        let value = spanned.into_inner();
-        let id = value.get("id").and_then(|v| v.as_str()).map(str::to_string);
-        if let Some(id) = &id {
-            // First spelling wins, matching `accept_steps`.
-            spans.entry(id.clone()).or_insert_with(|| span.clone());
-        }
-        let reference = EntryRef::step(i, id);
-        match value.try_into::<StepEntry>() {
-            Ok(entry) => step_candidates.push(Candidate {
-                entry,
-                reference,
-                span: Some(span),
-            }),
-            Err(e) => {
-                let message = e.message().trim().to_string();
-                let at = match complained_about(&message) {
-                    Some(key) => key_span(text, span, key),
-                    None => span,
-                };
-                diags.push(
-                    Diagnostic::new(Severity::Rejected, message)
-                        .at_entry(reference)
-                        .at_span(text, at),
-                )
+    let id_key = |v: &toml::Value| v.get("id").and_then(v_str);
+    let groups = deserialize_each(
+        text,
+        raw.groups,
+        EntryRef::group,
+        id_key,
+        &mut diags,
+        |_, _| {},
+    );
+    let steps = deserialize_each(
+        text,
+        raw.steps,
+        EntryRef::step,
+        raw_step_id,
+        &mut diags,
+        |v, span| {
+            if let Some(id) = raw_step_id(v) {
+                // First spelling wins, matching `accept_steps`.
+                spans.entry(id).or_insert(span);
             }
-        }
-    }
+            named.extend(v.get("group").and_then(v_str));
+        },
+    );
+    let applets = deserialize_each(
+        text,
+        raw.applets,
+        EntryRef::applet,
+        id_key,
+        &mut diags,
+        |v, _| {
+            named.extend(v.get("group").and_then(v_str));
+        },
+    );
 
-    let mut applet_candidates = Vec::with_capacity(raw.applets.len());
-    for (i, spanned) in raw.applets.into_iter().enumerate() {
-        let span = spanned.span();
-        let value = spanned.into_inner();
-        let id = value.get("id").and_then(|v| v.as_str()).map(str::to_string);
-        let reference = EntryRef::applet(i, id);
-        match value.try_into::<AppletEntry>() {
-            Ok(entry) => applet_candidates.push(Candidate {
-                entry,
-                reference,
-                span: Some(span),
-            }),
-            Err(e) => {
-                let message = e.message().trim().to_string();
-                let at = match complained_about(&message) {
-                    Some(key) => key_span(text, span, key),
-                    None => span,
-                };
-                diags.push(
-                    Diagnostic::new(Severity::Rejected, message)
-                        .at_entry(reference)
-                        .at_span(text, at),
-                )
-            }
-        }
-    }
+    let accepted = accept_entries(
+        Candidates {
+            groups,
+            steps,
+            applets,
+            named,
+        },
+        Some(text),
+    );
+    diags.extend(accepted.diagnostics);
 
-    let (accepted, step_diags) = accept_steps(step_candidates, Some(text));
-    let (applets, applet_diags) = accept_applets(applet_candidates, Some(text));
-    diags.extend(step_diags);
-    diags.extend(applet_diags);
-
-    let mut steps = Vec::with_capacity(accepted.len());
-    let mut specs = Vec::with_capacity(accepted.len());
-    for (entry, spec) in accepted {
+    let mut steps = Vec::with_capacity(accepted.steps.len());
+    let mut specs = Vec::with_capacity(accepted.steps.len());
+    for (entry, spec) in accepted.steps {
         steps.push(entry);
         specs.push(spec);
     }
 
     // Read off the diagnostics rather than tracked as entries are dropped, so
-    // a rule added above cannot forget to report here.
+    // a rule added above cannot forget to report here. Steps only: the set
+    // answers "did an *input* name something that was thrown out".
     let kept: BTreeSet<&str> = steps.iter().map(|e| e.id.as_str()).collect();
     let dropped: BTreeSet<String> = diags
         .iter()
         .filter(|d| d.severity.drops_the_entry())
+        .filter(|d| d.entry.as_ref().is_some_and(|e| e.kind == EntryKind::Step))
         .filter_map(|d| d.id())
         .filter(|id| !kept.contains(id))
         .map(str::to_string)
@@ -854,8 +1234,9 @@ fn entries_of(text: &str) -> Entries {
         cfg: DagConfig {
             data_root: raw.data_root,
             binary_dir: raw.binary_dir,
+            groups: accepted.groups,
             steps,
-            applets,
+            applets: accepted.applets,
             checkpoint_cadence: raw.checkpoint_cadence,
         },
         specs,
@@ -863,6 +1244,10 @@ fn entries_of(text: &str) -> Entries {
         dropped,
         diagnostics: diags,
     }
+}
+
+fn v_str(v: &toml::Value) -> Option<String> {
+    v.as_str().map(str::to_string)
 }
 
 /// Parse config text, keeping every entry that loads; only a file-level
@@ -897,6 +1282,12 @@ impl ConfigCheck {
 
     pub fn is_clean(&self) -> bool {
         self.diagnostics.is_empty()
+    }
+
+    /// Whether every entry reached the graph. A warning leaves this true:
+    /// it is advice about a config that runs exactly as written.
+    pub fn nothing_dropped(&self) -> bool {
+        self.dropped() == 0
     }
 
     pub fn worst(&self) -> Option<Severity> {
@@ -962,6 +1353,7 @@ impl DagConfig {
         DagConfig {
             data_root: None,
             binary_dir: None,
+            groups: Vec::new(),
             steps: Vec::new(),
             applets: Vec::new(),
             checkpoint_cadence: None,
@@ -1070,19 +1462,29 @@ mod tests {
     fn command_gets_declared_fields_as_json_flags() {
         let cfg: DagConfig = toml::from_str(
             r#"
+            [[groups]]
+            id = "slack"
+            type = "slack_api"
+
+            [[groups]]
+            id = "unified_index"
+
             [[steps]]
-            id = "slack/raw"
+            group = "slack"
+            function = "raw"
             command = "datalib-step download slack_api"
             params.sync = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
 
             [[steps]]
-            id = "slack/rendered_md"
+            group = "slack"
+            function = "rendered_md"
             inputs = ["slack/raw"]
             command = "datalib-step render slack_api"
             params.sync = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
 
             [[steps]]
-            id = "unified_index/grid"
+            group = "unified_index"
+            function = "grid"
             inputs = ["slack/rendered_md"]
             command = "datalib-step grid_index"
             "#,
@@ -1100,27 +1502,18 @@ mod tests {
         assert_eq!(dl[3], "--params");
         let params: serde_json::Value = serde_json::from_str(&dl[4]).unwrap();
         assert_eq!(params["sync"]["channels"][0], "chat-qi");
-        // No inputs declared → no --inputs. `--outputs` is still sent,
-        // now derived from the id, so a step written against the old
-        // contract keeps working.
-        assert_eq!(&dl[5..], &["--outputs", r#"["slack/raw"]"#]);
+        // No inputs declared → no --inputs, and nothing else: the one tree
+        // a step writes is its id, which it reads from the environment.
+        assert_eq!(dl.len(), 5);
 
         // TOML has no anchors, so the render step repeats the subtree —
         // and must produce byte-identical JSON for it.
         let rn = argv(1);
         assert_eq!(rn[1], "render");
         assert_eq!(rn[4], dl[4]);
-        assert_eq!(
-            &rn[5..],
-            &[
-                "--inputs",
-                r#"["slack/raw"]"#,
-                "--outputs",
-                r#"["slack/rendered_md"]"#
-            ]
-        );
+        assert_eq!(&rn[5..], &["--inputs", r#"["slack/raw"]"#]);
 
-        // Param-less step: just inputs + outputs.
+        // Param-less step: just inputs.
         assert_eq!(
             argv(2),
             vec![
@@ -1128,14 +1521,49 @@ mod tests {
                 "grid_index",
                 "--inputs",
                 r#"["slack/rendered_md"]"#,
-                "--outputs",
-                r#"["unified_index/grid"]"#
             ]
         );
+
+        // The composed ids are what everything downstream sees.
+        assert_eq!(specs[0].id, "slack/raw");
+        assert_eq!(specs[2].id, "unified_index/grid");
+        assert_eq!(specs[0].group.as_deref(), Some("slack"));
+        assert_eq!(specs[0].group_type.as_deref(), Some("slack_api"));
+        assert_eq!(specs[0].function.as_deref(), Some("raw"));
+        assert_eq!(specs[2].group_type, None);
 
         // Edges are the declared inputs, nothing more.
         let g = crate::Graph::build(specs).unwrap();
         assert_eq!(g.deps[g.by_id["unified_index/grid"]].len(), 1);
+    }
+
+    /// A group's `type` is part of what its steps are: changing it re-runs
+    /// them. Its `name` is not, so a rename re-runs nothing.
+    #[test]
+    fn a_groups_type_moves_the_fingerprint_and_its_name_does_not() {
+        let with = |group_line: &str| {
+            let cfg: DagConfig = toml::from_str(&format!(
+                r#"
+                [[groups]]
+                id = "mail"
+                {group_line}
+
+                [[steps]]
+                group = "mail"
+                function = "raw"
+                command = "datalib-step download email"
+                "#
+            ))
+            .expect("parse");
+            to_specs(&cfg).expect("to_specs").remove(0)
+        };
+        let untyped = with("");
+        let email = with(r#"type = "email""#);
+        let slack = with(r#"type = "slack_api""#);
+        let named = with("type = \"email\"\nname = \"Fastmail\"");
+        assert_ne!(untyped.fingerprint_material(), email.fingerprint_material());
+        assert_ne!(email.fingerprint_material(), slack.fingerprint_material());
+        assert_eq!(email.fingerprint_material(), named.fingerprint_material());
     }
 
     #[test]
@@ -1151,11 +1579,7 @@ mod tests {
         let specs = to_specs(&cfg).unwrap();
         match &specs[0].run {
             StepRun::Subprocess { argv, .. } => {
-                assert_eq!(
-                    &argv[..3],
-                    &["sh", "-c", r#"echo "hi there" > custom/out/x.txt"#]
-                );
-                assert_eq!(&argv[3..], &["--outputs", r#"["custom/out"]"#]);
+                assert_eq!(argv, &["sh", "-c", r#"echo "hi there" > custom/out/x.txt"#]);
             }
             other => panic!("expected subprocess, got {other:?}"),
         }
@@ -1322,6 +1746,31 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("command"), "{err}");
+    }
+
+    /// A step is `group` + `function` or a verbatim `id`, and the loader
+    /// says which half is missing rather than accepting a half-step.
+    #[test]
+    fn a_step_is_group_and_function_or_a_verbatim_id() {
+        let err = |body: &str| {
+            toml::from_str::<DagConfig>(&format!("[[steps]]\n{body}\ncommand = \"x\"\n"))
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(err("group = \"a\"").contains("missing field `function`"));
+        assert!(err("function = \"raw\"").contains("missing field `group`"));
+        assert!(err("").contains("missing field `group`"));
+        let both = err("id = \"a/raw\"\ngroup = \"a\"\nfunction = \"raw\"");
+        assert!(both.contains("`id` cannot be written"), "{both}");
+
+        let ok: DagConfig =
+            toml::from_str("[[steps]]\ngroup = \"a\"\nfunction = \"raw\"\ncommand = \"x\"\n")
+                .unwrap();
+        assert_eq!(ok.steps[0].id, "a/raw");
+        let custom: DagConfig =
+            toml::from_str("[[steps]]\nid = \"tools/csv\"\ncommand = \"x\"\n").unwrap();
+        assert_eq!(custom.steps[0].id, "tools/csv");
+        assert_eq!(custom.steps[0].group, None);
     }
 
     /// TOML dates are a distinct scalar type with no JSON counterpart;
@@ -1951,19 +2400,277 @@ command = "x"
     }
 
     /// The strict door and the graded one enforce one rule set: what
-    /// `parse` rejects is exactly what produces a diagnostic.
+    /// `parse` rejects is exactly what the graded loader drops.
     #[test]
-    fn strict_parse_rejects_exactly_what_the_graded_loader_reports() {
+    fn strict_parse_rejects_exactly_what_the_graded_loader_drops() {
         for text in [
             "[[steps]]\nid = \"a\"\ncommand = \"x\"\ntitle = 1\n",
             "[[steps]]\nid = \"a\"\ncommand = \"x\"\n[[steps]]\nid = \"a\"\ncommand = \"y\"\n",
             "[[steps]]\nid = \"system\"\ncommand = \"x\"\n",
             "[[applets]]\nid = \"user\"\ncommand = \"x\"\n",
+            "[[groups]]\nid = \"a/b\"\n",
+            "[[steps]]\ngroup = \"nope\"\nfunction = \"raw\"\ncommand = \"x\"\n",
             "nope = 1\n",
         ] {
             let (_, diags) = parse_graded(text);
-            assert!(!diags.is_empty(), "graded accepted {text:?}");
+            assert!(
+                diags.iter().any(|d| d.severity.drops_the_entry()),
+                "graded dropped nothing for {text:?}"
+            );
             assert!(parse(text).is_err(), "strict accepted {text:?}");
         }
+        // A warning drops nothing, so the strict door lets it through: what
+        // it returns is exactly what the graded loader would have run.
+        let warned = "[[groups]]\nid = \"lonely\"\n";
+        let (_, diags) = parse_graded(warned);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, Severity::Warning);
+        assert!(parse(warned).is_ok());
+    }
+}
+
+// --- Groups ----------------------------------------------------------------
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    fn sev_of(diags: &[Diagnostic], id: &str) -> Option<Severity> {
+        diags
+            .iter()
+            .find(|d| d.id() == Some(id))
+            .map(|d| d.severity)
+    }
+
+    const GROUPED: &str = r#"
+[[groups]]
+id = "work-slack"
+name = "Work Slack"
+type = "slack_api"
+
+[[steps]]
+group = "work-slack"
+function = "raw"
+command = "datalib-step download slack_api"
+
+[[steps]]
+group = "work-slack"
+function = "rendered_md"
+command = "datalib-step render slack_api"
+inputs = ["work-slack/raw"]
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid"
+command = "datalib-step grid_index"
+inputs = ["work-slack/rendered_md"]
+
+[[applets]]
+group = "unified_index"
+id = "unified_index"
+command = "datalib-applet unified_index"
+"#;
+
+    /// The plan's example shape loads clean, and the ids everything
+    /// downstream keys on are the composed ones.
+    #[test]
+    fn the_grouped_shape_loads_clean_with_composed_ids() {
+        let check = check_text(GROUPED);
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        let mut ids: Vec<&str> = check.cfg.steps.iter().map(|s| s.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec![
+                "unified_index/grid",
+                "work-slack/raw",
+                "work-slack/rendered_md"
+            ]
+        );
+        assert_eq!(check.cfg.groups.len(), 2);
+        assert_eq!(check.cfg.groups[0].name.as_deref(), Some("Work Slack"));
+        assert_eq!(check.cfg.applets[0].group.as_deref(), Some("unified_index"));
+        assert!(check.graph.by_id.contains_key("work-slack/rendered_md"));
+    }
+
+    /// A step naming a group that does not exist is unusable — its id
+    /// cannot be composed against anything — and the message lists what
+    /// does exist.
+    #[test]
+    fn a_step_under_an_undeclared_group_is_rejected() {
+        let check = check_text(
+            "[[groups]]\nid = \"slack\"\n\n\
+             [[steps]]\ngroup = \"slakc\"\nfunction = \"raw\"\ncommand = \"x\"\n",
+        );
+        let d = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("slakc/raw"))
+            .expect("a diagnostic for the step");
+        assert_eq!(d.severity, Severity::Rejected);
+        assert!(d.message.contains("names no declared group"), "{d:?}");
+        assert!(d.help.as_deref().unwrap().contains("slack"), "{d:?}");
+        assert_eq!(d.line, Some(5), "the `group =` line");
+        assert!(check.cfg.steps.is_empty());
+    }
+
+    /// A bad group id costs the group and every step under it — and those
+    /// steps are told the fix is on the group, not on them.
+    #[test]
+    fn a_bad_group_takes_its_steps_with_it_as_blocked() {
+        let check = check_text(
+            "[[groups]]\nid = \"a/b\"\n\n\
+             [[steps]]\ngroup = \"a/b\"\nfunction = \"raw\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"fine/raw\"\ncommand = \"y\"\n",
+        );
+        assert_eq!(sev_of(&check.diagnostics, "a/b"), Some(Severity::Rejected));
+        let step = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("a/b/raw"))
+            .unwrap();
+        assert_eq!(step.severity, Severity::Blocked);
+        assert!(step.message.contains("was itself dropped"), "{step:?}");
+        assert!(check.cfg.groups.is_empty());
+        let ids: Vec<&str> = check.cfg.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["fine/raw"]);
+    }
+
+    #[test]
+    fn a_group_id_is_one_segment_and_never_system() {
+        for bad in ["", "a/b", "..", "-x", "a b", "system"] {
+            let check = check_text(&format!("[[groups]]\nid = \"{bad}\"\n"));
+            assert_eq!(check.cfg.groups.len(), 0, "{bad:?} should be rejected");
+            assert_eq!(check.diagnostics[0].severity, Severity::Rejected);
+        }
+        for good in ["a", "work-slack", "a.b_c", "unified_index"] {
+            let check = check_text(&format!(
+                "[[groups]]\nid = \"{good}\"\n[[steps]]\ngroup = \"{good}\"\n\
+                 function = \"raw\"\ncommand = \"x\"\n"
+            ));
+            assert!(check.is_clean(), "{good:?}: {:?}", check.diagnostics);
+        }
+    }
+
+    #[test]
+    fn a_function_is_one_segment() {
+        for bad in ["", "a/b", "..", "-x"] {
+            let check = check_text(&format!(
+                "[[groups]]\nid = \"g\"\n[[steps]]\ngroup = \"g\"\nfunction = \"{bad}\"\n\
+                 command = \"x\"\n"
+            ));
+            assert!(check.cfg.steps.is_empty(), "{bad:?} should be rejected");
+            let d = check
+                .diagnostics
+                .iter()
+                .find(|d| d.severity == Severity::Rejected)
+                .unwrap();
+            assert!(d.message.contains("function"), "{d:?}");
+        }
+    }
+
+    /// Two groups with one id would both claim every step under it; the
+    /// first keeps the id, as with steps.
+    #[test]
+    fn the_first_of_two_duplicate_groups_wins() {
+        let check = check_text(
+            "[[groups]]\nid = \"g\"\nname = \"first\"\n\n[[groups]]\nid = \"g\"\nname = \"second\"\n\n\
+             [[steps]]\ngroup = \"g\"\nfunction = \"raw\"\ncommand = \"x\"\n",
+        );
+        assert_eq!(check.cfg.groups.len(), 1);
+        assert_eq!(check.cfg.groups[0].name.as_deref(), Some("first"));
+        assert_eq!(check.cfg.steps.len(), 1, "the step still resolves");
+        assert_eq!(check.diagnostics.len(), 1);
+        assert_eq!(check.diagnostics[0].severity, Severity::Rejected);
+    }
+
+    /// A composed id and a verbatim one share one namespace: a custom step
+    /// cannot claim a tree a grouped step writes, and the collision is
+    /// reported the same way whichever was written first.
+    #[test]
+    fn composed_and_verbatim_ids_collide_in_one_namespace() {
+        let check = check_text(
+            "[[groups]]\nid = \"g\"\n\n\
+             [[steps]]\ngroup = \"g\"\nfunction = \"raw\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"g/raw\"\ncommand = \"y\"\n\n\
+             [[steps]]\nid = \"g\"\ncommand = \"z\"\n",
+        );
+        assert_eq!(check.cfg.steps.len(), 1);
+        let msgs: Vec<&str> = check
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(msgs.iter().any(|m| m.contains("duplicate id")), "{msgs:?}");
+        assert!(msgs.iter().any(|m| m.contains("nested with")), "{msgs:?}");
+    }
+
+    /// The two warnings: a group nothing is filed under, and a name written
+    /// on a grouped step. Neither drops anything.
+    #[test]
+    fn empty_groups_and_step_names_warn_without_dropping() {
+        let check = check_text(
+            "[[groups]]\nid = \"lonely\"\n\n[[groups]]\nid = \"g\"\n\n\
+             [[steps]]\ngroup = \"g\"\nfunction = \"raw\"\nname = \"Nope\"\ncommand = \"x\"\n",
+        );
+        assert_eq!(check.dropped(), 0);
+        assert!(check.nothing_dropped());
+        assert!(!check.is_clean());
+        assert_eq!(check.cfg.groups.len(), 2);
+        assert_eq!(check.cfg.steps.len(), 1);
+        let lonely = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("lonely"))
+            .unwrap();
+        assert_eq!(lonely.severity, Severity::Warning);
+        assert!(lonely.message.contains("no steps"), "{lonely:?}");
+        let named = check
+            .diagnostics
+            .iter()
+            .find(|d| d.id() == Some("g/raw"))
+            .unwrap();
+        assert_eq!(named.severity, Severity::Warning);
+        assert_eq!(named.line, Some(10), "the `name =` line");
+    }
+
+    /// A group whose only step was rejected is not empty — somebody filled
+    /// it, and the entry to fix is the step.
+    #[test]
+    fn a_group_whose_step_was_rejected_is_not_called_empty() {
+        let check = check_text(
+            "[[groups]]\nid = \"g\"\n\n\
+             [[steps]]\ngroup = \"g\"\nfunction = \"raw\"\ncommand = \"x\"\ntitle = 1\n",
+        );
+        assert_eq!(check.diagnostics.len(), 1);
+        assert_eq!(check.diagnostics[0].id(), Some("g/raw"));
+    }
+
+    /// An applet's group is a filing, so a wrong one is advice rather than a
+    /// reason to take the grid down.
+    #[test]
+    fn an_applet_under_an_undeclared_group_only_warns() {
+        let check =
+            check_text("[[applets]]\ngroup = \"nope\"\nid = \"unified_index\"\ncommand = \"x\"\n");
+        assert_eq!(check.cfg.applets.len(), 1);
+        assert_eq!(check.diagnostics.len(), 1);
+        assert_eq!(check.diagnostics[0].severity, Severity::Warning);
+    }
+
+    /// A custom step outside any group is still legal and still writes its
+    /// id verbatim — the shape a shell script or a third-party program uses.
+    #[test]
+    fn an_ungrouped_custom_step_keeps_its_verbatim_id() {
+        let check = check_text(
+            "[[steps]]\nid = \"exports/csv\"\ncommand = \"my-exporter\"\nname = \"CSV export\"\n",
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        let spec = &check.graph.steps[0];
+        assert_eq!(spec.id, "exports/csv");
+        assert_eq!(spec.group, None);
+        assert_eq!(spec.function, None);
     }
 }

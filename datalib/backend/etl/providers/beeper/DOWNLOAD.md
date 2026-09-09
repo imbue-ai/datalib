@@ -32,21 +32,25 @@ bridge-agnostic schema. We re-shape that into our `rooms` / `users` /
    Google Chat, etc.) inside the desktop app. Let it run long
    enough to do its first sync; the app's caches need to be
    populated.
-3. Add the step pair to your `config.toml`:
+3. Add the group and its step pair to your `config.toml`:
    ```toml
+   [[groups]]
+   id = "beeper"
+   type = "beeper"
+
    [[steps]]
-   id = "beeper.download"
+   group = "beeper"
+   function = "raw"
    command = "datalib-step download beeper"
-   outputs = ["beeper/raw"]
    [steps.params.sync]
    sources = ["signal", "googlechat"]
    media = true
 
    [[steps]]
-   id = "beeper.render"
+   group = "beeper"
+   function = "rendered_md"
    command = "datalib-step render beeper"
    inputs = ["beeper/raw"]
-   outputs = ["beeper/rendered_md"]
    ```
 
 That's it.

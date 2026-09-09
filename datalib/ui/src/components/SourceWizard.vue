@@ -4,10 +4,11 @@
 //
 // Two fields carry the identity, and only one of them is permanent.
 // **Name** is what you type and what every screen shows; it is free
-// text and always editable. **Id** is the directory on disk and the
-// prefix inside every `qmd_path` the index holds, so changing it is a
-// migration rather than an edit — it is derived from the name once, at
-// creation, and read-only forever after.
+// text and always editable. **Id** is the group's id: the directory on
+// disk and the prefix inside every `qmd_path` the index holds, so
+// changing it is a migration rather than an edit — it is derived from
+// the name once, at creation, and read-only forever after. Both land on
+// the `[[groups]]` entry; the steps written under it carry neither.
 
 // A descriptor with a `credentialService` also gets a **Connection**
 // block: which latchkey account to use, a button that runs latchkey's
@@ -27,6 +28,7 @@ import {
   type Field,
 } from "@/config/catalog";
 import {
+  buildGroup,
   buildStep,
   fieldIsActive,
   fieldPhaseOf,
@@ -80,8 +82,15 @@ const emit = defineEmits<{
     e: "submit",
     payload: {
       id: string;
+      /// The group's name as typed. The caller writes it on the group —
+      /// as part of `groupBody` when creating, by renaming when editing.
       name: string;
+      /// The `[[steps]]` block for this step alone.
       body: string;
+      /// The `[[groups]]` block to write above it, when this dialog is
+      /// creating a source. Null when editing or chaining a render step:
+      /// the group already exists.
+      groupBody: string | null;
       entry: CatalogEntry;
       phase: FieldPhase;
       /// Set when this step reads another — the render step's fetch
@@ -128,16 +137,19 @@ const chosen = ref<CatalogEntry | null>(
   props.editing?.entry ?? props.renderFor?.entry ?? null,
 );
 
-/// Blank means "no name" — a step with none is shown by its id, so the
+/// Blank means "no name" — a group with none is shown by its id, so the
 /// field takes the id as its placeholder rather than pre-filling one,
 /// and clearing it removes the key.
 const name = ref(
   props.editing && props.editing.step.name !== props.editing.step.id
     ? props.editing.step.name
-    : props.renderFor
-      ? `${props.renderFor.fetchName} (render markdown)`
-      : "",
+    : "",
 );
+
+/// Whether this dialog has a name to offer. The name belongs to the
+/// group and is edited from its fetch step; a render step's label is
+/// derived from it, so a render dialog shows none.
+const nameEditable = computed(() => phase.value === "download");
 const id = ref(
   props.editing?.step.id ?? (props.renderFor ? renderIdFor(props.renderFor.fetchId) : ""),
 );
@@ -193,11 +205,9 @@ const alsoRenderPreview = computed(() => {
   if (!chosen.value || !canOfferRender.value || renderHasOptions.value || !alsoRender.value) {
     return "";
   }
-  const fetchName = name.value.trim() || stepId.value;
   return `\n\n${buildStep({
     entry: chosen.value,
-    id: renderIdFor(stepId.value),
-    name: `${fetchName} (render markdown)`,
+    group: stem.value,
     phase: "render",
     inputs: [stepId.value],
     values: values.value,
@@ -332,13 +342,26 @@ const body = computed(() =>
   chosen.value
     ? buildStep({
         entry: chosen.value,
-        id: stepId.value,
-        name: name.value,
+        group: stem.value,
         phase: phase.value,
         inputs: inputs.value,
         values: values.value,
       })
     : "",
+);
+
+/// The `[[groups]]` entry a new source gets, above its steps. Only while
+/// creating: editing and chaining both work under a group that exists.
+const groupBody = computed(() =>
+  chosen.value && mode.value === "create"
+    ? buildGroup({ id: stem.value, name: name.value, type: chosen.value.type })
+    : null,
+);
+
+/// What the review pane shows: the group (when one is being created),
+/// this step, and the render step the checkbox adds.
+const preview = computed(() =>
+  `${groupBody.value ? `${groupBody.value}\n\n` : ""}${body.value}${alsoRenderPreview.value}`,
 );
 
 function listText(field: Field): string {
@@ -584,8 +607,7 @@ function submit() {
           id: renderIdFor(stepId.value),
           body: buildStep({
             entry: chosen.value,
-            id: renderIdFor(stepId.value),
-            name: `${fetchName} (render markdown)`,
+            group: stem.value,
             phase: "render",
             inputs: [stepId.value],
             values: values.value,
@@ -597,6 +619,7 @@ function submit() {
     id: stepId.value,
     name: name.value.trim(),
     body: body.value,
+    groupBody: groupBody.value,
     entry: chosen.value,
     phase: phase.value,
     inputs: inputs.value,
@@ -788,16 +811,16 @@ function submit() {
           job log carries the exact command to run.
         </p>
 
-        <label class="wiz-field">
+        <label v-if="nameEditable" class="wiz-field">
           <span class="wiz-label">Name</span>
           <input
             v-model="name"
             class="wiz-input"
-            :placeholder="id || '…'"
+            :placeholder="stem || '…'"
           />
           <small class="wiz-help">
-            What this is called on screen. Change it whenever you like — nothing on disk moves and
-            no step re-runs. Leave it blank to be shown as <code>{{ id || "…" }}</code>.
+            What this source is called on screen. Change it whenever you like — nothing on disk
+            moves and no step re-runs. Leave it blank to be shown as <code>{{ stem || "…" }}</code>.
           </small>
         </label>
 
@@ -959,7 +982,7 @@ function submit() {
 
         <details class="wiz-review">
           <summary>Review the TOML this writes</summary>
-          <pre>{{ body }}{{ alsoRenderPreview }}</pre>
+          <pre>{{ preview }}</pre>
         </details>
       </div>
 

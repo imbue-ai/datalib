@@ -48,6 +48,17 @@ pub struct StepSpec {
     /// never what this step produces, so flipping it should not re-run
     /// anything.
     pub streams_output: bool,
+    /// The `[[groups]]` entry this step belongs to, when it has one. The
+    /// id is then `<group>/<function>`, composed by the loader; a step
+    /// with no group carries a verbatim id and none of these three.
+    pub group: Option<String>,
+    /// The group's `type` — the kind of data the group mirrors. In the
+    /// fingerprint, so changing a group's type re-runs its steps; the
+    /// group's `name` is deliberately not, so renaming re-runs nothing.
+    pub group_type: Option<String>,
+    /// What this step does within its group: the second segment of its
+    /// id, and the directory it writes under the group's.
+    pub function: Option<String>,
 }
 
 impl StepSpec {
@@ -59,6 +70,8 @@ impl StepSpec {
     pub fn fingerprint_material(&self) -> String {
         let mut m = String::new();
         m.push_str(&self.id);
+        m.push('\u{1}');
+        m.push_str(self.group_type.as_deref().unwrap_or(""));
         m.push('\u{1}');
         for i in &self.inputs {
             m.push_str(i.as_str());
@@ -93,6 +106,9 @@ impl StepSpec {
             run,
             code_version: None,
             streams_output: false,
+            group: None,
+            group_type: None,
+            function: None,
         }
     }
 
@@ -217,6 +233,13 @@ impl CheckpointSink {
 #[derive(Clone)]
 pub struct StepCtx {
     pub step_id: StepId,
+    /// The step's group, its type and its function — see the same
+    /// fields on [`StepSpec`]. Forwarded to a subprocess as
+    /// `DATALIB_DAG_GROUP`, `DATALIB_DAG_GROUP_TYPE` and
+    /// `DATALIB_DAG_FUNCTION`; all `None` for an ungrouped step.
+    pub group: Option<String>,
+    pub group_type: Option<String>,
+    pub function: Option<String>,
     pub data_root: PathBuf,
     /// Concrete input artifacts, resolved from the step's input
     /// patterns (producer outputs + external artifacts), relative to

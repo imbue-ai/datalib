@@ -383,8 +383,8 @@ rough dependency order:
   Every other step is reported `not_selected` and never considered.
   Inside the subgraph, ordinary change propagation applies, so the
   shared fan-in still re-runs only if a selected chain actually moved.
-  The UI's per-source / multi-select "Sync now" maps onto it
-  (`<name>.download` id convention), the whole selection as one run.
+  The UI's per-source / multi-select "Sync now" maps onto it (the
+  `<group>/raw` step ids), the whole selection as one run.
 
   The rule is *reachability in the graph*, deliberately not a function
   of run-time state (what succeeded before, whether an input exists,
@@ -458,13 +458,13 @@ rough dependency order:
   failed/blocked) rendered as one cell per task; `GET /api/dag` serves
   the derived graph via the runner's own load → specs → graph chain so
   the visualization can't drift from execution.
-* **Legacy configs migrate out of band, not in the runner**: the two
-  pre-TOML `config.yaml` shapes — a YAML steps config, and the older
-  stanza-based `sources:` one — are converted once by the separate
-  `datalib-migrate-config` program. The runner and the server accept
-  exactly one format, so a shape we stopped writing can't widen what a
-  running pipeline loads; every legacy schema, and the last YAML
-  parser, lives in that one tool.
+* **Retired config shapes are rewritten out of band, not in the
+  runner**: a `config.toml` written before `[[groups]]` existed is
+  rewritten once by the separate `datalib-migrate-config` program. The
+  runner and the server accept exactly one shape, so a shape we stopped
+  writing can't widen what a running pipeline loads; the one retired
+  shape the tool still understands lives there and nowhere else, and
+  the pre-TOML `config.yaml` era is no longer convertible at all.
 * **The data-root layout is unchanged** (`<name>/raw`,
   `<name>/rendered_md`, `system/…`), so roots move freely between the
   old and new binaries; the only addition is `dag_state.json`.

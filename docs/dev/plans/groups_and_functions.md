@@ -1,9 +1,12 @@
 # Groups and functions: one row per source
 
-**Status: agreed design (2026-09-09), nothing built.** Written against
-`eee381c3`. Per [`AGENTS.md`](../../../AGENTS.md), don't cite this
-file as a description of the tree. Where it says "today", that was
-checked against that commit; where it says "will", nothing exists.
+**Status: agreed design (2026-09-09); slice 1 built (2026-09-09),
+slices 2–5 not.** Written against `eee381c3`. Per
+[`AGENTS.md`](../../../AGENTS.md), don't cite this file as a
+description of the tree. Where it says "today", that was checked
+against that commit; where it says "will", check the slice list under
+"Order of work" — slice 1's items are in the tree, and the three
+places it departed from this text are recorded there.
 
 **Reverses** the "Sources stop being a grouping" section of
 [`step_identity.md`](completed/step_identity.md) and the header of
@@ -408,12 +411,31 @@ Mechanical, but wide:
 
 Each slice is a PR; each leaves the tree green.
 
-1. **Loader + runner.** `[[groups]]`, `group` and `function` on steps,
-   composition, the checks above, the forwarded environment, the
-   fingerprint rule. `--outputs` dropped. `datalib-migrate-config`
+1. **Loader + runner.** *Built.* `[[groups]]`, `group` and `function`
+   on steps, composition, the checks above, the forwarded environment,
+   the fingerprint rule. `--outputs` dropped. `datalib-migrate-config`
    rewrite. Configs and fixtures updated to the new shape with the
    *old* directory names still hardcoded in `datalib-step`, so this
-   slice does not move data.
+   slice does not move data — which is why the functions in every
+   config today are `raw`, `rendered_md`, `grid` and `qmd`, and slice 2
+   renames them with the trees. Three departures from the text above:
+   - `command` stays required. Decision 4 makes it optional once
+     `datalib-step` dispatches on the environment; until slice 2 a
+     step with no `command` would run a program that cannot read its
+     own function, so the loader still refuses it.
+   - `datalib-migrate-config` was cut back to a skeleton rather than
+     extended: the pre-TOML YAML era (the stanza schema, the YAML
+     steps schema, the tree's last YAML parser) is gone from it, and
+     the one rewrite it holds is ungrouped TOML → `[[groups]]`. The
+     shape stays so the next rewrite has a home. The http server's
+     "stray `config.yaml`" hint and the first-run screen's migration
+     branch went with it; a pre-TOML root is set up anew.
+   - The wizard writes the new shape now rather than in slice 4, since
+     a writer that produced the old one would have had nothing to
+     produce it for. The screen is unchanged: still one row per step,
+     with the fetch row labelled from the group's name and the render
+     row from the same name suffixed, so no test that reads the table
+     had to move. `stemOf` and its siblings stay until slice 4.
 2. **`datalib-step` honors the contract.** Dispatch on the environment,
    write to the named tree, read inputs from `DATALIB_DAG_INPUTS`,
    delete `source_name`. Vocabulary rename lands here, with the fixture

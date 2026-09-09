@@ -35,6 +35,8 @@ function steps(): ConfiguredStep[] {
   const mk = (id: string, inputs: string[]): ConfiguredStep => ({
     id,
     kind: "step",
+    group: null,
+    function: null,
     name: id,
     phase: "other",
     type: null,

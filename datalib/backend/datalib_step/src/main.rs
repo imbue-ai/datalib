@@ -13,6 +13,9 @@ mod source;
 mod source_type;
 mod synth;
 
+#[cfg(test)]
+mod config_examples_test;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -45,13 +48,6 @@ struct Cli {
     /// types rescan the data root rather than consuming it.
     #[arg(long, global = true)]
     inputs: Option<String>,
-    /// Declared output artifact paths (JSON string array), appended by
-    /// the runner as the single tree this step's id names. Accepted so
-    /// every step command shares one flag surface, and so a step
-    /// written against the older contract still parses — nothing here
-    /// reads it. Identity comes from `DATALIB_DAG_STEP`.
-    #[arg(long, global = true)]
-    outputs: Option<String>,
     /// Fixed "now" timestamp (RFC 3339), stamped wherever this step
     /// type records times (raw bookkeeping, `markdowns.rendered_at`).
     /// Falls back to `$DATALIB_DAG_NOW` (the runner exports one

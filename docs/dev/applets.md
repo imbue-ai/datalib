@@ -340,8 +340,9 @@ bundle, so there is nothing to write into a namespace — the gateway
 still passes `--frontend-dir`, and the applet ignores it.
 
 It is also the applet the app cannot run without. A data root whose
-config does not declare it has no search, which is why the scaffold, the
-config examples and `datalib-migrate-config`'s output all write it. The
+config does not declare it has no search, which is why the scaffold and
+the config examples all write it and `datalib-migrate-config` carries it
+through. The
 UI calls it directly at `/applet/unified_index/…`; there is no `/api/`
 alias, and `datalib-http` does not know those routes exist.
 

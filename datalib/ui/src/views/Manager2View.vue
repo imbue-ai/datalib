@@ -40,11 +40,13 @@ import {
   type PipelineStorage,
 } from "@/api";
 import {
+  listGroups,
   listSteps,
   type EntryKind,
   appendSource,
   phaseOf,
   removeSteps,
+  renameGroup,
   renderIdFor,
   replaceStep,
   stemOf,
@@ -54,6 +56,7 @@ import {
   entryForStep,
   producerOf,
   emptyTableDiagnosis,
+  type ConfiguredGroup,
   type ConfiguredStep,
   type StepPhase,
 } from "@/config/sourceSteps";
@@ -157,6 +160,9 @@ const dagRun = ref<DagRun | null>(null);
 /// whatever tab needed it.
 const appletErrors = ref<Record<string, string>>({});
 const sources = ref<ConfiguredStep[]>([]);
+/// The `[[groups]]` entries, for what a new source may not collide with
+/// and for taking a group with its last step.
+const configGroups = ref<ConfiguredGroup[]>([]);
 
 // The Advanced disclosure. Closed on load: the point of this tab is
 // that a text editor is not the first thing you meet.
@@ -208,11 +214,14 @@ const emptyDiagnosis = computed(() =>
   }),
 );
 
-/// Stems already spoken for. A new step reserves a whole tree
-/// (`work-slack/` covers both `work-slack/raw` and its render sibling),
-/// so collisions are checked on the stem rather than the full id.
+/// Ids already spoken for: every group, plus the stem of every step —
+/// a custom step's tree is reserved the same way a group's is.
 const takenIds = computed(
-  () => new Set(sources.value.filter((s) => s.kind === "step").map((s) => stemOf(s.id))),
+  () =>
+    new Set([
+      ...configGroups.value.map((g) => g.id),
+      ...sources.value.filter((s) => s.kind === "step").map((s) => stemOf(s.id)),
+    ]),
 );
 
 /// The render step that reads a given fetch step, if the config has
@@ -1039,6 +1048,7 @@ function onWindowKeydown(e: KeyboardEvent) {
 function reparse() {
   try {
     sources.value = listSteps(configText.value);
+    configGroups.value = listGroups(configText.value);
     parseError.value = null;
   } catch (e) {
     parseError.value = (e as Error).message;
@@ -1253,6 +1263,7 @@ async function onWizardSubmit(payload: {
   id: string;
   name: string;
   body: string;
+  groupBody: string | null;
   entry: CatalogEntry;
   inputs: string[];
   offerRenderFor: {
@@ -1265,7 +1276,16 @@ async function onWizardSubmit(payload: {
   const current = editing.value;
   let next = current
     ? replaceStep(configText.value, current.step, payload.body)
-    : appendSource(configText.value, payload.body);
+    : appendSource(
+        configText.value,
+        payload.groupBody ? `${payload.groupBody}\n\n${payload.body}` : payload.body,
+      );
+  // The name lives on the group. Editing a fetch step is how it gets
+  // renamed; a render step's label is derived, so its dialog offers
+  // no name and nothing to write here.
+  if (current?.step.group && current.step.phase === "fetch") {
+    next = renameGroup(next, current.step.group, payload.name);
+  }
 
   // The render step written alongside a fetch step, when the wizard's
   // checkbox was ticked. One save, so a failure leaves neither.
@@ -1342,7 +1362,16 @@ async function deleteSource(id: string) {
   for (const d of doomed) {
     if (d.phase === "render") next = unwireFromFanIns(next, d.id);
   }
-  await writeConfig(removeSteps(next, doomed), `Removed ${name}.`);
+  // A group with nothing left under it goes too: the loader would only
+  // warn about it, but a `[[groups]]` entry naming a source that is
+  // gone is litter someone has to explain.
+  const goneIds = new Set(doomed.map((d) => d.id));
+  const emptied = configGroups.value.filter(
+    (g) =>
+      step.group === g.id &&
+      !sources.value.some((s) => s.group === g.id && !goneIds.has(s.id)),
+  );
+  await writeConfig(removeSteps(next, [...doomed, ...emptied]), `Removed ${name}.`);
 }
 
 async function reveal(id: string) {
