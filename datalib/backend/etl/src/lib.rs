@@ -14,6 +14,7 @@ pub mod control;
 pub mod doltlite_raw;
 pub mod download_metrics;
 pub mod download_params;
+pub mod download_problems;
 pub mod download_run;
 pub mod event_store;
 pub mod event_tape;

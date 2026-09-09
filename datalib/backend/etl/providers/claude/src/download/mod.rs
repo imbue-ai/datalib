@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
+use datalib_etl::download_problems::{self, DownloadProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
 use datalib_time::IsoOffsetTimestamp;
@@ -122,6 +123,10 @@ impl FetchOptions {
 
 #[derive(Debug, Default, Serialize)]
 pub struct FetchSummary {
+    /// Configured `conv_uuids` no org has. Reported rather than fatal:
+    /// one dead link costs that conversation, not the run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<DownloadProblem>,
     pub fetched: usize,
     pub skipped: usize,
     /// Listing items ignored because their `updated_at` predates the
@@ -315,7 +320,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 opts.progress.inc(1);
                 opts.progress.set_message(raw);
                 let target = datalib_etl::ids::normalize_id_token(raw);
-                fetch_single(
+                let outcome = fetch_single(
                     &mut client,
                     &db,
                     &orgs,
@@ -325,7 +330,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     &now,
                 )
                 .await?;
+                if outcome == SingleOutcome::NotFoundInAnyOrg {
+                    summary.problems.push(DownloadProblem::not_found(
+                        "conv_uuids",
+                        raw,
+                        format!(
+                            "no conversation with this id in any of {} org(s)",
+                            orgs.len()
+                        ),
+                    ));
+                }
             }
+            download_problems::report(&summary.problems);
             return Ok::<(), anyhow::Error>(());
         }
 
@@ -852,6 +868,17 @@ fn credential_hint(e: ClaudeError) -> anyhow::Error {
     )
 }
 
+/// Whether a targeted `conv_uuids` fetch found its conversation.
+///
+/// A separate outcome rather than an `Err`: "no org has this uuid" is a
+/// config problem the caller reports and steps over, while a real fetch
+/// failure still has to stop the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SingleOutcome {
+    Fetched,
+    NotFoundInAnyOrg,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn fetch_single(
     client: &mut ClaudeClient,
@@ -861,7 +888,7 @@ async fn fetch_single(
     summary: &mut FetchSummary,
     blake3_by_file: &mut HashMap<String, String>,
     now: &str,
-) -> Result<()> {
+) -> Result<SingleOutcome> {
     for org in orgs {
         let Some((org_uuid, org_name)) = org_identity(org) else {
             continue;
@@ -876,7 +903,7 @@ async fn fetch_single(
                     org = %org_name
                 );
                 fetch_files_for(db, &full, conv_uuid, summary, blake3_by_file, now).await;
-                return Ok(());
+                return Ok(SingleOutcome::Fetched);
             }
             Err(ClaudeError::Forbidden(_)) => {
                 info!(
@@ -904,10 +931,7 @@ async fn fetch_single(
             }
         }
     }
-    Err(anyhow::anyhow!(
-        "conversation {conv_uuid} not found in any of {} org(s)",
-        orgs.len()
-    ))
+    Ok(SingleOutcome::NotFoundInAnyOrg)
 }
 
 /// Backoff delays for transient-403 retries on a single

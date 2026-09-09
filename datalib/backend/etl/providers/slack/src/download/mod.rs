@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
+use datalib_etl::download_problems::{self, DownloadProblem};
 use datalib_etl::events;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::scope_config;
@@ -300,6 +301,10 @@ struct TargetPlan {
     targets: Vec<(String, String)>,
     /// How many of `targets` are DMs — the tail of the vec.
     dm_targets: usize,
+    /// `channels` entries that matched no channel. Kept for the same
+    /// reason [`DmAllowlist::unmatched`] is: silence here is
+    /// indistinguishable from "that channel has no messages".
+    unmatched: Vec<String>,
 }
 
 fn select_targets(
@@ -321,8 +326,9 @@ fn select_targets(
         Some(specs) => {
             for spec in specs {
                 let name = spec.trim().trim_start_matches('#');
-                if let Some(t) = by_name.get(name) {
-                    plan.targets.push((t.id.clone(), name.to_string()));
+                match by_name.get(name) {
+                    Some(t) => plan.targets.push((t.id.clone(), name.to_string())),
+                    None => plan.unmatched.push(spec.clone()),
                 }
             }
         }
@@ -1064,6 +1070,10 @@ impl FetchOptions {
 
 #[derive(serde::Serialize)]
 pub struct FetchSummary {
+    /// Configured `channels` / `dm_users` this workspace has nothing
+    /// matching. Reported rather than fatal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<DownloadProblem>,
     pub messages: usize,
     pub replies: usize,
     /// Messages Slack no longer serves inside a range this run re-walked.
@@ -1130,6 +1140,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     );
 
     let mut grand = FetchSummary {
+        problems: Vec::new(),
         messages: 0,
         replies: 0,
         pruned: 0,
@@ -1199,6 +1210,25 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             &user_labels,
             self_user_id.as_deref(),
         );
+        for spec in &plan.unmatched {
+            grand.problems.push(DownloadProblem::not_found(
+                "channels",
+                spec,
+                format!("no channel by that name among {} listed", listed.len()),
+            ));
+        }
+        for spec in dm_allow
+            .as_ref()
+            .map(|a| a.unmatched.as_slice())
+            .unwrap_or(&[])
+        {
+            grand.problems.push(DownloadProblem::not_found(
+                "dm_users",
+                spec,
+                "no mirrored user matches this entry, so their DMs are not mirrored",
+            ));
+        }
+        download_problems::report(&grand.problems);
         info!(
             event = "slack_export_planned",
             channels = plan.targets.len() - plan.dm_targets,
