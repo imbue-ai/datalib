@@ -134,6 +134,9 @@ pub struct FetchOptions {
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
     /// `datalib/backend/etl/README.md`.
     pub db: RawDb,
+    /// Seals a flushed batch, so render can start on the mail already
+    /// mirrored while the walk continues. `None` commits once at the end.
+    pub sealer: Option<datalib_etl::raw_store::Sealer>,
     pub hostname: String,
     pub account_id: Option<String>,
     /// Skip stored `state` tokens and re-enumerate via `Email/query`.
@@ -166,6 +169,7 @@ impl FetchOptions {
         Self {
             latchkey: LatchkeySettings::default(),
             db,
+            sealer: None,
             hostname: String::new(),
             account_id: None,
             full_resync: false,
@@ -417,6 +421,7 @@ async fn run_sync(
     opts.progress.set_message("email: emails");
     let touched_threads = sync_emails(
         db,
+        opts.sealer.as_ref(),
         &now,
         session,
         account_id,
@@ -571,6 +576,7 @@ async fn incremental_mailboxes(
 #[allow(clippy::too_many_arguments)]
 async fn sync_emails(
     db: &RawDb,
+    sealer: Option<&datalib_etl::raw_store::Sealer>,
     now: &str,
     session: &Session,
     account_id: &str,
@@ -589,6 +595,7 @@ async fn sync_emails(
     if let Some(since) = stored {
         match incremental_emails(
             db,
+            sealer,
             now,
             session,
             account_id,
@@ -606,6 +613,7 @@ async fn sync_emails(
                 if let Some(scope) = backfill {
                     full_enumerate_emails(
                         db,
+                        sealer,
                         now,
                         session,
                         account_id,
@@ -627,6 +635,7 @@ async fn sync_emails(
 
     full_enumerate_emails(
         db,
+        sealer,
         now,
         session,
         account_id,
@@ -641,6 +650,7 @@ async fn sync_emails(
 #[allow(clippy::too_many_arguments)]
 async fn incremental_emails(
     db: &RawDb,
+    sealer: Option<&datalib_etl::raw_store::Sealer>,
     now: &str,
     session: &Session,
     account_id: &str,
@@ -680,6 +690,12 @@ async fn incremental_emails(
                 touched_threads,
             )
             .await?;
+            // A batch of `Email/get` results has landed in full -- rows and
+            // the blobs they name together -- so the store is consistent
+            // here. Deletions are applied separately, after the walk.
+            if let Some(sealer) = sealer {
+                sealer.wrote(1).await;
+            }
         }
 
         if !destroyed.is_empty() {
@@ -708,6 +724,7 @@ async fn incremental_emails(
 #[allow(clippy::too_many_arguments)]
 async fn full_enumerate_emails(
     db: &RawDb,
+    sealer: Option<&datalib_etl::raw_store::Sealer>,
     now: &str,
     session: &Session,
     account_id: &str,
@@ -799,6 +816,10 @@ async fn full_enumerate_emails(
                 touched_threads,
             )
             .await?;
+            // A batch has landed in full, so the store is consistent here.
+            if let Some(sealer) = sealer {
+                sealer.wrote(1).await;
+            }
 
             // The Email/get response's `state` is the live state token —
             // grab it on the *first* successful response and use it once

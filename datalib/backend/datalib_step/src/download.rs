@@ -54,6 +54,10 @@ pub async fn run(
              stay in doltlite history)",
         );
     }
+    // Every processor in this source's wave writes the one raw store, so the
+    // step can only claim what all of them can support. `all` on an empty
+    // iterator is `true`, which is why the emptiness check above matters.
+    emitter.declare_streams_output(processors.iter().all(|p| p.streams_output()));
     let guard = datalib_etl::retry::RetryGuard::from_params(&planned.download_params);
 
     let body = async {

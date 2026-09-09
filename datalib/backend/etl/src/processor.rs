@@ -20,6 +20,27 @@ pub trait DataProcessor: Send + Sync {
     fn id(&self) -> &str;
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String>;
+
+    /// May a consumer read this processor's output *while it is being
+    /// written* — P2 of the sink contract in
+    /// `docs/dev/plans/streaming_steps_plan.md`.
+    ///
+    /// Default `false`, and it should stay that way until someone has
+    /// looked. The question is not "is the store doltlite" — every raw
+    /// store is — but **what the download does to it between
+    /// checkpoints**. A download that empties a table before refilling it
+    /// publishes, at every moment in between, a store that reads as a
+    /// source which lost its data. Answering `true` there is how a
+    /// consumer comes to delete rendered documents for rows that are
+    /// about to come back.
+    ///
+    /// A wipe asked for by `--reset-and-redownload` or
+    /// `always_clear_before_ingest` is handled elsewhere and needs no
+    /// answer here: `RunCtx::checkpoint_policy` returns `Never` for those
+    /// runs, so nothing is announced to read.
+    fn streams_output(&self) -> bool {
+        false
+    }
 }
 
 /// The genuinely-runtime inputs a provider's `plan()` needs that are NOT part

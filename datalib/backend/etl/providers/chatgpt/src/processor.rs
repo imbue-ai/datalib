@@ -48,6 +48,18 @@ impl DataProcessor for ChatgptDownload {
         &self.id
     }
 
+    /// Upserts conversations one at a time and prunes to the enumeration it
+    /// just walked. Between checkpoints the store is therefore the previous
+    /// snapshot plus whatever this run has fetched — a superset, never a
+    /// gap — so a consumer reading one sees stale rows at worst, and the
+    /// prune's deletions reach it through the same diff on the next pass.
+    /// The one shape that would break that, a truncate before the refill,
+    /// happens only under `--reset-and-redownload`, and that run does not
+    /// checkpoint at all.
+    fn streams_output(&self) -> bool {
+        true
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = download::db_path_for(&self.raw_path);
         let db = download::RawDb::open(&entity_db).await?;
@@ -63,6 +75,7 @@ impl DataProcessor for ChatgptDownload {
             fetched_at: Some(ctx.now.to_string()),
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
+            sealer: Some(session.sealer()),
         })
         .await?;
         let summary = format!(

@@ -1022,6 +1022,10 @@ pub struct FetchOptions {
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
+    /// Seals what has been written so far, so render can start on the
+    /// channels already walked while the rest are still arriving. `None`
+    /// -- the default -- commits once at the end.
+    pub sealer: Option<datalib_etl::raw_store::Sealer>,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -1050,6 +1054,7 @@ impl FetchOptions {
     pub fn new(db: RawDb) -> Self {
         Self {
             db,
+            sealer: None,
             latchkey: LatchkeySettings::default(),
             channels: None,
             since: DEFAULT_SINCE.to_string(),
@@ -1278,6 +1283,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     grand.pruned += totals.pruned;
                     for (k, v) in totals.media {
                         *grand.media.entry(k).or_insert(0) += v;
+                    }
+                    // End of a channel is the consistent point, and it is
+                    // after the prune rather than before: `export_channel`
+                    // only prunes a window it walked to completion, so what
+                    // is published here is a settled channel rather than one
+                    // still carrying messages this run is about to delete.
+                    // A channel that *failed* deliberately seals nothing --
+                    // its window is half-walked.
+                    if let Some(sealer) = opts.sealer.as_ref() {
+                        sealer.wrote(1).await;
                     }
                 }
                 Err(e) => {
