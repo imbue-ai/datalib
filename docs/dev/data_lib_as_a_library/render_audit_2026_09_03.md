@@ -160,7 +160,7 @@ record costs every provider's index update for that run.
 ### The same defect at the loader
 
 Pass C named `grid_index` and it holds up.
-[`load_all_batch`](../../../datalib/backend/etl/src/grid_index.rs)
+[`load_all_batch`](../../../datalib/backend/etl/render/src/grid_index.rs)
 (line 785) propagates every per-sidecar error with `?`: an unreadable
 file, a sidecar that will not deserialize, or a `uuid` claimed by two
 sources. It is worse than "the load stops," because the whole loop runs
@@ -440,16 +440,16 @@ every fabrication below is in the bypass group.
 
 | # | site | what happens |
 | --- | --- | --- |
-| T1 | [`slack/render/mod.rs:39,46,50`](../../../datalib/backend/etl/providers/slack/src/render/mod.rs) | `ts_to_iso` fabricates epoch **three ways**: non-numeric seconds → `unwrap_or(0)`, non-numeric fraction → `unwrap_or(0)`, out-of-range → `Utc.timestamp_opt(0,0)`. Output is a real-looking `1970-01-01T00:00:00.000000+00:00`. |
-| T2 | [`slack/render/render.rs:272,278`](../../../datalib/backend/etl/providers/slack/src/render/render.rs) | A second, independent copy of the same parser with the same two `unwrap_or(0)`s. |
-| T3 | [`email/render/render.rs:436`](../../../datalib/backend/etl/providers/email/src/render/render.rs) | `date_ms: em.received_at.and_then(iso_to_ms).unwrap_or(0)`. An email with a missing or non-RFC-3339 `Date` header lands at the epoch. Malformed `Date` headers are common in real mail. |
-| T4 | [`whatsapp/render/parse.rs:222,261,281,431`](../../../datalib/backend/etl/providers/whatsapp/src/render/parse.rs) | `timestamp.unwrap_or(0)` — a NULL timestamp column becomes 1970. |
-| T5 | [`sms_backup_restore/render.rs:226`](../../../datalib/backend/etl/providers/sms_backup_restore/src/render.rs) | `v.get("date")…unwrap_or(0)`. |
-| T6 | [`google_takeout/render.rs:305`](../../../datalib/backend/etl/providers/google_takeout/src/render.rs) | `parse_date_ms` — doc comment says *"Returns 0 on any unexpected shape."* Also parses naive and calls `.and_utc()`, i.e. assume-UTC outside the one blessed function. |
-| T7 | [`linkedin/render.rs:198`](../../../datalib/backend/etl/providers/linkedin/src/render.rs) | Same, and its doc comment is explicit about the consequence: *"Returns 0 on any unexpected shape (sorts such rows to the top)."* |
+| T1 | [`slack_render/render/mod.rs:39,46,50`](../../../datalib/backend/etl/providers/slack_render/src/render/mod.rs) | `ts_to_iso` fabricates epoch **three ways**: non-numeric seconds → `unwrap_or(0)`, non-numeric fraction → `unwrap_or(0)`, out-of-range → `Utc.timestamp_opt(0,0)`. Output is a real-looking `1970-01-01T00:00:00.000000+00:00`. |
+| T2 | [`slack_render/render/render.rs:272,278`](../../../datalib/backend/etl/providers/slack_render/src/render/render.rs) | A second, independent copy of the same parser with the same two `unwrap_or(0)`s. |
+| T3 | [`email_render/render/render.rs:436`](../../../datalib/backend/etl/providers/email_render/src/render/render.rs) | `date_ms: em.received_at.and_then(iso_to_ms).unwrap_or(0)`. An email with a missing or non-RFC-3339 `Date` header lands at the epoch. Malformed `Date` headers are common in real mail. |
+| T4 | [`whatsapp_render/render/parse.rs:222,261,281,431`](../../../datalib/backend/etl/providers/whatsapp_render/src/render/parse.rs) | `timestamp.unwrap_or(0)` — a NULL timestamp column becomes 1970. |
+| T5 | [`sms_backup_restore_render/render.rs:226`](../../../datalib/backend/etl/providers/sms_backup_restore_render/src/render.rs) | `v.get("date")…unwrap_or(0)`. |
+| T6 | [`google_takeout_render/render.rs:305`](../../../datalib/backend/etl/providers/google_takeout_render/src/render.rs) | `parse_date_ms` — doc comment says *"Returns 0 on any unexpected shape."* Also parses naive and calls `.and_utc()`, i.e. assume-UTC outside the one blessed function. |
+| T7 | [`linkedin_render/render.rs:198`](../../../datalib/backend/etl/providers/linkedin_render/src/render.rs) | Same, and its doc comment is explicit about the consequence: *"Returns 0 on any unexpected shape (sorts such rows to the top)."* |
 | T8 | [`chat-common/render.rs:738`](../../../datalib/backend/etl/chat-common/src/render.rs) | `iso_from_ms` falls back to `"1970-01-01T00:00:00+00:00"` on out-of-range. It does `warn!` first — better than the rest — but the warning is emitted on a `spawn_blocking` thread with no diagnostics buffer installed, so nothing captures it. |
 | T9 | [`chat-common/render.rs:521`](../../../datalib/backend/etl/chat-common/src/render.rs) | `first_ts = doc.items.first()…unwrap_or_else(\|\| iso_from_ms(0))`. **An empty bucket gets a chat-level row stamped 1970.** Reachable: `render_markdown` explicitly handles `doc.items.is_empty()` with "_(no messages)_". |
-| T10 | [`signal/render/render.rs:510`](../../../datalib/backend/etl/providers/signal/src/render/render.rs) | Its own copy of T8. |
+| T10 | [`signal_render/render/render.rs:510`](../../../datalib/backend/etl/providers/signal_render/src/render/render.rs) | Its own copy of T8. |
 
 T6 and T7 are the ones to sit with. Both fabrications are **known,
 documented in the code, and reasoned about** — T7 even notes that the
@@ -567,7 +567,7 @@ stage contract doing its job.
 Two rules genuinely discard source content:
 
 **`strip_repeated_chrome`**
-([`pdf/render/convert.rs:132`](../../../datalib/backend/etl/providers/pdf/src/render/convert.rs))
+([`pdf_render/render/convert.rs:132`](../../../datalib/backend/etl/providers/pdf_render/src/render/convert.rs))
 removes running headers and footers. It is *well* built — position-
 constrained to first/last non-empty line, frequency-constrained to half
 the pages and at least two, and asymmetric between headers (exact
@@ -578,7 +578,7 @@ needs changing. What is missing is only R3's accounting: **how many
 lines did it remove on the last run?** Nobody can answer that.
 
 **`clamp_doc_text`**
-([`anthropic/render/render.rs:528`](../../../datalib/backend/etl/providers/anthropic/src/render/render.rs))
+([`anthropic/render/render.rs:528`](../../../datalib/backend/etl/providers/claude_render/src/render/render.rs))
 truncates long project documents — and it is the model citizen of the
 whole audit. It cuts on a char boundary, emits a visible marker, says
 how many bytes of how many are shown, names the config knob that raises

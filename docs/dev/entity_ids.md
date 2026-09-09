@@ -62,7 +62,7 @@ looks like the textbook `Upstream` case — right until you notice the
 column is empty whenever orgs aren't mirrored (`sync.projects = false`,
 or an older ingest) and populated afterwards. It issues service-wide
 unique uuids anyway, so `ProviderGlobal` is both correct and safe. See
-`claude/src/render/ids.rs` §Scope for the full argument.
+`claude_render/src/render/ids.rs` §Scope for the full argument.
 
 So the test is not "is this key unique within the account?" but "will
 this scope value be identical on every future ingest, including the ones
@@ -174,7 +174,7 @@ what the grid's "Copy upstream ID(s)" action reads.
 
 Three checks stand between a bad recipe and silent data loss.
 
-1. **`IdClaims`** ([`datalib_etl::grid_index`](../../datalib/backend/etl/src/grid_index.rs))
+1. **`IdClaims`** ([`datalib_etl_render::grid_index`](../../datalib/backend/etl/render/src/grid_index.rs))
    fails an index run when two sources claim one `markdown_uuid` or one
    `grid_rows.uuid`, naming both. Scoped to a single run on purpose:
    the same ids arriving under a new `source_name` is a *rename*, which

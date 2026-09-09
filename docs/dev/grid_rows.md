@@ -43,7 +43,7 @@ is the single source of truth, with no codegen step. Each field carries:
 `#[derive(PortableTable)]` (in `datalib/backend/etl/macros`) produces
 from the struct the `DDL`, `COLUMNS`, and `TABLES` module consts. The
 `DDL` constant is used at grid-index time (`init_schema` in
-`etl/src/grid_index.rs`) and from the `dump.sql` portable-DDL emitter.
+`etl/render/src/grid_index.rs`) and from the `dump.sql` portable-DDL emitter.
 
 ## Producer side: per-provider `render/grid_rows.rs`
 
@@ -51,7 +51,7 @@ Each provider crate under `datalib/backend/etl/providers/<p>/`
 writes its `GridRow`s into that source's own render store,
 `<root>/<stanza>/rendered_md/indexed_markdown.doltlite_db`. The
 grid_index step (`datalib-step grid_index`; `build_grid_index` in
-`datalib/backend/etl/src/grid_index.rs`) stacks those stores into the
+`datalib/backend/etl/render/src/grid_index.rs`) stacks those stores into the
 unified index: it asks each one `dolt_diff` between the commit the
 index last consumed (`source_cursors`) and that store's HEAD, applies
 each changed document's row set, and stamps the corresponding

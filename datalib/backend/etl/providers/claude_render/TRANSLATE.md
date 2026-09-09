@@ -1,4 +1,4 @@
-# Anthropic Translate
+# Claude Translate
 
 `claude-translate` reads a directory of conversations in
 export-shape JSON (written by `claude-download` or by an
@@ -8,7 +8,7 @@ that document's rows in the source's render store
 (`<out>/rendered_md/indexed_markdown.doltlite_db`).
 
 The Load step is provider-agnostic and lives in
-`datalib_etl::grid_index`.
+`datalib_etl_render::grid_index`.
 
 ## What is a "document"?
 

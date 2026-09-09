@@ -50,9 +50,9 @@ we want to stream.
 | piece | where | state |
 |---|---|---|
 | commit-diff scan from a stored cursor to HEAD | [`doltlite_raw.rs::scan_buckets`](../../datalib/backend/etl/src/doltlite_raw.rs) | built, shared |
-| render consuming the raw store that way | `providers/{slack,chatgpt,claude,signal,email}/src/render/parse.rs` | built, 5 providers |
+| render consuming the raw store that way | `providers/{slack,chatgpt,claude,signal,email}_render/src/render/parse.rs` | built, 5 providers |
 | durable render offset | [`render_cursor.rs`](../../datalib/backend/etl/src/render_cursor.rs) (`_render_cursor.json`) | built |
-| `grid_index` consuming render stores that way | [`grid_index.rs`](../../datalib/backend/etl/src/grid_index.rs) | built |
+| `grid_index` consuming render stores that way | [`grid_index.rs`](../../datalib/backend/etl/render/src/grid_index.rs) | built |
 | durable per-source index offset | `source_cursors` table in the grid store | built |
 | a step reporting a content version per output | [`step_protocol.md`](step_protocol.md), `Event`/`outcome` | built |
 | the raw store's version is already a commit-hash pair | `download.rs::raw_store_version` → `entities:<h> blobs:<h>` | built |
@@ -278,7 +278,7 @@ The two edges are wildly different in size, which is why the order of
 work below starts where it does.
 
 `render → grid_index` is **three** sites, all in
-[`indexed_markdown.rs::documents_matching`](../../datalib/backend/etl/src/indexed_markdown.rs)
+[`indexed_markdown.rs::documents_matching`](../../datalib/backend/etl/render/src/indexed_markdown.rs)
 — `markdowns`, `grid_rows`, `edges` — in one shared file.
 
 `download → render` is **48**, across 10 provider crates: slack 9,

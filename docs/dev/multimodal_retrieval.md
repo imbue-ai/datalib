@@ -239,7 +239,7 @@ silently invalidates every offset. So the fingerprint must also cover:
 
 Both columns exist on `markdowns`, and both are **write-only today.**
 `compute_row_set_hash` runs at
-[`grid_index.rs:777`](../../datalib/backend/etl/src/grid_index.rs) and
+[`grid_index.rs:777`](../../datalib/backend/etl/render/src/grid_index.rs) and
 `format!("{RENDERER_VERSION}.{}", md.render_version)` at `:778`; both are
 `INSERT`ed at `:796` and never selected again outside tests. The only
 render-skip reader is `load_fingerprints` (`:676`), which selects
@@ -625,7 +625,7 @@ their answers, because the answers are the useful part.
 |---|---|---|
 | 1 | What `grid_rows` key corresponds to a rendered document? | **`markdown_uuid`**, confirmed. It is the FK into `markdowns`, whose `md_path` column holds the path relative to the data root; `/applet/unified_index/chat/{markdown_uuid}` resolves through it. Note `grid_rows.qmd_path` is a *denormalized duplicate* of `markdowns.md_path` (the schema documents the invariant that they must be byte-equal, and that `markdowns` is preferred). |
 | 2 | Can a plain SQLite client read these stores? | **Split answer.** The qmd index is a plain SQLite file and stock `sqlite3` reads it (verified — every measurement in §4.2 came from stock `sqlite3` + `dbstat` on a copy). The `.doltlite_db` stores are **not** SQLite-file-compatible and need a doltlite-linked shell (`bazelisk build //third-party/doltlite:doltlite`). So the prefilter cannot be a plain `ATTACH`; the retrieval step must link doltlite (which every Rust binary in the tree already does) or the filter must be resolved through the existing repo layer. |
-| 3 | Which paths are current? | **`unified_index/grid/db.doltlite_db` and `unified_index/qmd/index.sqlite`.** [`core/src/layout.rs`](../../datalib/backend/core/src/layout.rs) is the source of truth and the live data root matches it. The tree diagram in `docs/agent_user.md` said `backend_index/db.doltlite_db` when this audit ran; it was fixed afterwards and now names `unified_index/grid/`. |
+| 3 | Which paths are current? | **`unified_index/grid/db.doltlite_db` and `unified_index/qmd/index.sqlite`.** [`core/src/layout.rs`](../../datalib/backend/runtime/src/layout.rs) is the source of truth and the live data root matches it. The tree diagram in `docs/agent_user.md` said `backend_index/db.doltlite_db` when this audit ran; it was fixed afterwards and now names `unified_index/grid/`. |
 | 4 | Actual thread count and post-quote-strip token volume for the mail corpus. | **Still open, and now blocking.** `fastmail/raw` is 976 KB in the measured root — the corpus is not ingested. This gates the stage-2 representation choice (§3.4), the `render_mode` decision (§4.5), and the embedding schedule (§8). **Est. 2h once a mailbox is actually pulled.** |
 
 New item:
@@ -784,7 +784,7 @@ And one found here rather than in the changelog:
 **Verified against this tree** (2026-09-01): `schema/src/grid_rows.rs`,
 `schema/src/markdowns.rs`, `core/src/layout.rs`,
 `etl/src/blob_cas.rs`, `etl/providers/email/src/download/schema_raw.rs`,
-`etl/providers/email/src/render/`, `unified_index/src/db.rs`,
+`etl/providers/email_render/src/render/`, `unified_index/src/db.rs`,
 `unified_index/src/dolt_repo.rs`, `unified_index/src/qmd/*`,
 `applets/src/unified_index/mod.rs`, `third-party/qmd/src/store.ts`
 (schema only). Measurements from `~/datalib/thad_imbue_dev` via stock
