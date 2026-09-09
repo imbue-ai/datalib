@@ -188,7 +188,7 @@ fn render_one(
     };
     let doc_title = format!("{chat_title} ({})", doc.period_key);
 
-    let md = render_markdown(profile, chat, doc, &doc_title, &fingerprint);
+    let md = render_markdown(profile, chat, doc, &chat_title, &doc_title, &fingerprint);
     fs::write(&md_path, &md).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
@@ -296,6 +296,10 @@ fn render_markdown(
     profile: &RenderProfile,
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
+    // `chat_title` is the chat's own name and `title` the composed
+    // "name (period)". The frontmatter wants the composed one; the
+    // heading takes them apart, so a clamp cannot eat the period.
+    chat_title: &str,
     title: &str,
     fingerprint: &str,
 ) -> String {
@@ -324,9 +328,14 @@ fn render_markdown(
     s.push_str(&format!("source_fingerprint: {fingerprint}\n"));
     s.push_str("---\n\n");
 
+    // The chat's name and the period go in separately: a long title is
+    // clamped, and `(2024-03)` — which says *which slice of the
+    // conversation this file is* — must survive that.
+    let period = format!("({})", doc.period_key);
     s.push_str(
         &Title {
-            text: title,
+            text: chat_title,
+            suffix: Some(&period),
             markdown_uuid: Some(&doc.markdown_uuid),
             // Public per-chat URL when the provider has one (LinkedIn
             // post, Slack permalink, …); None for backup-based providers.
@@ -1112,6 +1121,7 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
+            "Test · Bridge Crew (2364-04)",
             "fp",
         );
         assert!(md.contains("Make it so."));
@@ -1132,6 +1142,7 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
+            "Test · Bridge Crew (2364-04)",
             "fp",
         );
         assert!(
@@ -1156,6 +1167,7 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
+            "Test · Bridge Crew (2364-04)",
             "fp",
         );
         assert!(
@@ -1201,6 +1213,7 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
+            "Test · Bridge Crew (2364-04)",
             "fp",
         );
 
@@ -1255,7 +1268,14 @@ mod tests {
             when_ts_precision: WhenTsPrecision::Seconds,
             render_version: 1,
         };
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "fp");
+        let md = render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+            "fp",
+        );
         assert!(md.contains("not yet fetched"));
         assert!(md.contains("https://example/vscapture"));
     }
@@ -1276,7 +1296,14 @@ mod tests {
         chat.source_url = Some("https://example.com/post/42".to_string());
 
         // Title gets the `↗` source link.
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "fp");
+        let md = render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+            "fp",
+        );
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://example.com/post/42"),
             "title carries the source linkout: {md}"
@@ -1358,7 +1385,14 @@ mod tests {
         chat.buckets[0].items[0].source_url = Some("https://slack.example/p123".to_string());
 
         // Message header carries a `↗` linkout.
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "fp");
+        let md = render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+            "fp",
+        );
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://slack.example/p123"),
             "message header carries the per-message linkout: {md}"
@@ -1492,7 +1526,14 @@ mod tests {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items[0].date_ms = None;
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "fp");
+        let md = render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+            "fp",
+        );
         assert!(md.contains("(no timestamp)"), "{md}");
         assert!(!md.contains("1970"), "{md}");
     }

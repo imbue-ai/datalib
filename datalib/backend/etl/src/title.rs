@@ -15,6 +15,11 @@ pub struct Title<'a> {
     /// every provider this is the same UUID that addresses
     /// `/api/chat/{markdown_uuid}` — pass `markdown_uuid` directly.
     pub markdown_uuid: Option<&'a str>,
+    /// A short scope marker appended after the text and never clamped —
+    /// chat-common's `(2024-03)`. It is the part of a heading that says
+    /// *which slice of the conversation this file is*, so cutting it to
+    /// save two characters is the one truncation that costs meaning.
+    pub suffix: Option<&'a str>,
     /// External link to the source artifact (`claude.ai/chat/…`,
     /// `chatgpt.com/c/…`, `github.com/owner/repo/pull/N`, …). The
     /// rendered `<a>` carries `target="_blank"` + `rel="noopener
@@ -35,7 +40,10 @@ const MAX_TITLE_CHARS: usize = 90;
 
 /// `(shown, full)` — `full` is `None` when nothing was cut.
 fn clamp(text: &str) -> (String, Option<&str>) {
-    if text.chars().count() <= MAX_TITLE_CHARS {
+    // The margin keeps the clamp from firing where it cannot pay for
+    // itself: cutting a 92-character title to 90 spends an ellipsis and
+    // a tooltip to hide two characters.
+    if text.chars().count() <= MAX_TITLE_CHARS + 12 {
         return (text.to_string(), None);
     }
     // Cut on a word boundary when there is one near the limit, so the
@@ -63,10 +71,18 @@ impl<'a> Title<'a> {
                 .expect("write to String");
         }
         if let Some(full) = full {
-            write!(out, " title=\"{}\"", escape_attr(full)).expect("write to String");
+            let whole = match self.suffix {
+                Some(suffix) => format!("{full} {suffix}"),
+                None => full.to_string(),
+            };
+            write!(out, " title=\"{}\"", escape_attr(&whole)).expect("write to String");
         }
         out.push('>');
         out.push_str(&escape_html(&shown));
+        if let Some(suffix) = self.suffix {
+            out.push(' ');
+            out.push_str(&escape_html(suffix));
+        }
         if let Some(url) = self.source_url {
             write!(
                 out,
@@ -116,6 +132,7 @@ mod tests {
         let t = Title {
             text: "Hello",
             markdown_uuid: None,
+            suffix: None,
             source_url: None,
         };
         assert_eq!(t.render(), "<h1 class=\"page-title\">Hello</h1>\n\n");
@@ -126,6 +143,7 @@ mod tests {
         let t = Title {
             text: "Hello",
             markdown_uuid: Some("abc-123"),
+            suffix: None,
             source_url: None,
         };
         assert_eq!(
@@ -139,6 +157,7 @@ mod tests {
         let t = Title {
             text: "Hello",
             markdown_uuid: None,
+            suffix: None,
             source_url: Some("https://example.com/chat/x"),
         };
         assert_eq!(
@@ -152,6 +171,7 @@ mod tests {
         let t = Title {
             text: "Hello",
             markdown_uuid: Some("abc-123"),
+            suffix: None,
             source_url: Some("https://example.com/chat/x"),
         };
         assert_eq!(
@@ -171,6 +191,7 @@ mod tests {
         let s = Title {
             text: long,
             markdown_uuid: None,
+            suffix: None,
             source_url: None,
         }
         .render();
@@ -197,6 +218,7 @@ mod tests {
         let s = Title {
             text: "Bridge Crew",
             markdown_uuid: None,
+            suffix: None,
             source_url: None,
         }
         .render();
@@ -208,6 +230,7 @@ mod tests {
         let t = Title {
             text: "<script>alert('x')</script> & more",
             markdown_uuid: None,
+            suffix: None,
             source_url: None,
         };
         assert_eq!(
@@ -225,6 +248,7 @@ mod tests {
         let t = Title {
             text: "x",
             markdown_uuid: None,
+            suffix: None,
             source_url: Some("https://e.com/?a=b&c=\"d\""),
         };
         let s = t.render();
@@ -241,6 +265,7 @@ mod tests {
         let t = Title {
             text: "x",
             markdown_uuid: None,
+            suffix: None,
             source_url: None,
         };
         assert!(t.render().ends_with("\n\n"));

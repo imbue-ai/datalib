@@ -264,6 +264,7 @@ fn render_markdown(
 
     out.push_str(
         &Title {
+            suffix: None,
             text: &page_title(source_name),
             markdown_uuid: Some(m_uuid),
             source_url: None,
