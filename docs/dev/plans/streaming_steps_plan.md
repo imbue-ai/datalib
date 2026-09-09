@@ -759,13 +759,23 @@ Each of these is a reviewable PR that leaves the tree green.
    schema commit took before handing the pool back; and the `WHERE 0`
    branch is now only reached for a table genuinely newer than the pin,
    which is the case it was written for.
-6. **Streaming dispatch.** Needs a way for a step to declare its sink
-   snapshot-readable first — P2 above, in the shape `probe` already
-   uses — because "can this edge stream at all" is not something the
-   scheduler can infer from paths. Then the scheduler change: in-flight
-   tracking with checkpoints dropped rather than queued, and the
-   separate streaming slot, for `render → grid_index` only. Measure the
-   latency change before widening.
+6. ~~**Streaming dispatch.**~~ **Built in the scheduler, not yet turned
+   on for any real step.** A producer declares `streams_output`, its
+   checkpoints reach the run loop, and a consumer is dispatched against
+   partial output on its own budget. Five tests over synthetic steps.
+
+   Two things the build corrected. A checkpoint's version has to be
+   recorded **fingerprint-qualified**, the way `resolve_outputs` records
+   an outcome — otherwise checkpoints and outcomes live in different
+   namespaces, every final pass sees its input as moved, and the "same
+   rules, evaluated earlier" property is lost. And handling a checkpoint
+   has to return to the *dispatch* phase rather than back to waiting: it
+   deadlocked, and precisely in the case the feature exists for, with
+   every ordinary slot busy.
+
+   `datalib-step` does not declare the capability yet, so nothing
+   streams in a real pipeline. Turning it on is the next step, and it
+   wants the latency measured before it widens.
 7. **`download → render`.** Turn the capability on for the second edge.
 8. **The UI frame.**
 

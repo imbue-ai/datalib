@@ -34,6 +34,20 @@ pub struct StepSpec {
     /// feeds the fingerprint, so bumping it re-runs the step once.
     /// Most steps leave this `None`: argv already covers `params`.
     pub code_version: Option<String>,
+    /// Whether a consumer may read this step's output *while it is still
+    /// being written* — P2 of the sink contract in
+    /// `docs/dev/streaming_steps_plan.md`.
+    ///
+    /// Default `false`, and deliberately so: most sinks cannot, and the
+    /// failure when they cannot is a consumer acting on a torn read rather
+    /// than anything that looks like an error. A step earns this by having
+    /// a sink that can hand out a stable view under a live writer — a
+    /// doltlite store does, an index rewritten in place does not.
+    ///
+    /// Not in `fingerprint_material`: it changes when a consumer may run,
+    /// never what this step produces, so flipping it should not re-run
+    /// anything.
+    pub streams_output: bool,
 }
 
 impl StepSpec {
@@ -78,6 +92,7 @@ impl StepSpec {
             inputs: Vec::new(),
             run,
             code_version: None,
+            streams_output: false,
         }
     }
 
@@ -89,6 +104,13 @@ impl StepSpec {
 
     pub fn code_version(mut self, v: impl Into<String>) -> Self {
         self.code_version = Some(v.into());
+        self
+    }
+
+    /// Declare that this step's output can be read while it is being
+    /// written, so consumers may be dispatched on its checkpoints.
+    pub fn streams_output(mut self) -> Self {
+        self.streams_output = true;
         self
     }
 
@@ -132,6 +154,47 @@ impl std::fmt::Debug for StepRun {
     }
 }
 
+/// Where a step says it sealed part of its output, so a consumer could
+/// start on it before the step finishes.
+///
+/// One mechanism for both kinds of step: an in-process step calls
+/// [`StepCtx::checkpoint`] directly, and `run_subprocess` calls it when a
+/// child's NDJSON carries a `checkpoint` event. Cloneable and cheap, and
+/// [`CheckpointSink::disconnected`] is a working sink that drops
+/// everything — which is what a step invoked outside the scheduler gets.
+#[derive(Clone, Default, Debug)]
+pub struct CheckpointSink(Option<tokio::sync::mpsc::UnboundedSender<Checkpoint>>);
+
+/// A producer sealed its output at `version`.
+#[derive(Debug, Clone)]
+pub struct Checkpoint {
+    pub step: StepId,
+    pub version: String,
+}
+
+impl CheckpointSink {
+    pub fn new(tx: tokio::sync::mpsc::UnboundedSender<Checkpoint>) -> Self {
+        Self(Some(tx))
+    }
+
+    /// Announces nothing. Not an error: a step run outside a scheduler --
+    /// a test, a one-shot CLI invocation -- has nobody to tell.
+    pub fn disconnected() -> Self {
+        Self(None)
+    }
+
+    /// Best-effort. A closed receiver means the run is already tearing
+    /// down, and a producer should not fail because nobody is listening.
+    pub fn send(&self, step: &StepId, version: &str) {
+        if let Some(tx) = self.0.as_ref() {
+            let _ = tx.send(Checkpoint {
+                step: step.clone(),
+                version: version.to_string(),
+            });
+        }
+    }
+}
+
 /// Everything a running step gets from the scheduler. Steps resolve
 /// their own paths under `data_root`; `inputs`/`changed_inputs` let a
 /// step narrow its work to what actually moved without re-deriving the
@@ -152,6 +215,8 @@ pub struct StepCtx {
     pub changed_inputs: Vec<ArtifactPath>,
     /// Progress/log emitter, already tagged with this step's id.
     pub progress: StepProgress,
+    /// Where to announce a seal. See [`StepCtx::checkpoint`].
+    pub checkpoint: CheckpointSink,
 }
 
 impl StepCtx {
@@ -161,6 +226,17 @@ impl StepCtx {
 
     pub fn path_str(&self, rel: &str) -> PathBuf {
         self.data_root.join(rel)
+    }
+
+    /// Say that this step's output is readable up to `version`.
+    ///
+    /// Only call it where the output is *consistent* — a consumer may be
+    /// dispatched against it immediately. A step whose output cannot be
+    /// read while it is being written must never call this; that is P2 of
+    /// the sink contract, and it is declared by
+    /// [`StepSpec::streams_output`].
+    pub fn checkpoint(&self, version: &str) {
+        self.checkpoint.send(&self.step_id, version);
     }
 }
 
