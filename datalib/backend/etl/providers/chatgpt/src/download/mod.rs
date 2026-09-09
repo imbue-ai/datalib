@@ -45,6 +45,10 @@ pub struct FetchOptions {
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
     /// `datalib/backend/etl/README.md`.
     pub db: RawDb,
+    /// Seals what has been written so far, so render can start on the
+    /// early conversations while the rest are still arriving. `None` --
+    /// the default, and what every test uses -- commits once at the end.
+    pub sealer: Option<datalib_etl::raw_store::Sealer>,
     pub max_pages: Option<usize>,
     pub limit: Option<usize>,
     pub sleep_between: Duration,
@@ -76,6 +80,7 @@ impl FetchOptions {
         Self {
             latchkey: LatchkeySettings::default(),
             db,
+            sealer: None,
             max_pages: None,
             limit: None,
             sleep_between: Duration::ZERO,
@@ -209,6 +214,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                             &now,
                         )
                         .await;
+                        // The store is consistent here and nowhere earlier:
+                        // the conversation row and the blobs it names have
+                        // both landed. Sealing between the two would publish
+                        // a message pointing at bytes no reader can resolve.
+                        if let Some(sealer) = opts.sealer.as_ref() {
+                            sealer.wrote(1).await;
+                        }
                         info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target);
                     }
                     Err(e) => {
@@ -361,6 +373,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         &now,
                     )
                     .await;
+                    // Consistent here and nowhere earlier: the conversation
+                    // row and the blobs it names have both landed.
+                    if let Some(sealer) = opts.sealer.as_ref() {
+                        sealer.wrote(1).await;
+                    }
                     if opts.sleep_between > Duration::ZERO {
                         sleep(opts.sleep_between).await;
                     }

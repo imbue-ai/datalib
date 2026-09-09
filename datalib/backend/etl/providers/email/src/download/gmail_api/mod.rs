@@ -39,6 +39,8 @@ pub struct FetchOptions {
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
     /// `datalib/backend/etl/README.md`.
     pub db: RawDb,
+    /// Seals a flushed batch; see `RunState::sealer`.
+    pub sealer: Option<datalib_etl::raw_store::Sealer>,
     pub config: EmailGmailApi,
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block. `google-gmail` routinely holds
@@ -59,6 +61,7 @@ impl FetchOptions {
     pub fn new(db: RawDb) -> Self {
         Self {
             db,
+            sealer: None,
             config: EmailGmailApi::default(),
             latchkey: LatchkeySettings::default(),
             only_labels: Vec::new(),
@@ -232,6 +235,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
 
     let mut state = RunState {
         db,
+        sealer: opts.sealer.as_ref(),
         index: &index,
         account_id: &account_id,
         user_id: &user_id,
@@ -389,6 +393,9 @@ async fn collect_history(
 
 struct RunState<'a> {
     db: &'a RawDb,
+    /// Seals a flushed batch, so render can start on the mail already
+    /// mirrored while the walk continues. `None` commits once at the end.
+    sealer: Option<&'a datalib_etl::raw_store::Sealer>,
     index: &'a LabelIndex,
     account_id: &'a str,
     user_id: &'a str,
@@ -613,6 +620,13 @@ async fn flush(state: &mut RunState<'_>, summary: &mut FetchSummary) -> Result<(
         },
     )
     .await?;
+    // End of a flush is the consistent point: the email rows, their Gmail-id
+    // mapping and their blob bytes all landed above, and nothing here is
+    // mid-prune -- `prune_to_enumeration` runs after the walk, and only when
+    // the walk was authoritative over the whole mailbox.
+    if let Some(sealer) = state.sealer {
+        sealer.wrote(1).await;
+    }
     Ok(())
 }
 

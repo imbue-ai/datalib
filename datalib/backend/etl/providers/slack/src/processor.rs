@@ -50,6 +50,16 @@ impl DataProcessor for SlackDownload {
         &self.id
     }
 
+    /// Seals at the end of each channel, after that channel's prune rather
+    /// than before it: `export_channel` only prunes a window it walked to
+    /// completion, so what a consumer reads is a settled channel and not
+    /// one still carrying messages this run is about to delete. A channel
+    /// that failed seals nothing. Between channels the store is the
+    /// previous snapshot plus what this run has walked -- a superset.
+    fn streams_output(&self) -> bool {
+        true
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = download::db_path_for(&self.raw_path);
         let mut db = download::RawDb::open(&entity_db).await?;
@@ -69,6 +79,7 @@ impl DataProcessor for SlackDownload {
             db.attach_event_tape(tape);
         }
         let s = download::fetch(download::FetchOptions {
+            sealer: Some(session.sealer()),
             db,
             channels: self.sync.channels.clone(),
             since: self

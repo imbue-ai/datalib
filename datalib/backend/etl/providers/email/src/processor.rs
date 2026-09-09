@@ -107,6 +107,22 @@ impl DataProcessor for EmailDownload {
         &self.id
     }
 
+    /// Seals after each flushed batch — the email rows, their id mapping and
+    /// their blob bytes land together, so a consumer never sees a message
+    /// naming bytes it cannot resolve. Deletions come from
+    /// `prune_to_enumeration`, which runs after the walk and only when the
+    /// walk was authoritative over the whole mailbox, so between seals the
+    /// store is the previous snapshot plus what this run has mirrored.
+    ///
+    /// JMAP (Fastmail) and the Gmail API both seal, at their respective
+    /// batch boundaries. mbox does not — no seam is wired — so it commits
+    /// once at the end, which costs latency and never correctness: a
+    /// consumer that gets no checkpoints simply does one pass when the
+    /// download finishes.
+    fn streams_output(&self) -> bool {
+        true
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         // The source owns the store: open it, hand the orchestrator only an
         // opaque interrupt-commit hook, do the work, commit, close. No pool or
@@ -119,6 +135,7 @@ impl DataProcessor for EmailDownload {
             ExtractMode::Jmap(sync) => {
                 let s = download::fetch(download::FetchOptions {
                     db,
+                    sealer: Some(session.sealer()),
                     hostname: sync.hostname.clone(),
                     latchkey: self.latchkey.clone(),
                     account_id: sync.account_id.clone(),
@@ -144,6 +161,7 @@ impl DataProcessor for EmailDownload {
             ExtractMode::GmailApi(gmail) => {
                 let s = download::gmail_api::fetch(download::gmail_api::FetchOptions {
                     db,
+                    sealer: Some(session.sealer()),
                     config: gmail.clone(),
                     latchkey: self.latchkey.clone(),
                     only_labels: self.only_extract_labels.clone(),

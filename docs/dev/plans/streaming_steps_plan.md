@@ -841,7 +841,37 @@ Each of these is a reviewable PR that leaves the tree green.
    **What is still not measured is latency.** The fixture shows work
    arriving incrementally; it does not say what that is worth on a real
    mirror, which is what should be known before `download -> render`.
-7. **`download → render`.** Turn the capability on for the second edge.
+7. **`download → render`.** Turned on for claude, chatgpt, slack and
+   email (JMAP/Fastmail + the Gmail API). A download declares
+   `DataProcessor::streams_output` and seals at its own consistent
+   point — the boundary differs per provider, which is exactly why this
+   is not one switch:
+
+   | provider | seals after |
+   |---|---|
+   | claude, chatgpt | a conversation *and* the blobs it names |
+   | slack | a channel, after that channel's prune |
+   | email (gmail) | a flushed batch: rows, id mapping, blob bytes |
+   | email (jmap) | an `Email/get` batch |
+
+   **What made these four safe was the deletion shape.** Each prunes to
+   an enumeration it walked to completion, so between seals the store is
+   the previous snapshot plus what this run has fetched — a superset,
+   never a gap. A consumer reading one sees stale rows at worst, and the
+   prune's deletions reach it through the same diff on the next pass. The
+   shape that would break it, a truncate before the refill, happens only
+   under `--reset-and-redownload` or `always_clear_before_ingest`, and
+   both already force `Policy::Never`.
+
+   It also mattered that none of these four *renderers* sweeps: they
+   delete via `remove_conversation` driven by the diff's changed buckets,
+   so a bucket is only considered for deletion when the diff named it.
+   A renderer that instead handed a whole-set `retain_documents` a
+   partial download would delete everything not yet fetched — which is
+   the question to ask first about any provider added to this list.
+
+   Still off: everything else, and mbox inside email (no seam wired, so
+   it commits once at the end — latency, never correctness).
 8. **The UI frame.**
 
 Steps 1–4 carry no scheduling risk at all, and 3 is independently
