@@ -5,8 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use datalib_etl_claude::download::export::{ingest, IngestOptions};
-use datalib_etl_claude::render::parse::parse;
-use datalib_etl_claude::render::render::render_all;
+use datalib_etl_claude_render::render::parse::parse;
+use datalib_etl_claude_render::render::render::render_all;
 
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("CLAUDE_FIXTURE_DIR") {

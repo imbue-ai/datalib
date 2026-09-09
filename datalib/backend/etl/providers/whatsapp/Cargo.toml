@@ -11,9 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 datalib-etl = { path = "../.." }
 datalib-etl-render = { path = "../../render" }
-datalib-etl-chat-common = { path = "../../chat-common" }
 datalib-time = { path = "../../../time" }
-datalib-schema = { path = "../../../schema" }
 datalib-whatsapp-backup = { path = "../../../whatsapp-backup" }
 uuid = { workspace = true }
 anyhow = { workspace = true }

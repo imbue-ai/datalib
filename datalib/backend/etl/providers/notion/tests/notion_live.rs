@@ -6,7 +6,7 @@
 //! Live Notion single-page download test.
 
 use datalib_etl_notion::download::{self as notion, FetchOptions};
-use datalib_etl_notion::render::parse_api_dir;
+use datalib_etl_notion_render::render::parse_api_dir;
 use insta::assert_json_snapshot;
 use serde_json::json;
 

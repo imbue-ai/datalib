@@ -15,11 +15,9 @@ path = "src/bin/claude_download.rs"
 [dependencies]
 datalib-etl = { path = "../.." }
 datalib-etl-render = { path = "../../render" }
-datalib-etl-chat-common = { path = "../../chat-common" }
 datalib-etl-macros = { path = "../../macros" }
 datalib-obs = { path = "../../../obs" }
 datalib-time = { path = "../../../time" }
-datalib-schema = { path = "../../../schema" }
 datalib-id = { path = "../../../id" }
 serde = { workspace = true }
 serde_json = { workspace = true }

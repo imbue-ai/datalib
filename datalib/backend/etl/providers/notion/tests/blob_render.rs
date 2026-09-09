@@ -5,8 +5,8 @@ use std::fs;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl_notion::render::parse::ParsedNotion;
-use datalib_etl_notion::render::render::render_notion;
+use datalib_etl_notion_render::render::parse::ParsedNotion;
+use datalib_etl_notion_render::render::render::render_notion;
 use serde_json::json;
 use tempfile::tempdir;
 

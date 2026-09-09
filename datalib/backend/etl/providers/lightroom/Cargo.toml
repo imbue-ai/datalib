@@ -10,7 +10,6 @@ path = "src/lib.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }
-datalib-etl-render = { path = "../../render" }
 datalib-obs = { path = "../../../obs" }
 anyhow = { workspace = true }
 async-trait = "0.1"

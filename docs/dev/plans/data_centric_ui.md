@@ -6,8 +6,8 @@ as a description of the tree. Where it says "today", that was checked
 against that commit; where it says "would", nothing exists.
 
 **Depends on** [`provider_crate_split.md`](provider_crate_split.md),
-which lands first. The column-type vocabulary this design introduces
-would otherwise sit upstream of every downloader.
+**which has now landed** — so the column-type vocabulary this design
+introduces no longer sits upstream of every downloader.
 
 ## The idea
 
@@ -319,7 +319,7 @@ Each step is independently useful, which matters because the later
 ones are the speculative ones.
 
 1. **The crate split** —
-   [`provider_crate_split.md`](provider_crate_split.md). Lands first.
+   [`provider_crate_split.md`](provider_crate_split.md). Done.
 2. **`system/pipeline.sqlite`.** Replace `dag_state.json` and
    `progress.sqlite`; `GET /api/dag` reads the new store. No UI change
    yet — this is a pure substitution, verified by the existing tests.

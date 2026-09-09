@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use datalib_etl_slack::render::{parse, render::render_all, slack_message_uuid, slack_thread_uuid};
+use datalib_etl_slack_render::render::{
+    parse, render::render_all, slack_message_uuid, slack_thread_uuid,
+};
 use insta::{assert_json_snapshot, assert_snapshot};
 
 fn fixture_root() -> PathBuf {

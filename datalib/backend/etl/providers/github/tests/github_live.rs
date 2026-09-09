@@ -6,7 +6,7 @@
 //! Live GitHub single-PR download + render test.
 
 use datalib_etl_github::download::{self as github, parse_pr_ref, FetchOptions};
-use datalib_etl_github::render::{parse_api_dir, render_github};
+use datalib_etl_github_render::render::{parse_api_dir, render_github};
 use insta::assert_json_snapshot;
 use serde_json::json;
 
@@ -65,7 +65,7 @@ async fn github_live_single_pr_snapshot() {
     .expect("render_github failed");
 
     // The rendered doc must exist.
-    let qmd_rel = datalib_etl_github::render::render::pr_qmd_path_rel(
+    let qmd_rel = datalib_etl_github_render::render::render::pr_qmd_path_rel(
         stanza,
         &pr.repo_full_name,
         pr.pr_number,
@@ -84,7 +84,7 @@ async fn github_live_single_pr_snapshot() {
     );
 
     let mut sections: Vec<&'static str> = Vec::new();
-    use datalib_etl_github::render::parse::CommentSection;
+    use datalib_etl_github_render::render::parse::CommentSection;
     if parsed
         .comments
         .iter()

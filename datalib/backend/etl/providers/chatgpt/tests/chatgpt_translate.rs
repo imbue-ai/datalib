@@ -3,7 +3,7 @@
 //! `CARGO_MANIFEST_DIR` in the sandbox, so this lives as an integration
 //! test tagged `manual` and is run via `cargo test`.
 
-use datalib_etl_chatgpt::render::parse::{parse_api_dir, shred};
+use datalib_etl_chatgpt_render::render::parse::{parse_api_dir, shred};
 use std::path::PathBuf;
 
 fn fixture_dir() -> PathBuf {

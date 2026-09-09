@@ -8,7 +8,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_beeper::download::{self, FetchOptions, FetchSummary};
-use datalib_etl_beeper::render::{self, Period};
+use datalib_etl_beeper_render::render::{self, Period};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 
 fn fixture_dir() -> PathBuf {

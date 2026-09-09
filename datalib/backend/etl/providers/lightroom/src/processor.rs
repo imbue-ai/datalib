@@ -7,8 +7,7 @@ use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
-use datalib_etl_lightroom_config::{LightroomConfig, LightroomRenderConfig};
-use datalib_etl_render::processor::RenderProcessor;
+use datalib_etl_lightroom_config::LightroomConfig;
 
 use crate::download::{self, MirrorOptions};
 
@@ -35,15 +34,6 @@ pub fn plan_download(
         raw_path: config.common.raw_path().to_path_buf(),
         options: mirror_options(&config),
     })])
-}
-
-/// Render wave: `lightroom` is download-only, so this is always empty.
-pub fn plan_render(
-    ctx: PlanContext,
-    config: LightroomRenderConfig,
-) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let _ = (ctx, config);
-    Ok(Vec::new())
 }
 
 /// The mirror processor. Owns its doltlite store end to end (open,

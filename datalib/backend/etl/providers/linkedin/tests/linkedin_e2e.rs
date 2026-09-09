@@ -8,13 +8,13 @@ use anyhow::{Context, Result};
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_linkedin::connections;
 use datalib_etl_linkedin::download::photos::load_photo_blobs;
 use datalib_etl_linkedin::download::schema_raw::connection_uuid;
 use datalib_etl_linkedin::download::{self, db_path_for, FetchOptions, RawDb};
-use datalib_etl_linkedin::posts;
-use datalib_etl_linkedin::render;
 use datalib_etl_linkedin::synthesize::LinkedinSynth;
+use datalib_etl_linkedin_render::connections;
+use datalib_etl_linkedin_render::posts;
+use datalib_etl_linkedin_render::render;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 
 fn build_export(root: &Path) -> Result<()> {

@@ -18,7 +18,6 @@ datalib-etl-render = { path = "../../render" }
 datalib-etl-macros = { path = "../../macros" }
 datalib-time = { path = "../../../time" }
 datalib-obs = { path = "../../../obs" }
-datalib-schema = { path = "../../../schema" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

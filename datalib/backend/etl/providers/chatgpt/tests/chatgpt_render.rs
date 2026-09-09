@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use datalib_etl_chatgpt::render::parse::parse_api_dir;
-use datalib_etl_chatgpt::render::render::render_all;
+use datalib_etl_chatgpt_render::render::parse::parse_api_dir;
+use datalib_etl_chatgpt_render::render::render::render_all;
 
 fn fixture_dir() -> PathBuf {
     // Bazel sets `CHATGPT_FIXTURE_DIR` to a runfiles-relative path

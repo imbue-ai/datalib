@@ -38,10 +38,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
-        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
-        "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
@@ -98,6 +95,7 @@ rust_test(
     },
     deps = [
         ":datalib_etl_email",
+        "//datalib/backend/etl/providers/email_render:datalib_etl_email_render",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:anyhow",
@@ -119,6 +117,7 @@ rust_test(
     },
     deps = [
         ":datalib_etl_email",
+        "//datalib/backend/etl/providers/email_render:datalib_etl_email_render",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:serde_json",

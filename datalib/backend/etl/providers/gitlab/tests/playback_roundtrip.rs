@@ -11,8 +11,8 @@ use datalib_etl_gitlab::download::{
     block_on_load_all, db_path_for, fetch, FetchOptions, RawDb, ENTITY_DISCUSSION, ENTITY_MR,
     ENTITY_SELF,
 };
-use datalib_etl_gitlab::render::parse_api_dir;
 use datalib_etl_gitlab::synthesize::GitlabSynth;
+use datalib_etl_gitlab_render::render::parse_api_dir;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 

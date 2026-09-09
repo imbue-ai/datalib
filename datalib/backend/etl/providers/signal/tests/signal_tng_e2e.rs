@@ -14,7 +14,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_signal::download::{self, FetchOptions};
-use datalib_etl_signal::render::{parse_raw_dir, render_all, render_params};
+use datalib_etl_signal_render::render::{parse_raw_dir, render_all, render_params};
 use datalib_signal_backup::{
     backup, encrypt_attachment, local_media_name,
     write::{write_snapshot, SnapshotInput},
@@ -282,7 +282,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         let raw = raw_db_path.clone();
         let last_hash = cursor.last_rendered_hash.clone();
         move || {
-            datalib_etl_signal::render::parse(
+            datalib_etl_signal_render::render::parse(
                 &raw,
                 datalib_etl::periodize::Period::Month,
                 "signal-tng",

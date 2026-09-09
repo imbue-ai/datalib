@@ -8,7 +8,7 @@ use sqlx::Row;
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl_pdf::download::{self, RawDb};
-use datalib_etl_pdf::render;
+use datalib_etl_pdf_render::render;
 
 const NOW: &str = "2364-04-13T08:45:00-07:00";
 
@@ -229,13 +229,13 @@ async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
     let body = std::fs::read_to_string(&survey.md_path)?;
     assert!(body.contains("Ablative plating"), "page 1 body missing");
     assert!(
-        body.contains(&datalib_etl_pdf::render::convert::note_for_page(2)),
+        body.contains(&datalib_etl_pdf_render::render::convert::note_for_page(2)),
         "page 2 must leave a note; got:\n{body}"
     );
     assert!(
         !body.contains(&format!(
             r#"data-section-uuid="{}""#,
-            datalib_etl_pdf::render::grid_rows::page_uuid(
+            datalib_etl_pdf_render::render::grid_rows::page_uuid(
                 &survey.rows[0].upstream_id.clone().unwrap(),
                 2
             )

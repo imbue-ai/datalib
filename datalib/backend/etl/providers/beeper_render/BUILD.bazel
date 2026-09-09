@@ -1,0 +1,43 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Render half of the `beeper` provider. This is the side that knows
+# `datalib_schema`; //datalib/backend/etl/providers/beeper is the
+# download half and deliberately does not.
+rust_library(
+    name = "datalib_etl_beeper_render",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_beeper_render",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl/providers/beeper:datalib_etl_beeper",
+        "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "beeper_render_unittests",
+    size = "small",
+    crate = ":datalib_etl_beeper_render",
+    edition = "2021",
+)
