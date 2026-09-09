@@ -161,6 +161,24 @@ impl UpstreamRef {
     }
 }
 
+/// Reactions to a message the mirror does not have.
+///
+/// **Not** "a message in another period" — a provider that buckets by
+/// period is expected to file a reaction under its *target's* period,
+/// not its own, so a reaction to a March message lands in the March
+/// document however late it arrived. What is left over is the case
+/// nothing can place: the target event is not in the store at all,
+/// because it was never downloaded or it belongs to another
+/// conversation. The renderer lists those at the end rather than
+/// dropping a real event with nothing to say it happened.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrphanReactions {
+    /// The upstream's id for the message being reacted to. Shown as-is:
+    /// there is nothing to link it to.
+    pub target_native_id: String,
+    pub reactions: Vec<NormalizedReaction>,
+}
+
 /// One rendered-markdown bucket: a slice of a chat covering a single
 /// period key (`2024-03`, `2024-03-15`, `2024`, or `all`). Drives the
 /// .md file and its sidecar.
@@ -171,6 +189,10 @@ pub struct NormalizedDoc {
     /// `(chat_uuid, period_key)`).
     pub markdown_uuid: String,
     pub items: Vec<NormalizedChatItem>,
+    /// Empty for every provider that buckets a whole chat into one
+    /// document, which is most of them, and empty for a period-bucketed
+    /// one whose targets all resolve.
+    pub orphan_reactions: Vec<OrphanReactions>,
 }
 
 /// A complete chat as exposed to chat-common's renderer.
@@ -221,6 +243,11 @@ pub struct NormalizedChat {
     /// `None` for everything else — the default.
     pub org_uuid: Option<String>,
     pub org_name: Option<String>,
+    /// Extra path segment between `rendered_md/` and the chat's own
+    /// directory, for a source that bridges several upstreams and wants
+    /// them apart on disk (Beeper's `<network>/`). `None` — the default
+    /// — puts the chat directly under `rendered_md/<chat_uuid>/`.
+    pub path_prefix: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
 }

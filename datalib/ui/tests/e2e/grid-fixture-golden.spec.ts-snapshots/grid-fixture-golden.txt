@@ -328,7 +328,7 @@
 ["f1de1bb5-cfd5-5ee4-aecb-e90fa23d8c8c","GitLab","GitLab Discussion Note","","jlpicard"]
 ["f1f71f10-6232-5cdc-a351-332e86b7bb59","Storage","Table","",""]
 ["f1f922de-b96b-5025-bca1-62ec84b4a1d1","Slack","Slack Message","@William T. Riker","Jean-Luc Picard"]
-["f3cec598-54d7-5c4a-b828-4c2e978d7fd7","Signal","Signal Chat","Will Riker","Will Riker"]
+["f3cec598-54d7-5c4a-b828-4c2e978d7fd7","Signal","Signal Chat","Will Riker",""]
 ["f568b5f9-c761-5a5d-be84-35cf144c21ba","Mail","Email Thread","Bridge status display",""]
 ["f5e5deb7-aa07-548e-8d47-6b3b304dddc1","Storage","Table","",""]
 ["f6c005e6-4042-5708-9328-c50afd11dc61","Storage","Table","",""]

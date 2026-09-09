@@ -1,6 +1,6 @@
 # chat-common — one markdown layout for every chat provider
 
-Eight providers hand this crate a `NormalizedChat` and get back a
+Ten providers hand this crate a `NormalizedChat` and get back a
 rendered `.md` plus the `grid_rows` that go with it. This file covers
 the parts of that markdown you have to know about before changing it.
 
@@ -73,6 +73,36 @@ accident:
   message measures taller than the clamp and every message gets a "Show
   more" that does nothing. `decorateLongMessages` bails when
   `root.clientWidth` is 0 and waits on a `ResizeObserver` instead.
+
+## What a provider parameterizes
+
+Most of a provider's shape reaches the renderer through
+`RenderProfile` — its `grid_rows` taxonomy, its `source_label`, its
+`when_ts` precision. Three knobs exist for one source each, and are
+worth knowing about before you invent a fourth:
+
+- **`RenderProfile` is per *call*, not per source.** Beeper bridges
+  many upstreams and its taxonomy is per-network ("Signal Chat",
+  "Google Chat Message"), so it groups its chats by network and calls
+  `render_all` once per group.
+- **`NormalizedChat::path_prefix`** puts a segment between
+  `rendered_md/` and the chat's directory. Beeper's `<network>/`, so
+  two upstreams bridged into one stanza stay apart on disk.
+- **`NormalizedDoc::orphan_reactions`** carries reactions to a message
+  the mirror does not have. A period-bucketed provider is expected to
+  file a reaction under its *target's* period rather than its own — a
+  reaction to a March message belongs in the March document however
+  late it arrived, and beeper's parse resolves that against every event
+  in the store. What is left is the case nothing can place: the target
+  was never downloaded. Only beeper produces these today, and the TNG
+  fixture has none, so this is the one path here that nothing
+  exercises.
+
+One `NormalizedChat` per *bucket* rather than per chat is the idiom for
+a period-bucketed source (beeper, signal): attachment bundles are keyed
+by `NormalizedChat::id`, and those sources load a bundle per bucket.
+Nothing downstream notices — the path is `<chat_uuid>/<period>.md`
+either way, and the chat-level grid row was already one per document.
 
 ## `LAYOUT_VERSION`
 

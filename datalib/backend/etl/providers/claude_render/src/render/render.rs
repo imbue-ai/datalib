@@ -44,6 +44,7 @@ pub const RENDER_VERSION: u32 = 6;
 
 fn profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::Claude,
         source_label: "Claude".to_string(),
         chat_kind: "Chat".to_string(),
@@ -63,6 +64,7 @@ fn profile() -> RenderProfile {
 /// for why those anchors are load-bearing.
 fn project_profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::Claude,
         source_label: "Claude".to_string(),
         chat_kind: "Project".to_string(),
@@ -362,6 +364,7 @@ fn build_chat(
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(&conv_uuid).uuid;
     NormalizedChat {
+        path_prefix: None,
         id: chat_uuid.clone(),
         chat_uuid: chat_uuid.clone(),
         display: title.clone(),
@@ -382,6 +385,7 @@ fn build_chat(
         org_uuid: conv.org_uuid.clone(),
         org_name: conv.org_name.clone(),
         buckets: vec![NormalizedDoc {
+            orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: chat_uuid,
             items,
@@ -472,6 +476,7 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
     items.sort_by_key(|i| i.date_ms);
 
     NormalizedChat {
+        path_prefix: None,
         id: page_uuid.clone(),
         chat_uuid: page_uuid.clone(),
         display: name.clone(),
@@ -491,6 +496,7 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
         org_uuid: project.org_uuid.clone(),
         org_name: project.org_name.clone(),
         buckets: vec![NormalizedDoc {
+            orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: page_uuid,
             items,

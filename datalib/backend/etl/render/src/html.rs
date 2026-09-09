@@ -1,9 +1,8 @@
-//! Escaping for the small HTML fragments the chat renderer splices
-//! into its markdown (the per-message header, the aside wrapper).
+//! Escaping for the small HTML fragments a renderer splices into its
+//! markdown — the per-message header, a section wrapper, a link.
 //!
-//! Local rather than shared: `datalib_etl` sits upstream of ~130 test
-//! targets, and a ten-line escaper is not worth putting on that
-//! rebuild path.
+//! Here rather than in `datalib_etl`: that crate sits upstream of ~130
+//! test targets, and only the render side writes HTML.
 
 /// Escape text that lands between tags. `&` first, or the escapes
 /// this function just wrote get escaped again.

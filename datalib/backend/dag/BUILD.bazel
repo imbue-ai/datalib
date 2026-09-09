@@ -36,7 +36,9 @@ rust_library(
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
-        "@datalib_crates//:walkdir",    ],
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:walkdir",
+    ],
 )
 
 rust_test(

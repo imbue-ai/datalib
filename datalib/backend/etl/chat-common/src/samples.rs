@@ -15,6 +15,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_schema::providers::Provider;
+use datalib_time::WhenTsPrecision;
 
 use crate::render::{render_all, RenderProfile, ENTITY_KIND_CONVERSATION};
 use crate::types::{
@@ -33,6 +34,7 @@ pub fn sample_profile() -> RenderProfile {
         message_kind: "Message".to_string(),
         reaction_kind: "Reaction".to_string(),
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        when_ts_precision: WhenTsPrecision::Seconds,
         render_version: 1,
     }
 }
@@ -105,10 +107,12 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         source_url: Some(format!("https://example.invalid/chat/{id}")),
         org_uuid: None,
         org_name: None,
+        path_prefix: None,
         buckets: vec![NormalizedDoc {
             period_key: "all".to_string(),
             markdown_uuid: id.to_string(),
             items,
+            orphan_reactions: Vec::new(),
         }],
     }
 }

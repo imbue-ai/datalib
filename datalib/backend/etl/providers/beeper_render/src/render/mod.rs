@@ -1,5 +1,6 @@
 //! Beeper render stage.
 
+pub mod normalize;
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
 // an accident: the directory is the pipeline STAGE (mirroring
@@ -27,4 +28,4 @@ pub use datalib_etl::periodize::Period;
 // Public re-exports for the sync orchestrator
 
 pub use parse::{parse_raw_dir, ParsedBeeper};
-pub use render::{render_all, RenderSummary};
+pub use render::{render_all, RenderSummary, RENDER_VERSION};

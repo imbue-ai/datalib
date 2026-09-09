@@ -1,25 +1,30 @@
-//! Markdown + grid_rows rendering for Signal chats.
+//! Signal's render stage: normalize, then hand off to `chat-common`.
+//!
+//! Everything about *how* a Signal message looks now lives in
+//! `datalib_etl_chat_common`. What is left here is the stage plumbing —
+//! the progress accounting parse's skip-load needs, and the render
+//! cursor.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
-use datalib_etl::title::Title;
+use datalib_etl_chat_common::render::ENTITY_KIND_CONVERSATION;
+use datalib_etl_chat_common::{RenderProfile, RenderSummary as ChatSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::section::section_attrs;
-use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
-use super::parse::{DocBucket, ParsedChat, ParsedChatItem, ParsedSignal};
-use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
+use super::normalize::to_chats;
+use super::parse::ParsedSignal;
 
-/// Bump when the rendered markdown / grid_rows layout changes enough
-/// that we need every existing doc rebuilt.
-pub const RENDER_VERSION: u32 = 4;
+/// Bump when Signal's own contribution to the rendered output changes.
+/// The shared layout has its own number — see
+/// `datalib_etl_chat_common::LAYOUT_VERSION`, which is folded into every
+/// fingerprint alongside this one.
+pub const RENDER_VERSION: u32 = 5;
 
 const SOURCE_LABEL: &str = "Signal";
 const PROVIDER: Provider = Provider::Signal;
@@ -30,9 +35,6 @@ pub struct RenderSummary {
     pub docs_rendered: usize,
     pub docs_skipped: usize,
     pub messages_rendered: usize,
-    /// Attachment blobs materialized onto disk under
-    /// `<page_dir>/blobs/<short-b3>.<ext>`.
-    pub blobs_materialized: usize,
 }
 
 /// The render params recorded alongside the cursor. `period` decides
@@ -41,6 +43,22 @@ pub struct RenderSummary {
 /// [`datalib_etl::render_cursor::read_for_params`].
 pub fn render_params(period: Period) -> serde_json::Value {
     serde_json::json!({ "period": period.as_config_str() })
+}
+
+pub fn profile() -> RenderProfile {
+    RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        provider: PROVIDER,
+        source_label: SOURCE_LABEL.to_string(),
+        chat_kind: "Signal Chat".to_string(),
+        message_kind: "Signal Message".to_string(),
+        // Signal Android backups carry reactions, but this provider's
+        // parse does not read them yet, so nothing is ever tagged with
+        // this. Named for when it does.
+        reaction_kind: "Signal Reaction".to_string(),
+        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        render_version: RENDER_VERSION,
+    }
 }
 
 pub fn render_all(
@@ -54,10 +72,9 @@ pub fn render_all(
     // Log how long the dolt_diff scan took. Logged on every render
     // (including cold start with `None`) so the timing shows up in
     // sync output without the user having to crack the cursor open.
-    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
         source = source_name,
-        scan_elapsed_ms = elapsed_ms,
+        scan_elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64),
         changed_chats = parsed
             .scan
             .changed_chats
@@ -68,39 +85,34 @@ pub fn render_all(
         "[render] signal dolt_diff scan"
     );
 
-    let mut summary = RenderSummary {
-        // `docs` only contains the buckets that need re-rendering,
-        // so `docs_total = parsed.docs.len() + docs_skipped` is the
-        // count the orchestrator's progress bar wants. Skip count
-        // comes from parse — it counted chats whose dolt_diff entry
-        // was empty.
-        docs_total: parsed.docs.len() + parsed.docs_skipped,
-        docs_skipped: parsed.docs_skipped,
-        ..Default::default()
-    };
-    progress.set_length(Some(summary.docs_total as u64));
     // The parse-side skip-load has already filtered out unchanged
     // buckets; report them all up front so the progress bar accounts
     // for them too.
-    progress.inc(summary.docs_skipped as u64);
+    progress.set_length(Some((parsed.docs.len() + parsed.docs_skipped) as u64));
+    progress.inc(parsed.docs_skipped as u64);
 
-    for doc in &parsed.docs {
-        let Some(chat) = parsed.chats.get(&doc.chat_id) else {
-            tracing::warn!(
-                event = "signal_render_missing_chat",
-                chat_id = %doc.chat_id,
-                period_key = %doc.period_key,
-            );
-            progress.inc(1);
-            continue;
-        };
-        let RenderOutcome::Rendered { messages, blobs } =
-            render_one(chat, doc, parsed, out_dir, source_name, on_doc_complete)?;
-        summary.docs_rendered += 1;
-        summary.messages_rendered += messages;
-        summary.blobs_materialized += blobs;
-        progress.inc(1);
-    }
+    let (chats, blobs_by_chat) = to_chats(parsed, source_name);
+    // Empty on purpose. chat-common skips a document whose fingerprint
+    // is unchanged, and parse has *already* made that decision from
+    // `dolt_diff` — a bucket reaching here is one we have committed to
+    // writing. Handing over a real map would skip it a second time on
+    // the wrong evidence.
+    let prior_fingerprints = HashMap::new();
+
+    let ChatSummary {
+        docs_rendered,
+        items_rendered,
+        ..
+    } = datalib_etl_chat_common::render_all(
+        &profile(),
+        &chats,
+        out_dir,
+        source_name,
+        &blobs_by_chat,
+        progress,
+        &prior_fingerprints,
+        on_doc_complete,
+    )?;
 
     // Advance the render cursor only when:
     //   * every doc rendered without error (we're here, so true), AND
@@ -113,388 +125,11 @@ pub fn render_all(
         render_cursor::write(&cursor_path, head, render_params)
             .with_context(|| format!("write signal render cursor {}", cursor_path.display()))?;
     }
-    Ok(summary)
-}
 
-enum RenderOutcome {
-    Rendered { messages: usize, blobs: usize },
-}
-
-fn render_one(
-    chat: &ParsedChat,
-    doc: &DocBucket,
-    parsed: &ParsedSignal,
-    out_dir: &Path,
-    source_name: &str,
-    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<RenderOutcome> {
-    let chat_uuid = signal_chat_uuid(source_name, &chat.id);
-    let markdown_uuid = signal_markdown_uuid(&chat_uuid, &doc.period_key);
-    // The per-doc `source_fingerprint` used to be a content hash
-    // computed by the parse-side bucket-fingerprint CTE. With
-    // dolt_diff driving the skip decision, that compare doesn't
-    // happen anymore — but the load path still wants *some* stable
-    // identifier in the row set. Use the markdown_uuid: stable across
-    // re-renders of the same bucket, distinct between buckets,
-    // already in scope. The orchestrator's prior_fingerprints map is
-    // ignored by signal now (parse never reads it); this value just
-    // keeps the row schema honest.
-    let fingerprint = markdown_uuid.clone();
-
-    let recipient_display = parsed
-        .recipients
-        .get(&chat.recipient_id)
-        .map(|r| r.display())
-        .unwrap_or_else(|| format!("recipient_{}", chat.recipient_id));
-    let chat_title = format!("Signal · {recipient_display}");
-    let doc_title = format!("{chat_title} ({})", doc.period_key);
-
-    let (md_path, page_dir) = output_paths(out_dir, source_name, &chat_uuid, &doc.period_key);
-
-    // No prior-fingerprint check here: parse already filtered out
-    // unchanged buckets before they reach render. Reaching this
-    // function means we have committed to writing this doc.
-    fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
-
-    // Materialize attachment bytes into `<page_dir>/blobs/<short-b3>.<ext>`
-    // before the .md is written, so the relative links the renderer
-    // emits resolve to files that exist by the time the file appears
-    // on disk. Filename comes from `BlobBundle::filename_for` — same
-    // convention every other provider uses (slack, claude, notion,
-    // chatgpt, email), via the shared `BlobBundle::materialize_to_dir`.
-    let blobs_dir = page_dir.join("blobs");
-    let ref_ids: Vec<&str> = doc
-        .items
-        .iter()
-        .flat_map(|it| it.attachments.iter().map(|a| a.ref_id.as_str()))
-        .collect();
-    let mut blobs_written = 0usize;
-    if !ref_ids.is_empty() {
-        doc.blobs
-            .materialize_to_dir(&blobs_dir)
-            .with_context(|| format!("materialize blobs into {}", blobs_dir.display()))?;
-        // Count what landed on disk so the summary matches what we
-        // wrote. The bundle lookup is sync now.
-        for ref_id in &ref_ids {
-            if doc.blobs.get(ref_id).is_some() {
-                blobs_written += 1;
-            }
-        }
-    }
-
-    // Latest real stamp in the bucket, or nothing. An empty bucket used
-    // to get `iso_ts(0)` — a chat-level row claiming 1970 — which is
-    // exactly the fabrication §6 forbids. `None` reaches `when_ts` as a
-    // null; `GridRow::builder()` already takes it.
-    let when_ts = doc.items.last().and_then(|i| iso_ts(i.date_sent));
-
-    let md = render_markdown(
-        doc,
-        parsed,
-        source_name,
-        &chat.id,
-        &doc_title,
-        &recipient_display,
-        &chat_uuid,
-        &markdown_uuid,
-        &fingerprint,
-    );
-    fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
-
-    let md_rel_path = md_path
-        .strip_prefix(out_dir)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-
-    let mut problems: Vec<RenderProblemRow> = Vec::new();
-    let mut rows: Vec<GridRow> = Vec::with_capacity(1 + doc.items.len());
-    rows.extend(chat_grid_row(
-        &markdown_uuid,
-        &chat_uuid,
-        &doc_title,
-        &recipient_display,
-        when_ts.clone(),
-        &md_rel_path,
-        source_name,
-        &mut problems,
-    ));
-
-    let mut messages_rendered = 0;
-    for (idx, item) in doc.items.iter().enumerate() {
-        let Some(text) = item.text.as_deref() else {
-            continue;
-        };
-        let msg_uuid = signal_message_uuid(source_name, &chat.id, &item.author_id, item.date_sent);
-        let author = author_display(parsed, item);
-        rows.extend(message_grid_row(
-            &msg_uuid,
-            &markdown_uuid,
-            &chat_uuid,
-            &chat_title,
-            &recipient_display,
-            &author,
-            text,
-            idx as i64,
-            iso_ts(item.date_sent),
-            &md_rel_path,
-            source_name,
-            &mut problems,
-        ));
-        messages_rendered += 1;
-    }
-
-    on_doc_complete(RenderedMarkdown {
-        markdown_uuid: markdown_uuid.clone(),
-        source_name: source_name.to_string(),
-        source_fingerprint: fingerprint,
-        upstream_cursor: None,
-        md_path,
-        render_version: RENDER_VERSION,
-        rows,
-        edges: Vec::new(),
-        problems,
+    Ok(RenderSummary {
+        docs_total: parsed.docs.len() + parsed.docs_skipped,
+        docs_rendered,
+        docs_skipped: parsed.docs_skipped,
+        messages_rendered: items_rendered,
     })
-    .with_context(|| format!("on_doc_complete {markdown_uuid}"))?;
-
-    Ok(RenderOutcome::Rendered {
-        messages: messages_rendered,
-        blobs: blobs_written,
-    })
-}
-
-fn output_paths(
-    out_dir: &Path,
-    source_name: &str,
-    chat_uuid: &str,
-    period_key: &str,
-) -> (PathBuf, PathBuf) {
-    // One directory per chat keyed by the chat's stable UUID — never a
-    // title-derived slug, so a contact/group rename re-renders in place.
-    // period_key files live inside; mirrors beeper's `<room_uuid>/<period>.md`.
-    let page_dir = datalib_etl::layout::rendered_md_root(out_dir, source_name).join(chat_uuid);
-    let md_path = page_dir.join(format!("{period_key}.md"));
-    (md_path, page_dir)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_markdown(
-    doc: &DocBucket,
-    parsed: &ParsedSignal,
-    source_name: &str,
-    chat_id: &str,
-    title: &str,
-    recipient_display: &str,
-    chat_uuid: &str,
-    markdown_uuid: &str,
-    fingerprint: &str,
-) -> String {
-    let mut s = String::new();
-    s.push_str("---\n");
-    s.push_str(&format!("title: \"{}\"\n", title.replace('"', "\\\"")));
-    s.push_str(&format!("provider: {PROVIDER}\n"));
-    s.push_str(&format!("chat_uuid: {chat_uuid}\n"));
-    s.push_str(&format!("markdown_uuid: {markdown_uuid}\n"));
-    s.push_str(&format!("period: {}\n", doc.period_key));
-    s.push_str(&format!(
-        "recipient: \"{}\"\n",
-        recipient_display.replace('"', "\\\"")
-    ));
-    s.push_str(&format!("source_fingerprint: {fingerprint}\n"));
-    s.push_str("---\n\n");
-    // Use the shared `Title` helper so signal pages carry the same
-    // `class="page-title" data-page-title-uuid="…"` hook the Vue side
-    // keys the "copy page ID" button off. Signal Android backups don't
-    // expose a per-thread web URL, so `source_url` stays `None` —
-    // produces an H1 with the copy-id hook and no outbound ↗ arrow.
-    s.push_str(
-        &Title {
-            text: title,
-            markdown_uuid: Some(markdown_uuid),
-            source_url: None,
-        }
-        .render(),
-    );
-
-    if doc.items.is_empty() {
-        s.push_str("_(no messages)_\n");
-        return s;
-    }
-    for (idx, item) in doc.items.iter().enumerate() {
-        // Skip the bullet entirely only when there's neither text
-        // nor an attachment — that's a non-rendering ChatItem
-        // (StickerMessage, ChatUpdate, …) that contributes nothing
-        // to a chat-replay markdown.
-        if item.text.is_none() && item.attachments.is_empty() {
-            continue;
-        }
-        let msg_uuid = signal_message_uuid(source_name, chat_id, &item.author_id, item.date_sent);
-        let author = author_display(parsed, item);
-        // Words, not a fabricated date, when `date_sent` isn't a
-        // representable instant — matching the null this row's
-        // `when_ts` carries.
-        let ts = iso_ts(item.date_sent).unwrap_or_else(|| "(no timestamp)".to_string());
-        let body = item.text.as_deref().unwrap_or("");
-        // Shared `section_attrs` produces the same `id="m-{uuid}"
-        // data-section-uuid="{uuid}"` fragment every other provider
-        // emits on its message wrapper; signal puts it on a bullet
-        // span instead of a `<div>` so the markdown stays a tight
-        // bulleted list. The span wraps visible content (timestamp +
-        // author) so the browser gives it non-zero size — an empty
-        // anchor span would be `hidden` to the frontend's selection
-        // highlighting and Playwright's `toBeVisible` check.
-        s.push_str(&format!(
-            "- <span {attrs} data-msg-index=\"{idx}\">**{ts}** _{author}_:</span> {body}\n",
-            attrs = section_attrs(&msg_uuid),
-        ));
-        // One sub-bullet per attachment so multi-attachment messages
-        // stay readable. The bundle gives us the same image-vs-file
-        // split with a "(not yet fetched)" placeholder when the bytes
-        // haven't been ingested.
-        for att in &item.attachments {
-            let link = doc
-                .blobs
-                .markdown_link(&att.ref_id, att.file_name.as_deref(), att.is_image);
-            s.push_str("    - ");
-            s.push_str(&link);
-            s.push('\n');
-        }
-    }
-    s
-}
-
-#[allow(clippy::too_many_arguments)]
-fn chat_grid_row(
-    markdown_uuid: &str,
-    chat_uuid: &str,
-    title: &str,
-    recipient_display: &str,
-    when_ts: Option<String>,
-    qmd_rel: &str,
-    stanza: &str,
-    problems: &mut Vec<RenderProblemRow>,
-) -> Option<GridRow> {
-    base_row(
-        markdown_uuid.to_string(),
-        "Signal Chat".to_string(),
-        title.to_string(),
-        Some(recipient_display.to_string()),
-        chat_uuid.to_string(),
-        None,
-        when_ts,
-        title.to_string(),
-        // Drive the Channel column off the bare chat name (the recipient
-        // display), mirroring WhatsApp where channel == the chat's
-        // display name. Title carries the "Signal · …" prefix, so use
-        // recipient_display here, not `title`.
-        Some(recipient_display.to_string()),
-        qmd_rel.to_string(),
-        markdown_uuid.to_string(),
-        stanza,
-        problems,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn message_grid_row(
-    msg_uuid: &str,
-    markdown_uuid: &str,
-    chat_uuid: &str,
-    title: &str,
-    recipient_display: &str,
-    author: &str,
-    text: &str,
-    idx: i64,
-    when_ts: Option<String>,
-    qmd_rel: &str,
-    stanza: &str,
-    problems: &mut Vec<RenderProblemRow>,
-) -> Option<GridRow> {
-    base_row(
-        msg_uuid.to_string(),
-        "Signal Message".to_string(),
-        text.to_string(),
-        Some(author.to_string()),
-        chat_uuid.to_string(),
-        Some(idx),
-        when_ts,
-        title.to_string(),
-        // Channel == the chat name (recipient display), same value the
-        // chat-level row carries, so every Signal row populates the
-        // Channel column the way WhatsApp rows do.
-        Some(recipient_display.to_string()),
-        qmd_rel.to_string(),
-        markdown_uuid.to_string(),
-        stanza,
-        problems,
-    )
-}
-
-/// `None`, with the reason recorded on `problems`, when the row will
-/// not validate — see `GridRowBuilder::build_or_record`.
-#[allow(clippy::too_many_arguments)]
-fn base_row(
-    uuid: String,
-    kind: String,
-    text: String,
-    author: Option<String>,
-    conversation_uuid: String,
-    message_index: Option<i64>,
-    when_ts: Option<String>,
-    conversation_name: String,
-    channel: Option<String>,
-    qmd_path: String,
-    markdown_uuid: String,
-    stanza: &str,
-    problems: &mut Vec<RenderProblemRow>,
-) -> Option<GridRow> {
-    GridRow::builder()
-        .uuid(uuid)
-        .provider(PROVIDER)
-        .kind(kind)
-        .source_label(SOURCE_LABEL)
-        .when_ts(when_ts)
-        .author(author)
-        .channel(channel)
-        .conversation_name(Some(conversation_name))
-        .conversation_uuid(conversation_uuid)
-        .message_index(message_index)
-        .entire_chat(format!("/chat/{markdown_uuid}"))
-        .text(text)
-        .qmd_path(Some(qmd_path))
-        .markdown_uuid(Some(markdown_uuid.clone()))
-        .build_or_record(stanza, &markdown_uuid, RENDER_VERSION, problems)
-}
-
-fn author_display(parsed: &ParsedSignal, item: &ParsedChatItem) -> String {
-    if item.outgoing {
-        return "Me".to_string();
-    }
-    parsed
-        .recipients
-        .get(&item.author_id)
-        .map(|r| r.display())
-        .unwrap_or_else(|| format!("recipient_{}", item.author_id))
-}
-fn iso_ts(date_sent_ms: i64) -> Option<String> {
-    datalib_time::when_ts_from_unix_millis(
-        Some(date_sent_ms),
-        datalib_time::WhenTsPrecision::Seconds,
-    )
-}
-
-#[cfg(test)]
-mod timestamp_tests {
-    use super::*;
-
-    /// `date_sent` values chrono cannot represent must produce no
-    /// timestamp. This used to be the literal string
-    /// `"1970-01-01T00:00:00+00:00"`, which in the grid is
-    /// indistinguishable from a real 1970 message.
-    #[test]
-    fn iso_ts_yields_none_for_unrepresentable_values() {
-        assert_eq!(iso_ts(0).as_deref(), Some("1970-01-01T00:00:00+00:00"));
-        assert_eq!(iso_ts(i64::MAX), None);
-        assert_eq!(iso_ts(i64::MIN), None);
-    }
 }

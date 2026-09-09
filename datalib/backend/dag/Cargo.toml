@@ -27,6 +27,7 @@ tokio = { workspace = true, features = ["process", "sync", "time", "fs", "io-uti
 # Same pinned spec as datalib-etl: default content hash for
 # artifact versions when a step doesn't report its own.
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
+tracing = "0.1"
 walkdir = { workspace = true }
 # Signal forwarding to step subprocesses (kill(2)); already pinned
 # transitively.

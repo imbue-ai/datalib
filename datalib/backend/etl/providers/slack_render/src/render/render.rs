@@ -45,6 +45,7 @@ pub struct RenderSummary {
 
 fn profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::Slack,
         source_label: "Slack".to_string(),
         chat_kind: "Slack Thread".to_string(),
@@ -160,6 +161,7 @@ fn build_chats(
         let title = format!("{cname}: {}", thread_title(&root.text, user_labels));
 
         chats.push(NormalizedChat {
+            path_prefix: None,
             id: thread_uuid.clone(),
             chat_uuid: thread_uuid.clone(),
             display: cname,
@@ -184,6 +186,7 @@ fn build_chats(
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {
+                orphan_reactions: Vec::new(),
                 period_key: "all".to_string(),
                 markdown_uuid: thread_uuid.clone(),
                 items,

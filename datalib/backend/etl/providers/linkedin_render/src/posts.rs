@@ -30,6 +30,7 @@ const ME: &str = "Me";
 
 fn profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         chat_kind: "LinkedIn Post".to_string(),
@@ -193,6 +194,7 @@ fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat>
         }
 
         chats.push(NormalizedChat {
+            path_prefix: None,
             id: format!("posts:{key}"),
             chat_uuid: uuid5(&format!("chat:posts:{key}")),
             display: thread_title(thread.share, &thread.comments),
@@ -206,6 +208,7 @@ fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat>
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {
+                orphan_reactions: Vec::new(),
                 period_key: "all".to_string(),
                 markdown_uuid: uuid5(&format!("doc:posts:{key}:all")),
                 items,

@@ -212,10 +212,16 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         "page-title H1 with markdown_uuid hook present in:\n{md}"
     );
     assert!(md.contains("Make it so."), "Picard's order rendered");
-    assert!(md.contains("_Me_:"), "outgoing author labelled as Me");
+    // Signal renders through `chat-common` now, so a message is the
+    // same `## <span class="msg-author">…` header every chat source
+    // writes rather than the bulleted line this provider used to emit.
     assert!(
-        md.contains("_Will Riker_:"),
-        "Riker's name resolved from recipient"
+        md.contains("<span class=\"msg-author\">Me</span>"),
+        "outgoing author labelled as Me in:\n{md}"
+    );
+    assert!(
+        md.contains("<span class=\"msg-author\">Will Riker</span>"),
+        "Riker's name resolved from recipient in:\n{md}"
     );
 
     // PNG attachment surfaces as an inline image link under the

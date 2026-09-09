@@ -160,6 +160,7 @@ fn render_one_mr(
     let title_text = format!("{} (!{})", mr.title, mr.mr_iid);
     out.push_str(
         &Title {
+            suffix: None,
             text: &title_text,
             markdown_uuid: Some(&mr.uuid),
             source_url: mr.web_url.as_deref(),

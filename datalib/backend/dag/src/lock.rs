@@ -137,16 +137,43 @@ impl FileLock {
     /// rewrites its contents — so a caller on a timer does not make a root
     /// that never ran sprout a lock file. Racy by nature: the holder may let
     /// go a microsecond later, so don't build an invariant on it.
+    ///
+    /// **A probe that cannot get an answer says "held".** The one caller
+    /// is `GET /api/dag`, which turns a `false` here into "no runner
+    /// holds this root, so that open run record belongs to a run that
+    /// died" — and the UI paints the row `Interrupted`. Guessing `false`
+    /// on an errno we did not expect therefore declares a healthy run
+    /// dead; guessing `true` at worst delays that verdict by one poll.
     pub fn is_held(path: &Path) -> bool {
-        let Ok(file) = File::open(path) else {
-            return false;
+        let file = match File::open(path) {
+            Ok(f) => f,
+            // No lock file at all: nobody has ever taken it, or the
+            // runner has not reached `acquire` yet. Genuinely not held.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "lock probe could not open the lock file; reporting held"
+                );
+                return true;
+            }
         };
         match take(&file) {
             Ok(()) => {
                 release(&file);
                 false
             }
-            Err(e) => e.kind() == std::io::ErrorKind::WouldBlock,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => true,
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    errno = e.raw_os_error(),
+                    "lock probe got an unexpected errno; reporting held"
+                );
+                true
+            }
         }
     }
 
@@ -175,13 +202,22 @@ impl FileLock {
 #[cfg(unix)]
 fn take(file: &File) -> std::io::Result<()> {
     use std::os::unix::io::AsRawFd;
-    // LOCK_NB: refuse immediately rather than blocking behind a process
-    // someone forgot about.
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
+    loop {
+        // LOCK_NB: refuse immediately rather than blocking behind a
+        // process someone forgot about.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        // `flock` is interruptible, and a signal arriving mid-call says
+        // nothing about who holds the lock. Retrying is the standard
+        // handling; without it a busy machine turns "interrupted" into
+        // "not held" at every call site.
+        if err.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(err);
     }
 }
 
@@ -234,6 +270,32 @@ mod tests {
         assert!(!FileLock::runner_is_held(tmp.path()));
         // Probing an existing-but-free lock must leave it takeable.
         assert!(FileLock::acquire_runner(tmp.path()).is_ok());
+    }
+
+    /// A probe that cannot read the lock file must not answer "free".
+    ///
+    /// The one caller turns `false` into "no runner holds this root",
+    /// and the UI turns that into `Interrupted` on a run that is fine.
+    /// Here the lock's parent directory is a regular file, so `open`
+    /// fails `ENOTDIR` — a question we cannot answer, where the safe
+    /// answer is "held".
+    #[test]
+    #[cfg(unix)]
+    fn an_unreadable_lock_reports_held_rather_than_free() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp
+            .path()
+            .join(RUNNER_LOCK_REL_PATH)
+            .parent()
+            .expect("the lock path has a parent")
+            .to_path_buf();
+        std::fs::create_dir_all(parent.parent().expect("and a grandparent")).unwrap();
+        std::fs::write(&parent, b"not a directory").unwrap();
+
+        assert!(
+            FileLock::runner_is_held(tmp.path()),
+            "a probe that cannot open the lock must not report it free"
+        );
     }
 
     #[test]

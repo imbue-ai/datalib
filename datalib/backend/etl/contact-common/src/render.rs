@@ -258,6 +258,7 @@ fn render_markdown(
     // page (a LinkedIn profile, say) when the provider has one.
     out.push_str(
         &Title {
+            suffix: None,
             text: &title,
             markdown_uuid: Some(m_uuid),
             source_url: contact.source_url.as_deref(),

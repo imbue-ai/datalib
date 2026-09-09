@@ -48,6 +48,7 @@ fn uuid5(recipe: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::GoogleTakeout,
         source_label: "Google Chat".to_string(),
         chat_kind: "Google Chat".to_string(),
@@ -60,6 +61,7 @@ fn profile() -> RenderProfile {
 
 fn voice_profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::GoogleTakeout,
         source_label: "Google Voice".to_string(),
         chat_kind: "Google Voice Conversation".to_string(),
@@ -272,6 +274,7 @@ fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<Normalized
         let buckets: Vec<NormalizedDoc> = by_month
             .into_iter()
             .map(|(period_key, items)| NormalizedDoc {
+                orphan_reactions: Vec::new(),
                 markdown_uuid: uuid5(&format!("doc:{space}:{period_key}")),
                 period_key,
                 items,
@@ -284,6 +287,7 @@ fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<Normalized
             .unwrap_or_else(|| space.clone());
 
         chats.push(NormalizedChat {
+            path_prefix: None,
             id: space.clone(),
             chat_uuid: uuid5(&format!("chat:{space}")),
             display,
@@ -407,6 +411,7 @@ fn build_voice_chats(messages: &[Value]) -> Vec<NormalizedChat> {
         let buckets: Vec<NormalizedDoc> = by_month
             .into_iter()
             .map(|(period_key, items)| NormalizedDoc {
+                orphan_reactions: Vec::new(),
                 markdown_uuid: uuid5(&format!("voice:doc:{chat_id}:{period_key}")),
                 period_key,
                 items,
@@ -414,6 +419,7 @@ fn build_voice_chats(messages: &[Value]) -> Vec<NormalizedChat> {
             .collect();
 
         chats.push(NormalizedChat {
+            path_prefix: None,
             id: chat_id.clone(),
             chat_uuid: uuid5(&format!("voice:chat:{chat_id}")),
             display,
