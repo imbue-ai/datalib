@@ -297,12 +297,14 @@ failure is visible from a single run:
 
 ### Known gaps
 
-- **No checked-in wire fixtures.** `DOWNLOAD.md`'s "Sample data" section
-  is still accurate: `tests/jmap_render.rs` builds a `LoadedRaw` in
-  memory, and the Gmail API surface is covered by unit tests over canned
-  JSON rather than a replayed conversation. A synth + playback pair
-  matching the slack/notion pattern is the obvious next step, and would
-  let the live test's invariants run hermetically in CI.
+- **Almost no checked-in wire fixtures.** `tests/jmap_render.rs` builds
+  a `LoadedRaw` in memory, and the JMAP surface has no replayed
+  conversation at all — `tests/playback_roundtrip.rs` is still a
+  placeholder. The Gmail side has one: `tests/gmail_label_union.rs`
+  synthesizes a small conversation and replays it through
+  `DATALIB_HTTP_PLAYBACK`, but it covers the label filter and nothing
+  else. A full synth + playback pair matching the slack/notion pattern
+  would let the rest of the live test's invariants run in CI too.
 - **`DOWNLOAD.md` is titled "JMAP Extract"** and documents only that
   mode. It predates the other two.
 - **Render stamps `provider: email`** in QMD frontmatter and
@@ -322,18 +324,37 @@ Recorded because each was invisible from a passing single run:
    `messages.list?labelIds=` narrows it server-side, and a name that
    matches no label is a hard error, because an empty `labelIds` means
    "everything".
-2. **A budget-limited run advanced the cursor**, so run 2 went
+2. **Moving it server-side then quietly changed what it meant.**
+   `only_extract_labels` is "carrying **any** of these", and the fix
+   above passed all of them to one `messages.list`. Gmail *intersects*
+   repeated `labelIds`: a config naming three labels asked for the
+   messages carrying all three, which for most label sets is none. The
+   run enumerated nothing, downloaded nothing, stored the `historyId`
+   cursor and reported success — and every later run then went
+   incremental and correctly found nothing new, so the mirror stayed
+   empty and never said why. `messages.list` cannot express a union, so
+   the enumeration is now one walk per label, deduped into one id set
+   (`enumeration_walks` in `src/download/gmail_api/mod.rs`), and
+   `api::list_messages` takes `Option<&str>` rather than a slice so the
+   combined request cannot be built again.
+
+   The live test that existed did mirror a label — one label, where an
+   intersection and a union are the same set. Two are needed to tell
+   them apart, which is what `gmail_live_two_labels_mirror_their_union`
+   now does, and `gmail_label_union` covers hermetically by replaying
+   fixtures that model Gmail's intersecting answer.
+3. **A budget-limited run advanced the cursor**, so run 2 went
    incremental and silently abandoned the rest of the mailbox. Fixed by
    holding the cursor when `budget_exhausted`, *and* by skipping
    already-mirrored Gmail ids before spending quota — without the second
    half the run re-fetches the same prefix forever.
-3. **Incremental runs clobbered thread membership.** Thread rows were
+4. **Incremental runs clobbered thread membership.** Thread rows were
    built from the messages *this run* fetched, so relabeling one message
    of a ten-message thread rewrote the thread to contain only that one.
    Membership is now read back out of the `emails` table.
-4. **Deletes matched on `payload LIKE '%"gmailMessageId":"…"%'`** —
+5. **Deletes matched on `payload LIKE '%"gmailMessageId":"…"%'`** —
    O(rows) per deletion and silently dependent on serde's exact key
    spacing. Replaced by the `gmail_messages` mapping table, which the
    resumable backfill needed anyway.
-5. **`loaded_blob_ids()` was reloaded per `messages.list` page.** Now
+6. **`loaded_blob_ids()` was reloaded per `messages.list` page.** Now
    once per run.

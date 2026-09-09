@@ -16,6 +16,10 @@ instead from `bazel run //:precommit` and as a plain step in
      an unpinned read returns uncommitted rows once producers stream.
   5. Render code must not open a doltlite store writably: `open` writes on
      the way in, and the render step does not own the store it reads.
+  6. A download must take its store as an input rather than opening one.
+  7. Every target tagged `manual` must be named by a `build_test` in the
+     same package, because `bazel test //...` never builds a `manual`
+     target and one can stop compiling in silence.
 
 Check 1: why it exists
 ----------------------
@@ -300,6 +304,7 @@ def main() -> int:
     rc |= _check_unpinned_render_reads(root)
     rc |= _check_render_opens_read_only(root)
     rc |= _check_download_takes_a_store(root)
+    rc |= _check_manual_targets_still_build(root)
     return rc
 
 
@@ -731,6 +736,97 @@ def _check_no_sandbox(root: Path) -> int:
             file=sys.stderr,
         )
 
+    return 1
+
+
+# --- Check 7: `manual` targets must still be built somewhere ---------
+#
+# `manual` keeps a target out of `//...` expansion. That is what the live
+# tests want -- they talk to third-party services with the host's
+# credentials, and CI must never run them. But it also means CI never
+# *builds* them, so one can stop compiling and nothing says so.
+#
+# `gmail_live` did exactly that: it broke when `FetchOptions` gained its
+# non-defaultable `db` field and stayed broken until someone tried to run
+# it, at which point the Gmail bug it should have been guarding had
+# already shipped.
+#
+# `build_test` (bazel_skylib) builds a target and runs nothing, and a
+# `manual` dependency is still built when something depends on it --
+# the tag only affects target-pattern expansion. So each package with a
+# `manual` target carries a `build_test` naming it, and this check is
+# what keeps that pairing from drifting.
+_MANUAL_TAG = re.compile(r'^\s*"manual"\s*,?\s*$|tags\s*=\s*\[[^\]]*"manual"')
+_BUILD_TEST_LOCAL_TARGET = re.compile(r'"(:[A-Za-z0-9_.+-]+)"')
+
+
+def _build_test_targets(text: str) -> set[str]:
+    """Same-package labels named by any `build_test(...)` in `text`."""
+    out: set[str] = set()
+    for m in re.finditer(r"\bbuild_test\s*\(", text):
+        depth, i = 0, m.end() - 1
+        while i < len(text):
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        block = text[m.end() : i]
+        out.update(t[1:] for t in _BUILD_TEST_LOCAL_TARGET.findall(block))
+    return out
+
+
+def _manual_targets(root: Path) -> tuple[set[str], set[str]]:
+    """`(covered, uncovered)` sets of `//<package>:<name>` tagged `manual`."""
+    covered: set[str] = set()
+    uncovered: set[str] = set()
+    for build_file in _build_files(root):
+        text = build_file.read_text()
+        if '"manual"' not in text:
+            continue
+        lines = text.splitlines()
+        package = build_file.parent.relative_to(root).as_posix()
+        built = _build_test_targets(text)
+        for i, line in enumerate(lines):
+            if not _MANUAL_TAG.search(line):
+                continue
+            name = _find_enclosing_rule_name(lines, i)
+            if name is None:
+                print(
+                    f"WARNING: {build_file}:{i + 1} is tagged manual but no "
+                    "enclosing rule name was found; check it by hand.",
+                    file=sys.stderr,
+                )
+                continue
+            label = f"//{package}:{name}"
+            (covered if name in built else uncovered).add(label)
+    return covered, uncovered
+
+
+def _check_manual_targets_still_build(root: Path) -> int:
+    covered, uncovered = _manual_targets(root)
+    if not uncovered:
+        print(f"OK: {len(covered)} `manual` target(s), all covered by a build_test.")
+        return 0
+
+    print(
+        "ERROR: `manual` target with nothing to build it, so it can rot unnoticed:",
+        file=sys.stderr,
+    )
+    for label in sorted(uncovered):
+        print(f"  - {label}", file=sys.stderr)
+    print(
+        "\nAdd it to the `build_test` in its own BUILD.bazel (creating one "
+        "if the package has none):\n\n"
+        '    load("@bazel_skylib//rules:build_test.bzl", "build_test")\n\n'
+        "    build_test(\n"
+        '        name = "manual_targets_build",\n'
+        '        targets = [":<the target>"],\n'
+        "    )\n",
+        file=sys.stderr,
+    )
     return 1
 
 

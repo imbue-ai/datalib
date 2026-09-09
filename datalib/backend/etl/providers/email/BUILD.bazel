@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
@@ -123,6 +124,23 @@ rust_test(
     ],
 )
 
+# Hermetic Gmail download test: synthesized fixtures replayed through
+# DATALIB_HTTP_PLAYBACK, so it needs no credential and no network.
+rust_test(
+    name = "gmail_label_union",
+    srcs = ["tests/gmail_label_union.rs"],
+    crate_root = "tests/gmail_label_union.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_email",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 rust_test(
     name = "jmap_playback_roundtrip",
     srcs = ["tests/playback_roundtrip.rs"],
@@ -202,4 +220,14 @@ insta_update(
     name = "jmap_live.update",
     test = ":jmap_live",
     test_args = ["--ignored"],
+)
+
+# `manual` keeps these out of `//...`, so nothing else ever builds them.
+# See scripts/lint_repo.py check 7.
+build_test(
+    name = "manual_targets_build",
+    targets = [
+        ":gmail_live",
+        ":jmap_live",
+    ],
 )

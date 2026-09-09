@@ -36,10 +36,11 @@ pub struct EmailConfig {
     /// download planner rejects it with a pointer to the new home.
     #[serde(default)]
     pub outlink_format: Option<EmailOutlink>,
-    /// Limit **extraction** to mailboxes whose full label path (POSIX-like,
-    /// e.g. `Work/Projects`) exactly matches one of these — nested labels must
-    /// be listed explicitly. Empty = download everything. Applies to both the
-    /// JMAP and `.mbox` paths. Independent of the render step's
+    /// Limit **extraction** to messages under *any* of these mailboxes,
+    /// matched on the full label path (POSIX-like, e.g. `Work/Projects`)
+    /// — nested labels must be listed explicitly. Several labels union,
+    /// they do not intersect. Empty = download everything. Applies to
+    /// every download mode. Independent of the render step's
     /// `only_render_labels`.
     #[serde(default)]
     pub only_extract_labels: Vec<String>,

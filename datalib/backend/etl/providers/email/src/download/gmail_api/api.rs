@@ -194,15 +194,17 @@ pub struct MessagePage {
     pub next_page_token: Option<String>,
 }
 
-pub async fn list_messages(
+// One label, not many: Gmail intersects repeated `labelIds`, so a
+// request naming three labels returns only messages carrying all three.
+// A union over several labels is several walks — see `full_sync`.
+fn messages_list_url(
     user_id: &str,
-    latchkey: &LatchkeySettings,
     page_token: Option<&str>,
     page_size: u32,
-    label_ids: &[String],
-) -> Result<MessagePage> {
+    label_id: Option<&str>,
+) -> String {
     let mut url = format!("{BASE}/{user_id}/messages?maxResults={page_size}&includeSpamTrash=true");
-    for id in label_ids {
+    if let Some(id) = label_id {
         url.push_str("&labelIds=");
         url.push_str(&urlencode(id));
     }
@@ -210,7 +212,21 @@ pub async fn list_messages(
         url.push_str("&pageToken=");
         url.push_str(&urlencode(token));
     }
-    let v = get_json(&url, latchkey).await?;
+    url
+}
+
+pub async fn list_messages(
+    user_id: &str,
+    latchkey: &LatchkeySettings,
+    page_token: Option<&str>,
+    page_size: u32,
+    label_id: Option<&str>,
+) -> Result<MessagePage> {
+    let v = get_json(
+        &messages_list_url(user_id, page_token, page_size, label_id),
+        latchkey,
+    )
+    .await?;
     Ok(MessagePage {
         ids: v
             .get("messages")
@@ -401,6 +417,32 @@ pub fn decode_base64url(s: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The whole point of `messages_list_url` taking one label: Google
+    /// ANDs repeated `labelIds`, so a request naming two labels asks for
+    /// their intersection. Configs name several labels meaning "any of",
+    /// and that request answers a different question.
+    #[test]
+    fn asks_for_at_most_one_label_per_request() {
+        let filtered = messages_list_url("me", None, 500, Some("Label_7"));
+        assert_eq!(filtered.matches("labelIds=").count(), 1, "{filtered}");
+        assert!(filtered.contains("labelIds=Label_7"), "{filtered}");
+
+        // No filter is no `labelIds` at all, which Gmail reads as the
+        // whole mailbox. An empty one would mean the same, but only by
+        // accident.
+        let unfiltered = messages_list_url("me", None, 500, None);
+        assert!(!unfiltered.contains("labelIds"), "{unfiltered}");
+    }
+
+    /// A user label can be named anything, including characters that
+    /// would end the query string.
+    #[test]
+    fn escapes_a_label_id_into_the_query() {
+        let url = messages_list_url("me", Some("tok&en"), 500, Some("a/b c"));
+        assert!(url.contains("labelIds=a%2Fb%20c"), "{url}");
+        assert!(url.contains("pageToken=tok%26en"), "{url}");
+    }
 
     #[test]
     fn decodes_gmails_unpadded_base64url() {

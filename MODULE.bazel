@@ -35,6 +35,18 @@ bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "rules_cc", version = "0.2.22")
 bazel_dep(name = "platforms", version = "1.1.0")
 
+# Bazel Skylib — for `build_test`, which compiles a target without
+# running it. That is what keeps the `manual`-tagged live tests from
+# rotting: `bazelisk test //...` never builds a `manual` target, so one
+# stops compiling in silence. Each package with one carries a
+# `build_test`, and `scripts/lint_repo.py` check 7 keeps that pairing
+# honest.
+#
+# Exempt from the 7-day burn-in above: 1.9.0 is what the resolved
+# dependency graph already carried transitively, so declaring it changes
+# what the root module can *see*, not what the build uses.
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
+
 # doltlite amalgamation — a single-translation-unit `doltlite.c` that
 # bundles the SQLite core, the prolly-tree storage engine, the
 # `dolt_commit`/`dolt_log`/… version-control SQL surface, and embedded

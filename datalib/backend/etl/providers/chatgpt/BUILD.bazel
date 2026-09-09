@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
@@ -179,4 +180,13 @@ insta_update(
     name = "chatgpt_live.update",
     test = ":chatgpt_live",
     test_args = ["--ignored"],
+)
+
+# `manual` keeps these out of `//...`, so nothing else ever builds them.
+# See scripts/lint_repo.py check 7.
+build_test(
+    name = "manual_targets_build",
+    targets = [
+        ":chatgpt_live",
+    ],
 )

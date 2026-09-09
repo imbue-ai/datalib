@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_proto//proto:defs.bzl", "proto_library")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_rust_prost//:defs.bzl", "rust_prost_library")
@@ -110,5 +111,14 @@ rust_test(
     deps = [
         ":datalib_signal_backup",
         "@datalib_crates//:anyhow",
+    ],
+)
+
+# `manual` keeps these out of `//...`, so nothing else ever builds them.
+# See scripts/lint_repo.py check 7.
+build_test(
+    name = "manual_targets_build",
+    targets = [
+        ":signal_backup_e2e",
     ],
 )
