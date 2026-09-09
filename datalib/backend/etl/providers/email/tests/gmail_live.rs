@@ -29,7 +29,6 @@ async fn mirror(root: &Path, labels: &[&str], budget: Option<usize>) -> FetchSum
     // account on its own, and hard-coding an address here would make the
     // test author's mailbox a prerequisite.
     let mut opts = FetchOptions::new(db.clone());
-    opts.db_path = root.to_path_buf();
     opts.only_labels = labels.iter().map(|l| (*l).to_string()).collect();
     opts.config.message_budget = budget;
     let out = gmail_api::fetch(opts).await;

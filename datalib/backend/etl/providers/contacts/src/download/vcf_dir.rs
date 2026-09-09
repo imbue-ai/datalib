@@ -17,6 +17,9 @@ use super::db::{addressbook_pk, db_path_for, RawDb};
 use super::schema_raw::{synthesized_name_uid, ContactRow};
 
 pub struct FetchOptions {
+    /// The per-source directory, resolved to the entity db so the inline
+    /// photo CAS lands beside it. The download works through `db`; this
+    /// is here for the sibling path and nothing else.
     pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to

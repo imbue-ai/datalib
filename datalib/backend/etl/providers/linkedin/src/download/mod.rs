@@ -79,7 +79,9 @@ impl RawDb {
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    /// Doltlite database path.
+    /// The per-source directory, resolved to the entity db for the
+    /// sibling CAS path. The download works through `db`; this is here
+    /// for that derivation and nothing else.
     pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to

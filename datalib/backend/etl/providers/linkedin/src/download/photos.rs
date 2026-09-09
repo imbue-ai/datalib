@@ -104,7 +104,10 @@ pub async fn fetch_connection_photos(
     let cas = BlobCas::open(&cas_path_for(db_path))
         .await
         .context("open linkedin CAS")?;
-
+    // Every path out of the walk goes through the close below, `?`
+    // included: render opens this same file, and a pool that was only
+    // dropped is still a connection it has to contend with.
+    let walked = async {
     let mut summary = PhotoSummary::default();
     let mut consecutive_failures: u64 = 0;
     for p in &connections {
@@ -156,6 +159,12 @@ pub async fn fetch_connection_photos(
         }
     }
     Ok(summary)
+    }
+    .await;
+    // Closed, not dropped: the next open of this store is a second
+    // connection until this one is actually gone.
+    cas.close().await;
+    walked
 }
 
 /// The settled-or-not result of one connection's photo fetch.

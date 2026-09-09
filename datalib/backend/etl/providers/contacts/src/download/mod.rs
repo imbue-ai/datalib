@@ -25,9 +25,9 @@ pub struct FetchOptions {
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
-    /// Doltlite database path. [`db_path_for`] places the entity db
-    /// inside the per-source directory as `entities.doltlite_db` (the
-    /// dir is created if needed).
+    /// The per-source directory, resolved to the entity db so the inline
+    /// photo CAS lands beside it. The download works through `db`; this
+    /// is here for the sibling path and nothing else.
     pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to

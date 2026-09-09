@@ -32,10 +32,9 @@ fn dirs_home() -> Option<PathBuf> {
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    /// Path to the doltlite database we write into. [`db_path_for`]
-    /// places the entity db inside the per-source directory as
-    /// `entities.doltlite_db` (the dir is created if needed).
-    ///
+    /// Only names the store in this run's tracing span; the download
+    /// itself works through `db`. Kept for that alone — nothing here
+    /// opens it, and nothing should.
     pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to

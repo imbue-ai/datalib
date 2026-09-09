@@ -1017,6 +1017,9 @@ pub struct FetchOptions {
     /// Which latchkey identity the download authenticates as, from the
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
+    /// Only names the store in this run's tracing span; the download
+    /// itself works through `db`. Kept for that alone — nothing here
+    /// opens it, and nothing should.
     pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
