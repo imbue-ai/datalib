@@ -1,0 +1,3679 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Render preview</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  color-scheme: light dark;
+  --datalib-bg: #ffffff;
+  --datalib-fg: #1a1a1a;
+  --datalib-muted: #6b6b6b;
+  --datalib-border: #d8d8d8;
+  --datalib-input-bg: #ffffff;
+  --datalib-code-bg: #f4f4f4;
+  --datalib-hover: #f0f0f0;
+  --datalib-accent: #2563eb;
+  --datalib-card-bg: #fafafa;
+  /* Log severity highlights: dark shades on the light background… */
+  --datalib-log-error: #991b1b;
+  --datalib-log-warn: #854d0e;
+  --datalib-log-ok: #166534;
+}
+
+
+
+html,
+body,
+#app {
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  margin: 0;
+  min-height: 100vh;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+}
+
+a {
+  color: var(--datalib-accent);
+}
+
+.datalib-shell {
+  /* Viewport-pinned flex column: the header takes its natural height
+     and the routed view flexes into the rest, so full-height views
+     (MillerView) reach the bottom without guessing the chrome height.
+     min-height (not height) so taller views (sync) still
+     scroll the page normally. */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 1rem;
+}
+.datalib-header {
+  flex: 0 0 auto;
+}
+
+/* Browser-style tab band: the header sits on a tinted strip and the
+   active tab is cut from the page background, flowing into the
+   content below with no separating line under it. Negative margins
+   counter the shell's 1rem padding so the band runs full-bleed. */
+.datalib-header {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin: -1rem -1rem 0.75rem;
+  padding: 0.5rem 1rem 0;
+  background: var(--datalib-card-bg);
+  border-bottom: 1px solid var(--datalib-border);
+}
+.datalib-header h1 {
+  margin: 0 0 0.45rem 0;
+  font-size: 1.25rem;
+}
+.datalib-spacer {
+  flex: 1;
+}
+.datalib-tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 0.75rem;
+}
+/* The active tab is cut from the page background; border-bottom: none
+   plus the -1px overlap lets its background erase the band's hairline
+   so tab and page read as one surface. */
+.datalib-tab {
+  padding: 0.35rem 0.95rem;
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: var(--datalib-muted);
+  text-decoration: none;
+  line-height: 1.4;
+}
+.datalib-tab:hover {
+  background: var(--datalib-hover);
+  color: var(--datalib-fg);
+}
+.datalib-tab.router-link-active {
+  background: var(--datalib-bg);
+  border-color: var(--datalib-border);
+  color: var(--datalib-accent);
+  font-weight: 600;
+}
+
+:root.preview-dark {
+    --datalib-bg: #1a1b1e;
+    --datalib-fg: #e6e6e6;
+    --datalib-muted: #9aa0a6;
+    --datalib-border: #2f3136;
+    --datalib-input-bg: #232428;
+    --datalib-code-bg: #2a2b2f;
+    --datalib-hover: #2a2b2f;
+    --datalib-accent: #6ea8fe;
+    --datalib-card-bg: #232428;
+    /* …and light shades on the dark background. */
+    --datalib-log-error: #f87171;
+    --datalib-log-warn: #facc15;
+    --datalib-log-ok: #4ade80;
+  }
+pre code.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 1em
+}
+code.hljs {
+  padding: 3px 5px
+}
+/*!
+  Theme: GitHub Dark
+  Description: Dark theme as seen on github.com
+  Author: github.com
+  Maintainer: @Hirse
+  Updated: 2021-05-15
+
+  Outdated base version: https://github.com/primer/github-syntax-dark
+  Current colors taken from GitHub's CSS
+*/
+.hljs {
+  color: #c9d1d9;
+  background: #0d1117
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+  /* prettylights-syntax-keyword */
+  color: #ff7b72
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+  /* prettylights-syntax-entity */
+  color: #d2a8ff
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+  /* prettylights-syntax-constant */
+  color: #79c0ff
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+  /* prettylights-syntax-string */
+  color: #a5d6ff
+}
+.hljs-built_in,
+.hljs-symbol {
+  /* prettylights-syntax-variable */
+  color: #ffa657
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+  /* prettylights-syntax-comment */
+  color: #8b949e
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+  /* prettylights-syntax-entity-tag */
+  color: #7ee787
+}
+.hljs-subst {
+  /* prettylights-syntax-storage-modifier-import */
+  color: #c9d1d9
+}
+.hljs-section {
+  /* prettylights-syntax-markup-heading */
+  color: #1f6feb;
+  font-weight: bold
+}
+.hljs-bullet {
+  /* prettylights-syntax-markup-list */
+  color: #f2cc60
+}
+.hljs-emphasis {
+  /* prettylights-syntax-markup-italic */
+  color: #c9d1d9;
+  font-style: italic
+}
+.hljs-strong {
+  /* prettylights-syntax-markup-bold */
+  color: #c9d1d9;
+  font-weight: bold
+}
+.hljs-addition {
+  /* prettylights-syntax-markup-inserted */
+  color: #aff5b4;
+  background-color: #033a16
+}
+.hljs-deletion {
+  /* prettylights-syntax-markup-deleted */
+  color: #ffdcd7;
+  background-color: #67060c
+}
+.hljs-char.escape_,
+.hljs-link,
+.hljs-params,
+.hljs-property,
+.hljs-punctuation,
+.hljs-tag {
+  /* purposely ignored */
+  
+}
+
+.chat-preview {
+  height: 100%;
+  overflow-y: auto;
+  /* No padding at the *top*. A sticky message header stops at the
+     scrollport's padding edge, while the content behind it keeps
+     scrolling up through that padding and stays visible — so a top
+     padding shows a sliver of text floating above the pinned bar. The
+     gap comes back below as padding on the first child, where it
+     scrolls away with the content instead. */
+  padding: 0 1rem 0.75rem;
+  box-sizing: border-box;
+}
+.chat-preview > .empty,
+.chat-preview > .error,
+.chat-header {
+  padding-top: 0.75rem;
+}
+.chat-header h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+}
+.meta {
+  font-size: 0.8rem;
+  color: var(--datalib-muted);
+  margin: 0 0 0.25rem;
+}
+.empty,
+.error {
+  color: var(--datalib-muted);
+  padding: 1rem;
+}
+.error {
+  color: #e35d6a;
+}
+.outgoing-edges {
+  /* The doc-level outgoing edges list sits above the rendered body
+     and below the meta line. List markers off so the leading arrow
+     glyph stands in. */
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--datalib-border);
+  border-bottom: 1px solid var(--datalib-border);
+  padding: 0.4rem 0;
+}
+.outgoing-edges li {
+  margin: 0.15rem 0;
+}
+.edge-arrow {
+  color: var(--datalib-muted, #94a3b8);
+  margin-right: 0.4rem;
+}
+.edge-source-link {
+  /* Match the inline span styling in `ChatBody.ce.vue`: dotted muted
+     underline so it reads as a link without the "external blue"
+     baggage, and the same hover fill so source and destination
+     (lit up via `.hover-dst`) share a color. */
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--datalib-muted, #94a3b8);
+  text-underline-offset: 2px;
+  border-radius: 3px;
+  transition: background-color 100ms ease-in-out;
+}
+.edge-source-link:hover {
+  background: rgba(99, 102, 241, 0.28);
+}
+.edge-dst-title {
+  color: var(--datalib-muted, #94a3b8);
+  margin-left: 0.4rem;
+  font-size: 0.8rem;
+}
+.ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  background: transparent;
+}
+.ctx-menu {
+  position: fixed;
+  background: var(--datalib-input-bg, #fff);
+  color: var(--datalib-fg, #000);
+  border: 1px solid var(--datalib-border, #ccc);
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  min-width: 180px;
+  padding: 4px 0;
+  z-index: 1501;
+  font-size: 14px;
+}
+.ctx-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.ctx-item:hover {
+  background: var(--datalib-accent, #eee);
+}
+.ctx-divider {
+  height: 1px;
+  background: var(--datalib-border, #ccc);
+  margin: 4px 0;
+}
+
+
+/* Markdown styling for the v-html body. Unscoped so the rules reach
+   inside `v-html`; still shadow-local since this lands in the card's
+   shadow root. */
+.markdown-body {
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.markdown-body p {
+  margin: 0.4rem 0;
+}
+.markdown-body pre {
+  /* Fixed dark, not `--datalib-code-bg`: the highlight theme we inject
+     is github-*dark* and does not switch with the app's, so painting a
+     code block on the light-mode token left dark-theme token colors on
+     a near-white background. Inline `code` below is unhighlighted and
+     does follow the theme. */
+  background: #0d1117;
+  color: #e6edf3;
+  padding: 0.6rem 0.75rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.82rem;
+}
+.markdown-body code {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.85em;
+}
+.markdown-body :not(pre) > code {
+  background: var(--datalib-code-bg, #f0f0f0);
+  padding: 0 0.25rem;
+  border-radius: 2px;
+}
+.markdown-body details {
+  margin: 0.4rem 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  background: var(--datalib-card-bg);
+}
+.markdown-body details > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--datalib-muted);
+}
+.markdown-body details[open] > summary {
+  margin-bottom: 0.4rem;
+}
+.markdown-body img {
+  max-width: 100%;
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+}
+.markdown-body blockquote {
+  border-left: 3px solid var(--datalib-border);
+  margin: 0.5rem 0;
+  padding-left: 0.75rem;
+  color: var(--datalib-muted);
+}
+
+
+/* An unbroken token longer than the pane — a hash, a base64 blob, a
+   URL with no slashes to break at — otherwise runs off the edge of its
+   card and is simply not readable. `break-word` (not `anywhere`) so
+   only the token that would overflow gets broken, and intrinsic widths
+   are left alone. */
+.chat-body {
+  overflow-wrap: break-word;
+}
+/* A table wider than the pane scrolls itself rather than pushing the
+   column out. `width: max-content` keeps it from stretching to fill
+   when it is narrow. */
+.chat-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Per-message wrappers emitted by ingest. Unscoped on purpose so the rules
+   reach inside `v-html`. */
+.chat-body .msg {
+  scroll-margin-top: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid transparent;
+  margin: 0.5rem 0;
+}
+/* Every outermost item — a message, or a whole run of tool steps — is a
+   card, so where one ends and the next begins is drawn rather than
+   inferred from whitespace. Nested block sections (tool_use, thinking)
+   stay flat inside their parent; only direct children of the body get
+   the box. Declared BEFORE the per-provider rules below so their
+   `border-left-color` still wins. */
+.chat-body > .msg,
+.chat-body > details.tool-group {
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--datalib-card-bg, #fafafa);
+  margin: 0.4rem 0;
+}
+.chat-body .msg--claude {
+  border-left-color: var(--datalib-accent, #6366f1);
+}
+.chat-body .msg--chatgpt {
+  border-left-color: #16a34a;
+}
+.chat-body .msg--slack {
+  border-left-color: #4a154b;
+}
+/* Perseus sections carry polytonic Greek (Greek Extended, U+1F00–
+   U+1FFF: precomposed accented vowels). The body otherwise inherits
+   `system-ui`, which on macOS resolves to `.AppleSystemUIFont` — and
+   that font has NO polytonic glyphs. The browser then falls back
+   per-character and decomposes each precomposed vowel into base +
+   combining mark, rendering the accent at a default advance (floating
+   up and to the right of the letter) instead of over it. Naming fonts
+   that actually contain the precomposed glyphs makes the browser use
+   their (correctly placed) baked-in forms instead of that broken
+   fallback. Every face named here was verified to contain the
+   precomposed Greek Extended glyphs (via a CoreText coverage probe);
+   `Noto Sans` / `GFS Neohellenic` are sans faces built for polytonic
+   Greek, `Helvetica Neue` / `Lucida Grande` are the macOS sans
+   fallbacks that also cover the block. We deliberately end in generic
+   `sans-serif` (which maps to Helvetica, NOT the polytonic-less
+   `.AppleSystemUIFont` that `system-ui` resolves to) so the broken
+   fallback can never re-enter. Applies to the English sections too,
+   which is harmless. */
+.chat-body .msg--perseus {
+  font-family: "Noto Sans", "GFS Neohellenic", "Helvetica Neue",
+    "Lucida Grande", "Arial Unicode MS", sans-serif;
+}
+/* Per-block sections (tool_use / tool_result / thinking). Nested
+   inside their parent message wrapper, so we keep them visually
+   subordinate: thinner left border, lighter accent. The selection
+   outline below picks the same accent so the highlight still pops. */
+.chat-body .msg--block {
+  border-left-width: 2px;
+  margin: 0.35rem 0;
+  padding: 0.35rem 0.6rem;
+}
+.chat-body .msg--tool-use {
+  border-left-color: #a78bfa;
+}
+.chat-body .msg--tool-result {
+  border-left-color: #c4b5fd;
+}
+.chat-body .msg--thinking {
+  border-left-color: #94a3b8;
+}
+/* A message too tall to scroll past comfortably shows its first
+   screenful and says so. `--clamped` is toggled by the button
+   `decorateLongMessages` appends; `--long` stays for as long as the
+   message is long, which is what the sticky header keys off. */
+.chat-body > .msg.msg--clamped {
+  max-height: 22rem;
+  overflow: hidden;
+  position: relative;
+}
+.chat-body > .msg.msg--clamped::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 5rem;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--datalib-card-bg, #fafafa)
+  );
+  pointer-events: none;
+}
+.chat-body > .msg.msg--clamped.selected::after {
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--datalib-hover, #f0f0f0)
+  );
+}
+.chat-body > .msg > button.msg-expand {
+  display: block;
+  margin: 0.4rem auto 0;
+  padding: 0.1rem 0.6rem;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--datalib-muted, #94a3b8);
+  background: var(--datalib-input-bg, #fff);
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.chat-body > .msg > button.msg-expand:hover {
+  color: inherit;
+}
+.chat-body > .msg.msg--clamped > button.msg-expand {
+  position: absolute;
+  left: 50%;
+  bottom: 0.4rem;
+  transform: translateX(-50%);
+  z-index: 2;
+  margin: 0;
+}
+/* While you are inside a long message its header stays put, so the
+   author, the time and the jump controls are never something you have
+   to scroll back up for. Only long messages: pinning every header
+   would leave a stack of them on screen. The negative margins let the
+   pinned bar cover the card's full width rather than letting content
+   slide through the padding beside it. */
+.chat-body > .msg.msg--long > h2:has(> .msg-author) {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--datalib-card-bg, #fafafa);
+  margin: -0.5rem -0.75rem 0.15rem;
+  padding: 0.3rem 0.75rem 0.25rem;
+}
+.chat-body > .msg.msg--long.selected > h2:has(> .msg-author) {
+  background: var(--datalib-hover, #f0f0f0);
+}
+/* Only while it is actually pinned: an edge and a shadow, so the line
+   of text passing beneath the bar reads as passing beneath it rather
+   than as having gone missing. `.is-stuck` is set by the observer in
+   `chatSections.js`. */
+.chat-body > .msg.msg--long > h2.is-stuck {
+  border-bottom: 1px solid var(--datalib-border, #d8d8d8);
+  box-shadow: 0 4px 6px -4px rgba(0, 0, 0, 0.35);
+}
+.chat-body .msg-nav {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 0.15rem;
+}
+.chat-body button.msg-jump {
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0.15rem 0.35rem;
+  color: var(--datalib-muted, #94a3b8);
+  background: transparent;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.chat-body button.msg-jump:hover {
+  color: inherit;
+  background: var(--datalib-hover, #f0f0f0);
+}
+.chat-body .msg.selected {
+  background: var(--datalib-hover, #f0f0f0);
+  border-color: var(--datalib-accent, #6366f1);
+  /* `outline` (not a thicker border) so moving the selection doesn't
+     reflow; the negative offset lays it over the card's own edge so
+     the two read as one highlighted border rather than two rings. */
+  outline: 2px solid var(--datalib-accent, #6366f1);
+  outline-offset: -1px;
+}
+/* Inline span baked by ingest for sub-section edge anchors (today
+   only: perseus first-word wrappers). When the span happens to also
+   be the source of an outgoing edge, `.edge-source` is added by
+   ChatBody at mount time and the user gets a link-y dotted
+   underline (in the muted color so it doesn't read as "external
+   link blue"); the hover fill calls out the target and the
+   `.hover-dst` class on the matching destination anchor mirrors the
+   same fill across whichever column the destination lives in.
+
+   `.selected` on the same span is how we highlight the destination
+   side after navigating via an edge (click-driven, persistent),
+   distinct from `.hover-dst` (hover-driven, transient).
+
+   We deliberately scope these to `span[data-section-uuid]` so the
+   block-level `.msg.selected` styling above (which adds a 2px
+   outline + 4px left border) doesn't accidentally fire for inline
+   word-wrappers. */
+.chat-body span[data-section-uuid].edge-source {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--datalib-muted, #94a3b8);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: background-color 100ms ease-in-out;
+}
+.chat-body span[data-section-uuid].edge-source:hover,
+.chat-body [data-section-uuid].hover-dst {
+  background: rgba(99, 102, 241, 0.28);
+  border-radius: 3px;
+}
+.chat-body span[data-section-uuid].selected {
+  background: var(--datalib-card-bg, #1f2937);
+  outline: 2px solid var(--datalib-accent, #6366f1);
+  border-radius: 3px;
+}
+/* Attachment images arrive at their original resolution; without a
+   cap a phone photo renders thousands of pixels wide inside the pane.
+   Fit the column width and keep tall images from swallowing the whole
+   scrollport; `width/height: auto` preserves the aspect ratio under
+   whichever constraint bites. */
+.chat-body img {
+  max-width: 100%;
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+}
+.chat-body .msg-meta {
+  color: var(--datalib-muted, #94a3b8);
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+.chat-body .msg-meta a {
+  color: inherit;
+  text-decoration: underline;
+}
+/* The chat-common message header. It is a real `## ` heading because
+   qmd cuts its chunks at the best nearby break point and scores an h2
+   far above a blank line — so the heading is what makes every message
+   start a preferred chunk boundary. On screen it should read as
+   Slack's one-line "Name  time", not as a document section, hence the
+   reset below. `:has()` keeps it off an h2 that came from the message
+   *body* (someone pasting markdown with their own headings). */
+.chat-body .msg h2:has(> .msg-author) {
+  font-size: 1em;
+  font-weight: 400;
+  line-height: 1.3;
+  margin: 0 0 0.15rem;
+  padding: 0;
+  border: none;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.chat-body .msg-author {
+  font-weight: 600;
+}
+.chat-body .msg-ts {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--datalib-muted, #94a3b8);
+  /* The full instant is in `title`; say so with the cursor. */
+  cursor: help;
+}
+/* A run of adjacent tool steps, folded into one line until asked for. */
+.chat-body details.tool-group {
+  margin: 0.35rem 0;
+}
+.chat-body details.tool-group > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--datalib-muted, #94a3b8);
+  list-style-position: outside;
+}
+.chat-body details.tool-group > summary {
+  padding: 0.35rem 0.6rem;
+}
+.chat-body details.tool-group[open] > summary {
+  border-bottom: 1px solid var(--datalib-border, #d8d8d8);
+}
+/* Inside a group every step has the same author and near-identical
+   time, so the header is there for its anchor and its copy button, not
+   to be read. */
+.chat-body details.tool-group .msg h2:has(> .msg-author) {
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+.chat-body button.copy-uuid {
+  /* The 🆔 glyph is a saturated purple that outshouts the message it
+     sits next to; grey it out so it reads as a control rather than as
+     content. The `copied` / `copy-failed` states below re-colour on
+     purpose, so they drop the filter. */
+  filter: grayscale(1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: baseline;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  /* The glyph is a control, not text: smaller than what it sits beside. */
+  font-size: 0.75em;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+}
+/* Opacity only. A hover border would draw a box a different shape from
+   the glyph inside it, which reads as the control changing rather than
+   as it lighting up. */
+.chat-body button.copy-uuid:hover {
+  opacity: 1;
+}
+.chat-body button.copy-uuid.copied {
+  color: #16a34a;
+  opacity: 1;
+  filter: none;
+}
+.chat-body button.copy-uuid.copy-failed {
+  color: #dc2626;
+  opacity: 1;
+  filter: none;
+}
+
+
+  body { margin: 0; background: var(--datalib-bg); color: var(--datalib-fg);
+         font-family: system-ui, sans-serif; }
+  .preview-bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 1rem;
+    align-items: center; padding: .5rem 1rem; font-size: .85rem;
+    background: var(--datalib-card-bg); border-bottom: 1px solid var(--datalib-border); }
+  .preview-bar button { font: inherit; cursor: pointer; padding: .2rem .6rem;
+    border: 1px solid var(--datalib-border); border-radius: 4px;
+    background: var(--datalib-input-bg); color: inherit; }
+  .preview-doc { margin: 0 0 1.5rem; }
+  .preview-doc > h3.preview-name { font-size: .7rem; font-weight: 600; margin: 1.25rem 0 .25rem;
+    text-transform: uppercase; letter-spacing: .06em; color: var(--datalib-muted); }
+  .preview-source { max-width: 760px; margin: 0 auto; }
+  .preview-source-name { font-size: 1.1rem; margin: 2.5rem 0 0; scroll-margin-top: .5rem;
+    border-top: 2px solid var(--datalib-accent); padding-top: .75rem; }
+  .preview-count { font-size: .75rem; font-weight: 400; color: var(--datalib-muted); }
+  .preview-jump { flex: none; display: flex; flex-wrap: wrap; gap: .5rem; padding: .4rem 1rem;
+    font-size: .8rem; border-bottom: 1px solid var(--datalib-border);
+    background: var(--datalib-card-bg); }
+  .preview-jump a { color: var(--datalib-muted); text-decoration: none; }
+  .preview-jump a:hover { color: var(--datalib-fg); text-decoration: underline; }
+  /* ONE scrollport for the whole page, not one per document. The pane
+     has to really scroll or the sticky headers and jump controls have
+     nothing to work against — but a scroll box per document would stack
+     scrollbars inside a scrollbar, which the app never does and nobody
+     wants to read. */
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; }
+  .preview-bar { flex: none; }
+  .chat-preview { flex: 1; min-height: 0; }
+  </style></head>
+<body>
+<div class="preview-bar">
+  <strong>Render preview</strong>
+  <button id="theme" type="button">Dark theme</button>
+  <button id="expand" type="button">Expand / collapse all</button>
+  <span>Click a message to select it.</span>
+</div>
+<nav class="preview-jump"><a href="#src-beeper">beeper</a><a href="#src-chatgpt-api">chatgpt-api</a><a href="#src-claude-api">claude-api</a><a href="#src-github">github</a><a href="#src-gitlab">gitlab</a><a href="#src-google-takeout">google-takeout</a><a href="#src-linkedin">linkedin</a><a href="#src-notion">notion</a><a href="#src-signal">signal</a><a href="#src-slack">slack</a><a href="#src-sms-backup-restore">sms-backup-restore</a><a href="#src-tng-contacts">tng_contacts</a><a href="#src-tng-email">tng_email</a><a href="#src-tng-pdfs">tng_pdfs</a><a href="#src-whatsapp">whatsapp</a><a href="#src-yolink">yolink</a><a href="#src-zz-synthetic">zz-synthetic</a></nav>
+<section class="chat-preview">
+<section class="preview-source" id="src-beeper">
+<h2 class="preview-source-name">beeper <span class="preview-count">5 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">beeper/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>beeper — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-101b52f0-bdc4-5b7b-99c9-994ff6349370" data-section-uuid="101b52f0-bdc4-5b7b-99c9-994ff6349370" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — beeper/raw — 261.3 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-319c896b-cd08-5ed8-957e-f1fb16c4dfee" data-section-uuid="319c896b-cd08-5ed8-957e-f1fb16c4dfee" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — beeper/raw/blobs.doltlite_db — 5.3 KiB</li>
+</ul>
+</div>
+<div id="m-7e0fde04-3e3c-5d5a-9bef-f11fe5f92778" data-section-uuid="7e0fde04-3e3c-5d5a-9bef-f11fe5f92778" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — beeper/raw/blobs.doltlite_db#cas_objects — 2 rows</li>
+</ul>
+</div>
+<div id="m-bee85200-1af0-5b41-b107-a34e14f6aa6d" data-section-uuid="bee85200-1af0-5b41-b107-a34e14f6aa6d" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — beeper/raw/entities.doltlite_db — 256.0 KiB</li>
+</ul>
+</div>
+<div id="m-ad9dee5d-5dec-5940-986e-f6be04aa7bea" data-section-uuid="ad9dee5d-5dec-5940-986e-f6be04aa7bea" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — beeper/raw/entities.doltlite_db#beeper_media_attachments — 2 rows</li>
+</ul>
+</div>
+<div id="m-a63ea78e-0e0d-5e48-9997-837e1ed9444e" data-section-uuid="a63ea78e-0e0d-5e48-9997-837e1ed9444e" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — beeper/raw/entities.doltlite_db#events — 14 rows</li>
+</ul>
+</div>
+<div id="m-4a3f0518-2a37-573c-8498-dce39156930f" data-section-uuid="4a3f0518-2a37-573c-8498-dce39156930f" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — beeper/raw/entities.doltlite_db#rooms — 3 rows</li>
+</ul>
+</div>
+<div id="m-5dd5fa28-3653-581e-a7e3-e83bfe4cb560" data-section-uuid="5dd5fa28-3653-581e-a7e3-e83bfe4cb560" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — beeper/raw/entities.doltlite_db#users — 4 rows</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">beeper/rendered_md/googlechat/1caf25c0-7a5b-587c-8205-62ee1d92b057/2024-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="5df5a72d-eea4-5d1a-aaf7-7ce908e9cefb">Beeper:Google Chat · William T. Riker (2024-03)</h1>
+<div id="m-65c82d8b-2624-59e1-9411-760625b4ab95" data-section-uuid="65c82d8b-2624-59e1-9411-760625b4ab95" class="msg msg--beeper">
+<p><em><small>Wed Mar 20th, 2024 at 13:58 — system: hidden: m.room.create</small></em></p>
+</div>
+<div id="m-d4c49836-ece7-5327-be26-3880137db503" data-section-uuid="d4c49836-ece7-5327-be26-3880137db503" class="msg msg--beeper">
+<p><em><small>Wed Mar 20th, 2024 at 13:58 — system: hidden: m.bridge</small></em></p>
+</div>
+<div id="m-b6efb0a2-59f9-5b7f-bc8f-cafabba46080" data-section-uuid="b6efb0a2-59f9-5b7f-bc8f-cafabba46080" class="msg msg--beeper">
+<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2024-03-20T14:00:00+00:00" title="2024-03-20 14:00:00 UTC">Wed Mar 20th, 2024 at 14:00</time></h2>
+<p>Captain, the away team report is ready for your review.</p>
+</div>
+<div id="m-d708e16e-8bdd-5308-8d19-d0e8402ca0e1" data-section-uuid="d708e16e-8bdd-5308-8d19-d0e8402ca0e1" class="msg msg--beeper">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2024-03-20T14:05:00+00:00" title="2024-03-20 14:05:00 UTC">Wed Mar 20th, 2024 at 14:05</time></h2>
+<p>Send it through, Number One.</p>
+</div>
+<div id="m-a04d2f65-9b6e-5c08-95dd-89f718164b0e" data-section-uuid="a04d2f65-9b6e-5c08-95dd-89f718164b0e" class="msg msg--beeper">
+<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2024-03-20T14:10:00+00:00" title="2024-03-20 14:10:00 UTC">Wed Mar 20th, 2024 at 14:10</time></h2>
+<p>📎 <a href="blobs/3f8132abfd3ef2ea.pdf">away-team-report.pdf</a> — 38 B</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">beeper/rendered_md/signal/72999447-e9d8-5879-b3cb-655742ecf5ea/2024-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="e28ed67d-507b-5319-8732-00e249b6ebf6">Beeper:Signal · tng-data-conv-uuid-0001 (2024-03)</h1>
+<div id="m-11ec65e9-d663-5879-9079-b68b5664e098" data-section-uuid="11ec65e9-d663-5879-9079-b68b5664e098" class="msg msg--beeper">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2024-03-15T09:00:00+00:00" title="2024-03-15 09:00:00 UTC">Fri Mar 15th, 2024 at 09:00</time></h2>
+<p>Mr. Data, regarding the Iconian artifact analysis...</p>
+</div>
+<div id="m-0e373f21-a6e5-530b-bc3d-2590cae71df8" data-section-uuid="0e373f21-a6e5-530b-bc3d-2590cae71df8" class="msg msg--beeper">
+<h2><span class="msg-author">Mr. Data</span> <time class="msg-ts" datetime="2024-03-15T09:05:00+00:00" title="2024-03-15 09:05:00 UTC">Fri Mar 15th, 2024 at 09:05</time></h2>
+<blockquote>
+<p>↪ in reply to <code>$tng-data-001:ba_TNG.local-signal.localhost</code></p>
+</blockquote>
+<p>I have analyzed the artifact, Captain. It appears to be a quantum lattice.</p>
+</div>
+<div id="m-7f612085-3ddb-53c9-9db6-1c3cc27f882c" data-section-uuid="7f612085-3ddb-53c9-9db6-1c3cc27f882c" class="msg msg--beeper">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2024-03-15T09:10:00+00:00" title="2024-03-15 09:10:00 UTC">Fri Mar 15th, 2024 at 09:10</time></h2>
+<p><img src="blobs/54bd094b1cc83367.png" alt="iconian-schematic.png"></p>
+<ul>
+<li><span id="m-08419b1a-33ad-5d44-9334-ad8010d04cf7" data-section-uuid="08419b1a-33ad-5d44-9334-ad8010d04cf7">❤️ Mr. Data</span></li>
+<li><span id="m-31dbdc1d-ddd3-5f51-bf9f-e7a7f3443e4f" data-section-uuid="31dbdc1d-ddd3-5f51-bf9f-e7a7f3443e4f">🤔 Mr. Data</span></li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">beeper/rendered_md/signal/72999447-e9d8-5879-b3cb-655742ecf5ea/2024-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="67a44f2e-33af-5ad5-b354-704ee2e5c7a5">Beeper:Signal · tng-data-conv-uuid-0001 (2024-04)</h1>
+<div id="m-30feb8f9-facb-5199-9226-af454cac4f7d" data-section-uuid="30feb8f9-facb-5199-9226-af454cac4f7d" class="msg msg--beeper">
+<h2><span class="msg-author">Mr. Data</span> <time class="msg-ts" datetime="2024-04-02T11:30:00+00:00" title="2024-04-02 11:30:00 UTC">Tue Apr 2nd, 2024 at 11:30</time></h2>
+<p>Captain, I have located three similar structures in the Federation database.</p>
+</div>
+<div id="m-b1b66cfa-474d-5384-8383-480793181155" data-section-uuid="b1b66cfa-474d-5384-8383-480793181155" class="msg msg--beeper">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2024-04-02T11:35:00+00:00" title="2024-04-02 11:35:00 UTC">Tue Apr 2nd, 2024 at 11:35</time></h2>
+<p>Excellent. Brief the senior staff at oh-eight-hundred.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">beeper/rendered_md/signal/ca23bf72-c6a4-5838-a604-d82006926dc3/2024-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="eb85a327-9da4-5e46-87f2-b97cd29ccc9f">Beeper:Signal · tng-crusher-conv-uuid-0002 (2024-04)</h1>
+<div id="m-0e618f4c-a414-5d7d-b551-bcda8e9245e1" data-section-uuid="0e618f4c-a414-5d7d-b551-bcda8e9245e1" class="msg msg--beeper">
+<h2><span class="msg-author">Dr. Beverly Crusher</span> <time class="msg-ts" datetime="2024-04-10T19:00:00+00:00" title="2024-04-10 19:00:00 UTC">Wed Apr 10th, 2024 at 19:00</time></h2>
+<p>Jean-Luc, dinner tonight in my quarters?</p>
+</div>
+<div id="m-6d1c7cff-ddd3-5234-a68e-016241b8a832" data-section-uuid="6d1c7cff-ddd3-5234-a68e-016241b8a832" class="msg msg--beeper">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2024-04-10T19:01:00+00:00" title="2024-04-10 19:01:00 UTC">Wed Apr 10th, 2024 at 19:01</time></h2>
+<p>Earl Grey, hot — at 19:00.</p>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-chatgpt-api">
+<h2 class="preview-source-name">chatgpt-api <span class="preview-count">4 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">chatgpt-api/rendered_md/40497823-e5f8-5775-9407-65834d6381ae/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="40497823-e5f8-5775-9407-65834d6381ae">I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom? (all) <a class="source-link" href="https://chatgpt.com/c/68fa0003-fake-7000-8000-positronic0003" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-2558718b-d9d6-5343-b972-f1b66b74df23" data-section-uuid="2558718b-d9d6-5343-b972-f1b66b74df23" class="msg msg--chatgpt">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-26T08:00:00+00:00" title="2370-10-26 08:00:00 UTC">Mon Oct 26th, 2370 at 08:00</time></h2>
+<p>I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?</p>
+</div>
+<div id="m-47e2f247-4752-5a4c-be37-8dde30fb91b4" data-section-uuid="47e2f247-4752-5a4c-be37-8dde30fb91b4" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-26T08:05:00+00:00" title="2370-10-26 08:05:00 UTC">Mon Oct 26th, 2370 at 08:05</time></h2>
+<p>The premise has merit, but the trilithium containment problem is the load-bearing assumption. Before committing to the layered-composite design, I'd want to see whether the subspace shear signature you're describing can be addressed with a phase-conjugate recrystallization pass on standard dilithium first — it's a much cheaper experiment and would tell you whether the c-axis fractures are intrinsic or just a side effect of the current lattice geometry.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">chatgpt-api/rendered_md/62b1d972-57f0-5b4c-a81b-805d6c650bde/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="62b1d972-57f0-5b4c-a81b-805d6c650bde">Sonnet on a Cat Named Spot (all) <a class="source-link" href="https://chatgpt.com/c/68fa0001-fake-7000-8000-positronic0001" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-1c614514-3c11-5b75-be3f-fc995814468e" data-section-uuid="1c614514-3c11-5b75-be3f-fc995814468e" class="msg msg--chatgpt">
+<h2><span class="msg-author">System</span> <time class="msg-ts" datetime="2370-10-24T08:00:00+00:00" title="2370-10-24 08:00:00 UTC">Sat Oct 24th, 2370 at 08:00</time></h2>
+<p>User is Lt. Cmdr. Data, a sentient android. Prefers precise, literal language.</p>
+</div>
+<div id="m-9df467fb-930c-50a7-a081-1127598601a6" data-section-uuid="9df467fb-930c-50a7-a081-1127598601a6" class="msg msg--chatgpt">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-24T08:00:00+00:00" title="2370-10-24 08:00:00 UTC">Sat Oct 24th, 2370 at 08:00</time></h2>
+<p>Compose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles.</p>
+</div>
+<div id="m-9ee1da23-6eed-51f1-9802-70fc3f5d33fc" data-section-uuid="9ee1da23-6eed-51f1-9802-70fc3f5d33fc" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-24T08:02:00+00:00" title="2370-10-24 08:02:00 UTC">Sat Oct 24th, 2370 at 08:02</time></h2>
+<p>Upon the bridge, where duty bids us stand,
+A tabby of the warmest tangerine,
+With feline grace defies the captain's hand
+And treads the helm with footfall light, serene.</p>
+<p>No Klingon foe nor anomaly arrayed
+Can match the menace of his sudden leap;
+The console glows where Spot in mirth has played,
+And alarms ring out where he chose to sleep.</p>
+<p>Yet Data, faithful keeper, smiles unseen —
+An android's joy, though circuited and spare —
+For in this beast a mystery serene
+Reflects the very life he hopes to share.</p>
+<p>So bless thee, Spot, of fur and quiet purr:
+Thou art my muse, my console saboteur.</p>
+</div>
+<div id="m-c2ee776a-69c8-529c-a2de-00d0709dab1c" data-section-uuid="c2ee776a-69c8-529c-a2de-00d0709dab1c" class="msg msg--chatgpt">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-24T08:05:00+00:00" title="2370-10-24 08:05:00 UTC">Sat Oct 24th, 2370 at 08:05</time></h2>
+<p>Curious. The closing couplet is satisfying. Thank you.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">chatgpt-api/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>chatgpt-api — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-318565b8-6857-5827-8300-37b991fea63a" data-section-uuid="318565b8-6857-5827-8300-37b991fea63a" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — chatgpt-api/raw — 119.9 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-4b7b3871-a74f-5b06-bdf3-125b453e83fe" data-section-uuid="4b7b3871-a74f-5b06-bdf3-125b453e83fe" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — chatgpt-api/raw/blobs.doltlite_db — 3.0 KiB</li>
+</ul>
+</div>
+<div id="m-254e8731-93be-56b6-aa27-cf1a37ed4225" data-section-uuid="254e8731-93be-56b6-aa27-cf1a37ed4225" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — chatgpt-api/raw/blobs.doltlite_db#cas_objects — 0 rows</li>
+</ul>
+</div>
+<div id="m-acfad23c-9c82-5305-8c93-d701c2298119" data-section-uuid="acfad23c-9c82-5305-8c93-d701c2298119" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — chatgpt-api/raw/entities.doltlite_db — 117.0 KiB</li>
+</ul>
+</div>
+<div id="m-9461a958-e470-5015-9a4e-1442088ff376" data-section-uuid="9461a958-e470-5015-9a4e-1442088ff376" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — chatgpt-api/raw/entities.doltlite_db#chatgpt_attachments — 0 rows</li>
+</ul>
+</div>
+<div id="m-32a7da2c-01b8-552d-9ed5-549b93ac0fb3" data-section-uuid="32a7da2c-01b8-552d-9ed5-549b93ac0fb3" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — chatgpt-api/raw/entities.doltlite_db#conversations — 3 rows</li>
+</ul>
+</div>
+<div id="m-c921150b-e67a-5060-a050-16f95f91203f" data-section-uuid="c921150b-e67a-5060-a050-16f95f91203f" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — chatgpt-api/raw/entities.doltlite_db#me — 1 row</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">chatgpt-api/rendered_md/d1f64243-f79a-5057-a85b-b5f6908ecf52/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="d1f64243-f79a-5057-a85b-b5f6908ecf52">Polynomial Fit for Sensor Calibration (all) <a class="source-link" href="https://chatgpt.com/c/68fa0002-fake-7000-8000-positronic0002" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-cc095ebb-b3fa-5319-828b-3faa13996da1" data-section-uuid="cc095ebb-b3fa-5319-828b-3faa13996da1" class="msg msg--chatgpt">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-25T08:00:00+00:00" title="2370-10-25 08:00:00 UTC">Sun Oct 25th, 2370 at 08:00</time></h2>
+<p>Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python.</p>
+</div>
+<div id="m-840e5f5a-f904-595e-b5b7-aa3f09ececbb" data-section-uuid="840e5f5a-f904-595e-b5b7-aa3f09ececbb" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-25T08:03:20+00:00" title="2370-10-25 08:03:20 UTC">Sun Oct 25th, 2370 at 08:03</time></h2>
+<pre><code class="language-python"><span class="hljs-keyword">import</span> numpy <span class="hljs-keyword">as</span> np
+x = np.array([<span class="hljs-number">1</span>,<span class="hljs-number">2</span>,<span class="hljs-number">3</span>,<span class="hljs-number">4</span>,<span class="hljs-number">5</span>])
+y = np.array([<span class="hljs-number">2.1</span>, <span class="hljs-number">4.0</span>, <span class="hljs-number">9.1</span>, <span class="hljs-number">15.8</span>, <span class="hljs-number">25.0</span>])
+coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
+<span class="hljs-built_in">print</span>(coeffs)
+</code></pre>
+</div>
+<div id="m-92a8d8ca-452f-5651-992c-14fdd5abf300" data-section-uuid="92a8d8ca-452f-5651-992c-14fdd5abf300" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-25T08:05:20+00:00" title="2370-10-25 08:05:20 UTC">Sun Oct 25th, 2370 at 08:05</time></h2>
+<p>The fit gives approximately y = 1.014 x² + 0.06 x + 1.07. R² ≈ 0.9997. The residuals suggest the underlying process is very close to pure quadratic with small measurement noise.</p>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-claude-api">
+<h2 class="preview-source-name">claude-api <span class="preview-count">6 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">claude-api/rendered_md/1c72c68f-86f5-577e-93a8-53e634460711/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="1c72c68f-86f5-577e-93a8-53e634460711">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-177b2d24-eea2-5f3b-b898-0ad84bbd7d50" data-section-uuid="177b2d24-eea2-5f3b-b898-0ad84bbd7d50" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time></h2>
+<p>What's wrong with this medical-tricorder readout?</p>
+<p>🖼 <em>[tricorder-readout.png (not yet fetched)]</em></p>
+</div>
+<div id="m-0bdf2176-0b10-5cc3-b955-0a31599f6495" data-section-uuid="0bdf2176-0b10-5cc3-b955-0a31599f6495" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-15T08:30:45+00:00" title="2369-04-15 08:30:45 UTC">Tue Apr 15th, 2369 at 08:30</time></h2>
+<p>The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">claude-api/rendered_md/2efdd321-ada2-5000-911f-feb635f27954/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="2efdd321-ada2-5000-911f-feb635f27954">Claude Project · Stellar Cartography (all) <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-14cc724b-89ec-5740-84e3-07f0a01a17e7" data-section-uuid="14cc724b-89ec-5740-84e3-07f0a01a17e7" class="msg msg--claude">
+<h2><span class="msg-author">Description</span> <span class="msg-ts">(no timestamp)</span></h2>
+<p>Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.</p>
+</div>
+<div id="m-e73bd39e-6538-5117-b6c2-0bdd7fccdc14" data-section-uuid="e73bd39e-6538-5117-b6c2-0bdd7fccdc14" class="msg msg--claude">
+<h2><span class="msg-author">Custom instructions</span> <span class="msg-ts">(no timestamp)</span></h2>
+<p>Answer as a stellar cartographer. Give coordinates in standard galactic form and say when a reading is extrapolated rather than measured.</p>
+</div>
+<div id="m-0e22c340-4082-5e2f-8d9a-553feb522f41" data-section-uuid="0e22c340-4082-5e2f-8d9a-553feb522f41" class="msg msg--claude">
+<h2><span class="msg-author">charting-conventions.md</span> <span class="msg-ts">(no timestamp)</span></h2>
+<h1>Charting conventions</h1>
+<p>Bearings are given from the ship's current heading, not from galactic north.</p>
+<ul>
+<li>Sector designations use the Federation catalogue number, never the local name.</li>
+<li>An extrapolated position is written in parentheses.</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">claude-api/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>claude-api — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-fb3fe197-9877-5e04-971d-d17c2b656a64" data-section-uuid="fb3fe197-9877-5e04-971d-d17c2b656a64" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — claude-api/raw — 253.8 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-0ff73589-e395-5dda-a792-399617b45311" data-section-uuid="0ff73589-e395-5dda-a792-399617b45311" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — claude-api/raw/blobs.doltlite_db — 3.0 KiB</li>
+</ul>
+</div>
+<div id="m-4f9e14af-a20a-5075-9e2d-8f0d5eb24077" data-section-uuid="4f9e14af-a20a-5075-9e2d-8f0d5eb24077" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — claude-api/raw/blobs.doltlite_db#cas_objects — 0 rows</li>
+</ul>
+</div>
+<div id="m-2ecfee43-3e3f-538d-b844-d312c880cca5" data-section-uuid="2ecfee43-3e3f-538d-b844-d312c880cca5" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — claude-api/raw/entities.doltlite_db — 250.8 KiB</li>
+</ul>
+</div>
+<div id="m-71a3518f-75ec-5bb1-a5a0-1a4fcaa3c7bb" data-section-uuid="71a3518f-75ec-5bb1-a5a0-1a4fcaa3c7bb" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — claude-api/raw/entities.doltlite_db#claude_attachments — 1 row</li>
+</ul>
+</div>
+<div id="m-9d593820-513b-5848-a4be-37ac471cb29e" data-section-uuid="9d593820-513b-5848-a4be-37ac471cb29e" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — claude-api/raw/entities.doltlite_db#conversations — 3 rows</li>
+</ul>
+</div>
+<div id="m-b44ad700-2494-5007-a6dd-21a4b0742759" data-section-uuid="b44ad700-2494-5007-a6dd-21a4b0742759" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — claude-api/raw/entities.doltlite_db#orgs — 1 row</li>
+</ul>
+</div>
+<div id="m-bd21d6ce-786c-51f2-9cd3-7657d433c36e" data-section-uuid="bd21d6ce-786c-51f2-9cd3-7657d433c36e" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — claude-api/raw/entities.doltlite_db#project_docs — 3 rows</li>
+</ul>
+</div>
+<div id="m-e46cb11c-e569-55f3-8489-c46ff06b80f9" data-section-uuid="e46cb11c-e569-55f3-8489-c46ff06b80f9" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — claude-api/raw/entities.doltlite_db#projects — 2 rows</li>
+</ul>
+</div>
+<div id="m-3cf7ca2b-aed9-5cbd-b1a5-4502d315ba68" data-section-uuid="3cf7ca2b-aed9-5cbd-b1a5-4502d315ba68" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — claude-api/raw/entities.doltlite_db#users — 0 rows</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">claude-api/rendered_md/bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-97a4b942-55cc-5277-bb12-ffd97e43dc5c" data-section-uuid="97a4b942-55cc-5277-bb12-ffd97e43dc5c" class="msg msg--claude">
+<h2><span class="msg-author">Description</span> <time class="msg-ts" datetime="2364-03-01T09:00:00+00:00" title="2364-03-01 09:00:00 UTC">Sun Mar 1st, 2364 at 09:00</time></h2>
+<p>Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.</p>
+</div>
+<div id="m-9a048a2e-8f15-5fd1-b686-aba2e9cad97e" data-section-uuid="9a048a2e-8f15-5fd1-b686-aba2e9cad97e" class="msg msg--claude">
+<h2><span class="msg-author">Custom instructions</span> <time class="msg-ts" datetime="2364-03-01T09:00:00+00:00" title="2364-03-01 09:00:00 UTC">Sun Mar 1st, 2364 at 09:00</time></h2>
+<p>Answer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.</p>
+</div>
+<div id="m-92b18eb4-757f-5418-87da-f7e5e179b6b1" data-section-uuid="92b18eb4-757f-5418-87da-f7e5e179b6b1" class="msg msg--claude">
+<h2><span class="msg-author">hailing-frequencies.md</span> <time class="msg-ts" datetime="2364-03-01T09:05:00+00:00" title="2364-03-01 09:05:00 UTC">Sun Mar 1st, 2364 at 09:05</time></h2>
+<h1>Hailing frequencies</h1>
+<p>Open on subspace band 3 unless the target is cloaked.</p>
+<ul>
+<li>Klingon vessels: lead with rank, then ship name.</li>
+<li>Romulan vessels: do not open first.</li>
+</ul>
+</div>
+<div id="m-d734b686-97ce-5e76-9ae0-02fbb6dfe60b" data-section-uuid="d734b686-97ce-5e76-9ae0-02fbb6dfe60b" class="msg msg--claude">
+<h2><span class="msg-author">escalation-ladder.txt</span> <time class="msg-ts" datetime="2364-03-02T11:30:00+00:00" title="2364-03-02 11:30:00 UTC">Mon Mar 2nd, 2364 at 11:30</time></h2>
+<p>Ops -&gt; Tactical (Worf) -&gt; First Officer (Riker) -&gt; Captain (Picard).
+Medical emergencies route directly to Sickbay (Crusher).</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">claude-api/rendered_md/ecb57e3b-24ce-546b-9201-61bf610b0783/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="ecb57e3b-24ce-546b-9201-61bf610b0783">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-5af2bc5c-dc8f-5f8b-9ffe-3b8959ef4b6d" data-section-uuid="5af2bc5c-dc8f-5f8b-9ffe-3b8959ef4b6d" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-16T09:00:00+00:00" title="2369-04-16 09:00:00 UTC">Wed Apr 16th, 2369 at 09:00</time></h2>
+<p>Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.</p>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-9dc4d9e5-8760-5b4b-8356-513ddde8a81c" data-section-uuid="9dc4d9e5-8760-5b4b-8356-513ddde8a81c" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:00:10+00:00" title="2369-04-16 09:00:10 UTC">Wed Apr 16th, 2369 at 09:00</time></h2>
+<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;signature&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;7-of-9-alpha&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;table&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;borg_shield_signatures&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-acf0598d-da86-50cb-83c0-81c168a3aaf6" data-section-uuid="acf0598d-da86-50cb-83c0-81c168a3aaf6" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:00:30+00:00" title="2369-04-16 09:00:30 UTC">Wed Apr 16th, 2369 at 09:00</time></h2>
+<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;relay&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;backup-2&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;signature&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;7-of-9-alpha&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;table&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;borg_shield_signatures&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-fd099005-053a-540e-a4fa-26c872b932bf" data-section-uuid="fd099005-053a-540e-a4fa-26c872b932bf" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time></h2>
+<p>Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.</p>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-8e186a5a-3834-5ae1-ad1d-00a786a6f02d" data-section-uuid="8e186a5a-3834-5ae1-ad1d-00a786a6f02d" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time></h2>
+<details><summary>Tool result: starfleet_db_query (error)</summary>
+<pre><code>ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
+</code></pre>
+</details>
+</div>
+<div id="m-455f3019-2de0-5b4c-ad87-68e8f1003e6b" data-section-uuid="455f3019-2de0-5b4c-ad87-68e8f1003e6b" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time></h2>
+<details><summary>Tool result: starfleet_db_query</summary>
+<p>Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.</p>
+</details>
+</div>
+</details>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">claude-api/rendered_md/f6cad624-37b7-5673-af29-80ba9aac61a5/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="f6cad624-37b7-5673-af29-80ba9aac61a5">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-ec2d712e-ffd8-5f3e-bfb1-291c371a8a18" data-section-uuid="ec2d712e-ffd8-5f3e-bfb1-291c371a8a18" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-14T10:00:00+00:00" title="2369-04-14 10:00:00 UTC">Mon Apr 14th, 2369 at 10:00</time></h2>
+<p>Look up the Klingon greeting &quot;nuqneH&quot; and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.</p>
+</div>
+<div id="m-fba21d7b-ee94-5388-a431-83ab86883e1d" data-section-uuid="fba21d7b-ee94-5388-a431-83ab86883e1d" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:00:30+00:00" title="2369-04-14 10:00:30 UTC">Mon Apr 14th, 2369 at 10:00</time></h2>
+<details><summary>Thinking</summary>
+<blockquote>
+<p>&quot;nuqneH&quot; literally means &quot;what do you want&quot; — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.</p>
+</blockquote>
+</details>
+</div>
+<details class="tool-group">
+<summary>🛠 1 tool step</summary>
+<div id="m-627106cd-9749-58b6-b3c3-081b7c5bd325" data-section-uuid="627106cd-9749-58b6-b3c3-081b7c5bd325" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:00:32+00:00" title="2369-04-14 10:00:32 UTC">Mon Apr 14th, 2369 at 10:00</time></h2>
+<details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;url&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;https://memory-alpha.test/wiki/Klingon_language&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-db076984-1c8c-5f9c-95f3-49aff0ea4480" data-section-uuid="db076984-1c8c-5f9c-95f3-49aff0ea4480" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:01:00+00:00" title="2369-04-14 10:01:00 UTC">Mon Apr 14th, 2369 at 10:01</time></h2>
+<p>For a dispatch to Chancellor K'mpec, open with &quot;qaleghneS, Chancellor — nuqneH?&quot; (&quot;I am honored to see you — what do you want?&quot;). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.</p>
+</div>
+<details class="tool-group">
+<summary>🛠 1 tool step</summary>
+<div id="m-1657d974-f93f-5c85-92bb-789909cf6e41" data-section-uuid="1657d974-f93f-5c85-92bb-789909cf6e41" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:01:00+00:00" title="2369-04-14 10:01:00 UTC">Mon Apr 14th, 2369 at 10:01</time></h2>
+<details><summary>Tool result: web_fetch</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;is_missing&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-literal"><span class="hljs-keyword">false</span></span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;metadata&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;site_domain&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;memory-alpha.test&quot;</span>
+  <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;text&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;nuqneH (lit. \&quot;what do you want\&quot;) is the standard Klingon greeting. In formal diplomatic contexts it is paired with the honorific \&quot;qaleghneS\&quot; (\&quot;I am honored to see you\&quot;).&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;title&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Klingon language — Memory Alpha (test mirror)&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;type&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;knowledge&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;url&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;https://memory-alpha.test/wiki/Klingon_language&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-66adb1c8-8e2e-5b04-b2c5-5838f3b3ab9f" data-section-uuid="66adb1c8-8e2e-5b04-b2c5-5838f3b3ab9f" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-14T10:02:00+00:00" title="2369-04-14 10:02:00 UTC">Mon Apr 14th, 2369 at 10:02</time></h2>
+<p>Perfect. Make it so.</p>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-github">
+<h2 class="preview-source-name">github <span class="preview-count">3 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">github/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>github — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-8b319149-5ea6-5de0-b68c-ca73d7d88a75" data-section-uuid="8b319149-5ea6-5de0-b68c-ca73d7d88a75" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — github/raw — 246.1 KiB, 2 files</li>
+</ul>
+</div>
+<div id="m-95b11b43-c6b2-5f2d-a910-f98aca67d01d" data-section-uuid="95b11b43-c6b2-5f2d-a910-f98aca67d01d" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — github/raw/entities.doltlite_db — 246.1 KiB</li>
+</ul>
+</div>
+<div id="m-23d7b762-f6c1-55b8-922a-0ae75bd70256" data-section-uuid="23d7b762-f6c1-55b8-922a-0ae75bd70256" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — github/raw/entities.doltlite_db#issue_comments — 2 rows</li>
+</ul>
+</div>
+<div id="m-2841582b-9568-5110-8739-bf6d06bc8a72" data-section-uuid="2841582b-9568-5110-8739-bf6d06bc8a72" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — github/raw/entities.doltlite_db#pr_review_comments — 4 rows</li>
+</ul>
+</div>
+<div id="m-41274a75-a696-562a-94cd-51deb67fccd3" data-section-uuid="41274a75-a696-562a-94cd-51deb67fccd3" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — github/raw/entities.doltlite_db#pr_reviews — 2 rows</li>
+</ul>
+</div>
+<div id="m-3b525323-2e70-56dd-bce8-602778875589" data-section-uuid="3b525323-2e70-56dd-bce8-602778875589" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — github/raw/entities.doltlite_db#pull_requests — 2 rows</li>
+</ul>
+</div>
+<div id="m-e3b78fbc-153e-52c6-a0dc-dfdc5845a13e" data-section-uuid="e3b78fbc-153e-52c6-a0dc-dfdc5845a13e" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — github/raw/entities.doltlite_db#self_identity — 1 row</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">github/rendered_md/enterprise-d/replicator-firmware/pr-42/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="6a0d7000-3fa1-5479-9d32-6ba74d546fa8">Recalibrate replicator templates for Earl Grey, hot (#42) <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p><em>closed</em> — @jlpicard — <code>picard/earl-grey-temp</code> → <code>main</code></p>
+<h2>Description</h2>
+<p>Adjusts the steeping target to 85 degC. Tea is meant to be HOT.</p>
+<h2>Reviews</h2>
+<p><strong>@wtriker</strong> <em>(APPROVED)</em> @ 2369-04-15T10:00:00Z — <a href="https://github.com/enterprise-d/replicator-firmware/pull/42#pullrequestreview-4200077">link</a></p>
+<blockquote>
+<p>LGTM, Captain. Make it so.</p>
+</blockquote>
+<h2>General discussion</h2>
+<p><strong>@geordi-laforge</strong> @ 2369-04-15T09:30:00Z — <a href="https://github.com/enterprise-d/replicator-firmware/pull/42#issuecomment-4242001">link</a></p>
+<blockquote>
+<p>Did you account for water temperature drift on long-duration replicator runs?</p>
+</blockquote>
+<h2>Inline comments</h2>
+<h3><code>src/replicator/tea.c:17</code></h3>
+<p><strong>@wtriker</strong> @ 2369-04-15T10:00:01Z — <a href="https://github.com/enterprise-d/replicator-firmware/pull/42#discussion_r4200201">link</a></p>
+<blockquote>
+<p>Should be 85 degC, not 82. Earl Grey wants it HOT.</p>
+</blockquote>
+<p><strong>@jlpicard</strong> <em>(reply)</em> @ 2369-04-15T10:05:00Z — <a href="https://github.com/enterprise-d/replicator-firmware/pull/42#discussion_r4200202">link</a></p>
+<blockquote>
+<p>Quite right, Number One. Fixed in the next push.</p>
+</blockquote>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">github/rendered_md/enterprise-d/replicator-firmware/pr-43/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="8365cf2d-2561-5cc5-bba0-657a8b9f35a2">Add holodeck safety interlock for live phaser fire (#43) <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p><em>open</em> — @jlpicard — <code>picard/holodeck-safety</code> → <code>main</code></p>
+<h2>Description</h2>
+<p>Disables holodeck weapons fire when safeties are off, with audible warning.</p>
+<p>Fixes #41.</p>
+<h2>Reviews</h2>
+<p><strong>@data-soong</strong> <em>(COMMENTED)</em> @ 2369-04-15T14:00:00Z — <a href="https://github.com/enterprise-d/replicator-firmware/pull/43#pullrequestreview-4300088">link</a></p>
+<blockquote>
+<p>I have run 47 simulations against this branch. Two edge cases warrant attention; see inline.</p>
+</blockquote>
+<h2>General discussion</h2>
+<p><strong>@worf-rozhenko</strong> @ 2369-04-15T13:30:00Z — <a href="https://github.com/enterprise-d/replicator-firmware/pull/43#issuecomment-4343001">link</a></p>
+<blockquote>
+<p>Approved. Honor demands no compromise on safety.</p>
+</blockquote>
+<h2>Inline comments</h2>
+<h3><code>src/holodeck/safety.c:200</code></h3>
+<p><strong>@data-soong</strong> @ 2369-04-15T14:00:01Z — <a href="https://github.com/enterprise-d/replicator-firmware/pull/43#discussion_r4300301">link</a></p>
+<blockquote>
+<p>If <code>safeties_engaged</code> is read after <code>weapons_armed</code> is set, there is a 12-microsecond window in which a discharge could occur. I recommend reordering the checks.</p>
+</blockquote>
+<h3><code>src/holodeck/safety.c:215</code></h3>
+<p><strong>@data-soong</strong> @ 2369-04-15T14:00:02Z — <a href="https://github.com/enterprise-d/replicator-firmware/pull/43#discussion_r4300302">link</a></p>
+<blockquote>
+<p>The audible warning loops indefinitely. Counsellor Troi has noted that this may induce undue anxiety in trainees; consider capping the loop at 10 cycles.</p>
+</blockquote>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-gitlab">
+<h2 class="preview-source-name">gitlab <span class="preview-count">3 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">gitlab/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>gitlab — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-e6dd26a1-747c-54ef-b0c9-734e1c581c83" data-section-uuid="e6dd26a1-747c-54ef-b0c9-734e1c581c83" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — gitlab/raw — 124.8 KiB, 2 files</li>
+</ul>
+</div>
+<div id="m-23ecb105-7ef6-59c4-bf8f-819e5d419d87" data-section-uuid="23ecb105-7ef6-59c4-bf8f-819e5d419d87" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — gitlab/raw/entities.doltlite_db — 124.8 KiB</li>
+</ul>
+</div>
+<div id="m-d740829c-f6e5-52dc-801f-850d72b8fbef" data-section-uuid="d740829c-f6e5-52dc-801f-850d72b8fbef" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — gitlab/raw/entities.doltlite_db#discussions — 4 rows</li>
+</ul>
+</div>
+<div id="m-69a8939f-87df-52b8-a19a-fd67dd1ddfea" data-section-uuid="69a8939f-87df-52b8-a19a-fd67dd1ddfea" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — gitlab/raw/entities.doltlite_db#merge_requests — 2 rows</li>
+</ul>
+</div>
+<div id="m-84ead3e7-ce8c-53f0-a1f4-31712db034b4" data-section-uuid="84ead3e7-ce8c-53f0-a1f4-31712db034b4" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — gitlab/raw/entities.doltlite_db#self_identity — 1 row</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">gitlab/rendered_md/enterprise-d/holodeck/mr-17/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="743537a5-d2bc-54f5-a660-97cb674ba8c8">Add Earl Grey, hot to replicator menu (!17) <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p><em>merged</em> — @jlpicard — <code>picard/earl-grey</code> → <code>main</code></p>
+<h2>Description</h2>
+<p>Tea. Earl Grey. Hot.</p>
+<h2>General discussion</h2>
+<p><strong>@jlpicard</strong> <em>(reply)</em> @ 2369-04-15T10:05:00.000Z — <a href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017002">link</a></p>
+<blockquote>
+<p>Adopted. Make it so.</p>
+</blockquote>
+<p><strong>@worf-rozhenko</strong> @ 2369-04-15T10:30:00.000Z — <a href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017003">link</a></p>
+<blockquote>
+<p>I will set the standard temperature to be served warm in case of crisis. Klingon ambassadors will not accept tepid beverages.</p>
+</blockquote>
+<h2>Inline comments</h2>
+<h3><code>src/replicator/menu.rs:88</code></h3>
+<p><strong>@wtriker</strong> @ 2369-04-15T10:00:00.000Z — <a href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017001">link</a></p>
+<blockquote>
+<p>Use <code>enum Tea { EarlGrey, Chamomile, ... }</code> here rather than a string match — it'll catch typos at compile time.</p>
+</blockquote>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">gitlab/rendered_md/enterprise-d/holodeck/mr-18/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="6fc719a5-94c3-5757-a26f-2f34579d2508">Holodeck safety interlock regression test (!18) <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p><em>opened</em> — @jlpicard — <code>picard/safety-regression</code> → <code>main</code></p>
+<h2>Description</h2>
+<p>Adds a regression test that asserts holodeck weapons cannot fire while safeties are engaged. Closes #41.</p>
+<h2>General discussion</h2>
+<p><strong>@geordi-laforge</strong> <em>(reply)</em> @ 2369-04-15T14:10:00.000Z — <a href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018002">link</a></p>
+<blockquote>
+<p>Agreed — I can wire that into the simulator harness if Data writes the assertion.</p>
+</blockquote>
+<p><strong>@jlpicard</strong> <em>(reply)</em> @ 2369-04-15T14:20:00.000Z — <a href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018003">link</a></p>
+<blockquote>
+<p>Concur. Make it so.</p>
+</blockquote>
+<p><strong>@bcrusher</strong> @ 2369-04-15T14:30:00.000Z — <a href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018004">link</a></p>
+<blockquote>
+<p>Please ensure the medical override path is preserved — Sickbay must be able to disable safeties on a holodeck program in a triage scenario.</p>
+</blockquote>
+<h2>Inline comments</h2>
+<h3><code>tests/safety.rs:42</code></h3>
+<p><strong>@data-soong</strong> @ 2369-04-15T14:00:00.000Z — <a href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018001">link</a></p>
+<blockquote>
+<p>The assertion only checks the safety flag <em>before</em> arming. We should also assert that arming the weapon while safeties are engaged returns Err(SafetyEngaged).</p>
+</blockquote>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-google-takeout">
+<h2 class="preview-source-name">google-takeout <span class="preview-count">6 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">google-takeout/rendered_md/10a5ea3a-8229-54e5-8af3-d23abaa42860/2364-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="2c6ace48-3820-5124-8cc2-5a34f7770ee2">Google Voice · +15550900 (2364-03)</h1>
+<div id="m-de30b754-54b7-5df0-97bb-e6008935e19b" data-section-uuid="de30b754-54b7-5df0-97bb-e6008935e19b" class="msg msg--google_takeout">
+<h2><span class="msg-author">Ferengi Commerce Authority</span> <time class="msg-ts" datetime="2364-03-04T20:00:00+00:00" title="2364-03-04 20:00:00 UTC">Wed Mar 4th, 2364 at 20:00</time></h2>
+<p><strong>Voicemail:</strong> Greetings, valued customer. You have won a free holodeck program.</p>
+<p><audio controls src="blobs/5b1a259c45cfa10e.mp3"></audio></p>
+<p>🔊 <a href="blobs/5b1a259c45cfa10e.mp3"> - Voicemail - 2364-03-04T12_00_00Z.mp3</a> — size unknown</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">google-takeout/rendered_md/31ab2c83-77e2-53bd-b225-c3a70f9acec4/2025-02.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="e7293acc-95ca-573c-8ad8-aaee090b4b73">Google Chat · Jean-Luc Picard, William Riker (2025-02)</h1>
+<div id="m-5cb47e7c-176b-5551-badb-c8aefa0280f8" data-section-uuid="5cb47e7c-176b-5551-badb-c8aefa0280f8" class="msg msg--google_takeout">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2025-02-11T11:33:35+00:00" title="2025-02-11 11:33:35 UTC">Tue Feb 11th, 2025 at 11:33</time></h2>
+<p>Number One, set a course for Risa.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">google-takeout/rendered_md/31ab2c83-77e2-53bd-b225-c3a70f9acec4/2025-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="26344276-3a84-5e48-b2db-1fceb78df775">Google Chat · Jean-Luc Picard, William Riker (2025-03)</h1>
+<div id="m-e5725d78-ded6-5bb6-9248-2c01d794a0be" data-section-uuid="e5725d78-ded6-5bb6-9248-2c01d794a0be" class="msg msg--google_takeout">
+<h2><span class="msg-author">William Riker</span> <time class="msg-ts" datetime="2025-03-05T21:34:00+00:00" title="2025-03-05 21:34:00 UTC">Wed Mar 5th, 2025 at 21:34</time></h2>
+<p>Aye, sir.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">google-takeout/rendered_md/6d7fadb9-51d2-5d1c-9ec1-54814773f24b/2364-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="d223f2f7-3bec-5db5-ab16-c856ffbfb7bf">Google Voice · Jean-Luc Picard (2364-03)</h1>
+<div id="m-5f0c90bb-4202-50ce-a26c-985632bed489" data-section-uuid="5f0c90bb-4202-50ce-a26c-985632bed489" class="msg msg--google_takeout">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2364-03-01T17:00:00+00:00" title="2364-03-01 17:00:00 UTC">Sun Mar 1st, 2364 at 17:00</time></h2>
+<p>Number One, report to the bridge.</p>
+</div>
+<div id="m-1183b755-20cf-5a77-8bd2-eb9f270c5713" data-section-uuid="1183b755-20cf-5a77-8bd2-eb9f270c5713" class="msg msg--google_takeout">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2364-03-01T17:01:30+00:00" title="2364-03-01 17:01:30 UTC">Sun Mar 1st, 2364 at 17:01</time></h2>
+<p>On my way, Captain.
+Riker out.</p>
+</div>
+<div id="m-c5f99500-23f5-5f1f-a52f-207baa9e6655" data-section-uuid="c5f99500-23f5-5f1f-a52f-207baa9e6655" class="msg msg--google_takeout">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2364-03-01T17:03:00+00:00" title="2364-03-01 17:03:00 UTC">Sun Mar 1st, 2364 at 17:03</time></h2>
+<p>Here is the sensor reading.</p>
+<p><img src="blobs/846b6adacbeb3968.jpg" alt="Jean-Luc Picard - Text - 2364-03-01T09_00_00Z-1-1.jpg"></p>
+</div>
+<div id="m-2c09a989-b914-5ed3-a79c-9bc29484a779" data-section-uuid="2c09a989-b914-5ed3-a79c-9bc29484a779" class="msg msg--google_takeout">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2364-03-02T18:00:00+00:00" title="2364-03-02 18:00:00 UTC">Mon Mar 2nd, 2364 at 18:00</time></h2>
+<p><strong>Voicemail:</strong> Number One, the away team is ready. Make it so.</p>
+<p><audio controls src="blobs/1971bd86278d9dc6.mp3"></audio></p>
+<p>🔊 <a href="blobs/1971bd86278d9dc6.mp3">Jean-Luc Picard - Voicemail - 2364-03-02T10_00_00Z.mp3</a> — size unknown</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">google-takeout/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>google-takeout — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-c93f49a0-d0f5-5d75-a679-09a0921579ff" data-section-uuid="c93f49a0-d0f5-5d75-a679-09a0921579ff" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — google-takeout/raw — 529.0 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-0b5d005e-0e59-569d-ac6b-26211e5b9283" data-section-uuid="0b5d005e-0e59-569d-ac6b-26211e5b9283" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — google-takeout/raw/blobs.doltlite_db — 5.9 KiB</li>
+</ul>
+</div>
+<div id="m-1d2d9b0d-576a-53b7-b90d-566481ebf061" data-section-uuid="1d2d9b0d-576a-53b7-b90d-566481ebf061" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/blobs.doltlite_db#cas_objects — 5 rows</li>
+</ul>
+</div>
+<div id="m-3628a0e6-aac2-5be0-9391-ddac9bb5734b" data-section-uuid="3628a0e6-aac2-5be0-9391-ddac9bb5734b" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — google-takeout/raw/entities.doltlite_db — 523.1 KiB</li>
+</ul>
+</div>
+<div id="m-3c20ff52-4868-54e0-98ff-7b54642ce3c4" data-section-uuid="3c20ff52-4868-54e0-98ff-7b54642ce3c4" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#chat_attachments — 1 row</li>
+</ul>
+</div>
+<div id="m-8ac70851-d6b8-583f-a645-2ec08643c4ec" data-section-uuid="8ac70851-d6b8-583f-a645-2ec08643c4ec" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#chat_groups — 1 row</li>
+</ul>
+</div>
+<div id="m-97f31185-471a-5818-b348-af37bc4a1ea6" data-section-uuid="97f31185-471a-5818-b348-af37bc4a1ea6" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#chat_messages — 2 rows</li>
+</ul>
+</div>
+<div id="m-ecf0dfd1-5773-5a82-87ff-3c88db49e7fb" data-section-uuid="ecf0dfd1-5773-5a82-87ff-3c88db49e7fb" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#chat_users — 1 row</li>
+</ul>
+</div>
+<div id="m-4312dbce-d6f8-5dc3-bc84-8fc1461e0479" data-section-uuid="4312dbce-d6f8-5dc3-bc84-8fc1461e0479" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#gemini_activity — 0 rows</li>
+</ul>
+</div>
+<div id="m-f98c0d35-c6b7-58a9-a421-628c3dfdec86" data-section-uuid="f98c0d35-c6b7-58a9-a421-628c3dfdec86" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#gemini_attachments — 0 rows</li>
+</ul>
+</div>
+<div id="m-3a1ebda4-9d00-52e4-a645-6be984fd4680" data-section-uuid="3a1ebda4-9d00-52e4-a645-6be984fd4680" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#ingested_files — 8 rows</li>
+</ul>
+</div>
+<div id="m-82a02a0e-4b87-588c-817b-bb3144304881" data-section-uuid="82a02a0e-4b87-588c-817b-bb3144304881" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#maps_photos — 0 rows</li>
+</ul>
+</div>
+<div id="m-d4e40a8f-58ca-5838-8723-46f2ae67859a" data-section-uuid="d4e40a8f-58ca-5838-8723-46f2ae67859a" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#maps_reviews — 0 rows</li>
+</ul>
+</div>
+<div id="m-f6c005e6-4042-5708-9328-c50afd11dc61" data-section-uuid="f6c005e6-4042-5708-9328-c50afd11dc61" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#maps_saved_places — 0 rows</li>
+</ul>
+</div>
+<div id="m-d5457003-8689-5ed1-94d5-9500b51269c5" data-section-uuid="d5457003-8689-5ed1-94d5-9500b51269c5" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#voice_attachments — 4 rows</li>
+</ul>
+</div>
+<div id="m-48fa759c-edcb-5b0c-a6f9-2da3bc04d23d" data-section-uuid="48fa759c-edcb-5b0c-a6f9-2da3bc04d23d" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#voice_bills — 0 rows</li>
+</ul>
+</div>
+<div id="m-006305eb-d633-5521-a144-0c75b6482409" data-section-uuid="006305eb-d633-5521-a144-0c75b6482409" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#voice_greetings — 1 row</li>
+</ul>
+</div>
+<div id="m-1cd75c0e-b1a6-55c4-83e1-ffc620dbf5f3" data-section-uuid="1cd75c0e-b1a6-55c4-83e1-ffc620dbf5f3" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#voice_messages — 6 rows</li>
+</ul>
+</div>
+<div id="m-86ac345a-11c0-5eca-843d-66c217bdcc08" data-section-uuid="86ac345a-11c0-5eca-843d-66c217bdcc08" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#youtube_subscriptions — 0 rows</li>
+</ul>
+</div>
+<div id="m-e31f8c3f-8ac6-53c9-82ab-c325e0244ede" data-section-uuid="e31f8c3f-8ac6-53c9-82ab-c325e0244ede" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — google-takeout/raw/entities.doltlite_db#youtube_watch_history — 0 rows</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">google-takeout/rendered_md/a05ba898-60e4-589d-babb-abcb65b80773/2364-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="cb0ffcf2-dcc8-52c4-8f1a-f9b1c53782c7">Google Voice · Wesley Crusher (2364-03)</h1>
+<div id="m-57a77ace-6592-534d-8226-5718afdb0789" data-section-uuid="57a77ace-6592-534d-8226-5718afdb0789" class="msg msg--google_takeout">
+<p><em><small>Tue Mar 3rd, 2364 at 19:00 — system: Missed call — Wesley Crusher</small></em></p>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-linkedin">
+<h2 class="preview-source-name">linkedin <span class="preview-count">5 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">linkedin/rendered_md/0f7d3aa5-e30a-5528-9ea5-d5b6fa547fc0/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="7779d1ce-184c-5b95-bd62-112362fc5c4d">LinkedIn · Jean-Luc Picard, William Riker (all)</h1>
+<div id="m-9d658d08-cc67-543f-81bf-27f8adc859ff" data-section-uuid="9d658d08-cc67-543f-81bf-27f8adc859ff" class="msg msg--linkedin">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-10T09:00:00+00:00" title="2369-04-10 09:00:00 UTC">Thu Apr 10th, 2369 at 09:00</time></h2>
+<p>Number One, the bridge is yours.</p>
+</div>
+<div id="m-4b17d732-6667-5cd8-8071-7629ed2fa75b" data-section-uuid="4b17d732-6667-5cd8-8071-7629ed2fa75b" class="msg msg--linkedin">
+<h2><span class="msg-author">William Riker</span> <time class="msg-ts" datetime="2369-04-10T09:05:00+00:00" title="2369-04-10 09:05:00 UTC">Thu Apr 10th, 2369 at 09:05</time></h2>
+<p>Aye, Captain. Setting a course for Risa.</p>
+</div>
+<div id="m-d4aa04b2-cbcd-587f-b2cc-0a8eaa39e473" data-section-uuid="d4aa04b2-cbcd-587f-b2cc-0a8eaa39e473" class="msg msg--linkedin">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-10T09:06:30+00:00" title="2369-04-10 09:06:30 UTC">Thu Apr 10th, 2369 at 09:06</time></h2>
+<p>Make it so.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">linkedin/rendered_md/861a616f-cf0e-550e-b7bc-28efd43b7867/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="861a616f-cf0e-550e-b7bc-28efd43b7867">Jean-Luc Picard <a class="source-link" href="https://www.linkedin.com/in/jlpicard" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p><img src="blobs/861a616f-cf0e-550e-b7bc-28efd43b7867.png" alt="Jean-Luc Picard"></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Company</td>
+<td>Starfleet</td>
+</tr>
+<tr>
+<td>Position</td>
+<td>Captain</td>
+</tr>
+<tr>
+<td>Email Address</td>
+<td><a href="mailto:jlpicard@starfleet.gov">jlpicard@starfleet.gov</a></td>
+</tr>
+<tr>
+<td>Connected On</td>
+<td>10 Apr 2369</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">linkedin/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>linkedin — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-d12abd2b-526a-5ea9-81a3-5313718e1a69" data-section-uuid="d12abd2b-526a-5ea9-81a3-5313718e1a69" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — linkedin/raw — 53.1 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-7d73b136-d68f-5afa-ab93-daaee3794952" data-section-uuid="7d73b136-d68f-5afa-ab93-daaee3794952" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — linkedin/raw/blobs.doltlite_db — 6.8 KiB</li>
+</ul>
+</div>
+<div id="m-fb43c1f1-6b54-5362-acfe-13b01a6cb11f" data-section-uuid="fb43c1f1-6b54-5362-acfe-13b01a6cb11f" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — linkedin/raw/blobs.doltlite_db#cas_objects — 3 rows</li>
+</ul>
+</div>
+<div id="m-aea34e6b-8916-5230-9bd1-f5e998a74ac8" data-section-uuid="aea34e6b-8916-5230-9bd1-f5e998a74ac8" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — linkedin/raw/entities.doltlite_db — 46.3 KiB</li>
+</ul>
+</div>
+<div id="m-87b9a749-5838-5ff6-9ae6-eefefe5d9e34" data-section-uuid="87b9a749-5838-5ff6-9ae6-eefefe5d9e34" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — linkedin/raw/entities.doltlite_db#connections — 3 rows</li>
+</ul>
+</div>
+<div id="m-3f418913-0fc5-5803-b87b-c7991ee1dddf" data-section-uuid="3f418913-0fc5-5803-b87b-c7991ee1dddf" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — linkedin/raw/entities.doltlite_db#contact_photos — 3 rows</li>
+</ul>
+</div>
+<div id="m-ed71df01-2c54-5e69-9fee-e212b2ae7755" data-section-uuid="ed71df01-2c54-5e69-9fee-e212b2ae7755" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — linkedin/raw/entities.doltlite_db#messages — 3 rows</li>
+</ul>
+</div>
+<div id="m-c0eb947d-b9a4-5fc7-b59b-d7c9a0ff2777" data-section-uuid="c0eb947d-b9a4-5fc7-b59b-d7c9a0ff2777" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — linkedin/raw/entities.doltlite_db#skills — 3 rows</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">linkedin/rendered_md/b55690ec-c377-56ca-bf0a-e51a006a1071/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="b55690ec-c377-56ca-bf0a-e51a006a1071">William Riker <a class="source-link" href="https://www.linkedin.com/in/wriker" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p><img src="blobs/b55690ec-c377-56ca-bf0a-e51a006a1071.png" alt="William Riker"></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Company</td>
+<td>Starfleet</td>
+</tr>
+<tr>
+<td>Position</td>
+<td>Commander</td>
+</tr>
+<tr>
+<td>Connected On</td>
+<td>09 Apr 2369</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">linkedin/rendered_md/dfabaa93-8b49-5738-bfc5-f2671bace58a/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="dfabaa93-8b49-5738-bfc5-f2671bace58a">Data Soong <a class="source-link" href="https://www.linkedin.com/in/datasoong" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p><img src="blobs/dfabaa93-8b49-5738-bfc5-f2671bace58a.png" alt="Data Soong"></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Company</td>
+<td>Starfleet</td>
+</tr>
+<tr>
+<td>Position</td>
+<td>Lt. Commander, Operations</td>
+</tr>
+<tr>
+<td>Connected On</td>
+<td>08 Apr 2369</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-notion">
+<h2 class="preview-source-name">notion <span class="preview-count">6 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">notion/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>notion — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-59a90ea4-1135-5ad7-9bd2-99afd27f0550" data-section-uuid="59a90ea4-1135-5ad7-9bd2-99afd27f0550" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — notion/raw — 258.4 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-bbc48936-c58b-5ece-be40-d4349e6a82c6" data-section-uuid="bbc48936-c58b-5ece-be40-d4349e6a82c6" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — notion/raw/blobs.doltlite_db — 3.0 KiB</li>
+</ul>
+</div>
+<div id="m-0fcf0f0d-c372-562d-b298-5a13eeeecbe7" data-section-uuid="0fcf0f0d-c372-562d-b298-5a13eeeecbe7" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — notion/raw/blobs.doltlite_db#cas_objects — 0 rows</li>
+</ul>
+</div>
+<div id="m-e41809bf-7636-5e33-8f3f-b56d2b1d11f6" data-section-uuid="e41809bf-7636-5e33-8f3f-b56d2b1d11f6" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — notion/raw/entities.doltlite_db — 255.4 KiB</li>
+</ul>
+</div>
+<div id="m-721d2676-429c-5d0e-9d22-bd7796202d1d" data-section-uuid="721d2676-429c-5d0e-9d22-bd7796202d1d" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — notion/raw/entities.doltlite_db#comment_anchors — 1 row</li>
+</ul>
+</div>
+<div id="m-fc971fef-031d-5ab3-bce8-a507be0481b1" data-section-uuid="fc971fef-031d-5ab3-bce8-a507be0481b1" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — notion/raw/entities.doltlite_db#comments — 3 rows</li>
+</ul>
+</div>
+<div id="m-3c7e7766-c1a1-57b1-ab32-ee3fdcc36e2d" data-section-uuid="3c7e7766-c1a1-57b1-ab32-ee3fdcc36e2d" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — notion/raw/entities.doltlite_db#notion_attachments — 0 rows</li>
+</ul>
+</div>
+<div id="m-bd7103cf-b95b-5162-8b4a-04d67056c9c8" data-section-uuid="bd7103cf-b95b-5162-8b4a-04d67056c9c8" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — notion/raw/entities.doltlite_db#page_markdown — 3 rows</li>
+</ul>
+</div>
+<div id="m-fc571705-606f-5d16-a97a-d139f19c805d" data-section-uuid="fc571705-606f-5d16-a97a-d139f19c805d" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — notion/raw/entities.doltlite_db#pages — 3 rows</li>
+</ul>
+</div>
+<div id="m-9ce29c93-7fc5-5923-8026-44e8e7667e49" data-section-uuid="9ce29c93-7fc5-5923-8026-44e8e7667e49" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — notion/raw/entities.doltlite_db#users — 2 rows</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">notion/rendered_md/pages/b1d6e000-1701-4d00-8000-000000000001/index.md</h3>
+<div class="chat-body markdown-body"><h1>Mission Overview</h1>
+<p>The USS Enterprise-D is on a deep-space survey near the Romulan Neutral Zone. Coordinate any sensor sweeps with Data before adjusting sensor gain.</p>
+<callout>
+Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
+</callout>
+<p>&lt;table_of_contents/&gt;</p>
+<h2>Crew Roster</h2>
+<ul>
+<li>
+<p>Duty roster lives at Shift Roster — refer to it before bridge handoff.</p>
+</li>
+<li>
+<p>Senior staff: Jean-Luc Picard, William T. Riker, Data, Worf.</p>
+</li>
+</ul>
+<ol>
+<li>
+<p>Confirm shift assignments at start of duty.</p>
+</li>
+<li>
+<p>File anomalies in the incident log below.</p>
+</li>
+</ol>
+<hr>
+<h2>Standing Orders</h2>
+<ul>
+<li>
+<p>[x] Maintain Yellow Alert posture in the Neutral Zone</p>
+</li>
+<li>
+<p>[ ] Run weekly warp-core diagnostic with Geordi La Forge</p>
+</li>
+</ul>
+<details>
+<summary>Engagement protocols</summary>
+</details>
+<p>Hail before firing. Shields raised only after a second sensor confirmation.</p>
+<ul>
+<li>Tactical leads: Worf</li>
+</ul>
+<blockquote>
+<p>Make it so.</p>
+</blockquote>
+<pre><code class="language-python"><span class="hljs-keyword">def</span> <span class="hljs-title function_">hail</span>(<span class="hljs-params">frequency</span>):
+    <span class="hljs-keyword">return</span> <span class="hljs-string">f&quot;Open channel <span class="hljs-subst">{frequency}</span>.&quot;</span>
+
+</code></pre>
+<h2>Reference Material</h2>
+<unknown url="https://app.notion.com/p/x#b10c000117014d008000000000000020" alt="bookmark"/>
+<unknown url="https://app.notion.com/p/x#b10c000117014d008000000000000021" alt="bookmark"/>
+<unknown url="https://app.notion.com/p/x#b10c000117014d008000000000000022" alt="link_preview"/>
+<unknown url="https://app.notion.com/p/x#b10c000117014d008000000000000023" alt="embed"/>
+<p><img src="https://example.invalid/images/bridge-station.png" alt="Bridge tactical station"></p>
+<p><img src="" alt=""></p>
+<p><video src="https://example.invalid/videos/warp-drive-tour.mp4">Warp drive tour</video></p>
+<p><file src="https://example.invalid/files/duty-roster-2369-04-15.pdf"></file></p>
+<p>$$E = mc^2$$</p>
+<p>Port side: sensor banks A-C.</p>
+<p>Starboard side: sensor banks D-F.</p>
+<unknown url="https://app.notion.com/p/x#b10c000117014d008000000000000038" alt="synced_block"/>
+<p>Reminder: log all subspace anomalies on the date 2369-04-15 form.</p>
+<hr>
+<h2>Related Logs</h2>
+<p><mention-page url="https://app.notion.com/p/b1d6e00017014d008000000000000003"></mention-page></p>
+<p><page url="https://app.notion.com/p/b1d6e00017014d008000000000000002">Shift Roster</page></p>
+<p><page url="https://app.notion.com/p/b1d6e00017014d008000000000000003">Incident Log: Stardate 47988.1</page></p>
+<unknown url="https://app.notion.com/p/x#b10c000117014d008000000000000043" alt="breadcrumb"/>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">notion/rendered_md/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000001.md</h3>
+<div class="chat-body markdown-body"><blockquote>
+<p>The USS Enterprise-D is on a deep-space survey near the Romulan Neutral Zone. Coordinate any sensor sweeps with Data before adjusting sensor gain.</p>
+</blockquote>
+<div id="m-c0000001-1701-4d00-8000-000000000001" data-section-uuid="c0000001-1701-4d00-8000-000000000001" class="msg msg--notion">
+<p><strong>Geordi La Forge</strong> · 2369-04-15T01:00:00.000Z</p>
+<p>Recommend we lower sensor gain to avoid tipping off the Romulans.</p>
+</div>
+<div id="m-c0000001-1701-4d00-8000-000000000002" data-section-uuid="c0000001-1701-4d00-8000-000000000002" class="msg msg--notion">
+<p><strong>Data</strong> · 2369-04-15T01:05:00.000Z</p>
+<p>Concur, Commander. Reducing gain by 30%.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">notion/rendered_md/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000002.md</h3>
+<div class="chat-body markdown-body"><div id="m-c0000001-1701-4d00-8000-000000000003" data-section-uuid="c0000001-1701-4d00-8000-000000000003" class="msg msg--notion">
+<p><strong>Beverly Crusher</strong> · 2369-04-15T01:10:00.000Z</p>
+<p>Make it so.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">notion/rendered_md/pages/b1d6e000-1701-4d00-8000-000000000002/index.md</h3>
+<div class="chat-body markdown-body"><p>Alpha shift staffing for stardate 2369-04-15.</p>
+<ul>
+<li>
+<p>Bridge: Jean-Luc Picard, William T. Riker</p>
+</li>
+<li>
+<p>Engineering: Geordi La Forge</p>
+</li>
+<li>
+<p>Tactical: Worf</p>
+</li>
+</ul>
+<p>Cross-reference with Bridge Operations Handbook before swapping stations.</p>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">notion/rendered_md/pages/b1d6e000-1701-4d00-8000-000000000003/index.md</h3>
+<div class="chat-body markdown-body"><h2>Audit</h2>
+<p>Reviewing tickets logged against the warp coil since 2369-04-08.</p>
+<ul>
+<li>
+<p>Plasma flow irregularity, see <a href="https://incident-tracker.starfleet.invalid/issue/NCC-1701-D-17">https://incident-tracker.starfleet.invalid/issue/NCC-1701-D-17</a> — closed.</p>
+</li>
+<li>
+<p>Holodeck safety override, see incident-tracker.starfleet.invalid/issue/NCC-1701-D-23 — in progress.</p>
+</li>
+</ul>
+<h2>Planning</h2>
+<ol>
+<li>
+<p>Schedule diagnostic with Geordi La Forge by 0900 hours.</p>
+</li>
+<li>
+<p>Brief Jean-Luc Picard before alpha shift.</p>
+</li>
+</ol>
+<h2>Reflection</h2>
+<blockquote>
+<p>There are four lights.</p>
+</blockquote>
+<p>Reminder of yesterday's tactical drill — see Bridge Operations Handbook for standing orders.</p>
+<hr>
+<p>End of log. Signed: William T. Riker.</p>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-signal">
+<h2 class="preview-source-name">signal <span class="preview-count">2 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">signal/rendered_md/8047c185-16c7-562a-9f2f-55565ca61367/2364-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="f3cec598-54d7-5c4a-b828-4c2e978d7fd7">Signal · Will Riker (2364-04)</h1>
+<div id="m-264e2a0a-6fad-5355-a42e-bf9b8d274dd3" data-section-uuid="264e2a0a-6fad-5355-a42e-bf9b8d274dd3" class="msg msg--signal">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2364-04-11T00:00:00+00:00" title="2364-04-11 00:00:00 UTC">Sat Apr 11th, 2364 at 00:00</time></h2>
+<p>Status report.</p>
+</div>
+<div id="m-9aa7e84d-87b3-5d66-8065-7b2ea82f29ba" data-section-uuid="9aa7e84d-87b3-5d66-8065-7b2ea82f29ba" class="msg msg--signal">
+<h2><span class="msg-author">Will Riker</span> <time class="msg-ts" datetime="2364-04-11T00:01:00+00:00" title="2364-04-11 00:01:00 UTC">Sat Apr 11th, 2364 at 00:01</time></h2>
+<p>All decks at green status, Captain.</p>
+</div>
+<div id="m-4e119d2c-5b9b-502a-a269-96807d04c5bb" data-section-uuid="4e119d2c-5b9b-502a-a269-96807d04c5bb" class="msg msg--signal">
+<h2><span class="msg-author">Data Soong</span> <time class="msg-ts" datetime="2364-04-11T00:02:00+00:00" title="2364-04-11 00:02:00 UTC">Sat Apr 11th, 2364 at 00:02</time></h2>
+<p>Sensors detect an unidentified vessel.</p>
+</div>
+<div id="m-789cc0d0-df89-53d0-b602-db22dbcb493e" data-section-uuid="789cc0d0-df89-53d0-b602-db22dbcb493e" class="msg msg--signal">
+<h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2364-04-11T00:03:00+00:00" title="2364-04-11 00:03:00 UTC">Sat Apr 11th, 2364 at 00:03</time></h2>
+<p>Warp engines online. Ready for your order.</p>
+</div>
+<div id="m-7d8766c4-b8d7-59e7-a5b2-7f3a4d83b033" data-section-uuid="7d8766c4-b8d7-59e7-a5b2-7f3a4d83b033" class="msg msg--signal">
+<h2><span class="msg-author">Worf Rozhenko</span> <time class="msg-ts" datetime="2364-04-11T00:04:00+00:00" title="2364-04-11 00:04:00 UTC">Sat Apr 11th, 2364 at 00:04</time></h2>
+<p>Shields at maximum, Captain.</p>
+</div>
+<div id="m-8bc7c2b5-04a6-5b56-b311-90c5947bcad1" data-section-uuid="8bc7c2b5-04a6-5b56-b311-90c5947bcad1" class="msg msg--signal">
+<h2><span class="msg-author">Deanna Troi</span> <time class="msg-ts" datetime="2364-04-11T00:05:00+00:00" title="2364-04-11 00:05:00 UTC">Sat Apr 11th, 2364 at 00:05</time></h2>
+<p>I'm sensing a deep curiosity from them.</p>
+</div>
+<div id="m-3d9c83ab-a70d-58f3-b4e8-9cd30c896fb4" data-section-uuid="3d9c83ab-a70d-58f3-b4e8-9cd30c896fb4" class="msg msg--signal">
+<h2><span class="msg-author">Beverly Crusher</span> <time class="msg-ts" datetime="2364-04-11T00:06:00+00:00" title="2364-04-11 00:06:00 UTC">Sat Apr 11th, 2364 at 00:06</time></h2>
+<p>Sickbay reports no casualties.</p>
+</div>
+<div id="m-05b7764f-4347-5650-846d-31e545bf19bd" data-section-uuid="05b7764f-4347-5650-846d-31e545bf19bd" class="msg msg--signal">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2364-04-11T00:07:00+00:00" title="2364-04-11 00:07:00 UTC">Sat Apr 11th, 2364 at 00:07</time></h2>
+<p>Mr. Data, open hailing frequencies.</p>
+</div>
+<div id="m-0d0bdcac-fe30-5798-bf03-7e3118c30ce4" data-section-uuid="0d0bdcac-fe30-5798-bf03-7e3118c30ce4" class="msg msg--signal">
+<h2><span class="msg-author">Data Soong</span> <time class="msg-ts" datetime="2364-04-11T00:08:00+00:00" title="2364-04-11 00:08:00 UTC">Sat Apr 11th, 2364 at 00:08</time></h2>
+<p>Hailing frequencies open, sir.</p>
+</div>
+<div id="m-92525485-57cc-55ba-be9e-49ce420fff6f" data-section-uuid="92525485-57cc-55ba-be9e-49ce420fff6f" class="msg msg--signal">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2364-04-11T00:09:00+00:00" title="2364-04-11 00:09:00 UTC">Sat Apr 11th, 2364 at 00:09</time></h2>
+<p>Make it so.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">signal/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>signal — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-bf8b04fa-287e-5488-a82e-5e98dd14aea3" data-section-uuid="bf8b04fa-287e-5488-a82e-5e98dd14aea3" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — signal/raw — 182.1 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-da4abe15-f263-5260-aa00-64aa5e29761c" data-section-uuid="da4abe15-f263-5260-aa00-64aa5e29761c" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — signal/raw/blobs.doltlite_db — 3.0 KiB</li>
+</ul>
+</div>
+<div id="m-7c94a245-7f59-52d7-b709-2f931ea13392" data-section-uuid="7c94a245-7f59-52d7-b709-2f931ea13392" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — signal/raw/blobs.doltlite_db#cas_objects — 0 rows</li>
+</ul>
+</div>
+<div id="m-fa3055ec-2774-586a-9a13-89be0d14f651" data-section-uuid="fa3055ec-2774-586a-9a13-89be0d14f651" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — signal/raw/entities.doltlite_db — 179.1 KiB</li>
+</ul>
+</div>
+<div id="m-45d0e727-80b0-52d3-89c9-2287dd321940" data-section-uuid="45d0e727-80b0-52d3-89c9-2287dd321940" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — signal/raw/entities.doltlite_db#account — 0 rows</li>
+</ul>
+</div>
+<div id="m-702d3bcf-67fd-5a29-bf68-5598caeeafe8" data-section-uuid="702d3bcf-67fd-5a29-bf68-5598caeeafe8" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — signal/raw/entities.doltlite_db#chat_item_attachments — 0 rows</li>
+</ul>
+</div>
+<div id="m-38ebc489-c0db-52f5-854d-5348bf1665b8" data-section-uuid="38ebc489-c0db-52f5-854d-5348bf1665b8" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — signal/raw/entities.doltlite_db#chat_items — 10 rows</li>
+</ul>
+</div>
+<div id="m-8672adb2-f738-5797-b329-e62de70beebf" data-section-uuid="8672adb2-f738-5797-b329-e62de70beebf" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — signal/raw/entities.doltlite_db#chats — 1 row</li>
+</ul>
+</div>
+<div id="m-b710db5c-bf11-568d-8780-14fa39e05abb" data-section-uuid="b710db5c-bf11-568d-8780-14fa39e05abb" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — signal/raw/entities.doltlite_db#ingested_backups — 1 row</li>
+</ul>
+</div>
+<div id="m-d02f7d74-bc91-5fe9-93bb-da73251f7042" data-section-uuid="d02f7d74-bc91-5fe9-93bb-da73251f7042" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — signal/raw/entities.doltlite_db#recipients — 7 rows</li>
+</ul>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-slack">
+<h2 class="preview-source-name">slack <span class="preview-count">12 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba">#bridge: Mr. Data, status report. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-59f47f5f-2d07-53da-a9f5-a6f164c52d11" data-section-uuid="59f47f5f-2d07-53da-a9f5-a6f164c52d11" class="msg msg--slack">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:08:20+00:00" title="2369-05-28 15:08:20 UTC">Wed May 28th, 2369 at 15:08</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Mr. Data, status report.</p>
+</div>
+<div id="m-ee0f6228-19a1-54ea-a38d-c0fbe02e1242" data-section-uuid="ee0f6228-19a1-54ea-a38d-c0fbe02e1242" class="msg msg--slack">
+<h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:10:00+00:00" title="2369-05-28 15:10:00 UTC">Wed May 28th, 2369 at 15:10</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.</p>
+<ul>
+<li><span id="m-c24ad66f-7604-5fea-a884-edd163160de9" data-section-uuid="c24ad66f-7604-5fea-a884-edd163160de9">:robot_face: Lt. Cmdr. Data</span></li>
+<li><span id="m-e38a2cae-f5d0-506a-98d5-3a96413df8a1" data-section-uuid="e38a2cae-f5d0-506a-98d5-3a96413df8a1">👍 Jean-Luc Picard</span></li>
+<li><span id="m-3f034f5c-dd99-55c4-a545-82c7eec42c03" data-section-uuid="3f034f5c-dd99-55c4-a545-82c7eec42c03">👍 William T. Riker</span></li>
+</ul>
+</div>
+<div id="m-b89c97ab-5bca-5de7-98e8-f2157ff69991" data-section-uuid="b89c97ab-5bca-5de7-98e8-f2157ff69991" class="msg msg--slack">
+<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:11:40+00:00" title="2369-05-28 15:11:40 UTC">Wed May 28th, 2369 at 15:11</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Set a course, Mr. Data. Warp factor five.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/1803e003-56a7-5c12-9024-5265850e9eaa/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="1803e003-56a7-5c12-9024-5265850e9eaa">@William T. Riker: Thank you, Number One. Make it so. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-f1f922de-b96b-5025-bca1-62ec84b4a1d1" data-section-uuid="f1f922de-b96b-5025-bca1-62ec84b4a1d1" class="msg msg--slack">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:21:41+00:00" title="2369-05-28 15:21:41 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Thank you, Number One. Make it so.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/56f6c1d9-495c-5104-8a26-be13bc28718e/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="56f6c1d9-495c-5104-8a26-be13bc28718e">#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-591128f8-b39e-5237-9704-e469199ba7ac" data-section-uuid="591128f8-b39e-5237-9704-e469199ba7ac" class="msg msg--slack">
+<h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:20:00+00:00" title="2369-05-28 15:20:00 UTC">Wed May 28th, 2369 at 15:20</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/658ccd8e-50ad-527c-8cc3-401cf8b315db/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="658ccd8e-50ad-527c-8cc3-401cf8b315db">@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-06cfe816-d34f-5428-be2e-0898eee3f468" data-section-uuid="06cfe816-d34f-5428-be2e-0898eee3f468" class="msg msg--slack">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:21:44+00:00" title="2369-05-28 15:21:44 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Noted, Mr. Worf. Phasers on stun.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/68000dc2-0cb1-5eb4-ba26-89498049dfa8/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="68000dc2-0cb1-5eb4-ba26-89498049dfa8">#engineering: Warp core efficiency at 99.7%. (all) <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-6607ab50-b9d8-55c1-86c2-a810ba8949eb" data-section-uuid="6607ab50-b9d8-55c1-86c2-a810ba8949eb" class="msg msg--slack">
+<h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:15:00+00:00" title="2369-05-28 15:15:00 UTC">Wed May 28th, 2369 at 15:15</time> <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Warp core efficiency at 99.7%.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/777b8f58-706d-549a-82b8-699fc856030e/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="777b8f58-706d-549a-82b8-699fc856030e">@William T. Riker: Captain, the away team roster is ready for your review. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-c5a0c94e-03a4-565a-b390-0ee002edeab2" data-section-uuid="c5a0c94e-03a4-565a-b390-0ee002edeab2" class="msg msg--slack">
+<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:21:40+00:00" title="2369-05-28 15:21:40 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Captain, the away team roster is ready for your review.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>slack — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-59670c2c-49f4-536b-a9a8-40b069507acf" data-section-uuid="59670c2c-49f4-536b-a9a8-40b069507acf" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — slack/raw — 292.2 KiB, 8 files</li>
+</ul>
+</div>
+<div id="m-919f21c3-88c6-5543-a0c9-c63d3d7ff1c9" data-section-uuid="919f21c3-88c6-5543-a0c9-c63d3d7ff1c9" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — slack/raw/blobs.doltlite_db — 3.0 KiB</li>
+</ul>
+</div>
+<div id="m-10d77a3c-c64d-51d5-ad2f-777627567abe" data-section-uuid="10d77a3c-c64d-51d5-ad2f-777627567abe" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — slack/raw/blobs.doltlite_db#cas_objects — 0 rows</li>
+</ul>
+</div>
+<div id="m-51cfbba1-fd98-5dd6-9af8-b6240af82e1e" data-section-uuid="51cfbba1-fd98-5dd6-9af8-b6240af82e1e" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — slack/raw/entities.doltlite_db — 280.2 KiB</li>
+</ul>
+</div>
+<div id="m-8565687c-5fdb-5c13-8f97-47d1ff320f7e" data-section-uuid="8565687c-5fdb-5c13-8f97-47d1ff320f7e" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — slack/raw/entities.doltlite_db#channels — 6 rows</li>
+</ul>
+</div>
+<div id="m-80aa4b4b-d385-5b59-a9f4-bc296c5db083" data-section-uuid="80aa4b4b-d385-5b59-a9f4-bc296c5db083" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — slack/raw/entities.doltlite_db#messages — 14 rows</li>
+</ul>
+</div>
+<div id="m-09e23cab-e27b-51d3-b6a3-783c9c9b1b4a" data-section-uuid="09e23cab-e27b-51d3-b6a3-783c9c9b1b4a" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — slack/raw/entities.doltlite_db#replies_pages — 2 rows</li>
+</ul>
+</div>
+<div id="m-6a4746c0-7e1b-5d31-b96a-817e8e6a23ff" data-section-uuid="6a4746c0-7e1b-5d31-b96a-817e8e6a23ff" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — slack/raw/entities.doltlite_db#slack_attachments — 0 rows</li>
+</ul>
+</div>
+<div id="m-f0546d46-bf84-560f-af43-d36eea49abcb" data-section-uuid="f0546d46-bf84-560f-af43-d36eea49abcb" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — slack/raw/entities.doltlite_db#users — 5 rows</li>
+</ul>
+</div>
+<div id="m-6e831e2e-85af-537e-8182-191c2245c223" data-section-uuid="6e831e2e-85af-537e-8182-191c2245c223" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — slack/raw/entities.doltlite_db#workspaces — 1 row</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/aa7f900b-31b9-5603-995a-5ed36db03478/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="aa7f900b-31b9-5603-995a-5ed36db03478">#bridge: I recommend raising shields, Captain. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-80b2ae4e-06f9-5ca3-9d40-e24d82214eb3" data-section-uuid="80b2ae4e-06f9-5ca3-9d40-e24d82214eb3" class="msg msg--slack">
+<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:13:20+00:00" title="2369-05-28 15:13:20 UTC">Wed May 28th, 2369 at 15:13</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>I recommend raising shields, Captain.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/b168a24b-fddb-55c2-88fe-523dec59fd5c/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="b168a24b-fddb-55c2-88fe-523dec59fd5c">@William T. Riker, Worf: I must object to beaming down unarmed. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-a3c08320-2b85-52bd-afab-ddfe4dafe08d" data-section-uuid="a3c08320-2b85-52bd-afab-ddfe4dafe08d" class="msg msg--slack">
+<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:21:43+00:00" title="2369-05-28 15:21:43 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>I must object to beaming down unarmed.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="dcda988e-79b9-5b19-b3d7-7325524c86dd">#ten-forward: Anyone up for poker tonight? (all) <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-927f4e6c-fefc-5b6a-a15d-d472c09bdbd8" data-section-uuid="927f4e6c-fefc-5b6a-a15d-d472c09bdbd8" class="msg msg--slack">
+<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:16:40+00:00" title="2369-05-28 15:16:40 UTC">Wed May 28th, 2369 at 15:16</time> <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Anyone up for poker tonight?</p>
+</div>
+<div id="m-3d82f5ae-bcdc-5d76-9621-2c885e289b6c" data-section-uuid="3d82f5ae-bcdc-5d76-9621-2c885e289b6c" class="msg msg--slack">
+<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:18:20+00:00" title="2369-05-28 15:18:20 UTC">Wed May 28th, 2369 at 15:18</time> <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D&amp;thread_ts=12604000600.000600&amp;cid=C_TENFWD" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>I do not understand the appeal of this Earth game.</p>
+<ul>
+<li><span id="m-c4e1ebb5-ed20-5ddb-b16d-2355a3aed544" data-section-uuid="c4e1ebb5-ed20-5ddb-b16d-2355a3aed544">😂 William T. Riker</span></li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="e5c54890-5a44-5a3d-9efe-e28b37b48edf">@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all) <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-ee15c54c-ae19-51b4-a51b-ba2e9f7a77d2" data-section-uuid="ee15c54c-ae19-51b4-a51b-ba2e9f7a77d2" class="msg msg--slack">
+<h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:21:42+00:00" title="2369-05-28 15:21:42 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Sir, I have completed my analysis of the Romulan signature.</p>
+<ul>
+<li><span id="m-72e606d1-ae64-5d13-a4d1-8e378668521a" data-section-uuid="72e606d1-ae64-5d13-a4d1-8e378668521a">👍 Jean-Luc Picard</span></li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/rendered_md/efd7f060-7cc7-508b-811f-afbb133a9ff6/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="efd7f060-7cc7-508b-811f-afbb133a9ff6">#bridge: New combadge prototypes — thoughts? (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-21fc5644-c4fd-5110-9c41-48d338915fb6" data-section-uuid="21fc5644-c4fd-5110-9c41-48d338915fb6" class="msg msg--slack">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:18:20+00:00" title="2369-05-28 15:18:20 UTC">Wed May 28th, 2369 at 15:18</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>New combadge prototypes — thoughts?</p>
+<p>🖼 <em>[Delta shield prototype (not yet fetched)]</em>
+<em>(source: <a href="https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png">https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png</a>)</em></p>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-sms-backup-restore">
+<h2 class="preview-source-name">sms-backup-restore <span class="preview-count">4 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">sms-backup-restore/rendered_md/3c1232fb-5525-5678-b043-6e9a745ee4e0/2369-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="46217fed-6442-5d1e-9f34-9bddf6b7f026">SMS · Worf (2369-04)</h1>
+<div id="m-cd7f0c98-b743-529f-81f4-b31f2f281bc6" data-section-uuid="cd7f0c98-b743-529f-81f4-b31f2f281bc6" class="msg msg--sms_backup_restore">
+<p><em><small>Mon Apr 14th, 2369 at 19:30 — system: Missed call — Worf</small></em></p>
+</div>
+<div id="m-13c79762-7edb-5fa7-928f-444174cac09f" data-section-uuid="13c79762-7edb-5fa7-928f-444174cac09f" class="msg msg--sms_backup_restore">
+<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-04-15T10:00:00+00:00" title="2369-04-15 10:00:00 UTC">Tue Apr 15th, 2369 at 10:00</time></h2>
+<p>Today is a good day to die.</p>
+</div>
+<div id="m-a2fbdac5-170d-5d65-a5db-052df0506ba3" data-section-uuid="a2fbdac5-170d-5d65-a5db-052df0506ba3" class="msg msg--sms_backup_restore">
+<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-04-15T10:01:00+00:00" title="2369-04-15 10:01:00 UTC">Tue Apr 15th, 2369 at 10:01</time></h2>
+<p>Bat'leth practice at 0700.</p>
+<p><img src="blobs/937a72665cf9fcb9.gif" alt="batleth.gif"></p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">sms-backup-restore/rendered_md/743ae90a-bb3c-5327-8198-6732bd7503c1/2369-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="1d83fe39-d152-54b2-a695-9894ce215746">SMS · Jean-Luc Picard (2369-04)</h1>
+<div id="m-d29e1b64-4080-5daa-b64f-ce9b266bf9ef" data-section-uuid="d29e1b64-4080-5daa-b64f-ce9b266bf9ef" class="msg msg--sms_backup_restore">
+<p><em><small>Mon Apr 14th, 2369 at 18:30 — system: Incoming call — Jean-Luc Picard (1:35)</small></em></p>
+</div>
+<div id="m-00519cec-98d5-5afb-b706-00e2712375d8" data-section-uuid="00519cec-98d5-5afb-b706-00e2712375d8" class="msg msg--sms_backup_restore">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></h2>
+<p>Make it so. 🚀</p>
+</div>
+<div id="m-6fdc8082-ac36-5bd7-a4fd-ea57776d40a3" data-section-uuid="6fdc8082-ac36-5bd7-a4fd-ea57776d40a3" class="msg msg--sms_backup_restore">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-15T09:01:00+00:00" title="2369-04-15 09:01:00 UTC">Tue Apr 15th, 2369 at 09:01</time></h2>
+<p>Aye, Captain.</p>
+</div>
+<div id="m-cab20973-cf47-53f8-a9c9-52db231f1938" data-section-uuid="cab20973-cf47-53f8-a9c9-52db231f1938" class="msg msg--sms_backup_restore">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-15T09:02:00+00:00" title="2369-04-15 09:02:00 UTC">Tue Apr 15th, 2369 at 09:02</time></h2>
+<p>The Enterprise approaches.</p>
+<p><img src="blobs/3af2399847fcb127.png" alt="viewscreen.png"></p>
+</div>
+<div id="m-7c03e889-9f6e-5766-820d-751185153a45" data-section-uuid="7c03e889-9f6e-5766-820d-751185153a45" class="msg msg--sms_backup_restore">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-15T09:03:00+00:00" title="2369-04-15 09:03:00 UTC">Tue Apr 15th, 2369 at 09:03</time></h2>
+<p>Captain's log, supplemental.</p>
+<p><audio controls src="blobs/722dc947668381e9.m4a"></audio></p>
+<p>🔊 <a href="blobs/722dc947668381e9.m4a">captainslog.m4a</a> — size unknown</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">sms-backup-restore/rendered_md/86931423-0d9c-5e82-aecf-a585280e986f/2369-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="15e20e91-1d17-55ad-8542-1a425bdc13d8">SMS · Deanna Troi (2369-04)</h1>
+<div id="m-511ff882-5a4f-5eff-bd3d-4a05b8abb1ee" data-section-uuid="511ff882-5a4f-5eff-bd3d-4a05b8abb1ee" class="msg msg--sms_backup_restore">
+<p><em><small>Mon Apr 14th, 2369 at 20:30 — system: Outgoing call — Deanna Troi (4:00)</small></em></p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">sms-backup-restore/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>sms-backup-restore — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-aa7e11d1-fa22-5de1-8d8d-f494a5ea56f3" data-section-uuid="aa7e11d1-fa22-5de1-8d8d-f494a5ea56f3" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — sms-backup-restore/raw — 116.7 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-e9cbb963-6681-58c5-a41c-9878e509f32f" data-section-uuid="e9cbb963-6681-58c5-a41c-9878e509f32f" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — sms-backup-restore/raw/blobs.doltlite_db — 6.4 KiB</li>
+</ul>
+</div>
+<div id="m-cae13cd7-97c3-57dc-9589-03aff87d9f3f" data-section-uuid="cae13cd7-97c3-57dc-9589-03aff87d9f3f" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — sms-backup-restore/raw/blobs.doltlite_db#cas_objects — 3 rows</li>
+</ul>
+</div>
+<div id="m-b35309b4-2933-5b55-b5f2-3bd4050267fd" data-section-uuid="b35309b4-2933-5b55-b5f2-3bd4050267fd" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — sms-backup-restore/raw/entities.doltlite_db — 110.3 KiB</li>
+</ul>
+</div>
+<div id="m-0912693f-1f04-58f3-adea-72036977d252" data-section-uuid="0912693f-1f04-58f3-adea-72036977d252" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — sms-backup-restore/raw/entities.doltlite_db#ingested_files — 2 rows</li>
+</ul>
+</div>
+<div id="m-d803d6ee-8587-565f-a857-4d0cec5965dc" data-section-uuid="d803d6ee-8587-565f-a857-4d0cec5965dc" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — sms-backup-restore/raw/entities.doltlite_db#sms_attachments — 3 rows</li>
+</ul>
+</div>
+<div id="m-4fe0a232-19b1-58b2-8c1c-c0207228f93b" data-section-uuid="4fe0a232-19b1-58b2-8c1c-c0207228f93b" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — sms-backup-restore/raw/entities.doltlite_db#sms_calls — 3 rows</li>
+</ul>
+</div>
+<div id="m-c07d0a0f-6081-5276-8082-fdea39d61c93" data-section-uuid="c07d0a0f-6081-5276-8082-fdea39d61c93" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — sms-backup-restore/raw/entities.doltlite_db#sms_messages — 6 rows</li>
+</ul>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-tng-contacts">
+<h2 class="preview-source-name">tng_contacts <span class="preview-count">5 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">tng_contacts/rendered_md/14207f4b-af38-5ee1-8d55-6fd426d572f2/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="14207f4b-af38-5ee1-8d55-6fd426d572f2">William T. Riker</h1>
+<p><img src="blobs/14207f4b-af38-5ee1-8d55-6fd426d572f2.png" alt="William T. Riker"></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Org</td>
+<td>Starfleet — USS Enterprise NCC-1701-D</td>
+</tr>
+<tr>
+<td>Title</td>
+<td>Commander</td>
+</tr>
+<tr>
+<td>Email (work)</td>
+<td><a href="mailto:wriker@enterprise.starfleet">wriker@enterprise.starfleet</a></td>
+</tr>
+<tr>
+<td>Email (home)</td>
+<td><a href="mailto:will.riker@alaska.earth">will.riker@alaska.earth</a></td>
+</tr>
+<tr>
+<td>Phone (cell)</td>
+<td>+1-555-NUMBER-1</td>
+</tr>
+<tr>
+<td>Note</td>
+<td>Plays the trombone. Owns a beard.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_contacts/rendered_md/1544ef1c-ce85-59cd-a01f-235133651a2c/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="1544ef1c-ce85-59cd-a01f-235133651a2c">Geordi La Forge</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Org</td>
+<td>Starfleet — USS Enterprise NCC-1701-D — Engineering</td>
+</tr>
+<tr>
+<td>Title</td>
+<td>Chief Engineer</td>
+</tr>
+<tr>
+<td>Email (work)</td>
+<td><a href="mailto:glaforge@enterprise.starfleet">glaforge@enterprise.starfleet</a></td>
+</tr>
+<tr>
+<td>Phone (work)</td>
+<td>+1-555-WARP-FAC</td>
+</tr>
+<tr>
+<td>Note</td>
+<td>If we modulate the deflector array we should be able to render this contact correctly.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_contacts/rendered_md/1db2d2f9-e79a-58ad-978f-eb56fba5060f/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="1db2d2f9-e79a-58ad-978f-eb56fba5060f">Data</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Org</td>
+<td>Starfleet — USS Enterprise NCC-1701-D — Operations</td>
+</tr>
+<tr>
+<td>Title</td>
+<td>Operations Officer</td>
+</tr>
+<tr>
+<td>Email (work)</td>
+<td><a href="mailto:data@enterprise.starfleet">data@enterprise.starfleet</a></td>
+</tr>
+<tr>
+<td>Note</td>
+<td>Soong-type android. Positronic. Probability of friendship: 1.0.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_contacts/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>tng_contacts — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-905fdbfc-3f0f-5572-ac6f-500e4be71cb6" data-section-uuid="905fdbfc-3f0f-5572-ac6f-500e4be71cb6" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — tng_contacts/raw — 162.2 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-33b9da78-3555-5365-a76e-2b19a1596c10" data-section-uuid="33b9da78-3555-5365-a76e-2b19a1596c10" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — tng_contacts/raw/blobs.doltlite_db — 4.2 KiB</li>
+</ul>
+</div>
+<div id="m-b542c642-b4b6-5ee7-aa2f-1dd6e6597bfd" data-section-uuid="b542c642-b4b6-5ee7-aa2f-1dd6e6597bfd" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_contacts/raw/blobs.doltlite_db#cas_objects — 1 row</li>
+</ul>
+</div>
+<div id="m-6279751e-f679-5c8a-ac07-d3384f008659" data-section-uuid="6279751e-f679-5c8a-ac07-d3384f008659" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — tng_contacts/raw/entities.doltlite_db — 157.9 KiB</li>
+</ul>
+</div>
+<div id="m-280f33f7-80c1-5c17-a243-00e8faaa35f2" data-section-uuid="280f33f7-80c1-5c17-a243-00e8faaa35f2" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_contacts/raw/entities.doltlite_db#accounts — 1 row</li>
+</ul>
+</div>
+<div id="m-880366ec-8a92-54b0-ac10-b18c1b266ee0" data-section-uuid="880366ec-8a92-54b0-ac10-b18c1b266ee0" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_contacts/raw/entities.doltlite_db#addressbooks — 2 rows</li>
+</ul>
+</div>
+<div id="m-f5e5deb7-aa07-548e-8d47-6b3b304dddc1" data-section-uuid="f5e5deb7-aa07-548e-8d47-6b3b304dddc1" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_contacts/raw/entities.doltlite_db#contact_photos — 2 rows</li>
+</ul>
+</div>
+<div id="m-e184bf2e-e474-5c98-8f99-f022bcb6c9ab" data-section-uuid="e184bf2e-e474-5c98-8f99-f022bcb6c9ab" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_contacts/raw/entities.doltlite_db#contacts — 4 rows</li>
+</ul>
+</div>
+<div id="m-1339aff2-cd97-5a4e-b8f8-da193050543e" data-section-uuid="1339aff2-cd97-5a4e-b8f8-da193050543e" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_contacts/raw/entities.doltlite_db#ingested_files — 2 rows</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_contacts/rendered_md/c27813c9-e0d8-551d-87fe-33ed24b93bb6/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="c27813c9-e0d8-551d-87fe-33ed24b93bb6">Jean-Luc Picard</h1>
+<p><img src="blobs/c27813c9-e0d8-551d-87fe-33ed24b93bb6.png" alt="Jean-Luc Picard"></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Org</td>
+<td>Starfleet — USS Enterprise NCC-1701-D</td>
+</tr>
+<tr>
+<td>Title</td>
+<td>Captain</td>
+</tr>
+<tr>
+<td>Email (work)</td>
+<td><a href="mailto:jlpicard@enterprise.starfleet">jlpicard@enterprise.starfleet</a></td>
+</tr>
+<tr>
+<td>Phone (work)</td>
+<td>+1-555-NCC-1701</td>
+</tr>
+<tr>
+<td>Address (work)</td>
+<td>, , Ready Room, Deck 1, Saucer Section, ,</td>
+</tr>
+<tr>
+<td>Note</td>
+<td>Make it so.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-tng-email">
+<h2 class="preview-source-name">tng_email <span class="preview-count">5 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">tng_email/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>tng_email — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-7ce34a0e-7f1d-5831-9b97-fbaa68c339a2" data-section-uuid="7ce34a0e-7f1d-5831-9b97-fbaa68c339a2" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — tng_email/raw — 284.6 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-9c09f509-1a90-535b-a823-691ebe857330" data-section-uuid="9c09f509-1a90-535b-a823-691ebe857330" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — tng_email/raw/blobs.doltlite_db — 10.3 KiB</li>
+</ul>
+</div>
+<div id="m-c310d18a-b400-54ad-bfc3-91a7ecc00906" data-section-uuid="c310d18a-b400-54ad-bfc3-91a7ecc00906" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_email/raw/blobs.doltlite_db#cas_objects — 6 rows</li>
+</ul>
+</div>
+<div id="m-429232b6-3f22-57e3-92ec-699b4103c19f" data-section-uuid="429232b6-3f22-57e3-92ec-699b4103c19f" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — tng_email/raw/entities.doltlite_db — 274.3 KiB</li>
+</ul>
+</div>
+<div id="m-f1f71f10-6232-5cdc-a351-332e86b7bb59" data-section-uuid="f1f71f10-6232-5cdc-a351-332e86b7bb59" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_email/raw/entities.doltlite_db#accounts — 1 row</li>
+</ul>
+</div>
+<div id="m-374ce6f0-0a1e-586a-a7b8-8a6cdce2ae3d" data-section-uuid="374ce6f0-0a1e-586a-a7b8-8a6cdce2ae3d" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_email/raw/entities.doltlite_db#email_blobs — 6 rows</li>
+</ul>
+</div>
+<div id="m-e5a74c87-69ee-55a4-bc2c-0e7b60248a48" data-section-uuid="e5a74c87-69ee-55a4-bc2c-0e7b60248a48" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_email/raw/entities.doltlite_db#email_keywords — 8 rows</li>
+</ul>
+</div>
+<div id="m-98abf9ee-f95e-5d2b-9954-1d335a301be9" data-section-uuid="98abf9ee-f95e-5d2b-9954-1d335a301be9" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_email/raw/entities.doltlite_db#email_mailboxes — 8 rows</li>
+</ul>
+</div>
+<div id="m-8ce5565a-52bd-5a56-84c8-4b36171cf5cd" data-section-uuid="8ce5565a-52bd-5a56-84c8-4b36171cf5cd" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_email/raw/entities.doltlite_db#emails — 6 rows</li>
+</ul>
+</div>
+<div id="m-581e9fe5-cfd0-50ba-b92f-c36ce4ac39c0" data-section-uuid="581e9fe5-cfd0-50ba-b92f-c36ce4ac39c0" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_email/raw/entities.doltlite_db#gmail_messages — 0 rows</li>
+</ul>
+</div>
+<div id="m-20b1ba12-4a4e-5186-8588-a5213928ac80" data-section-uuid="20b1ba12-4a4e-5186-8588-a5213928ac80" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_email/raw/entities.doltlite_db#ingested_files — 1 row</li>
+</ul>
+</div>
+<div id="m-22f70bbe-edd7-5c9a-b21d-05fd6ef88141" data-section-uuid="22f70bbe-edd7-5c9a-b21d-05fd6ef88141" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_email/raw/entities.doltlite_db#mailboxes — 3 rows</li>
+</ul>
+</div>
+<div id="m-46ee5fe3-c793-5ad8-986a-672c38de47e3" data-section-uuid="46ee5fe3-c793-5ad8-986a-672c38de47e3" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_email/raw/entities.doltlite_db#threads — 4 rows</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_email/rendered_md/a9d22a8f-656e-5347-bd95-454448be45e7/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="a9d22a8f-656e-5347-bd95-454448be45e7">Captain's Log — Stardate 80124.1 (all) <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:log-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-6ce9dbf5-c1cc-52a5-ab4d-e252b7ebd0b9" data-section-uuid="6ce9dbf5-c1cc-52a5-ab4d-e252b7ebd0b9" class="msg msg--email">
+<h2><span class="msg-author">Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-07T14:00:00+00:00" title="2026-01-07 14:00:00 UTC">Wed Jan 7th, 2026 at 14:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:log-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>🏷 Sent</p>
+<p>Captain's log, stardate 80124.1. The Enterprise has arrived at the Neutral Zone. Long-range scans have detected three Romulan warbirds holding position at the edge of sensor range. I have ordered yellow alert and dispatched a coded message to Starfleet Command. We continue our investigation. — Picard</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_email/rendered_md/b52e719c-9f85-5e53-bdd3-483ba67e5637/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="b52e719c-9f85-5e53-bdd3-483ba67e5637">Your shore leave awaits! (all) <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:risa-promo-001%40risa.tourism" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-80ff9e5b-7346-5fc4-a502-41f15b3510e9" data-section-uuid="80ff9e5b-7346-5fc4-a502-41f15b3510e9" class="msg msg--email">
+<h2><span class="msg-author">Risa Tourism Board &lt;hello@risa.tourism&gt;</span> <time class="msg-ts" datetime="2026-01-06T08:00:00+00:00" title="2026-01-06 08:00:00 UTC">Tue Jan 6th, 2026 at 08:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:risa-promo-001%40risa.tourism" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>🏷 Category Promotions · Inbox</p>
+<h1>Greetings Captain Picard!</h1>
+<p>Risa is the <strong>jewel of the Alpha Quadrant</strong>. Book your next shore leave today and save 30%.</p>
+<p><a href="https://risa.tourism/shore-leave">Redeem your offer</a></p>
+<p>— The Risa Tourism Board</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_email/rendered_md/c99c303c-2182-50ac-a7e2-321ead150a4c/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="c99c303c-2182-50ac-a7e2-321ead150a4c">Mission Briefing — Sector 001 (all) <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-90da25a7-b568-5a0f-b468-d84f74502d2a" data-section-uuid="90da25a7-b568-5a0f-b468-d84f74502d2a" class="msg msg--email">
+<h2><span class="msg-author">Starfleet Command &lt;command@starfleet.gov&gt;</span> <time class="msg-ts" datetime="2026-01-05T09:00:00+00:00" title="2026-01-05 09:00:00 UTC">Mon Jan 5th, 2026 at 09:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>🏷 Inbox</p>
+<p>Captain Picard, You are hereby ordered to proceed at maximum warp to the Romulan Neutral Zone. Investigate reports of unusual subspace activity near outpost 23. Per General Order 12, you have full discretion. Make it so. — Admiral Hayes</p>
+</div>
+<div id="m-7634706e-b652-5782-857f-29512c1d8612" data-section-uuid="7634706e-b652-5782-857f-29512c1d8612" class="msg msg--email">
+<h2><span class="msg-author">Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-05T10:30:00+00:00" title="2026-01-05 10:30:00 UTC">Mon Jan 5th, 2026 at 10:30</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-002%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>🏷 Inbox · Sent</p>
+<p>Number One, Set a course for the Neutral Zone, warp 9. Brief the senior staff at 1400 hours. I want Mr. Data running long-range scans the moment we cross into the buffer region. Engage. — Picard</p>
+</div>
+<div id="m-4ddc779a-31c7-5824-9425-04b4fa99cc67" data-section-uuid="4ddc779a-31c7-5824-9425-04b4fa99cc67" class="msg msg--email">
+<h2><span class="msg-author">Geordi La Forge &lt;laforge@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-05T11:15:00+00:00" title="2026-01-05 11:15:00 UTC">Mon Jan 5th, 2026 at 11:15</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-003%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>🏷 Inbox</p>
+<p>Captain, Warp core diagnostics attached. We can sustain warp 9 for approximately twelve hours before we need to drop out for a coolant cycle. I would recommend a brief stop at Starbase 173 if the mission allows. — Geordi</p>
+<h3>Attachments</h3>
+<ul>
+<li><a href="blobs/789575fe99512ab2.txt">warp_diagnostics.txt</a></li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_email/rendered_md/f568b5f9-c761-5a5d-be84-35cf144c21ba/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="f568b5f9-c761-5a5d-be84-35cf144c21ba">Bridge status display (all) <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bridge-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-79236cba-b44a-5faa-89f1-4150d3f18c9b" data-section-uuid="79236cba-b44a-5faa-89f1-4150d3f18c9b" class="msg msg--email">
+<h2><span class="msg-author">LCARS Status &lt;lcars@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-07T09:00:00+00:00" title="2026-01-07 09:00:00 UTC">Wed Jan 7th, 2026 at 09:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bridge-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>🏷 Inbox</p>
+<p>Bridge status display below:</p>
+<p><img src="blobs/491fbd09cfa629f6.png" alt="LCARS"></p>
+<p>End of report.</p>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-tng-pdfs">
+<h2 class="preview-source-name">tng_pdfs <span class="preview-count">5 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">tng_pdfs/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>tng_pdfs — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-b956d29a-0433-54ce-8cdc-44ed0fc59433" data-section-uuid="b956d29a-0433-54ce-8cdc-44ed0fc59433" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — tng_pdfs/raw — 71.7 KiB, 2 files</li>
+</ul>
+</div>
+<div id="m-2e352aba-db03-5ae8-8588-566c878e763f" data-section-uuid="2e352aba-db03-5ae8-8588-566c878e763f" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — tng_pdfs/raw/entities.doltlite_db — 71.7 KiB</li>
+</ul>
+</div>
+<div id="m-c6800c40-8ba0-5c9f-9b55-453ad73da426" data-section-uuid="c6800c40-8ba0-5c9f-9b55-453ad73da426" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_pdfs/raw/entities.doltlite_db#pdf_documents — 6 rows</li>
+</ul>
+</div>
+<div id="m-43aa3843-3120-57ec-9f82-a92656b11983" data-section-uuid="43aa3843-3120-57ec-9f82-a92656b11983" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_pdfs/raw/entities.doltlite_db#pdf_paths — 7 rows</li>
+</ul>
+</div>
+<div id="m-ee9614d9-2e7f-508a-8a83-3f4333da5528" data-section-uuid="ee9614d9-2e7f-508a-8a83-3f4333da5528" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — tng_pdfs/raw/entities.doltlite_db#pdf_scan_meta — 1 row</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_pdfs/rendered_md/docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md</h3>
+<div class="chat-body markdown-body"><h1>Captain's Log</h1>
+<div id="m-ecd63b8b-3231-5224-bd85-a565eeeec01f" data-section-uuid="ecd63b8b-3231-5224-bd85-a565eeeec01f" class="msg msg--pdf">
+Captain’s Log, Stardate 41153.7 Our destination is planet Deneb IV, beyond which lies the great unexplored mass of the galaxy.
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_pdfs/rendered_md/docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md</h3>
+<div class="chat-body markdown-body"><h1>warp_core_manual.pdf</h1>
+<div id="m-5c88d55d-f88f-5a0b-9c2d-8a90667c3a38" data-section-uuid="5c88d55d-f88f-5a0b-9c2d-8a90667c3a38" class="msg msg--pdf">
+Warp Core Maintenance, Galaxy Class Recalibrate the dilithium articulation frame every four hundred hours of continuous warp operation. Misalignment induces antimatter containment cascade.
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_pdfs/rendered_md/docs/c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2.md</h3>
+<div class="chat-body markdown-body"><h1>Hull Integrity Survey</h1>
+<div id="m-9747740a-55e6-57fa-b53f-dc2f73ce5824" data-section-uuid="9747740a-55e6-57fa-b53f-dc2f73ce5824" class="msg msg--pdf">
+Hull Integrity Survey, Stardate 41209.2 Ablative plating on decks nine through twelve shows microfracturing consistent with prolonged warp stress. The scanned schematic follows on the next page.
+</div>
+<p><em>Page 2 — no extractable text (image-only or scanned; OCR is not available yet).</em></p>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_pdfs/rendered_md/docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md</h3>
+<div class="chat-body markdown-body"><h1>Captain's Log</h1>
+<div id="m-1d49a35a-b955-56e4-9d21-000ea7acb469" data-section-uuid="1d49a35a-b955-56e4-9d21-000ea7acb469" class="msg msg--pdf">
+Captain’s Log, Stardate 41153.7 Our destination is planet Deneb IV, beyond which lies the great unexplored mass of the galaxy.
+</div>
+<div id="m-14f67751-2d0c-56bf-9a56-a0de97c7079a" data-section-uuid="14f67751-2d0c-56bf-9a56-a0de97c7079a" class="msg msg--pdf">
+Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Command. The alien entity known as Q has confronted us.
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-whatsapp">
+<h2 class="preview-source-name">whatsapp <span class="preview-count">3 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">whatsapp/rendered_md/931592e5-9b50-5d07-8dc3-471750613c6e/2364-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="834e1043-9903-53d5-815c-d0863739ca47">WhatsApp · Bridge Crew (2364-04)</h1>
+<div id="m-8a51fff4-dc2f-5ab6-9794-fa82c2996eac" data-section-uuid="8a51fff4-dc2f-5ab6-9794-fa82c2996eac" class="msg msg--whatsapp">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2364-04-11T00:00:00+00:00" title="2364-04-11 00:00:00 UTC">Sat Apr 11th, 2364 at 00:00</time></h2>
+<p>Status report.</p>
+</div>
+<div id="m-5a86b1a7-e9a1-55d5-b8ac-bed6ff071995" data-section-uuid="5a86b1a7-e9a1-55d5-b8ac-bed6ff071995" class="msg msg--whatsapp">
+<h2><span class="msg-author">+17015550102</span> <time class="msg-ts" datetime="2364-04-11T00:01:00+00:00" title="2364-04-11 00:01:00 UTC">Sat Apr 11th, 2364 at 00:01</time></h2>
+<p>All decks at green status, Captain.</p>
+</div>
+<div id="m-6ae5e65b-9a06-5f1d-9f4c-e6584a401ed6" data-section-uuid="6ae5e65b-9a06-5f1d-9f4c-e6584a401ed6" class="msg msg--whatsapp">
+<h2><span class="msg-author">+17015550103</span> <time class="msg-ts" datetime="2364-04-11T00:02:00+00:00" title="2364-04-11 00:02:00 UTC">Sat Apr 11th, 2364 at 00:02</time></h2>
+<p>Sensors detect an unidentified vessel.</p>
+</div>
+<div id="m-68591a34-7804-578c-82f7-ffa0997b20cc" data-section-uuid="68591a34-7804-578c-82f7-ffa0997b20cc" class="msg msg--whatsapp">
+<h2><span class="msg-author">+17015550104</span> <time class="msg-ts" datetime="2364-04-11T00:03:00+00:00" title="2364-04-11 00:03:00 UTC">Sat Apr 11th, 2364 at 00:03</time></h2>
+<p>Warp engines online. Ready for your order.</p>
+</div>
+<div id="m-9a65339c-45cf-5518-99a9-7cd793d95c02" data-section-uuid="9a65339c-45cf-5518-99a9-7cd793d95c02" class="msg msg--whatsapp">
+<h2><span class="msg-author">+17015550105</span> <time class="msg-ts" datetime="2364-04-11T00:04:00+00:00" title="2364-04-11 00:04:00 UTC">Sat Apr 11th, 2364 at 00:04</time></h2>
+<p>Shields at maximum, Captain.</p>
+</div>
+<div id="m-556fe69a-59fc-5bba-a4b2-5b8b9d7516ab" data-section-uuid="556fe69a-59fc-5bba-a4b2-5b8b9d7516ab" class="msg msg--whatsapp">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2364-04-11T00:05:00+00:00" title="2364-04-11 00:05:00 UTC">Sat Apr 11th, 2364 at 00:05</time></h2>
+<p><img src="blobs/ade2b43c28300670.jpg" alt="bridge-viewscreen.jpg"></p>
+</div>
+<div id="m-e7071304-9b27-55b7-a9b0-b4046038651d" data-section-uuid="e7071304-9b27-55b7-a9b0-b4046038651d" class="msg msg--whatsapp">
+<h2><span class="msg-author">+17015550103</span> <time class="msg-ts" datetime="2364-04-11T00:06:00+00:00" title="2364-04-11 00:06:00 UTC">Sat Apr 11th, 2364 at 00:06</time></h2>
+<p>Hailing frequencies open, sir.</p>
+</div>
+<div id="m-556b42e8-f21b-57a9-9d13-a4cde9271faf" data-section-uuid="556b42e8-f21b-57a9-9d13-a4cde9271faf" class="msg msg--whatsapp">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2364-04-11T00:07:00+00:00" title="2364-04-11 00:07:00 UTC">Sat Apr 11th, 2364 at 00:07</time></h2>
+<p>Make it so.</p>
+<ul>
+<li><span id="m-2ab694ff-0d20-5436-92b2-06da10e6d6ac" data-section-uuid="2ab694ff-0d20-5436-92b2-06da10e6d6ac">👍 +17015550103</span></li>
+<li><span id="m-3b54eb62-675a-52ec-8977-1a40261bb8fd" data-section-uuid="3b54eb62-675a-52ec-8977-1a40261bb8fd">🛸 +17015550104</span></li>
+<li><span id="m-0daca21f-9f33-5206-bb37-bf097476733b" data-section-uuid="0daca21f-9f33-5206-bb37-bf097476733b">🫡 +17015550102</span></li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">whatsapp/rendered_md/95e94192-e06f-5008-bf5b-f7879184d2e1/2364-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="aafa0ad5-4dc4-59cd-b75e-572a0329836e">WhatsApp · +17015550102 (2364-04)</h1>
+<div id="m-98dd9f5c-e1c0-5440-b436-07099dacca72" data-section-uuid="98dd9f5c-e1c0-5440-b436-07099dacca72" class="msg msg--whatsapp">
+<h2><span class="msg-author">+17015550102</span> <time class="msg-ts" datetime="2364-04-11T00:08:00+00:00" title="2364-04-11 00:08:00 UTC">Sat Apr 11th, 2364 at 00:08</time></h2>
+<p>Captain, a private word about Commander Data?</p>
+</div>
+<div id="m-06fc5934-348b-5e61-9c8e-5d82af769d39" data-section-uuid="06fc5934-348b-5e61-9c8e-5d82af769d39" class="msg msg--whatsapp">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2364-04-11T00:09:00+00:00" title="2364-04-11 00:09:00 UTC">Sat Apr 11th, 2364 at 00:09</time></h2>
+<p>Come in, Number One.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">whatsapp/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>whatsapp — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-72c8d7c4-1a60-5a90-9f43-4e5f660e46de" data-section-uuid="72c8d7c4-1a60-5a90-9f43-4e5f660e46de" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — whatsapp/raw — 130.8 KiB, 4 files</li>
+</ul>
+</div>
+<div id="m-380bf61a-4dc9-5e2c-a5e2-08a22665c055" data-section-uuid="380bf61a-4dc9-5e2c-a5e2-08a22665c055" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — whatsapp/raw/blobs.doltlite_db — 4.4 KiB</li>
+</ul>
+</div>
+<div id="m-c03e5a46-8a4d-5637-b595-05d671f62b56" data-section-uuid="c03e5a46-8a4d-5637-b595-05d671f62b56" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — whatsapp/raw/blobs.doltlite_db#cas_objects — 1 row</li>
+</ul>
+</div>
+<div id="m-8a46ddb6-1187-5902-b2e7-5317a63127b0" data-section-uuid="8a46ddb6-1187-5902-b2e7-5317a63127b0" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — whatsapp/raw/entities.doltlite_db — 126.4 KiB</li>
+</ul>
+</div>
+<div id="m-82760551-e515-5f0c-97ac-8712e785fc53" data-section-uuid="82760551-e515-5f0c-97ac-8712e785fc53" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — whatsapp/raw/entities.doltlite_db#wa_chat — 2 rows</li>
+</ul>
+</div>
+<div id="m-e423769d-af7a-5573-987f-1572ebcbbafa" data-section-uuid="e423769d-af7a-5573-987f-1572ebcbbafa" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — whatsapp/raw/entities.doltlite_db#wa_jid — 6 rows</li>
+</ul>
+</div>
+<div id="m-e692f5e8-f00f-53fe-b371-ea0bfc76435e" data-section-uuid="e692f5e8-f00f-53fe-b371-ea0bfc76435e" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — whatsapp/raw/entities.doltlite_db#wa_media_files — 1 row</li>
+</ul>
+</div>
+<div id="m-239d0ac3-6d66-5a32-845e-1afb333e6b54" data-section-uuid="239d0ac3-6d66-5a32-845e-1afb333e6b54" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — whatsapp/raw/entities.doltlite_db#wa_message — 10 rows</li>
+</ul>
+</div>
+<div id="m-4fcea2af-1746-5c01-8e1d-1f3104cc5c28" data-section-uuid="4fcea2af-1746-5c01-8e1d-1f3104cc5c28" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — whatsapp/raw/entities.doltlite_db#wa_message_add_on — 3 rows</li>
+</ul>
+</div>
+<div id="m-c3b8aaf4-5c9e-56f7-8fcc-2a35c6dbf93b" data-section-uuid="c3b8aaf4-5c9e-56f7-8fcc-2a35c6dbf93b" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — whatsapp/raw/entities.doltlite_db#wa_message_add_on_reaction — 3 rows</li>
+</ul>
+</div>
+<div id="m-8f1c7516-1fcf-55a4-a63d-b71a20e1fcf8" data-section-uuid="8f1c7516-1fcf-55a4-a63d-b71a20e1fcf8" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — whatsapp/raw/entities.doltlite_db#wa_message_media — 1 row</li>
+</ul>
+</div>
+<div id="m-82fac636-acd5-52d7-8e2d-33f1aa5e0c5c" data-section-uuid="82fac636-acd5-52d7-8e2d-33f1aa5e0c5c" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — whatsapp/raw/entities.doltlite_db#wa_message_text — 0 rows</li>
+</ul>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-yolink">
+<h2 class="preview-source-name">yolink <span class="preview-count">2 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">yolink/rendered_md/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>yolink — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<div id="m-6cad92d9-877b-5dd1-94ac-6fa07593f234" data-section-uuid="6cad92d9-877b-5dd1-94ac-6fa07593f234" class="msg msg--datalib">
+<ul>
+<li><strong>Source Size</strong> — yolink/raw — 1.2 MiB, 2 files</li>
+</ul>
+</div>
+<div id="m-fe714815-f6cf-5bd8-8ad2-41a41b54f0e3" data-section-uuid="fe714815-f6cf-5bd8-8ad2-41a41b54f0e3" class="msg msg--datalib">
+<ul>
+<li><strong>Store</strong> — yolink/raw/entities.doltlite_db — 1.2 MiB</li>
+</ul>
+</div>
+<div id="m-5ad95645-5709-5da0-b2e8-159e0f2233be" data-section-uuid="5ad95645-5709-5da0-b2e8-159e0f2233be" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — yolink/raw/entities.doltlite_db#yolink_devices — 4 rows</li>
+</ul>
+</div>
+<div id="m-2202454e-cfe3-5df7-960f-7589fa21b723" data-section-uuid="2202454e-cfe3-5df7-960f-7589fa21b723" class="msg msg--datalib">
+<ul>
+<li><strong>Table</strong> — yolink/raw/entities.doltlite_db#yolink_readings — 2304 rows</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">yolink/rendered_md/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="ea19f544-e204-5348-9d08-3acdf605dc8a">YoLink sensors — yolink</h1>
+<p>4 devices · 2,304 readings across 8 series, 2369-04-14 00:00 — 2369-04-14 23:55.</p>
+<p>Values are converted to SI on the way into each plot, so devices reporting in different units share one axis.</p>
+<h2>Plots</h2>
+<h3>Temperature</h3>
+<p>Every temperature-capable device, in degrees Celsius.</p>
+<p>3 series · 864 points · 2369-04-14 00:00 — 2369-04-14 23:55</p>
+<iframe src="plots/temperature.html" title="Temperature" width="100%" height="520" loading="lazy" sandbox="allow-scripts allow-downloads" style="border:1px solid rgba(128,128,128,.35);border-radius:6px"></iframe>
+<p><a href="plots/temperature.html">Open the temperature plot on its own</a></p>
+<h3>Relative humidity</h3>
+<p>Relative humidity is already a dimensionless ratio — no conversion applies.</p>
+<p>3 series · 864 points · 2369-04-14 00:00 — 2369-04-14 23:55</p>
+<iframe src="plots/humidity.html" title="Relative humidity" width="100%" height="520" loading="lazy" sandbox="allow-scripts allow-downloads" style="border:1px solid rgba(128,128,128,.35);border-radius:6px"></iframe>
+<p><a href="plots/humidity.html">Open the relative humidity plot on its own</a></p>
+<h3>Liquid volume</h3>
+<p>Per-sample consumption on the left axis; the meter's lifetime total on the right axis. Click a legend entry to isolate a series.</p>
+<p>2 series · 576 points · 2369-04-14 00:00 — 2369-04-14 23:55</p>
+<iframe src="plots/volume.html" title="Liquid volume" width="100%" height="520" loading="lazy" sandbox="allow-scripts allow-downloads" style="border:1px solid rgba(128,128,128,.35);border-radius:6px"></iframe>
+<p><a href="plots/volume.html">Open the liquid volume plot on its own</a></p>
+<h2>Devices</h2>
+<p>Per-device read credentials (<code>family_device_id</code>, <code>device_udid</code>) are deliberately omitted: the pair grants access to that device's entire history.</p>
+<div id="m-4833834a-2c7b-5091-a7e3-ee5e363bc356" data-section-uuid="4833834a-2c7b-5091-a7e3-ee5e363bc356" class="msg msg--yolink">
+<h3>deck_12_water_main</h3>
+<p><em>watermeter · configured from 2369-04-14T00:00:00+00:00 · cursor at 2369-04-14T23:55:00+00:00</em></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Unit</th>
+<th style="text-align:right">Samples</th>
+<th style="text-align:right">Min</th>
+<th style="text-align:right">Max</th>
+<th style="text-align:right">Mean</th>
+<th style="text-align:right">Latest</th>
+<th>First</th>
+<th>Last</th>
+<th style="text-align:right">Median gap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>water_consumption_gal</code></td>
+<td>L</td>
+<td style="text-align:right">288</td>
+<td style="text-align:right">0.000</td>
+<td style="text-align:right">12.613</td>
+<td style="text-align:right">5.917</td>
+<td style="text-align:right">5.205</td>
+<td>2369-04-14 00:00</td>
+<td>2369-04-14 23:55</td>
+<td style="text-align:right">5.0m</td>
+</tr>
+<tr>
+<td><code>water_meter_gal</code></td>
+<td>L</td>
+<td style="text-align:right">288</td>
+<td style="text-align:right">30667.635</td>
+<td style="text-align:right">32365.967</td>
+<td style="text-align:right">31592.693</td>
+<td style="text-align:right">32365.967</td>
+<td>2369-04-14 00:00</td>
+<td>2369-04-14 23:55</td>
+<td style="text-align:right">5.0m</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div id="m-1b617cfb-791c-534f-920c-249e47baa096" data-section-uuid="1b617cfb-791c-534f-920c-249e47baa096" class="msg msg--yolink">
+<h3>sickbay_plasma_fridge</h3>
+<p><em>temperature_humidity · configured from 2369-04-14T00:00:00+00:00 · cursor at 2369-04-14T23:55:00+00:00</em></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Unit</th>
+<th style="text-align:right">Samples</th>
+<th style="text-align:right">Min</th>
+<th style="text-align:right">Max</th>
+<th style="text-align:right">Mean</th>
+<th style="text-align:right">Latest</th>
+<th>First</th>
+<th>Last</th>
+<th style="text-align:right">Median gap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>humidity_pct</code></td>
+<td>%RH</td>
+<td style="text-align:right">288</td>
+<td style="text-align:right">28.347</td>
+<td style="text-align:right">36.343</td>
+<td style="text-align:right">32.372</td>
+<td style="text-align:right">34.824</td>
+<td>2369-04-14 00:00</td>
+<td>2369-04-14 23:55</td>
+<td style="text-align:right">5.0m</td>
+</tr>
+<tr>
+<td><code>temperature_f</code></td>
+<td>°C</td>
+<td style="text-align:right">288</td>
+<td style="text-align:right">5.362</td>
+<td style="text-align:right">8.360</td>
+<td style="text-align:right">6.861</td>
+<td style="text-align:right">6.861</td>
+<td>2369-04-14 00:00</td>
+<td>2369-04-14 23:55</td>
+<td style="text-align:right">5.0m</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div id="m-235526b4-b7c1-50e7-9103-8a7ece4d33dc" data-section-uuid="235526b4-b7c1-50e7-9103-8a7ece4d33dc" class="msg msg--yolink">
+<h3>stasis_unit_alpha</h3>
+<p><em>temperature_humidity · configured from 2369-04-14T00:00:00+00:00 · cursor at 2369-04-14T23:55:00+00:00</em></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Unit</th>
+<th style="text-align:right">Samples</th>
+<th style="text-align:right">Min</th>
+<th style="text-align:right">Max</th>
+<th style="text-align:right">Mean</th>
+<th style="text-align:right">Latest</th>
+<th>First</th>
+<th>Last</th>
+<th style="text-align:right">Median gap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>humidity_pct</code></td>
+<td>%RH</td>
+<td style="text-align:right">288</td>
+<td style="text-align:right">58.324</td>
+<td style="text-align:right">76.318</td>
+<td style="text-align:right">67.694</td>
+<td style="text-align:right">58.680</td>
+<td>2369-04-14 00:00</td>
+<td>2369-04-14 23:55</td>
+<td style="text-align:right">5.0m</td>
+</tr>
+<tr>
+<td><code>temperature_c</code></td>
+<td>°C</td>
+<td style="text-align:right">288</td>
+<td style="text-align:right">-20.757</td>
+<td style="text-align:right">-16.357</td>
+<td style="text-align:right">-18.557</td>
+<td style="text-align:right">-18.844</td>
+<td>2369-04-14 00:00</td>
+<td>2369-04-14 23:55</td>
+<td style="text-align:right">5.0m</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div id="m-fd55728b-00bf-5462-b88f-01e5bc61025d" data-section-uuid="fd55728b-00bf-5462-b88f-01e5bc61025d" class="msg msg--yolink">
+<h3>ten_forward_cooler</h3>
+<p><em>temperature_humidity · configured from 2369-04-14T00:00:00+00:00 · cursor at 2369-04-14T23:55:00+00:00</em></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Unit</th>
+<th style="text-align:right">Samples</th>
+<th style="text-align:right">Min</th>
+<th style="text-align:right">Max</th>
+<th style="text-align:right">Mean</th>
+<th style="text-align:right">Latest</th>
+<th>First</th>
+<th>Last</th>
+<th style="text-align:right">Median gap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>humidity_pct</code></td>
+<td>%RH</td>
+<td style="text-align:right">288</td>
+<td style="text-align:right">34.261</td>
+<td style="text-align:right">46.256</td>
+<td style="text-align:right">40.415</td>
+<td style="text-align:right">46.139</td>
+<td>2369-04-14 00:00</td>
+<td>2369-04-14 23:55</td>
+<td style="text-align:right">5.0m</td>
+</tr>
+<tr>
+<td><code>temperature_c</code></td>
+<td>°C</td>
+<td style="text-align:right">288</td>
+<td style="text-align:right">1.381</td>
+<td style="text-align:right">4.966</td>
+<td style="text-align:right">3.240</td>
+<td style="text-align:right">3.824</td>
+<td>2369-04-14 00:00</td>
+<td>2369-04-14 23:55</td>
+<td style="text-align:right">5.0m</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2>Store</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Commits</td>
+<td>3</td>
+</tr>
+<tr>
+<td>Readings</td>
+<td>2,304</td>
+</tr>
+<tr>
+<td>Readings with a recorded fetch error</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-zz-synthetic">
+<h2 class="preview-source-name">zz-synthetic <span class="preview-count">4 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic/samples/rendered_md/sample-edges/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-edges">Edge cases (all) <a class="source-link" href="https://example.invalid/chat/sample-edges" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-s3-undated" data-section-uuid="s3-undated" class="msg msg--claude">
+<h2><span class="msg-author">Unknown sender</span> <span class="msg-ts">(no timestamp)</span></h2>
+<p>Who sent this, and when?</p>
+</div>
+<div id="m-s3-markup" data-section-uuid="s3-markup" class="msg msg--claude">
+<h2><span class="msg-author">&lt;script&gt;alert(1)&lt;/script&gt; &amp; Co.</span> <time class="msg-ts" datetime="2369-05-14T16:10:01+00:00" title="2369-05-14 16:10:01 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>An author name that is markup must not become markup.</p>
+</div>
+<div id="m-s3-code" data-section-uuid="s3-code" class="msg msg--claude">
+<h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2369-05-14T16:10:02+00:00" title="2369-05-14 16:10:02 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>Here's the plasma-flow patch:</p>
+<pre><code class="language-rust"><span class="hljs-keyword">fn</span> <span class="hljs-title function_">realign</span>(coil: &amp;<span class="hljs-keyword">mut</span> Coil) {
+    coil.phase += <span class="hljs-number">0.5</span>;
+}
+</code></pre>
+</div>
+<div id="m-s3-long" data-section-uuid="s3-long" class="msg msg--claude">
+<h2><span class="msg-author">Reginald Barclay</span> <time class="msg-ts" datetime="2369-05-14T16:10:03+00:00" title="2369-05-14 16:10:03 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>The transporter buffer id is aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and it should wrap rather than widen the column.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic/samples/rendered_md/sample-group/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-group">Bridge Crew (all) <a class="source-link" href="https://example.invalid/chat/sample-group" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-s2-picard" data-section-uuid="s2-picard" class="msg msg--claude">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00+00:00" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time> <a class="source-link" href="https://example.invalid/archive/s2-picard" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Senior staff, my ready room at 0900.</p>
+<ul>
+<li><span id="m-s2-react-2" data-section-uuid="s2-react-2">👍 Deanna Troi</span></li>
+<li><span id="m-s2-react-1" data-section-uuid="s2-react-1">🫡 Will Riker</span></li>
+</ul>
+</div>
+<div id="m-s2-riker" data-section-uuid="s2-riker" class="msg msg--claude">
+<h2><span class="msg-author">Will Riker</span> <time class="msg-ts" datetime="2369-05-14T16:40:00+00:00" title="2369-05-14 16:40:00 UTC">Wed May 14th, 2369 at 16:40</time></h2>
+<p>Understood. I'll have the duty roster with me.</p>
+<ul>
+<li>Ops: Data</li>
+<li>Tactical: Worf</li>
+<li>Conn: unassigned</li>
+</ul>
+</div>
+<div id="m-s2-data" data-section-uuid="s2-data" class="msg msg--claude">
+<h2><span class="msg-author">Data</span> <time class="msg-ts" datetime="2369-05-14T17:10:00+00:00" title="2369-05-14 17:10:00 UTC">Wed May 14th, 2369 at 17:10</time></h2>
+<p>The readout, as promised.</p>
+<p>🖼 <em>[tricorder-readout.png (not yet fetched)]</em>
+<em>(source: <a href="https://example.invalid/blob/readout">https://example.invalid/blob/readout</a>)</em></p>
+</div>
+<div id="m-s2-system" data-section-uuid="s2-system" class="msg msg--claude">
+<p><em><small>Wed May 14th, 2369 at 18:10 — system: Worf joined the channel</small></em></p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic/samples/rendered_md/sample-long/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-long">Nacelle diagnostic dump (all) <a class="source-link" href="https://example.invalid/chat/sample-long" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-s4-ask" data-section-uuid="s4-ask" class="msg msg--claude">
+<h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2369-05-14T16:10:00+00:00" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>Can you paste the whole port-nacelle conduit dump? I want to see every line, not a summary.</p>
+</div>
+<div id="m-s4-dump" data-section-uuid="s4-dump" class="msg msg--claude">
+<h2><span class="msg-author">Reginald Barclay</span> <time class="msg-ts" datetime="2369-05-14T16:11:00+00:00" title="2369-05-14 16:11:00 UTC">Wed May 14th, 2369 at 16:11</time></h2>
+<p>Full diagnostic dump from the port nacelle, as requested. The interesting part is around line 60.</p>
+<ol>
+<li>plasma conduit 001 — flow 40.37 kPa, ripple 0.110%</li>
+<li>plasma conduit 002 — flow 40.74 kPa, ripple 0.220%</li>
+<li>plasma conduit 003 — flow 41.11 kPa, ripple 0.330%</li>
+<li>plasma conduit 004 — flow 41.48 kPa, ripple 0.440%</li>
+<li>plasma conduit 005 — flow 41.85 kPa, ripple 0.550%</li>
+<li>plasma conduit 006 — flow 42.22 kPa, ripple 0.660%</li>
+<li>plasma conduit 007 — flow 42.59 kPa, ripple 0.770%</li>
+<li>plasma conduit 008 — flow 42.96 kPa, ripple 0.880%</li>
+<li>plasma conduit 009 — flow 43.33 kPa, ripple 0.990%</li>
+<li>plasma conduit 010 — flow 43.70 kPa, ripple 0.100%</li>
+<li>plasma conduit 011 — flow 44.07 kPa, ripple 0.210%</li>
+<li>plasma conduit 012 — flow 44.44 kPa, ripple 0.320%</li>
+<li>plasma conduit 013 — flow 44.81 kPa, ripple 0.430%</li>
+<li>plasma conduit 014 — flow 45.18 kPa, ripple 0.540%</li>
+<li>plasma conduit 015 — flow 45.55 kPa, ripple 0.650%</li>
+<li>plasma conduit 016 — flow 45.92 kPa, ripple 0.760%</li>
+<li>plasma conduit 017 — flow 40.29 kPa, ripple 0.870%</li>
+<li>plasma conduit 018 — flow 40.66 kPa, ripple 0.980%</li>
+<li>plasma conduit 019 — flow 41.03 kPa, ripple 0.090%</li>
+<li>plasma conduit 020 — flow 41.40 kPa, ripple 0.200%</li>
+<li>plasma conduit 021 — flow 41.77 kPa, ripple 0.310%</li>
+<li>plasma conduit 022 — flow 42.14 kPa, ripple 0.420%</li>
+<li>plasma conduit 023 — flow 42.51 kPa, ripple 0.530%</li>
+<li>plasma conduit 024 — flow 42.88 kPa, ripple 0.640%</li>
+<li>plasma conduit 025 — flow 43.25 kPa, ripple 0.750%</li>
+<li>plasma conduit 026 — flow 43.62 kPa, ripple 0.860%</li>
+<li>plasma conduit 027 — flow 43.99 kPa, ripple 0.970%</li>
+<li>plasma conduit 028 — flow 44.36 kPa, ripple 0.080%</li>
+<li>plasma conduit 029 — flow 44.73 kPa, ripple 0.190%</li>
+<li>plasma conduit 030 — flow 45.10 kPa, ripple 0.300%</li>
+<li>plasma conduit 031 — flow 45.47 kPa, ripple 0.410%</li>
+<li>plasma conduit 032 — flow 45.84 kPa, ripple 0.520%</li>
+<li>plasma conduit 033 — flow 40.21 kPa, ripple 0.630%</li>
+<li>plasma conduit 034 — flow 40.58 kPa, ripple 0.740%</li>
+<li>plasma conduit 035 — flow 40.95 kPa, ripple 0.850%</li>
+<li>plasma conduit 036 — flow 41.32 kPa, ripple 0.960%</li>
+<li>plasma conduit 037 — flow 41.69 kPa, ripple 0.070%</li>
+<li>plasma conduit 038 — flow 42.06 kPa, ripple 0.180%</li>
+<li>plasma conduit 039 — flow 42.43 kPa, ripple 0.290%</li>
+<li>plasma conduit 040 — flow 42.80 kPa, ripple 0.400%</li>
+<li>plasma conduit 041 — flow 43.17 kPa, ripple 0.510%</li>
+<li>plasma conduit 042 — flow 43.54 kPa, ripple 0.620%</li>
+<li>plasma conduit 043 — flow 43.91 kPa, ripple 0.730%</li>
+<li>plasma conduit 044 — flow 44.28 kPa, ripple 0.840%</li>
+<li>plasma conduit 045 — flow 44.65 kPa, ripple 0.950%</li>
+<li>plasma conduit 046 — flow 45.02 kPa, ripple 0.060%</li>
+<li>plasma conduit 047 — flow 45.39 kPa, ripple 0.170%</li>
+<li>plasma conduit 048 — flow 45.76 kPa, ripple 0.280%</li>
+<li>plasma conduit 049 — flow 40.13 kPa, ripple 0.390%</li>
+<li>plasma conduit 050 — flow 40.50 kPa, ripple 0.500%</li>
+<li>plasma conduit 051 — flow 40.87 kPa, ripple 0.610%</li>
+<li>plasma conduit 052 — flow 41.24 kPa, ripple 0.720%</li>
+<li>plasma conduit 053 — flow 41.61 kPa, ripple 0.830%</li>
+<li>plasma conduit 054 — flow 41.98 kPa, ripple 0.940%</li>
+<li>plasma conduit 055 — flow 42.35 kPa, ripple 0.050%</li>
+<li>plasma conduit 056 — flow 42.72 kPa, ripple 0.160%</li>
+<li>plasma conduit 057 — flow 43.09 kPa, ripple 0.270%</li>
+<li>plasma conduit 058 — flow 43.46 kPa, ripple 0.380%</li>
+<li>plasma conduit 059 — flow 43.83 kPa, ripple 0.490%</li>
+<li>plasma conduit 060 — flow 44.20 kPa, ripple 0.600%  ← ripple outside tolerance</li>
+<li>plasma conduit 061 — flow 44.57 kPa, ripple 0.710%</li>
+<li>plasma conduit 062 — flow 44.94 kPa, ripple 0.820%</li>
+<li>plasma conduit 063 — flow 45.31 kPa, ripple 0.930%</li>
+<li>plasma conduit 064 — flow 45.68 kPa, ripple 0.040%</li>
+<li>plasma conduit 065 — flow 40.05 kPa, ripple 0.150%</li>
+<li>plasma conduit 066 — flow 40.42 kPa, ripple 0.260%</li>
+<li>plasma conduit 067 — flow 40.79 kPa, ripple 0.370%</li>
+<li>plasma conduit 068 — flow 41.16 kPa, ripple 0.480%</li>
+<li>plasma conduit 069 — flow 41.53 kPa, ripple 0.590%</li>
+<li>plasma conduit 070 — flow 41.90 kPa, ripple 0.700%</li>
+<li>plasma conduit 071 — flow 42.27 kPa, ripple 0.810%</li>
+<li>plasma conduit 072 — flow 42.64 kPa, ripple 0.920%</li>
+<li>plasma conduit 073 — flow 43.01 kPa, ripple 0.030%</li>
+<li>plasma conduit 074 — flow 43.38 kPa, ripple 0.140%</li>
+<li>plasma conduit 075 — flow 43.75 kPa, ripple 0.250%</li>
+<li>plasma conduit 076 — flow 44.12 kPa, ripple 0.360%</li>
+<li>plasma conduit 077 — flow 44.49 kPa, ripple 0.470%</li>
+<li>plasma conduit 078 — flow 44.86 kPa, ripple 0.580%</li>
+<li>plasma conduit 079 — flow 45.23 kPa, ripple 0.690%</li>
+<li>plasma conduit 080 — flow 45.60 kPa, ripple 0.800%</li>
+<li>plasma conduit 081 — flow 45.97 kPa, ripple 0.910%</li>
+<li>plasma conduit 082 — flow 40.34 kPa, ripple 0.020%</li>
+<li>plasma conduit 083 — flow 40.71 kPa, ripple 0.130%</li>
+<li>plasma conduit 084 — flow 41.08 kPa, ripple 0.240%</li>
+<li>plasma conduit 085 — flow 41.45 kPa, ripple 0.350%</li>
+<li>plasma conduit 086 — flow 41.82 kPa, ripple 0.460%</li>
+<li>plasma conduit 087 — flow 42.19 kPa, ripple 0.570%</li>
+<li>plasma conduit 088 — flow 42.56 kPa, ripple 0.680%</li>
+<li>plasma conduit 089 — flow 42.93 kPa, ripple 0.790%</li>
+<li>plasma conduit 090 — flow 43.30 kPa, ripple 0.900%</li>
+<li>plasma conduit 091 — flow 43.67 kPa, ripple 0.010%</li>
+<li>plasma conduit 092 — flow 44.04 kPa, ripple 0.120%</li>
+<li>plasma conduit 093 — flow 44.41 kPa, ripple 0.230%</li>
+<li>plasma conduit 094 — flow 44.78 kPa, ripple 0.340%</li>
+<li>plasma conduit 095 — flow 45.15 kPa, ripple 0.450%</li>
+<li>plasma conduit 096 — flow 45.52 kPa, ripple 0.560%</li>
+<li>plasma conduit 097 — flow 45.89 kPa, ripple 0.670%</li>
+<li>plasma conduit 098 — flow 40.26 kPa, ripple 0.780%</li>
+<li>plasma conduit 099 — flow 40.63 kPa, ripple 0.890%</li>
+<li>plasma conduit 100 — flow 41.00 kPa, ripple 0.000%</li>
+</ol>
+<p>End of dump.</p>
+</div>
+<div id="m-s4-reply" data-section-uuid="s4-reply" class="msg msg--claude">
+<h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2369-05-14T16:12:00+00:00" title="2369-05-14 16:12:00 UTC">Wed May 14th, 2369 at 16:12</time></h2>
+<p>Line 60 is the one. Thanks — I'll pull that conduit at the next maintenance window.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic/samples/rendered_md/sample-tool-run/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-tool-run">Sensor sweep of the Argolis cluster (all) <a class="source-link" href="https://example.invalid/chat/sample-tool-run" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-s1-user" data-section-uuid="s1-user" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-14T16:10:00+00:00" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>Can you check the long-range sensor logs for anything moving in the Argolis cluster, and summarize what you find?</p>
+</div>
+<details class="tool-group">
+<summary>🛠 4 tool steps</summary>
+<div id="m-s1-tool-1" data-section-uuid="s1-tool-1" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:04+00:00" title="2369-05-14 16:10:04 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<details><summary>Tool use: sensor_query</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;band&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;subspace&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;sector&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;argolis&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-s1-tool-2" data-section-uuid="s1-tool-2" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:05+00:00" title="2369-05-14 16:10:05 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<details><summary>Tool result: sensor_query</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;contacts&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">3</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;nearest_ly&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0.4</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-s1-tool-3" data-section-uuid="s1-tool-3" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:06+00:00" title="2369-05-14 16:10:06 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<details><summary>Tool use: chart_lookup</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;catalogue&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;federation&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;sector&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;argolis&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-s1-tool-4" data-section-uuid="s1-tool-4" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:07+00:00" title="2369-05-14 16:10:07 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<details><summary>Tool result: chart_lookup</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;known_traffic&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;none scheduled&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-s1-answer" data-section-uuid="s1-answer" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:09+00:00" title="2369-05-14 16:10:09 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>Three contacts, the nearest 0.4 ly out and closing slowly. Nothing is scheduled through Argolis this quarter, so none of them is a Federation vessel on a filed course.</p>
+<table>
+<thead>
+<tr>
+<th>contact</th>
+<th>bearing</th>
+<th>range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td>041 mark 3</td>
+<td>0.4 ly</td>
+</tr>
+<tr>
+<td>B</td>
+<td>118 mark 0</td>
+<td>1.9 ly</td>
+</tr>
+<tr>
+<td>C</td>
+<td>274 mark 7</td>
+<td>3.1 ly</td>
+</tr>
+</tbody>
+</table>
+</div>
+<details class="tool-group">
+<summary>🛠 1 tool step</summary>
+<div id="m-s1-tool-5" data-section-uuid="s1-tool-5" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:11+00:00" title="2369-05-14 16:10:11 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<details><summary>Tool use: log_note</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;note&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;flagged for the bridge watch&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+</details>
+</div>
+</div>
+</section>
+</section>
+<script type="module">// DOM decoration for a rendered chat body: the per-section copy button,
+// and the handling that makes a very long message navigable.
+//
+// Plain JavaScript, and deliberately so. `ChatBody.ce.vue` imports it,
+// and `tools/chat_preview.mjs` inlines this same file into the preview
+// page it generates — so the page you review a layout change in behaves
+// like the app instead of like a hand-written imitation of it. Anything
+// here must therefore stay dependency-free and touch nothing but the
+// DOM node it is handed.
+
+/** A message taller than this (CSS px) is clamped and gets jump controls. */
+export const LONG_MESSAGE_PX = 360;
+
+/**
+ * Scroll `el` to the top of its scrollport.
+ *
+ * Sets scrollTop directly rather than calling `scrollIntoView`, which
+ * silently no-ops in Chromium when the pane is re-rendering — that bug
+ * is why "nothing happens when I click around inside one thread" was
+ * reported once already.
+ * @param {HTMLElement} el
+ */
+export function scrollSectionToTop(el) {
+  const pane = el.closest(".chat-preview");
+  if (!pane) return;
+  pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+}
+
+/**
+ * Open every `<details>` enclosing `el`. A tool step lives inside a
+ * collapsed `.tool-group`, so "scroll to it" has nothing to scroll to
+ * until the group is open. Walks the whole chain: groups nest.
+ * @param {HTMLElement} el
+ */
+export function openEnclosingDetails(el) {
+  for (
+    let d = el.closest("details");
+    d;
+    d = d.parentElement?.closest("details") ?? null
+  ) {
+    d.open = true;
+  }
+}
+
+/**
+ * Where a section's copy button goes: the chat-common message header
+ * (the `## ` line whose parts are tagged `.msg-author` / `.msg-ts`),
+ * else an explicit `.msg-meta` div, else the first `<p><em>…</em></p>`
+ * some renderers emit as an italic meta line. Block sections have none
+ * of the three and get the button at the top of the section.
+ * @param {HTMLElement} el
+ * @returns {HTMLElement | null}
+ */
+export function metaHost(el) {
+  const header = el.querySelector(":scope > h2 > .msg-author");
+  if (header?.parentElement) return header.parentElement;
+  const meta = el.querySelector(":scope > .msg-meta");
+  if (meta) return meta;
+  for (const p of el.querySelectorAll(":scope > p")) {
+    if (p.firstElementChild?.tagName === "EM" && p.children.length === 1) return p;
+  }
+  return null;
+}
+
+/**
+ * Add a control to the end of a header's controls, but ahead of the
+ * source-link arrow — `↗` reads as "and here is the thing itself", so
+ * it belongs last however many controls accumulate before it. The
+ * renderer emits it inline at the end of the header, which is why this
+ * inserts rather than appends.
+ * @param {HTMLElement} host
+ * @param {string} separator
+ * @param {HTMLElement} control
+ */
+function addHeaderControl(host, separator, control) {
+  const link = host.querySelector(":scope > .source-link");
+  if (!link) {
+    host.append(document.createTextNode(separator), control);
+    return;
+  }
+  link.before(
+    document.createTextNode(separator),
+    control,
+    document.createTextNode(" "),
+  );
+}
+
+/**
+ * Give every `[data-section-uuid]` a button that copies its uuid, and
+ * the page title one that copies the document's.
+ * @param {HTMLElement} root
+ */
+export function injectCopyUuidButtons(root) {
+  const button = (uuid, label) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-uuid";
+    btn.dataset.uuid = uuid;
+    btn.title = `${label} (${uuid})`;
+    btn.setAttribute("aria-label", label);
+    btn.textContent = "🆔";
+    return btn;
+  };
+
+  for (const el of root.querySelectorAll(
+    "div[data-section-uuid], section[data-section-uuid]",
+  )) {
+    if (
+      el.querySelector(
+        ":scope > h2 .copy-uuid, :scope > .msg-meta .copy-uuid, :scope > p .copy-uuid, :scope > .copy-uuid",
+      )
+    )
+      continue;
+    const uuid = el.getAttribute("data-section-uuid") ?? "";
+    if (!uuid) continue;
+    const btn = button(uuid, "Copy section ID");
+    const host = metaHost(el);
+    if (host) addHeaderControl(host, " · ", btn);
+    else el.prepend(btn);
+  }
+
+  for (const el of root.querySelectorAll("[data-page-title-uuid]")) {
+    if (el.querySelector(":scope > button.copy-uuid")) continue;
+    const uuid = el.getAttribute("data-page-title-uuid") ?? "";
+    if (!uuid) continue;
+    addHeaderControl(el, " ", button(uuid, "Copy page ID"));
+  }
+}
+
+/** The next top-level item after `el`, or null at the end of the doc. */
+function nextItem(el) {
+  for (let n = el.nextElementSibling; n; n = n.nextElementSibling) {
+    if (n.matches(".msg, details.tool-group")) return /** @type {HTMLElement} */ (n);
+  }
+  return null;
+}
+
+/**
+ * Clamp messages that are too tall to scroll past comfortably, and give
+ * them a sticky header carrying "jump to the start of this message" and
+ * "jump to the next one" — so being deep inside a wall of text is never
+ * a place you have to scroll your way out of.
+ *
+ * Idempotent: re-running over an already-decorated body does nothing.
+ * @param {HTMLElement} root
+ * @param {{ clampPx?: number }} [opts]
+ */
+export function decorateLongMessages(root, opts = {}) {
+  const clampPx = opts.clampPx ?? LONG_MESSAGE_PX;
+  // v-html replaces the body wholesale, so observers from the previous
+  // render are watching detached nodes. `root` survives; hang them off
+  // it and drop them here rather than leaking one set per document.
+  for (const io of root.__chatStickyObservers ?? []) io.disconnect();
+  root.__chatStickyObservers = [];
+  root.__chatWidthObserver?.disconnect();
+  root.__chatWidthObserver = null;
+
+  // Height is meaningless until the pane has a width. In a column that
+  // has not been laid out yet — a hidden tab, the frame before first
+  // paint — every line of text wraps into a zero-width box and a
+  // one-line message measures taller than the clamp, so every message
+  // gets a "Show more" that does nothing. Wait for a real width.
+  if (!root.clientWidth) {
+    const ro = new ResizeObserver(() => {
+      if (!root.clientWidth) return;
+      decorateLongMessages(root, opts);
+    });
+    ro.observe(root);
+    root.__chatWidthObserver = ro;
+    return;
+  }
+
+  for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]")) {
+    if (el.dataset.longChecked) continue;
+    el.dataset.longChecked = "1";
+    // Measured before any clamp class lands, so this is the content's
+    // own height rather than the clamped box's.
+    if (el.scrollHeight <= clampPx) continue;
+    el.classList.add("msg--long", "msg--clamped");
+
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "msg-expand";
+    more.textContent = "Show more";
+    more.addEventListener("click", () => {
+      const clamped = el.classList.toggle("msg--clamped");
+      more.textContent = clamped ? "Show more" : "Show less";
+      // Re-collapsing from far down the message would otherwise leave
+      // the viewport somewhere below the message entirely.
+      if (clamped) scrollSectionToTop(el);
+    });
+    el.append(more);
+
+    const host = metaHost(el);
+    if (!host) continue;
+    const nav = document.createElement("span");
+    nav.className = "msg-nav";
+    const jump = (glyph, label, target) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "msg-jump";
+      b.textContent = glyph;
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      b.addEventListener("click", target);
+      return b;
+    };
+    nav.append(
+      jump("▲", "Jump to the start of this message", () => scrollSectionToTop(el)),
+      jump("▼", "Jump to the next message", () => {
+        const next = nextItem(el);
+        if (next) scrollSectionToTop(next);
+        else el.closest(".chat-preview")?.scrollTo({ top: 1e9 });
+      }),
+    );
+    host.append(nav);
+
+    // A pinned header unavoidably covers the line of text passing under
+    // it — that is what `position: sticky` does, and GitHub's file
+    // headers and VS Code's sticky scroll both live with it. What is
+    // avoidable is the header looking identical whether it is pinned or
+    // not, which makes the covered line read as content that vanished.
+    // `.is-stuck` lets the CSS give it a shadow and an edge for exactly
+    // as long as it is floating over something.
+    //
+    // The threshold/rootMargin pair is the standard detection: with the
+    // root's top edge pulled in by 1px, a header sitting at `top: 0`
+    // can no longer be fully visible, so its ratio drops below 1.
+    const pane = el.closest(".chat-preview");
+    if (!pane) continue;
+    const io = new IntersectionObserver(
+      ([entry]) => host.classList.toggle("is-stuck", entry.intersectionRatio < 1),
+      { root: pane, threshold: [1], rootMargin: "-1px 0px 0px 0px" },
+    );
+    io.observe(host);
+    root.__chatStickyObservers.push(io);
+  }
+}
+
+
+for (const body of document.querySelectorAll(".chat-body")) {
+  injectCopyUuidButtons(body);
+  decorateLongMessages(body);
+}
+document.addEventListener("click", (ev) => {
+  const el = ev.target.closest?.("[data-section-uuid]");
+  if (!el || ev.target.closest("button, a, summary")) return;
+  for (const s of document.querySelectorAll(".selected")) s.classList.remove("selected");
+  el.classList.add("selected");
+  openEnclosingDetails(el);
+});
+const root = document.documentElement;
+const themeBtn = document.getElementById("theme");
+const setDark = (dark) => {
+  root.classList.toggle("preview-dark", dark);
+  root.style.colorScheme = dark ? "dark" : "light";
+  themeBtn.textContent = dark ? "Light theme" : "Dark theme";
+};
+setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+themeBtn.addEventListener("click", () => setDark(!root.classList.contains("preview-dark")));
+document.getElementById("expand").addEventListener("click", () => {
+  const anyClosed = [...document.querySelectorAll("details")].some((d) => !d.open);
+  for (const d of document.querySelectorAll("details")) d.open = anyClosed;
+});
+</script>
+</body></html>

@@ -25,6 +25,7 @@ pub const RENDER_VERSION: u32 = 2;
 
 fn profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         chat_kind: "LinkedIn Chat".to_string(),
@@ -155,6 +156,7 @@ fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
             .unwrap_or_else(|| participants(&rows));
 
         chats.push(NormalizedChat {
+            path_prefix: None,
             id: format!("{table}:{conv}"),
             chat_uuid: uuid5(&format!("chat:{table}:{conv}")),
             display,
@@ -168,6 +170,7 @@ fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {
+                orphan_reactions: Vec::new(),
                 period_key: "all".to_string(),
                 markdown_uuid: uuid5(&format!("doc:{table}:{conv}:all")),
                 items,

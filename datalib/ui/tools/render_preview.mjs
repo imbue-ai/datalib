@@ -1,6 +1,8 @@
-// Turn rendered chat markdown into one interactive HTML page, so a
-// layout change can be reviewed — clicked, expanded, re-themed —
-// without a data root.
+// Turn a tree of rendered markdown into one interactive HTML page, so a
+// rendering change can be reviewed — clicked, expanded, re-themed —
+// without a data root. Every provider's output lands on the same page,
+// which is the point: standardizing them is impossible if comparing
+// them means opening sixteen files.
 //
 // The fidelity comes from reading the app's own sources rather than
 // re-stating them: markdown-it with the same options as
@@ -11,7 +13,7 @@
 // is re-implemented here; only the preview's own chrome (the toolbar,
 // and the light/dark switch below) is new.
 //
-// Usage: node chat_preview.mjs --md <dir-of-md> --out <file.html> [--ui <ui-root>]
+// Usage: node render_preview.mjs --md <dir-of-md> --out <file.html> [--ui <ui-root>]
 
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
@@ -76,9 +78,18 @@ const css = [
   .preview-bar button { font: inherit; cursor: pointer; padding: .2rem .6rem;
     border: 1px solid var(--datalib-border); border-radius: 4px;
     background: var(--datalib-input-bg); color: inherit; }
-  .preview-doc { max-width: 760px; margin: 0 auto 2rem; }
-  .preview-doc > h2.preview-name { font-size: .75rem; font-weight: 600; margin: 1.5rem 0 .25rem;
+  .preview-doc { margin: 0 0 1.5rem; }
+  .preview-doc > h3.preview-name { font-size: .7rem; font-weight: 600; margin: 1.25rem 0 .25rem;
     text-transform: uppercase; letter-spacing: .06em; color: var(--datalib-muted); }
+  .preview-source { max-width: 760px; margin: 0 auto; }
+  .preview-source-name { font-size: 1.1rem; margin: 2.5rem 0 0; scroll-margin-top: .5rem;
+    border-top: 2px solid var(--datalib-accent); padding-top: .75rem; }
+  .preview-count { font-size: .75rem; font-weight: 400; color: var(--datalib-muted); }
+  .preview-jump { flex: none; display: flex; flex-wrap: wrap; gap: .5rem; padding: .4rem 1rem;
+    font-size: .8rem; border-bottom: 1px solid var(--datalib-border);
+    background: var(--datalib-card-bg); }
+  .preview-jump a { color: var(--datalib-muted); text-decoration: none; }
+  .preview-jump a:hover { color: var(--datalib-fg); text-decoration: underline; }
   /* ONE scrollport for the whole page, not one per document. The pane
      has to really scroll or the sticky headers and jump controls have
      nothing to work against — but a scroll box per document would stack
@@ -159,28 +170,52 @@ const mdFiles = readdirSync(mdDir, { recursive: true })
   .sort();
 if (mdFiles.length === 0) throw new Error(`no .md files under ${mdDir}`);
 
-const docs = mdFiles
+/** Documents are grouped by the first path segment: the source that wrote them. */
+const bySource = new Map();
+for (const rel of mdFiles) {
+  const source = rel.split(/[/\\]/)[0];
+  if (!bySource.has(source)) bySource.set(source, []);
+  bySource.get(source).push(rel);
+}
+
+const slug = (s) => s.replace(/[^a-zA-Z0-9]+/g, "-");
+
+const docs = [...bySource]
+  .map(
+    ([source, rels]) => `<section class="preview-source" id="src-${slug(source)}">
+<h2 class="preview-source-name">${source} <span class="preview-count">${rels.length} document${
+      rels.length === 1 ? "" : "s"
+    }</span></h2>
+${rels
   .map(
     (rel) => `<div class="preview-doc">
-<h2 class="preview-name">${rel}</h2>
+<h3 class="preview-name">${rel}</h3>
 <div class="chat-body markdown-body">${md.render(
       stripFrontmatter(readFileSync(join(mdDir, rel), "utf8")),
     )}</div>
 </div>`,
   )
+  .join("\n")}
+</section>`,
+  )
   .join("\n");
 
+const jumpList = [...bySource.keys()]
+  .map((s) => `<a href="#src-${slug(s)}">${s}</a>`)
+  .join("");
+
 const html = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Chat markdown preview</title>
+<html><head><meta charset="utf-8"><title>Render preview</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${css}</style></head>
 <body>
 <div class="preview-bar">
-  <strong>Chat markdown preview</strong>
+  <strong>Render preview</strong>
   <button id="theme" type="button">Dark theme</button>
   <button id="expand" type="button">Expand / collapse all</button>
   <span>Click a message to select it.</span>
 </div>
+<nav class="preview-jump">${jumpList}</nav>
 <section class="chat-preview">
 ${docs}
 </section>

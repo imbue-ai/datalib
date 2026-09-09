@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Render the chat-common sample corpus to markdown, then to one
-# interactive HTML page — the checked-in golden
-# `datalib/ui/tests/goldens/chat_preview.html`, which is there so a chat
-# layout change can be reviewed by opening a file in a browser.
+# Render every provider's markdown into one interactive HTML page — the
+# checked-in golden `datalib/ui/tests/goldens/render_preview.html`, which
+# is there so a rendering change can be reviewed by opening a file in a
+# browser instead of building a data root.
 #
-#   bazelisk test //datalib/ui:chat_preview_test   # regenerate and diff
-#   bazelisk run  //datalib/ui:chat_preview        # rewrite the golden
+#   bazelisk test //datalib/ui:render_preview_test   # regenerate and diff
+#   bazelisk run  //datalib/ui:render_preview        # rewrite the golden
+#
+# Two markdown sources, and both are needed. The TNG fixture is what
+# every provider's renderer *actually* emits, end to end, which is the
+# only honest way to compare them; chat-common's synthetic corpus adds
+# the shapes no fixture has (a hundred-line message, an author whose
+# name is markup, an item with no timestamp at all).
 #
 # The two modes differ only in where the CSS comes from and what happens
 # to the result: `run` reads the .vue files from your working tree (so an
@@ -37,10 +43,20 @@ samples_bin="$(need_runfile "$FW_SAMPLES_BIN_RLOC")"
 node_bin="$(need_runfile "$FW_NODE_BIN_RLOC")"
 preview_js="$(need_runfile "$FW_PREVIEW_JS_RLOC")"
 golden="$(need_runfile "$FW_GOLDEN_RLOC")"
+fixture_tar="$(need_runfile "$FW_FIXTURE_MD_RLOC")"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-"$samples_bin" "$work/md" >/dev/null
+md="$work/md"
+mkdir -p "$md"
+
+# The fixture tar holds `qmd/<source>/rendered_md/…`; strip the `qmd/`
+# so a document's label starts with the source that wrote it.
+tar -xf "$fixture_tar" -C "$md" --strip-components=1
+
+# chat-common's synthetic corpus, under a name that sorts last so the
+# real output leads.
+"$samples_bin" "$md/zz-synthetic" >/dev/null
 
 # `--ui` names the tree the card CSS is read from; the script always
 # resolves its own npm packages from beside itself in the runfiles.
@@ -50,18 +66,18 @@ else
   ui_root="$(dirname "$preview_js")/.."
 fi
 
-"$node_bin" "$preview_js" --md "$work/md" --out "$work/chat_preview.html" --ui "$ui_root"
+"$node_bin" "$preview_js" --md "$md" --out "$work/render_preview.html" --ui "$ui_root"
 
 if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
-  dest="$BUILD_WORKSPACE_DIRECTORY/datalib/ui/tests/goldens/chat_preview.html"
-  cp "$work/chat_preview.html" "$dest"
+  dest="$BUILD_WORKSPACE_DIRECTORY/datalib/ui/tests/goldens/render_preview.html"
+  cp "$work/render_preview.html" "$dest"
   echo "wrote $dest"
   exit 0
 fi
 
-if ! diff -u "$golden" "$work/chat_preview.html" > "$work/diff.txt"; then
-  echo "The chat preview golden is stale." >&2
-  echo "Regenerate it with:  bazelisk run //datalib/ui:chat_preview" >&2
+if ! diff -u "$golden" "$work/render_preview.html" > "$work/diff.txt"; then
+  echo "The render preview golden is stale." >&2
+  echo "Regenerate it with:  bazelisk run //datalib/ui:render_preview" >&2
   echo >&2
   head -c 8000 "$work/diff.txt" >&2
   exit 1

@@ -180,14 +180,16 @@ reference doc it relates to.
   — the dactal view bridge.
 - [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md)
   — **read before changing how a chat message looks**: the one markdown
-  layout all eight chat providers render through. Why the message
+  layout all ten chat providers render through. Why the message
   header has to stay an `h2` (qmd cuts its chunks there), how a run of
   tool calls folds into one collapsed `<details>`, and `LAYOUT_VERSION`
   — the one number to bump so all eight re-render. It also points at
-  `bazelisk run //datalib/ui:chat_preview`, which rewrites
-  `datalib/ui/tests/goldens/chat_preview.html`: the sample corpus drawn
-  through the app's own markdown-it and card CSS, so a layout change is
-  reviewed by opening a file rather than by building a data root.
+  `bazelisk run //datalib/ui:render_preview`, which rewrites
+  `datalib/ui/tests/goldens/render_preview.html`: **every** provider's
+  rendered markdown — the TNG fixture's real output, plus chat-common's
+  synthetic corpus — drawn through the app's own markdown-it, card CSS
+  and decoration module, so a rendering change is reviewed by opening a
+  file rather than by building a data root.
 - [`docs/dev/plans/data_centric_ui.md`](docs/dev/plans/data_centric_ui.md) —
   *proposal*, nothing built: one typed table viewer plus the markdown
   one, with column types declared by whoever serves the rows, and the

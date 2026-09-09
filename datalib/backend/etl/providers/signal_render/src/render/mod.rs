@@ -1,5 +1,6 @@
 //! Signal render stage.
 
+pub mod normalize;
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
 // an accident: the directory is the pipeline STAGE (mirroring

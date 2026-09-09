@@ -47,6 +47,7 @@ fn uuid5(recipe: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::SmsBackupRestore,
         // Drives the grid "Source" column (and `source:SMS` queries); keep
         // it short so it reads cleanly next to the SMS icon.
@@ -292,6 +293,7 @@ fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
         let buckets: Vec<NormalizedDoc> = by_month
             .into_iter()
             .map(|(period_key, items)| NormalizedDoc {
+                orphan_reactions: Vec::new(),
                 markdown_uuid: uuid5(&format!("doc:{id}:{period_key}")),
                 period_key,
                 items,
@@ -299,6 +301,7 @@ fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
             .collect();
 
         chats.push(NormalizedChat {
+            path_prefix: None,
             id: id.clone(),
             chat_uuid: uuid5(&format!("chat:{id}")),
             display,

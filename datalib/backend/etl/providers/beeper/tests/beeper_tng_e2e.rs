@@ -343,9 +343,17 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
         "googlechat md should surface HIDDEN events as one-liners"
     );
 
-    // Frontmatter carries external IDs.
-    assert!(march.contains("external_room_id: tng-data-conv-uuid-0001"));
-    assert!(march.contains("external_workspace_id: tng-picard-account-uuid"));
+    // Frontmatter carries external IDs, under the names chat-common
+    // gives them: the room is the chat's `external_id`, and the Beeper
+    // workspace is its `project`.
+    assert!(
+        march.contains("external_id: tng-data-conv-uuid-0001"),
+        "{march}"
+    );
+    assert!(
+        march.contains("project: tng-picard-account-uuid"),
+        "{march}"
+    );
 
     // Blob file actually got materialized into the page dir.
     let blob_dir = rendered

@@ -38,6 +38,7 @@ pub const RENDER_VERSION: u32 = 7;
 
 fn profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::Chatgpt,
         source_label: "ChatGPT".to_string(),
         chat_kind: "Chat".to_string(),
@@ -194,6 +195,7 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(&conv_id).uuid;
     NormalizedChat {
+        path_prefix: None,
         id: chat_uuid.clone(),
         chat_uuid: chat_uuid.clone(),
         display: title.clone(),
@@ -208,6 +210,7 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
+            orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: chat_uuid,
             items,

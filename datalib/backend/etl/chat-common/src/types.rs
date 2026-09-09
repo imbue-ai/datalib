@@ -161,6 +161,21 @@ impl UpstreamRef {
     }
 }
 
+/// Reactions that landed in this bucket but whose target message did
+/// not — the reactor got there in April, the message is in March.
+///
+/// They cannot hang off an item, because the item is in another
+/// document, so the renderer lists them at the end under the id of what
+/// they reacted to. Dropping them instead would lose a real event with
+/// nothing to say it happened.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrphanReactions {
+    /// The upstream's id for the message being reacted to. Shown as-is:
+    /// it lives in a different document, so there is no anchor to link.
+    pub target_native_id: String,
+    pub reactions: Vec<NormalizedReaction>,
+}
+
 /// One rendered-markdown bucket: a slice of a chat covering a single
 /// period key (`2024-03`, `2024-03-15`, `2024`, or `all`). Drives the
 /// .md file and its sidecar.
@@ -171,6 +186,9 @@ pub struct NormalizedDoc {
     /// `(chat_uuid, period_key)`).
     pub markdown_uuid: String,
     pub items: Vec<NormalizedChatItem>,
+    /// Empty for every provider that buckets a whole chat into one
+    /// document, which is most of them.
+    pub orphan_reactions: Vec<OrphanReactions>,
 }
 
 /// A complete chat as exposed to chat-common's renderer.
@@ -221,6 +239,11 @@ pub struct NormalizedChat {
     /// `None` for everything else — the default.
     pub org_uuid: Option<String>,
     pub org_name: Option<String>,
+    /// Extra path segment between `rendered_md/` and the chat's own
+    /// directory, for a source that bridges several upstreams and wants
+    /// them apart on disk (Beeper's `<network>/`). `None` — the default
+    /// — puts the chat directly under `rendered_md/<chat_uuid>/`.
+    pub path_prefix: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
 }

@@ -99,6 +99,7 @@ fn percent_encode(s: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::Email,
         source_label: "Mail".to_string(),
         chat_kind: "Email Thread".to_string(),
@@ -427,6 +428,7 @@ fn build_chat(
     // The thread's title `↗` points at the root (first) email's outlink.
     let thread_source_url = items.first().and_then(|i| i.source_url.clone());
     let chat = NormalizedChat {
+        path_prefix: None,
         id: tuid.clone(),
         chat_uuid: tuid.clone(),
         display: subject.clone(),
@@ -439,6 +441,7 @@ fn build_chat(
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
+            orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: tuid,
             items,

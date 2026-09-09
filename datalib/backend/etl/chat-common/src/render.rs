@@ -28,14 +28,15 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::message::{short_ts, MessageHeader};
 use datalib_etl_render::section::msg_div_open;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 use sha2::{Digest, Sha256};
 
-use crate::html::{escape_attr, escape_text};
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
+use datalib_etl_render::html::escape_text;
 
 /// Per-provider knobs the renderer parameterizes on. Values that
 /// would otherwise be hard-coded as `"signal"` / `"Signal Chat"` /
@@ -62,6 +63,12 @@ pub struct RenderProfile {
     /// rows — the `entity_kind` component of the `datalib_id` recipe
     /// that minted their `uuid`.
     pub chat_entity_kind: &'static str,
+    /// Precision of the `when_ts` this provider stamps on its grid
+    /// rows. Not a free choice: the value reaches `source_fingerprint`,
+    /// so changing it re-renders the provider's whole tree. Beeper is
+    /// the one source whose upstream timestamps are meaningful below
+    /// the second.
+    pub when_ts_precision: WhenTsPrecision,
     /// Each provider bumps its own render version when its render
     /// layer changes meaningfully (column changes, item-shape changes,
     /// new field on grid_rows). The chat-common renderer stamps this
@@ -274,8 +281,11 @@ fn output_paths(
     chat: &NormalizedChat,
     period_key: &str,
 ) -> (PathBuf, PathBuf) {
-    let page_dir =
-        datalib_etl::layout::rendered_md_root(out_dir, source_name).join(&chat.chat_uuid);
+    let mut page_dir = datalib_etl::layout::rendered_md_root(out_dir, source_name);
+    if let Some(prefix) = &chat.path_prefix {
+        page_dir = page_dir.join(prefix);
+    }
+    let page_dir = page_dir.join(&chat.chat_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));
     (md_path, page_dir)
 }
@@ -344,7 +354,33 @@ fn render_markdown(
             i += 1;
         }
     }
+    render_orphan_reactions(&mut s, doc);
     s
+}
+
+/// Reactions whose target message is in a different document, listed at
+/// the end under the upstream id of what they reacted to.
+fn render_orphan_reactions(s: &mut String, doc: &NormalizedDoc) {
+    if doc.orphan_reactions.is_empty() {
+        return;
+    }
+    s.push_str("---\n\n## Reactions to messages outside this period\n\n");
+    for group in &doc.orphan_reactions {
+        s.push_str(&format!(
+            "- target `{}`:\n",
+            escape_text(&group.target_native_id)
+        ));
+        for r in &group.reactions {
+            s.push_str(&format!(
+                "  - <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span> ({ts})\n",
+                uuid = r.reaction_uuid,
+                emoji = r.emoji,
+                who = escape_text(&r.reactor_display),
+                ts = short_ts(r.date_ms),
+            ));
+        }
+    }
+    s.push('\n');
 }
 
 /// Wrap one run of adjacent asides in a single collapsed `<details>`.
@@ -387,26 +423,14 @@ fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatIte
             return;
         }
         ItemKind::Text | ItemKind::Attachment => {
-            // A real `##` heading, whose parts are tagged so the UI can
-            // style it down to a Slack-style one-liner. The heading is
-            // load-bearing beyond looks: qmd cuts its chunks at the
-            // best nearby break point and scores an `h2` far above the
-            // blank line it would otherwise settle for, so every
-            // message start is also a chunk boundary it prefers.
-            s.push_str("## ");
-            s.push_str(&format!(
-                "<span class=\"msg-author\">{}</span> ",
-                escape_text(&item.author_display),
-            ));
-            s.push_str(&timestamp_html(item.date_ms));
-            // Per-message linkout (e.g. a Slack permalink) as a `↗` after
-            // the header, opening in a new tab.
-            if let Some(url) = &item.source_url {
-                s.push_str(&format!(
-                    " <a class=\"source-link\" href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\">↗</a>",
-                    url = escape_attr(url),
-                ));
-            }
+            s.push_str(
+                &MessageHeader {
+                    author: &item.author_display,
+                    date_ms: item.date_ms,
+                    source_url: item.source_url.as_deref(),
+                }
+                .render(),
+            );
             s.push('\n');
         }
     }
@@ -556,7 +580,10 @@ fn build_grid_rows(
     // gets `None` instead of the 1970 stamp it used to get. Providers
     // sort ascending, so for a fully-dated bucket this is the same value
     // `items.first()` gave.
-    let first_ts = when_ts_from_ms(doc.items.iter().filter_map(|i| i.date_ms).min());
+    let first_ts = when_ts_from_ms(
+        doc.items.iter().filter_map(|i| i.date_ms).min(),
+        profile.when_ts_precision,
+    );
     let conversation_name = Some(chat.display.clone());
     let entire_chat = format!("/chat/{}", doc.markdown_uuid);
 
@@ -629,8 +656,11 @@ fn build_grid_rows(
                 // exactly one workspace/account, and every row inside
                 // it was minted under that same `Scope::Upstream`.
                 .upstream_scope(chat.upstream_scope.clone())
-                .when_ts(when_ts_from_ms(item.date_ms))
-                .author(Some(item.author_display.clone()))
+                .when_ts(when_ts_from_ms(item.date_ms, profile.when_ts_precision))
+                // An empty display is "upstream named nobody", which is a
+                // null — never a row whose author is the empty string,
+                // and never a stand-in like "unknown".
+                .author(non_empty(&item.author_display))
                 .account(chat.account.clone())
                 .org_uuid(chat.org_uuid.clone())
                 .org_name(chat.org_name.clone())
@@ -657,38 +687,80 @@ fn build_grid_rows(
                 ),
         );
         for r in &item.reactions {
-            rows.extend(
-                GridRow::builder()
-                    .uuid(r.reaction_uuid.clone())
-                    .provider(profile.provider)
-                    .kind(profile.reaction_kind.clone())
-                    .source_label(profile.source_label.clone())
-                    .upstream_id(r.source_ref.as_ref().map(|s| s.native_id.clone()))
-                    .upstream_entity_kind(r.source_ref.as_ref().map(|s| s.entity_kind.clone()))
-                    .upstream_scope(chat.upstream_scope.clone())
-                    .when_ts(when_ts_from_ms(r.date_ms))
-                    .author(Some(r.reactor_display.clone()))
-                    .account(chat.account.clone())
-                    .org_uuid(chat.org_uuid.clone())
-                    .org_name(chat.org_name.clone())
-                    .project(chat.project.clone())
-                    .channel(conversation_name.clone())
-                    .conversation_name(conversation_name.clone())
-                    .conversation_uuid(chat.chat_uuid.clone())
-                    .entire_chat(entire_chat.clone())
-                    .text(r.emoji.clone())
-                    .qmd_path(Some(md_rel.to_string()))
-                    .markdown_uuid(Some(doc.markdown_uuid.clone()))
-                    .build_or_record(
-                        source_name,
-                        &doc.markdown_uuid,
-                        profile.render_version,
-                        problems,
-                    ),
-            );
+            rows.extend(reaction_row(
+                profile,
+                chat,
+                doc,
+                r,
+                &conversation_name,
+                &entire_chat,
+                md_rel,
+                source_name,
+                problems,
+            ));
+        }
+    }
+    for group in &doc.orphan_reactions {
+        for r in &group.reactions {
+            rows.extend(reaction_row(
+                profile,
+                chat,
+                doc,
+                r,
+                &conversation_name,
+                &entire_chat,
+                md_rel,
+                source_name,
+                problems,
+            ));
         }
     }
     rows
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reaction_row(
+    profile: &RenderProfile,
+    chat: &NormalizedChat,
+    doc: &NormalizedDoc,
+    r: &crate::types::NormalizedReaction,
+    conversation_name: &Option<String>,
+    entire_chat: &str,
+    md_rel: &str,
+    source_name: &str,
+    problems: &mut Vec<RenderProblemRow>,
+) -> Option<GridRow> {
+    GridRow::builder()
+        .uuid(r.reaction_uuid.clone())
+        .provider(profile.provider)
+        .kind(profile.reaction_kind.clone())
+        .source_label(profile.source_label.clone())
+        .upstream_id(r.source_ref.as_ref().map(|s| s.native_id.clone()))
+        .upstream_entity_kind(r.source_ref.as_ref().map(|s| s.entity_kind.clone()))
+        .upstream_scope(chat.upstream_scope.clone())
+        .when_ts(when_ts_from_ms(r.date_ms, profile.when_ts_precision))
+        .author(non_empty(&r.reactor_display))
+        .account(chat.account.clone())
+        .org_uuid(chat.org_uuid.clone())
+        .org_name(chat.org_name.clone())
+        .project(chat.project.clone())
+        .channel(conversation_name.clone())
+        .conversation_name(conversation_name.clone())
+        .conversation_uuid(chat.chat_uuid.clone())
+        .entire_chat(entire_chat.to_string())
+        .text(r.emoji.clone())
+        .qmd_path(Some(md_rel.to_string()))
+        .markdown_uuid(Some(doc.markdown_uuid.clone()))
+        .build_or_record(
+            source_name,
+            &doc.markdown_uuid,
+            profile.render_version,
+            problems,
+        )
+}
+
+fn non_empty(s: &str) -> Option<String> {
+    (!s.is_empty()).then(|| s.to_string())
 }
 
 fn attachment_search_text(item: &NormalizedChatItem) -> String {
@@ -791,6 +863,18 @@ fn compute_fingerprint(
             h.update(r.emoji.as_bytes());
         }
     }
+    for group in &doc.orphan_reactions {
+        h.update(b"\norphan|");
+        h.update(group.target_native_id.as_bytes());
+        let mut reacts = group.reactions.clone();
+        reacts.sort_by(|a, b| a.reaction_uuid.cmp(&b.reaction_uuid));
+        for r in &reacts {
+            h.update(b"+");
+            h.update(r.reaction_uuid.as_bytes());
+            h.update(b"+");
+            h.update(r.emoji.as_bytes());
+        }
+    }
     h.finalize()
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -798,48 +882,12 @@ fn compute_fingerprint(
 }
 
 // Format helpers
-// `when_ts_from_ms` / `display_ts` used to live here. Both were the
-// timestamp policy rather than anything chat-shaped, and beeper and
-// signal each carried their own drifting copy, so they moved to
-// `datalib-time` — see the note on `when_ts_from_unix_millis`.
-use datalib_time::{
-    display_ts_from_unix_millis, when_ts_from_unix_millis, IsoOffsetTimestamp, WhenTsPrecision,
-};
+use datalib_time::{when_ts_from_unix_millis, WhenTsPrecision};
 
 /// Seconds precision, as this renderer has always emitted. Changing it
 /// would re-cut every fingerprint chat-common has written.
-fn when_ts_from_ms(ms: Option<i64>) -> Option<String> {
-    when_ts_from_unix_millis(ms, WhenTsPrecision::Seconds)
-}
-
-fn display_ts(ms: Option<i64>) -> String {
-    display_ts_from_unix_millis(ms)
-}
-
-/// Short stamp on screen, full instant on hover.
-fn short_ts(ms: Option<i64>) -> String {
-    match ms.and_then(IsoOffsetTimestamp::from_unix_millis) {
-        Some(t) => datalib_time::short_ts(&t),
-        // Either no stamp at all or a number that is not an instant.
-        // `display_ts` spells those two apart and neither has a short
-        // form worth inventing.
-        None => display_ts(ms),
-    }
-}
-
-/// The message header's timestamp: a `<time>` a reader can hover for
-/// the full instant, or a plain span when there is no instant to
-/// state.
-fn timestamp_html(ms: Option<i64>) -> String {
-    match ms.and_then(IsoOffsetTimestamp::from_unix_millis) {
-        Some(t) => format!(
-            "<time class=\"msg-ts\" datetime=\"{iso}\" title=\"{full}\">{short}</time>",
-            iso = t.to_rfc3339_secs(),
-            full = display_ts(ms),
-            short = datalib_time::short_ts(&t),
-        ),
-        None => format!("<span class=\"msg-ts\">{}</span>", display_ts(ms)),
-    }
+fn when_ts_from_ms(ms: Option<i64>, precision: WhenTsPrecision) -> Option<String> {
+    when_ts_from_unix_millis(ms, precision)
 }
 
 fn human_bytes(n: i64) -> String {
@@ -889,9 +937,11 @@ mod tests {
             title: None,
             org_uuid: None,
             org_name: None,
+            path_prefix: None,
             buckets: vec![NormalizedDoc {
                 period_key: "2364-04".to_string(),
                 markdown_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
+                orphan_reactions: Vec::new(),
                 items: vec![NormalizedChatItem {
                     message_uuid: "33333333-3333-3333-3333-333333333333".to_string(),
                     author_id: "1".to_string(),
@@ -1053,6 +1103,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            when_ts_precision: WhenTsPrecision::Seconds,
             render_version: 1,
         };
         let chat = mk_chat();
@@ -1201,6 +1252,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            when_ts_precision: WhenTsPrecision::Seconds,
             render_version: 1,
         };
         let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "fp");
@@ -1217,6 +1269,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            when_ts_precision: WhenTsPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1266,6 +1319,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            when_ts_precision: WhenTsPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1297,6 +1351,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            when_ts_precision: WhenTsPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1337,6 +1392,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            when_ts_precision: WhenTsPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1363,6 +1419,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            when_ts_precision: WhenTsPrecision::Seconds,
             render_version: 1,
         }
     }
@@ -1464,6 +1521,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            when_ts_precision: WhenTsPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();

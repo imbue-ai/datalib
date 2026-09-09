@@ -26,6 +26,7 @@ const SOURCE_LABEL: &str = "WhatsApp";
 
 fn profile() -> RenderProfile {
     RenderProfile {
+        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
         provider: Provider::Whatsapp,
         source_label: SOURCE_LABEL.to_string(),
         chat_kind: "WhatsApp Chat".to_string(),

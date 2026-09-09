@@ -300,12 +300,14 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
             let mut items = items_by_period.remove(&k).unwrap_or_default();
             items.sort_by_key(|i| i.date_ms);
             buckets.push(NormalizedDoc {
+                orphan_reactions: Vec::new(),
                 period_key: k.clone(),
                 markdown_uuid: whatsapp_markdown_uuid(&chat_uuid, &k),
                 items,
             });
         }
         out.push(NormalizedChat {
+            path_prefix: None,
             id: ch.chat_jid.clone(),
             chat_uuid,
             display: ch.display,
