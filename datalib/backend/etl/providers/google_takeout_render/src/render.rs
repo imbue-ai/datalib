@@ -257,6 +257,7 @@ fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<Normalized
                     source_url: None,
                     kind_label: None,
                     source_ref: None,
+                    is_aside: false,
                 }
             })
             .collect();
@@ -491,6 +492,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 source_url: None,
                 kind_label: None,
                 source_ref: None,
+                is_aside: false,
             }
         }
         "voicemail" | "recorded" => {
@@ -520,6 +522,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 source_url: None,
                 kind_label: None,
                 source_ref: None,
+                is_aside: false,
             }
         }
         // missed / placed / received — a call with no media: a system note.
@@ -544,6 +547,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 source_url: None,
                 kind_label: None,
                 source_ref: None,
+                is_aside: false,
             }
         }
     }

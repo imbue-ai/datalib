@@ -1,10 +1,13 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
 rust_library(
     name = "datalib_etl_chat_common",
-    srcs = glob(["src/**/*.rs"]),
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
     crate_name = "datalib_etl_chat_common",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
@@ -27,5 +30,18 @@ rust_test(
     edition = "2021",
     deps = [
         "@datalib_crates//:serde_json",
+    ],
+)
+
+# Renders the `samples` corpus to `.md` for `//datalib/ui:chat_preview`
+# to turn into HTML and PNGs. Not part of any shipped binary.
+rust_binary(
+    name = "render_chat_samples",
+    srcs = ["src/bin/render_chat_samples.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_chat_common",
+        "@datalib_crates//:anyhow",
     ],
 )

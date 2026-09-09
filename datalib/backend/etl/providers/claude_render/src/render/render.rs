@@ -321,6 +321,7 @@ fn build_chat(
                     block_id.entity_kind,
                     block_id.natural_key.clone(),
                 )),
+                is_aside: matches!(btype, "tool_use" | "tool_result"),
             });
         }
 
@@ -350,6 +351,7 @@ fn build_chat(
                 msg_id.entity_kind,
                 msg_id.natural_key.clone(),
             )),
+            is_aside: false,
         });
     }
 
@@ -469,6 +471,7 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
                 doc_id.entity_kind,
                 doc_id.natural_key.clone(),
             )),
+            is_aside: false,
         });
     }
     items.sort_by_key(|i| i.date_ms);
@@ -545,6 +548,7 @@ fn project_item(
         source_url: None,
         kind_label: Some(kind_label.to_string()),
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
+        is_aside: false,
     }
 }
 

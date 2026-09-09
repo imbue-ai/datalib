@@ -236,6 +236,7 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
         source_url: None,
         kind_label: None,
         source_ref: None,
+        is_aside: false,
     }
 }
 
@@ -257,6 +258,7 @@ fn post_placeholder(key: &str, date_ms: Option<i64>, url: &str) -> NormalizedCha
         source_url: None,
         kind_label: None,
         source_ref: None,
+        is_aside: false,
     }
 }
 

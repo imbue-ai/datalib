@@ -1,0 +1,1313 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Chat markdown preview</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  color-scheme: light dark;
+  --datalib-bg: #ffffff;
+  --datalib-fg: #1a1a1a;
+  --datalib-muted: #6b6b6b;
+  --datalib-border: #d8d8d8;
+  --datalib-input-bg: #ffffff;
+  --datalib-code-bg: #f4f4f4;
+  --datalib-hover: #f0f0f0;
+  --datalib-accent: #2563eb;
+  --datalib-card-bg: #fafafa;
+  /* Log severity highlights: dark shades on the light background… */
+  --datalib-log-error: #991b1b;
+  --datalib-log-warn: #854d0e;
+  --datalib-log-ok: #166534;
+}
+
+
+
+html,
+body,
+#app {
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  margin: 0;
+  min-height: 100vh;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+}
+
+a {
+  color: var(--datalib-accent);
+}
+
+.datalib-shell {
+  /* Viewport-pinned flex column: the header takes its natural height
+     and the routed view flexes into the rest, so full-height views
+     (MillerView) reach the bottom without guessing the chrome height.
+     min-height (not height) so taller views (sync) still
+     scroll the page normally. */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 1rem;
+}
+.datalib-header {
+  flex: 0 0 auto;
+}
+
+/* Browser-style tab band: the header sits on a tinted strip and the
+   active tab is cut from the page background, flowing into the
+   content below with no separating line under it. Negative margins
+   counter the shell's 1rem padding so the band runs full-bleed. */
+.datalib-header {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin: -1rem -1rem 0.75rem;
+  padding: 0.5rem 1rem 0;
+  background: var(--datalib-card-bg);
+  border-bottom: 1px solid var(--datalib-border);
+}
+.datalib-header h1 {
+  margin: 0 0 0.45rem 0;
+  font-size: 1.25rem;
+}
+.datalib-spacer {
+  flex: 1;
+}
+.datalib-tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 0.75rem;
+}
+/* The active tab is cut from the page background; border-bottom: none
+   plus the -1px overlap lets its background erase the band's hairline
+   so tab and page read as one surface. */
+.datalib-tab {
+  padding: 0.35rem 0.95rem;
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: var(--datalib-muted);
+  text-decoration: none;
+  line-height: 1.4;
+}
+.datalib-tab:hover {
+  background: var(--datalib-hover);
+  color: var(--datalib-fg);
+}
+.datalib-tab.router-link-active {
+  background: var(--datalib-bg);
+  border-color: var(--datalib-border);
+  color: var(--datalib-accent);
+  font-weight: 600;
+}
+
+:root.preview-dark {
+    --datalib-bg: #1a1b1e;
+    --datalib-fg: #e6e6e6;
+    --datalib-muted: #9aa0a6;
+    --datalib-border: #2f3136;
+    --datalib-input-bg: #232428;
+    --datalib-code-bg: #2a2b2f;
+    --datalib-hover: #2a2b2f;
+    --datalib-accent: #6ea8fe;
+    --datalib-card-bg: #232428;
+    /* …and light shades on the dark background. */
+    --datalib-log-error: #f87171;
+    --datalib-log-warn: #facc15;
+    --datalib-log-ok: #4ade80;
+  }
+pre code.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 1em
+}
+code.hljs {
+  padding: 3px 5px
+}
+/*!
+  Theme: GitHub Dark
+  Description: Dark theme as seen on github.com
+  Author: github.com
+  Maintainer: @Hirse
+  Updated: 2021-05-15
+
+  Outdated base version: https://github.com/primer/github-syntax-dark
+  Current colors taken from GitHub's CSS
+*/
+.hljs {
+  color: #c9d1d9;
+  background: #0d1117
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+  /* prettylights-syntax-keyword */
+  color: #ff7b72
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+  /* prettylights-syntax-entity */
+  color: #d2a8ff
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+  /* prettylights-syntax-constant */
+  color: #79c0ff
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+  /* prettylights-syntax-string */
+  color: #a5d6ff
+}
+.hljs-built_in,
+.hljs-symbol {
+  /* prettylights-syntax-variable */
+  color: #ffa657
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+  /* prettylights-syntax-comment */
+  color: #8b949e
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+  /* prettylights-syntax-entity-tag */
+  color: #7ee787
+}
+.hljs-subst {
+  /* prettylights-syntax-storage-modifier-import */
+  color: #c9d1d9
+}
+.hljs-section {
+  /* prettylights-syntax-markup-heading */
+  color: #1f6feb;
+  font-weight: bold
+}
+.hljs-bullet {
+  /* prettylights-syntax-markup-list */
+  color: #f2cc60
+}
+.hljs-emphasis {
+  /* prettylights-syntax-markup-italic */
+  color: #c9d1d9;
+  font-style: italic
+}
+.hljs-strong {
+  /* prettylights-syntax-markup-bold */
+  color: #c9d1d9;
+  font-weight: bold
+}
+.hljs-addition {
+  /* prettylights-syntax-markup-inserted */
+  color: #aff5b4;
+  background-color: #033a16
+}
+.hljs-deletion {
+  /* prettylights-syntax-markup-deleted */
+  color: #ffdcd7;
+  background-color: #67060c
+}
+.hljs-char.escape_,
+.hljs-link,
+.hljs-params,
+.hljs-property,
+.hljs-punctuation,
+.hljs-tag {
+  /* purposely ignored */
+  
+}
+
+.chat-preview {
+  height: 100%;
+  overflow-y: auto;
+  /* No padding at the *top*. A sticky message header stops at the
+     scrollport's padding edge, while the content behind it keeps
+     scrolling up through that padding and stays visible — so a top
+     padding shows a sliver of text floating above the pinned bar. The
+     gap comes back below as padding on the first child, where it
+     scrolls away with the content instead. */
+  padding: 0 1rem 0.75rem;
+  box-sizing: border-box;
+}
+.chat-preview > .empty,
+.chat-preview > .error,
+.chat-header {
+  padding-top: 0.75rem;
+}
+.chat-header h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+}
+.meta {
+  font-size: 0.8rem;
+  color: var(--datalib-muted);
+  margin: 0 0 0.25rem;
+}
+.empty,
+.error {
+  color: var(--datalib-muted);
+  padding: 1rem;
+}
+.error {
+  color: #e35d6a;
+}
+.outgoing-edges {
+  /* The doc-level outgoing edges list sits above the rendered body
+     and below the meta line. List markers off so the leading arrow
+     glyph stands in. */
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--datalib-border);
+  border-bottom: 1px solid var(--datalib-border);
+  padding: 0.4rem 0;
+}
+.outgoing-edges li {
+  margin: 0.15rem 0;
+}
+.edge-arrow {
+  color: var(--datalib-muted, #94a3b8);
+  margin-right: 0.4rem;
+}
+.edge-source-link {
+  /* Match the inline span styling in `ChatBody.ce.vue`: dotted muted
+     underline so it reads as a link without the "external blue"
+     baggage, and the same hover fill so source and destination
+     (lit up via `.hover-dst`) share a color. */
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--datalib-muted, #94a3b8);
+  text-underline-offset: 2px;
+  border-radius: 3px;
+  transition: background-color 100ms ease-in-out;
+}
+.edge-source-link:hover {
+  background: rgba(99, 102, 241, 0.28);
+}
+.edge-dst-title {
+  color: var(--datalib-muted, #94a3b8);
+  margin-left: 0.4rem;
+  font-size: 0.8rem;
+}
+.ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  background: transparent;
+}
+.ctx-menu {
+  position: fixed;
+  background: var(--datalib-input-bg, #fff);
+  color: var(--datalib-fg, #000);
+  border: 1px solid var(--datalib-border, #ccc);
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  min-width: 180px;
+  padding: 4px 0;
+  z-index: 1501;
+  font-size: 14px;
+}
+.ctx-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.ctx-item:hover {
+  background: var(--datalib-accent, #eee);
+}
+.ctx-divider {
+  height: 1px;
+  background: var(--datalib-border, #ccc);
+  margin: 4px 0;
+}
+
+
+/* Markdown styling for the v-html body. Unscoped so the rules reach
+   inside `v-html`; still shadow-local since this lands in the card's
+   shadow root. */
+.markdown-body {
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.markdown-body p {
+  margin: 0.4rem 0;
+}
+.markdown-body pre {
+  /* Fixed dark, not `--datalib-code-bg`: the highlight theme we inject
+     is github-*dark* and does not switch with the app's, so painting a
+     code block on the light-mode token left dark-theme token colors on
+     a near-white background. Inline `code` below is unhighlighted and
+     does follow the theme. */
+  background: #0d1117;
+  color: #e6edf3;
+  padding: 0.6rem 0.75rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.82rem;
+}
+.markdown-body code {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.85em;
+}
+.markdown-body :not(pre) > code {
+  background: var(--datalib-code-bg, #f0f0f0);
+  padding: 0 0.25rem;
+  border-radius: 2px;
+}
+.markdown-body details {
+  margin: 0.4rem 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  background: var(--datalib-card-bg);
+}
+.markdown-body details > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--datalib-muted);
+}
+.markdown-body details[open] > summary {
+  margin-bottom: 0.4rem;
+}
+.markdown-body img {
+  max-width: 100%;
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+}
+.markdown-body blockquote {
+  border-left: 3px solid var(--datalib-border);
+  margin: 0.5rem 0;
+  padding-left: 0.75rem;
+  color: var(--datalib-muted);
+}
+
+
+/* An unbroken token longer than the pane — a hash, a base64 blob, a
+   URL with no slashes to break at — otherwise runs off the edge of its
+   card and is simply not readable. `break-word` (not `anywhere`) so
+   only the token that would overflow gets broken, and intrinsic widths
+   are left alone. */
+.chat-body {
+  overflow-wrap: break-word;
+}
+/* A table wider than the pane scrolls itself rather than pushing the
+   column out. `width: max-content` keeps it from stretching to fill
+   when it is narrow. */
+.chat-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Per-message wrappers emitted by ingest. Unscoped on purpose so the rules
+   reach inside `v-html`. */
+.chat-body .msg {
+  scroll-margin-top: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid transparent;
+  margin: 0.5rem 0;
+}
+/* Every outermost item — a message, or a whole run of tool steps — is a
+   card, so where one ends and the next begins is drawn rather than
+   inferred from whitespace. Nested block sections (tool_use, thinking)
+   stay flat inside their parent; only direct children of the body get
+   the box. Declared BEFORE the per-provider rules below so their
+   `border-left-color` still wins. */
+.chat-body > .msg,
+.chat-body > details.tool-group {
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--datalib-card-bg, #fafafa);
+  margin: 0.4rem 0;
+}
+.chat-body .msg--claude {
+  border-left-color: var(--datalib-accent, #6366f1);
+}
+.chat-body .msg--chatgpt {
+  border-left-color: #16a34a;
+}
+.chat-body .msg--slack {
+  border-left-color: #4a154b;
+}
+/* Perseus sections carry polytonic Greek (Greek Extended, U+1F00–
+   U+1FFF: precomposed accented vowels). The body otherwise inherits
+   `system-ui`, which on macOS resolves to `.AppleSystemUIFont` — and
+   that font has NO polytonic glyphs. The browser then falls back
+   per-character and decomposes each precomposed vowel into base +
+   combining mark, rendering the accent at a default advance (floating
+   up and to the right of the letter) instead of over it. Naming fonts
+   that actually contain the precomposed glyphs makes the browser use
+   their (correctly placed) baked-in forms instead of that broken
+   fallback. Every face named here was verified to contain the
+   precomposed Greek Extended glyphs (via a CoreText coverage probe);
+   `Noto Sans` / `GFS Neohellenic` are sans faces built for polytonic
+   Greek, `Helvetica Neue` / `Lucida Grande` are the macOS sans
+   fallbacks that also cover the block. We deliberately end in generic
+   `sans-serif` (which maps to Helvetica, NOT the polytonic-less
+   `.AppleSystemUIFont` that `system-ui` resolves to) so the broken
+   fallback can never re-enter. Applies to the English sections too,
+   which is harmless. */
+.chat-body .msg--perseus {
+  font-family: "Noto Sans", "GFS Neohellenic", "Helvetica Neue",
+    "Lucida Grande", "Arial Unicode MS", sans-serif;
+}
+/* Per-block sections (tool_use / tool_result / thinking). Nested
+   inside their parent message wrapper, so we keep them visually
+   subordinate: thinner left border, lighter accent. The selection
+   outline below picks the same accent so the highlight still pops. */
+.chat-body .msg--block {
+  border-left-width: 2px;
+  margin: 0.35rem 0;
+  padding: 0.35rem 0.6rem;
+}
+.chat-body .msg--tool-use {
+  border-left-color: #a78bfa;
+}
+.chat-body .msg--tool-result {
+  border-left-color: #c4b5fd;
+}
+.chat-body .msg--thinking {
+  border-left-color: #94a3b8;
+}
+/* A message too tall to scroll past comfortably shows its first
+   screenful and says so. `--clamped` is toggled by the button
+   `decorateLongMessages` appends; `--long` stays for as long as the
+   message is long, which is what the sticky header keys off. */
+.chat-body > .msg.msg--clamped {
+  max-height: 22rem;
+  overflow: hidden;
+  position: relative;
+}
+.chat-body > .msg.msg--clamped::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 5rem;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--datalib-card-bg, #fafafa)
+  );
+  pointer-events: none;
+}
+.chat-body > .msg.msg--clamped.selected::after {
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--datalib-hover, #f0f0f0)
+  );
+}
+.chat-body > .msg > button.msg-expand {
+  display: block;
+  margin: 0.4rem auto 0;
+  padding: 0.1rem 0.6rem;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--datalib-muted, #94a3b8);
+  background: var(--datalib-input-bg, #fff);
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.chat-body > .msg > button.msg-expand:hover {
+  color: inherit;
+}
+.chat-body > .msg.msg--clamped > button.msg-expand {
+  position: absolute;
+  left: 50%;
+  bottom: 0.4rem;
+  transform: translateX(-50%);
+  z-index: 2;
+  margin: 0;
+}
+/* While you are inside a long message its header stays put, so the
+   author, the time and the jump controls are never something you have
+   to scroll back up for. Only long messages: pinning every header
+   would leave a stack of them on screen. The negative margins let the
+   pinned bar cover the card's full width rather than letting content
+   slide through the padding beside it. */
+.chat-body > .msg.msg--long > h2:has(> .msg-author) {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--datalib-card-bg, #fafafa);
+  margin: -0.5rem -0.75rem 0.15rem;
+  padding: 0.3rem 0.75rem 0.25rem;
+}
+.chat-body > .msg.msg--long.selected > h2:has(> .msg-author) {
+  background: var(--datalib-hover, #f0f0f0);
+}
+/* Only while it is actually pinned: an edge and a shadow, so the line
+   of text passing beneath the bar reads as passing beneath it rather
+   than as having gone missing. `.is-stuck` is set by the observer in
+   `chatSections.js`. */
+.chat-body > .msg.msg--long > h2.is-stuck {
+  border-bottom: 1px solid var(--datalib-border, #d8d8d8);
+  box-shadow: 0 4px 6px -4px rgba(0, 0, 0, 0.35);
+}
+.chat-body .msg-nav {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 0.15rem;
+}
+.chat-body button.msg-jump {
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0.15rem 0.35rem;
+  color: var(--datalib-muted, #94a3b8);
+  background: transparent;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.chat-body button.msg-jump:hover {
+  color: inherit;
+  background: var(--datalib-hover, #f0f0f0);
+}
+.chat-body .msg.selected {
+  background: var(--datalib-hover, #f0f0f0);
+  border-color: var(--datalib-accent, #6366f1);
+  /* `outline` (not a thicker border) so moving the selection doesn't
+     reflow; the negative offset lays it over the card's own edge so
+     the two read as one highlighted border rather than two rings. */
+  outline: 2px solid var(--datalib-accent, #6366f1);
+  outline-offset: -1px;
+}
+/* Inline span baked by ingest for sub-section edge anchors (today
+   only: perseus first-word wrappers). When the span happens to also
+   be the source of an outgoing edge, `.edge-source` is added by
+   ChatBody at mount time and the user gets a link-y dotted
+   underline (in the muted color so it doesn't read as "external
+   link blue"); the hover fill calls out the target and the
+   `.hover-dst` class on the matching destination anchor mirrors the
+   same fill across whichever column the destination lives in.
+
+   `.selected` on the same span is how we highlight the destination
+   side after navigating via an edge (click-driven, persistent),
+   distinct from `.hover-dst` (hover-driven, transient).
+
+   We deliberately scope these to `span[data-section-uuid]` so the
+   block-level `.msg.selected` styling above (which adds a 2px
+   outline + 4px left border) doesn't accidentally fire for inline
+   word-wrappers. */
+.chat-body span[data-section-uuid].edge-source {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--datalib-muted, #94a3b8);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: background-color 100ms ease-in-out;
+}
+.chat-body span[data-section-uuid].edge-source:hover,
+.chat-body [data-section-uuid].hover-dst {
+  background: rgba(99, 102, 241, 0.28);
+  border-radius: 3px;
+}
+.chat-body span[data-section-uuid].selected {
+  background: var(--datalib-card-bg, #1f2937);
+  outline: 2px solid var(--datalib-accent, #6366f1);
+  border-radius: 3px;
+}
+/* Attachment images arrive at their original resolution; without a
+   cap a phone photo renders thousands of pixels wide inside the pane.
+   Fit the column width and keep tall images from swallowing the whole
+   scrollport; `width/height: auto` preserves the aspect ratio under
+   whichever constraint bites. */
+.chat-body img {
+  max-width: 100%;
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+}
+.chat-body .msg-meta {
+  color: var(--datalib-muted, #94a3b8);
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+.chat-body .msg-meta a {
+  color: inherit;
+  text-decoration: underline;
+}
+/* The chat-common message header. It is a real `## ` heading because
+   qmd cuts its chunks at the best nearby break point and scores an h2
+   far above a blank line — so the heading is what makes every message
+   start a preferred chunk boundary. On screen it should read as
+   Slack's one-line "Name  time", not as a document section, hence the
+   reset below. `:has()` keeps it off an h2 that came from the message
+   *body* (someone pasting markdown with their own headings). */
+.chat-body .msg h2:has(> .msg-author) {
+  font-size: 1em;
+  font-weight: 400;
+  line-height: 1.3;
+  margin: 0 0 0.15rem;
+  padding: 0;
+  border: none;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.chat-body .msg-author {
+  font-weight: 600;
+}
+.chat-body .msg-ts {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--datalib-muted, #94a3b8);
+  /* The full instant is in `title`; say so with the cursor. */
+  cursor: help;
+}
+/* A run of adjacent tool steps, folded into one line until asked for. */
+.chat-body details.tool-group {
+  margin: 0.35rem 0;
+}
+.chat-body details.tool-group > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--datalib-muted, #94a3b8);
+  list-style-position: outside;
+}
+.chat-body details.tool-group > summary {
+  padding: 0.35rem 0.6rem;
+}
+.chat-body details.tool-group[open] > summary {
+  border-bottom: 1px solid var(--datalib-border, #d8d8d8);
+}
+/* Inside a group every step has the same author and near-identical
+   time, so the header is there for its anchor and its copy button, not
+   to be read. */
+.chat-body details.tool-group .msg h2:has(> .msg-author) {
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+.chat-body button.copy-uuid {
+  /* The 🆔 glyph is a saturated purple that outshouts the message it
+     sits next to; grey it out so it reads as a control rather than as
+     content. The `copied` / `copy-failed` states below re-colour on
+     purpose, so they drop the filter. */
+  filter: grayscale(1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: baseline;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  /* The glyph is a control, not text: smaller than what it sits beside. */
+  font-size: 0.75em;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+}
+/* Opacity only. A hover border would draw a box a different shape from
+   the glyph inside it, which reads as the control changing rather than
+   as it lighting up. */
+.chat-body button.copy-uuid:hover {
+  opacity: 1;
+}
+.chat-body button.copy-uuid.copied {
+  color: #16a34a;
+  opacity: 1;
+  filter: none;
+}
+.chat-body button.copy-uuid.copy-failed {
+  color: #dc2626;
+  opacity: 1;
+  filter: none;
+}
+
+
+  body { margin: 0; background: var(--datalib-bg); color: var(--datalib-fg);
+         font-family: system-ui, sans-serif; }
+  .preview-bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 1rem;
+    align-items: center; padding: .5rem 1rem; font-size: .85rem;
+    background: var(--datalib-card-bg); border-bottom: 1px solid var(--datalib-border); }
+  .preview-bar button { font: inherit; cursor: pointer; padding: .2rem .6rem;
+    border: 1px solid var(--datalib-border); border-radius: 4px;
+    background: var(--datalib-input-bg); color: inherit; }
+  .preview-doc { max-width: 760px; margin: 0 auto 2rem; }
+  .preview-doc > h2.preview-name { font-size: .75rem; font-weight: 600; margin: 1.5rem 0 .25rem;
+    text-transform: uppercase; letter-spacing: .06em; color: var(--datalib-muted); }
+  /* ONE scrollport for the whole page, not one per document. The pane
+     has to really scroll or the sticky headers and jump controls have
+     nothing to work against — but a scroll box per document would stack
+     scrollbars inside a scrollbar, which the app never does and nobody
+     wants to read. */
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; }
+  .preview-bar { flex: none; }
+  .chat-preview { flex: 1; min-height: 0; }
+  </style></head>
+<body>
+<div class="preview-bar">
+  <strong>Chat markdown preview</strong>
+  <button id="theme" type="button">Dark theme</button>
+  <button id="expand" type="button">Expand / collapse all</button>
+  <span>Click a message to select it.</span>
+</div>
+<section class="chat-preview">
+<div class="preview-doc">
+<h2 class="preview-name">samples/rendered_md/sample-edges/all.md</h2>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-edges">Edge cases (all) <a class="source-link" href="https://example.invalid/chat/sample-edges" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-s3-undated" data-section-uuid="s3-undated" class="msg msg--claude">
+<h2><span class="msg-author">Unknown sender</span> <span class="msg-ts">(no timestamp)</span></h2>
+<p>Who sent this, and when?</p>
+</div>
+<div id="m-s3-markup" data-section-uuid="s3-markup" class="msg msg--claude">
+<h2><span class="msg-author">&lt;script&gt;alert(1)&lt;/script&gt; &amp; Co.</span> <time class="msg-ts" datetime="2369-05-14T16:10:01+00:00" title="2369-05-14 16:10:01 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>An author name that is markup must not become markup.</p>
+</div>
+<div id="m-s3-code" data-section-uuid="s3-code" class="msg msg--claude">
+<h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2369-05-14T16:10:02+00:00" title="2369-05-14 16:10:02 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>Here's the plasma-flow patch:</p>
+<pre><code class="language-rust"><span class="hljs-keyword">fn</span> <span class="hljs-title function_">realign</span>(coil: &amp;<span class="hljs-keyword">mut</span> Coil) {
+    coil.phase += <span class="hljs-number">0.5</span>;
+}
+</code></pre>
+</div>
+<div id="m-s3-long" data-section-uuid="s3-long" class="msg msg--claude">
+<h2><span class="msg-author">Reginald Barclay</span> <time class="msg-ts" datetime="2369-05-14T16:10:03+00:00" title="2369-05-14 16:10:03 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>The transporter buffer id is aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and it should wrap rather than widen the column.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h2 class="preview-name">samples/rendered_md/sample-group/all.md</h2>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-group">Bridge Crew (all) <a class="source-link" href="https://example.invalid/chat/sample-group" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-s2-picard" data-section-uuid="s2-picard" class="msg msg--claude">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00+00:00" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time> <a class="source-link" href="https://example.invalid/archive/s2-picard" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Senior staff, my ready room at 0900.</p>
+<ul>
+<li><span id="m-s2-react-2" data-section-uuid="s2-react-2">👍 Deanna Troi</span></li>
+<li><span id="m-s2-react-1" data-section-uuid="s2-react-1">🫡 Will Riker</span></li>
+</ul>
+</div>
+<div id="m-s2-riker" data-section-uuid="s2-riker" class="msg msg--claude">
+<h2><span class="msg-author">Will Riker</span> <time class="msg-ts" datetime="2369-05-14T16:40:00+00:00" title="2369-05-14 16:40:00 UTC">Wed May 14th, 2369 at 16:40</time></h2>
+<p>Understood. I'll have the duty roster with me.</p>
+<ul>
+<li>Ops: Data</li>
+<li>Tactical: Worf</li>
+<li>Conn: unassigned</li>
+</ul>
+</div>
+<div id="m-s2-data" data-section-uuid="s2-data" class="msg msg--claude">
+<h2><span class="msg-author">Data</span> <time class="msg-ts" datetime="2369-05-14T17:10:00+00:00" title="2369-05-14 17:10:00 UTC">Wed May 14th, 2369 at 17:10</time></h2>
+<p>The readout, as promised.</p>
+<p>🖼 <em>[tricorder-readout.png (not yet fetched)]</em>
+<em>(source: <a href="https://example.invalid/blob/readout">https://example.invalid/blob/readout</a>)</em></p>
+</div>
+<div id="m-s2-system" data-section-uuid="s2-system" class="msg msg--claude">
+<p><em><small>Wed May 14th, 2369 at 18:10 — system: Worf joined the channel</small></em></p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h2 class="preview-name">samples/rendered_md/sample-long/all.md</h2>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-long">Nacelle diagnostic dump (all) <a class="source-link" href="https://example.invalid/chat/sample-long" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-s4-ask" data-section-uuid="s4-ask" class="msg msg--claude">
+<h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2369-05-14T16:10:00+00:00" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>Can you paste the whole port-nacelle conduit dump? I want to see every line, not a summary.</p>
+</div>
+<div id="m-s4-dump" data-section-uuid="s4-dump" class="msg msg--claude">
+<h2><span class="msg-author">Reginald Barclay</span> <time class="msg-ts" datetime="2369-05-14T16:11:00+00:00" title="2369-05-14 16:11:00 UTC">Wed May 14th, 2369 at 16:11</time></h2>
+<p>Full diagnostic dump from the port nacelle, as requested. The interesting part is around line 60.</p>
+<ol>
+<li>plasma conduit 001 — flow 40.37 kPa, ripple 0.110%</li>
+<li>plasma conduit 002 — flow 40.74 kPa, ripple 0.220%</li>
+<li>plasma conduit 003 — flow 41.11 kPa, ripple 0.330%</li>
+<li>plasma conduit 004 — flow 41.48 kPa, ripple 0.440%</li>
+<li>plasma conduit 005 — flow 41.85 kPa, ripple 0.550%</li>
+<li>plasma conduit 006 — flow 42.22 kPa, ripple 0.660%</li>
+<li>plasma conduit 007 — flow 42.59 kPa, ripple 0.770%</li>
+<li>plasma conduit 008 — flow 42.96 kPa, ripple 0.880%</li>
+<li>plasma conduit 009 — flow 43.33 kPa, ripple 0.990%</li>
+<li>plasma conduit 010 — flow 43.70 kPa, ripple 0.100%</li>
+<li>plasma conduit 011 — flow 44.07 kPa, ripple 0.210%</li>
+<li>plasma conduit 012 — flow 44.44 kPa, ripple 0.320%</li>
+<li>plasma conduit 013 — flow 44.81 kPa, ripple 0.430%</li>
+<li>plasma conduit 014 — flow 45.18 kPa, ripple 0.540%</li>
+<li>plasma conduit 015 — flow 45.55 kPa, ripple 0.650%</li>
+<li>plasma conduit 016 — flow 45.92 kPa, ripple 0.760%</li>
+<li>plasma conduit 017 — flow 40.29 kPa, ripple 0.870%</li>
+<li>plasma conduit 018 — flow 40.66 kPa, ripple 0.980%</li>
+<li>plasma conduit 019 — flow 41.03 kPa, ripple 0.090%</li>
+<li>plasma conduit 020 — flow 41.40 kPa, ripple 0.200%</li>
+<li>plasma conduit 021 — flow 41.77 kPa, ripple 0.310%</li>
+<li>plasma conduit 022 — flow 42.14 kPa, ripple 0.420%</li>
+<li>plasma conduit 023 — flow 42.51 kPa, ripple 0.530%</li>
+<li>plasma conduit 024 — flow 42.88 kPa, ripple 0.640%</li>
+<li>plasma conduit 025 — flow 43.25 kPa, ripple 0.750%</li>
+<li>plasma conduit 026 — flow 43.62 kPa, ripple 0.860%</li>
+<li>plasma conduit 027 — flow 43.99 kPa, ripple 0.970%</li>
+<li>plasma conduit 028 — flow 44.36 kPa, ripple 0.080%</li>
+<li>plasma conduit 029 — flow 44.73 kPa, ripple 0.190%</li>
+<li>plasma conduit 030 — flow 45.10 kPa, ripple 0.300%</li>
+<li>plasma conduit 031 — flow 45.47 kPa, ripple 0.410%</li>
+<li>plasma conduit 032 — flow 45.84 kPa, ripple 0.520%</li>
+<li>plasma conduit 033 — flow 40.21 kPa, ripple 0.630%</li>
+<li>plasma conduit 034 — flow 40.58 kPa, ripple 0.740%</li>
+<li>plasma conduit 035 — flow 40.95 kPa, ripple 0.850%</li>
+<li>plasma conduit 036 — flow 41.32 kPa, ripple 0.960%</li>
+<li>plasma conduit 037 — flow 41.69 kPa, ripple 0.070%</li>
+<li>plasma conduit 038 — flow 42.06 kPa, ripple 0.180%</li>
+<li>plasma conduit 039 — flow 42.43 kPa, ripple 0.290%</li>
+<li>plasma conduit 040 — flow 42.80 kPa, ripple 0.400%</li>
+<li>plasma conduit 041 — flow 43.17 kPa, ripple 0.510%</li>
+<li>plasma conduit 042 — flow 43.54 kPa, ripple 0.620%</li>
+<li>plasma conduit 043 — flow 43.91 kPa, ripple 0.730%</li>
+<li>plasma conduit 044 — flow 44.28 kPa, ripple 0.840%</li>
+<li>plasma conduit 045 — flow 44.65 kPa, ripple 0.950%</li>
+<li>plasma conduit 046 — flow 45.02 kPa, ripple 0.060%</li>
+<li>plasma conduit 047 — flow 45.39 kPa, ripple 0.170%</li>
+<li>plasma conduit 048 — flow 45.76 kPa, ripple 0.280%</li>
+<li>plasma conduit 049 — flow 40.13 kPa, ripple 0.390%</li>
+<li>plasma conduit 050 — flow 40.50 kPa, ripple 0.500%</li>
+<li>plasma conduit 051 — flow 40.87 kPa, ripple 0.610%</li>
+<li>plasma conduit 052 — flow 41.24 kPa, ripple 0.720%</li>
+<li>plasma conduit 053 — flow 41.61 kPa, ripple 0.830%</li>
+<li>plasma conduit 054 — flow 41.98 kPa, ripple 0.940%</li>
+<li>plasma conduit 055 — flow 42.35 kPa, ripple 0.050%</li>
+<li>plasma conduit 056 — flow 42.72 kPa, ripple 0.160%</li>
+<li>plasma conduit 057 — flow 43.09 kPa, ripple 0.270%</li>
+<li>plasma conduit 058 — flow 43.46 kPa, ripple 0.380%</li>
+<li>plasma conduit 059 — flow 43.83 kPa, ripple 0.490%</li>
+<li>plasma conduit 060 — flow 44.20 kPa, ripple 0.600%  ← ripple outside tolerance</li>
+<li>plasma conduit 061 — flow 44.57 kPa, ripple 0.710%</li>
+<li>plasma conduit 062 — flow 44.94 kPa, ripple 0.820%</li>
+<li>plasma conduit 063 — flow 45.31 kPa, ripple 0.930%</li>
+<li>plasma conduit 064 — flow 45.68 kPa, ripple 0.040%</li>
+<li>plasma conduit 065 — flow 40.05 kPa, ripple 0.150%</li>
+<li>plasma conduit 066 — flow 40.42 kPa, ripple 0.260%</li>
+<li>plasma conduit 067 — flow 40.79 kPa, ripple 0.370%</li>
+<li>plasma conduit 068 — flow 41.16 kPa, ripple 0.480%</li>
+<li>plasma conduit 069 — flow 41.53 kPa, ripple 0.590%</li>
+<li>plasma conduit 070 — flow 41.90 kPa, ripple 0.700%</li>
+<li>plasma conduit 071 — flow 42.27 kPa, ripple 0.810%</li>
+<li>plasma conduit 072 — flow 42.64 kPa, ripple 0.920%</li>
+<li>plasma conduit 073 — flow 43.01 kPa, ripple 0.030%</li>
+<li>plasma conduit 074 — flow 43.38 kPa, ripple 0.140%</li>
+<li>plasma conduit 075 — flow 43.75 kPa, ripple 0.250%</li>
+<li>plasma conduit 076 — flow 44.12 kPa, ripple 0.360%</li>
+<li>plasma conduit 077 — flow 44.49 kPa, ripple 0.470%</li>
+<li>plasma conduit 078 — flow 44.86 kPa, ripple 0.580%</li>
+<li>plasma conduit 079 — flow 45.23 kPa, ripple 0.690%</li>
+<li>plasma conduit 080 — flow 45.60 kPa, ripple 0.800%</li>
+<li>plasma conduit 081 — flow 45.97 kPa, ripple 0.910%</li>
+<li>plasma conduit 082 — flow 40.34 kPa, ripple 0.020%</li>
+<li>plasma conduit 083 — flow 40.71 kPa, ripple 0.130%</li>
+<li>plasma conduit 084 — flow 41.08 kPa, ripple 0.240%</li>
+<li>plasma conduit 085 — flow 41.45 kPa, ripple 0.350%</li>
+<li>plasma conduit 086 — flow 41.82 kPa, ripple 0.460%</li>
+<li>plasma conduit 087 — flow 42.19 kPa, ripple 0.570%</li>
+<li>plasma conduit 088 — flow 42.56 kPa, ripple 0.680%</li>
+<li>plasma conduit 089 — flow 42.93 kPa, ripple 0.790%</li>
+<li>plasma conduit 090 — flow 43.30 kPa, ripple 0.900%</li>
+<li>plasma conduit 091 — flow 43.67 kPa, ripple 0.010%</li>
+<li>plasma conduit 092 — flow 44.04 kPa, ripple 0.120%</li>
+<li>plasma conduit 093 — flow 44.41 kPa, ripple 0.230%</li>
+<li>plasma conduit 094 — flow 44.78 kPa, ripple 0.340%</li>
+<li>plasma conduit 095 — flow 45.15 kPa, ripple 0.450%</li>
+<li>plasma conduit 096 — flow 45.52 kPa, ripple 0.560%</li>
+<li>plasma conduit 097 — flow 45.89 kPa, ripple 0.670%</li>
+<li>plasma conduit 098 — flow 40.26 kPa, ripple 0.780%</li>
+<li>plasma conduit 099 — flow 40.63 kPa, ripple 0.890%</li>
+<li>plasma conduit 100 — flow 41.00 kPa, ripple 0.000%</li>
+</ol>
+<p>End of dump.</p>
+</div>
+<div id="m-s4-reply" data-section-uuid="s4-reply" class="msg msg--claude">
+<h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2369-05-14T16:12:00+00:00" title="2369-05-14 16:12:00 UTC">Wed May 14th, 2369 at 16:12</time></h2>
+<p>Line 60 is the one. Thanks — I'll pull that conduit at the next maintenance window.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h2 class="preview-name">samples/rendered_md/sample-tool-run/all.md</h2>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-tool-run">Sensor sweep of the Argolis cluster (all) <a class="source-link" href="https://example.invalid/chat/sample-tool-run" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-s1-user" data-section-uuid="s1-user" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-14T16:10:00+00:00" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>Can you check the long-range sensor logs for anything moving in the Argolis cluster, and summarize what you find?</p>
+</div>
+<details class="tool-group">
+<summary>🛠 4 tool steps</summary>
+<div id="m-s1-tool-1" data-section-uuid="s1-tool-1" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:04+00:00" title="2369-05-14 16:10:04 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<details><summary>Tool use: sensor_query</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;band&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;subspace&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;sector&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;argolis&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-s1-tool-2" data-section-uuid="s1-tool-2" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:05+00:00" title="2369-05-14 16:10:05 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<details><summary>Tool result: sensor_query</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;contacts&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">3</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;nearest_ly&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0.4</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-s1-tool-3" data-section-uuid="s1-tool-3" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:06+00:00" title="2369-05-14 16:10:06 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<details><summary>Tool use: chart_lookup</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;catalogue&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;federation&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;sector&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;argolis&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-s1-tool-4" data-section-uuid="s1-tool-4" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:07+00:00" title="2369-05-14 16:10:07 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<details><summary>Tool result: chart_lookup</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;known_traffic&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;none scheduled&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-s1-answer" data-section-uuid="s1-answer" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:09+00:00" title="2369-05-14 16:10:09 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<p>Three contacts, the nearest 0.4 ly out and closing slowly. Nothing is scheduled through Argolis this quarter, so none of them is a Federation vessel on a filed course.</p>
+<table>
+<thead>
+<tr>
+<th>contact</th>
+<th>bearing</th>
+<th>range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td>041 mark 3</td>
+<td>0.4 ly</td>
+</tr>
+<tr>
+<td>B</td>
+<td>118 mark 0</td>
+<td>1.9 ly</td>
+</tr>
+<tr>
+<td>C</td>
+<td>274 mark 7</td>
+<td>3.1 ly</td>
+</tr>
+</tbody>
+</table>
+</div>
+<details class="tool-group">
+<summary>🛠 1 tool step</summary>
+<div id="m-s1-tool-5" data-section-uuid="s1-tool-5" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2369-05-14T16:10:11+00:00" title="2369-05-14 16:10:11 UTC">Wed May 14th, 2369 at 16:10</time></h2>
+<details><summary>Tool use: log_note</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;note&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;flagged for the bridge watch&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+</details>
+</div>
+</div>
+</section>
+<script type="module">// DOM decoration for a rendered chat body: the per-section copy button,
+// and the handling that makes a very long message navigable.
+//
+// Plain JavaScript, and deliberately so. `ChatBody.ce.vue` imports it,
+// and `tools/chat_preview.mjs` inlines this same file into the preview
+// page it generates — so the page you review a layout change in behaves
+// like the app instead of like a hand-written imitation of it. Anything
+// here must therefore stay dependency-free and touch nothing but the
+// DOM node it is handed.
+
+/** A message taller than this (CSS px) is clamped and gets jump controls. */
+export const LONG_MESSAGE_PX = 360;
+
+/**
+ * Scroll `el` to the top of its scrollport.
+ *
+ * Sets scrollTop directly rather than calling `scrollIntoView`, which
+ * silently no-ops in Chromium when the pane is re-rendering — that bug
+ * is why "nothing happens when I click around inside one thread" was
+ * reported once already.
+ * @param {HTMLElement} el
+ */
+export function scrollSectionToTop(el) {
+  const pane = el.closest(".chat-preview");
+  if (!pane) return;
+  pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+}
+
+/**
+ * Open every `<details>` enclosing `el`. A tool step lives inside a
+ * collapsed `.tool-group`, so "scroll to it" has nothing to scroll to
+ * until the group is open. Walks the whole chain: groups nest.
+ * @param {HTMLElement} el
+ */
+export function openEnclosingDetails(el) {
+  for (
+    let d = el.closest("details");
+    d;
+    d = d.parentElement?.closest("details") ?? null
+  ) {
+    d.open = true;
+  }
+}
+
+/**
+ * Where a section's copy button goes: the chat-common message header
+ * (the `## ` line whose parts are tagged `.msg-author` / `.msg-ts`),
+ * else an explicit `.msg-meta` div, else the first `<p><em>…</em></p>`
+ * some renderers emit as an italic meta line. Block sections have none
+ * of the three and get the button at the top of the section.
+ * @param {HTMLElement} el
+ * @returns {HTMLElement | null}
+ */
+export function metaHost(el) {
+  const header = el.querySelector(":scope > h2 > .msg-author");
+  if (header?.parentElement) return header.parentElement;
+  const meta = el.querySelector(":scope > .msg-meta");
+  if (meta) return meta;
+  for (const p of el.querySelectorAll(":scope > p")) {
+    if (p.firstElementChild?.tagName === "EM" && p.children.length === 1) return p;
+  }
+  return null;
+}
+
+/**
+ * Add a control to the end of a header's controls, but ahead of the
+ * source-link arrow — `↗` reads as "and here is the thing itself", so
+ * it belongs last however many controls accumulate before it. The
+ * renderer emits it inline at the end of the header, which is why this
+ * inserts rather than appends.
+ * @param {HTMLElement} host
+ * @param {string} separator
+ * @param {HTMLElement} control
+ */
+function addHeaderControl(host, separator, control) {
+  const link = host.querySelector(":scope > .source-link");
+  if (!link) {
+    host.append(document.createTextNode(separator), control);
+    return;
+  }
+  link.before(
+    document.createTextNode(separator),
+    control,
+    document.createTextNode(" "),
+  );
+}
+
+/**
+ * Give every `[data-section-uuid]` a button that copies its uuid, and
+ * the page title one that copies the document's.
+ * @param {HTMLElement} root
+ */
+export function injectCopyUuidButtons(root) {
+  const button = (uuid, label) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-uuid";
+    btn.dataset.uuid = uuid;
+    btn.title = `${label} (${uuid})`;
+    btn.setAttribute("aria-label", label);
+    btn.textContent = "🆔";
+    return btn;
+  };
+
+  for (const el of root.querySelectorAll(
+    "div[data-section-uuid], section[data-section-uuid]",
+  )) {
+    if (
+      el.querySelector(
+        ":scope > h2 .copy-uuid, :scope > .msg-meta .copy-uuid, :scope > p .copy-uuid, :scope > .copy-uuid",
+      )
+    )
+      continue;
+    const uuid = el.getAttribute("data-section-uuid") ?? "";
+    if (!uuid) continue;
+    const btn = button(uuid, "Copy section ID");
+    const host = metaHost(el);
+    if (host) addHeaderControl(host, " · ", btn);
+    else el.prepend(btn);
+  }
+
+  for (const el of root.querySelectorAll("[data-page-title-uuid]")) {
+    if (el.querySelector(":scope > button.copy-uuid")) continue;
+    const uuid = el.getAttribute("data-page-title-uuid") ?? "";
+    if (!uuid) continue;
+    addHeaderControl(el, " ", button(uuid, "Copy page ID"));
+  }
+}
+
+/** The next top-level item after `el`, or null at the end of the doc. */
+function nextItem(el) {
+  for (let n = el.nextElementSibling; n; n = n.nextElementSibling) {
+    if (n.matches(".msg, details.tool-group")) return /** @type {HTMLElement} */ (n);
+  }
+  return null;
+}
+
+/**
+ * Clamp messages that are too tall to scroll past comfortably, and give
+ * them a sticky header carrying "jump to the start of this message" and
+ * "jump to the next one" — so being deep inside a wall of text is never
+ * a place you have to scroll your way out of.
+ *
+ * Idempotent: re-running over an already-decorated body does nothing.
+ * @param {HTMLElement} root
+ * @param {{ clampPx?: number }} [opts]
+ */
+export function decorateLongMessages(root, opts = {}) {
+  const clampPx = opts.clampPx ?? LONG_MESSAGE_PX;
+  // v-html replaces the body wholesale, so observers from the previous
+  // render are watching detached nodes. `root` survives; hang them off
+  // it and drop them here rather than leaking one set per document.
+  for (const io of root.__chatStickyObservers ?? []) io.disconnect();
+  root.__chatStickyObservers = [];
+  root.__chatWidthObserver?.disconnect();
+  root.__chatWidthObserver = null;
+
+  // Height is meaningless until the pane has a width. In a column that
+  // has not been laid out yet — a hidden tab, the frame before first
+  // paint — every line of text wraps into a zero-width box and a
+  // one-line message measures taller than the clamp, so every message
+  // gets a "Show more" that does nothing. Wait for a real width.
+  if (!root.clientWidth) {
+    const ro = new ResizeObserver(() => {
+      if (!root.clientWidth) return;
+      decorateLongMessages(root, opts);
+    });
+    ro.observe(root);
+    root.__chatWidthObserver = ro;
+    return;
+  }
+
+  for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]")) {
+    if (el.dataset.longChecked) continue;
+    el.dataset.longChecked = "1";
+    // Measured before any clamp class lands, so this is the content's
+    // own height rather than the clamped box's.
+    if (el.scrollHeight <= clampPx) continue;
+    el.classList.add("msg--long", "msg--clamped");
+
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "msg-expand";
+    more.textContent = "Show more";
+    more.addEventListener("click", () => {
+      const clamped = el.classList.toggle("msg--clamped");
+      more.textContent = clamped ? "Show more" : "Show less";
+      // Re-collapsing from far down the message would otherwise leave
+      // the viewport somewhere below the message entirely.
+      if (clamped) scrollSectionToTop(el);
+    });
+    el.append(more);
+
+    const host = metaHost(el);
+    if (!host) continue;
+    const nav = document.createElement("span");
+    nav.className = "msg-nav";
+    const jump = (glyph, label, target) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "msg-jump";
+      b.textContent = glyph;
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      b.addEventListener("click", target);
+      return b;
+    };
+    nav.append(
+      jump("▲", "Jump to the start of this message", () => scrollSectionToTop(el)),
+      jump("▼", "Jump to the next message", () => {
+        const next = nextItem(el);
+        if (next) scrollSectionToTop(next);
+        else el.closest(".chat-preview")?.scrollTo({ top: 1e9 });
+      }),
+    );
+    host.append(nav);
+
+    // A pinned header unavoidably covers the line of text passing under
+    // it — that is what `position: sticky` does, and GitHub's file
+    // headers and VS Code's sticky scroll both live with it. What is
+    // avoidable is the header looking identical whether it is pinned or
+    // not, which makes the covered line read as content that vanished.
+    // `.is-stuck` lets the CSS give it a shadow and an edge for exactly
+    // as long as it is floating over something.
+    //
+    // The threshold/rootMargin pair is the standard detection: with the
+    // root's top edge pulled in by 1px, a header sitting at `top: 0`
+    // can no longer be fully visible, so its ratio drops below 1.
+    const pane = el.closest(".chat-preview");
+    if (!pane) continue;
+    const io = new IntersectionObserver(
+      ([entry]) => host.classList.toggle("is-stuck", entry.intersectionRatio < 1),
+      { root: pane, threshold: [1], rootMargin: "-1px 0px 0px 0px" },
+    );
+    io.observe(host);
+    root.__chatStickyObservers.push(io);
+  }
+}
+
+
+for (const body of document.querySelectorAll(".chat-body")) {
+  injectCopyUuidButtons(body);
+  decorateLongMessages(body);
+}
+document.addEventListener("click", (ev) => {
+  const el = ev.target.closest?.("[data-section-uuid]");
+  if (!el || ev.target.closest("button, a, summary")) return;
+  for (const s of document.querySelectorAll(".selected")) s.classList.remove("selected");
+  el.classList.add("selected");
+  openEnclosingDetails(el);
+});
+const root = document.documentElement;
+const themeBtn = document.getElementById("theme");
+const setDark = (dark) => {
+  root.classList.toggle("preview-dark", dark);
+  root.style.colorScheme = dark ? "dark" : "light";
+  themeBtn.textContent = dark ? "Light theme" : "Dark theme";
+};
+setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+themeBtn.addEventListener("click", () => setDark(!root.classList.contains("preview-dark")));
+document.getElementById("expand").addEventListener("click", () => {
+  const anyClosed = [...document.querySelectorAll("details")].some((d) => !d.open);
+  for (const d of document.querySelectorAll("details")) d.open = anyClosed;
+});
+</script>
+</body></html>

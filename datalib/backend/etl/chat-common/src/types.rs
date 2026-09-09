@@ -120,6 +120,15 @@ pub struct NormalizedChatItem {
     /// backpointer columns. `None` for providers not yet ported onto
     /// `datalib_id`.
     pub source_ref: Option<UpstreamRef>,
+    /// Machinery rather than conversation — an assistant's tool calls
+    /// and their results. The renderer folds each *run* of adjacent
+    /// asides into one `<details>`, collapsed by default, so a
+    /// transcript reads as what was said with the plumbing tucked
+    /// away. `false` for anything a person or an assistant actually
+    /// said, which is the default for every provider that doesn't set
+    /// it. Layout only: an aside still gets its own anchor, its own
+    /// grid_row, and its own place in the fingerprint.
+    pub is_aside: bool,
 }
 
 /// The upstream's own identity for one chat item, carried through to

@@ -352,6 +352,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 source_url: None,
                 kind_label: None,
                 source_ref: None,
+                is_aside: false,
             }
         }
         // sms / mms
@@ -414,6 +415,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 source_url: None,
                 kind_label: None,
                 source_ref: None,
+                is_aside: false,
             }
         }
     }

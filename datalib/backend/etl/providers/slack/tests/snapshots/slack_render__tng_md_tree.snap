@@ -14,14 +14,14 @@ display: "#bridge"
 account: T_NCC1701D
 external_id: C_BRIDGE#12604000100.000100
 item_count: 3
-source_fingerprint: 407842378ccf5b59047cfd1a4eedfa6cc8fa70facf471df77f3e1541ab45998b
+source_fingerprint: 2495389e275e900db04c15f2ead34fc92befe1e4e0dd2b081fbf4725bdd4aed2
 ---
 
 <h1 class="page-title" data-page-title-uuid="0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba">#bridge: Mr. Data, status report. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-59f47f5f-2d07-53da-a9f5-a6f164c52d11" data-section-uuid="59f47f5f-2d07-53da-a9f5-a6f164c52d11" class="msg msg--slack">
 
-## 2369-05-28 15:08:20 UTC — Jean-Luc Picard <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:08:20+00:00" title="2369-05-28 15:08:20 UTC">Wed May 28th, 2369 at 15:08</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 Mr. Data, status report.
 
@@ -29,7 +29,7 @@ Mr. Data, status report.
 
 <div id="m-ee0f6228-19a1-54ea-a38d-c0fbe02e1242" data-section-uuid="ee0f6228-19a1-54ea-a38d-c0fbe02e1242" class="msg msg--slack">
 
-## 2369-05-28 15:10:00 UTC — Lt. Cmdr. Data <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D&thread_ts=12604000100.000100&cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:10:00+00:00" title="2369-05-28 15:10:00 UTC">Wed May 28th, 2369 at 15:10</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a>
 
 All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.
 
@@ -41,7 +41,7 @@ All systems nominal, Captain. Long-range sensors detect a Class M planet bearing
 
 <div id="m-b89c97ab-5bca-5de7-98e8-f2157ff69991" data-section-uuid="b89c97ab-5bca-5de7-98e8-f2157ff69991" class="msg msg--slack">
 
-## 2369-05-28 15:11:40 UTC — William T. Riker <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&thread_ts=12604000100.000100&cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:11:40+00:00" title="2369-05-28 15:11:40 UTC">Wed May 28th, 2369 at 15:11</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a>
 
 Set a course, Mr. Data. Warp factor five.
 
@@ -60,14 +60,14 @@ display: "@William T. Riker"
 account: T_NCC1701D
 external_id: D_RIKER#12604000901.000901
 item_count: 1
-source_fingerprint: 37607ec2a006ff4f8c31277dfacd8670a446e1a6d9f4849d5ff48cd598a89993
+source_fingerprint: 85dc8be43b62ea936f873f3b8a065f6a49fb1e8729a4be3b015809b255072034
 ---
 
 <h1 class="page-title" data-page-title-uuid="1803e003-56a7-5c12-9024-5265850e9eaa">@William T. Riker: Thank you, Number One. Make it so. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-f1f922de-b96b-5025-bca1-62ec84b4a1d1" data-section-uuid="f1f922de-b96b-5025-bca1-62ec84b4a1d1" class="msg msg--slack">
 
-## 2369-05-28 15:21:41 UTC — Jean-Luc Picard <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:21:41+00:00" title="2369-05-28 15:21:41 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 Thank you, Number One. Make it so.
 
@@ -86,14 +86,14 @@ display: "#bridge"
 account: T_NCC1701D
 external_id: C_BRIDGE#12604000800.000800
 item_count: 1
-source_fingerprint: 4a2b5a46d47fd00304fe5a277d3d64dae07baa122b191273a32c314752746295
+source_fingerprint: fa8bc2598ebf3dc9475ab0da804d4f246a38594b010c8bc72c4681922941acbf
 ---
 
 <h1 class="page-title" data-page-title-uuid="56f6c1d9-495c-5104-8a26-be13bc28718e">#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-591128f8-b39e-5237-9704-e469199ba7ac" data-section-uuid="591128f8-b39e-5237-9704-e469199ba7ac" class="msg msg--slack">
 
-## 2369-05-28 15:20:00 UTC — Lt. Cmdr. Data <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:20:00+00:00" title="2369-05-28 15:20:00 UTC">Wed May 28th, 2369 at 15:20</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.
 
@@ -112,14 +112,14 @@ display: "@William T. Riker, Worf"
 account: T_NCC1701D
 external_id: G_AWAYTEAM#12604000904.000904
 item_count: 1
-source_fingerprint: 4b1375346d62077011c06cbffde418935d128738b191ce46462907ebbd9a37ad
+source_fingerprint: 2c401dbf92b0dcf78360bc9a035de6b2869bcb085fac7b56490e949ee64c484d
 ---
 
 <h1 class="page-title" data-page-title-uuid="658ccd8e-50ad-527c-8cc3-401cf8b315db">@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-06cfe816-d34f-5428-be2e-0898eee3f468" data-section-uuid="06cfe816-d34f-5428-be2e-0898eee3f468" class="msg msg--slack">
 
-## 2369-05-28 15:21:44 UTC — Jean-Luc Picard <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:21:44+00:00" title="2369-05-28 15:21:44 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 Noted, Mr. Worf. Phasers on stun.
 
@@ -138,14 +138,14 @@ display: "#engineering"
 account: T_NCC1701D
 external_id: C_ENG#12604000500.000500
 item_count: 1
-source_fingerprint: b8556d8690717b51069aae183396dccc2f0a0bc7f698a18c4a0da2d8389b955c
+source_fingerprint: ffc1aefb2687dc2f51962c518e83b3084544e09c7d7b5ecfced6e512c08724ca
 ---
 
 <h1 class="page-title" data-page-title-uuid="68000dc2-0cb1-5eb4-ba26-89498049dfa8">#engineering: Warp core efficiency at 99.7%. (all) <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-6607ab50-b9d8-55c1-86c2-a810ba8949eb" data-section-uuid="6607ab50-b9d8-55c1-86c2-a810ba8949eb" class="msg msg--slack">
 
-## 2369-05-28 15:15:00 UTC — Lt. Cmdr. Data <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:15:00+00:00" title="2369-05-28 15:15:00 UTC">Wed May 28th, 2369 at 15:15</time> <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 Warp core efficiency at 99.7%.
 
@@ -164,14 +164,14 @@ display: "@William T. Riker"
 account: T_NCC1701D
 external_id: D_RIKER#12604000900.000900
 item_count: 1
-source_fingerprint: 4c2c6794591c9d6e2c1246dba5709e49d5b158e8825f8a36d3fcde1063fee751
+source_fingerprint: 7b843daa85e51bc67b224671a1b38dcc8f03703e57d3f8f7caa9a01e9717b79a
 ---
 
 <h1 class="page-title" data-page-title-uuid="777b8f58-706d-549a-82b8-699fc856030e">@William T. Riker: Captain, the away team roster is ready for your review. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-c5a0c94e-03a4-565a-b390-0ee002edeab2" data-section-uuid="c5a0c94e-03a4-565a-b390-0ee002edeab2" class="msg msg--slack">
 
-## 2369-05-28 15:21:40 UTC — William T. Riker <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:21:40+00:00" title="2369-05-28 15:21:40 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 Captain, the away team roster is ready for your review.
 
@@ -190,14 +190,14 @@ display: "#bridge"
 account: T_NCC1701D
 external_id: C_BRIDGE#12604000400.000400
 item_count: 1
-source_fingerprint: e5d9258b3d06d5ae5d0590d53bd6949bc2318aaf58022bec10509879f90bd7ca
+source_fingerprint: 242ec8cb6487c372391303ec1f8465e6c4422adb8bc92b797be727216e0e4e4a
 ---
 
 <h1 class="page-title" data-page-title-uuid="aa7f900b-31b9-5603-995a-5ed36db03478">#bridge: I recommend raising shields, Captain. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-80b2ae4e-06f9-5ca3-9d40-e24d82214eb3" data-section-uuid="80b2ae4e-06f9-5ca3-9d40-e24d82214eb3" class="msg msg--slack">
 
-## 2369-05-28 15:13:20 UTC — Worf <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:13:20+00:00" title="2369-05-28 15:13:20 UTC">Wed May 28th, 2369 at 15:13</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 I recommend raising shields, Captain.
 
@@ -216,14 +216,14 @@ display: "@William T. Riker, Worf"
 account: T_NCC1701D
 external_id: G_AWAYTEAM#12604000903.000903
 item_count: 1
-source_fingerprint: 7f5331ccbb52d1740dde9ab558b6594b5c711a3ab71f888a22f92d19d9293eab
+source_fingerprint: f3ac0d187036f5e0a00dd84d8d2da20c65e44bf7d880c19fcb5ea3d5a4d21db7
 ---
 
 <h1 class="page-title" data-page-title-uuid="b168a24b-fddb-55c2-88fe-523dec59fd5c">@William T. Riker, Worf: I must object to beaming down unarmed. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-a3c08320-2b85-52bd-afab-ddfe4dafe08d" data-section-uuid="a3c08320-2b85-52bd-afab-ddfe4dafe08d" class="msg msg--slack">
 
-## 2369-05-28 15:21:43 UTC — Worf <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:21:43+00:00" title="2369-05-28 15:21:43 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 I must object to beaming down unarmed.
 
@@ -242,14 +242,14 @@ display: "#ten-forward"
 account: T_NCC1701D
 external_id: C_TENFWD#12604000600.000600
 item_count: 2
-source_fingerprint: 309e2493c4caab1550d90cad9c82cb477b6a8059db153cbc9f0abfe352b95e27
+source_fingerprint: bdc2ced76c938710009dba35c1492255c8c8c778cadfb571d244ca0e15afacff
 ---
 
 <h1 class="page-title" data-page-title-uuid="dcda988e-79b9-5b19-b3d7-7325524c86dd">#ten-forward: Anyone up for poker tonight? (all) <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-927f4e6c-fefc-5b6a-a15d-d472c09bdbd8" data-section-uuid="927f4e6c-fefc-5b6a-a15d-d472c09bdbd8" class="msg msg--slack">
 
-## 2369-05-28 15:16:40 UTC — William T. Riker <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:16:40+00:00" title="2369-05-28 15:16:40 UTC">Wed May 28th, 2369 at 15:16</time> <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 Anyone up for poker tonight?
 
@@ -257,7 +257,7 @@ Anyone up for poker tonight?
 
 <div id="m-3d82f5ae-bcdc-5d76-9621-2c885e289b6c" data-section-uuid="3d82f5ae-bcdc-5d76-9621-2c885e289b6c" class="msg msg--slack">
 
-## 2369-05-28 15:18:20 UTC — Worf <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D&thread_ts=12604000600.000600&cid=C_TENFWD" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:18:20+00:00" title="2369-05-28 15:18:20 UTC">Wed May 28th, 2369 at 15:18</time> <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D&amp;thread_ts=12604000600.000600&amp;cid=C_TENFWD" target="_blank" rel="noopener noreferrer">↗</a>
 
 I do not understand the appeal of this Earth game.
 
@@ -278,14 +278,14 @@ display: "@Lt. Cmdr. Data"
 account: T_NCC1701D
 external_id: D_DATA#12604000902.000902
 item_count: 1
-source_fingerprint: 123dc38e249fe50f3ffae73f22c2b026ac07c9851318ddc44226b98186128e84
+source_fingerprint: 073699116fda6f8c195635b9ee2def77ad99c15d77f85b1057c8b22631fec753
 ---
 
 <h1 class="page-title" data-page-title-uuid="e5c54890-5a44-5a3d-9efe-e28b37b48edf">@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all) <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-ee15c54c-ae19-51b4-a51b-ba2e9f7a77d2" data-section-uuid="ee15c54c-ae19-51b4-a51b-ba2e9f7a77d2" class="msg msg--slack">
 
-## 2369-05-28 15:21:42 UTC — Lt. Cmdr. Data <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:21:42+00:00" title="2369-05-28 15:21:42 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 Sir, I have completed my analysis of the Romulan signature.
 
@@ -306,14 +306,14 @@ display: "#bridge"
 account: T_NCC1701D
 external_id: C_BRIDGE#12604000700.000700
 item_count: 1
-source_fingerprint: 45b98923cf7fa636baa283ac0e4c024d2a790801c5cdfb7d406e43687c6af9dc
+source_fingerprint: 3fa3978cfb10d1a5840823a5e818201be3b6b72e184d07ecd4133833db3ca98e
 ---
 
 <h1 class="page-title" data-page-title-uuid="efd7f060-7cc7-508b-811f-afbb133a9ff6">#bridge: New combadge prototypes — thoughts? (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-21fc5644-c4fd-5110-9c41-48d338915fb6" data-section-uuid="21fc5644-c4fd-5110-9c41-48d338915fb6" class="msg msg--slack">
 
-## 2369-05-28 15:18:20 UTC — Jean-Luc Picard <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
+## <span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:18:20+00:00" title="2369-05-28 15:18:20 UTC">Wed May 28th, 2369 at 15:18</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a>
 
 New combadge prototypes — thoughts?
 

@@ -10,6 +10,19 @@ use std::path::{Path, PathBuf};
 /// value most providers put in [`RenderProfile::chat_entity_kind`].
 pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 
+/// The markdown layout in this file has its own version, and it is
+/// hashed into every document's fingerprint beside the provider's
+/// [`RenderProfile::render_version`].
+///
+/// **Bump this whenever `render_markdown` changes what it writes.**
+/// Without it, changing the shared layout means editing the version
+/// constant in all eight providers by hand and re-rendering nothing
+/// in the one you forget. The provider's own number stays its own —
+/// `datalib_step`'s render step checks that every version stored on
+/// disk is one its processors declare, so this must not be mixed into
+/// the stored value.
+pub const LAYOUT_VERSION: u32 = 3;
+
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
@@ -21,6 +34,7 @@ use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 use sha2::{Digest, Sha256};
 
+use crate::html::{escape_attr, escape_text};
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 
 /// Per-provider knobs the renderer parameterizes on. Values that
@@ -134,7 +148,7 @@ fn render_one(
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Outcome> {
-    let fingerprint = compute_fingerprint(profile.render_version, chat, doc);
+    let fingerprint = compute_fingerprint(profile.render_version, LAYOUT_VERSION, chat, doc);
     let (md_path, page_dir) = output_paths(out_dir, source_name, chat, &doc.period_key);
 
     if prior_fingerprints
@@ -316,10 +330,39 @@ fn render_markdown(
         return s;
     }
 
-    for item in &doc.items {
-        render_item(&mut s, profile, item);
+    let mut i = 0;
+    while i < doc.items.len() {
+        let run_end = doc.items[i..]
+            .iter()
+            .position(|it| !it.is_aside)
+            .map_or(doc.items.len(), |n| i + n);
+        if run_end > i {
+            render_aside_run(&mut s, profile, &doc.items[i..run_end]);
+            i = run_end;
+        } else {
+            render_item(&mut s, profile, &doc.items[i]);
+            i += 1;
+        }
     }
     s
+}
+
+/// Wrap one run of adjacent asides in a single collapsed `<details>`.
+///
+/// The `<details>` sits *outside* the per-message `<div>`s so every
+/// anchor, copy button and grid-row highlight inside it keeps working
+/// unchanged — the frontend opens the enclosing `<details>` when it
+/// scrolls to a section within one.
+fn render_aside_run(s: &mut String, profile: &RenderProfile, items: &[NormalizedChatItem]) {
+    let plural = if items.len() == 1 { "" } else { "s" };
+    s.push_str(&format!(
+        "<details class=\"tool-group\">\n<summary>🛠 {n} tool step{plural}</summary>\n\n",
+        n = items.len(),
+    ));
+    for item in items {
+        render_item(s, profile, item);
+    }
+    s.push_str("</details>\n\n");
 }
 
 fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatItem) {
@@ -338,21 +381,30 @@ fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatIte
                 .unwrap_or("(system event)");
             s.push_str(&format!(
                 "*<small>{ts} — system: {summary}</small>*\n\n",
-                ts = display_ts(item.date_ms)
+                ts = short_ts(item.date_ms)
             ));
             s.push_str("</div>\n\n");
             return;
         }
         ItemKind::Text | ItemKind::Attachment => {
+            // A real `##` heading, whose parts are tagged so the UI can
+            // style it down to a Slack-style one-liner. The heading is
+            // load-bearing beyond looks: qmd cuts its chunks at the
+            // best nearby break point and scores an `h2` far above the
+            // blank line it would otherwise settle for, so every
+            // message start is also a chunk boundary it prefers.
             s.push_str("## ");
-            s.push_str(&display_ts(item.date_ms));
-            s.push_str(" — ");
-            s.push_str(&item.author_display);
+            s.push_str(&format!(
+                "<span class=\"msg-author\">{}</span> ",
+                escape_text(&item.author_display),
+            ));
+            s.push_str(&timestamp_html(item.date_ms));
             // Per-message linkout (e.g. a Slack permalink) as a `↗` after
             // the header, opening in a new tab.
             if let Some(url) = &item.source_url {
                 s.push_str(&format!(
-                    " <a class=\"source-link\" href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\">↗</a>"
+                    " <a class=\"source-link\" href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\">↗</a>",
+                    url = escape_attr(url),
                 ));
             }
             s.push('\n');
@@ -649,9 +701,19 @@ fn attachment_search_text(item: &NormalizedChatItem) -> String {
 
 // Fingerprint
 
-fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &NormalizedDoc) -> String {
+/// `layout_version` is always [`LAYOUT_VERSION`] in production; it is a
+/// parameter so a test can prove the shared layout really does reach
+/// the hash.
+fn compute_fingerprint(
+    render_version: u32,
+    layout_version: u32,
+    chat: &NormalizedChat,
+    doc: &NormalizedDoc,
+) -> String {
     let mut h = Sha256::new();
     h.update(render_version.to_be_bytes());
+    h.update(b"|");
+    h.update(layout_version.to_be_bytes());
     h.update(b"|");
     h.update(chat.chat_uuid.as_bytes());
     h.update(b"|");
@@ -703,6 +765,9 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
             h.update(b"|kind|");
             h.update(k.as_bytes());
         }
+        if item.is_aside {
+            h.update(b"|aside|");
+        }
         h.update(b"|");
         h.update((item.attachments.len() as u32).to_be_bytes());
         for a in &item.attachments {
@@ -737,7 +802,9 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
 // timestamp policy rather than anything chat-shaped, and beeper and
 // signal each carried their own drifting copy, so they moved to
 // `datalib-time` — see the note on `when_ts_from_unix_millis`.
-use datalib_time::{display_ts_from_unix_millis, when_ts_from_unix_millis, WhenTsPrecision};
+use datalib_time::{
+    display_ts_from_unix_millis, when_ts_from_unix_millis, IsoOffsetTimestamp, WhenTsPrecision,
+};
 
 /// Seconds precision, as this renderer has always emitted. Changing it
 /// would re-cut every fingerprint chat-common has written.
@@ -747,6 +814,32 @@ fn when_ts_from_ms(ms: Option<i64>) -> Option<String> {
 
 fn display_ts(ms: Option<i64>) -> String {
     display_ts_from_unix_millis(ms)
+}
+
+/// Short stamp on screen, full instant on hover.
+fn short_ts(ms: Option<i64>) -> String {
+    match ms.and_then(IsoOffsetTimestamp::from_unix_millis) {
+        Some(t) => datalib_time::short_ts(&t),
+        // Either no stamp at all or a number that is not an instant.
+        // `display_ts` spells those two apart and neither has a short
+        // form worth inventing.
+        None => display_ts(ms),
+    }
+}
+
+/// The message header's timestamp: a `<time>` a reader can hover for
+/// the full instant, or a plain span when there is no instant to
+/// state.
+fn timestamp_html(ms: Option<i64>) -> String {
+    match ms.and_then(IsoOffsetTimestamp::from_unix_millis) {
+        Some(t) => format!(
+            "<time class=\"msg-ts\" datetime=\"{iso}\" title=\"{full}\">{short}</time>",
+            iso = t.to_rfc3339_secs(),
+            full = display_ts(ms),
+            short = datalib_time::short_ts(&t),
+        ),
+        None => format!("<span class=\"msg-ts\">{}</span>", display_ts(ms)),
+    }
 }
 
 fn human_bytes(n: i64) -> String {
@@ -818,6 +911,7 @@ mod tests {
                     source_url: None,
                     kind_label: None,
                     source_ref: None,
+                    is_aside: false,
                 }],
             }],
         }
@@ -915,17 +1009,29 @@ mod tests {
     #[test]
     fn fingerprint_is_stable_across_runs() {
         let chat = mk_chat();
-        let fp1 = compute_fingerprint(1, &chat, &chat.buckets[0]);
-        let fp2 = compute_fingerprint(1, &chat, &chat.buckets[0]);
+        let fp1 = compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]);
+        let fp2 = compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]);
         assert_eq!(fp1, fp2);
     }
 
     #[test]
     fn fingerprint_changes_with_render_version() {
         let chat = mk_chat();
-        let fp1 = compute_fingerprint(1, &chat, &chat.buckets[0]);
-        let fp2 = compute_fingerprint(2, &chat, &chat.buckets[0]);
+        let fp1 = compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]);
+        let fp2 = compute_fingerprint(2, LAYOUT_VERSION, &chat, &chat.buckets[0]);
         assert_ne!(fp1, fp2);
+    }
+
+    /// Bumping the shared layout must re-render every chat provider
+    /// without any of them touching its own `RENDER_VERSION` — that is
+    /// the whole reason [`LAYOUT_VERSION`] exists.
+    #[test]
+    fn fingerprint_changes_with_layout_version() {
+        let chat = mk_chat();
+        assert_ne!(
+            compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION + 1, &chat, &chat.buckets[0]),
+        );
     }
 
     #[test]
@@ -933,8 +1039,8 @@ mod tests {
         let chat1 = mk_chat();
         let mut chat2 = mk_chat();
         chat2.buckets[0].items[0].reactions[0].emoji = "👍".to_string();
-        let fp1 = compute_fingerprint(1, &chat1, &chat1.buckets[0]);
-        let fp2 = compute_fingerprint(1, &chat2, &chat2.buckets[0]);
+        let fp1 = compute_fingerprint(1, LAYOUT_VERSION, &chat1, &chat1.buckets[0]);
+        let fp2 = compute_fingerprint(1, LAYOUT_VERSION, &chat2, &chat2.buckets[0]);
         assert_ne!(fp1, fp2);
     }
 
@@ -961,6 +1067,115 @@ mod tests {
         assert!(md.contains("🫡 Will Riker"));
         assert!(md.contains("id=\"m-33333333"));
         assert!(md.contains("id=\"m-44444444"));
+    }
+
+    /// The header stays a real `##` — qmd scores an `h2` far above the
+    /// blank line it would otherwise cut a chunk at, so dropping the
+    /// heading for a plain `<div>` would quietly coarsen every chat's
+    /// chunk boundaries.
+    #[test]
+    fn message_header_is_an_h2_with_a_hoverable_short_timestamp() {
+        let chat = mk_chat();
+        let md = render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test · Bridge Crew",
+            "fp",
+        );
+        assert!(
+            md.contains("## <span class=\"msg-author\">Picard</span> "),
+            "{md}"
+        );
+        assert!(
+            md.contains(
+                "<time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00+00:00\" \
+                 title=\"2364-04-11 00:00:00 UTC\">Sat Apr 11th, 2364 at 00:00</time>"
+            ),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn an_author_named_in_markup_cannot_break_out_of_the_header() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].author_display = "<script>x</script> & co".to_string();
+        let md = render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test · Bridge Crew",
+            "fp",
+        );
+        assert!(
+            md.contains("&lt;script&gt;x&lt;/script&gt; &amp; co"),
+            "{md}"
+        );
+        assert!(!md.contains("<script>"), "{md}");
+    }
+
+    fn aside_item(uuid: &str, text: &str) -> NormalizedChatItem {
+        NormalizedChatItem {
+            message_uuid: uuid.to_string(),
+            author_id: "tool".to_string(),
+            author_display: "tool".to_string(),
+            date_ms: Some(12442118400000),
+            text: Some(text.to_string()),
+            kind: ItemKind::Text,
+            attachments: vec![],
+            reactions: vec![],
+            system_note: None,
+            source_url: None,
+            kind_label: Some("Tool Call".to_string()),
+            source_ref: None,
+            is_aside: true,
+        }
+    }
+
+    /// One `<details>` per *run*, not per aside — the whole point is
+    /// that a turn's five tool steps cost the reader one line.
+    #[test]
+    fn adjacent_asides_share_one_collapsed_details() {
+        let mut chat = mk_chat();
+        let spoken = chat.buckets[0].items[0].clone();
+        chat.buckets[0].items = vec![
+            spoken.clone(),
+            aside_item("aside-1", "first tool"),
+            aside_item("aside-2", "second tool"),
+            spoken,
+            aside_item("aside-3", "third tool"),
+        ];
+        let md = render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test · Bridge Crew",
+            "fp",
+        );
+
+        assert_eq!(
+            md.matches("<details class=\"tool-group\">").count(),
+            2,
+            "two runs, two wrappers: {md}"
+        );
+        assert!(md.contains("<summary>🛠 2 tool steps</summary>"), "{md}");
+        assert!(md.contains("<summary>🛠 1 tool step</summary>"), "{md}");
+        // Every aside keeps its own anchor inside the wrapper, so a
+        // grid row still has something to scroll to.
+        for uuid in ["aside-1", "aside-2", "aside-3"] {
+            assert!(md.contains(&format!("id=\"m-{uuid}\"")), "{md}");
+        }
+    }
+
+    #[test]
+    fn flipping_is_aside_re_renders_the_document() {
+        let chat1 = mk_chat();
+        let mut chat2 = mk_chat();
+        chat2.buckets[0].items[0].is_aside = true;
+        assert_ne!(
+            compute_fingerprint(1, LAYOUT_VERSION, &chat1, &chat1.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &chat2, &chat2.buckets[0]),
+        );
     }
 
     #[test]
@@ -1030,15 +1245,15 @@ mod tests {
         let mut bare = mk_chat();
         bare.source_url = None;
         assert_eq!(
-            compute_fingerprint(1, &none, &none.buckets[0]),
-            compute_fingerprint(1, &bare, &bare.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &none, &none.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &bare, &bare.buckets[0]),
         );
         // …while setting / changing it re-cuts the fingerprint.
         let mut set = mk_chat();
         set.source_url = Some("https://example.com/a".to_string());
         assert_ne!(
-            compute_fingerprint(1, &none, &none.buckets[0]),
-            compute_fingerprint(1, &set, &set.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &none, &none.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &set, &set.buckets[0]),
         );
     }
 
@@ -1068,8 +1283,8 @@ mod tests {
         // And a set title re-cuts the fingerprint (None stays stable).
         let plain = mk_chat();
         assert_ne!(
-            compute_fingerprint(1, &plain, &plain.buckets[0]),
-            compute_fingerprint(1, &chat, &chat.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &plain, &plain.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]),
         );
     }
 
@@ -1108,8 +1323,8 @@ mod tests {
         // A per-message URL re-cuts the fingerprint.
         let plain = mk_chat();
         assert_ne!(
-            compute_fingerprint(1, &plain, &plain.buckets[0]),
-            compute_fingerprint(1, &chat, &chat.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &plain, &plain.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]),
         );
     }
 
@@ -1135,8 +1350,8 @@ mod tests {
         // …and it re-cuts the fingerprint.
         let plain = mk_chat();
         assert_ne!(
-            compute_fingerprint(1, &plain, &plain.buckets[0]),
-            compute_fingerprint(1, &chat, &chat.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &plain, &plain.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]),
         );
     }
 
@@ -1235,8 +1450,8 @@ mod tests {
         let mut epoch = mk_chat();
         epoch.buckets[0].items[0].date_ms = Some(0);
         assert_ne!(
-            compute_fingerprint(1, &undated, &undated.buckets[0]),
-            compute_fingerprint(1, &epoch, &epoch.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &undated, &undated.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &epoch, &epoch.buckets[0]),
         );
     }
 
@@ -1266,8 +1481,8 @@ mod tests {
         // org identity folds into the fingerprint (only when set).
         let plain = mk_chat();
         assert_ne!(
-            compute_fingerprint(1, &plain, &plain.buckets[0]),
-            compute_fingerprint(1, &chat, &chat.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &plain, &plain.buckets[0]),
+            compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]),
         );
     }
 }

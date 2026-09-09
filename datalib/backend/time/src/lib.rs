@@ -15,7 +15,7 @@
 //! sorts into a real position and answers `before:` / `after:` queries it
 //! should not.
 
-use chrono::{DateTime, FixedOffset, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -282,6 +282,48 @@ pub fn display_ts_from_unix_millis(ms: Option<i64>) -> String {
     IsoOffsetTimestamp::from_unix_millis(ms)
         .map(|t| t.inner().format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| format!("@{ms}ms"))
+}
+
+/// Compact, Slack-style stamp for a rendered message header:
+/// `Tue Apr 15th, 2369 at 08:30`.
+///
+/// Deliberately absolute rather than relative ("Today at 11:02"): the
+/// markdown is written once and read for years, so a word that means
+/// "the day this file was rendered" would be a lie by the next
+/// morning. The full instant stays one hover away — see
+/// [`display_ts_from_unix_millis`], which is what the renderer puts in
+/// the `title` attribute.
+///
+/// This is the *default* spelling, not the only possible one. The
+/// renderer also writes the machine-readable instant into the
+/// `<time datetime="…">` attribute beside it, so a UI that later grows
+/// a per-user format setting can restyle every stamp on screen without
+/// re-rendering a single document.
+///
+/// Display only; nothing derived from it reaches the index.
+pub fn short_ts(t: &IsoOffsetTimestamp) -> String {
+    let dt = t.inner();
+    let day = dt.day();
+    format!(
+        "{dow} {mon} {day}{ord}, {year} at {time}",
+        dow = dt.format("%a"),
+        mon = dt.format("%b"),
+        ord = ordinal_suffix(day),
+        year = dt.format("%Y"),
+        time = dt.format("%H:%M"),
+    )
+}
+
+fn ordinal_suffix(day: u32) -> &'static str {
+    // The teens are the exception the last digit alone gets wrong:
+    // 11th, 12th, 13th — not 11st, 12nd, 13rd.
+    match (day % 100, day % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    }
 }
 
 /// ISO 8601 but not RFC 3339, so it slips past producers and gets
@@ -625,6 +667,39 @@ mod tests {
             normalize_user_time_to_utc("2026-01-15").as_deref(),
             Some(expect_local(2026, 1, 15, 0, 0).as_str())
         );
+    }
+
+    #[test]
+    fn short_ts_reads_like_a_chat_header() {
+        let at = |s: &str| short_ts(&parse_strict(s).unwrap());
+        assert_eq!(
+            at("2369-04-15T08:30:00+00:00"),
+            "Tue Apr 15th, 2369 at 08:30"
+        );
+        // 24-hour clock, and the offset in the input is the clock the
+        // reader sees — we render the wall time as given, not in UTC.
+        assert_eq!(
+            at("2026-08-22T17:03:09-07:00"),
+            "Sat Aug 22nd, 2026 at 17:03"
+        );
+        // The four ordinal shapes, teens included.
+        let day = |s: &str| {
+            at(s)
+                .split(' ')
+                .nth(2)
+                .unwrap()
+                .trim_end_matches(',')
+                .to_string()
+        };
+        assert_eq!(day("2026-08-01T00:00:00Z"), "1st");
+        assert_eq!(day("2026-08-02T00:00:00Z"), "2nd");
+        assert_eq!(day("2026-08-03T00:00:00Z"), "3rd");
+        assert_eq!(day("2026-08-11T00:00:00Z"), "11th");
+        assert_eq!(day("2026-08-12T00:00:00Z"), "12th");
+        assert_eq!(day("2026-08-13T00:00:00Z"), "13th");
+        assert_eq!(day("2026-08-21T00:00:00Z"), "21st");
+        assert_eq!(day("2026-08-23T00:00:00Z"), "23rd");
+        assert_eq!(day("2026-08-31T00:00:00Z"), "31st");
     }
 
     #[test]

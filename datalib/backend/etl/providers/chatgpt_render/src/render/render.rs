@@ -183,6 +183,7 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
                 msg_id.entity_kind,
                 msg_id.natural_key.clone(),
             )),
+            is_aside: is_tool_role(m.role.as_deref()),
         });
     }
 
@@ -283,6 +284,19 @@ fn att_to_norm(a: &OAAttachmentRef) -> NormalizedAttachment {
         source_url: None,
         ref_id: Some(a.file_id.clone()),
     }
+}
+
+/// Whether a message is tool traffic, and so belongs in a collapsed
+/// aside rather than in the reading flow.
+///
+/// Read off the role, *not* off `kind_for_role_and_type` below: that
+/// function lumps `system` in with the tool roles under one "Tool Call"
+/// label, and a system prompt is content someone may well want to read.
+fn is_tool_role(role: Option<&str>) -> bool {
+    matches!(
+        role.unwrap_or("").to_ascii_lowercase().as_str(),
+        "tool" | "function"
+    )
 }
 
 fn kind_for_role_and_type(role: Option<&str>, content_type: Option<&str>) -> &'static str {

@@ -144,6 +144,7 @@ fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
                     source_url: None,
                     kind_label: None,
                     source_ref: None,
+                    is_aside: false,
                 }
             })
             .collect();
