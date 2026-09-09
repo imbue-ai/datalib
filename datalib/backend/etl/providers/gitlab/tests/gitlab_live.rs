@@ -6,7 +6,7 @@
 //! Live GitLab single-MR download + render test.
 
 use datalib_etl_gitlab::download::{self as gitlab, parse_mr_ref, FetchOptions};
-use datalib_etl_gitlab::render::{parse_api_dir, render_gitlab};
+use datalib_etl_gitlab_render::render::{parse_api_dir, render_gitlab};
 use insta::assert_json_snapshot;
 use serde_json::json;
 
@@ -49,7 +49,7 @@ async fn gitlab_live_single_mr_snapshot() {
 
     let render_root = tmp.clone();
     let stanza = "gitlab";
-    let mut docs: Vec<datalib_etl::grid_index::RenderedMarkdown> = Vec::new();
+    let mut docs: Vec<datalib_etl_render::grid_index::RenderedMarkdown> = Vec::new();
     render_gitlab(
         &parsed,
         &render_root,
@@ -63,7 +63,7 @@ async fn gitlab_live_single_mr_snapshot() {
     )
     .expect("render_gitlab failed");
 
-    let qmd_rel = datalib_etl_gitlab::render::render::mr_qmd_path_rel(
+    let qmd_rel = datalib_etl_gitlab_render::render::render::mr_qmd_path_rel(
         stanza,
         &mr.project_full_path,
         mr.mr_iid,
@@ -82,7 +82,7 @@ async fn gitlab_live_single_mr_snapshot() {
     );
 
     let mut sections: Vec<&'static str> = Vec::new();
-    use datalib_etl_gitlab::render::parse::NoteSection;
+    use datalib_etl_gitlab_render::render::parse::NoteSection;
     if parsed
         .notes
         .iter()

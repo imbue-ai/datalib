@@ -434,7 +434,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         The run reports success and the row count looks plausible — one
         source has simply vanished from the index.
 
-        `IdClaims` in `datalib_etl::grid_index` now fails the run when
+        `IdClaims` in `datalib_etl_render::grid_index` now fails the run when
         it sees this, so in a green pipeline this is a second, external
         witness rather than the primary check. It is asserted here
         anyway because it reads the store rather than the code path:

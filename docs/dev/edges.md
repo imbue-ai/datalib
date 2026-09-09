@@ -5,7 +5,7 @@ documents (or spans inside documents) discovered during ingest. The
 schema is the hand-written `EdgeRow` struct at
 `datalib/backend/schema/src/edges.rs` (DDL via
 `#[derive(PortableTable)]`); the table is created by
-`init_schema` in `datalib/backend/etl/src/grid_index.rs` and persists in
+`init_schema` in `datalib/backend/etl/render/src/grid_index.rs` and persists in
 `<root>/unified_index/grid/db.doltlite_db` alongside `grid_rows` and
 `markdowns`.
 

@@ -9,11 +9,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
-use datalib_etl_perseus::render::align::PerseusAlignments;
-use datalib_etl_perseus::render::{parse, render};
 use datalib_etl_perseus::{book_uuid, chapter_uuid, paragraph_uuid};
+use datalib_etl_perseus_render::render::align::PerseusAlignments;
+use datalib_etl_perseus_render::render::{parse, render};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 
 const GRC: &str = "perseus-grc2";
 const ENG: &str = "1st1K-eng1";

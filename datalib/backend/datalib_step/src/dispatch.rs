@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::processor::{DataProcessor, PlanContext};
+use datalib_etl_render::processor::RenderProcessor;
 use datalib_source_common::{Defaults, DownloadParams};
 
 use crate::source_type::SourceType;
@@ -27,7 +28,24 @@ pub struct PlannedSource {
     /// `common.always_clear_before_ingest`, resolved. Download wave only —
     /// render rewrites its own tree already.
     pub always_clear_before_ingest: bool,
-    pub processors: Vec<Box<dyn DataProcessor>>,
+    pub processors: Wave,
+}
+
+/// A planned source's processors, which are of a different type per
+/// phase: download and render no longer share a trait, because they no
+/// longer share a run context.
+pub enum Wave {
+    Download(Vec<Box<dyn DataProcessor>>),
+    Render(Vec<Box<dyn RenderProcessor>>),
+}
+
+impl Wave {
+    pub fn len(&self) -> usize {
+        match self {
+            Wave::Download(p) => p.len(),
+            Wave::Render(p) => p.len(),
+        }
+    }
 }
 
 impl std::fmt::Debug for PlannedSource {
@@ -72,18 +90,20 @@ pub fn plan(
         )
     })?;
 
+    // Each arm names two crates, because a provider is two crates: the
+    // download half and the `_render` half that links `datalib_schema`.
     macro_rules! arm {
         // The usual shape: a provider's two waves are its
         // `plan_download` / `plan_render` pair.
-        ($cfgty:ty, $rcfgty:ty, $provider:ident) => {
-            arm!($cfgty, $rcfgty, $provider, plan_download, plan_render)
+        ($cfgty:ty, $rcfgty:ty, $dlp:ident, $rnp:ident) => {
+            arm!($cfgty, $rcfgty, $dlp, $rnp, plan_download, plan_render)
         };
         // …and the shape for a provider serving more than one source
         // type, which needs a different entry point per type. Only
         // claude does: `claude_api` walks the live API,
         // `claude_export` ingests an export off disk, and they share
         // one `plan_render`.
-        ($cfgty:ty, $rcfgty:ty, $provider:ident, $dl:ident, $rn:ident) => {{
+        ($cfgty:ty, $rcfgty:ty, $dlp:ident, $rnp:ident, $dl:ident, $rn:ident) => {{
             let ctx = PlanContext {
                 name: name.to_string(),
                 // Playback redirection goes through the
@@ -111,7 +131,7 @@ pub fn plan(
                         raw_path,
                         download_params,
                         always_clear_before_ingest,
-                        processors: $provider::processor::$dl(ctx, cfg)?,
+                        processors: Wave::Download($dlp::processor::$dl(ctx, cfg)?),
                     }
                 }
                 Phase::Render => {
@@ -131,7 +151,52 @@ pub fn plan(
                         // Rate-limit bounds are download-only machinery.
                         download_params: Default::default(),
                         always_clear_before_ingest: false,
-                        processors: $provider::processor::$rn(ctx, cfg)?,
+                        processors: Wave::Render($rnp::processor::$rn(ctx, cfg)?),
+                    }
+                }
+            }
+        }};
+    }
+
+    // A source that renders nothing: it plans a download wave and an
+    // empty render one. The render config is still parsed, so a typo in
+    // a render step's params is still rejected rather than ignored.
+    macro_rules! download_only {
+        ($cfgty:ty, $rcfgty:ty, $dlp:ident) => {{
+            let ctx = PlanContext {
+                name: name.to_string(),
+                playback_root: None,
+            };
+            match phase {
+                Phase::Download => {
+                    let mut cfg: $cfgty = serde_json::from_value(source).with_context(|| {
+                        format!("parse --params as a {source_type} download config")
+                    })?;
+                    cfg.common.fold_defaults(&Defaults::default());
+                    cfg.common.resolve_paths(data_root, name);
+                    cfg.validate()
+                        .with_context(|| format!("source {name:?} (type={source_type})"))?;
+                    PlannedSource {
+                        name: name.to_string(),
+                        source_type,
+                        raw_path: cfg.common.raw_path().to_path_buf(),
+                        download_params: cfg.common.download_params.clone(),
+                        always_clear_before_ingest: cfg.common.always_clear_before_ingest,
+                        processors: Wave::Download($dlp::processor::plan_download(ctx, cfg)?),
+                    }
+                }
+                Phase::Render => {
+                    let mut cfg: $rcfgty = serde_json::from_value(source).with_context(|| {
+                        format!("parse --params as a {source_type} render config")
+                    })?;
+                    cfg.common.resolve_paths(data_root, name);
+                    PlannedSource {
+                        name: name.to_string(),
+                        source_type,
+                        raw_path: cfg.common.raw_path().to_path_buf(),
+                        download_params: Default::default(),
+                        always_clear_before_ingest: false,
+                        processors: Wave::Render(Vec::new()),
                     }
                 }
             }
@@ -144,66 +209,78 @@ pub fn plan(
         SourceType::ClaudeApi => arm!(
             datalib_etl_claude_config::ClaudeConfig,
             datalib_etl_claude_config::ClaudeRenderConfig,
-            datalib_etl_claude
+            datalib_etl_claude,
+            datalib_etl_claude_render
         ),
         SourceType::ClaudeExport => arm!(
             datalib_etl_claude_config::ClaudeExportConfig,
             datalib_etl_claude_config::ClaudeExportRenderConfig,
             datalib_etl_claude,
+            datalib_etl_claude_render,
             plan_export_download,
             plan_render
         ),
         SourceType::ChatgptApi => arm!(
             datalib_etl_chatgpt_config::ChatgptConfig,
             datalib_etl_chatgpt_config::ChatgptRenderConfig,
-            datalib_etl_chatgpt
+            datalib_etl_chatgpt,
+            datalib_etl_chatgpt_render
         ),
         SourceType::SlackApi => arm!(
             datalib_etl_slack_config::SlackConfig,
             datalib_etl_slack_config::SlackRenderConfig,
-            datalib_etl_slack
+            datalib_etl_slack,
+            datalib_etl_slack_render
         ),
         SourceType::GithubApi => arm!(
             datalib_etl_github_config::GithubConfig,
             datalib_etl_github_config::GithubRenderConfig,
-            datalib_etl_github
+            datalib_etl_github,
+            datalib_etl_github_render
         ),
         SourceType::GitlabApi => arm!(
             datalib_etl_gitlab_config::GitlabConfig,
             datalib_etl_gitlab_config::GitlabRenderConfig,
-            datalib_etl_gitlab
+            datalib_etl_gitlab,
+            datalib_etl_gitlab_render
         ),
         SourceType::NotionApi => arm!(
             datalib_etl_notion_config::NotionConfig,
             datalib_etl_notion_config::NotionRenderConfig,
-            datalib_etl_notion
+            datalib_etl_notion,
+            datalib_etl_notion_render
         ),
         SourceType::Email => arm!(
             datalib_etl_email_config::EmailConfig,
             datalib_etl_email_config::EmailRenderConfig,
-            datalib_etl_email
+            datalib_etl_email,
+            datalib_etl_email_render
         ),
         SourceType::Beeper => arm!(
             datalib_etl_beeper_config::BeeperConfig,
             datalib_etl_beeper_config::BeeperRenderConfig,
-            datalib_etl_beeper
+            datalib_etl_beeper,
+            datalib_etl_beeper_render
         ),
         SourceType::Carddav => arm!(
             datalib_etl_carddav_config::CarddavConfig,
             datalib_etl_carddav_config::CarddavRenderConfig,
-            datalib_etl_contacts
+            datalib_etl_contacts,
+            datalib_etl_contacts_render
         ),
         SourceType::Linkedin => arm!(
             datalib_etl_linkedin_config::LinkedinConfig,
             datalib_etl_linkedin_config::LinkedinRenderConfig,
-            datalib_etl_linkedin
+            datalib_etl_linkedin,
+            datalib_etl_linkedin_render
         ),
         SourceType::GoogleTakeout => arm!(
             datalib_etl_google_takeout_config::GoogleTakeoutConfig,
             datalib_etl_google_takeout_config::GoogleTakeoutRenderConfig,
-            datalib_etl_google_takeout
+            datalib_etl_google_takeout,
+            datalib_etl_google_takeout_render
         ),
-        SourceType::Media => arm!(
+        SourceType::Media => download_only!(
             datalib_etl_media_config::MediaConfig,
             datalib_etl_media_config::MediaRenderConfig,
             datalib_etl_media
@@ -211,39 +288,45 @@ pub fn plan(
         SourceType::Pdf => arm!(
             datalib_etl_pdf_config::PdfConfig,
             datalib_etl_pdf_config::PdfRenderConfig,
-            datalib_etl_pdf
+            datalib_etl_pdf,
+            datalib_etl_pdf_render
         ),
         SourceType::Perseus => arm!(
             datalib_etl_perseus_config::PerseusConfig,
             datalib_etl_perseus_config::PerseusRenderConfig,
-            datalib_etl_perseus
+            datalib_etl_perseus,
+            datalib_etl_perseus_render
         ),
         SourceType::Yolink => arm!(
             datalib_etl_yolink_config::YolinkConfig,
             datalib_etl_yolink_config::YolinkRenderConfig,
-            datalib_etl_yolink
+            datalib_etl_yolink,
+            datalib_etl_yolink_render
         ),
         SourceType::SignalBackup => arm!(
             datalib_etl_signal_config::SignalConfig,
             datalib_etl_signal_config::SignalRenderConfig,
-            datalib_etl_signal
+            datalib_etl_signal,
+            datalib_etl_signal_render
         ),
         SourceType::WhatsappBackup => arm!(
             datalib_etl_whatsapp_config::WhatsappConfig,
             datalib_etl_whatsapp_config::WhatsappRenderConfig,
-            datalib_etl_whatsapp
+            datalib_etl_whatsapp,
+            datalib_etl_whatsapp_render
         ),
         SourceType::SmsBackupRestore => arm!(
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreConfig,
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreRenderConfig,
-            datalib_etl_sms_backup_restore
+            datalib_etl_sms_backup_restore,
+            datalib_etl_sms_backup_restore_render
         ),
-        SourceType::Lightroom => arm!(
+        SourceType::Lightroom => download_only!(
             datalib_etl_lightroom_config::LightroomConfig,
             datalib_etl_lightroom_config::LightroomRenderConfig,
             datalib_etl_lightroom
         ),
-        SourceType::Fsindex => arm!(
+        SourceType::Fsindex => download_only!(
             datalib_etl_fsindex_config::FsindexConfig,
             datalib_etl_fsindex_config::FsindexRenderConfig,
             datalib_etl_fsindex
@@ -421,7 +504,7 @@ mod tests {
             td.path(),
         )
         .unwrap();
-        assert!(dl.processors.is_empty(), "no sync: means nothing to fetch");
+        assert_eq!(dl.processors.len(), 0, "no sync: means nothing to fetch");
     }
 
     /// `claude_export` is file-backed, not render-only: it ingests the
@@ -524,8 +607,9 @@ mod tests {
             assert_eq!(dl.processors.len(), 1, "{ty} should plan one download");
 
             let rn = plan(ty, Phase::Render, "local", serde_json::json!({}), td.path()).unwrap();
-            assert!(
-                rn.processors.is_empty(),
+            assert_eq!(
+                rn.processors.len(),
+                0,
                 "{ty} renders nothing; download-only is structural, not a flag"
             );
         }

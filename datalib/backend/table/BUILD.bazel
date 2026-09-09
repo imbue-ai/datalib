@@ -1,0 +1,21 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+exports_files(["Cargo.toml"])
+
+# The `BulkUpsertable` row-write contract, alone in a leaf crate.
+#
+# `deps` is `sqlx` and nothing else, and that is load-bearing rather
+# than tidy — the same reason //datalib/backend/runtime keeps an empty
+# one. Both schema families implement this trait and every provider's
+# download side calls the helpers that take it, so anything added here
+# is inherited by every downloader in the tree. See src/lib.rs.
+rust_library(
+    name = "datalib_table",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_table",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:sqlx",
+    ],
+)

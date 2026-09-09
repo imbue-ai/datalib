@@ -1,0 +1,38 @@
+[package]
+name = "datalib-etl-google-takeout-render"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_etl_google_takeout_render"
+path = "src/lib.rs"
+
+[dependencies]
+datalib-etl = { path = "../.." }
+datalib-etl-render = { path = "../../render" }
+datalib-etl-macros = { path = "../../macros" }
+datalib-obs = { path = "../../../obs" }
+datalib-time = { path = "../../../time" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "rt-multi-thread", "macros"] }
+uuid = { workspace = true, features = ["v5"] }
+sqlx = { workspace = true }
+# Google Voice takeout is XHTML; quick-xml pull-parses it (with a
+# `<br>`→newline pre-pass) into structured rows.
+quick-xml = "0.36"
+sha2 = { workspace = true }
+tracing = "0.1"
+
+datalib-etl-chat-common = { path = "../../chat-common" }
+datalib-schema = { path = "../../../schema" }
+datalib-etl-google-takeout = { path = "../google_takeout" }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+sqlx = { workspace = true }

@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 
 use super::db::{BeeperMediaAttachmentRow, EventRow, RawDb, RoomRow, UserRow};
 use super::FetchSummary;
-use crate::render::{beeper_event_uuid, beeper_room_uuid, beeper_user_uuid};
+use crate::download::schema_raw::{beeper_event_uuid, beeper_room_uuid, beeper_user_uuid};
 use datalib_etl::blob_cas::CasEdgeRow as _;
 
 /// In-memory accumulator the per-thread walkers push into; flushed

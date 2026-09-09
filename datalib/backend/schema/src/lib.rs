@@ -1,15 +1,6 @@
 //! Datalib **render schema** crate — the "universal schema" for the
 //! denormalized tables that back the grid / UI.
 
-// So the `PortableTable` derive can emit `impl
-// ::datalib_schema::bulk::BulkUpsertable` for structs defined *inside*
-// this crate: without the self-alias that absolute path does not
-// resolve here, and a relative one would not resolve in the provider
-// crates that also use the derive.
-extern crate self as datalib_schema;
-
-pub mod bulk;
-
 pub mod providers {
     include!("providers.rs");
 }

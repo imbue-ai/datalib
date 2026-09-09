@@ -1,0 +1,45 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Render half of the `pdf` provider. This is the side that knows
+# `datalib_schema`; //datalib/backend/etl/providers/pdf is the
+# download half and deliberately does not.
+rust_library(
+    name = "datalib_etl_pdf_render",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_pdf_render",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl/providers/pdf:datalib_etl_pdf",
+        "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:hex",
+        "@datalib_crates//:lopdf",
+        "@datalib_crates//:pdf-inspector",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:url",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "pdf_render_unittests",
+    size = "small",
+    crate = ":datalib_etl_pdf_render",
+    edition = "2021",
+)

@@ -72,7 +72,7 @@ Factored out and shared already:
 - **The downstream is already provider-agnostic** —
   `RenderedMarkdown`, handed back through `ctx.emit_doc` and written
   into the source's render store, is the render→index contract;
-  `etl/src/title.rs` and `etl/src/section.rs` write the cross-provider
+  `etl/src/title.rs` and `etl/render/src/section.rs` write the cross-provider
   title block and anchors; and `grid_index` needs no per-provider
   change to pick up a new source's store.
 

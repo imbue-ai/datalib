@@ -25,8 +25,8 @@ fn applet_command() -> String {
 }
 
 fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
-    use datalib_etl::grid_index::RenderedMarkdown;
-    use datalib_etl::indexed_markdown::IndexedMarkdownStore;
+    use datalib_etl_render::grid_index::RenderedMarkdown;
+    use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
     use datalib_schema::grid_rows::GridRow;
 
     let mk = |uuid: String, index: Option<i64>, author: Option<&str>, text: &str, when: &str| {

@@ -21,7 +21,6 @@ rust_library(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/notion_config:datalib_etl_notion_config",
         "//datalib/backend/time:datalib_time",
-        "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:clap",
@@ -46,6 +45,7 @@ rust_binary(
     deps = [
         ":datalib_etl_notion",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
@@ -75,6 +75,7 @@ rust_test(
     deps = [
         ":datalib_etl_notion",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -88,7 +89,9 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_etl_notion",
+        "//datalib/backend/etl/providers/notion_render:datalib_etl_notion_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
@@ -103,7 +106,9 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_etl_notion",
+        "//datalib/backend/etl/providers/notion_render:datalib_etl_notion_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
@@ -127,7 +132,9 @@ rust_test(
     ],
     deps = [
         ":datalib_etl_notion",
+        "//datalib/backend/etl/providers/notion_render:datalib_etl_notion_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",

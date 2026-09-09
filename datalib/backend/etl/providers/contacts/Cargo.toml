@@ -10,10 +10,9 @@ path = "src/lib.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }
-datalib-etl-contact-common = { path = "../../contact-common" }
+datalib-etl-render = { path = "../../render" }
 datalib-etl-macros = { path = "../../macros" }
 datalib-time = { path = "../../../time" }
-datalib-schema = { path = "../../../schema" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

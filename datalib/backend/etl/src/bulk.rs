@@ -93,8 +93,10 @@ where
     }
     Ok(())
 }
-/// The row-struct write contract.
-pub use datalib_schema::bulk::BulkUpsertable;
+/// The row-struct write contract. Re-exported so the `RawTable` /
+/// `WirePayloadRow` / `CasEdgeRow` derives can name it as
+/// `::datalib_etl::bulk::BulkUpsertable` from any provider crate.
+pub use datalib_table::BulkUpsertable;
 
 pub fn insert_sql<T: BulkUpsertable>() -> String {
     let mut cols = String::from(T::ID_COLUMN);

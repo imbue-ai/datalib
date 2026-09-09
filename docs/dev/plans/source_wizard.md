@@ -1204,7 +1204,7 @@ someone does design it, note the prerequisite: **`grid_index` is
 upsert-only.** `build_grid_index` walks the sidecar trees and per
 document runs `DELETE … WHERE markdown_uuid = ?` followed by an insert
 — the delete-then-insert of a document it is currently re-indexing.
-Nothing in `etl/src/grid_index.rs` sweeps rows whose sidecar has
+Nothing in `etl/render/src/grid_index.rs` sweeps rows whose sidecar has
 disappeared, so deleting a `rendered_md` tree by hand today leaves its
 `grid_rows`, `markdowns` and `edges` rows in the index indefinitely.
 An orphan sweep keyed on `source_name` would be the first piece of that

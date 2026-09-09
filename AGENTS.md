@@ -181,8 +181,8 @@ reference doc it relates to.
 - [`docs/dev/plans/data_centric_ui.md`](docs/dev/plans/data_centric_ui.md) —
   *proposal*, nothing built: one typed table viewer plus the markdown
   one, with column types declared by whoever serves the rows, and the
-  Manage screen ported onto it as an ordinary card. Depends on the
-  crate split below.
+  Manage screen ported onto it as an ordinary card. The crate split it
+  depended on has landed.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md)
   — **read before adding a source to the Add/Edit wizard**: a field
   that asks for a file or folder must offer a native OS picker, not a
@@ -212,11 +212,13 @@ reference doc it relates to.
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites;
   [`docs/dev/coverage.md`](docs/dev/coverage.md) — coverage runs.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
-- [`docs/dev/plans/provider_crate_split.md`](docs/dev/plans/provider_crate_split.md)
-  — *proposal*, nothing built: separating download from render so a
-  render-schema change stops rebuilding every downloader. Measured —
-  `datalib_etl` has a direct edge to `datalib_schema`, so splitting the
-  provider crates alone would buy nothing.
+- [`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md)
+  — **built**: download and render are separate crates, so a
+  render-schema change no longer rebuilds every downloader (105 test
+  targets downstream of `datalib_schema`, now 79). Read it for the
+  measurements and for the three things the proposal got wrong; the
+  rules it leaves behind are in §"Download and render are separate
+  crates" below.
 
 **User-facing**
 
@@ -333,13 +335,21 @@ datalib/
     datalib_step/  `datalib-step`: the built-in step commands —
                    download/render <source_type>, grid_index, qmd_index.
     etl/           shared ingest machinery (raw stores, blob CAS,
-                   render cursors) + etl/providers/<p>/ crates, each
-                   with src/download/ and src/render/ and a sibling
-                   <p>_config/ crate for its config schema.
-                   Three of them scan local trees and share
+                   render cursors) — the download side, and the one
+                   place a downloader's dependencies stop.
+    etl/render/    `datalib_etl_render`: the render store, the
+                   unified-index load, and `RenderCtx`. Everything in
+                   the tree that knows `datalib_schema` sits here or
+                   above; see "Download and render are separate crates".
+    etl/providers/ <p>/ (download) + <p>_render/ (render) per provider,
+                   plus a <p>_config/ crate for the config schema.
+                   Three providers scan local trees and share
                    etl/src/fswalk.rs (blake3 + Unison's rescan cursor):
                    fsindex (path-keyed, no render), pdf and media (both
-                   content-keyed; media has no render side either).
+                   content-keyed; media has no render side either), so
+                   fsindex, media and lightroom have no <p>_render.
+    table/         `datalib_table`: the `BulkUpsertable` row-write
+                   contract, alone, with `sqlx` as its only dependency.
     migrate_config/ `datalib-migrate-config`: one-shot conversion of a
                    pre-TOML `config.yaml`. Holds every retired config
                    schema and the tree's last YAML parser, so the
@@ -395,6 +405,12 @@ proliferation is close to free.
 Three of them (`chatgpt_config`, `perseus_config`, `slack_config`) are
 missing the comment their siblings carry; the convention applies to
 them just the same.
+
+The `<p>_render` split below is the same move for the same reason —
+see §"Download and render are separate crates". Those crates *do*
+carry a `Cargo.toml`, because unlike the config crates they depend on
+first-party crates, so they are the ordinary case rather than the
+free one.
 
 ## The sync pipeline in one paragraph
 
@@ -486,6 +502,51 @@ git subtree pull --prefix=third-party/qmd \
 Do **not** edit files under `third-party/qmd/` — they will be overwritten
 on the next pull. If you need local patches, layer them outside the
 subtree and document why.
+
+## Download and render are separate crates
+
+A provider is three crates: `datalib_etl_<p>_config` holds the config
+schema (§"Why each provider has a `<p>_config` crate"),
+`datalib_etl_<p>` fetches, and `datalib_etl_<p>_render` turns what was
+fetched into markdown and `grid_rows`. The framework splits the same
+way — `datalib_etl` below, `datalib_etl_render` above it.
+
+**The render schema stops at that line.** `datalib_schema` — `GridRow`,
+`edges`, `markdowns` — is reachable from the render crates and from
+nothing on the download side. That is what the split is for: moving a
+`grid_rows` column used to rebuild and re-run every downloader in the
+tree, including `chatgpt_live`, `claude_reset_and_redownload` and every
+other test that cannot be affected by it.
+
+The direction is enforced by Rust itself: crate dependencies are
+acyclic, so a download crate *cannot* depend on its render crate even
+by accident. Nothing else is needed to keep it that way, and no bazel
+visibility rule is doing this job.
+
+Two rules follow:
+
+- **Anything a downloader needs must live on the download side.** The
+  uuid recipes are the usual case: they are minted during download and
+  read again during render, so they belong in `download/schema_raw.rs`
+  and the render crate names them through the download crate. Before
+  the split, beeper's downloader reached three of them through a
+  re-export in `render/mod.rs` — which read as a render dependency and
+  would now not compile.
+- **A source that renders nothing has no `_render` crate at all.**
+  fsindex, media and lightroom are download-only, and `download_only!`
+  in `datalib_step/src/dispatch.rs` says so once rather than three
+  providers each carrying a `plan_render` stub — and, with it, a
+  dependency on a framework they have no use for.
+
+The measurement that motivated the split is the one that checks it:
+
+```sh
+bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
+```
+
+79 as of the split (105 before it). If that number climbs, something
+took a dependency it should not have; the arithmetic is in
+[`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md).
 
 ## The grid_rows union table
 

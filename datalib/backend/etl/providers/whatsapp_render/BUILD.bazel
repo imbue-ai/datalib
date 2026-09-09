@@ -1,0 +1,45 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Render half of the `whatsapp` provider. This is the side that knows
+# `datalib_schema`; //datalib/backend/etl/providers/whatsapp is the
+# download half and deliberately does not.
+rust_library(
+    name = "datalib_etl_whatsapp_render",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_whatsapp_render",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/etl/providers/whatsapp:datalib_etl_whatsapp",
+        "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+        "@datalib_crates//:walkdir",
+    ],
+)
+
+rust_test(
+    name = "whatsapp_render_unittests",
+    size = "small",
+    crate = ":datalib_etl_whatsapp_render",
+    edition = "2021",
+)

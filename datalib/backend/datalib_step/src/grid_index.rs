@@ -5,7 +5,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use datalib_etl::grid_index::{build_grid_index, init_schema};
+use datalib_etl_render::grid_index::{build_grid_index, init_schema};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use crate::events::{Emitter, OutputClaim};

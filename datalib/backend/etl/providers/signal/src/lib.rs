@@ -1,5 +1,6 @@
-//! Signal provider for [`datalib_etl`]: Download only (for now).
+//! Signal provider for [`datalib_etl`]: the download half — the
+//! decrypted Android backup into a doltlite raw store. Rendering lives
+//! in [`datalib_etl_signal_render`].
 
 pub mod download;
 pub mod processor;
-pub mod render;

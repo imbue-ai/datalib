@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use datalib_etl_slack::render::{parse, ts_to_iso, ts_to_ms};
+use datalib_etl_slack_render::render::{parse, ts_to_iso, ts_to_ms};
 
 fn fixture_root() -> PathBuf {
     if let Ok(d) = std::env::var("SLACK_FIXTURE_DIR") {
