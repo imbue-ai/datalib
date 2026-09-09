@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_perseus_config::PerseusConfig;
 use datalib_etl_perseus_config::PerseusRenderConfig;
+use datalib_etl_render::processor::{RenderCtx, RenderPass, RenderProcessor};
 
 use crate::download;
 
@@ -46,7 +47,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: PerseusRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let input_path = config.common.input_or_raw_path().to_path_buf();
     let pairs: Vec<(String, String)> = config
@@ -98,7 +99,7 @@ struct PerseusRender {
 }
 
 #[async_trait]
-impl DataProcessor for PerseusRender {
+impl RenderProcessor for PerseusRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -107,7 +108,7 @@ impl DataProcessor for PerseusRender {
         Some(crate::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{align, parse, render};
         let parsed = parse::parse(&self.input_path)
             .with_context(|| format!("perseus parse {}", self.input_path.display()))?;
@@ -136,7 +137,7 @@ impl DataProcessor for PerseusRender {
         )
         .context("perseus render_all")?;
         // `render_all` has no early return: reaching here means it walked.
-        ctx.retain_documents(datalib_etl::processor::RenderPass::Walked, &seen);
+        ctx.retain_documents(RenderPass::Walked, &seen);
         Ok("rendered".into())
     }
 }

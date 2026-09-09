@@ -9,10 +9,10 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_signal::download::{self, FetchOptions};
 use datalib_etl_signal::render::{parse_raw_dir, render_all, render_params};
 use datalib_signal_backup::{

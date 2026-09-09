@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl_beeper::download::{self, FetchOptions, FetchSummary};
 use datalib_etl_beeper::render::{self, Period};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("BEEPER_FIXTURE_DIR") {

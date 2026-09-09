@@ -5,10 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl::title::Title;
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
 use regex::Regex;

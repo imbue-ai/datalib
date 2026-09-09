@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_render::processor::{RenderCtx, RenderPass, RenderProcessor};
 
 use datalib_etl_carddav_config::CarddavRenderConfig;
 use datalib_etl_carddav_config::{CarddavConfig, CarddavSync};
@@ -49,7 +50,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: CarddavRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(CarddavRender {
@@ -153,7 +154,7 @@ pub struct CarddavRender {
 }
 
 #[async_trait]
-impl DataProcessor for CarddavRender {
+impl RenderProcessor for CarddavRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -162,7 +163,7 @@ impl DataProcessor for CarddavRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse, render};
 
         let db_path = download::db_path_for(&self.raw_path);
@@ -191,7 +192,7 @@ impl DataProcessor for CarddavRender {
         // `render_all` itself has no early return, and the one bail above
         // returned already — so reaching here means the store was there and
         // this pass walked all of it.
-        ctx.retain_documents(datalib_etl::processor::RenderPass::Walked, &seen);
+        ctx.retain_documents(RenderPass::Walked, &seen);
         Ok("rendered".into())
     }
 }

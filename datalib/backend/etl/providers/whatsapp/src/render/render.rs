@@ -8,13 +8,13 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 
 use datalib_etl::doltlite_raw;
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl_chat_common::{
     render::{RenderProfile, RenderSummary, ENTITY_KIND_CONVERSATION},
     NormalizedChat,
 };
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::providers::Provider;
 use sqlx::Row;
 
@@ -397,10 +397,11 @@ mod tests {
             let mut emitted: Vec<String> = Vec::new();
             let progress = datalib_etl::progress::Progress::noop();
             let prior: HashMap<String, String> = HashMap::new();
-            let mut on_complete = |md: datalib_etl::grid_index::RenderedMarkdown| -> Result<()> {
-                emitted.push(md.markdown_uuid);
-                Ok(())
-            };
+            let mut on_complete =
+                |md: datalib_etl_render::grid_index::RenderedMarkdown| -> Result<()> {
+                    emitted.push(md.markdown_uuid);
+                    Ok(())
+                };
             let mut on_chat_gone = |_: &str| -> Result<()> { Ok(()) };
             render_all(
                 &parsed.chats,

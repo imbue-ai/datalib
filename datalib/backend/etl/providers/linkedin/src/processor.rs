@@ -1,6 +1,5 @@
 //! Program-A `DataProcessor`s for the `linkedin` source.
 
-use datalib_etl::processor::RenderPass;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -9,6 +8,7 @@ use async_trait::async_trait;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_linkedin_config::LinkedinConfig;
 use datalib_etl_linkedin_config::LinkedinRenderConfig;
+use datalib_etl_render::processor::{RenderCtx, RenderPass, RenderProcessor};
 
 use crate::download;
 
@@ -37,7 +37,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: LinkedinRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(LinkedinRender {
@@ -96,7 +96,7 @@ struct LinkedinRender {
 }
 
 #[async_trait]
-impl DataProcessor for LinkedinRender {
+impl RenderProcessor for LinkedinRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -105,7 +105,7 @@ impl DataProcessor for LinkedinRender {
         Some(crate::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         // This renderer walks the whole raw store every run, so the set it
         // considered is the complete one: anything else the render store
         // holds is a document whose source is gone. The driver sweeps.

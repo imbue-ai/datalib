@@ -94,7 +94,7 @@ impl Harness {
         prior: &HashMap<String, String>,
     ) -> Result<(
         render::RenderSummary,
-        Vec<datalib_etl::grid_index::RenderedMarkdown>,
+        Vec<datalib_etl_render::grid_index::RenderedMarkdown>,
     )> {
         let mut emitted = Vec::new();
         let mut sink = |md| {

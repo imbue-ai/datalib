@@ -173,11 +173,11 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 }
 
 /// Re-exports of the ONE canonical latchkey pin and the user-facing
-/// invocation hint (`datalib_core::node_runtime`) — re-exports
+/// invocation hint (`datalib_runtime::node_runtime`) — re-exports
 /// rather than literals so this crate and the provider crates cannot
 /// drift from the hint text / staged tree (same discipline as the qmd
 /// pin).
-pub use datalib_core::node_runtime::{latchkey_cli_hint, LATCHKEY_VERSION};
+pub use datalib_runtime::node_runtime::{latchkey_cli_hint, LATCHKEY_VERSION};
 
 /// Entry script of the `latchkey` npm package inside a staged runtime
 /// tree (its package.json `bin` target), equivalent to what
@@ -190,9 +190,9 @@ const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 /// non-CF endpoints.
 pub fn latchkey_command() -> std::process::Command {
     warn_if_missing();
-    datalib_core::node_runtime::bundled_command("latchkey", LATCHKEY_VERSION, LATCHKEY_ENTRY_REL)
+    datalib_runtime::node_runtime::bundled_command("latchkey", LATCHKEY_VERSION, LATCHKEY_ENTRY_REL)
         .unwrap_or_else(|| {
-            datalib_core::node_runtime::npx_command(&format!("latchkey@{LATCHKEY_VERSION}"))
+            datalib_runtime::node_runtime::npx_command(&format!("latchkey@{LATCHKEY_VERSION}"))
         })
 }
 

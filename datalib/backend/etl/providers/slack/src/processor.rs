@@ -8,6 +8,7 @@ use async_trait::async_trait;
 
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 use datalib_etl_slack_config::SlackRenderConfig;
 use datalib_etl_slack_config::{SlackApiSync, SlackConfig};
 
@@ -38,7 +39,7 @@ pub fn plan_download(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dy
 pub fn plan_render(
     ctx: PlanContext,
     config: SlackRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(SlackRender {
@@ -124,7 +125,7 @@ struct SlackRender {
 }
 
 #[async_trait]
-impl DataProcessor for SlackRender {
+impl RenderProcessor for SlackRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -133,7 +134,7 @@ impl DataProcessor for SlackRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
         let cursor = datalib_etl::render_cursor::read_for_params(

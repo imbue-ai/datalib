@@ -4,12 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
-use datalib_etl::section::section_attrs;
 use datalib_etl::title::Title;
+use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::section::section_attrs;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;

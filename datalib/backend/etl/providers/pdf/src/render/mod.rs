@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
-use datalib_etl::section::{msg_div_open, MSG_DIV_CLOSE};
+use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::section::{msg_div_open, MSG_DIV_CLOSE};
 
 use crate::download::{RawDb, RenderTarget};
 pub use convert::RENDER_VERSION;

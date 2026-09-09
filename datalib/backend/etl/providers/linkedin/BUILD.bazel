@@ -21,6 +21,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
@@ -61,6 +62,7 @@ rust_test(
     deps = [
         ":datalib_etl_linkedin",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",

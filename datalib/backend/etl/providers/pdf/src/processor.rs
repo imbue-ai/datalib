@@ -9,6 +9,7 @@ use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_pdf_config::{PdfConfig, PdfRenderConfig};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 
 use crate::{download, render};
 
@@ -27,7 +28,7 @@ pub fn plan_download(ctx: PlanContext, config: PdfConfig) -> Result<Vec<Box<dyn 
 pub fn plan_render(
     ctx: PlanContext,
     config: PdfRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     Ok(vec![Box::new(PdfRender {
         id: format!("pdf/{name}/render"),
@@ -79,7 +80,7 @@ struct PdfRender {
 }
 
 #[async_trait]
-impl DataProcessor for PdfRender {
+impl RenderProcessor for PdfRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -88,7 +89,7 @@ impl DataProcessor for PdfRender {
         Some(crate::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         let out_dir = datalib_etl::layout::rendered_md_root(ctx.root, ctx.name);
         // Load first, render second: the document sink borrows `ctx`
         // and is not `Send`, so it must not be alive across an await.

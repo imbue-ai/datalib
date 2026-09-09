@@ -18,6 +18,7 @@ path = "src/bin/beeper_inspect.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }
+datalib-etl-render = { path = "../../render" }
 datalib-etl-macros = { path = "../../macros" }
 datalib-obs = { path = "../../../obs" }
 datalib-time = { path = "../../../time" }

@@ -6,7 +6,6 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context as _, Result};
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl_chat_common::render::{
@@ -15,6 +14,7 @@ use datalib_etl_chat_common::render::{
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_render::grid_index::RenderedMarkdown;
 
 use super::ids;
 use super::parse::{

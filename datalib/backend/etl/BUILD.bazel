@@ -27,11 +27,9 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/unified_index:datalib_unified_index",
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/time:datalib_time",
-        "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",
         "//datalib/backend/source_common:datalib_source_common",
 
@@ -103,28 +101,6 @@ rust_test(
     edition = "2021",
 )
 
-
-# Provider-agnostic Load step: stack every source's render store into
-# the unified index, driven by the per-source `source_cursors` commit
-# the index last consumed.
-rust_binary(
-    name = "grid_rows_load",
-    srcs = ["src/bin/grid_rows_load.rs"],
-    edition = "2021",
-    visibility = ["//datalib:__subpackages__"],
-    deps = [
-        ":datalib_etl",
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/unified_index:datalib_unified_index",
-        "//datalib/backend/obs:datalib_obs",
-        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:clap",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
-    ],
-)
 
 rust_test(
     name = "etl_unittests",

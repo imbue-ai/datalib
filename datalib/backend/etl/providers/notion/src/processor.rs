@@ -16,6 +16,7 @@ use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_notion_config::NotionRenderConfig;
 use datalib_etl_notion_config::{NotionConfig, NotionSync};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 
 use crate::download;
 
@@ -46,7 +47,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: NotionRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(NotionRender {
@@ -113,7 +114,7 @@ struct NotionRender {
 }
 
 #[async_trait]
-impl DataProcessor for NotionRender {
+impl RenderProcessor for NotionRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -122,7 +123,7 @@ impl DataProcessor for NotionRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render::render_notion};
         let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, ctx.name);
         let cursor = datalib_etl::render_cursor::read_for_params(

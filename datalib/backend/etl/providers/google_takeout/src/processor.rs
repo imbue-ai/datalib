@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_google_takeout_config::GoogleTakeoutRenderConfig;
 use datalib_etl_google_takeout_config::{GoogleTakeoutConfig, GoogleTakeoutSync};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 
 use crate::download;
 
@@ -36,7 +37,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: GoogleTakeoutRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(GoogleTakeoutRender {
@@ -114,7 +115,7 @@ struct GoogleTakeoutRender {
 }
 
 #[async_trait]
-impl DataProcessor for GoogleTakeoutRender {
+impl RenderProcessor for GoogleTakeoutRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -123,7 +124,7 @@ impl DataProcessor for GoogleTakeoutRender {
         Some(crate::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         // Only the chat-shaped feeds (Google Chat / Google Voice) render; the
         // other feeds stay queryable in the raw store.
         let prior: &HashMap<String, String> = ctx.prior_fingerprints;

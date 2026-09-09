@@ -6,13 +6,13 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 use uuid::Uuid;
 

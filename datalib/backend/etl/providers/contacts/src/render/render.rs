@@ -6,12 +6,12 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{
     render_all as cc_render_all, ContactField, ContactPhoto, ContactRenderProfile,
     NormalizedContact, RenderSummary,
 };
+use datalib_etl_render::grid_index::RenderedMarkdown;
 
 use super::parse::{ParsedContact, ParsedContacts};
 use super::{addressbook_uuid, contact_uuid};

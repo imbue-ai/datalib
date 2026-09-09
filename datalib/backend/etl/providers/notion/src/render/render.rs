@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;

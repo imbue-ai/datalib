@@ -13,6 +13,7 @@ use async_trait::async_trait;
 
 use datalib_etl::periodize::Period;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 use datalib_etl_whatsapp_config::WhatsappRenderConfig;
 use datalib_etl_whatsapp_config::{WhatsAppSync, WhatsappConfig};
 
@@ -38,7 +39,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: WhatsappRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(WhatsappRender {
@@ -105,7 +106,7 @@ struct WhatsappRender {
 }
 
 #[async_trait]
-impl DataProcessor for WhatsappRender {
+impl RenderProcessor for WhatsappRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -114,7 +115,7 @@ impl DataProcessor for WhatsappRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse, render_all};
         // WhatsApp doesn't expose a `period` knob on its sync block today —
         // default to month bucketing, same as signal.

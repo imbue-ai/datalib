@@ -10,6 +10,7 @@ use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_claude_config::ClaudeRenderConfig;
 use datalib_etl_claude_config::{ClaudeApiSync, ClaudeConfig, ClaudeExportConfig};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 
 use crate::download;
 
@@ -60,7 +61,7 @@ pub fn plan_export_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: ClaudeRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(ClaudeRender {
@@ -189,7 +190,7 @@ struct ClaudeRender {
 }
 
 #[async_trait]
-impl DataProcessor for ClaudeRender {
+impl RenderProcessor for ClaudeRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -198,7 +199,7 @@ impl DataProcessor for ClaudeRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
         let cursor = datalib_etl::render_cursor::read_for_params(

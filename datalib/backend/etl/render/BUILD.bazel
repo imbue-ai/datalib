@@ -1,0 +1,73 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# The render half of the framework: the per-source render store, the
+# unified-index load, and the render run context.
+#
+# This is the crate that knows `datalib_schema`. Keeping it out of
+# `//datalib/backend/etl` is the point — a downloader links that and
+# stops, so a `grid_rows` column moving no longer rebuilds it.
+rust_library(
+    name = "datalib_etl_render",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_render",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/table:datalib_table",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "etl_render_unittests",
+    size = "small",
+    crate = ":datalib_etl_render",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# Provider-agnostic Load step: stack every source's render store into
+# the unified index, driven by the per-source `source_cursors` commit
+# the index last consumed.
+rust_binary(
+    name = "grid_rows_load",
+    srcs = ["src/bin/grid_rows_load.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_render",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/unified_index:datalib_unified_index",
+        "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)

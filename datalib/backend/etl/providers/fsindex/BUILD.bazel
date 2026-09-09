@@ -34,6 +34,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl/providers/fsindex_config:datalib_etl_fsindex_config",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -59,6 +60,7 @@ rust_binary(
     deps = [
         ":datalib_etl_fsindex",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -103,6 +105,7 @@ rust_test(
     deps = [
         ":datalib_etl_fsindex",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:insta",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
@@ -130,6 +133,7 @@ rust_test(
     deps = [
         ":datalib_etl_fsindex",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -148,6 +152,7 @@ rust_test(
     deps = [
         ":datalib_etl_fsindex",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

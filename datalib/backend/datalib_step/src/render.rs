@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use datalib_etl::grid_index::RenderedMarkdown;
-use datalib_etl::processor::{CheckpointSink, DataProcessor, RunCtx};
+use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 
-use crate::dispatch::PlannedSource;
+use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
-use datalib_etl::indexed_markdown::IndexedMarkdownStore;
+use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
 
 pub async fn run(
     planned: PlannedSource,
@@ -20,15 +20,21 @@ pub async fn run(
     now: &str,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
+    let PlannedSource {
+        name, processors, ..
+    } = planned;
+    let Wave::Render(processors) = processors else {
+        anyhow::bail!("the render driver was handed source {name:?}'s download wave");
+    };
     let progress = emitter.progress();
-    let rendered_root = data_root.join(&planned.name).join("rendered_md");
+    let rendered_root = data_root.join(&name).join("rendered_md");
     // Skip state and renderer versions come from the store: two indexed
     // reads, where this used to walk the whole tree and parse every
     // document's header to rebuild the same two answers.
-    let declared = declared_render_versions(&planned.processors);
+    let declared = declared_render_versions(&processors);
     let mut store = IndexedMarkdownStore::open(&rendered_root)
         .map(|s| s.with_now(now))
-        .with_context(|| format!("open render store for {}", planned.name))?;
+        .with_context(|| format!("open render store for {}", name))?;
     // A tree an older renderer wrote can't be updated in place, only
     // replaced — see [`discard_tree_from_an_older_renderer`]. When it is
     // discarded there is nothing left to skip against, so every document
@@ -42,11 +48,11 @@ pub async fn run(
         discard_tree(&rendered_root)?;
         store = IndexedMarkdownStore::open(&rendered_root)
             .map(|s| s.with_now(now))
-            .with_context(|| format!("reopen render store for {}", planned.name))?;
+            .with_context(|| format!("reopen render store for {}", name))?;
     }
     let prior = store.prior_fingerprints()?;
     tracing::info!(
-        source = %planned.name,
+        source = %name,
         prior = prior.len(),
         "render: prior fingerprints from the store"
     );
@@ -54,16 +60,16 @@ pub async fn run(
     // What the source's mirror weighs. Measured out here because the
     // scan is async and `blocking()` cannot drive a future from inside
     // the `spawn_blocking` thread below.
-    let measured = crate::introspect::scan(data_root, &planned.name)
+    let measured = crate::introspect::scan(data_root, &name)
         .await
-        .with_context(|| format!("measure {}", planned.name))?;
+        .with_context(|| format!("measure {}", name))?;
 
     let docs = Arc::new(AtomicUsize::new(0));
     let removed = Arc::new(AtomicUsize::new(0));
-    let out_rel = format!("{}/rendered_md", planned.name);
+    let out_rel = format!("{}/rendered_md", name);
     // `planned` moves into the render task below; the post-render check
     // still needs the source's name for its message.
-    let source_name = planned.name.clone();
+    let source_name = name.clone();
     let data_root = data_root.to_path_buf();
     let docs_in = docs.clone();
     let removed_in = removed.clone();
@@ -81,8 +87,6 @@ pub async fn run(
     // on a blocking thread.
     let versions_after =
         tokio::task::spawn_blocking(move || -> Result<(BTreeSet<u32>, HashMap<String, i64>)> {
-            let checkpoints = CheckpointSink::new();
-            let control = datalib_etl::control::DownloadControl::default();
             // Every finished document goes into the per-source store. The
             // providers already hand us a `RenderedMarkdown` carrying its
             // rows, edges, fingerprint, version and problems through
@@ -127,15 +131,13 @@ pub async fn run(
                     .get_or_insert_with(BTreeSet::new)
                     .extend(seen.iter().cloned());
             };
-            for proc in &planned.processors {
-                let ctx = RunCtx::for_render(
-                    &planned.name,
+            for proc in &processors {
+                let ctx = RenderCtx::new(
+                    &name,
                     &data_root,
                     &now,
                     &progress,
-                    &control,
                     &prior,
-                    &checkpoints,
                     &mut on_doc,
                     &mut on_remove,
                     &mut on_retain,
@@ -156,7 +158,7 @@ pub async fn run(
             // then decline to write it back on any run where no number
             // moved. The report would vanish from the grid and stay
             // gone.
-            let storage = crate::introspect::plan(&data_root, &planned.name, measured, &now)?;
+            let storage = crate::introspect::plan(&data_root, &name, measured, &now)?;
             if let (Some(m), Some(keep)) = (storage.as_ref(), retained.as_mut()) {
                 keep.insert(m.doc.markdown_uuid.clone());
             }
@@ -191,19 +193,18 @@ pub async fn run(
             if let Some(m) = storage {
                 if prior.get(&m.doc.markdown_uuid) == Some(&m.doc.source_fingerprint) {
                     tracing::debug!(
-                        source = %planned.name,
+                        source = %name,
                         "render: storage unchanged since the last run"
                     );
                 } else {
-                    m.write_report().with_context(|| {
-                        format!("write the storage report for {}", planned.name)
-                    })?;
+                    m.write_report()
+                        .with_context(|| format!("write the storage report for {}", name))?;
                     store
                         .put_document(&data_root, &m.doc)
-                        .with_context(|| format!("store storage report for {}", planned.name))?;
+                        .with_context(|| format!("store storage report for {}", name))?;
                     store
                         .put_measurements(&m.samples)
-                        .with_context(|| format!("append measurements for {}", planned.name))?;
+                        .with_context(|| format!("append measurements for {}", name))?;
                     docs_in.fetch_add(1, Ordering::SeqCst);
                 }
             }
@@ -215,16 +216,16 @@ pub async fn run(
             let stored = docs_in.load(Ordering::SeqCst);
             let dropped = removed_in.load(Ordering::SeqCst);
             let msg = if dropped == 0 {
-                format!("render {}: {stored} document(s)", planned.name)
+                format!("render {}: {stored} document(s)", name)
             } else {
                 format!(
                     "render {}: {stored} document(s), {dropped} removed upstream",
-                    planned.name
+                    name
                 )
             };
             store
                 .commit(&msg)
-                .with_context(|| format!("commit render store for {}", planned.name))?;
+                .with_context(|| format!("commit render store for {}", name))?;
             // The versions the tree now carries, read back from the store
             // that just wrote them — the post-render check needs them, and
             // the store is consumed by `close` here. Problem counts come
@@ -390,7 +391,7 @@ fn every_stored_version_must_be_declared(
     Ok(())
 }
 
-fn declared_render_versions(processors: &[Box<dyn DataProcessor>]) -> Option<BTreeSet<u32>> {
+fn declared_render_versions(processors: &[Box<dyn RenderProcessor>]) -> Option<BTreeSet<u32>> {
     let versions: BTreeSet<u32> = processors
         .iter()
         .map(|p| p.render_version())
@@ -464,9 +465,9 @@ mod stale_tree_tests {
     use std::path::Path;
 
     use anyhow::Result;
-    use datalib_etl::grid_index::RenderedMarkdown;
-    use datalib_etl::indexed_markdown::IndexedMarkdownStore;
-    use datalib_etl::processor::{DataProcessor, RunCtx};
+    use datalib_etl_render::grid_index::RenderedMarkdown;
+    use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
+    use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
     use datalib_schema::grid_rows::GridRow;
 
     use super::{
@@ -652,11 +653,11 @@ mod stale_tree_tests {
     struct Stub(Option<u32>);
 
     #[async_trait::async_trait]
-    impl DataProcessor for Stub {
+    impl RenderProcessor for Stub {
         fn id(&self) -> &str {
             "stub"
         }
-        async fn run(&self, _ctx: &RunCtx<'_>) -> Result<String> {
+        async fn run(&self, _ctx: &RenderCtx<'_>) -> Result<String> {
             Ok(String::new())
         }
         fn render_version(&self) -> Option<u32> {
@@ -671,11 +672,11 @@ mod stale_tree_tests {
     /// re-rendered on every single run.
     #[test]
     fn one_abstaining_processor_disables_the_check_for_the_source() {
-        let mixed: Vec<Box<dyn DataProcessor>> =
+        let mixed: Vec<Box<dyn RenderProcessor>> =
             vec![Box::new(Stub(Some(5))), Box::new(Stub(None))];
         assert_eq!(declared_render_versions(&mixed), None);
 
-        let all_declared: Vec<Box<dyn DataProcessor>> =
+        let all_declared: Vec<Box<dyn RenderProcessor>> =
             vec![Box::new(Stub(Some(5))), Box::new(Stub(Some(5)))];
         assert_eq!(
             declared_render_versions(&all_declared),

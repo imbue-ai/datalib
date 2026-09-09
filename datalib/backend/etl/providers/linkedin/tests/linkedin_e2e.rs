@@ -5,7 +5,6 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
 use datalib_etl::synthesize::Synthesizer;
@@ -16,6 +15,7 @@ use datalib_etl_linkedin::download::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_linkedin::posts;
 use datalib_etl_linkedin::render;
 use datalib_etl_linkedin::synthesize::LinkedinSynth;
+use datalib_etl_render::grid_index::RenderedMarkdown;
 
 fn build_export(root: &Path) -> Result<()> {
     // Connections.csv with the Notes: preamble we strip, and the real

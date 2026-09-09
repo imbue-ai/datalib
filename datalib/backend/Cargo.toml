@@ -14,6 +14,7 @@ members = [
     "time",
     "id",
     "etl",
+    "etl/render",
     "etl/macros",
     "etl/providers/claude",
     "etl/providers/beeper",

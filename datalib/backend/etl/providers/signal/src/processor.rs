@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::periodize::Period;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 use datalib_etl_signal_config::SignalRenderConfig;
 use datalib_etl_signal_config::{SignalConfig, SignalSync};
 
@@ -42,7 +43,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: SignalRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let period = Period::from_config(config.period.as_deref()).context("signal period")?;
@@ -106,7 +107,7 @@ struct SignalRender {
 }
 
 #[async_trait]
-impl DataProcessor for SignalRender {
+impl RenderProcessor for SignalRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -115,7 +116,7 @@ impl DataProcessor for SignalRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse, render_all};
 
         let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);

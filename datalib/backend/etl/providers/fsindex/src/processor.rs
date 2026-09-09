@@ -10,6 +10,7 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_fsindex_config::FsindexConfig;
 use datalib_etl_fsindex_config::FsindexRenderConfig;
+use datalib_etl_render::processor::RenderProcessor;
 
 use crate::download;
 
@@ -34,7 +35,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: FsindexRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let _ = (ctx, config);
     Ok(Vec::new())
 }

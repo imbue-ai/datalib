@@ -1,17 +1,17 @@
 //! Render LinkedIn `connections` as first-class contacts through the
 //! shared [`datalib_etl_contact_common`] renderer.
 
-use datalib_etl::processor::RenderPass;
+use datalib_etl_render::processor::RenderPass;
 use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{
     render_all as cc_render_all, ContactField, ContactPhoto, ContactRenderProfile,
     NormalizedContact,
 };
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use serde_json::Value;
 
 use crate::download::photos::load_photo_blobs;

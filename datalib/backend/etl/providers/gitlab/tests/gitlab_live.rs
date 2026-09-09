@@ -50,7 +50,7 @@ async fn gitlab_live_single_mr_snapshot() {
 
     let render_root = tmp.clone();
     let stanza = "gitlab";
-    let mut docs: Vec<datalib_etl::grid_index::RenderedMarkdown> = Vec::new();
+    let mut docs: Vec<datalib_etl_render::grid_index::RenderedMarkdown> = Vec::new();
     render_gitlab(
         &parsed,
         &render_root,

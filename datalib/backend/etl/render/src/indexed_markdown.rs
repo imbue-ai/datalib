@@ -18,8 +18,8 @@ use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::measurements::{SourceMeasurementRow, DDL as MEASUREMENTS_DDL};
 use datalib_schema::render_problems::{RenderProblemRow, ScopeKind, DDL as RENDER_PROBLEMS_DDL};
 
-use crate::bulk::BulkUpsertable;
 use crate::grid_index::{RenderedMarkdown, WriteLock};
+use datalib_etl::bulk::BulkUpsertable;
 
 /// File name inside a source's `rendered_md/`.
 pub const STORE_FILE: &str = "indexed_markdown.doltlite_db";
@@ -70,7 +70,7 @@ impl IndexedMarkdownStore {
         std::fs::create_dir_all(rendered_root)
             .with_context(|| format!("mkdir -p {}", rendered_root.display()))?;
         let path = path_for(rendered_root);
-        let pool = blocking(crate::doltlite_raw::open_derived(&path, &store_ddl()))
+        let pool = blocking(datalib_etl::doltlite_raw::open_derived(&path, &store_ddl()))
             .with_context(|| format!("open indexed markdown store {}", path.display()))?;
         Ok(Self {
             write_lock: WriteLock::new(pool.clone()),
@@ -83,14 +83,14 @@ impl IndexedMarkdownStore {
     /// Open somebody else's render store to read it.
     ///
     /// The index is not this store's owner — the render step is — so this goes
-    /// through [`crate::doltlite_raw::open_reader`] and performs none of the
+    /// through [`datalib_etl::doltlite_raw::open_reader`] and performs none of the
     /// writes [`Self::open`] does on the way in. Read that function's note for
     /// what those are and why they are a hazard here specifically.
     ///
     /// No `now`, no write lock: nothing reached through this handle may write.
     pub fn open_for_reading(rendered_root: &Path) -> Result<Self> {
         let path = path_for(rendered_root);
-        let pool = blocking(crate::doltlite_raw::open_reader(&path))
+        let pool = blocking(datalib_etl::doltlite_raw::open_reader(&path))
             .with_context(|| format!("open render store for reading {}", path.display()))?;
         Ok(Self {
             write_lock: WriteLock::new(pool.clone()),
@@ -338,7 +338,7 @@ impl IndexedMarkdownStore {
             };
             // Same generated write path the rows use; see
             // `PortableTable`'s `BulkUpsertable` impl.
-            let sql = crate::bulk::insert_sql::<RenderProblemRow>();
+            let sql = datalib_etl::bulk::insert_sql::<RenderProblemRow>();
             // Audited: `sql` is built from `RenderProblemRow`'s
             // associated consts, never from row data; all values bound.
             stamped
@@ -436,12 +436,12 @@ impl IndexedMarkdownStore {
     /// Everything below reads through the views this installs, so it has to
     /// come first: `changed_since`'s diff and `documents_matching`'s rows must
     /// name the same commit, and the views must exist before either runs.
-    pub fn pin_for_reading(&self) -> Result<Option<crate::pin::Pin>> {
+    pub fn pin_for_reading(&self) -> Result<Option<datalib_etl::pin::Pin>> {
         blocking(async {
-            let Some(pin) = crate::pin::head(&self.pool).await? else {
+            let Some(pin) = datalib_etl::pin::head(&self.pool).await? else {
                 return Ok(None);
             };
-            crate::pin::install_views(&self.pool, &pin)
+            datalib_etl::pin::install_views(&self.pool, &pin)
                 .await
                 .context("install pinned views over the render store")?;
             Ok(Some(pin))
@@ -451,7 +451,7 @@ impl IndexedMarkdownStore {
     pub fn documents(
         &self,
         out_dir: &Path,
-        pin: &crate::pin::Pin,
+        pin: &datalib_etl::pin::Pin,
     ) -> Result<Vec<RenderedMarkdown>> {
         self.documents_matching(out_dir, None, pin)
     }
@@ -459,13 +459,13 @@ impl IndexedMarkdownStore {
     pub fn changed_since(
         &self,
         cursor: Option<&str>,
-        pin: &crate::pin::Pin,
-    ) -> Result<crate::doltlite_raw::DiffScan> {
-        blocking(crate::doltlite_raw::scan_buckets(
+        pin: &datalib_etl::pin::Pin,
+    ) -> Result<datalib_etl::doltlite_raw::DiffScan> {
+        blocking(datalib_etl::doltlite_raw::scan_buckets(
             &self.pool,
             cursor,
             pin,
-            &crate::doltlite_raw::DiffScanSpec {
+            &datalib_etl::doltlite_raw::DiffScanSpec {
                 // Nothing in a render store fans out to "re-index
                 // everything": every row already names the document it
                 // belongs to. The providers need this for tables like
@@ -509,7 +509,7 @@ impl IndexedMarkdownStore {
         &self,
         out_dir: &Path,
         only: Option<&HashSet<String>>,
-        pin: &crate::pin::Pin,
+        pin: &datalib_etl::pin::Pin,
     ) -> Result<Vec<RenderedMarkdown>> {
         let _ = pin; // the views were installed by `pin_for_reading`
         blocking(async {
@@ -585,7 +585,7 @@ impl IndexedMarkdownStore {
 
     /// One `dolt_commit` for the whole render, not one per document.
     pub fn commit(&self, summary: &str) -> Result<Option<String>> {
-        blocking(crate::doltlite_raw::commit_run(&self.pool, summary))
+        blocking(datalib_etl::doltlite_raw::commit_run(&self.pool, summary))
     }
 
     pub fn close(self) {

@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::bulk::BulkUpsertable;
 use anyhow::{Context, Result};
+use datalib_etl::bulk::BulkUpsertable;
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
@@ -246,7 +246,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// matches.
 ///
 /// **Drop and rebuild, rather than `ALTER TABLE … ADD COLUMN`** — the
-/// opposite of [`crate::doltlite_raw::open`]'s policy, because every row here
+/// opposite of [`datalib_etl::doltlite_raw::open`]'s policy, because every row here
 /// is a pure function of a row in a source's render store, so a rebuild costs
 /// one local scan. It is also the only answer that yields correct values:
 /// `ADD COLUMN` leaves existing rows NULL, and the fingerprint skip then makes
@@ -267,7 +267,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
 /// The table a DDL statement creates, for error messages. Degrades to the
 /// raw SQL rather than panicking.
 fn table_of(ddl: &str) -> String {
-    crate::doltlite_raw::parse_create_table_name(ddl).unwrap_or_else(|| ddl.to_string())
+    datalib_etl::doltlite_raw::parse_create_table_name(ddl).unwrap_or_else(|| ddl.to_string())
 }
 
 /// Drop and recreate every index table if any one of them disagrees with
@@ -275,13 +275,13 @@ fn table_of(ddl: &str) -> String {
 async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
     let mut drift: Vec<String> = Vec::new();
     for ddl in index_ddl() {
-        let Some(table) = crate::doltlite_raw::parse_create_table_name(ddl) else {
+        let Some(table) = datalib_etl::doltlite_raw::parse_create_table_name(ddl) else {
             continue;
         };
-        let declared = crate::doltlite_raw::declared_column_names(ddl, &table)
+        let declared = datalib_etl::doltlite_raw::declared_column_names(ddl, &table)
             .await
             .with_context(|| format!("declared columns for {table}"))?;
-        let actual = crate::doltlite_raw::actual_column_names(pool, &table)
+        let actual = datalib_etl::doltlite_raw::actual_column_names(pool, &table)
             .await
             .with_context(|| format!("actual columns for {table}"))?;
         if declared == actual {
@@ -312,7 +312,7 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
          no re-render)"
     );
     for ddl in index_ddl() {
-        let Some(table) = crate::doltlite_raw::parse_create_table_name(ddl) else {
+        let Some(table) = datalib_etl::doltlite_raw::parse_create_table_name(ddl) else {
             continue;
         };
         // Audited: `table` is parsed out of our own static index DDL.
@@ -859,7 +859,7 @@ async fn write_source_cursor(
         .execute(&mut **conn)
         .await
         .context("clear prior source cursor")?;
-    let sql = crate::bulk::insert_sql::<SourceCursorRow>();
+    let sql = datalib_etl::bulk::insert_sql::<SourceCursorRow>();
     // Audited: `sql` is built from `SourceCursorRow`'s associated consts.
     row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
         .execute(&mut **conn)
@@ -1045,7 +1045,7 @@ async fn insert_grid_row(
     // A plain INSERT, not the bulk upsert: a `PRIMARY KEY (uuid)` collision
     // here is a finding, not an update — see the error arm below.
     // `ON CONFLICT DO UPDATE` would silently overwrite it.
-    let sql = crate::bulk::insert_sql::<GridRow>();
+    let sql = datalib_etl::bulk::insert_sql::<GridRow>();
     // Audited: `sql` comes from `GridRow`'s associated consts; values bound.
     let res = row
         .bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
@@ -1617,8 +1617,8 @@ mod schema_reconcile_tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
     use tempfile::tempdir;
 
-    use crate::doltlite_raw::actual_column_names;
     use crate::grid_index::{init_schema, EDGES_DDL, MARKDOWNS_DDL};
+    use datalib_etl::doltlite_raw::actual_column_names;
 
     /// `grid_rows` exactly as data roots created before #216 have it on disk.
     /// Written out longhand rather than derived from the current DDL: the

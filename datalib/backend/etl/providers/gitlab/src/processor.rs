@@ -13,6 +13,7 @@ use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_gitlab_config::GitlabRenderConfig;
 use datalib_etl_gitlab_config::{GitlabApiSync, GitlabConfig};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 
 use crate::download;
 
@@ -40,7 +41,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: GitlabRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(GitlabRender {
@@ -113,7 +114,7 @@ struct GitlabRender {
 }
 
 #[async_trait]
-impl DataProcessor for GitlabRender {
+impl RenderProcessor for GitlabRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -122,7 +123,7 @@ impl DataProcessor for GitlabRender {
         Some(crate::render::grid_rows::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render_gitlab};
         let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, ctx.name);
         let cursor = datalib_etl::render_cursor::read_for_params(

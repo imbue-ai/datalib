@@ -14,6 +14,7 @@ path = "src/bin/chatgpt_download.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }
+datalib-etl-render = { path = "../../render" }
 datalib-etl-chat-common = { path = "../../chat-common" }
 datalib-etl-macros = { path = "../../macros" }
 datalib-obs = { path = "../../../obs" }

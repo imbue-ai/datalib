@@ -26,7 +26,7 @@ fn page(id: &str, title: &str) -> serde_json::Value {
 fn render(parsed: &ParsedNotion, root: &std::path::Path) -> Vec<String> {
     let mut emitted = Vec::new();
     {
-        let mut on_doc = |md: datalib_etl::grid_index::RenderedMarkdown| {
+        let mut on_doc = |md: datalib_etl_render::grid_index::RenderedMarkdown| {
             emitted.push(md.markdown_uuid.clone());
             Ok(())
         };

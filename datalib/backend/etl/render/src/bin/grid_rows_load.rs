@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use datalib_etl::grid_index::{build_grid_index, init_schema};
+use datalib_etl_render::grid_index::{build_grid_index, init_schema};
 use datalib_obs::{init as init_obs, ObsArgs};
 use datalib_qmd_indexer::{run_index, IndexOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};

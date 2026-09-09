@@ -12,10 +12,10 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
-use datalib_etl::section::msg_div_open;
 use datalib_etl::title::Title;
+use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::section::msg_div_open;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;

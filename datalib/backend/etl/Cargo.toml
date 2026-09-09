@@ -8,10 +8,6 @@ publish.workspace = true
 name = "datalib_etl"
 path = "src/lib.rs"
 
-[[bin]]
-name = "grid-rows-load"
-path = "src/bin/grid_rows_load.rs"
-
 # Curl-compatible CLI shim wrapping rquest's Chrome TLS impersonation.
 # Mirror of `src/download/latchkey_curl_impersonate.py` — point latchkey at it
 # via `LATCHKEY_CURL=<path-to-this-binary>` to clear Cloudflare without
@@ -30,10 +26,9 @@ name = "latchkey-curl-dispatch"
 path = "src/bin/latchkey_curl_dispatch.rs"
 
 [dependencies]
-datalib-core = { path = "../core" }
+datalib-runtime = { path = "../runtime" }
 datalib-obs = { path = "../obs" }
 datalib-time = { path = "../time" }
-datalib-schema = { path = "../schema" }
 datalib-table = { path = "../table" }
 datalib-qmd-indexer = { path = "../qmd_indexer" }
 serde = { workspace = true }

@@ -9,11 +9,11 @@
 use std::path::PathBuf;
 
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl_email::download::db::{EmailJoins, LoadedAttachment, LoadedEmail};
 use datalib_etl_email::render::parse::{EmailThreadBucket, ParsedEmail, ScanResult};
 use datalib_etl_email::render::render::{render_all, thread_uuid, OutlinkFormat};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use serde_json::json;
 
 const EML_E1: &str = "From: Alice <a@x.test>\r\n\

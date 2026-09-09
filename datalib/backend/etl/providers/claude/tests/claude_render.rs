@@ -134,8 +134,8 @@ async fn renders_tng_fixture() {
     }
 }
 
-fn docs_bundle(docs: &[datalib_etl::grid_index::RenderedMarkdown]) -> String {
-    let mut sorted: Vec<&datalib_etl::grid_index::RenderedMarkdown> = docs.iter().collect();
+fn docs_bundle(docs: &[datalib_etl_render::grid_index::RenderedMarkdown]) -> String {
+    let mut sorted: Vec<&datalib_etl_render::grid_index::RenderedMarkdown> = docs.iter().collect();
     sorted.sort_by(|a, b| a.markdown_uuid.cmp(&b.markdown_uuid));
     let mut out = String::new();
     for d in sorted {

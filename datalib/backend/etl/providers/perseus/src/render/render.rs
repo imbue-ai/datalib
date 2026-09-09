@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::layout::rendered_md_root;
 use datalib_etl::progress::Progress;
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;

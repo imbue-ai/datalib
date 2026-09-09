@@ -19,6 +19,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl/providers/github_config:datalib_etl_github_config",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
@@ -47,6 +48,7 @@ rust_binary(
     deps = [
         ":datalib_etl_github",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/obs:datalib_obs",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
@@ -70,6 +72,7 @@ rust_test(
     deps = [
         ":datalib_etl_github",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -84,6 +87,7 @@ rust_test(
     deps = [
         ":datalib_etl_github",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -99,6 +103,7 @@ rust_test(
         "@datalib_crates//:sqlx",
         ":datalib_etl_github",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -123,6 +128,7 @@ rust_test(
     deps = [
         ":datalib_etl_github",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",

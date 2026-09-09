@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_lightroom_config::{LightroomConfig, LightroomRenderConfig};
+use datalib_etl_render::processor::RenderProcessor;
 
 use crate::download::{self, MirrorOptions};
 
@@ -40,7 +41,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: LightroomRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let _ = (ctx, config);
     Ok(Vec::new())
 }

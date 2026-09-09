@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }
+datalib-etl-render = { path = "../../render" }
 datalib-schema = { path = "../../../schema" }
 datalib-etl-chat-common = { path = "../../chat-common" }
 datalib-etl-macros = { path = "../../macros" }

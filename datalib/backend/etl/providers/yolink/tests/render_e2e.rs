@@ -3,9 +3,9 @@
 
 use std::path::Path;
 
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_yolink::download::schema_raw::{YolinkDeviceRow, YolinkReadingRow};
 use datalib_etl_yolink::download::{db_path_for, RawDb};
 use datalib_etl_yolink::render::parse::{parse, Parsed};

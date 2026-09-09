@@ -13,6 +13,7 @@ use datalib_etl::periodize::Period;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_beeper_config::BeeperRenderConfig;
 use datalib_etl_beeper_config::{BeeperConfig, BeeperSync};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 
 use crate::download;
 
@@ -43,7 +44,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: BeeperRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let period = Period::from_config(config.period.as_deref()).context("parse beeper period")?;
@@ -106,7 +107,7 @@ struct BeeperRender {
 }
 
 #[async_trait]
-impl DataProcessor for BeeperRender {
+impl RenderProcessor for BeeperRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -115,7 +116,7 @@ impl DataProcessor for BeeperRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let parsed = parse(&self.raw_path, self.period)
             .with_context(|| format!("beeper parse {}", self.raw_path.display()))?;

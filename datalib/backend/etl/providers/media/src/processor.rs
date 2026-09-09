@@ -9,6 +9,7 @@ use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_media_config::{MediaConfig, MediaRenderConfig};
+use datalib_etl_render::processor::RenderProcessor;
 
 use crate::download;
 
@@ -31,7 +32,7 @@ pub fn plan_download(ctx: PlanContext, config: MediaConfig) -> Result<Vec<Box<dy
 pub fn plan_render(
     ctx: PlanContext,
     config: MediaRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let _ = (ctx, config);
     Ok(Vec::new())
 }

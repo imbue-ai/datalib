@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::processor::{DataProcessor, PlanContext};
+use datalib_etl_render::processor::RenderProcessor;
 use datalib_source_common::{Defaults, DownloadParams};
 
 use crate::source_type::SourceType;
@@ -27,7 +28,24 @@ pub struct PlannedSource {
     /// `common.always_clear_before_ingest`, resolved. Download wave only —
     /// render rewrites its own tree already.
     pub always_clear_before_ingest: bool,
-    pub processors: Vec<Box<dyn DataProcessor>>,
+    pub processors: Wave,
+}
+
+/// A planned source's processors, which are of a different type per
+/// phase: download and render no longer share a trait, because they no
+/// longer share a run context.
+pub enum Wave {
+    Download(Vec<Box<dyn DataProcessor>>),
+    Render(Vec<Box<dyn RenderProcessor>>),
+}
+
+impl Wave {
+    pub fn len(&self) -> usize {
+        match self {
+            Wave::Download(p) => p.len(),
+            Wave::Render(p) => p.len(),
+        }
+    }
 }
 
 impl std::fmt::Debug for PlannedSource {
@@ -111,7 +129,7 @@ pub fn plan(
                         raw_path,
                         download_params,
                         always_clear_before_ingest,
-                        processors: $provider::processor::$dl(ctx, cfg)?,
+                        processors: Wave::Download($provider::processor::$dl(ctx, cfg)?),
                     }
                 }
                 Phase::Render => {
@@ -131,7 +149,7 @@ pub fn plan(
                         // Rate-limit bounds are download-only machinery.
                         download_params: Default::default(),
                         always_clear_before_ingest: false,
-                        processors: $provider::processor::$rn(ctx, cfg)?,
+                        processors: Wave::Render($provider::processor::$rn(ctx, cfg)?),
                     }
                 }
             }
@@ -421,7 +439,7 @@ mod tests {
             td.path(),
         )
         .unwrap();
-        assert!(dl.processors.is_empty(), "no sync: means nothing to fetch");
+        assert_eq!(dl.processors.len(), 0, "no sync: means nothing to fetch");
     }
 
     /// `claude_export` is file-backed, not render-only: it ingests the
@@ -524,8 +542,9 @@ mod tests {
             assert_eq!(dl.processors.len(), 1, "{ty} should plan one download");
 
             let rn = plan(ty, Phase::Render, "local", serde_json::json!({}), td.path()).unwrap();
-            assert!(
-                rn.processors.is_empty(),
+            assert_eq!(
+                rn.processors.len(),
+                0,
                 "{ty} renders nothing; download-only is structural, not a flag"
             );
         }

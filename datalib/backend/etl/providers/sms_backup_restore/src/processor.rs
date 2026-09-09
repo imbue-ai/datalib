@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 use datalib_etl_sms_backup_restore_config::SmsBackupRestoreConfig;
 use datalib_etl_sms_backup_restore_config::SmsBackupRestoreRenderConfig;
 
@@ -30,7 +31,7 @@ pub fn plan_download(
 pub fn plan_render(
     ctx: PlanContext,
     config: SmsBackupRestoreRenderConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(SmsRender {
@@ -84,7 +85,7 @@ struct SmsRender {
 }
 
 #[async_trait]
-impl DataProcessor for SmsRender {
+impl RenderProcessor for SmsRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -93,7 +94,7 @@ impl DataProcessor for SmsRender {
         Some(crate::render::RENDER_VERSION)
     }
 
-    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
         let cursor = datalib_etl::render_cursor::read_for_params(
             &cursor_path,

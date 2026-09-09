@@ -1,14 +1,13 @@
 //! Render the user's own LinkedIn posts and the comments they left,
 //! grouped into one chat-style thread per post.
 
-use datalib_etl::processor::RenderPass;
+use datalib_etl_render::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl::grid_index::RenderedMarkdown;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
@@ -16,6 +15,7 @@ use datalib_etl_chat_common::render::{
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use serde_json::Value;
 
 use crate::download::schema_raw::ns_id as uuid5;

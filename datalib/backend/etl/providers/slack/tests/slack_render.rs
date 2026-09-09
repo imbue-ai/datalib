@@ -35,11 +35,12 @@ fn collect_md(root: &std::path::Path) -> BTreeMap<String, String> {
 fn renders_tng_fixture() {
     let parsed = parse(&fixture_root(), None).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
-    let mut docs: Vec<datalib_etl::grid_index::RenderedMarkdown> = Vec::new();
-    let mut on_done = |doc: datalib_etl::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
-        docs.push(doc);
-        Ok(())
-    };
+    let mut docs: Vec<datalib_etl_render::grid_index::RenderedMarkdown> = Vec::new();
+    let mut on_done =
+        |doc: datalib_etl_render::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
+            docs.push(doc);
+            Ok(())
+        };
     let summary = render_all(
         &parsed,
         tmp.path(),
@@ -86,12 +87,13 @@ fn renders_tng_fixture_grid_rows() {
     // Capture every grid row the chat-common renderer emits.
     let mut rows: Vec<serde_json::Value> = Vec::new();
     {
-        let mut on_done = |doc: datalib_etl::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
-            for r in &doc.rows {
-                rows.push(serde_json::to_value(r).unwrap());
-            }
-            Ok(())
-        };
+        let mut on_done =
+            |doc: datalib_etl_render::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
+                for r in &doc.rows {
+                    rows.push(serde_json::to_value(r).unwrap());
+                }
+                Ok(())
+            };
         render_all(
             &parsed,
             tmp.path(),
