@@ -436,6 +436,19 @@ describe("renameGroup", () => {
   it("leaves the text alone for a group it cannot find", () => {
     expect(renameGroup(PAIR, "nope", "X")).toBe(PAIR);
   });
+
+  // A name is user text; `$1`, `$&` and `$$` in it must land verbatim,
+  // not be read as replacement patterns.
+  it("writes a name containing dollar signs verbatim", () => {
+    const name = "Top $1 & $& costs $$";
+    // Replacing an existing name, and inserting one after the id.
+    for (const groupId of ["slack", "unified_index"]) {
+      expect(renameGroup(PAIR, groupId, name)).toContain(`name = "${name}"`);
+    }
+    expect(listSteps(renameGroup(PAIR, "slack", name)).find((s) => s.id === "slack/raw")!.name).toBe(
+      name,
+    );
+  });
 });
 
 describe("fan-in wiring", () => {

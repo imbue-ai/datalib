@@ -1,12 +1,12 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# `datalib-migrate-config` — rewrites a `config.toml` from a shape the
-# runner no longer accepts into the one it does.
+# `datalib-migrate-config` — rewrites a `config.toml` from a shape nothing
+# writes any more into the one the wizard writes.
 #
-# This package is the one place a retired config shape is understood.
+# This package is the one place a retired config shape is *rewritten*.
 # Keeping it out of `datalib-dag` / `datalib-http` is the point: the
-# shipping programs accept exactly one shape, so a shape we stopped
-# writing can't widen what a running pipeline will load. It holds one
+# runner still loads the old shape (with a warning naming this tool),
+# but the rewrite must not widen what those programs know. It holds one
 # rewrite at a time (today: ungrouped steps → `[[groups]]`); the next
 # one replaces it.
 rust_library(

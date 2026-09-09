@@ -467,6 +467,7 @@ onUnmounted(() => {
               </span>
               <span v-if="saveStatus && saveStatus.ok" class="status ok">
                 ✓ Saved — {{ saveStatus.count }} source(s) configured.
+                <template v-if="saveStatus.error"> Warning: {{ saveStatus.error }}</template>
               </span>
               <span v-else-if="dirty" class="status muted">unsaved changes</span>
             </template>

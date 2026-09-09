@@ -33,5 +33,6 @@ does that, and `--config` validates it offline. See
 [`/docs/dev/testing.md`](/docs/dev/testing.md).
 
 If that config predates `[[groups]]`, rewrite it once with
-`datalib-migrate-config <path>/dag.toml --force`; the original is kept
-beside it as `dag.toml.orig`.
+`datalib-migrate-config <path>/dag.toml -o <path>/dag.toml --force`; the
+original is kept beside it as `dag.toml.orig`. Without `-o` the tool
+writes `<path>/config.toml`, which is not the file this script reads.

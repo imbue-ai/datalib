@@ -651,10 +651,12 @@ export function renameGroup(text: string, groupId: string, name: string): string
   const line = next && next !== groupId ? `name = ${quote(next)}` : null;
   const nameRe = /^[ \t]*name[ \t]*=.*$/m;
   let edited: string;
+  // Function replacers: a name is user text, and as a replacement
+  // *string* `$1`, `$&` and `$$` in it would be expanded.
   if (nameRe.test(body)) {
-    edited = body.replace(nameRe, line ?? "").replace(/\n\n(?=\S)/, "\n");
+    edited = body.replace(nameRe, () => line ?? "").replace(/\n\n(?=\S)/, "\n");
   } else if (line) {
-    edited = body.replace(/^([ \t]*id[ \t]*=.*)$/m, `$1\n${line}`);
+    edited = body.replace(/^([ \t]*id[ \t]*=.*)$/m, (_m, idLine: string) => `${idLine}\n${line}`);
   } else {
     edited = body;
   }

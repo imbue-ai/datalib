@@ -849,6 +849,21 @@ fn accept_steps(
                     ));
                     continue;
                 }
+                if is_ungrouped_builtin(&c.entry.command) {
+                    diags.push(
+                        c.diag(
+                            Severity::Warning,
+                            text,
+                            Some("id"),
+                            "a `datalib-step` download or render step outside any group is the \
+                             shape written before `[[groups]]` existed. It still runs, but the \
+                             editor cannot change it and `datalib-step` will stop accepting it.",
+                        )
+                        .with_help(
+                            "rewrite the file once: `datalib-migrate-config <data root> --force`",
+                        ),
+                    );
+                }
             }
         }
         // Where the composed-vs-written distinction stops mattering: every
@@ -934,6 +949,18 @@ fn accept_steps(
     (accepted, diags)
 }
 
+fn is_datalib_step(prog: &str) -> bool {
+    prog == "datalib-step" || prog.ends_with("/datalib-step")
+}
+
+/// The retired shape: a built-in fetch or render step carrying a verbatim
+/// id. Tokenised the way the migrator and the UI do, so the three agree on
+/// what the retired shape looks like.
+fn is_ungrouped_builtin(command: &str) -> bool {
+    let mut words = command.split_whitespace();
+    words.next().is_some_and(is_datalib_step) && matches!(words.next(), Some("download" | "render"))
+}
+
 fn nests_with(a: &str, b: &str) -> bool {
     a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
@@ -953,6 +980,19 @@ fn spec_of(e: &StepEntry, group_type: Option<&str>) -> Result<StepSpec> {
         .with_context(|| format!("command {:?} has unbalanced quoting", e.command))?;
     if argv.is_empty() {
         bail!("empty command");
+    }
+    // Until `datalib-step` reads the type from the environment the provider is
+    // written twice, and the UI trusts the group's while the step runs the
+    // command's; a disagreement has to be refused rather than run.
+    if let (Some(want), true) = (group_type, is_datalib_step(&argv[0])) {
+        if matches!(argv.get(1).map(String::as_str), Some("download" | "render")) {
+            if let Some(have) = argv.get(2).filter(|have| *have != want) {
+                bail!(
+                    "command names provider {have:?} but the group's type is {want:?}; the \
+                     two must agree"
+                );
+            }
+        }
     }
     if let Some(params) = &e.params {
         let json =
@@ -1551,7 +1591,7 @@ mod tests {
                 [[steps]]
                 group = "mail"
                 function = "raw"
-                command = "datalib-step download email"
+                command = "my-fetcher"
                 "#
             ))
             .expect("parse");
@@ -2672,5 +2712,39 @@ command = "datalib-applet unified_index"
         assert_eq!(spec.id, "exports/csv");
         assert_eq!(spec.group, None);
         assert_eq!(spec.function, None);
+    }
+
+    /// The shape written before `[[groups]]` still runs, and says so: a
+    /// warning naming the migrator, nothing dropped.
+    #[test]
+    fn an_ungrouped_builtin_step_loads_with_a_warning() {
+        let check = check_text(
+            "[[steps]]\nid = \"slack/raw\"\ncommand = \"datalib-step download slack_api\"\n",
+        );
+        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(check.diagnostics[0].severity, Severity::Warning);
+        assert!(check.diagnostics[0]
+            .describe()
+            .contains("datalib-migrate-config"));
+        assert_eq!(check.graph.steps[0].id, "slack/raw");
+    }
+
+    /// Until `datalib-step` reads the type from the environment the provider
+    /// is written twice; a hand edit that makes them disagree is refused.
+    #[test]
+    fn a_command_whose_provider_disagrees_with_the_groups_type_is_rejected() {
+        let check = check_text(
+            "[[groups]]\nid = \"mail\"\ntype = \"slack_api\"\n\n\
+             [[steps]]\ngroup = \"mail\"\nfunction = \"raw\"\ncommand = \"datalib-step download email\"\n",
+        );
+        assert_eq!(check.dropped(), 1, "{:?}", check.diagnostics);
+        let d = check
+            .diagnostics
+            .iter()
+            .find(|d| d.severity == Severity::Rejected)
+            .expect("rejected");
+        assert!(d.describe().contains("\"email\""), "{}", d.describe());
+        assert!(d.describe().contains("\"slack_api\""), "{}", d.describe());
     }
 }

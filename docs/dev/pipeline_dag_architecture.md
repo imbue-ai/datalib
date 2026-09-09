@@ -461,10 +461,10 @@ rough dependency order:
 * **Retired config shapes are rewritten out of band, not in the
   runner**: a `config.toml` written before `[[groups]]` existed is
   rewritten once by the separate `datalib-migrate-config` program. The
-  runner and the server accept exactly one shape, so a shape we stopped
-  writing can't widen what a running pipeline loads; the one retired
-  shape the tool still understands lives there and nowhere else, and
-  the pre-TOML `config.yaml` era is no longer convertible at all.
+  runner still loads that shape — as ungrouped steps, with a warning
+  naming the tool — but nothing writes it and the editor cannot change
+  it; the rewrite lives in the tool and nowhere else, and the pre-TOML
+  `config.yaml` era is no longer convertible at all.
 * **The data-root layout is unchanged** (`<name>/raw`,
   `<name>/rendered_md`, `system/…`), so roots move freely between the
   old and new binaries; the only addition is `dag_state.json`.

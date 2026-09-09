@@ -175,10 +175,18 @@ pub fn group_steps(text: &str) -> Result<String> {
             (None, Some(want)) => group.r#type = Some(want.clone()),
             _ => {}
         }
-        // The download step's name is the source's name; a render step's is
-        // the same thing said again, and the group carries it once.
-        if group.name.is_none() {
-            group.name = step.name.clone();
+        // The download step's name is the source's name. The old wizard named
+        // the render step `<that> (render markdown)`, falling back to the fetch
+        // step's id, so a render step's name is only a fallback, and only once
+        // that suffix and that fallback are removed.
+        let name = step.name.as_deref().map(|n| {
+            n.strip_suffix(" (render markdown)")
+                .unwrap_or(n)
+                .to_string()
+        });
+        let name = name.filter(|n| n != &step.id && n != &format!("{}/raw", b.group));
+        if (b.function == "raw" && name.is_some()) || group.name.is_none() {
+            group.name = name;
         }
         steps.push((
             Some(gi),

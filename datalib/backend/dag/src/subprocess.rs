@@ -96,9 +96,12 @@ pub(crate) async fn run_subprocess(
         (ENV_GROUP_TYPE, &ctx.group_type),
         (ENV_FUNCTION, &ctx.function),
     ] {
-        if let Some(v) = value {
-            cmd.env(key, v);
-        }
+        match value {
+            Some(v) => cmd.env(key, v),
+            // Unset for a step outside any group, even if the runner's own
+            // environment carries one.
+            None => cmd.env_remove(key),
+        };
     }
     cmd.args(args)
         .env(ENV_STEP, &ctx.step_id)

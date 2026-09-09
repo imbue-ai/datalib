@@ -1,8 +1,9 @@
-//! `datalib-migrate-config` — rewrite a `config.toml` from a shape the
-//! runner no longer accepts into the one it does.
+//! `datalib-migrate-config` — rewrite a `config.toml` from a shape nothing
+//! writes any more into the one the wizard writes.
 //!
-//! The shipping programs read exactly one shape, so a retired one has to
-//! be understood somewhere else, and this is that somewhere. One rewrite
+//! The runner still loads the retired shape, with a warning naming this
+//! tool, but the editor cannot change it; the rewrite has to live
+//! somewhere, and this is that somewhere. One rewrite
 //! lives here at a time; when the shape moves again, the next rewrite
 //! replaces it. Nothing pre-TOML is convertible any more: a root that still
 //! has a `config.yaml` is set up again from the app.
@@ -183,6 +184,30 @@ tree = "slack/rendered_md"
         assert_eq!(by_id("slack_view").group.as_deref(), Some("slack"));
         assert_eq!(cfg.groups.len(), 2);
         assert_eq!(cfg.steps.len(), 4);
+    }
+
+    /// The old wizard named only the render step when the name box was
+    /// left blank — `<fetch id> (render markdown)` — so the group's name
+    /// must come from the download step, and the render step's only once
+    /// that suffix is gone. An unnamed source stays unnamed.
+    #[test]
+    fn the_groups_name_comes_from_the_download_step_not_the_render_one() {
+        let out = convert(
+            "[[steps]]\nid = \"slack/rendered_md\"\nname = \"Work Slack (render markdown)\"\n\
+             command = \"datalib-step render slack_api\"\ninputs = [\"slack/raw\"]\n\n\
+             [[steps]]\nid = \"slack/raw\"\ncommand = \"datalib-step download slack_api\"\n",
+        )
+        .unwrap();
+        assert!(out.contains("name = \"Work Slack\""), "{out}");
+        assert!(!out.contains("(render markdown)"), "{out}");
+
+        let out = convert(
+            "[[steps]]\nid = \"slack/raw\"\ncommand = \"datalib-step download slack_api\"\n\n\
+             [[steps]]\nid = \"slack/rendered_md\"\nname = \"slack/raw (render markdown)\"\n\
+             command = \"datalib-step render slack_api\"\ninputs = [\"slack/raw\"]\n",
+        )
+        .unwrap();
+        assert!(!out.contains("name ="), "{out}");
     }
 
     /// Two steps of one source that disagree about its type cannot share a

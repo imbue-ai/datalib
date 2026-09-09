@@ -67,7 +67,7 @@ fi
 if [[ ! -f "$DATALIB_MANUAL_E2E_DIR/dag.toml" ]]; then
   echo "error: no dag.toml in $DATALIB_MANUAL_E2E_DIR" >&2
   echo "       that dir must hold the DAG-format config (dag.toml), sources/, and snapshots/." >&2
-  echo "       Written before [[groups]]? Rewrite once: datalib-migrate-config \"$DATALIB_MANUAL_E2E_DIR/dag.toml\" --force" >&2
+  echo "       Written before [[groups]]? Rewrite once: datalib-migrate-config \"$DATALIB_MANUAL_E2E_DIR/dag.toml\" -o \"$DATALIB_MANUAL_E2E_DIR/dag.toml\" --force" >&2
   exit 1
 fi
 

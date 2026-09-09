@@ -285,6 +285,13 @@ type Row = {
   revealPath: string | null;
 };
 
+/// A `datalib-step` step written before `[[groups]]` existed still loads,
+/// but the wizard only writes grouped steps, so a save from here would
+/// name a group the file does not declare.
+const PREDATES_GROUPS =
+  "This step predates [[groups]]. Rewrite the config once with " +
+  "`datalib-migrate-config <data root> --force`, then edit it here.";
+
 /// The word behind a row's step-role glyph. A step is labelled by its
 /// phase rather than the word "step", because that is the distinction a
 /// reader actually wants: which of these brings data in, which turns it
@@ -398,6 +405,8 @@ const rows = computed<Row[]>(() =>
       editBlocked = "This step isn't a datalib-step command the catalog knows.";
     } else if (!entry.wizard) {
       editBlocked = `No guided form for ${entry.label} yet — edit it in Advanced below.`;
+    } else if (!s.group) {
+      editBlocked = PREDATES_GROUPS;
     } else {
       const rep = paramsAreRepresentable(s, entry);
       if (!rep.ok) {
@@ -416,6 +425,8 @@ const rows = computed<Row[]>(() =>
       renderBlocked = "No guided form for this type — add the render step in Advanced below.";
     } else if (entry.renderStep === false) {
       renderBlocked = `${entry.label} produces no markdown to render.`;
+    } else if (!s.group) {
+      renderBlocked = PREDATES_GROUPS;
     } else if (renderSiblingOf(s.id)) {
       renderBlocked = "This already has a render step.";
     }
@@ -1200,7 +1211,9 @@ async function writeConfig(text: string, what: string) {
     configText.value = text;
     configDirty.value = false;
     reparse();
-    banner.value = { ok: true, text: what };
+    // A warning saves — nothing is dropped — but it is still advice
+    // the file would otherwise only give on the command line.
+    banner.value = { ok: true, text: res.error ? `${what} Warning: ${res.error}` : what };
     return true;
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -1357,11 +1370,6 @@ async function deleteSource(id: string) {
             `resumes from what's already there.`;
   if (!window.confirm(what)) return;
 
-  // Unwire before removing, for the same reason.
-  let next = configText.value;
-  for (const d of doomed) {
-    if (d.phase === "render") next = unwireFromFanIns(next, d.id);
-  }
   // A group with nothing left under it goes too: the loader would only
   // warn about it, but a `[[groups]]` entry naming a source that is
   // gone is litter someone has to explain.
@@ -1371,7 +1379,14 @@ async function deleteSource(id: string) {
       step.group === g.id &&
       !sources.value.some((s) => s.group === g.id && !goneIds.has(s.id)),
   );
-  await writeConfig(removeSteps(next, [...doomed, ...emptied]), `Removed ${name}.`);
+  // Cut first: the entries' offsets are into the text as parsed, and
+  // unwiring a fan-in above the source would shift them. Unwiring is a
+  // regex over the result, so it needs no offsets.
+  let next = removeSteps(configText.value, [...doomed, ...emptied]);
+  for (const d of doomed) {
+    if (d.phase === "render") next = unwireFromFanIns(next, d.id);
+  }
+  await writeConfig(next, `Removed ${name}.`);
 }
 
 async function reveal(id: string) {

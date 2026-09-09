@@ -20,7 +20,10 @@ group and a fetch never becomes a render — so the composed id is stable
 by construction. The group's `name` is the half that is free to change:
 it is never forwarded to a step and never fingerprinted, so a rename
 re-runs nothing. Its `type` is forwarded and fingerprinted, so changing
-it re-runs every step under the group.
+it re-runs every step under the group. Introducing that slot, and
+dropping `--outputs` from every argv, moved every step's fingerprint
+once: the first run on binaries with `[[groups]]` re-runs the whole
+pipeline against an existing root. It converges, and nothing is lost.
 
 A step outside any group is a custom executable and writes its `id`
 verbatim. That is the only place a step id is written.
@@ -166,9 +169,12 @@ them would be the cheaper code and the worse error message.
 
 A group whose id is bad costs the group *and* every step under it, and
 those steps are `Blocked`, not `Rejected`: nothing is wrong with them,
-and the fix is on the group's line. The two warnings today are a group
-nothing is filed under and a `name` written on a grouped step, whose
-label comes from the group. A warning passes the strict door too
+and the fix is on the group's line. The warnings today: a group nothing
+is filed under; a `name` written on a grouped step, whose label comes
+from the group; an applet filed under a group that does not exist; and
+a `datalib-step` download or render step outside any group, the shape
+written before `[[groups]]` existed — it still runs, and the warning
+names `datalib-migrate-config`. A warning passes the strict door too
 (`config::parse`, and the `PUT /api/config` behind the editor): it
 changes nothing about what runs, and refusing it would make the editor
 unable to save a config the app is happily running on.

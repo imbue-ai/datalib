@@ -380,11 +380,12 @@ datalib/
     table/         `datalib_table`: the `BulkUpsertable` row-write
                    contract, alone, with `sqlx` as its only dependency.
     migrate_config/ `datalib-migrate-config`: rewrites a `config.toml`
-                   from a shape the runner no longer accepts into the
-                   one it does. One rewrite at a time (today: ungrouped
-                   steps → `[[groups]]`), so the shipping programs
-                   accept exactly one shape. Nothing pre-TOML is
-                   convertible any more.
+                   from a shape nothing writes any more into the one the
+                   wizard writes. One rewrite at a time (today: ungrouped
+                   steps → `[[groups]]`). The runner still *loads* the
+                   old shape, with a warning naming this tool; the editor
+                   cannot change it. Nothing pre-TOML is convertible any
+                   more.
     runtime/       the data-root layout, the bundled-Node/npx resolver,
                    and the qmd version pin + spawn helper. Has NO
                    dependencies, deliberately: `qmd_indexer_bin` is a

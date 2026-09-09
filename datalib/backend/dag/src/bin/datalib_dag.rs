@@ -124,7 +124,9 @@ async fn main() -> Result<()> {
                 }
             );
         }
-        std::process::exit(if checked.is_clean() { 0 } else { 2 });
+        // Same door as `PUT /api/config`: a warning drops nothing, so it
+        // is printed above and does not fail the check.
+        std::process::exit(if checked.nothing_dropped() { 0 } else { 2 });
     }
     let dropped_entries = checked.dropped();
     let cfg = checked.cfg;
