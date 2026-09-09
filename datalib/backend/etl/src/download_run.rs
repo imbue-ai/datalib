@@ -17,10 +17,23 @@ pub struct RowDelta {
     pub removed: u64,
 }
 
+impl RowDelta {
+    fn is_empty(&self) -> bool {
+        self.added == 0 && self.modified == 0 && self.removed == 0
+    }
+}
+
 pub struct DownloadRun<'p> {
     run_id: i64,
     pool: &'p SqlitePool,
     started: std::time::Instant,
+    /// HEAD before this run wrote anything, and the `from_ref` the
+    /// `deltas` summary is measured against. It has to be the run's own
+    /// starting point rather than the store's last commit: a provider that
+    /// commits mid-run — so render can start on the batches that have
+    /// landed — leaves those batches clean, and "since the last commit"
+    /// then reports only the final one.
+    head_at_start: Option<String>,
     /// `sync_scope_state` snapshot taken right after `start_run`;
     /// diffed against another snapshot at `finish` time so the
     /// resulting `cursors` summary records every scope that moved
@@ -30,6 +43,12 @@ pub struct DownloadRun<'p> {
 
 impl<'p> DownloadRun<'p> {
     pub async fn start(pool: &'p SqlitePool, config: &Value) -> Result<Self> {
+        let head_at_start = crate::doltlite_raw::head_commit(pool)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %format!("{e:#}"), "head read at run start failed");
+                None
+            });
         let run_id = start_run(pool, config).await?;
         let cursors_before = scope_state::snapshot(pool).await.unwrap_or_else(|e| {
             tracing::warn!(error = %format!("{e:#}"), "scope_state snapshot at start failed");
@@ -39,6 +58,7 @@ impl<'p> DownloadRun<'p> {
             run_id,
             pool,
             started: std::time::Instant::now(),
+            head_at_start,
             cursors_before,
         })
     }
@@ -53,7 +73,7 @@ impl<'p> DownloadRun<'p> {
     {
         let elapsed_ms = self.started.elapsed().as_millis() as u64;
         let status = if result.is_ok() { "ok" } else { "error" };
-        let deltas = compute_deltas(self.pool).await;
+        let deltas = compute_deltas(self.pool, self.head_at_start.as_deref()).await;
         let cursors_after = scope_state::snapshot(self.pool).await.unwrap_or_else(|e| {
             tracing::warn!(error = %format!("{e:#}"), "scope_state snapshot at finish failed");
             HashMap::new()
@@ -88,29 +108,40 @@ impl<'p> DownloadRun<'p> {
     }
 }
 
-/// Query `dolt_status` for dirty tables, then `dolt_diff_<table>` for
-/// per-diff-type counts since the last `dolt_commit`. Returns `None`
-/// against stock libsqlite3 (no dolt extensions); returns `Some({})`
-/// against doltlite when nothing's dirty. Individual table queries
-/// that fail are logged and skipped — we never want a single bad
-/// virtual table read to drop the rest of the summary.
-async fn compute_deltas(pool: &SqlitePool) -> Option<BTreeMap<String, RowDelta>> {
+/// Per-table row counts for everything this run changed, diffing every
+/// table in the store from `head_at_start` to the working set. Returns
+/// `None` against stock libsqlite3 (no dolt extensions) or when the run
+/// began with no HEAD to measure from; `Some({})` when nothing moved.
+/// Individual table queries that fail are logged and skipped — we never
+/// want a single bad virtual table read to drop the rest of the summary.
+///
+/// Every table, not just the ones `dolt_status` reports dirty: a table a
+/// streaming provider finished and committed mid-run is clean by the time
+/// we get here, and asking only about dirty tables loses it entirely.
+async fn compute_deltas(
+    pool: &SqlitePool,
+    head_at_start: Option<&str>,
+) -> Option<BTreeMap<String, RowDelta>> {
     if !has_dolt_extensions(pool).await {
         return None;
     }
-    let dirty: Vec<(String, i64, String)> =
-        match sqlx::query_as("SELECT table_name, staged, status FROM dolt_status")
+    let Some(from_ref) = head_at_start else {
+        tracing::warn!("no HEAD at run start; per-table deltas unavailable for this run");
+        return None;
+    };
+    let tables: Vec<String> =
+        match sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
             .fetch_all(pool)
             .await
         {
             Ok(rows) => rows,
             Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "dolt_status read failed");
+                tracing::warn!(error = %format!("{e:#}"), "table list read failed");
                 return None;
             }
         };
     let mut out: BTreeMap<String, RowDelta> = BTreeMap::new();
-    for (table, _staged, _status) in dirty {
+    for table in tables {
         // Guard against any table name that wouldn't be a safe
         // identifier in the dynamic `dolt_diff_<table>` query. Dolt's
         // own naming for these virtual tables matches the underlying
@@ -124,12 +155,13 @@ async fn compute_deltas(pool: &SqlitePool) -> Option<BTreeMap<String, RowDelta>>
         }
         let sql = format!(
             "SELECT diff_type, COUNT(*) FROM dolt_diff_{table} \
-             WHERE to_commit = 'WORKING' GROUP BY diff_type"
+             WHERE from_ref = ?1 AND to_ref = 'WORKING' GROUP BY diff_type"
         );
         // Audited: `table` is interpolated into the `dolt_diff_<table>` vtab name,
         // and the `is_safe_identifier` guard above rejects anything that is not a
-        // plain identifier before we get here.
+        // plain identifier before we get here. `from_ref` is bound.
         let rows: Vec<(String, i64)> = match sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(from_ref)
             .fetch_all(pool)
             .await
         {
@@ -149,6 +181,9 @@ async fn compute_deltas(pool: &SqlitePool) -> Option<BTreeMap<String, RowDelta>>
                 "removed" => d.removed = n,
                 _ => {}
             }
+        }
+        if d.is_empty() {
+            continue;
         }
         out.insert(table, d);
     }
@@ -329,7 +364,8 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let deltas = compute_deltas(&pool)
+        let head = crate::doltlite_raw::head_commit(&pool).await.unwrap();
+        let deltas = compute_deltas(&pool, head.as_deref())
             .await
             .expect("doltlite extensions present => Some(deltas)");
         let d = deltas.get("discussions").unwrap_or_else(|| {
@@ -338,6 +374,87 @@ mod tests {
         assert_eq!(
             d.added, 3,
             "all 3 rows of the newly-created table should count as added; got {d:?}"
+        );
+    }
+
+    /// Guards the streaming-download regression: a provider that commits
+    /// part-way through a run — so the render step can start on what has
+    /// landed — used to report only the rows written after that commit,
+    /// because the deltas were measured from the store's last commit
+    /// rather than from where the run began.
+    #[tokio::test]
+    async fn deltas_span_a_mid_run_commit() {
+        const DDL: &str = "CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, body TEXT)";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mid_run_commit.doltlite_db");
+        let pool = crate::doltlite_raw::open(&path, &[DDL]).await.unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+
+        let run = DownloadRun::start(&pool, &json!({})).await.unwrap();
+        let run_id = run.run_id();
+        for i in 0..4 {
+            sqlx::query("INSERT INTO notes (id, body) VALUES (?, ?)")
+                .bind(format!("first-{i}"))
+                .bind("{}")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        // The batch handoff that makes this a streaming download.
+        crate::doltlite_raw::commit_run(&pool, "batch 1")
+            .await
+            .unwrap();
+        for i in 0..3 {
+            sqlx::query("INSERT INTO notes (id, body) VALUES (?, ?)")
+                .bind(format!("second-{i}"))
+                .bind("{}")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let work_result: Result<()> = Ok(());
+        run.finish(&work_result, &DummySummary { new: 7, skipped: 0 })
+            .await;
+
+        let row: (String,) = sqlx::query_as("SELECT summary FROM sync_runs WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let s: Value = serde_json::from_str(&row.0).unwrap();
+        let deltas = s
+            .get("deltas")
+            .and_then(|v| v.as_object())
+            .expect("deltas object present in summary");
+        let notes = deltas
+            .get("notes")
+            .unwrap_or_else(|| panic!("notes missing in deltas: {deltas:?}"));
+        assert_eq!(
+            notes["added"], 7,
+            "both batches should count, not just the one after the mid-run commit; got {notes}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unchanged_tables_stay_out_of_the_deltas() {
+        // Every table is diffed now, so a table nobody touched has to be
+        // dropped explicitly or it pads every summary with zeroes.
+        const DDL: &str = "CREATE TABLE IF NOT EXISTS quiet (id TEXT PRIMARY KEY)";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("quiet_table.doltlite_db");
+        let pool = crate::doltlite_raw::open(&path, &[DDL]).await.unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+        let head = crate::doltlite_raw::head_commit(&pool).await.unwrap();
+        let deltas = compute_deltas(&pool, head.as_deref())
+            .await
+            .expect("doltlite extensions present => Some(deltas)");
+        assert!(
+            !deltas.contains_key("quiet"),
+            "an untouched table should not appear at all; got {deltas:?}"
         );
     }
 }

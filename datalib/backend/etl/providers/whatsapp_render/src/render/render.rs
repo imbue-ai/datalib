@@ -66,71 +66,68 @@ pub fn render_all(
     let prior = render_cursor::read_for_params(&cursor_path, &render_cursor::no_params())?;
     let db_path = doltlite_raw::db_path_for(raw_dir);
 
-    let (filtered_owned, new_head, scan_elapsed): (
-        Option<Vec<NormalizedChat>>,
-        Option<String>,
-        Option<std::time::Duration>,
-    ) = if db_path.exists() {
-        let (changed, head, elapsed) = tokio::task::block_in_place(|| {
-            let h = tokio::runtime::Handle::try_current();
-            match h {
-                Ok(h) => h.block_on(scan_diff(
-                    &db_path,
-                    prior.as_ref().map(|c| c.last_rendered_hash.as_str()),
-                )),
-                Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(
-                    &db_path,
-                    prior.as_ref().map(|c| c.last_rendered_hash.as_str()),
-                )),
-            }
-        })?;
-        let filtered = changed.as_ref().map(|set| {
-            chats
-                .iter()
-                .filter(|c| set.contains(&c.id))
-                .cloned()
-                .collect::<Vec<_>>()
-        });
-        tracing::info!(
-            source = source_name,
-            scan_elapsed_ms = elapsed.map(|d| d.as_millis() as u64),
-            changed_chats = changed.as_ref().map(|s| s.len() as i64).unwrap_or(-1),
-            cold_start = changed.is_none(),
-            "[render] whatsapp dolt_diff scan"
-        );
-        // Every backup is a full snapshot (the ingest truncates first), so
-        // a chat the diff named that `wa_chat` no longer carries is one the
-        // phone deleted.
-        if let Some(set) = changed.as_ref() {
-            let pool = tokio::task::block_in_place(|| {
-                let h = tokio::runtime::Handle::current();
-                h.block_on(datalib_etl::doltlite_raw::open_reader(&db_path))
+    let (filtered_owned, new_head): (Option<Vec<NormalizedChat>>, Option<String>) =
+        if db_path.exists() {
+            let (changed, head, elapsed) = tokio::task::block_in_place(|| {
+                let h = tokio::runtime::Handle::try_current();
+                match h {
+                    Ok(h) => h.block_on(scan_diff(
+                        &db_path,
+                        prior.as_ref().map(|c| c.last_rendered_hash.as_str()),
+                    )),
+                    Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(
+                        &db_path,
+                        prior.as_ref().map(|c| c.last_rendered_hash.as_str()),
+                    )),
+                }
             })?;
-            // Its own pool, so its own pin: this asks which chats are gone at
-            // a commit, not in whatever the writer is part-way through.
-            let gone = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
-                        return Ok::<_, anyhow::Error>(Vec::new());
-                    };
-                    datalib_etl::pin::install_views(&pool, &pin).await?;
-                    doltlite_raw::buckets_without_rows(
-                        &pool,
-                        datalib_etl::pin::Reads::At(&pin),
-                        set,
-                        &[("wa_chat", "chat_jid")],
-                    )
-                    .await
-                })
-            })?;
-            for jid in &gone {
-                on_chat_gone(jid)?;
+            let filtered = changed.as_ref().map(|set| {
+                chats
+                    .iter()
+                    .filter(|c| set.contains(&c.id))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+            tracing::info!(
+                source = source_name,
+                scan_elapsed_ms = elapsed.map(|d| d.as_millis() as u64),
+                changed_chats = changed.as_ref().map(|s| s.len() as i64).unwrap_or(-1),
+                cold_start = changed.is_none(),
+                "[render] whatsapp dolt_diff scan"
+            );
+            // Every backup is a full snapshot (the ingest truncates first), so
+            // a chat the diff named that `wa_chat` no longer carries is one the
+            // phone deleted.
+            if let Some(set) = changed.as_ref() {
+                let pool = tokio::task::block_in_place(|| {
+                    let h = tokio::runtime::Handle::current();
+                    h.block_on(datalib_etl::doltlite_raw::open_reader(&db_path))
+                })?;
+                // Its own pool, so its own pin: this asks which chats are gone at
+                // a commit, not in whatever the writer is part-way through.
+                let gone = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+                            return Ok::<_, anyhow::Error>(Vec::new());
+                        };
+                        datalib_etl::pin::install_views(&pool, &pin).await?;
+                        doltlite_raw::buckets_without_rows(
+                            &pool,
+                            datalib_etl::pin::Reads::At(&pin),
+                            set,
+                            &[("wa_chat", "chat_jid")],
+                        )
+                        .await
+                    })
+                })?;
+                for jid in &gone {
+                    on_chat_gone(jid)?;
+                }
             }
-        }
-        (filtered, head, elapsed)
-    } else {
-        (None, None, None)
-    };
+            (filtered, head)
+        } else {
+            (None, None)
+        };
     let to_render: &[NormalizedChat] = filtered_owned.as_deref().unwrap_or(chats);
 
     let empty_fingerprints: HashMap<String, String> = HashMap::new();
@@ -146,12 +143,7 @@ pub fn render_all(
     )?;
 
     if let Some(head) = new_head {
-        render_cursor::write(
-            &cursor_path,
-            &head,
-            scan_elapsed,
-            &render_cursor::no_params(),
-        )?;
+        render_cursor::write(&cursor_path, &head, &render_cursor::no_params())?;
     }
     Ok(summary)
 }

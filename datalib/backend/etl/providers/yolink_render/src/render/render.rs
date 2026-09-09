@@ -125,7 +125,7 @@ pub fn render_all(
     // placeholder would make it skip forever.
     if let Some(head) = parsed.head.as_deref() {
         let cursor_path = render_cursor::cursor_path(root, source_name);
-        render_cursor::write(&cursor_path, head, parsed.scan_elapsed, &cursor_params())
+        render_cursor::write(&cursor_path, head, &cursor_params())
             .with_context(|| format!("write yolink render cursor {}", cursor_path.display()))?;
     } else {
         tracing::warn!(

@@ -282,12 +282,20 @@ answers this for any window, for every provider, and always will.
 
 There is also a precomputed per-run summary, and it is narrower than it
 looks. `DownloadRun::finish`
-([`download_run.rs`](/datalib/backend/etl/src/download_run.rs)) reads
-`dolt_status` for dirty tables, counts `dolt_diff_<table>` by
-`diff_type`, and writes `{table: {added, modified, removed}}` to
-`sync_runs.summary.deltas`. It runs before the store's end-of-run
-`dolt_commit` (`RawStoreSession::finish`), so the numbers cover the
-whole run rather than a tail.
+([`download_run.rs`](/datalib/backend/etl/src/download_run.rs)) counts
+`dolt_diff_<table>` by `diff_type` for every table in the store and
+writes `{table: {added, modified, removed}}` to
+`sync_runs.summary.deltas`.
+
+The diff runs from the HEAD the run *started* at, which `DownloadRun`
+captures before the provider writes anything. That has to be the
+anchor, and it is the one thing to preserve if you touch this code:
+a streaming provider commits part-way through so the render step can
+start on what has landed, which leaves those earlier batches clean and
+gone from `dolt_status`. Measured from the store's last commit instead,
+the summary reports only the final batch — silently, since a smaller
+number looks like a smaller run. `deltas_span_a_mid_run_commit` in
+`download_run.rs` is the guard.
 
 **Only 8 of the 20 providers with a download side use `DownloadRun`**
 (beeper, chatgpt, claude, email, github, gitlab, notion, slack; checked
