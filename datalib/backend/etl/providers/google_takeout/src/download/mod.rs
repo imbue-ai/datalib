@@ -26,9 +26,9 @@ use datalib_etl::progress::Progress;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-/// Opt-in switches matching the YAML `sync:` block in
-/// `docs/dev/archived/google_takeout_ingestion.md`. Defaults are all `false` —
-/// a fresh user has to enable each feed consciously.
+/// One switch per Takeout feed. Defaults are all `false` — a fresh
+/// user has to enable each feed consciously; DOWNLOAD.md says why
+/// that matters and what each flag writes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SyncFlags {

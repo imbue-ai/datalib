@@ -210,7 +210,7 @@ fn nonempty(s: &str) -> Option<&str> {
 /// records that we discarded something upstream actually sent — that is
 /// only half of R1 ("drop, count, log; never abort, never hide"). When
 /// the problem sink exists (see
-/// `docs/dev/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
+/// `docs/dev/plans/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
 /// report `{field, reason: CoercionFailed, sample}` here as well as
 /// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse LinkedIn's `2026-06-16 22:11:33 UTC` timestamp to unix millis,

@@ -18,7 +18,7 @@
 //! than a quiet wrong answer. It also leaves writes through the real names
 //! working, so a pool that reads and writes is unaffected.
 //!
-//! See `docs/dev/streaming_steps_plan.md`.
+//! See `docs/dev/plans/streaming_steps_plan.md`.
 
 use anyhow::{bail, Result};
 

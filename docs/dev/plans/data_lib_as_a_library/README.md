@@ -44,7 +44,7 @@ agent to build, in ten minutes and ~600 lines of stdlib Python, an
 ingestion tool with incremental loading, backfill, a problem log and
 bounded retention.
 
-Read next to [`data_architecture_ingestion.md`](../data_architecture_ingestion.md),
+Read next to [`data_architecture_ingestion.md`](../../data_architecture_ingestion.md),
 the **storage core converges** — upstream identity as the primary key,
 one complete upsert shape, one transaction per batch, a raw layer
 everything else is derived from. The **data-quality surface does not**,

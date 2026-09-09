@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # Schema-only config crate for the pdf source.
 # Bazel-only by design (no Cargo.toml). See
-# docs/dev/archived/data_processor_and_config_refactor.md §4.3.
+# AGENTS.md, "Why each provider has a <p>_config crate".
 rust_library(
     name = "datalib_etl_pdf_config",
     srcs = glob(["src/**/*.rs"]),

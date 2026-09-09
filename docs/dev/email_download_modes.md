@@ -20,7 +20,7 @@ separate entries in `ui/src/config/catalog.ts`, each writing the table
 that selects its mode. They are not one form with a mode dropdown —
 they authenticate against different latchkey services and want
 different words on screen — and the fact that they share a step type is
-what `variantKey` exists to handle (`docs/dev/source_wizard.md`,
+what `variantKey` exists to handle (`docs/dev/plans/source_wizard.md`,
 "What shipped"). The mbox mode has no form: it is a path, and the
 catch-all `email` entry sends you to the config editor.
 

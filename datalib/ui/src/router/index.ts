@@ -19,7 +19,7 @@ const router = createRouter({
       component: () => import("@/views/SourcesView.vue"),
     },
     // Manager2: the sources-grid rewrite of the Manage tab, alongside
-    // the original while it's proven out. See docs/dev/source_wizard.md.
+    // the original while it's proven out. See docs/dev/plans/source_wizard.md.
     {
       path: "/sources2",
       name: "sources2",

@@ -26,9 +26,9 @@ re-render and never a re-fetch.
 Like its siblings this is aspirational as much as descriptive, and it
 tries to say which is which at each point. §4 in particular is a set of
 rules we do **not** follow today; the audit and retrofit plan is
-[`data_lib_as_a_library/data_handling_practices.md`](data_lib_as_a_library/data_handling_practices.md),
+[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md),
 and what the tree actually does today is measured in the
-[render audit](data_lib_as_a_library/render_audit_2026_09_03.md).
+[render audit](plans/data_lib_as_a_library/render_audit_2026_09_03.md).
 §3's **U-rules are mostly descriptive** — they name a pattern already
 built in four places — while its **P-rules are mixed**, and P1 and P3
 are both currently violated. §2's
@@ -304,14 +304,14 @@ markdown tree.** The semantic index shells out to `@tobilu/qmd` over
 `rendered_md/`, so the tree cannot simply stop existing — it would have
 to be materialized for the indexer, or qmd's role would have to be taken
 over by something that reads from the database (a direction
-[`multimodal_retrieval.md`](multimodal_retrieval.md) already proposes for
+[`multimodal_retrieval.md`](plans/multimodal_retrieval.md) already proposes for
 other reasons). Two smaller things point the same way: attachment blobs
 are materialized into each page's `blobs/` directory today, and the
 markdown is deliberately human-readable and greppable on disk, which is
 a property someone will miss.
 
 The storage argument cuts both ways and should not be oversold.
-`multimodal_retrieval.md` §4 measured a real data root and found the
+`plans/multimodal_retrieval.md` §4 measured a real data root and found the
 same text stored **five** times. Putting markdown in doltlite makes that
 six unless the file tree actually goes away — so the win is conditional
 on finishing the move, not on starting it.
@@ -463,7 +463,7 @@ answer* rather than merely an inconsistent-looking one.
 This rule is currently violated for timestamps — six of the twelve
 render modules parse them with raw `chrono` instead, and that is where
 every fabricated-epoch bug in the tree lives. See the
-[render audit](data_lib_as_a_library/render_audit_2026_09_03.md) §04.
+[render audit](plans/data_lib_as_a_library/render_audit_2026_09_03.md) §04.
 
 **P4 — Parse reads the raw store and nothing else.** The stage contract
 from §2, restated here because parse is where the temptation appears:
@@ -586,7 +586,7 @@ Two families are cheaper than one family with an exception in it.
 
 **Status: not implemented.** These are adopted-in-principle and
 unimplemented in fact; see
-[`data_lib_as_a_library/data_handling_practices.md`](data_lib_as_a_library/data_handling_practices.md)
+[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md)
 for the audit that measures how far off we are and the plan to close
 it.
 
@@ -800,7 +800,7 @@ For these `when_ts` is **null** and the consumer query filters them out of time-
 
 ## See also
 
-- [`data_lib_as_a_library/data_handling_practices.md`](data_lib_as_a_library/data_handling_practices.md)
+- [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md)
   — the audit and retrofit plan for §4.
 - [`step_protocol.md`](step_protocol.md) — where R2's third category
   has to be written down to mean anything.

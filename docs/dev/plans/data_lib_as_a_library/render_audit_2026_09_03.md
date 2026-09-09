@@ -19,7 +19,7 @@
 > What it audits: every provider's parse/render code, the two shared
 > render crates (`chat-common`, `contact-common`), the render step
 > driver, and the grid-index loader — against
-> [`data_architecture_parse_and_render.md`](../data_architecture_parse_and_render.md)
+> [`data_architecture_parse_and_render.md`](../../data_architecture_parse_and_render.md)
 > (the stage contract, §4's rules R1–R7, §6's timestamp policy) and
 > [`data_handling_practices.md`](data_handling_practices.md) (gaps
 > G1–G8).
@@ -33,7 +33,7 @@
 The render stage has **no channel through which a data problem can be
 reported.** That is not a metaphor: `RunCtx::for_render` constructs its
 context with `metrics: None, diagnostics: None`
-([`processor.rs:253`](../../../datalib/backend/etl/src/processor.rs)),
+([`processor.rs:253`](../../../../datalib/backend/etl/src/processor.rs)),
 and both accessors `panic!` when called on a render context. So a
 renderer that notices a bad record has exactly two things it can do —
 crash the step, or silently substitute a plausible-looking value — and
@@ -45,7 +45,7 @@ precondition for R3 and R4 rather than merely the first item on a list.
 There is nowhere to put a count today.
 
 The severity is higher than the docs state. Verified against
-[`scheduler.rs:1527`](../../../datalib/backend/dag/src/scheduler.rs):
+[`scheduler.rs:1527`](../../../../datalib/backend/dag/src/scheduler.rs):
 when one provider's render fails with `FailureKind::Data`, the
 `unified_index/grid` fan-in is left **`Blocked`** — it does not run.
 One unparseable timestamp in one Slack message stops the grid from
@@ -115,7 +115,7 @@ brings the total to **545**. That is the honest size of the surface.
 ### Every row-construction failure is fatal
 
 `GridRow::builder().build()` is the tree's one validating chokepoint
-([`grid_rows_builder.rs:153`](../../../datalib/backend/schema/src/grid_rows_builder.rs)),
+([`grid_rows_builder.rs:153`](../../../../datalib/backend/schema/src/grid_rows_builder.rs)),
 and it is a good one — it rejects an empty `uuid`/`provider`/`kind`/
 `source_label` and a `when_ts` that is not RFC 3339 with an explicit
 offset. Its own module comment explains that validating here turns "a
@@ -132,7 +132,7 @@ exactly one failure mode, and it is "kill the step."
 
 ### …and the failure is then classified as systemic
 
-[`hints.rs:18`](../../../datalib/backend/datalib_step/src/hints.rs)
+[`hints.rs:18`](../../../../datalib/backend/datalib_step/src/hints.rs)
 maps errors onto the DAG taxonomy by substring-matching the error
 chain. Anything that is not recognizably auth-, rate-limit- or
 network-shaped falls through the final `else` to `"data"`. A
@@ -150,7 +150,7 @@ This is R2's diagnosis exactly, now confirmed end to end:
 ### The blast radius, verified
 
 The scheduler test `subset_sync_leaves_pending_work_in_other_chains_alone`
-([`scheduler.rs:1527`](../../../datalib/backend/dag/src/scheduler.rs))
+([`scheduler.rs:1527`](../../../../datalib/backend/dag/src/scheduler.rs))
 constructs precisely this scenario — an email render that fails with
 `FailureKind::Data` and the message `"boom: unparseable row"` — and
 asserts that `unified_index/grid` does not run that pass. The index is
@@ -160,7 +160,7 @@ record costs every provider's index update for that run.
 ### The same defect at the loader
 
 Pass C named `grid_index` and it holds up.
-[`load_all_batch`](../../../datalib/backend/etl/src/grid_index.rs)
+[`load_all_batch`](../../../../datalib/backend/etl/src/grid_index.rs)
 (line 785) propagates every per-sidecar error with `?`: an unreadable
 file, a sidecar that will not deserialize, or a `uuid` claimed by two
 sources. It is worse than "the load stops," because the whole loop runs
@@ -200,7 +200,7 @@ One file per source:
 
 **Not** a single `system/problems.doltlite_db`. The DAG runs with
 `parallelism: 4` by default
-([`scheduler.rs:104`](../../../datalib/backend/dag/src/scheduler.rs)),
+([`scheduler.rs:104`](../../../../datalib/backend/dag/src/scheduler.rs)),
 so up to four render steps are live at once, and doltlite's working set
 is per *file* and shared across processes — the constraint AGENTS.md
 states as "one writer per file, and it is load-bearing." Four
@@ -350,7 +350,7 @@ useful rather than merely populated:
 The obvious rule ("delete every row this run did not re-emit") is
 wrong, and wrong in a way that would quietly empty the table. Render is
 incremental: the fingerprint skip in
-[`chat-common/render.rs:158`](../../../datalib/backend/etl/chat-common/src/render.rs)
+[`chat-common/render.rs:158`](../../../../datalib/backend/etl/chat-common/src/render.rs)
 means a steady-state run touches almost nothing, so "not re-emitted"
 overwhelmingly means "not looked at," not "fixed."
 
@@ -440,16 +440,16 @@ every fabrication below is in the bypass group.
 
 | # | site | what happens |
 | --- | --- | --- |
-| T1 | [`slack/render/mod.rs:39,46,50`](../../../datalib/backend/etl/providers/slack/src/render/mod.rs) | `ts_to_iso` fabricates epoch **three ways**: non-numeric seconds → `unwrap_or(0)`, non-numeric fraction → `unwrap_or(0)`, out-of-range → `Utc.timestamp_opt(0,0)`. Output is a real-looking `1970-01-01T00:00:00.000000+00:00`. |
-| T2 | [`slack/render/render.rs:272,278`](../../../datalib/backend/etl/providers/slack/src/render/render.rs) | A second, independent copy of the same parser with the same two `unwrap_or(0)`s. |
-| T3 | [`email/render/render.rs:436`](../../../datalib/backend/etl/providers/email/src/render/render.rs) | `date_ms: em.received_at.and_then(iso_to_ms).unwrap_or(0)`. An email with a missing or non-RFC-3339 `Date` header lands at the epoch. Malformed `Date` headers are common in real mail. |
-| T4 | [`whatsapp/render/parse.rs:222,261,281,431`](../../../datalib/backend/etl/providers/whatsapp/src/render/parse.rs) | `timestamp.unwrap_or(0)` — a NULL timestamp column becomes 1970. |
-| T5 | [`sms_backup_restore/render.rs:226`](../../../datalib/backend/etl/providers/sms_backup_restore/src/render.rs) | `v.get("date")…unwrap_or(0)`. |
-| T6 | [`google_takeout/render.rs:305`](../../../datalib/backend/etl/providers/google_takeout/src/render.rs) | `parse_date_ms` — doc comment says *"Returns 0 on any unexpected shape."* Also parses naive and calls `.and_utc()`, i.e. assume-UTC outside the one blessed function. |
-| T7 | [`linkedin/render.rs:198`](../../../datalib/backend/etl/providers/linkedin/src/render.rs) | Same, and its doc comment is explicit about the consequence: *"Returns 0 on any unexpected shape (sorts such rows to the top)."* |
-| T8 | [`chat-common/render.rs:738`](../../../datalib/backend/etl/chat-common/src/render.rs) | `iso_from_ms` falls back to `"1970-01-01T00:00:00+00:00"` on out-of-range. It does `warn!` first — better than the rest — but the warning is emitted on a `spawn_blocking` thread with no diagnostics buffer installed, so nothing captures it. |
-| T9 | [`chat-common/render.rs:521`](../../../datalib/backend/etl/chat-common/src/render.rs) | `first_ts = doc.items.first()…unwrap_or_else(\|\| iso_from_ms(0))`. **An empty bucket gets a chat-level row stamped 1970.** Reachable: `render_markdown` explicitly handles `doc.items.is_empty()` with "_(no messages)_". |
-| T10 | [`signal/render/render.rs:510`](../../../datalib/backend/etl/providers/signal/src/render/render.rs) | Its own copy of T8. |
+| T1 | [`slack/render/mod.rs:39,46,50`](../../../../datalib/backend/etl/providers/slack/src/render/mod.rs) | `ts_to_iso` fabricates epoch **three ways**: non-numeric seconds → `unwrap_or(0)`, non-numeric fraction → `unwrap_or(0)`, out-of-range → `Utc.timestamp_opt(0,0)`. Output is a real-looking `1970-01-01T00:00:00.000000+00:00`. |
+| T2 | [`slack/render/render.rs:272,278`](../../../../datalib/backend/etl/providers/slack/src/render/render.rs) | A second, independent copy of the same parser with the same two `unwrap_or(0)`s. |
+| T3 | [`email/render/render.rs:436`](../../../../datalib/backend/etl/providers/email/src/render/render.rs) | `date_ms: em.received_at.and_then(iso_to_ms).unwrap_or(0)`. An email with a missing or non-RFC-3339 `Date` header lands at the epoch. Malformed `Date` headers are common in real mail. |
+| T4 | [`whatsapp/render/parse.rs:222,261,281,431`](../../../../datalib/backend/etl/providers/whatsapp/src/render/parse.rs) | `timestamp.unwrap_or(0)` — a NULL timestamp column becomes 1970. |
+| T5 | [`sms_backup_restore/render.rs:226`](../../../../datalib/backend/etl/providers/sms_backup_restore/src/render.rs) | `v.get("date")…unwrap_or(0)`. |
+| T6 | [`google_takeout/render.rs:305`](../../../../datalib/backend/etl/providers/google_takeout/src/render.rs) | `parse_date_ms` — doc comment says *"Returns 0 on any unexpected shape."* Also parses naive and calls `.and_utc()`, i.e. assume-UTC outside the one blessed function. |
+| T7 | [`linkedin/render.rs:198`](../../../../datalib/backend/etl/providers/linkedin/src/render.rs) | Same, and its doc comment is explicit about the consequence: *"Returns 0 on any unexpected shape (sorts such rows to the top)."* |
+| T8 | [`chat-common/render.rs:738`](../../../../datalib/backend/etl/chat-common/src/render.rs) | `iso_from_ms` falls back to `"1970-01-01T00:00:00+00:00"` on out-of-range. It does `warn!` first — better than the rest — but the warning is emitted on a `spawn_blocking` thread with no diagnostics buffer installed, so nothing captures it. |
+| T9 | [`chat-common/render.rs:521`](../../../../datalib/backend/etl/chat-common/src/render.rs) | `first_ts = doc.items.first()…unwrap_or_else(\|\| iso_from_ms(0))`. **An empty bucket gets a chat-level row stamped 1970.** Reachable: `render_markdown` explicitly handles `doc.items.is_empty()` with "_(no messages)_". |
+| T10 | [`signal/render/render.rs:510`](../../../../datalib/backend/etl/providers/signal/src/render/render.rs) | Its own copy of T8. |
 
 T6 and T7 are the ones to sit with. Both fabrications are **known,
 documented in the code, and reasoned about** — T7 even notes that the
@@ -471,7 +471,7 @@ it satisfies `before:`/`after:` queries it should not match.
 ### The type that forces it
 
 `NormalizedChatItem.date_ms` is `i64`, not `Option<i64>`
-([`chat-common/types.rs:124`](../../../datalib/backend/etl/chat-common/src/types.rs)).
+([`chat-common/types.rs:124`](../../../../datalib/backend/etl/chat-common/src/types.rs)).
 **A chat item cannot express "no timestamp,"** so every one of the
 eight providers on chat-common must invent a value at the boundary —
 which is exactly what T3, T4, T5, T6 and T7 are doing. Fixing the
@@ -491,7 +491,7 @@ others." Measured:
 
 - **The round-trip check covers 3 of 17 rendering providers.**
   `SCOPE_TAG_BY_PROVIDER` in
-  [`ingested_tng_test.py:111`](../../../tests/fixtures/ingested_tng_test.py)
+  [`ingested_tng_test.py:111`](../../../../tests/fixtures/ingested_tng_test.py)
   holds `anthropic`, `openai`, `slack`. Fourteen providers are checked
   by nothing with source independence.
 - **It checks identity, never content.** It recomputes `uuid` from
@@ -567,7 +567,7 @@ stage contract doing its job.
 Two rules genuinely discard source content:
 
 **`strip_repeated_chrome`**
-([`pdf/render/convert.rs:132`](../../../datalib/backend/etl/providers/pdf/src/render/convert.rs))
+([`pdf/render/convert.rs:132`](../../../../datalib/backend/etl/providers/pdf/src/render/convert.rs))
 removes running headers and footers. It is *well* built — position-
 constrained to first/last non-empty line, frequency-constrained to half
 the pages and at least two, and asymmetric between headers (exact
@@ -578,7 +578,7 @@ needs changing. What is missing is only R3's accounting: **how many
 lines did it remove on the last run?** Nobody can answer that.
 
 **`clamp_doc_text`**
-([`anthropic/render/render.rs:528`](../../../datalib/backend/etl/providers/anthropic/src/render/render.rs))
+([`anthropic/render/render.rs:528`](../../../../datalib/backend/etl/providers/anthropic/src/render/render.rs))
 truncates long project documents — and it is the model citizen of the
 whole audit. It cuts on a char boundary, emits a visible marker, says
 how many bytes of how many are shown, names the config knob that raises
@@ -600,7 +600,7 @@ its module doc. Nothing else has either.
 
 The `rendered_md/` pruning gap is **half fixed, and the docs do not say
 so.** `discard_tree_from_an_older_renderer`
-([`datalib_step/render.rs:246`](../../../datalib/backend/datalib_step/src/render.rs))
+([`datalib_step/render.rs:246`](../../../../datalib/backend/datalib_step/src/render.rs))
 now deletes the whole tree when `render_version` moves, which closes
 the re-keying case the parse-and-render doc §5 describes. It does *not*
 close the render-param case: `read_for_params` invalidates the cursor
@@ -621,7 +621,7 @@ revisited.
 own caveat that "an event from a detached `spawn`/`spawn_blocking`
 won't see the task-local," and the render wave runs inside
 `spawn_blocking`
-([`datalib_step/render.rs:66`](../../../datalib/backend/datalib_step/src/render.rs)).
+([`datalib_step/render.rs:66`](../../../../datalib/backend/datalib_step/src/render.rs)).
 Copying the ambient pattern here would produce a sink that silently
 collects nothing.
 
@@ -672,7 +672,7 @@ before "malformed systemically" can mean anything.
 
 **P7 — R4's threshold, once P1 exists.** The render driver already
 counts documents
-([`datalib_step/render.rs:59`](../../../datalib/backend/datalib_step/src/render.rs));
+([`datalib_step/render.rs:59`](../../../../datalib/backend/datalib_step/src/render.rs));
 add `records_read` alongside `records_dropped` and fail the step past
 20%. Note that the denominator does not exist today — no provider
 counts records read — so R4 is blocked on P1 in a way R3 is not.
@@ -718,7 +718,7 @@ in the tree at all.
 
 1. ~~**`parse_and_render.md` §2**~~ *(fixed)* — the sidecar header field was named
    `document_uuid` in the doc and `markdown_uuid` in
-   [`index_lib/src/lib.rs`](../../../datalib/backend/index_lib/src/lib.rs)
+   [`index_lib/src/lib.rs`](../../../../datalib/backend/index_lib/src/lib.rs)
    and in every sidecar on disk.
 2. ~~**`parse_and_render.md` §2**~~ *(fixed)* — "Grid index reads
    `(qmd_path, source_fingerprint)` from `markdowns_loaded`." No such

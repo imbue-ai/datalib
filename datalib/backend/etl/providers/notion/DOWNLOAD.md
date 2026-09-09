@@ -222,4 +222,4 @@ on that reading would destroy a live document.
 - Incremental render (`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`).
 
 The design and the measurements behind it are in
-[`docs/dev/archived/notion_redesign.md`](../../../../../docs/dev/archived/notion_redesign.md).
+[`docs/dev/plans/completed/notion_redesign.md`](../../../../../docs/dev/plans/completed/notion_redesign.md).

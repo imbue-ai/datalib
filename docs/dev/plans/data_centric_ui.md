@@ -259,7 +259,7 @@ button opens a Vue modal.
 **The wizard stays a modal**, opened by a row action, exactly as now.
 Its multi-step credential-and-probe flow is genuinely not tabular, and
 pretending otherwise would cost more than it buys. See
-[`source_wizard.md`](../source_wizard.md).
+[`source_wizard.md`](source_wizard.md).
 
 ### 6. Publishing changes, per dataset
 

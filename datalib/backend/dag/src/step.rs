@@ -36,7 +36,7 @@ pub struct StepSpec {
     pub code_version: Option<String>,
     /// Whether a consumer may read this step's output *while it is still
     /// being written* — P2 of the sink contract in
-    /// `docs/dev/streaming_steps_plan.md`.
+    /// `docs/dev/plans/streaming_steps_plan.md`.
     ///
     /// Default `false`, and deliberately so: most sinks cannot, and the
     /// failure when they cannot is a consumer acting on a torn read rather

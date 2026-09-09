@@ -1,6 +1,6 @@
 //! End-to-end fixture walk: point the extractor at the checked-in
 //! TNG-themed Takeout tree and assert each feed lands the rows
-//! `docs/dev/archived/google_takeout_ingestion.md` promises.
+//! the provider's DOWNLOAD.md promises.
 
 use std::path::{Path, PathBuf};
 

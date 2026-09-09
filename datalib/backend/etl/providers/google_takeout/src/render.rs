@@ -329,7 +329,7 @@ fn space_of_dir(dir: &str) -> String {
 /// records that we discarded something upstream actually sent — that is
 /// only half of R1 ("drop, count, log; never abort, never hide"). When
 /// the problem sink exists (see
-/// `docs/dev/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
+/// `docs/dev/plans/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
 /// report `{field, reason: CoercionFailed, sample}` here as well as
 /// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`

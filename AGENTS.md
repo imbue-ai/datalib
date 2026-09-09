@@ -11,6 +11,23 @@ custom step), start with [`agent_user.md`](docs/agent_user.md) instead.
 Start here when a task touches an area you don't already know. All paths
 are relative to the repo root.
 
+**Only the docs directly under `docs/dev/` describe the tree.** Three
+subdirectories hold things that do not, and each says so in its own
+banner:
+
+| | |
+|---|---|
+| [`plans/`](docs/dev/plans/) | intended, not built |
+| [`plans/completed/`](docs/dev/plans/completed/) | landed, kept as the record of what was decided |
+
+A plan that lands moves to `plans/completed/`. The exception is a plan
+somebody would read to *learn how the system works*: rewrite that one
+as reference and put it directly under `docs/dev/`. When a completed
+plan stops being worth keeping, **delete it** — git has it, and a
+directory of obsolete prose is a liability here rather than an asset.
+The entries below stay grouped by topic, so a plan sits beside the
+reference doc it relates to.
+
 **Pipeline / sync engine**
 
 - [`datalib/backend/dag/README.md`](datalib/backend/dag/README.md) — the
@@ -22,19 +39,19 @@ are relative to the repo root.
   — the design history behind that: why a DAG at all, the node contract
   as it was proposed, the implementation decisions and the open
   questions.
-- [`docs/dev/step_identity.md`](docs/dev/step_identity.md) — *proposal*:
-  making a step's `id` the path it writes, so `inputs` name step ids and
-  the six places that recover an identity by splitting a string go away.
-  Nothing in it is built; the `name` / `id` split that did ship is in
-  `source_wizard.md`.
-- [`docs/dev/streaming_steps.md`](docs/dev/streaming_steps.md) —
+- [`docs/dev/plans/completed/step_identity.md`](docs/dev/plans/completed/step_identity.md)
+  — **built (2026-08-31)**: a step's `id` *is* the one tree it writes,
+  `inputs` name step ids, and `outputs` is gone from the config
+  entirely. Read it for why; it was written as the design and kept as
+  the explanation.
+- [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
   *proposal*, nothing built: letting a consumer step start before its
   producer finishes. Splits the two meanings an edge carries today
   ("B consumes A's output" and "B may assume A is finished"). The
   doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
-- [`docs/dev/streaming_steps_plan.md`](docs/dev/streaming_steps_plan.md)
+- [`docs/dev/plans/streaming_steps_plan.md`](docs/dev/plans/streaming_steps_plan.md)
   — *plan*, partly built: how to build the above, measured against the
   tree, with each step marked done or not. Read it before touching how
   any consumer reads a store — its §"The hazard" is the one to know,
@@ -57,22 +74,22 @@ are relative to the repo root.
   NDJSON progress/outcome protocol, failure classification, and
   cancellation. Any executable can be a step; `datalib-step` is the
   reference implementation.
-- [`docs/dev/data_lib_as_a_library/`](docs/dev/data_lib_as_a_library/)
+- [`docs/dev/plans/data_lib_as_a_library/`](docs/dev/plans/data_lib_as_a_library/)
   — two linked *proposals* (nothing built) about datalib as something
   others build on, prompted by the `data-pipeline-builder` skill in
   `imbue-ai/default-workspace-template#534`, plus
-  [`render_audit_2026_09_03.md`](docs/dev/data_lib_as_a_library/render_audit_2026_09_03.md)
+  [`render_audit_2026_09_03.md`](docs/dev/plans/data_lib_as_a_library/render_audit_2026_09_03.md)
   — the first of those proposals' audit actually run, and the one file
   here that is measurement rather than intent (read it before believing
   any claim about what render does today).
-  [`data_handling_practices.md`](docs/dev/data_lib_as_a_library/data_handling_practices.md)
+  [`data_handling_practices.md`](docs/dev/plans/data_lib_as_a_library/data_handling_practices.md)
   is the one to read first and the one that touches this repo: the
   seven things that skill does better than we do, the four audit
   passes over the providers we already shipped, and what a new
   provider has to do from now on. Its §1 scorecard is the honest
   version — we are behind on **everything about the record we cannot
   store**.
-  [`toolchain_for_agents.md`](docs/dev/data_lib_as_a_library/toolchain_for_agents.md)
+  [`toolchain_for_agents.md`](docs/dev/plans/data_lib_as_a_library/toolchain_for_agents.md)
   is downstream of it; its §1 inventories what the five file-backed
   providers already share (`fswalk`, `file_checkpoint`, `input_path`,
   the content-vs-path identity split) — read that before concluding
@@ -146,7 +163,7 @@ are relative to the repo root.
 - [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md)
   — the live recipe for porting the remaining providers to CAS blobs +
   incremental render.
-- [`docs/dev/multimodal_retrieval.md`](docs/dev/multimodal_retrieval.md)
+- [`docs/dev/plans/multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md)
   — *proposal*, nothing built: replacing the `qmd_index` step with a
   retrieval layer that takes an arbitrary `grid_rows` metadata
   prefilter and holds more than one vector space. Read §4 ("bytes at
@@ -172,10 +189,10 @@ are relative to the repo root.
   text box. How the three layers fit (Tauri capability → `pickPath` →
   the button), the checklist for a new path field, and why the
   browser-served case can't have one. The wizard's own design is
-  [`docs/dev/source_wizard.md`](docs/dev/source_wizard.md) (a
+  [`docs/dev/plans/source_wizard.md`](docs/dev/plans/source_wizard.md) (a
   proposal, only partly built — read its banner); the descriptors you
   actually edit are `datalib/ui/src/config/catalog.ts`.
-- [`docs/dev/qmd_index_ui.md`](docs/dev/qmd_index_ui.md) — the grid's
+- [`docs/dev/plans/qmd_index_ui.md`](docs/dev/plans/qmd_index_ui.md) — the grid's
   `Indexed` / `Embedded` columns and the `qmd_state` endpoint behind
   them (built), plus the design for selective re-indexing and live
   index progress (proposal — the file marks which is which).
@@ -208,10 +225,6 @@ are relative to the repo root.
   and [`docs/user/config_examples/`](docs/user/config_examples/) (one
   commented `<name>.download` + `<name>.render` step pair per source,
   in the steps format).
-
-**Historical** — [`docs/dev/archived/`](docs/dev/archived/) holds
-point-in-time plans and audits (each with an "Archived" banner). Don't
-treat them as current reference.
 
 ## Prose can be stale — verify claims against the tree
 
@@ -362,9 +375,26 @@ datalib/
 tests/         goldens under tests/__snapshots__/ (Bazel-driven).
 tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
 docs/          dev/ architecture notes; user/ guides + config_examples/;
-               dev/archived/ historical plans.
+               dev/plans/ intended work, dev/plans/completed/ landed.
 third-party/   vendored upstream code (see below).
 ```
+
+### Why each provider has a `<p>_config` crate
+
+A provider's config schema lives in its own crate, holding the serde
+structs and nothing else — no download code, no render code. That lets
+anything needing to *understand* a config link the schema without
+linking the machinery that acts on it, and it keeps the dependency rule
+structural rather than merely intended.
+
+They are **Bazel-only by design — no `Cargo.toml`**. A first-party
+crate that uses only third-party dependencies the workspace already has
+needs just a `BUILD.bazel` under `rules_rust`, so the crate
+proliferation is close to free.
+
+Three of them (`chatgpt_config`, `perseus_config`, `slack_config`) are
+missing the comment their siblings carry; the convention applies to
+them just the same.
 
 ## The sync pipeline in one paragraph
 
