@@ -89,26 +89,12 @@ impl Subject {
     /// the fixture golden unable to pass on both at once.
     ///
     /// The size is not lost — it is in `byte_size`, which the grid
-    /// renders in its own column, and in the report body via
-    /// [`Self::body_line`]. It is only kept out of the string that a
-    /// staleness decision hashes.
+    /// renders in its own column, and in the report's Size cell. It is
+    /// only kept out of the string that a staleness decision hashes.
     fn summary(&self) -> String {
         match self.items.map(|n| plural(n, self.counts())) {
             Some(n) => format!("{} — {n}", self.path),
             None => self.path.clone(),
-        }
-    }
-
-    /// The human-readable line in the rendered report, where the size
-    /// belongs: the body is in neither hash, and it is only rewritten
-    /// when a count moves, so the figure it shows is the one from the
-    /// last run that changed something.
-    fn body_line(&self) -> String {
-        match (self.bytes, self.items.map(|n| plural(n, self.counts()))) {
-            (Some(b), Some(n)) => format!("{} — {}, {n}", self.path, human_bytes(b)),
-            (Some(b), None) => format!("{} — {}", self.path, human_bytes(b)),
-            (None, Some(n)) => format!("{} — {n}", self.path),
-            (None, None) => self.path.clone(),
         }
     }
 
@@ -393,15 +379,29 @@ fn report_body(source_name: &str, subjects: &[Subject], now: &str) -> String {
         "---\ntitle: {source_name} storage\nsource: {source_name}\nmeasured_at: {now}\n---\n\n\
          # {source_name} — storage\n\nMeasured {now}.\n\n"
     );
+    // One table, not one wrapped `<div>` per measurement. A source with
+    // a dozen stores and tables used to render a dozen bordered cards
+    // stacked down the page to say twelve short facts; the same facts
+    // fit in a dozen rows. The anchor moves onto a span inside the Id
+    // cell — the frontend keys selection off `[data-section-uuid]`
+    // wherever it sits, and a row is what a reader wants to land on.
+    out.push_str("| Kind | What | Size | Count | Id |\n|---|---|---|---|---|\n");
     for s in subjects {
         let uuid = s.uuid(source_name);
         out.push_str(&format!(
-            "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--datalib\">\n\n\
-             - **{}** — {}\n\n</div>\n\n",
-            s.kind.label(),
-            s.body_line(),
+            "| {kind} | `{path}` | {size} | {count} | \
+             <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">`{short}`</span> |\n",
+            kind = s.kind.label(),
+            path = s.path,
+            size = s.bytes.map(human_bytes).unwrap_or_default(),
+            count = s.items.map(|n| plural(n, s.counts())).unwrap_or_default(),
+            // The full uuid is on the span for the deeplink and the
+            // copy button; the cell shows the head of it, which is what
+            // a person compares against a grid row.
+            short = &uuid[..8.min(uuid.len())],
         ));
     }
+    out.push('\n');
     out
 }
 
@@ -961,14 +961,54 @@ mod tests {
             "the hashed text must not carry a size: {}",
             s.summary()
         );
-        // …and it is not lost: the body says it, and so does the column.
-        assert_eq!(s.body_line(), "s/raw — 2.0 KiB, 2 files");
+        // …and it is not lost: the report's Size cell says it, and so
+        // does the column.
+        let body = report_body("s", std::slice::from_ref(&s), "2026-09-07T10:00:00-07:00");
+        assert!(body.contains("| 2.0 KiB |"), "{body}");
 
         let td = tempdir().unwrap();
         let m = plan(td.path(), "s", vec![s], "2026-09-07T10:00:00-07:00")
             .unwrap()
             .unwrap();
         assert_eq!(m.doc.rows[0].byte_size, Some(2048));
+    }
+
+    /// The report is a table, and every measurement is one row of it.
+    /// It used to be a bordered `<div>` per measurement — a dozen cards
+    /// stacked down the page to say a dozen short facts.
+    #[test]
+    fn the_report_is_one_table_row_per_measurement() {
+        let subjects = vec![
+            subject("s/raw", MeasurementKind::Tree, Some(2048), Some(2)),
+            subject(
+                "s/raw/db.doltlite_db",
+                MeasurementKind::Store,
+                Some(512),
+                None,
+            ),
+        ];
+        let body = report_body("s", &subjects, "2026-09-07T10:00:00-07:00");
+
+        assert!(
+            body.contains("| Kind | What | Size | Count | Id |"),
+            "{body}"
+        );
+        assert!(!body.contains("<div"), "no per-measurement card: {body}");
+        // Two measurements, two rows — plus the header and its rule.
+        assert_eq!(
+            body.lines().filter(|l| l.starts_with('|')).count(),
+            4,
+            "{body}"
+        );
+        // Every row still carries the anchor the grid scrolls to.
+        for s in &subjects {
+            let uuid = s.uuid("s");
+            assert!(
+                body.contains(&format!("data-section-uuid=\"{uuid}\"")),
+                "row for {} lost its anchor: {body}",
+                s.path
+            );
+        }
     }
 
     #[test]

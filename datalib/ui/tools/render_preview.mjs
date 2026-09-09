@@ -165,6 +165,26 @@ function stripFrontmatter(text) {
   return end < 0 ? text : text.slice(end + 5);
 }
 
+/**
+ * Replace the byte figures in a storage report with a fixed token.
+ *
+ * A doltlite store's size is not reproducible: it drifts a few bytes
+ * between rebuilds on one machine and differs outright between
+ * machines, so CI's Linux runner measures 261.4 KiB where a Mac
+ * measures 261.3. `Subject::summary` already keeps sizes out of the
+ * hashed text for this reason (see `introspect.rs`); a checked-in
+ * golden of the *rendered* report needs the same treatment, or it can
+ * never be green on both platforms at once.
+ *
+ * Scoped to the storage documents. Sizes everywhere else — an
+ * attachment's `— 384 B` — come from fixture metadata and are stable,
+ * and are worth seeing rendered.
+ */
+function redactVolatileSizes(rel, text) {
+  if (!rel.includes("_datalib/storage.md")) return text;
+  return text.replace(/\b\d+(\.\d+)? (B|KiB|MiB|GiB)\b/g, "‹size›");
+}
+
 const mdFiles = readdirSync(mdDir, { recursive: true })
   .filter((f) => typeof f === "string" && f.endsWith(".md"))
   .sort();
@@ -191,7 +211,7 @@ ${rels
     (rel) => `<div class="preview-doc">
 <h3 class="preview-name">${rel}</h3>
 <div class="chat-body markdown-body">${md.render(
-      stripFrontmatter(readFileSync(join(mdDir, rel), "utf8")),
+      redactVolatileSizes(rel, stripFrontmatter(readFileSync(join(mdDir, rel), "utf8"))),
     )}</div>
 </div>`,
   )

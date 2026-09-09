@@ -23,20 +23,50 @@ pub struct Title<'a> {
     pub source_url: Option<&'a str>,
 }
 
+/// Longest heading we render in full.
+///
+/// A conversation upstream never named gets titled after its first
+/// message — ChatGPT does this — so a page title can run to several
+/// hundred characters and push everything else off the screen. The
+/// full string is not lost: it goes in the `title` attribute, the
+/// frontmatter, and `grid_rows.conversation_name`, which is what
+/// search reads.
+const MAX_TITLE_CHARS: usize = 90;
+
+/// `(shown, full)` — `full` is `None` when nothing was cut.
+fn clamp(text: &str) -> (String, Option<&str>) {
+    if text.chars().count() <= MAX_TITLE_CHARS {
+        return (text.to_string(), None);
+    }
+    // Cut on a word boundary when there is one near the limit, so the
+    // heading does not end mid-word; fall back to the hard limit for a
+    // string with no spaces at all (a URL, a hash).
+    let hard: String = text.chars().take(MAX_TITLE_CHARS).collect();
+    let cut = match hard.rfind(' ') {
+        Some(i) if i >= MAX_TITLE_CHARS * 2 / 3 => &hard[..i],
+        _ => hard.as_str(),
+    };
+    (format!("{}…", cut.trim_end()), Some(text))
+}
+
 impl<'a> Title<'a> {
     /// Render the title block as an HTML-in-markdown chunk. The
     /// returned string ends with `\n\n` so callers can splice it
     /// straight into the body without worrying about blank-line
     /// terminators.
     pub fn render(&self) -> String {
+        let (shown, full) = clamp(self.text);
         let mut out = String::new();
         out.push_str("<h1 class=\"page-title\"");
         if let Some(uuid) = self.markdown_uuid {
             write!(out, " data-page-title-uuid=\"{}\"", escape_attr(uuid))
                 .expect("write to String");
         }
+        if let Some(full) = full {
+            write!(out, " title=\"{}\"", escape_attr(full)).expect("write to String");
+        }
         out.push('>');
-        out.push_str(&escape_html(self.text));
+        out.push_str(&escape_html(&shown));
         if let Some(url) = self.source_url {
             write!(
                 out,
@@ -128,6 +158,49 @@ mod tests {
             t.render(),
             "<h1 class=\"page-title\" data-page-title-uuid=\"abc-123\">Hello <a class=\"source-link\" href=\"https://example.com/chat/x\" target=\"_blank\" rel=\"noopener noreferrer\">↗</a></h1>\n\n",
         );
+    }
+
+    /// A conversation ChatGPT titled after its first message runs to
+    /// hundreds of characters; rendered in full it is the whole top of
+    /// the page. The full string stays reachable on hover.
+    #[test]
+    fn a_very_long_title_is_clamped_with_the_full_text_on_hover() {
+        let long = "I have been reviewing the Daystrom Institute archives on subspace \
+                    harmonic stabilization, and I'm increasingly convinced that our \
+                    current dilithium recrystallization approach is a dead end";
+        let s = Title {
+            text: long,
+            markdown_uuid: None,
+            source_url: None,
+        }
+        .render();
+
+        assert!(s.contains('…'), "{s}");
+        assert!(
+            s.contains("title=\"I have been reviewing the Daystrom Institute archives"),
+            "the full text is on the element: {s}"
+        );
+        // Clamped on a word boundary, not mid-word.
+        let shown = s
+            .split_once('>')
+            .and_then(|(_, rest)| rest.split_once("</h1>"))
+            .map(|(t, _)| t.to_string())
+            .expect("heading text");
+        assert!(shown.chars().count() <= 91, "{shown:?}");
+        assert!(shown.ends_with('…') && !shown.ends_with(" …"), "{shown:?}");
+    }
+
+    /// A title that fits is rendered verbatim, with no `title`
+    /// attribute promising a fuller version that does not exist.
+    #[test]
+    fn a_short_title_is_left_alone() {
+        let s = Title {
+            text: "Bridge Crew",
+            markdown_uuid: None,
+            source_url: None,
+        }
+        .render();
+        assert_eq!(s, "<h1 class=\"page-title\">Bridge Crew</h1>\n\n");
     }
 
     #[test]
