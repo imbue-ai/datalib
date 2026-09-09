@@ -71,7 +71,6 @@ impl RenderProcessor for SmsRender {
             datalib_etl::render_cursor::write(
                 &cursor_path,
                 head,
-                outcome.scan_elapsed,
                 &datalib_etl::render_cursor::no_params(),
             )
             .with_context(|| format!("write sms render cursor {}", cursor_path.display()))?;

@@ -452,7 +452,6 @@ pub fn render_notion(
         datalib_etl::render_cursor::write(
             &cursor_path,
             head,
-            parsed.scan.scan_elapsed,
             &datalib_etl::render_cursor::no_params(),
         )?;
     }

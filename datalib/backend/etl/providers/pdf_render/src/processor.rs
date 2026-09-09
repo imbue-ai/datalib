@@ -113,7 +113,6 @@ impl RenderProcessor for PdfRender {
             datalib_etl::render_cursor::write(
                 &cursor_path,
                 head,
-                scan.elapsed,
                 &datalib_etl::render_cursor::no_params(),
             )
             .with_context(|| format!("write pdf render cursor {}", cursor_path.display()))?;

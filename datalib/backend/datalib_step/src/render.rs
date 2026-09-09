@@ -453,21 +453,21 @@ mod tests {
         let cursor = root.join("_render_cursor.json");
         let params = |p: &str| serde_json::json!({ "period": p });
 
-        datalib_etl::render_cursor::write(&cursor, "commit-a", None, &params("month")).unwrap();
+        datalib_etl::render_cursor::write(&cursor, "commit-a", &params("month")).unwrap();
         let v1 = rendered_tree_version(&root).expect("cursor present");
         // A second render that found nothing new rewrites the same
         // cursor; the version must not budge.
-        datalib_etl::render_cursor::write(&cursor, "commit-a", None, &params("month")).unwrap();
+        datalib_etl::render_cursor::write(&cursor, "commit-a", &params("month")).unwrap();
         assert_eq!(rendered_tree_version(&root).as_deref(), Some(v1.as_str()));
 
         // New upstream data.
-        datalib_etl::render_cursor::write(&cursor, "commit-b", None, &params("month")).unwrap();
+        datalib_etl::render_cursor::write(&cursor, "commit-b", &params("month")).unwrap();
         let v2 = rendered_tree_version(&root).unwrap();
         assert_ne!(v1, v2, "a new source commit must move the version");
 
         // Same data, different render knob: the tree differs, so the
         // version must too, or the index keeps the old rendering.
-        datalib_etl::render_cursor::write(&cursor, "commit-b", None, &params("week")).unwrap();
+        datalib_etl::render_cursor::write(&cursor, "commit-b", &params("week")).unwrap();
         assert_ne!(
             rendered_tree_version(&root).unwrap(),
             v2,

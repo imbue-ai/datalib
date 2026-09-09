@@ -368,13 +368,8 @@ pub fn render_github(
     // cold-starts the next run — the safe direction.
     if let Some(head) = parsed.scan.new_head.as_deref() {
         let cursor_path = render_cursor::cursor_path(root, stanza);
-        render_cursor::write(
-            &cursor_path,
-            head,
-            parsed.scan.scan_elapsed,
-            &render_cursor::no_params(),
-        )
-        .with_context(|| format!("write github render cursor {}", cursor_path.display()))?;
+        render_cursor::write(&cursor_path, head, &render_cursor::no_params())
+            .with_context(|| format!("write github render cursor {}", cursor_path.display()))?;
     }
     Ok(summary)
 }
