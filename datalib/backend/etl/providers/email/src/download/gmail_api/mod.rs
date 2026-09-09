@@ -4,7 +4,6 @@ pub mod api;
 pub mod ingest;
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
@@ -34,7 +33,6 @@ const FLUSH_BATCH: usize = 200;
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -59,7 +57,6 @@ impl FetchOptions {
     /// it is a live handle the caller opens and closes.
     pub fn new(db: RawDb) -> Self {
         Self {
-            db_path: PathBuf::new(),
             db,
             config: EmailGmailApi::default(),
             latchkey: LatchkeySettings::default(),

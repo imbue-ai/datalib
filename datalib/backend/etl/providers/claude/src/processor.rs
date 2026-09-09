@@ -100,7 +100,6 @@ impl DataProcessor for ClaudeDownload {
         )
         .await;
         let s = download::fetch(download::FetchOptions {
-            db_path: self.raw_path.clone(),
             db,
             latchkey: self.latchkey.clone(),
             // users.json is expected alongside the raw store (playback seeds it).
@@ -162,7 +161,6 @@ impl DataProcessor for ClaudeExportIngest {
         let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = download::export::ingest(download::export::IngestOptions {
-            db_path: self.raw_path.clone(),
             db,
             input_path: self.input_path.clone(),
             // The run-pinned `now`, so every bookkeeping stamp this

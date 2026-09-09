@@ -10,7 +10,6 @@ pub mod db;
 pub mod schema_raw;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -37,10 +36,6 @@ pub struct FetchOptions {
     /// source's `latchkey_settings:` block. Default = the only stored
     /// account for the service.
     pub latchkey: LatchkeySettings,
-    /// Path to the doltlite database file. The entity db lives inside
-    /// the per-source directory as `entities.doltlite_db` (the dir is
-    /// created if needed).
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -67,7 +62,6 @@ impl FetchOptions {
     pub fn new(db: RawDb) -> Self {
         Self {
             latchkey: LatchkeySettings::default(),
-            db_path: PathBuf::new(),
             db,
             scopes: DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect(),
             refresh_window_days: 30,

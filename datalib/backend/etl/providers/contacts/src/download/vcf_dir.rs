@@ -13,11 +13,10 @@ use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 
 use super::api::{vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
-use super::db::{addressbook_pk, db_path_for, RawDb};
+use super::db::{addressbook_pk, RawDb};
 use super::schema_raw::{synthesized_name_uid, ContactRow};
 
 pub struct FetchOptions {
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -112,11 +111,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         opts.progress.inc(1);
     }
 
-    // `db_path` is the per-source *directory*, so resolve it to the entity db
-    // file before deriving the CAS sibling — otherwise `cas_path_for` walks up
-    // to the shared `raw/` parent and the store leaks there.
-    if let Err(e) = super::photos::lift_photos_to_cas(&db, &db_path_for(&opts.db_path)).await {
-        warn!(event = "carddav_vcf_photo_lift_failed", error = %e);
+    // Through the handle's own CAS, so nothing here opens a second
+    // store. `None` is a reader, which never reaches this path.
+    if let Some(cas) = db.cas() {
+        if let Err(e) = super::photos::lift_photos_to_cas(&db, cas).await {
+            warn!(event = "carddav_vcf_photo_lift_failed", error = %e);
+        }
     }
     Ok(summary)
 }
@@ -260,6 +260,7 @@ fn split_vcards(body: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::db::db_path_for;
     use super::*;
 
     /// A fingerprint cache in a throwaway directory, so no test ever
@@ -303,7 +304,6 @@ mod tests {
         let entity_db = db_path_for(&source_dir);
         let db = RawDb::open(&entity_db).await.unwrap();
         let summary = fetch(FetchOptions {
-            db_path: source_dir.clone(),
             db: db.clone(),
             input_path: export.path().to_path_buf(),
             cache: test_cache().await,
@@ -339,7 +339,6 @@ mod tests {
         let cache = test_cache().await;
         let db = RawDb::open(&db_path).await.unwrap();
         let opts = || FetchOptions {
-            db_path: db_path.clone(),
             db: db.clone(),
             input_path: dir.path().to_path_buf(),
             cache: cache.clone(),
@@ -380,7 +379,6 @@ mod tests {
         let cache = test_cache().await;
         let db = RawDb::open(&db_path).await.unwrap();
         let opts = || FetchOptions {
-            db_path: db_path.clone(),
             db: db.clone(),
             input_path: dir.path().to_path_buf(),
             cache: cache.clone(),
@@ -424,7 +422,6 @@ mod tests {
         let cache = test_cache().await;
         let db = RawDb::open(&db_path).await.unwrap();
         let opts = || FetchOptions {
-            db_path: db_path.clone(),
             db: db.clone(),
             input_path: dir.path().to_path_buf(),
             cache: cache.clone(),
@@ -471,7 +468,6 @@ mod tests {
         let db_path = dir.path().join("c.doltlite_db");
         let db = RawDb::open(&db_path).await.unwrap();
         let summary = fetch(FetchOptions {
-            db_path: db_path.clone(),
             db: db.clone(),
             input_path: dir.path().to_path_buf(),
             cache: test_cache().await,
@@ -505,7 +501,6 @@ mod tests {
         let db_path = dir.path().join("c.doltlite_db");
         let db = RawDb::open(&db_path).await.unwrap();
         let summary = fetch(FetchOptions {
-            db_path: db_path.clone(),
             db: db.clone(),
             input_path: dir.path().to_path_buf(),
             cache: test_cache().await,

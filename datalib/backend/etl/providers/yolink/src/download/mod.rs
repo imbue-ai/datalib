@@ -11,7 +11,7 @@ pub mod schema_raw;
 
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -200,7 +200,6 @@ async fn upsert_readings(pool: &SqlitePool, device: &str, readings: &[Reading]) 
 // ── orchestrator ────────────────────────────────────────────────────
 
 pub struct FetchOptions {
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See

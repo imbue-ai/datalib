@@ -86,7 +86,6 @@ impl DataProcessor for NotionDownload {
         seeds.sort();
         seeds.dedup();
         let s = download::fetch(download::FetchOptions {
-            db_path: self.raw_path.clone(),
             latchkey: self.latchkey.clone(),
             subtree_pages: seeds,
             max_pages: self.sync.max_pages.map(|m| m as usize),

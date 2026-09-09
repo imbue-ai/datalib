@@ -24,9 +24,6 @@ const DELETE_CHUNK: usize = 400;
 
 #[derive(Debug, Clone)]
 pub struct IngestOptions {
-    /// Path to the doltlite database file, or the per-source raw
-    /// directory holding it.
-    pub db_path: PathBuf,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: two live connections to
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
@@ -392,9 +389,8 @@ mod tests {
         RawDb::open(&db_path_for(raw)).await.unwrap()
     }
 
-    fn opts(db: &RawDb, export: &Path, raw: &Path) -> IngestOptions {
+    fn opts(db: &RawDb, export: &Path) -> IngestOptions {
         IngestOptions {
-            db_path: raw.to_path_buf(),
             db: db.clone(),
             input_path: export.to_path_buf(),
             now: NOW.to_string(),
@@ -444,7 +440,7 @@ mod tests {
         );
 
         let db = open_raw(raw.path()).await;
-        let s = ingest(opts(&db, ex.path(), raw.path())).await.unwrap();
+        let s = ingest(opts(&db, ex.path())).await.unwrap();
         assert_eq!(
             (
                 s.users,
@@ -491,14 +487,14 @@ mod tests {
             &json!([conv("c1", "First"), conv("c2", "Second")]),
         );
         let db = open_raw(raw.path()).await;
-        ingest(opts(&db, ex.path(), raw.path())).await.unwrap();
+        ingest(opts(&db, ex.path())).await.unwrap();
 
         write(
             ex.path(),
             "conversations.json",
             &json!([conv("c1", "First")]),
         );
-        let s = ingest(opts(&db, ex.path(), raw.path())).await.unwrap();
+        let s = ingest(opts(&db, ex.path())).await.unwrap();
         assert_eq!(s.pruned, 1, "c2 vanished from the export");
 
         let ids: Vec<String> = db
@@ -538,10 +534,10 @@ mod tests {
             &json!({"uuid": "p1", "name": "Bridge Ops"}),
         );
         let db = open_raw(raw.path()).await;
-        ingest(opts(&db, ex.path(), raw.path())).await.unwrap();
+        ingest(opts(&db, ex.path())).await.unwrap();
 
         std::fs::remove_dir_all(ex.path().join("projects")).unwrap();
-        let s = ingest(opts(&db, ex.path(), raw.path())).await.unwrap();
+        let s = ingest(opts(&db, ex.path())).await.unwrap();
         assert_eq!(s.pruned, 0);
         assert_eq!(dump(db.pool(), "projects").await.len(), 1);
         db.close().await;
@@ -554,7 +550,7 @@ mod tests {
         let ex = tempfile::tempdir().unwrap();
         let raw = tempfile::tempdir().unwrap();
         let db = open_raw(raw.path()).await;
-        let err = ingest(opts(&db, ex.path(), raw.path()))
+        let err = ingest(opts(&db, ex.path()))
             .await
             .expect_err("no conversations.json");
         let err = format!("{err:#}");

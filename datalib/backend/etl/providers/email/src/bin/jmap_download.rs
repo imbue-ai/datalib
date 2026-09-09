@@ -61,7 +61,6 @@ async fn main() -> Result<()> {
     let db = RawDb::open(&db_path_for(&args.out)).await?;
     let opts = FetchOptions {
         db: db.clone(),
-        db_path: args.out.clone(),
         hostname: args.hostname.clone(),
         account_id: args.account_id.clone(),
         full_resync: args.full_resync,
