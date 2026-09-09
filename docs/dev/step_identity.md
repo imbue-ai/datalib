@@ -4,7 +4,7 @@
 `inputs` name step ids instead of artifact paths, and the places that
 recovered an identity by splitting a string are gone. Phase 1 (the
 `name` / `id` split in the wizard and the config) shipped separately —
-see [`source_wizard.md`](source_wizard.md#two-names-id-is-the-identity-name-is-what-you-type).
+see [`source_wizard.md`](plans/source_wizard.md#two-names-id-is-the-identity-name-is-what-you-type).
 
 This file was written as the design and kept as the explanation. Where
 it says "proposal" below, read "what was done"; the two places the build

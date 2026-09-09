@@ -6,8 +6,8 @@
 > which turned out to be ahead of us on a set of things worth stealing.
 >
 > **This does not replace
-> [`data_architecture_ingestion.md`](../data_architecture_ingestion.md)
-> or its [practices companion](../data_architecture_ingestion_practices.md).**
+> [`data_architecture_ingestion.md`](../../data_architecture_ingestion.md)
+> or its [practices companion](../../data_architecture_ingestion_practices.md).**
 > Those own storage, identity, incrementality and the download
 > architecture, and nothing here contradicts them. This doc owns one
 > layer they barely cover: **what happens to a record we cannot store
@@ -67,7 +67,7 @@ own prose:
 | G1 | One problem sink with a reason taxonomy: unreadable file / non-object / no identity → **drop**; failed coercion → **null**; each one line with a reason and a sample | A single `errors=N` for fetch failures, and nothing at all for projection |
 | G2 | A stated field-nulling policy — "any rule that turns a non-null source value into null is a judgment call" | No such concept, so no way to count them |
 | G3 | The **judgment-call table**: every lossy rule listed with the number of records it affected | No analogue anywhere |
-| G4 | A **systematic-breakage exit**: stop when a run drops more than some fraction of what it read | Nearest is a consecutive-failure budget on *fetch*. See [§"Detecting upstream shape drift"](../data_architecture_ingestion_practices.md#detecting-upstream-shape-drift), recorded as an open question after `endpoint_shapes` was deleted |
+| G4 | A **systematic-breakage exit**: stop when a run drops more than some fraction of what it read | Nearest is a consecutive-failure budget on *fetch*. See [§"Detecting upstream shape drift"](../../data_architecture_ingestion_practices.md#detecting-upstream-shape-drift), recorded as an open question after `endpoint_shapes` was deleted |
 | G5 | A **spot check sharing no code with the code under test** (their `parse`; our render projection): N random exported rows compared against their raw records | Insta goldens, which assert output matches *what it matched last time* |
 | G6 | **Order-independence** asserted as a property, falling out of a `max((version, batch))` merge | Last-complete-write-wins, plus `--reset-and-redownload` for completeness only |
 | G7 | **Retention**: bound the store, the ledger and the log inside the load itself | No pruning anywhere in the ingestion path; no CAS GC either |
@@ -83,7 +83,7 @@ is self-concealing" — and our provider goldens are exactly that shape.
 ## 2. The practices
 
 **The rules themselves now live in
-[`docs/dev/data_architecture_parse_and_render.md` §4](../data_architecture_parse_and_render.md#4-data-quality-rules)**,
+[`docs/dev/data_architecture_parse_and_render.md` §4](../../data_architecture_parse_and_render.md#4-data-quality-rules)**,
 because that is where they belong: they are durable architecture for
 the render stage, not a project plan. They were written up here first
 only because render had no architecture document to put them in — which
@@ -243,7 +243,7 @@ were not paying attention.
 
 These are additions to the existing recipe in
 [`data_architecture_ingestion_practices.md`
-§"Adding new sources is meant to be easy"](../data_architecture_ingestion_practices.md#adding-new-sources-is-meant-to-be-easy),
+§"Adding new sources is meant to be easy"](../../data_architecture_ingestion_practices.md#adding-new-sources-is-meant-to-be-easy),
 not a replacement for it. That list stays; this is what it grows.
 
 **Before writing the projection**, when nobody on the team has read the
@@ -305,10 +305,10 @@ that written down (R7)?
 
 - [`toolchain_for_agents.md`](toolchain_for_agents.md) — the companion,
   and downstream of this one.
-- [`data_architecture_ingestion.md`](../data_architecture_ingestion.md)
+- [`data_architecture_ingestion.md`](../../data_architecture_ingestion.md)
   — storage, identity, incrementality; the layer under this one.
-- [`data_architecture_ingestion_practices.md`](../data_architecture_ingestion_practices.md)
+- [`data_architecture_ingestion_practices.md`](../../data_architecture_ingestion_practices.md)
   — the new-provider recipe §5 extends, and the open questions G4 and
   R4 speak to.
-- [`step_protocol.md`](../step_protocol.md) — where R2's third category
+- [`step_protocol.md`](../../step_protocol.md) — where R2's third category
   has to be written down for it to mean anything.

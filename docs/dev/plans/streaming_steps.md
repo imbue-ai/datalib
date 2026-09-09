@@ -2,7 +2,7 @@
 
 **Status: proposal (2026-09-03). Nothing here is built.** The claims
 about what doltlite can do are verified against doltlite 0.50.3 — the
-reproducer is [`hack/doltlite_concurrent_reader/`](../../hack/doltlite_concurrent_reader/),
+reproducer is [`hack/doltlite_concurrent_reader/`](../../../hack/doltlite_concurrent_reader/),
 and every number quoted below comes from running it. The design that
 follows is a proposal and has not been implemented.
 
