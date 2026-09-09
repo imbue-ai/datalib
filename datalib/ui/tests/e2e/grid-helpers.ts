@@ -319,6 +319,27 @@ export async function statusLog(page: Page, id: string): Promise<string[]> {
 /// derives by probing the lock. A root that has never run reports no run
 /// at all, which counts as closed: there is nothing in flight to be
 /// wrong about.
+/// What the backend says about the run right now, for a failure that
+/// would otherwise report only a status word.
+///
+/// The three fields that decide `Interrupted` are `run.live` (the
+/// backend's lock probe), `run.finished_at`, and the step's
+/// `current_state`; printing all three separates "a run really died"
+/// from "the lock probe lost its race" without opening a trace.
+async function dumpRunnerState(page: Page, id: string, why: string): Promise<void> {
+  try {
+    const dag = await (await page.request.get("/api/dag")).json();
+    const step = (dag.steps ?? []).find((s: { id: string }) => s.id === id);
+    console.warn(
+      `[e2e] ${why} for ${id}: run=${JSON.stringify(dag.run ?? null)} ` +
+        `current_state=${JSON.stringify(step?.current_state ?? null)} ` +
+        `last_run=${JSON.stringify(step?.last_run ?? null)}`,
+    );
+  } catch (e) {
+    console.warn(`[e2e] ${why} for ${id}: could not read /api/dag: ${e}`);
+  }
+}
+
 async function runIsClosed(page: Page): Promise<boolean> {
   const dag = await (await page.request.get("/api/dag")).json();
   return !dag.run || dag.run.finished_at != null;
@@ -358,6 +379,16 @@ async function settleRowOnly(
       },
     )
     .toBe("finished");
+  // "Interrupted" reaching a caller means the guard above lost its
+  // race: the DOM's verdict was computed from a `/api/dag` poll that
+  // reported the run not live, and by the time we asked, the run had
+  // closed. The caller is about to fail an assertion whose message is
+  // just the word "Interrupted", so leave behind the evidence that
+  // says whether a run really died — Playwright puts test stdout in
+  // the report and in bazel's test log.
+  if (last === "Interrupted") {
+    await dumpRunnerState(page, id, "settle returned Interrupted");
+  }
   // The value the poll matched, never a fresh read: the row can be
   // claimed by the next job between the two, and the function would
   // then return "Queued" from a call whose contract is a terminal
