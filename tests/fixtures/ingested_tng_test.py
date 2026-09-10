@@ -1103,7 +1103,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # behavior for the download step, and it would make this assert
         # nothing.
         self._run_step(
-            "claude-api", "render_markdown", "claude_api", inputs=("claude-api/ingest",)
+            "claude-api", "render_markdown", "claude", inputs=("claude-api/ingest",)
         )
         self._run_step("unified_index", "grid_index")
 
@@ -1183,9 +1183,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             f"DELETE FROM pull_requests_bookkeeping WHERE id = '{victim_pr}'; "
             "SELECT dolt_commit('-Am', 'test: upstream dropped a pull request');",
         )
-        self._run_step(
-            "github", "render_markdown", "github_api", inputs=("github/ingest",)
-        )
+        self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
         self._run_step("unified_index", "grid_index")
 
         github_docs_after = set(

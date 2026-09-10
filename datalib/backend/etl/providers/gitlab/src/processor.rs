@@ -1,5 +1,5 @@
-//! Program-A `DataProcessor`s for the gitlab (`gitlab_api`) source.
-//! `gitlab_api` contributes download + render; render is
+//! Program-A `DataProcessor`s for the `gitlab` source.
+//! `gitlab` contributes download + render; render is
 //! fingerprint-driven (no render cursor). The source owns its raw store
 //! (open/commit/checkpoint); the orchestrator only drives `run`.
 
@@ -15,7 +15,7 @@ use datalib_etl_gitlab_config::{GitlabApiSync, GitlabConfig};
 
 use crate::download;
 
-/// Download wave: present iff `sync:` (managed).
+/// Download wave: present iff `api`.
 pub fn plan_download(
     ctx: PlanContext,
     config: GitlabConfig,
@@ -24,7 +24,7 @@ pub fn plan_download(
     let raw_path = config.common.raw_path().to_path_buf();
     let latchkey_settings = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
-    if let Some(sync) = config.sync {
+    if let Some(sync) = config.api {
         procs.push(Box::new(GitlabDownload {
             id: format!("gitlab/{name}/download"),
             raw_path,

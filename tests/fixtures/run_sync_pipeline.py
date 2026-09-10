@@ -32,7 +32,7 @@ Args (positional):
                                    BeeperTexts-shaped dir from it)
     14: carddav_tng   fixture dir (vCard files; file mode — extract
                                    walks `.vcf` files straight from
-                                   `input_path`)
+                                   `vcf.path`)
     15: signal_tng    JSON spec for the TNG signal backup; the path is
                       to the .json file itself. We run
                       `signal-make-fixture` against it to materialize
@@ -51,10 +51,10 @@ Args (positional):
                       is supplied via the source's `mbox:` block.
     18: gtk_fx        Google Takeout root dir.
     19: linkedin_fx   LinkedIn data-export dir (CSVs + Articles HTML).
-                      File-backed; extract walks `input_path` directly.
+                      File-backed; extract walks its `path` directly.
     20: sms_fx        "SMS Backup & Restore" export dir (sms-*.xml /
                       calls-*.xml with inline base64 attachments).
-                      File-backed; extract walks `input_path` directly.
+                      File-backed; extract walks its `path` directly.
     21: yolink-make-fixture binary
     22: yolink_tng    JSON spec for the TNG YoLink sensor history. We
                       run `yolink-make-fixture` on it to seed the raw
@@ -64,7 +64,7 @@ Args (positional):
 
     23: pdf_tng       TNG-themed PDF corpus (Captain's logs, a warp-core
                       manual, a scanned blueprint). File-backed; the
-                      scanner walks `input_path` directly. Unlike
+                      scanner walks its `path` directly. Unlike
                       fsindex this source RENDERS, so its markdown
                       reaches grid_index and the qmd index like any
                       chat source — which is the whole point of
@@ -227,31 +227,30 @@ def main() -> int:
             ]
         )
 
-    # Every source: name → (source type, synth input fixture dir,
-    # extract-phase input_path). The synth input is the checked-in
-    # fixture tree the synthesizer reads; the extract input_path is
-    # what the provider walks at pipeline time (per-source raw subdirs
-    # for the HTTP providers, the fixture/export trees for the
-    # file-backed ones). Raw doltlite stores always land at the
-    # ingest step's tree, `<data_root>/<name>/ingest`, regardless.
+    # Every source: name → (source type, synth input fixture dir, the
+    # file-backed method's `path`). The synth input is the checked-in
+    # fixture tree the synthesizer reads; the path is what a file-backed
+    # provider walks at pipeline time (the fixture/export trees; unused
+    # by the HTTP providers, whose method is `api`). Raw doltlite stores
+    # always land at the ingest step's tree, `<data_root>/<name>/ingest`.
     sources: dict[str, tuple[str, Path, Path]] = {
-        "claude-api": ("claude_api", anth_fx, raw_root / "claude-api"),
-        "chatgpt-api": ("chatgpt_api", cgpt_fx, raw_root / "chatgpt-api"),
-        "slack": ("slack_api", slack_fx, raw_root / "slack"),
-        "github": ("github_api", gh_fx, raw_root / "github"),
-        "gitlab": ("gitlab_api", gl_fx, raw_root / "gitlab"),
-        "notion": ("notion_api", notion_fx, raw_root / "notion"),
+        "claude-api": ("claude", anth_fx, raw_root / "claude-api"),
+        "chatgpt-api": ("chatgpt", cgpt_fx, raw_root / "chatgpt-api"),
+        "slack": ("slack", slack_fx, raw_root / "slack"),
+        "github": ("github", gh_fx, raw_root / "github"),
+        "gitlab": ("gitlab", gl_fx, raw_root / "gitlab"),
+        "notion": ("notion", notion_fx, raw_root / "notion"),
         "beeper": ("beeper", beeper_data_dir, raw_root / "beeper"),
-        "tng_contacts": ("carddav", carddav_fx, carddav_fx),
-        "signal": ("signal_backup", signal_snapshot_root, raw_root / "signal"),
-        "whatsapp": ("whatsapp_backup", whatsapp_dir, raw_root / "whatsapp"),
+        "tng_contacts": ("contacts", carddav_fx, carddav_fx),
+        "signal": ("signal", signal_snapshot_root, raw_root / "signal"),
+        "whatsapp": ("whatsapp", whatsapp_dir, raw_root / "whatsapp"),
         "tng_email": ("email", email_mbox, email_mbox),
         "google-takeout": ("google_takeout", gtk_fx, gtk_fx),
         "linkedin": ("linkedin", linkedin_fx, linkedin_fx),
         "sms-backup-restore": ("sms_backup_restore", sms_fx, sms_fx),
-        # Render-only; its raw store was seeded above. `input_path` is
-        # unused by yolink (it reads `raw_path`), but every entry in this
-        # table declares one, so point it at the spec.
+        # Render-only; its raw store was seeded above. The path is
+        # unused by yolink, but every entry in this table declares one,
+        # so point it at the spec.
         "yolink": ("yolink", yolink_spec, yolink_spec),
         # File-backed and rendering: PDFs under this tree become
         # markdown + grid_rows, so the fan-in steps index them.
@@ -260,18 +259,18 @@ def main() -> int:
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
     # `datalib-step synthesize` reads each source's fixture tree
-    # (`common.input_path`) and writes replay tapes into `playback/`.
+    # (`fixture_path`) and writes replay tapes into `playback/`.
     # Sources without an HTTP synthesizer (beeper, signal, …) log a
     # skip and write nothing — invoked anyway for symmetry, exactly
     # like the old whole-config synth pass.
     print(f"[run_sync_pipeline] synth → {playback}", flush=True)
     step_env = {**os.environ, "DATALIB_DAG_DATA_ROOT": str(workspace)}
     for name, (type_str, synth_input, _extract_input) in sources.items():
-        source: dict = {"common": {"input_path": str(synth_input)}}
+        source: dict = {"fixture_path": str(synth_input)}
         if type_str == "linkedin":
             # The photo fetch is linkedin's one HTTP path; the synth
             # gate checks this flag.
-            source["fetch_photos"] = True
+            source["export"] = {"fetch_photos": True}
         _run(
             [
                 str(step_bin),
@@ -457,15 +456,17 @@ def _source_config(
 ) -> dict:
     """The provider config subtree (step `params:`) for one fixture source.
 
-    Mirrors the knobs the old sync YAML carried, minus the `type:` tag
-    (the group's `type` names the provider now).
+    One table per ingest method, named for the method; a file-backed
+    method carries its own `path`. Mirrors the knobs the old sync YAML
+    carried, minus the `type:` tag (the group's `type` names the
+    provider now).
     """
-    source: dict = {"common": {"input_path": str(input_path)}}
-    if type_str == "notion_api":
-        # `roots` narrows the mirror; an empty sync block would mirror
+    source: dict = {}
+    if type_str == "notion":
+        # `roots` narrows the mirror; an empty api block would mirror
         # the whole workspace, which in playback is the fixture tree.
-        source["sync"] = {"roots": [notion_seed]} if notion_seed else {}
-    elif type_str == "slack_api":
+        source["api"] = {"roots": [notion_seed]} if notion_seed else {}
+    elif type_str == "slack":
         # Disable media so extract doesn't fall back to the direct
         # `latchkey curl -v` path for file downloads (not on PATH in
         # the bazel sandbox, and the fixtures don't exercise media).
@@ -477,87 +478,83 @@ def _source_config(
         # `im` / `mpim` envelope at all. Leaving it off would mean the
         # DM surfaces are in the fixture but never mirrored, rendered,
         # indexed, or asserted on.
-        source["sync"] = {"media": False, "dms": True}
+        source["api"] = {"media": False, "dms": True}
     elif type_str == "beeper":
         # `sources` here is the canonical-network list that filters
-        # which rooms get ingested. `beeper_data_dir` points at the
-        # materialized BeeperTexts fixture.
+        # which rooms get ingested. `path` points at the materialized
+        # BeeperTexts fixture.
         #
         # Built as its own `dict[str, object]` before being attached:
-        # assigning the literal first would narrow `source["sync"]` to
+        # assigning the literal first would narrow `source["texts"]` to
         # `dict[str, list[str]]`, and the `str` value below then fails
         # to typecheck even though it is correct at runtime.
-        beeper_sync: dict[str, object] = {"sources": ["signal", "googlechat"]}
+        beeper_texts: dict[str, object] = {"sources": ["signal", "googlechat"]}
         if beeper_data_dir is not None:
-            beeper_sync["beeper_data_dir"] = str(beeper_data_dir)
-        source["sync"] = beeper_sync
-    elif type_str == "carddav":
-        # File-tree mode: no `sync:` block (otherwise we'd be in
-        # CardDAV-server mode). Extract walks `input_path` for `.vcf`
-        # files; translate reads the raw doltlite store.
-        pass
-    elif type_str == "signal_backup":
-        # The signal extractor needs `snapshot_dir` (where the
-        # `signal-backup-*` subdirs live) in addition to the raw store.
-        # AEP comes from the SIGNAL_BACKUP_PASSPHRASE env var.
-        source["sync"] = (
-            {"snapshot_dir": str(signal_snapshot_root)}
-            if signal_snapshot_root is not None
-            else {}
-        )
+            beeper_texts["path"] = str(beeper_data_dir)
+        source["texts"] = beeper_texts
+    elif type_str == "contacts":
+        # File mode: `vcf` walks the directory for `.vcf` files;
+        # translate reads the raw doltlite store.
+        source["vcf"] = {"path": str(input_path)}
+    elif type_str == "signal":
+        # The signal extractor needs the directory where the
+        # `signal-backup-*` subdirs live. AEP comes from the
+        # SIGNAL_BACKUP_PASSPHRASE env var.
+        source["backup"] = {
+            "path": str(
+                signal_snapshot_root if signal_snapshot_root is not None else input_path
+            )
+        }
     elif type_str == "email":
-        # Mbox mode: no `sync:` block (would otherwise trigger the
-        # JMAP path). Account metadata is supplied via the `mbox:`
-        # block so the synthesized `accounts` row carries display name
-        # + canonical address — same shape JMAP would produce. (The
-        # Gmail outlink format is a render knob — see _render_config.)
+        # Mbox mode. Account metadata is supplied beside the path so the
+        # synthesized `accounts` row carries display name + canonical
+        # address — same shape JMAP would produce. (The Gmail outlink
+        # format is a render knob — see _render_config.)
         source["mbox"] = {
+            "path": str(input_path),
             "account_id": "picard@enterprise.starfleet",
             "display_name": "Jean-Luc Picard",
             "email_address": "picard@enterprise.starfleet",
             "is_personal": True,
         }
-    elif type_str == "whatsapp_backup":
-        # WhatsApp extractor needs `backup_dir` (the dir containing
-        # `Databases/msgstore.db.crypt15` + `Media/`). Root key comes
+    elif type_str == "whatsapp":
+        # WhatsApp extractor needs the dir containing
+        # `Databases/msgstore.db.crypt15` + `Media/`. Root key comes
         # from the WHATSAPP_BACKUP_DECRYPTION_KEY env var.
-        source["sync"] = (
-            {"backup_dir": str(whatsapp_dir)} if whatsapp_dir is not None else {}
-        )
+        source["backup"] = {
+            "path": str(whatsapp_dir if whatsapp_dir is not None else input_path)
+        }
     elif type_str == "linkedin":
-        # File-backed CSV walk (no `sync:` block). Turn on the
-        # connection-photo fetch so the pipeline exercises the
-        # og:image → CAS path — hermetically, against the playback
-        # fixtures LinkedinSynth wrote in the synth phase.
-        source["fetch_photos"] = True
+        # File-backed CSV walk. Turn on the connection-photo fetch so
+        # the pipeline exercises the og:image → CAS path — hermetically,
+        # against the playback fixtures LinkedinSynth wrote in the synth
+        # phase.
+        source["export"] = {"path": str(input_path), "fetch_photos": True}
     elif type_str == "google_takeout":
         # Opt into the rendering feeds: Google Chat and Google Voice
         # (incl. its Spam folder, to exercise that path). The other
         # feeds stay off for the central pipeline (their extract is
         # covered by the provider's own fixture_walk test).
-        source["sync"] = {
+        source["export"] = {
+            "path": str(input_path),
             "google_chat": True,
             "google_voice": True,
             "google_voice_include_spam": True,
         }
     elif type_str == "sms_backup_restore":
-        # File-backed, no `sync:` field at all (deny_unknown_fields
-        # would reject `sync: {}`). Extract walks `input_path`.
-        pass
+        source["backup"] = {"path": str(input_path)}
     elif type_str == "yolink":
-        # No `sync:` — the fixture seeds this store itself, so nothing
-        # here would use one. `sync: {}` would fail validation outright
-        # anyway: yolink requires at least one entry under
-        # `sync.devices`.
+        # No method at all: the fixture seeds this store itself, so the
+        # ingest step is never run. `api = {}` would fail validation
+        # outright anyway (yolink requires at least one `api.devices`).
         pass
     elif type_str == "pdf":
-        # File-backed, no `sync:` field at all (deny_unknown_fields
-        # would reject `sync: {}`). The scanner walks `input_path`, and
-        # the render step reads the root back from `pdf_scan_meta`, so
-        # it needs no params of its own.
-        pass
+        # The scanner walks `fswalk.path`; the render step reads the
+        # root back from `pdf_scan_meta`, so it needs no params of its
+        # own.
+        source["fswalk"] = {"path": str(input_path)}
     else:
-        source["sync"] = {}
+        source["api"] = {}
     return source
 
 

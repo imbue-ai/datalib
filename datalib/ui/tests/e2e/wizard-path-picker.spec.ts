@@ -28,7 +28,7 @@ test("a path field types in a browser and offers no dead picker button", async (
   const pathInput = wizard.locator("input.wiz-path");
   await pathInput.fill("/Users/x/backups/WhatsApp");
   await wizard.getByText("Review the TOML this writes").click();
-  await expect(wizard.locator("pre")).toContainText('backup_dir = "/Users/x/backups/WhatsApp"');
+  await expect(wizard.locator("pre")).toContainText('path = "/Users/x/backups/WhatsApp"');
 
   // Required-field gating still applies to the field the picker feeds.
   await expect(wizard.getByRole("button", { name: "Add source" })).toBeEnabled();

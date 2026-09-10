@@ -442,8 +442,8 @@ rough dependency order:
 
 * **Every input has a producer.** An input names a step id, not a path
   on disk: `Graph::build` rejects an input that names no declared step,
-  with an error pointing at `params.common.input_path` as the way to
-  name a directory you staged by hand. The scheduler therefore never
+  with an error pointing at the method table's `path` in `params` as the
+  way to name a directory you staged by hand. The scheduler therefore never
   reads an input path itself, and there is no "external artifact"
   special case anywhere in it. (An earlier design synthesized a
   `staged:` source step per unwritten path and hashed it; nothing in

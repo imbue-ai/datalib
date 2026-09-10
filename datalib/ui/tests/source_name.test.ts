@@ -11,19 +11,19 @@ import {
 } from "../src/config/sourceSteps";
 import { catalogFor, type CatalogEntry } from "../src/config/catalog";
 
-const SLACK = catalogFor("slack_api") as CatalogEntry;
+const SLACK = catalogFor("slack") as CatalogEntry;
 
 const UNNAMED = `data_root = "/tmp/data"
 
 [[groups]]
 id = "slack"
-type = "slack_api"
+type = "slack"
 
 [[steps]]
 group = "slack"
 function = "ingest"
 [steps.params]
-sync = {}
+api = {}
 
 [[steps]]
 group = "slack"
@@ -172,8 +172,8 @@ describe("writing a name", () => {
   /// A new source is written the way the wizard writes it: the group
   /// carries the name, the steps carry none.
   it("lands on the group when a source is created", () => {
-    const body = `${buildGroup({ id: "slack-2", name: "Second Slack", type: "slack_api" })}\n\n${buildStep(
-      { entry: SLACK, group: "slack-2", phase: "download", values: { "sync.media": true } },
+    const body = `${buildGroup({ id: "slack-2", name: "Second Slack", type: "slack" })}\n\n${buildStep(
+      { entry: SLACK, group: "slack-2", phase: "download", values: { "api.media": true } },
     )}`;
     const next = appendSource(UNNAMED, body);
     expect(next.indexOf('name = "Second Slack"')).toBeLessThan(next.indexOf('group = "slack-2"'));

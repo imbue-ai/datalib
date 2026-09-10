@@ -1,11 +1,12 @@
 # Claude: download
 
-This provider serves **two source types** that share one renderer:
+The `claude` source has **two ingest methods**, one table each on the
+ingest step's params, sharing one renderer:
 
-| type            | download wave                                      | needs credentials |
-|-----------------|----------------------------------------------------|-------------------|
-| `claude_api`    | walks the live `claude.ai` API                     | yes               |
-| `claude_export` | reads an unpacked bulk export off disk             | no                |
+| method table               | download wave                              | needs credentials |
+|----------------------------|--------------------------------------------|-------------------|
+| `[steps.params.api]`       | walks the live `claude.ai` API             | yes               |
+| `[steps.params.export]`    | reads an unpacked bulk export off its `path` | no              |
 
 Both write **the same six tables of the same raw store** — `users`,
 `orgs`, `projects`, `project_docs`, `conversations`,
@@ -139,30 +140,30 @@ metadata skip-check finding an empty `projects` table, not by the TTL.
 upstream keeps its row (and keeps rendering) — the walk only ever
 upserts what the listing returns, same as conversations. A
 `--reset-and-redownload` is the way to drop them today. A UUID in
-`sync.project_uuids` that matches nothing in any visible org logs
+`api.project_uuids` that matches nothing in any visible org logs
 `claude_project_uuid_not_found` rather than quietly mirroring
 nothing.
 
-## `claude_export`: ingesting a bulk export
+## The `export` method: ingesting a bulk export
 
-`type: claude_export` points `common.input_path` at the directory you
-unpacked Anthropic's data export into:
+`[steps.params.export] path = …` names the directory you unpacked
+Anthropic's data export into:
 
 ```
-<input_path>/
+<path>/
   users.json            # array of accounts (optional)
   conversations.json    # array of conversations, in export shape
   projects/*.json       # one Claude Project per file, `docs` nested
 ```
 
-The ingest step of a `claude_export` group (
+The ingest step with that table (
 [`src/download/export.rs`](src/download/export.rs)) reads those files
 and writes the same rows the API walk writes: `users` from
 `users.json`, `conversations` from `conversations.json`, and each
 project split into a `projects` row plus one `project_docs` row per
 nested knowledge document — the same split the API gets from its two
 separate endpoints. Then render reads the store, exactly as it does for
-`claude_api`.
+the `api` method.
 
 This replaced a renderer that walked the export tree in place
 (issue #207). What that bought:
@@ -284,9 +285,10 @@ now, and one `updated_at` column.
 **Not built, and not quite safe to do by hand yet — read the hazard at
 the end before trying it.** Written down because it is the obvious thing
 to want: seed years of history from a bulk export (which needs no
-credentials and no rate limit), then let `claude_api` keep it current.
+credentials and no rate limit), then let the `api` method keep it
+current.
 
-Because both source types write the same tables of the same store, most
+Because both methods write the same tables of the same store, most
 of this already works:
 
   * **Incrementality falls out for free.** The API listing pass compares
@@ -315,21 +317,22 @@ above is that it mostly won't.
     in an export to hash), so their attachments keep rendering as
     un-fetched until the same re-fetch happens.
 
-To force either one, make the API re-fetch: widen `sync.since`, raise
+To force either one, make the API re-fetch: widen `api.since`, raise
 `refresh_most_recent_n_chat_count`, name the conversations in
-`sync.conv_uuids`, or `--reset-and-redownload` for the whole store.
+`api.conv_uuids`, or `--reset-and-redownload` for the whole store.
 
 ### The hazard: don't leave both download steps pointed at one store
 
 The export ingest treats the export as a complete snapshot and **prunes
 every conversation the export does not mention**. That is correct when
 the export is the only writer. It is destructive once the API has added
-conversations the export predates: re-running `download claude_export`
-over that store would delete exactly the rows the API just fetched.
+conversations the export predates: re-running the export ingest over
+that store would delete exactly the rows the API just fetched.
 
 So today the bootstrap is a one-way door — ingest the export, then
-change the group's `type` to `claude_api` and
-don't run the export ingest against that store again.
+replace the ingest step's `export` table with `api` and don't run the
+export ingest against that store again. (The step refuses a config
+naming both, which is what keeps the door one-way.)
 
 Making it a supported configuration means teaching the prune whose rows
 it owns. The discriminator already exists: an export-ingested

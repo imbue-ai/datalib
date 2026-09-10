@@ -1,14 +1,16 @@
-//! Provider-owned config schema for the `carddav` source (Program A
+//! Provider-owned config schema for the `contacts` source (Program A
 //! goal #1). Schema-only (serde + anyhow), so the orchestrator can name
-//! `CarddavConfig` without linking the provider.
+//! `CarddavConfig` without linking the provider. The crate keeps its
+//! protocol name until the mechanical rename; the type is `contacts`.
 
-use datalib_source_common::{LatchkeySettings, SourceCommon};
+use datalib_source_common::{LatchkeySettings, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The carddav-owned slice of a `carddav` source. `sync:` present →
-/// live CardDAV server mirror (the download path); absent → file mode,
-/// ingesting `.vcf` exports under `input_path`.
+/// The contacts-owned slice of a `contacts` source. Two ways in:
+/// `carddav` mirrors a live CardDAV server, `vcf` ingests `.vcf` exports
+/// under a directory on disk.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CarddavConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.
@@ -20,7 +22,10 @@ pub struct CarddavConfig {
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
     #[serde(default)]
-    pub sync: Option<CarddavSync>,
+    pub carddav: Option<CarddavSync>,
+    /// A directory of `.vcf` files (a Google or Fastmail export).
+    #[serde(default)]
+    pub vcf: Option<LocalPath>,
 }
 
 impl CarddavConfig {
@@ -28,6 +33,12 @@ impl CarddavConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
+        if self.carddav.is_some() && self.vcf.is_some() {
+            anyhow::bail!(
+                "contacts sets both `carddav` and `vcf` — pick one. To mirror the same \
+                 contacts two ways, declare two sources."
+            );
+        }
         Ok(())
     }
 }
@@ -58,7 +69,7 @@ pub type CarddavRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for CarddavConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] = &[
-        datalib_source_common::IngestMethod::origin("sync"),
-        datalib_source_common::IngestMethod::local("common.input_path"),
+        datalib_source_common::IngestMethod::origin("carddav"),
+        datalib_source_common::IngestMethod::local("vcf"),
     ];
 }

@@ -1,14 +1,14 @@
 # The `email` source's download modes
 
-**Status:** current as of 2026-08-25.
+**Status:** current as of 2026-09-10.
 
 `type: email` has three download modes, all writing one raw schema:
 
 | mode | selected by | for |
 |------|-------------|-----|
-| JMAP | `[steps.params.sync]` | Fastmail, Stalwart, any RFC 8620+8621 server |
-| Gmail API | `[steps.params.gmail_api]` | a Gmail / Google Workspace account |
-| mbox | neither, plus an `.mbox` at `common.input_path` | a Google Takeout export |
+| JMAP | `[steps.params.jmap]` | Fastmail, Stalwart, any RFC 8620+8621 server |
+| Gmail API | `[steps.params.gmail]` | a Gmail / Google Workspace account |
+| mbox | `[steps.params.mbox] path = …` | a Google Takeout export |
 
 Render reads only the raw store, so it is mode-agnostic and needs no
 changes when a mode is added. See
@@ -116,7 +116,7 @@ google-gmail` creates one via the Cloud Console and takes a few minutes.)
 The config is an empty table:
 
 ```toml
-[steps.params.gmail_api]
+[steps.params.gmail]
 ```
 
 Which Google account this source mirrors is **not** a Gmail knob — it is
@@ -140,7 +140,7 @@ deliberately **not** part of `fixture_key`: which identity fetched a
 response doesn't change the response's shape, and folding it in would
 make one user's playback fixtures unusable by another.
 
-> The knob used to be `gmail_api.account`. It moved because the JMAP
+> The knob used to be `gmail.account` (then spelled `gmail_api`). It moved because the JMAP
 > mode needs it too (Fastmail is just as capable of holding two
 > accounts), and because the account is latchkey's namespace rather than
 > any one provider's. A config still using the old location fails at

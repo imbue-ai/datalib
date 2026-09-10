@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
@@ -18,7 +18,11 @@ pub fn plan_download(
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let root = config.common.input_or_raw_path().to_path_buf();
+    let root = config
+        .fswalk
+        .as_ref()
+        .ok_or_else(|| anyhow!("fsindex source {name} missing `fswalk.path`"))?
+        .path();
     Ok(vec![Box::new(FsindexDownload {
         id: format!("fsindex/{name}/download"),
         raw_path,

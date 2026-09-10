@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
@@ -15,10 +15,15 @@ use crate::download;
 pub fn plan_download(ctx: PlanContext, config: PdfConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     config.validate()?;
     let name = ctx.name;
+    let root = config
+        .fswalk
+        .as_ref()
+        .ok_or_else(|| anyhow!("pdf source {name} missing `fswalk.path`"))?
+        .path();
     Ok(vec![Box::new(PdfDownload {
         id: format!("pdf/{name}/download"),
         raw_path: config.common.raw_path().to_path_buf(),
-        root: config.common.input_or_raw_path().to_path_buf(),
+        root,
         ignore: config.ignore,
         max_bytes: config.max_bytes,
     })])

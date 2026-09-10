@@ -1,12 +1,12 @@
 # Groups and functions: one row per source
 
-**Status: agreed design (2026-09-09); slices 1, 2, 3a, 4a and 4b built
-(2026-09-09 and 2026-09-10), slices 3b and 5 not.** Written against
+**Status: agreed design (2026-09-09); slices 1, 2, 3a, 3b, 4a and 4b
+built (2026-09-09 and 2026-09-10), slice 5 not.** Written against
 `eee381c3`. Per [`AGENTS.md`](../../../AGENTS.md), don't cite this
 file as a description of the tree. Where it says "today", that was
 checked against that commit; where it says "will", check the slice
-list under "Order of work" — slices 1, 2, 3a, 4a and 4b are in the tree,
-and the places each departed from this text are recorded there.
+list under "Order of work" — every slice but 5 is in the tree, and the
+places each departed from this text are recorded there.
 
 **Reverses** the "Sources stop being a grouping" section of
 [`step_identity.md`](completed/step_identity.md) and the header of
@@ -569,24 +569,76 @@ Each slice is a PR; each leaves the tree green.
        toggles — so only its `common.input_path` is.
      - The step-role glyph's accessible name still says "Ingest": it
        names the phase, which is true of both words.
-   - **3b. One type per data shape, one table per method.** `SourceType`
-     drops the `_api` suffixes (`slack`, `chatgpt`, `github`, …) and
-     `claude_export` folds into `claude`, so a group's `type` names the
-     thing mirrored and the render side is a function of it. The ingest
-     step's params hold one table per method, named for the method:
-     `sync` becomes `api` (or `jmap` for email), `claude`'s export
-     becomes `[steps.params.export]`, and every file-backed method
-     (`export`, `mbox`, `fswalk` for the three `fswalk` sources, the
-     backup readers) carries its own `path` instead of the shared
-     `common.input_path`. That is a rewrite of every provider config
-     crate, the catalog, every example and fixture config, and the
-     fixture bake — and a second config-shape change, so
+   - **3b. One type per data shape, one table per method** — *built
+     (2026-09-10)*. `SourceType` drops the `_api` suffixes (`slack`,
+     `chatgpt`, `github`, …) and `claude_export` folds into `claude`, so
+     a group's `type` names the thing mirrored and the render side is a
+     function of it. The ingest step's params hold one table per
+     method, named for the method: `sync` becomes `api` (or `jmap` for
+     email), `claude`'s export becomes `[steps.params.export]`, and
+     every file-backed method (`export`, `mbox`, `fswalk` for the three
+     `fswalk` sources, the backup readers) carries its own `path`
+     instead of the shared `common.input_path`. That is a rewrite of
+     every provider config crate, the catalog, every example and fixture
+     config, and the fixture bake — and a second config-shape change, so
      `datalib-migrate-config`'s one rewrite becomes "any earlier shape
      → this one": it already parses the pre-`[[groups]]` and slice-1
      shapes, and gains the type and method-table renames. Expect a cold
      CI run: every provider crate rebuilds. `Provider` in
      `schema/src/providers.rs` (the `grid_rows.provider` tag) is a
      separate vocabulary and does not move.
+
+     Where it departed from that text, and what it settled:
+     - The `_backup` suffixes went with the `_api` ones (`signal`,
+       `whatsapp`), for the same reason: they named the method. And
+       `carddav` became `contacts` — CardDAV is a protocol, the thing
+       mirrored is contacts, and the `Provider` tag and the crate already
+       said so. The rule is now stated in `source_type.rs` and a test
+       there pins that every type with a `grid_rows.provider` tag spells
+       it the same way. Only `sms_backup_restore` and `google_takeout`
+       keep a method word, because each *is* the product's name.
+     - A table's name is read *under the type*, and there is no global
+       vocabulary of them. `api` under `type = "slack"` is Slack's own
+       API — the qualified `slack_api` would only repeat the type — and
+       it is a specific name precisely because a product has one API.
+       A type that is not one product qualifies its sources: email's
+       are `jmap`, `gmail` and `mbox`. So the tables are `api` for
+       slack, chatgpt, github, gitlab, notion, yolink and claude;
+       `export` (with `path`) for claude, linkedin and google_takeout —
+       what a method does goes in its table, so Takeout's feed toggles
+       and linkedin's `fetch_photos` (still the one `Origin` method,
+       now at `export.fetch_photos`) moved inside it, while a knob that
+       applies whatever the method (email's `only_extract_labels`)
+       stays at the top; `jmap`, `gmail` and
+       `mbox` (with `path`) for email; `carddav` and `vcf` for contacts;
+       `texts` for beeper (the Beeper Texts app's own database, with
+       `path` optional); `backup` for signal, whatsapp and
+       sms_backup_restore; `fswalk` for fsindex, pdf and media;
+       `catalog` for lightroom; `github` for perseus. A provider with
+       two tables refuses a step naming both, so the "bootstrap from an
+       export" door stays one-way by construction.
+     - Perseus lost its `Local` method. A tree staged by hand was never
+       an ingest: with no `sync` the download wave was empty and the
+       step refused, so the staged tree is what it always was, a
+       render-only step, and it stays on `RenderCommon.input_path`.
+       `SourceCommon.input_path` is gone; `RenderCommon.input_path`
+       survives for that one reader.
+     - `datalib-step` refuses the retired shape by name: a type spelled
+       `*_api`, `*_backup`, `claude_export` or `carddav`, or an ingest
+       step whose params still carry `sync` or `common.input_path`,
+       fails naming `datalib-migrate-config` rather than falling through
+       to "no method set". The migrator holds the rename tables
+       (`RETIRED_TYPES`, `rewrite_ingest_params` in `convert.rs`) and
+       refuses a perseus ingest step carrying `common.input_path` with
+       directions instead of dropping it.
+     - The catalog gained `method`, the table an entry writes as `= {}`
+       when none of its fields is set, because presence is the
+       selection; the wizard's "Claude export" entry gained a form (one
+       path field) since a `claude` step now has two variants and the
+       export one is a single path.
+     - The synth subcommand's fixture tree is `--params
+       '{"fixture_path": …}'` rather than a `common.input_path` it
+       shared with the config shape.
 4. **Manage screen and wizard**, in two halves, because the second
    rewrites the files slice 2 renames through:
    - **4a. The tree grid** — *built (2026-09-10)*: one row per group,
@@ -656,10 +708,10 @@ Each slice is a PR; each leaves the tree green.
        (`renderStep: false`) is removed on save and unwired from the
        fan-ins; the dialog says so beforehand, the way it does for a
        missing step.
-     - The latchkey / credentials section still shows as it did
-       before 3a: gating it on `ingestReach` (`ui/src/config/ingestMethods.ts`)
-       for an `Origin` method is the one piece of 4b that waited for
-       3a, and the two landed side by side. It is the next UI edit.
+     - The latchkey / credentials section is gated on `ingestReach`
+       (`ui/src/config/ingestMethods.ts`) reading `origin` off the
+       params the form would write (landed with 3b): an import shows
+       no Connection section, however its descriptor is labelled.
 
 5. **Mechanical rename** (optional, after 3b): crate names,
    `download/` module directories, `DOWNLOAD.md` files, and the
@@ -670,22 +722,10 @@ Each slice is a PR; each leaves the tree green.
    review noise, not build time. After 3b rather than before it, so
    the `git mv` does not land on files 3b is rewriting.
 
-With 1, 2, 3a, 4a and 4b in the tree, the thing the UI review asked
-for is done: one row per source, edited as one thing, with the steps
-under it. What is left, in order and with its size:
-
-- **The wizard's credentials section gated on `Origin`** (above): a
-  small UI edit, `ingestReach` with the params the form would write.
-- **3b**: the last config-shape change, across every provider config
-  crate, with the migrator's rewrite behind it. Once it lands the
-  migrator's one rewrite is settled, and the `IngestMethods` lists are
-  where the renamed tables go — the UI mirror is regenerated, never
-  edited.
-- **5**: the mechanical crate rename, after 3b.
-
-None of the three changes what the app does. If the config shape is
-to stop moving instead, 3b and 5 move to Deferred with their reasoning
-kept, and the plan is complete at this line.
+With every slice but 5 in the tree, the thing the UI review asked for
+is done: one row per source, edited as one thing, with the steps under
+it, and the config shape has stopped moving. What is left is **5**, the
+mechanical crate rename, which changes nothing the app does.
 
 ## Deferred
 

@@ -1,7 +1,7 @@
 # The `google_takeout` source
 
 An unpacked [Google Takeout](https://takeout.google.com) export, read
-off `common.input_path`. There is no API and no network: the download
+off `export.path`; the feed switches sit beside it in the same table. There is no API and no network: the download
 step walks a directory tree the user exported and unzipped themselves.
 
 ## Every feed is opt-in, and off by default

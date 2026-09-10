@@ -89,13 +89,13 @@ set $DATALIB_CURL_DISPATCH / $LATCHKEY_CURL explicitly, and that \
 /// app, else `npx -y latchkey@<pin>`, so the printed commands are
 /// copy-pasteable as-is in both worlds.
 pub fn auth_hint_for(source_type: SourceType) -> String {
-    let template: &str = match source_type.as_str() {
+    let template: &str = match source_type {
         // All hints route the secret through the macOS clipboard so it
         // never lands in shell history: a one-liner copies the token to
         // the pasteboard, then the printed `… auth set …` command
         // expands `$(pbpaste)` at exec time. zsh/bash record the literal
         // `$(pbpaste)`, not the resolved value.
-        "chatgpt_api" => {
+        SourceType::Chatgpt => {
             "\
 chatgpt access token expired or missing.
 
@@ -122,7 +122,7 @@ chatgpt access token expired or missing.
 
 See datalib/backend/etl/providers/chatgpt/DOWNLOAD.md for details."
         }
-        "claude_api" => {
+        SourceType::Claude => {
             "\
 Claude sessionKey expired or missing.
 
@@ -138,7 +138,7 @@ Claude sessionKey expired or missing.
 
 See datalib/backend/etl/providers/claude/DOWNLOAD.md for details."
         }
-        "slack_api" => {
+        SourceType::Slack => {
             "\
 slack token expired or missing.
 
@@ -151,7 +151,7 @@ slack token expired or missing.
 
 See datalib/backend/etl/providers/slack/DOWNLOAD.md for details."
         }
-        "github_api" => {
+        SourceType::Github => {
             "\
 github PAT expired or missing.
 
@@ -164,7 +164,7 @@ github PAT expired or missing.
 
 See datalib/backend/etl/providers/github/DOWNLOAD.md for details."
         }
-        "gitlab_api" => {
+        SourceType::Gitlab => {
             "\
 gitlab token expired or missing.
 
@@ -177,7 +177,7 @@ gitlab token expired or missing.
 
 See datalib/backend/etl/providers/gitlab/DOWNLOAD.md for details."
         }
-        "notion_api" => {
+        SourceType::Notion => {
             "\
 notion integration token expired or missing.
 
@@ -192,7 +192,7 @@ notion integration token expired or missing.
 
 See datalib/backend/etl/providers/notion/DOWNLOAD.md for details."
         }
-        "email" => {
+        SourceType::Email => {
             "\
 Email source: JMAP (Fastmail / generic) auth missing or expired.
 
@@ -221,7 +221,7 @@ service and routes to it by URL host:
   2. Smoke-test:
        {LK} curl -s https://gmail.googleapis.com/gmail/v1/users/me/profile
   3. Point the source at it — an empty table is a complete config:
-       [steps.params.gmail_api]
+       [steps.params.gmail]
      Signed in as more than one Google account? Name which one this
      source mirrors — latchkey requires it once a service holds two:
        [steps.params.latchkey_settings]
@@ -233,15 +233,15 @@ service and routes to it by URL host:
 
 See datalib/backend/etl/providers/email/DOWNLOAD.md for details."
         }
-        "beeper" => {
+        SourceType::Beeper => {
             "\
 beeper download reads Beeper Texts' on-disk SQLite. No auth dance.
 
   1. Make sure Beeper Texts is installed and has run at least once
      so its data dir exists. Default path:
        ~/Library/Application Support/BeeperTexts/index.db
-     (Pass --beeper-data-dir or set `beeper_data_dir:` in the source's
-     sync block to override.)
+     (Pass --beeper-data-dir, or set `path` in the source's `texts`
+     table, to override.)
   2. Confirm read access (Application Support is NOT Full Disk Access
      protected, so this should just work):
        sqlite3 ~/Library/Application\\ Support/BeeperTexts/index.db \\
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn auth_hint_resolves_latchkey_placeholder() {
-        let hint = auth_hint_for(SourceType::SlackApi);
+        let hint = auth_hint_for(SourceType::Slack);
         assert!(!hint.contains("{LK}"), "placeholder must be substituted");
         assert!(hint.contains("auth set slack"));
         // A type with no hint of its own gets the generic text.

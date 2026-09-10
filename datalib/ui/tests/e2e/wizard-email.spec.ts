@@ -31,7 +31,7 @@ const GMAIL_SERVICE = {
 /// that matter: Gmail returns them as labels, we store them as flags,
 /// and so they are downloadable but never renderable.
 const GMAIL_PROBE = {
-  mode: "gmail_api",
+  mode: "gmail",
   account: {
     id: "picard@enterprise.gov",
     address: "picard@enterprise.gov",
@@ -93,7 +93,7 @@ async function stubBackend(page: Page) {
   await page.route("**/api/probe", (route) => {
     lastProbeRequest = route.request().postDataJSON();
     const params = (lastProbeRequest.params ?? {}) as Record<string, unknown>;
-    route.fulfill({ json: "gmail_api" in params ? GMAIL_PROBE : FASTMAIL_PROBE });
+    route.fulfill({ json: "gmail" in params ? GMAIL_PROBE : FASTMAIL_PROBE });
   });
 }
 
@@ -173,7 +173,7 @@ test("a probe fills the label picker, and ticking a chip writes the filter", asy
   expect(lastProbeRequest.type).toBe("email");
   expect(lastProbeRequest.params).toEqual({
     latchkey_settings: { account: "picard@enterprise.gov" },
-    gmail_api: { user_id: "me" },
+    gmail: { user_id: "me" },
   });
 
   // The download filter may name anything the account has, flags
@@ -194,8 +194,8 @@ test("a probe fills the label picker, and ticking a chip writes the filter", asy
   const toml = wizard(page).locator(".wiz-review pre");
   await expect(toml).toContainText('only_extract_labels = ["Bridge/Logs", "Inbox"]');
   // Presence of the table is what selects the mode; without it the
-  // provider falls through to the mbox path and fails at sync time.
-  await expect(toml).toContainText("[steps.params.gmail_api]");
+  // step names no method and is refused at sync time.
+  await expect(toml).toContainText("[steps.params.gmail]");
   await expect(toml).toContainText('account = "picard@enterprise.gov"');
 });
 
@@ -224,7 +224,7 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
     .poll(() => lastProbeRequest.params)
     .toEqual({
       latchkey_settings: { account: "picard@enterprise.gov" },
-      gmail_api: { user_id: "me" },
+      gmail: { user_id: "me" },
     });
 
   // `Important`, `Starred` and `Unread` are labels on the wire and
@@ -261,7 +261,7 @@ test("Fastmail writes its JMAP host without asking, and shows folder counts", as
 
   expect(lastProbeRequest.params).toEqual({
     latchkey_settings: { account: "troi@betazed.example" },
-    sync: { hostname: "api.fastmail.com" },
+    jmap: { hostname: "api.fastmail.com" },
   });
 
   // JMAP reports counts for free. Nested folders keep their full path,
@@ -280,7 +280,7 @@ test("Fastmail writes its JMAP host without asking, and shows folder counts", as
   const toml = wizard(page).locator(".wiz-review pre");
   await expect(toml).toContainText('hostname = "api.fastmail.com"');
   await expect(toml).toContainText('only_extract_labels = ["travel/portugal"]');
-  await expect(toml).not.toContainText("gmail_api");
+  await expect(toml).not.toContainText("gmail");
 });
 
 test("an existing source reopens on the form that wrote it", async ({ page }) => {

@@ -1,7 +1,6 @@
 //! Program A `DataProcessor`s for the email source.
 
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
-use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -10,12 +9,12 @@ use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
 use datalib_etl_email_config::{EmailConfig, EmailGmailApi, EmailLiveMode, EmailSync, MboxSync};
+use std::path::PathBuf;
 
 use crate::download;
 
-/// Download wave: present iff managed — a live block (`sync:` for JMAP,
-/// `gmail_api:` for the Gmail REST API) selects a server mode; else an
-/// `.mbox` under input_path → mbox mode.
+/// Download wave: a live table (`jmap`, `gmail`) selects a server
+/// mode; `mbox` reads the `.mbox` at its `path`.
 pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     if config.outlink_format.is_some() || !config.only_render_labels.is_empty() {
@@ -25,37 +24,21 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
         );
     }
     let raw_path = config.common.raw_path().to_path_buf();
-    let input_path = config.common.input_or_raw_path().to_path_buf();
     let blob_size_limit_bytes = config.common.blob_size_limit_bytes;
     let latchkey = config.latchkey_settings.clone();
 
-    // Live-server modes are declared explicitly and are mutually
-    // exclusive (`live_mode` enforces that); the file-backed mbox mode is
-    // the fallback, chosen by probing the filesystem — which is why it
-    // isn't a `live_mode` variant.
+    // Live-server modes are mutually exclusive (`live_mode` enforces
+    // that, and `validate` refuses one beside `mbox`).
     let mode = match config.live_mode()? {
         Some(EmailLiveMode::Jmap(sync)) => Some(ExtractMode::Jmap(sync.clone())),
         Some(EmailLiveMode::GmailApi(gmail)) => Some(ExtractMode::GmailApi(gmail.clone())),
-        None => {
-            if is_mbox_input(&input_path) {
-                let mbox = config.mbox.clone().unwrap_or_default();
-                Some(ExtractMode::Mbox {
-                    input_path: input_path.clone(),
-                    account_config: mbox,
-                })
-            } else if input_path_is_set_but_no_mbox(&input_path) {
-                // A `sync:`-less email source whose `input_path` exists but
-                // holds no `.mbox` is a config error — same as the old
-                // orchestrator path.
-                return Err(anyhow!(
-                    "email source {name} declares no download mode (`sync` for JMAP, \
-                     `gmail_api` for the Gmail REST API) and no .mbox was found under {}",
-                    input_path.display()
-                ));
-            } else {
-                None
-            }
-        }
+        // Planning never touches the filesystem — `datalib-dag --check`
+        // and the schema tests run where the data is not — so whether the
+        // path really is an mbox is checked when the download runs.
+        None => config.mbox.clone().map(|mbox| ExtractMode::Mbox {
+            input_path: mbox.path(),
+            account_config: mbox,
+        }),
     };
 
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
@@ -191,6 +174,12 @@ impl DataProcessor for EmailDownload {
                 input_path,
                 account_config,
             } => {
+                if !is_mbox_input(input_path) {
+                    return Err(anyhow!(
+                        "`mbox.path` is {} — expected a .mbox file, or a directory holding one",
+                        input_path.display()
+                    ));
+                }
                 let s = download::mbox::fetch(download::mbox::FetchOptions {
                     cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
                         .await?,
@@ -228,7 +217,7 @@ impl DataProcessor for EmailDownload {
     }
 }
 
-fn is_mbox_input(input: &Path) -> bool {
+fn is_mbox_input(input: &PathBuf) -> bool {
     if input.is_file() {
         return input.extension().and_then(|s| s.to_str()) == Some("mbox");
     }
@@ -239,8 +228,4 @@ fn is_mbox_input(input: &Path) -> bool {
         let p = e.path();
         p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("mbox")
     })
-}
-
-fn input_path_is_set_but_no_mbox(input: &Path) -> bool {
-    input.exists()
 }

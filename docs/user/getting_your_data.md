@@ -219,7 +219,7 @@ adb pull /sdcard/SMSBackupRestore ~/backups/SMSBackupRestore
 ```
 
 (Or copy them over MTP / a file manager / the app's share sheet.) Point
-the source's `input_path` at that directory — it walks every `*.xml`
+the source's `backup.path` at that directory — it walks every `*.xml`
 inside, so keeping multiple dated backups there is fine; re-ingesting a
 newer export deduplicates against what's already there.
 

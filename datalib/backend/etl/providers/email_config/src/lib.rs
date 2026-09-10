@@ -1,14 +1,16 @@
 //! Provider-owned config schema for the `email` source — Program A goal #1
 //! ("one config definition per source, adjacent to the source").
 
-use datalib_source_common::{LatchkeySettings, RenderCommon, SourceCommon};
+use datalib_source_common::{expand_tilde, LatchkeySettings, RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// The full config for a `type: email` source: the shared `common:` envelope
 /// (paths + cross-source knobs, composed from `source_common` and resolved by
 /// the orchestrator's `normalize()`) plus everything email-specific. `name`
 /// and `enabled` stay orchestrator-owned and are NOT here.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EmailConfig {
     /// Shared per-source envelope (paths + cross-source tunables).
     #[serde(default)]
@@ -18,16 +20,15 @@ pub struct EmailConfig {
     /// forwarded whole to the download client — see [`LatchkeySettings`].
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
-    /// JMAP sync knobs. `Some` selects the JMAP live-server download path.
+    /// JMAP knobs. `Some` selects the JMAP live-server download path.
     #[serde(default)]
-    pub sync: Option<EmailSync>,
-    /// Gmail REST API knobs. `Some` selects the Gmail API download path.
+    pub jmap: Option<EmailSync>,
+    /// Gmail REST API knobs. `Some` selects the Gmail download path.
     /// Mutually exclusive with the other two.
     #[serde(default)]
-    pub gmail_api: Option<EmailGmailApi>,
-    /// Account-row config for the mbox path (display name, address,
-    /// is_personal). Ignored when `sync:` is present (JMAP carries that
-    /// info itself).
+    pub gmail: Option<EmailGmailApi>,
+    /// The mbox path: where the `.mbox` is, plus the account row to
+    /// synthesize for it (JMAP and Gmail learn that from the server).
     #[serde(default)]
     pub mbox: Option<MboxSync>,
     /// Legacy location of the outlink format — the knob now lives on
@@ -74,10 +75,9 @@ pub struct EmailRenderConfig {
 }
 
 /// Which live-server transport a source selected, if any. The file-backed
-/// mbox mode is deliberately *not* a variant: choosing it requires probing
-/// the filesystem for an `.mbox`, and this crate is schema-only. The
-/// provider asks for [`EmailConfig::live_mode`] first and falls back to
-/// the mbox probe when it comes back `None`.
+/// mbox mode is deliberately *not* a variant: it is [`EmailConfig::mbox`],
+/// and the provider asks for [`EmailConfig::live_mode`] first and reads
+/// the mbox table when it comes back `None`.
 #[derive(Debug, Clone)]
 pub enum EmailLiveMode<'a> {
     Jmap(&'a EmailSync),
@@ -87,11 +87,11 @@ pub enum EmailLiveMode<'a> {
 impl EmailConfig {
     pub fn live_mode(&self) -> anyhow::Result<Option<EmailLiveMode<'_>>> {
         let mut selected: Vec<(&str, EmailLiveMode<'_>)> = Vec::new();
-        if let Some(s) = &self.sync {
-            selected.push(("sync (JMAP)", EmailLiveMode::Jmap(s)));
+        if let Some(s) = &self.jmap {
+            selected.push(("jmap", EmailLiveMode::Jmap(s)));
         }
-        if let Some(g) = &self.gmail_api {
-            selected.push(("gmail_api", EmailLiveMode::GmailApi(g)));
+        if let Some(g) = &self.gmail {
+            selected.push(("gmail", EmailLiveMode::GmailApi(g)));
         }
         match selected.len() {
             0 => Ok(None),
@@ -108,26 +108,30 @@ impl EmailConfig {
         }
     }
 
-    /// Provider-local validation, run by the step planner at config load.
-    /// The mbox-vs-`input_path` check lives in the builder, which has the
-    /// resolved paths; what can be checked from the schema alone is that
-    /// at most one download mode is selected and that each one's own
-    /// fields hang together.
+    /// Provider-local validation, run by the step planner at config load:
+    /// at most one download mode is selected and each one's own fields
+    /// hang together.
     pub fn validate(&self) -> anyhow::Result<()> {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
-        match self.live_mode()? {
+        let live = self.live_mode()?;
+        if live.is_some() && self.mbox.is_some() {
+            anyhow::bail!(
+                "email source sets a live download mode and `mbox` — pick one. To mirror \
+                 the same account two ways, declare two sources."
+            );
+        }
+        match live {
             Some(EmailLiveMode::GmailApi(gmail)) => gmail.validate(),
             _ => Ok(()),
         }
     }
 }
 
-/// JMAP sync tunables. Mirrors the `sync:` sub-stanza of a `type: email`
-/// source. (Named `EmailSync` rather than `JmapApiSync` because the source
-/// variant covers more than the JMAP API surface.)
+/// JMAP tunables: the `jmap` table of a `type = "email"` ingest step.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EmailSync {
     /// JMAP server hostname. Session discovered at
     /// `https://<hostname>/.well-known/jmap` (e.g. `api.fastmail.com`).
@@ -150,11 +154,15 @@ pub struct EmailSync {
     pub blob_download_concurrency: Option<usize>,
 }
 
-/// Account-row data for the mbox download path, so the synthesized `accounts`
-/// row matches JMAP's shape. All fields optional (defaults: `account_id` ←
+/// The mbox download path: a `.mbox` file, or a directory holding one,
+/// plus account-row data so the synthesized `accounts` row matches
+/// JMAP's shape. The row fields are optional (defaults: `account_id` ←
 /// mbox file stem, `display_name` ← `account_id`, `is_personal` ← true).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MboxSync {
+    /// The `.mbox` file, or a directory containing one.
+    pub path: PathBuf,
     #[serde(default)]
     pub account_id: Option<String>,
     #[serde(default)]
@@ -163,6 +171,12 @@ pub struct MboxSync {
     pub email_address: Option<String>,
     #[serde(default)]
     pub is_personal: Option<bool>,
+}
+
+impl MboxSync {
+    pub fn path(&self) -> PathBuf {
+        expand_tilde(&self.path)
+    }
 }
 
 /// How to build the "open this email in webmail" outlink. The provider that
@@ -175,13 +189,13 @@ pub enum EmailOutlink {
     Fastmail,
 }
 
-/// Gmail REST API tunables. Mirrors the `gmail_api:` sub-stanza.
+/// Gmail REST API tunables: the `gmail` table.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmailGmailApi {
     /// **Retired** — moved to the source-level `latchkey_settings.account`,
     /// which every latchkey-backed provider now shares (and which the JMAP
-    /// mode needs too, so it could not stay under `gmail_api`). Still
+    /// mode needs too, so it could not stay under `gmail`). Still
     /// parsed so a config written against the old location fails at load
     /// time with the fix rather than being silently ignored; see
     /// [`EmailGmailApi::validate`].
@@ -250,15 +264,15 @@ impl EmailGmailApi {
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.quota_units_per_minute.is_some_and(|q| q == 0) {
             anyhow::bail!(
-                "email `gmail_api.quota_units_per_minute` must be > 0 (omit it for the default \
+                "email `gmail.quota_units_per_minute` must be > 0 (omit it for the default \
                  of {DEFAULT_QUOTA_UNITS_PER_MINUTE})"
             );
         }
         if let Some(account) = &self.account {
             anyhow::bail!(
-                "email `gmail_api.account` has moved to `latchkey_settings.account`, which \
+                "email `gmail.account` has moved to `latchkey_settings.account`, which \
                  every latchkey-backed source shares. Replace it with a sibling of \
-                 `gmail_api`:\n\n    [steps.params.latchkey_settings]\n    account = \
+                 `gmail`:\n\n    [steps.params.latchkey_settings]\n    account = \
                  {account:?}\n"
             );
         }
@@ -268,10 +282,9 @@ impl EmailGmailApi {
 
 impl datalib_source_common::IngestMethods for EmailConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] = &[
-        datalib_source_common::IngestMethod::origin("sync"),
-        datalib_source_common::IngestMethod::origin("gmail_api"),
+        datalib_source_common::IngestMethod::origin("jmap"),
+        datalib_source_common::IngestMethod::origin("gmail"),
         datalib_source_common::IngestMethod::local("mbox"),
-        datalib_source_common::IngestMethod::local("common.input_path"),
     ];
 }
 
@@ -280,12 +293,12 @@ mod tests {
     use super::*;
 
     /// The whole reason mode selection became explicit: with more than
-    /// one mode, inferring from `sync:` alone would silently pick one.
+    /// one mode, inferring from one table alone would silently pick one.
     #[test]
     fn rejects_more_than_one_live_mode() {
         let cfg = EmailConfig {
-            sync: Some(EmailSync::default()),
-            gmail_api: Some(EmailGmailApi::default()),
+            jmap: Some(EmailSync::default()),
+            gmail: Some(EmailGmailApi::default()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -297,13 +310,26 @@ mod tests {
     #[test]
     fn names_the_colliding_modes() {
         let cfg = EmailConfig {
-            sync: Some(EmailSync::default()),
-            gmail_api: Some(EmailGmailApi::default()),
+            jmap: Some(EmailSync::default()),
+            gmail: Some(EmailGmailApi::default()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
-        assert!(err.contains("sync (JMAP)"), "{err}");
-        assert!(err.contains("gmail_api"), "{err}");
+        assert!(err.contains("jmap"), "{err}");
+        assert!(err.contains("gmail"), "{err}");
+    }
+
+    /// A live mode beside an mbox table is the same mistake in a
+    /// different shape.
+    #[test]
+    fn rejects_a_live_mode_beside_an_mbox() {
+        let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
+            "gmail": {},
+            "mbox": { "path": "/mail.mbox" },
+        }))
+        .unwrap();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("mbox"), "{err}");
     }
 
     #[test]
@@ -341,7 +367,7 @@ mod tests {
     fn parses_a_gmail_api_step_params_payload() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
             "latchkey_settings": { "account": "thad@imbue.com" },
-            "gmail_api": { "message_budget": 5000 },
+            "gmail": { "message_budget": 5000 },
         }))
         .unwrap();
         cfg.validate().unwrap();
@@ -351,19 +377,19 @@ mod tests {
             "the account is a source-level latchkey setting, not a gmail knob",
         );
         let Some(EmailLiveMode::GmailApi(g)) = cfg.live_mode().unwrap() else {
-            panic!("expected gmail_api mode");
+            panic!("expected gmail mode");
         };
         assert_eq!(g.message_budget, Some(5000));
     }
 
-    /// The account used to live under `gmail_api`. A config written against
+    /// The account used to live under `gmail`. A config written against
     /// that location must fail with the fix rather than mirror the wrong
     /// identity (or, once `google-gmail` holds two accounts, fail deep in a
     /// download with latchkey's own ambiguity error).
     #[test]
     fn rejects_the_retired_gmail_api_account_location() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
-            "gmail_api": { "account": "thad@imbue.com" },
+            "gmail": { "account": "thad@imbue.com" },
         }))
         .unwrap();
         let err = cfg
@@ -380,7 +406,7 @@ mod tests {
     fn rejects_an_empty_latchkey_account() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
             "latchkey_settings": { "account": "  " },
-            "gmail_api": {},
+            "gmail": {},
         }))
         .unwrap();
         assert!(cfg.validate().is_err());
@@ -399,7 +425,7 @@ mod tests {
     #[test]
     fn selects_each_live_mode_on_its_own() {
         let jmap = EmailConfig {
-            sync: Some(EmailSync::default()),
+            jmap: Some(EmailSync::default()),
             ..Default::default()
         };
         assert!(matches!(
@@ -408,7 +434,7 @@ mod tests {
         ));
 
         let gmail = EmailConfig {
-            gmail_api: Some(EmailGmailApi::default()),
+            gmail: Some(EmailGmailApi::default()),
             ..Default::default()
         };
         assert!(matches!(
@@ -417,12 +443,18 @@ mod tests {
         ));
     }
 
-    /// No live block is not an error — it's the mbox case (or simply
-    /// no download wave this run), which the provider resolves by
-    /// probing `input_path`.
+    /// No live block is not an error — it's the mbox case, or a config
+    /// `datalib-step` will refuse for naming no method at all; neither
+    /// is this crate's call.
     #[test]
     fn no_live_block_is_not_an_error() {
         assert!(EmailConfig::default().live_mode().unwrap().is_none());
         assert!(EmailConfig::default().validate().is_ok());
+        let mbox: EmailConfig = serde_json::from_value(serde_json::json!({
+            "mbox": { "path": "~/Takeout/Mail/All mail.mbox" },
+        }))
+        .unwrap();
+        mbox.validate().unwrap();
+        assert!(mbox.mbox.unwrap().path().ends_with("All mail.mbox"));
     }
 }

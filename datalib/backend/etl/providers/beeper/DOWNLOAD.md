@@ -41,7 +41,7 @@ bridge-agnostic schema. We re-shape that into our `rooms` / `users` /
    [[steps]]
    group = "beeper"
    function = "ingest"
-   [steps.params.sync]
+   [steps.params.texts]
    sources = ["signal", "googlechat"]
    media = true
 

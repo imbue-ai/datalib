@@ -1,151 +1,141 @@
 {
   "beeper": [
     {
-      "path": "sync",
+      "path": "texts",
       "reach": "local"
     }
   ],
-  "carddav": [
+  "chatgpt": [
     {
-      "path": "sync",
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
+  "claude": [
+    {
+      "path": "api",
       "reach": "origin"
     },
     {
-      "path": "common.input_path",
+      "path": "export",
       "reach": "local"
     }
   ],
-  "chatgpt_api": [
+  "contacts": [
     {
-      "path": "sync",
+      "path": "carddav",
       "reach": "origin"
-    }
-  ],
-  "claude_api": [
+    },
     {
-      "path": "sync",
-      "reach": "origin"
-    }
-  ],
-  "claude_export": [
-    {
-      "path": "common.input_path",
+      "path": "vcf",
       "reach": "local"
     }
   ],
   "email": [
     {
-      "path": "sync",
+      "path": "jmap",
       "reach": "origin"
     },
     {
-      "path": "gmail_api",
+      "path": "gmail",
       "reach": "origin"
     },
     {
       "path": "mbox",
       "reach": "local"
-    },
-    {
-      "path": "common.input_path",
-      "reach": "local"
     }
   ],
   "fsindex": [
     {
-      "path": "common.input_path",
+      "path": "fswalk",
       "reach": "local"
     }
   ],
-  "github_api": [
+  "github": [
     {
-      "path": "sync",
+      "path": "api",
       "reach": "origin"
     }
   ],
-  "gitlab_api": [
+  "gitlab": [
     {
-      "path": "sync",
+      "path": "api",
       "reach": "origin"
     }
   ],
   "google_takeout": [
     {
-      "path": "common.input_path",
+      "path": "export",
       "reach": "local"
     }
   ],
   "lightroom": [
     {
-      "path": "common.input_path",
+      "path": "catalog",
       "reach": "local"
     }
   ],
   "linkedin": [
     {
-      "path": "common.input_path",
+      "path": "export",
       "reach": "local"
     },
     {
-      "path": "fetch_photos",
+      "path": "export.fetch_photos",
       "reach": "origin"
     }
   ],
   "media": [
     {
-      "path": "common.input_path",
+      "path": "fswalk",
       "reach": "local"
     }
   ],
-  "notion_api": [
+  "notion": [
     {
-      "path": "sync",
+      "path": "api",
       "reach": "origin"
     }
   ],
   "pdf": [
     {
-      "path": "common.input_path",
+      "path": "fswalk",
       "reach": "local"
     }
   ],
   "perseus": [
     {
-      "path": "sync",
+      "path": "github",
       "reach": "origin"
-    },
+    }
+  ],
+  "signal": [
     {
-      "path": "common.input_path",
+      "path": "backup",
       "reach": "local"
     }
   ],
-  "signal_backup": [
+  "slack": [
     {
-      "path": "sync",
-      "reach": "local"
-    }
-  ],
-  "slack_api": [
-    {
-      "path": "sync",
+      "path": "api",
       "reach": "origin"
     }
   ],
   "sms_backup_restore": [
     {
-      "path": "common.input_path",
+      "path": "backup",
       "reach": "local"
     }
   ],
-  "whatsapp_backup": [
+  "whatsapp": [
     {
-      "path": "sync",
+      "path": "backup",
       "reach": "local"
     }
   ],
   "yolink": [
     {
-      "path": "sync",
+      "path": "api",
       "reach": "origin"
     }
   ]

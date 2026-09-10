@@ -248,7 +248,7 @@ pub async fn connect_status(
 
 #[derive(Debug, Deserialize)]
 pub struct ProbeRequest {
-    /// The group's `type`: the provider word (`slack_api`, `email`, …).
+    /// The group's `type`: the provider word (`slack`, `email`, …).
     #[serde(rename = "type")]
     pub source_type: String,
     /// The provider's **download** params, exactly as they would be
@@ -486,7 +486,7 @@ mod tests {
         assert!(validated_type("--params").is_err());
         assert!(validated_type("Email").is_err());
         assert_eq!(validated_type("email").unwrap(), "email");
-        assert_eq!(validated_type("slack_api").unwrap(), "slack_api");
+        assert_eq!(validated_type("slack").unwrap(), "slack");
     }
 
     /// The tail is sliced by bytes; a log ending mid-codepoint must not

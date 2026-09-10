@@ -41,8 +41,8 @@ pub struct Graph {
 impl Graph {
     /// Ids of the source steps — those with no declared inputs. Their
     /// real input is outside the graph (a remote service for a
-    /// download, a directory named by `common.input_path` for a
-    /// file-backed source), so the scheduler cannot version it and
+    /// download, the `path` of a file-backed method table for an
+    /// import), so the scheduler cannot version it and
     /// always runs them. These are the valid targets for the runner's
     /// subset-sync mode.
     pub fn fringe_ids(&self) -> Vec<&str> {
@@ -144,8 +144,8 @@ impl Graph {
                         .at_entry(EntryRef::step_id(s.id.clone()))
                         .with_help(format!(
                             "an input is a step id, not a path on disk — a directory you \
-                             staged by hand is named by that step's \
-                             `params.common.input_path` instead. Declared steps: {}",
+                             staged by hand is the `path` of that step's method table \
+                             (`[steps.params.export] path = …`) instead. Declared steps: {}",
                             id_list(&live, &s.id)
                         ))
                     };
@@ -399,7 +399,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("names no declared step"), "{err}");
-        assert!(err.contains("input_path"), "{err}");
+        assert!(err.contains("path = "), "{err}");
     }
 
     /// Single-writer, which used to be its own pass over every pair of

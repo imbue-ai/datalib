@@ -137,7 +137,7 @@ has been deleted upstream, so we delete our copy.
 to how far back you want deletions caught:
 
 ```toml
-[steps.params.sync]
+[steps.params.api]
 refresh_window_days = 7
 ```
 

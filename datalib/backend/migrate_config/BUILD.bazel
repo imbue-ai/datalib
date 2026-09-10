@@ -5,10 +5,9 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 #
 # This package is the one place a retired config shape is *rewritten*.
 # Keeping it out of `datalib-dag` / `datalib-http` is the point: the
-# runner still loads the old shape (with a warning naming this tool),
-# but the rewrite must not widen what those programs know. It holds one
-# rewrite at a time (today: ungrouped steps → `[[groups]]`); the next
-# one replaces it.
+# runner refuses the old shape (naming this tool), and the rewrite must
+# not widen what those programs know. It holds one rewrite at a time,
+# "any earlier shape → the current one"; the next shape change extends it.
 rust_library(
     name = "datalib_migrate_config",
     srcs = glob(

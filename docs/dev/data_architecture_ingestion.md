@@ -142,8 +142,8 @@ downloader writes there and the renderer reads there, the latter through
 its `inputs`. The
 filenames inside it (`entities.doltlite_db`, `blobs.doltlite_db`, `events/`)
 are the constants in `datalib_etl::raw_layout`, the one place the layout
-is defined. This is distinct from a file-backed source's `input_path:`, which
-says where the data is read *from* (a `.mbox`, a Takeout export, …).
+is defined. This is distinct from a file-backed method's `path` (`[steps.params.mbox]
+path = …`), which says where the data is read *from* (a `.mbox`, a Takeout export, …).
 
 We use doltlite because:
 
@@ -348,13 +348,13 @@ look identical from the UI.
 | --- | --- | --- |
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
 | `email` (Gmail) | `history.list` deletions; a full walk when the cursor ages out | emails, via the same cascade |
-| `carddav` | RFC 6578 sync-collection `404`/`410` | contacts |
+| `contacts` (CardDAV) | RFC 6578 sync-collection `404`/`410` | contacts |
 | `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | messages inside the walked range; replies on a re-fetched thread |
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
-| `claude_api` | `/chat_conversations`, one org at a time | that org's conversations |
-| `chatgpt_api` | `/conversations`, when the walk reached `total` | conversations |
+| `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
+| `chatgpt` | `/conversations`, when the walk reached `total` | conversations |
 | `media`, `fsindex`, `pdf` | truncate-and-refill | structurally |
-| `claude_export`, and every source carrying [`always_clear_before_ingest`](#snapshot-inputs-always_clear_before_ingest) | the snapshot is the enumeration | structurally |
+| `claude` (`export`), and every source carrying [`always_clear_before_ingest`](#snapshot-inputs-always_clear_before_ingest) | the snapshot is the enumeration | structurally |
 | `yolink` | — | nothing; append-only telemetry |
 | `notion`, `beeper` | — | not wired (rework; poorly supported) |
 

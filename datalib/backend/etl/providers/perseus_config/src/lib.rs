@@ -4,14 +4,19 @@
 use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
+/// The perseus-owned slice of a `perseus` source. `github` — TEI files
+/// fetched from PerseusDL — is its one ingest method. A tree staged by
+/// hand has no ingest step at all: its render step names the tree on
+/// `common.input_path`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PerseusConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.
     #[serde(default)]
     pub common: SourceCommon,
     #[serde(default)]
-    pub sync: Option<PerseusSync>,
+    pub github: Option<PerseusSync>,
 }
 
 impl PerseusConfig {
@@ -23,7 +28,7 @@ impl PerseusConfig {
 /// Params for the perseus **render** step. Split from [`PerseusConfig`]
 /// (the download-step params) so each step's params carry only what
 /// that wave reads. Perseus is file-tree-backed, so render reads
-/// `common.input_path` (else the raw dir) directly.
+/// `common.input_path` (a tree staged by hand) else the ingest tree.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PerseusRenderConfig {
@@ -49,11 +54,7 @@ pub struct PerseusSync {
     pub alignment_pairs: Vec<[String; 2]>,
 }
 
-// `sync` fetches the TEI files from GitHub; without it, render reads the
-// tree already staged at `common.input_path`.
 impl datalib_source_common::IngestMethods for PerseusConfig {
-    const METHODS: &'static [datalib_source_common::IngestMethod] = &[
-        datalib_source_common::IngestMethod::origin("sync"),
-        datalib_source_common::IngestMethod::local("common.input_path"),
-    ];
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::origin("github")];
 }

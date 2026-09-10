@@ -45,8 +45,8 @@ reference doc it relates to.
   entirely. Read it for why; it was written as the design and kept as
   the explanation.
 - [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md)
-  — *agreed design (2026-09-09); slices 1, 2, 3a, 4a and 4b built
-  (2026-09-09 and 2026-09-10); 3b and 5 not*: one row per source in the
+  — *agreed design (2026-09-09); every slice but 5 built (2026-09-09
+  and 2026-09-10)*: one row per source in the
   Manage screen, done by making the grouping a config entity. A
   `[[groups]]` table with `id`/`name`/`type`; a step is `(group,
   function)` with its id composed and never written; `datalib-step`
@@ -69,11 +69,17 @@ reference doc it relates to.
   mirrored into `ui/src/config/ingestMethods.json` by a generator),
   which is what makes a step's row read "Download" or "Import" and
   what makes `datalib-step` refuse an ingest step that names no
-  method. Still to come, all optional to the goal above: the wizard's
-  credentials section gated on `Origin` (a small UI edit); 3b, one
-  type per data shape and one params table per method, which is a
-  config-shape change across every provider crate and the last one;
-  and the mechanical crate rename.
+  method. A group's `type` names the thing mirrored (`slack`,
+  `claude`, `contacts`), never the way it is reached; where the data
+  comes from is one table on the ingest step, whose name is read
+  under the type — `api` is that product's own API, `export` an
+  unpacked export, `backup` a phone backup — and only a type that is
+  not one product qualifies its sources (email's `jmap`, `gmail`,
+  `mbox`). A table that reads files carries its own `path`. There is
+  no global list of these names: each type has its own two or three.
+  That is the shape `datalib-migrate-config` rewrites any earlier one
+  into. Still to come, optional: the mechanical crate
+  rename (slice 5).
   Read it before touching step ids, the wizard, or `datalib-step`'s
   dispatch. It reverses the "ungrouping" section of `step_identity.md`.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
@@ -1233,17 +1239,17 @@ bazelisk build //datalib/backend:bin
 bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 ```
 
-## Provenance: `claude_api` vs `claude_export`
+## Provenance: Claude's `api` and `export` methods
 
-Claude data can come from the live web API (`type: claude_api`) or an
-unpacked bulk export (`type: claude_export`) — two separate source
-types, each its own download + render step pair, both served by one
-provider crate.
+Claude data can come from the live web API or an unpacked bulk export.
+Both are the one `claude` type; which one an ingest step uses is the
+method table in its params, `[steps.params.api]` or
+`[steps.params.export] path = …`, and the step refuses both at once.
 
-**They write the same raw store.** `claude_api` walks the API and
-`claude_export` reads the export's JSON off `common.input_path`, and
-both land rows in the same six tables of `<name>/ingest`, so the render
-step has exactly one input shape. The API downloader gets there by
+**They write the same raw store.** The `api` method walks the API and
+the `export` method reads the export's JSON off its `path`, and both
+land rows in the same six tables of `<name>/ingest`, so the render step
+has exactly one input shape. The API downloader gets there by
 normalizing every response into the bulk-export on-disk shape
 (`normalize_to_export_shape` in
 `datalib/backend/etl/providers/claude/src/download/normalize.rs`,
@@ -1252,13 +1258,14 @@ export ingest stores what the export already said, with the org columns
 NULL — which is how the renderer tells the two apart and knows not to
 normalize an already-normalized payload a second time.
 
-Until #207 the export type had no download wave at all: the renderer
-read the export tree in place through a second parser, and the source
-had no raw store, no `sync_runs` row and no way to notice a deleted
-conversation. If you find prose calling `claude_export` "render-only",
-it predates that fix.
+Until #207 the export had no download wave at all: the renderer read
+the export tree in place through a second parser, and the source had no
+raw store, no `sync_runs` row and no way to notice a deleted
+conversation. If you find prose calling the export "render-only", or
+naming a `claude_export` *type*, it predates that fix or the method
+tables.
 
-Because the two types share a store, seeding one from an export and
+Because the two methods share a store, seeding one from an export and
 then keeping it fresh with the API nearly works today — and has one
 destructive edge (the export ingest prunes to its own snapshot, so
 re-running it over an API-extended store deletes what the API added).
@@ -1268,15 +1275,18 @@ it. See `datalib/backend/etl/providers/claude/DOWNLOAD.md`.
 ### "Claude", not "Anthropic"
 
 **Claude is the product; that is the name we use.** The provider crate is
-`datalib_etl_claude` under `providers/claude/`, the source types are
-`claude_api` / `claude_export`, the `grid_rows.provider` tag is
-`claude`, the tables are `claude_attachments`, processor ids are
-`claude/<name>/…`, and tracing events are `claude_*`.
+`datalib_etl_claude` under `providers/claude/`, the source type is
+`claude`, the `grid_rows.provider` tag is `claude`, the tables are
+`claude_attachments`, processor ids are `claude/<name>/…`, and tracing
+events are `claude_*`.
 
 The rule that settled it is the sibling comparison, not a headcount:
 **every source type in this tree is named for the product a person
-recognizes, never for the vendor** — `chatgpt_api`, not `openai_api`;
-`lightroom`, not `adobe_catalog`. The provider directory was the single
+recognizes, never for the vendor** — `chatgpt`, not `openai`;
+`lightroom`, not `adobe_catalog`. And never for the way it is reached:
+`claude` whether over the API or from an export, `contacts` whether
+over CardDAV or from `.vcf` files — the method is a table on the ingest
+step, not part of the type. The provider directory was the single
 exception until #269, where `anthropic` sat next to `chatgpt` and named
 the company instead of the thing.
 

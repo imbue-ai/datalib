@@ -292,7 +292,7 @@ function appletType(command: string): string | null {
   return words[1];
 }
 
-/// Read a dotted path (`sync.channels`) out of a params tree.
+/// Read a dotted path (`api.channels`) out of a params tree.
 export function getParam(params: Record<string, unknown>, target: string): unknown {
   let cur: unknown = params;
   for (const seg of target.split(".")) {
@@ -323,7 +323,7 @@ export function paramsAreRepresentable(
   const phase = fieldPhaseOf(step);
   // Presets count as known. They are values this descriptor *writes*,
   // just without a box to type them in, so a Gmail step's
-  // `gmail_api.user_id` is modeled even though no field names it —
+  // `gmail.user_id` is modeled even though no field names it —
   // and without this, every source with a preset would be permanently
   // un-editable.
   const known = new Set([
@@ -389,8 +389,8 @@ export function fieldPhaseOf(step: ConfiguredStep): FieldPhase {
 
 /// A descriptor's fields for one phase. `phase` is optional on a field
 /// and defaults to `download`, which is where all but one sit — only
-/// `signal_backup` declares a render knob today, so a render step's
-/// form is usually a name and nothing else.
+/// `signal` declares a render knob today, so a render step's form is
+/// usually a name and nothing else.
 export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
   return (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
 }
@@ -480,13 +480,14 @@ export function paramsObject(
     }
     cur[segs[segs.length - 1]] = jsonValue(field, value);
   }
-    // A mode-selecting table with no keys of its own still has to exist —
-    // `gmail_api = {}` is how a config says "this is a Gmail source" — and so
-    // does the params object the probe receives.
+  // A mode-selecting table with no keys of its own still has to exist —
+  // `gmail = {}` is how a config says "this is a Gmail source" — and so
+  // does the params object the probe receives.
   for (const preset of presetsFor(entry, phase)) {
     const head = preset.target.split(".")[0];
     if (!(head in root)) root[head] = {};
   }
+  if (phase === "download" && entry.method && !(entry.method in root)) root[entry.method] = {};
   return root;
 }
 
@@ -511,7 +512,7 @@ function jsonValue(field: Field | undefined, value: unknown): unknown {
 /// Emitted as sub-table headers, so it must come last within its step —
 /// in TOML every key after a table header belongs to that table.
 function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase): string {
-  // Group by the table each target sits in (`sync.channels` → `sync`).
+  // Group by the table each target sits in (`api.channels` → `api`).
   const tables = new Map<string, string[]>();
   for (const { target, value, field } of paramEntries(entry, values, phase)) {
     const dot = target.lastIndexOf(".");
@@ -521,14 +522,17 @@ function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase)
     lines.push(`${key} = ${tomlValue(field, value)}`);
     tables.set(table, lines);
   }
-  if (tables.size === 0) {
-    // On a render step, no knobs means no params at all.
-    if (phase === "render") return "";
-    // On a download step, an empty `sync` table is not the same as no
-    // sync block: for several providers its *presence* selects the
-    // live-download path over a file-backed one.
-    return "[steps.params]\nsync = {}";
+  // The method table has to exist even with none of its knobs set: its
+  // *presence* is what names the ingest method (`api = {}` is a complete
+  // selection), and `datalib-step` refuses a step naming none.
+  if (
+    phase === "download" &&
+    entry.method &&
+    ![...tables.keys()].some((t) => t === entry.method || t.startsWith(`${entry.method}.`))
+  ) {
+    tables.set("", [...(tables.get("") ?? []), `${entry.method} = {}`]);
   }
+  if (tables.size === 0) return "";
   // Shallowest table first, so `[steps.params]` precedes
   // `[steps.params.common]`. TOML permits defining a super-table after
   // a sub-table, but a generated file people are meant to read and

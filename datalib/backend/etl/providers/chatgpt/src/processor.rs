@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the chatgpt_api source (download + render).
+//! Program-A `DataProcessor`s for the chatgpt source (download + render).
 //! The source owns its raw store; the orchestrator only drives `run`.
 
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ use datalib_etl_chatgpt_config::{ChatgptApiSync, ChatgptConfig};
 
 use crate::download;
 
-/// Download wave: present iff `sync:` (managed).
+/// Download wave: present iff `api`.
 pub fn plan_download(
     ctx: PlanContext,
     config: ChatgptConfig,
@@ -22,7 +22,7 @@ pub fn plan_download(
     let raw_path = config.common.raw_path().to_path_buf();
     let latchkey_settings = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
-    if let Some(sync) = config.sync {
+    if let Some(sync) = config.api {
         procs.push(Box::new(ChatgptDownload {
             id: format!("chatgpt/{name}/download"),
             raw_path,
