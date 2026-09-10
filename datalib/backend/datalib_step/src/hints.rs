@@ -90,35 +90,46 @@ set $DATALIB_CURL_DISPATCH / $LATCHKEY_CURL explicitly, and that \
 /// copy-pasteable as-is in both worlds.
 pub fn auth_hint_for(source_type: SourceType) -> String {
     let template: &str = match source_type {
-        // All hints route the secret through the macOS clipboard so it
-        // never lands in shell history: a one-liner copies the token to
-        // the pasteboard, then the printed `… auth set …` command
-        // expands `$(pbpaste)` at exec time. zsh/bash record the literal
-        // `$(pbpaste)`, not the resolved value.
+        // Prefer `auth browser` where the service has a login flow: the
+        // secret never leaves latchkey. Where a hint falls back to
+        // pasting one, it routes it through the macOS clipboard so it
+        // never lands in shell history — a one-liner copies the token
+        // to the pasteboard, then the printed `… auth set …` command
+        // expands `$(pbpaste)` at exec time. zsh/bash record the
+        // literal `$(pbpaste)`, not the resolved value.
         SourceType::Chatgpt => {
             "\
 chatgpt access token expired or missing.
 
-  1. Open https://chatgpt.com in a logged-in browser, then in DevTools
-     console run (clipboard write needs page focus, so it waits for a
-     click on the page):
-       const r = await fetch('/api/auth/session');
-       const j = await r.json();
-       addEventListener('click', async () => {
-         await navigator.clipboard.writeText(j.accessToken);
-         console.log('  {LK} auth set chatgpt -H \"Authorization: Bearer $(pbpaste)\"');
-       }, { once: true });
-     Then click anywhere on the chatgpt page; the console prints the
-     command to run.
-  2. Paste the printed `latchkey auth set …` line into your shell and
-     run it. zsh/bash record the literal `$(pbpaste)`, not the resolved
-     token, so the secret never lands in shell history.
-  3. Smoke-test:
-       {LK} curl -s https://chatgpt.com/backend-api/me | head -c 200
-     Expect a JSON object with your account id. If you still see a
-     Cloudflare challenge, copy `cf_clearance` from DevTools → Application
-     → Cookies → chatgpt.com and add a second `-H \"Cookie: cf_clearance=$(pbpaste)\"`
-     to the `latchkey auth set chatgpt` call.
+  1. Refresh it from the browser — latchkey opens chatgpt.com, waits
+     for the login, and stores the fresh token itself:
+       {LK} auth browser chatgpt
+  2. Smoke-test:
+       {LK} curl -s https://chatgpt.com/backend-api/me
+     Expect a JSON object with your account id.
+
+If step 1 says the service has no browser login, it was registered
+before the token-capture flow existed. `{LK} services info chatgpt`
+lists `authOptions`; a name that already exists cannot be
+re-registered, so drop it and register it again:
+  {LK} services deregister chatgpt
+  {LK} services register chatgpt --base-api-url=https://chatgpt.com/ --login-url=https://chatgpt.com/auth/login --login-flow=token-capture --login-flow-params='{\"tokenUrl\": \"https://chatgpt.com/api/auth/session\", \"tokenField\": \"accessToken\"}'
+
+To paste the token by hand instead, open https://chatgpt.com logged in
+and run in the DevTools console (clipboard write needs page focus, so
+it waits for a click on the page):
+  const r = await fetch('/api/auth/session');
+  const j = await r.json();
+  addEventListener('click', async () => {
+    await navigator.clipboard.writeText(j.accessToken);
+    console.log('  {LK} auth set chatgpt -H \"Authorization: Bearer $(pbpaste)\"');
+  }, { once: true });
+Then click anywhere on the chatgpt page and run the printed command;
+zsh/bash record the literal `$(pbpaste)`, not the token.
+
+If you still see a Cloudflare challenge, copy `cf_clearance` from
+DevTools → Application → Cookies → chatgpt.com and add a second
+`-H \"Cookie: cf_clearance=$(pbpaste)\"` to an `auth set` call.
 
 See datalib/backend/etl/providers/chatgpt/INGEST.md for details."
         }

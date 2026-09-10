@@ -250,7 +250,7 @@ pbpaste | docker run --rm -i -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
 ```
 
 The browser login flows (`latchkey auth browser slack`, `google-gmail`,
-`github`, `fastmail`) cannot run inside the container, which has no
+`github`, `fastmail`, `chatgpt`) cannot run inside the container, which has no
 browser. Run them on your host as usual, then re-encrypt the result
 into the container's store. The first container run against the folder
 creates its key; the re-encrypt reads that key from standard input:
