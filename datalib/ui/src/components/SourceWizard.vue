@@ -503,6 +503,21 @@ const accountValue = computed(() =>
   accountField.value ? String(values.value[accountField.value.target] ?? "").trim() : "",
 );
 
+/// A name in the account box that latchkey does not hold.
+///
+/// `--account` *selects* a credential to refresh; latchkey refuses a
+/// name it has never seen ("No credentials stored for account 'x' of
+/// service 'y'"), so a browser login cannot create one. Dropping the
+/// flag would sign in successfully and store the credential under
+/// latchkey's default account — while the config being written says
+/// `account = "<name>"`, which then resolves to nothing at sync time.
+/// Succeeding wrongly is the worse outcome, so this blocks the button
+/// and says what to run.
+const accountIsNew = computed(
+  () =>
+    !!accountValue.value && !accounts.value?.some((a) => a.account === accountValue.value),
+);
+
 // The probe
 
 const probe = ref<{
@@ -732,7 +747,12 @@ function submit() {
               v-if="canConnect"
               type="button"
               class="btn ghost"
-              :disabled="connect.state === 'running'"
+              :disabled="connect.state === 'running' || accountIsNew"
+              :title="
+                accountIsNew
+                  ? `latchkey has no ${accountValue} yet, and a browser login can only refresh an account that exists`
+                  : ''
+              "
               @click="connectViaLatchkey"
             >
               {{ connect.state === "running" ? "Waiting for the browser…" : "Latchkey auth" }}
@@ -753,6 +773,16 @@ function submit() {
             class="wiz-help wiz-conn-note"
           >
             {{ chosen.credentialConnectWarning }}
+          </p>
+          <!-- Where a browser login actually puts the credential, said
+               before the button is pressed rather than after. -->
+          <p v-if="canConnect && accountIsNew" class="wiz-help wiz-conn-note wiz-newaccount">
+            latchkey has no <code>{{ accountValue }}</code> yet, and a browser login only ever
+            refreshes an account that already exists. Create it once — any value will do, the
+            login replaces it — and the button above comes back:
+            <code
+              >{{ latchkeyCli }} --account {{ accountValue }} auth set {{ service }} -H "…"</code
+            >. Or clear the box to sign in as latchkey’s unnamed default account.
           </p>
           <!-- What the button says on a service that has no browser
                login. Shown rather than done: latchkey refuses to
@@ -1194,6 +1224,7 @@ function submit() {
   padding-left: 10px;
 }
 .wiz-convert-head { margin: 0; }
+.wiz-newaccount code { overflow-wrap: anywhere; }
 .wiz-req {
   font-style: normal;
   font-weight: 400;
