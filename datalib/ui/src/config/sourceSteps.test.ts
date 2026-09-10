@@ -61,14 +61,14 @@ describe("the Slack attachment cap", () => {
   // would have silently imposed 5 MB on it.
   it("leaves an existing uncapped source uncapped", () => {
     const existing = step({ sync: { media: true, channels: ["general"] } });
-    const seeded = seedFieldValues(SLACK, existing);
+    const seeded = seedFieldValues(SLACK, { ingest: existing });
     expect(seeded[CAP]).toBe("");
     expect(toml(seeded)).not.toContain("blob_size_limit_bytes");
   });
 
   it("round-trips a cap the config already sets, without snapping it to 5 MB", () => {
     const existing = step({ sync: { media: true }, common: { blob_size_limit_bytes: 250 } });
-    const seeded = seedFieldValues(SLACK, existing);
+    const seeded = seedFieldValues(SLACK, { ingest: existing });
     expect(seeded[CAP]).toBe(250);
     expect(toml(seeded)).toContain("blob_size_limit_bytes = 250");
   });
@@ -87,9 +87,35 @@ describe("seedFieldValues", () => {
   // The asymmetry the `int` arm relies on: bool/select defaults mirror
   // the backend's own, so unlike an int default they seed on edit too.
   it("still seeds bool and select defaults while editing", () => {
-    const seeded = seedFieldValues(SLACK, step({ sync: { channels: ["general"] } }));
+    const seeded = seedFieldValues(SLACK, { ingest: step({ sync: { channels: ["general"] } }) });
     expect(seeded["sync.media"]).toBe(true);
     expect(seeded["sync.dms"]).toBe(false);
+  });
+
+  // One form, two steps: a render field reads the render step's params
+  // and an ingest field the ingest step's, so a knob with the same
+  // spelling on both sides could never be read off the wrong one.
+  it("reads each phase's fields off its own step", () => {
+    const SIGNAL = catalogFor("signal_backup")!;
+    const ingest: ConfiguredStep = {
+      ...step({ sync: { snapshot_dir: "~/backups" } }),
+      id: "signal/ingest",
+      group: "signal",
+      type: "signal_backup",
+    };
+    const render: ConfiguredStep = {
+      ...ingest,
+      id: "signal/render_markdown",
+      function: "render_markdown",
+      phase: "render",
+      inputs: ["signal/ingest"],
+      params: { period: "year" },
+    };
+    const seeded = seedFieldValues(SIGNAL, { ingest, render });
+    expect(seeded["sync.snapshot_dir"]).toBe("~/backups");
+    expect(seeded["period"]).toBe("year");
+    // With no render step yet, the render field takes its default.
+    expect(seedFieldValues(SIGNAL, { ingest })["period"]).toBe("month");
   });
 
   it("keeps an int a person cleared out of the form empty", () => {

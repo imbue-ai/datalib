@@ -1,12 +1,12 @@
 # Groups and functions: one row per source
 
-**Status: agreed design (2026-09-09); slices 1, 2 and 4a built
-(2026-09-09 and 2026-09-10), slices 3, 4b and 5 not.** Written against
+**Status: agreed design (2026-09-09); slices 1, 2, 4a and 4b built
+(2026-09-09 and 2026-09-10), slices 3 and 5 not.** Written against
 `eee381c3`. Per [`AGENTS.md`](../../../AGENTS.md), don't cite this
 file as a description of the tree. Where it says "today", that was
 checked against that commit; where it says "will", check the slice
-list under "Order of work" — slices 1, 2 and 4a are in the tree, and the
-places each departed from this text are recorded there.
+list under "Order of work" — slices 1, 2, 4a and 4b are in the tree,
+and the places each departed from this text are recorded there.
 
 **Reverses** the "Sources stop being a grouping" section of
 [`step_identity.md`](completed/step_identity.md) and the header of
@@ -376,12 +376,14 @@ backlog reporting are follow-ons (below).
 
 ## The wizard
 
+*Built as slice 4b; see "Order of work" for what it settled.*
+
 One dialog creates a group and its two steps. Ingest-phase catalog
 fields are shown on the main screen and written to the ingest step;
 render-phase fields and presets (`outlink_format` for the email
 providers, beeper's `period`, `signal_backup`'s knob) go under a
-"Rendering" heading and are written to the render step. There is one name box, for the group. The
-"also render this?" chain goes away.
+"Rendering" heading and are written to the render step. There is one
+name box, for the group. The "also render this?" chain goes away.
 
 `stemOf`, `renderIdFor`, `phaseOf`, `PHASE_BY_LEAF` and the
 `<stem>/raw` fallback in `producerOf` are deleted. `wireIntoFanIns`
@@ -527,21 +529,42 @@ Each slice is a PR; each leaves the tree green.
        what the loader's note on that key says. The "Download" /
        "Import" word waits for slice 3's `Origin` / `Local`
        declaration. A step outside any group keeps its own name.
-     - A group's Edit and "Render to markdown" open its *fetch step's*
-       form, since that is where the name and the download settings
-       live until 4b's one-dialog wizard; a group with no fetch step
-       has no form. The aggregation rules live in
+     - A group's Edit opened its *fetch step's* form until 4b landed
+       the one dialog. The aggregation rules live in
        `ui/src/config/groupRows.ts`, tested without a grid; a failed
        applet counts as a failed child, since the group row is the
        only place its health shows while the group is folded.
-   - **4b. The one-dialog wizard** — group + both steps from one form,
-     render fields under a "Rendering" heading, one name box; delete
-     `stemOf`, `phaseOf`, `renderIdFor`, `PHASE_BY_LEAF` and the
-     `<stem>/raw` fallback in `producerOf`; rewrite the
-     `sourceSteps.ts` header. **After slice 2**: it rewrites
-     `SourceWizard.vue` and `sourceSteps.ts`, which is where slice 2's
-     rename lands, and a wizard written against `raw` would be rewritten
-     twice.
+   - **4b. The one-dialog wizard** — *built (2026-09-10)*: group + both
+     steps from one form, render fields under a "Rendering" heading,
+     one name box; `stemOf`, `phaseOf`, `renderIdFor`, `PHASE_BY_LEAF`
+     and the `<stem>/raw` fallback in `producerOf` deleted; the
+     `sourceSteps.ts` header rewritten. It came after slice 2 because
+     it rewrites `SourceWizard.vue` and `sourceSteps.ts`, which is
+     where slice 2's rename landed. Where it departed from the text
+     above, and what it settled that the text left open:
+     - A step's phase is read off its `function` (`ingest`,
+       `render_markdown`, `grid_index`, `qmd_index`; anything else is
+       a custom step), never off the shape of its id. The grid's
+       Source column joins `source_name` to a *group's* name the same
+       way, so nothing in the UI splits an id any more.
+     - The "Render to markdown" row action went with the chain: a
+       source's render step is written with its ingest step, and Edit
+       on the group row *or on any step under it* opens the one form.
+       A hand-edited source missing one of its two steps gets it back
+       on save, and the dialog says so before Save is pressed. A
+       provider that renders nothing (`renderStep: false`) is written
+       as one step and shows no Rendering heading.
+     - Edit replaces both steps in one cut-and-append
+       (`replaceSteps`); the group is renamed in place. Cutting and
+       appending one step at a time would use offsets the first cut
+       had shifted.
+     - `producerOf` follows a render step's `inputs`, then falls back
+       to the ingest step filed under the same *group* — the fallback
+       `datalib-step` itself makes — rather than to a stem split.
+     - The probe runs once, with the ingest step's params as the form
+       would write them, and fills the render step's pickers too;
+       the wizard no longer threads a `downloadParams` copy between
+       two dialogs.
 
 5. **Mechanical rename** (optional, any time after 3): crate names,
    `download/` module directories, `DOWNLOAD.md` files, and the
@@ -553,7 +576,7 @@ Each slice is a PR; each leaves the tree green.
 
 Slices 2 and 3 are backend with a mechanical UI edge; 4a is the row the
 UI review asked for and depends on 1 only, so it was built beside 2;
-4b waits for 2. Slice 3 is independent of 4a and 4b.
+4b waited for 2. Slice 3 is independent of 4a and 4b.
 
 ## Deferred
 
