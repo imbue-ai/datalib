@@ -419,4 +419,23 @@ jobs:
               echo "fully static: OK"
           done
 
+      # Static is necessary, not sufficient: a musl link can come out
+      # fully static and still carry stock SQLite instead of the doltlite
+      # engine, and the checks above cannot tell. This runs the musl
+      # binaries end to end on a fixture and reads dolt_log back through
+      # the shell. The script is //datalib/backend:doltlite_link_test in
+      # the default build; here it runs standalone, because a
+      # `--platforms` build has no shell toolchain for an sh_test.
+      - name: doltlite_link_test against the musl binaries
+        run: |
+          set -euo pipefail
+          libdir="${{ steps.env.outputs.libclang-path }}"
+          flags=(-c opt --config=release --config=musl-x86_64 --nostamp \
+                 --action_env=LIBCLANG_PATH="${libdir}" \
+                 --host_action_env=LIBCLANG_PATH="${libdir}")
+          bazel build "${flags[@]}" --jobs=16 --build_metadata=ROLE=CI //datalib/backend:bin
+          DATALIB_BIN_DIR="$(bazel info bazel-bin "${flags[@]}")/datalib/backend/bin" \
+          DATALIB_VCF_DIR="datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng" \
+              datalib/backend/doltlite_link_test.sh
+
 
