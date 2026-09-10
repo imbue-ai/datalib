@@ -104,28 +104,25 @@ test("once the service has a browser login, the button just runs it", async ({ p
 /// name and pressing the button produced "No credentials stored for
 /// account 'thad_test_2' of service 'claude-ai'". latchkey's
 /// `--account` selects a credential to refresh and cannot create one,
-/// and dropping the flag would be worse — the login would succeed and
-/// store under latchkey's unnamed default while the config being
-/// written names `thad_test_2`, which resolves to nothing at sync time.
-test("a name latchkey doesn't hold blocks the button and says what to run", async ({ page }) => {
+/// so the server seeds the name and retries — the person is not handed
+/// a command to run. This end only has to prove the button still acts
+/// on the name they typed; `connect.rs` owns the seeding.
+test("a name latchkey doesn't hold still starts a login, under that name", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
 
-  let connectCalls = 0;
+  let connectBody: { account?: string } | null = null;
   await page.route("**/api/latchkey/claude-ai/connect", (route) => {
-    connectCalls += 1;
+    connectBody = route.request().postDataJSON();
     return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
   });
 
   await accountBox(page).fill("thad_test_2");
   const auth = wizard(page).getByRole("button", { name: "Latchkey auth" });
-  await expect(auth).toBeDisabled();
-  await expect(wizard(page).locator(".wiz-newaccount")).toContainText(
-    "--account thad_test_2 auth set claude-ai",
-  );
-  expect(connectCalls).toBe(0);
-
-  // Clearing the box is the other way through — latchkey's own default
-  // account needs no `--account` and no seeding.
-  await accountBox(page).fill("");
   await expect(auth).toBeEnabled();
+  await auth.click();
+
+  // The name reaches the server; storing under latchkey's unnamed
+  // default instead would sign in happily and leave the config naming
+  // an account that resolves to nothing at sync time.
+  await expect.poll(() => connectBody?.account).toBe("thad_test_2");
 });
