@@ -334,13 +334,6 @@ type Row = {
   revealPath: string | null;
 };
 
-/// A `datalib-step` step written before `[[groups]]` existed still loads,
-/// but the wizard only writes grouped steps, so a save from here would
-/// name a group the file does not declare.
-const PREDATES_GROUPS =
-  "This step predates [[groups]]. Rewrite the config once with " +
-  "`datalib-migrate-config <data root> --force`, then edit it here.";
-
 /// The word behind a row's step-role glyph. A step is labelled by its
 /// phase rather than the word "step", because that is the distinction a
 /// reader actually wants: which of these brings data in, which turns it
@@ -365,8 +358,8 @@ const CHILD_LABEL: Record<StepPhase, string> = {
 
 /// The index steps, by function.
 const INDEX_LABEL: Record<string, string> = {
-  grid: "Grid index",
-  qmd: "QMD index",
+  grid_index: "Grid index",
+  qmd_index: "QMD index",
 };
 
 function childLabel(s: ConfiguredStep): string {
@@ -497,8 +490,6 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
     editBlocked = "This step's group has no type the catalog knows.";
   } else if (!entry.wizard) {
     editBlocked = `No guided form for ${entry.label} yet — edit it in Advanced below.`;
-  } else if (!s.group) {
-    editBlocked = PREDATES_GROUPS;
   } else {
     const rep = paramsAreRepresentable(s, entry);
     if (!rep.ok) {
@@ -517,8 +508,6 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
     renderBlocked = "No guided form for this type — add the render step in Advanced below.";
   } else if (entry.renderStep === false) {
     renderBlocked = `${entry.label} produces no markdown to render.`;
-  } else if (!s.group) {
-    renderBlocked = PREDATES_GROUPS;
   } else if (renderSiblingOf(s.id)) {
     renderBlocked = "This already has a render step.";
   }

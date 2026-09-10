@@ -18,6 +18,7 @@
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
+  expandGroup,
   pipelineRow as row,
   recordStatuses,
   settle,
@@ -81,6 +82,14 @@ async function writeConfig(page: Page, text: string) {
   // fetches config, jobs and the DAG record in one `Promise.all`, so
   // that in-between state cannot be observed.
   await openManager(page);
+}
+
+/// The step rows this file drives live under groups, and a group's
+/// steps have rows only while it is open. Opened once per test; the
+/// grid remembers across the remounts `settle` does.
+async function writeConfigAndOpenGroups(page: Page, text: string) {
+  await writeConfig(page, text);
+  for (const id of ["pdfs", "docs", "unsynced"]) await expandGroup(page, id);
 }
 
 let original = "";
@@ -174,7 +183,7 @@ ${applets()}`;
   test("syncing one source leaves another source's history untouched", async ({
     page,
   }) => {
-    await writeConfig(page, config());
+    await writeConfigAndOpenGroups(page, config());
 
     // Give docs a real history to protect.
     const docsWas = await lastSyncedOf(page, "docs/ingest");
@@ -204,7 +213,7 @@ ${applets()}`;
   test("the row shows the sync happening, and never goes backwards", async ({
     page,
   }) => {
-    await writeConfig(page, config());
+    await writeConfigAndOpenGroups(page, config());
 
     // Watch the row the way the grid paints it, from before the click
     // until it settles. This is the real sequence — the unit suite
@@ -333,7 +342,7 @@ ${applets()}`;
     // that the column is wired to the relative form at all, that the
     // absolute stamp survives as the hover, and that the cell does not
     // tick while a person is looking at it.
-    await writeConfig(page, config());
+    await writeConfigAndOpenGroups(page, config());
     const countUpWas = await lastSyncedOf(page, "pdfs/ingest");
     await syncBtn(page, "pdfs/ingest").click();
     expect(await settle(page, "pdfs/ingest", countUpWas)).toBe("Succeeded");
@@ -387,7 +396,7 @@ ${applets()}`;
     // makes this worth asserting through the real header rather than
     // only against the comparator: alphabetically "1 hour ago" precedes
     // "seconds ago", while chronologically it follows it.
-    await writeConfig(page, config());
+    await writeConfigAndOpenGroups(page, config());
 
     // Two rows with a real gap between them, so the orders differ. Each
     // sync must be finished before the next begins, or the stamps can
@@ -481,7 +490,7 @@ ${applets()}`;
   test("a downstream step can't be synced on its own, and says what would carry it", async ({
     page,
   }) => {
-    await writeConfig(page, config());
+    await writeConfigAndOpenGroups(page, config());
 
     // `datalib-dag` rejects a `--sync` naming anything but a source
     // step, so this button would only ever queue a job that fails on

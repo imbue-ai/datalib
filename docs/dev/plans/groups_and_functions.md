@@ -449,8 +449,10 @@ Each slice is a PR; each leaves the tree green.
    the only source); and `convert::builtin_of` (updated, since the
    migrator's one rewrite becomes old shape → grouped *with the new
    function names and no command*, decision 9 allowing one rewrite at
-   a time). `PREDATES_GROUPS` in `Manager2View.vue` keys on
-   `!step.group` and stays.
+   a time). `PREDATES_GROUPS` in `Manager2View.vue` keyed on
+   `!step.group`; slice 2 deleted it, because with the retired shape
+   rejected and an ungrouped step never carrying a `type`, no row could
+   reach it.
 2. **`datalib-step` honors the contract.** *Built.* Dispatch on the
    environment, write to the named tree, read inputs from
    `DATALIB_DAG_INPUTS`, delete `source_name`. `command` becomes

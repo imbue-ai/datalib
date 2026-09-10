@@ -20,7 +20,7 @@ Args (positional):
         WhatsApp TNG spec — produces a `WhatsApp/` backup dir with
         `Databases/msgstore.db.crypt15` + `Media/`)
     5:  --now stamp (ISO-8601)
-    6:  data_root for the pipeline (rendered_md/, system/, raw/ land
+    6:  data_root for the pipeline (render_markdown/, ingest/, system/ land
         directly underneath; the DAG config + playback also stashed here)
     7:  claude_export fixture dir (input)
     8:  chatgpt_api   fixture dir

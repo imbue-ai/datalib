@@ -145,6 +145,11 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     for (const id of ["unified_index/grid_index", "unified_index/qmd_index", "unified_index"]) {
       await expect(row(page, id)).toHaveCount(1);
     }
+    // The two index steps are labelled by their function, not by the
+    // generic "Index" the label map falls through to when a key is
+    // stale — which is what happened when the functions were renamed.
+    await expect(row(page, "unified_index/grid_index")).toContainText("Grid index");
+    await expect(row(page, "unified_index/qmd_index")).toContainText("QMD index");
 
     // The qmd index step, removed before anything can queue it. See the
     // header: it is real work this test cannot afford, and the delete
