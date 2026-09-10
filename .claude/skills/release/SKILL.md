@@ -57,31 +57,38 @@ published from a local machine — the tag is the trigger.
    `CARGO_BAZEL_REPIN=1 bazel test //datalib/backend:version_consistency_test //datalib/backend:cargo_lock_versions_test`.
    (A one-off "FAILED TO BUILD" from bazel's test-xml generator is a
    known local flake — rerun before believing it.)
-   Then check `MODULE.bazel.lock` **explicitly** — don't wait to notice
-   it in the diff:
-   `git status --porcelain MODULE.bazel.lock`. That file records content
-   hashes of `datalib/backend/Cargo.{toml,lock}`, which steps 3–4 just
-   changed, so the bazel run above rewrites it. Don't be alarmed by its
-   size: it is a **3-line** diff that prints as ~360 KB, because one of
-   those lines is a 17 KB single-line generated blob. That is also why it
-   falls straight through a targeted `git add` — the last four release
-   bumps (`d5f2aa47`, `75abc2a7`, `786b628f`, `71c315d4`) all shipped
-   without it, leaving the lock stuck on the v0.25.0 state until it was
-   refreshed wholesale. Nothing breaks when it's missed (`lockfile_mode`
-   is unset, so bazel's default is to re-resolve and rewrite silently
-   rather than fail) — which is exactly why four releases passed without
-   anyone noticing, and why this is a step rather than a test. Stage it
-   whenever that command prints anything.
+   Then refresh `MODULE.bazel.lock`. It records content hashes of
+   `datalib/backend/Cargo.{toml,lock}`, which steps 3–4 just changed —
+   but **the two tests above will not update it**. Both are shell tests,
+   so nothing in that invocation needs the `crate_universe` extension,
+   and the stale hashes sit there behind a green result. Build one Rust
+   target to force the re-resolve, then check explicitly rather than
+   waiting to notice it in the diff:
+
+   ```sh
+   CARGO_BAZEL_REPIN=1 bazelisk build //datalib/backend/table:datalib_table
+   git status --porcelain MODULE.bazel.lock
+   ```
+
+   Don't be alarmed by its size: it is a **3-line** diff that prints as
+   ~360 KB, because one of those lines is a 17 KB single-line generated
+   blob. That is also why it falls straight through a targeted `git add`
+   — the release bumps `d5f2aa47`, `75abc2a7`, `786b628f` and
+   `71c315d4` all shipped without it, leaving the lock stuck on the
+   v0.25.0 state until it was refreshed wholesale. A miss is no longer
+   silent — CI runs `--lockfile_mode=error` and `scripts/lint_repo.py`'s
+   check 3 fails locally — but neither of those is the version test you
+   just ran, so stage it whenever that command prints anything.
 7. Commit as `chore(release): bump version X.Y.Z → X.Y'.Z'` with a
    short summary of what the release carries (see commits `835946a9`
    and `c05fa424` for the shape). Expected files: `Cargo.toml`,
    `Cargo.lock`, the two `BUILD.bazel`, `.devcontainer/Dockerfile`, and
    `MODULE.bazel.lock` (per step 6 — expect it, don't treat it as a
    surprise), plus possibly `datalib/tauri/Cargo.lock`.
-   Sanity-check before pushing: re-run the step 6 bazel command and
-   confirm `git status --porcelain MODULE.bazel.lock` is now empty. If
-   it still isn't, the lock didn't converge and the next person to build
-   inherits the dirty file.
+   Sanity-check before pushing: re-run the step 6 Rust build and confirm
+   `git status --porcelain MODULE.bazel.lock` is now empty. If it still
+   isn't, the lock didn't converge and the next person to build inherits
+   the dirty file.
 8. Push the bump straight to main (release bumps land directly, not
    via PR): `git push origin release-vX.Y.Z:main`.
 9. Tag that commit and push the tag:
