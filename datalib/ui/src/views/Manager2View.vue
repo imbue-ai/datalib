@@ -5,6 +5,7 @@
 // endpoints and the unified_index applet respectively, and the layout forbids
 // datalib-http reading that tree.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { AgGridVue } from "ag-grid-vue3";
 import {
   ModuleRegistry,
@@ -76,6 +77,8 @@ import {
 } from "@/config/groupRows";
 import { ingestLabel } from "@/config/ingestMethods";
 import { iconUrl } from "@/config/icons";
+import { browseColumns, browseQuery } from "@/config/browsePresets";
+import { encodeColumns } from "@/router/columns";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { stepLogLines, type StepLogLine } from "@/config/stepLog";
 import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
@@ -191,6 +194,9 @@ const configDirty = ref(false);
 const canReveal = isDesktopApp();
 const revealLabel = revealActionLabel();
 
+// Browse navigates out of this screen into a card stack.
+const router = useRouter();
+
 const wizardOpen = ref(false);
 /// Bumped on every opening, and bound to the dialog's `key`, so a
 /// reopened dialog is a fresh mount rather than a reused component
@@ -285,6 +291,15 @@ type Row = {
   runBlocked: string | null;
   editBlocked: string | null;
   revealBlocked: string | null;
+  /// Why this row has nothing to browse, or null when it does. A source
+  /// reaches the grid only through a `render_markdown` step — the three
+  /// download-only providers (fsindex, media, lightroom) declare none,
+  /// and even their storage rows come from render, so they have no rows
+  /// at all rather than a few.
+  browseBlocked: string | null;
+  /// The card source a Browse of this row opens. Empty for the index
+  /// group, whose browse is the unified projection over every source.
+  browseSource: string;
   /// What a sync of this row starts at: the step itself, or for a group
   /// its steps with no inputs. Empty exactly when `runBlocked` says why.
   seeds: string[];
@@ -539,6 +554,14 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
     runBlocked,
     editBlocked,
     revealBlocked,
+    // A source is browsed as one thing, from its group's row — the same
+    // rule Edit follows. A step's own rows are not a separate view of
+    // the data; they are the same rows.
+    browseBlocked:
+      s.kind === "applet"
+        ? "An applet serves endpoints; it has no rows of its own."
+        : "Browse a source from its group's row.",
+    browseSource: "",
     seeds: s.kind === "step" && s.inputs.length === 0 ? [s.id] : [],
     editGroup: editBlocked ? null : group,
     lastSynced: status.at,
@@ -553,6 +576,36 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
     outputs: trees,
     revealPath: onDisk[0]?.abs ?? null,
   };
+}
+
+/// What a Browse of this group opens, and why it might not.
+///
+/// A group's rows reach the index through its `render_markdown` step, so
+/// having one is exactly the condition for having anything to browse.
+/// The index group has no type and no render step: browsing it is the
+/// unified projection across every source, which is the card the app
+/// already opens on.
+function groupBrowse(
+  g: ConfiguredGroup,
+  steps: Row[],
+  dropped: string | null,
+): { browseBlocked: string | null; browseSource: string } {
+  if (!g.type) {
+    return { browseBlocked: dropped, browseSource: "gridView()" };
+  }
+  if (dropped) return { browseBlocked: dropped, browseSource: "" };
+  if (!steps.some((r) => r.kind === "step" && r.phase === "render")) {
+    return {
+      browseBlocked:
+        "This source has no render step, so none of what it downloads " +
+        "reaches the grid. Its files are on disk — open the folder instead.",
+      browseSource: "",
+    };
+  }
+  const columns = browseColumns(g.type);
+  const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id))}`];
+  if (columns) args.push(`columns: ${JSON.stringify(columns)}`);
+  return { browseBlocked: null, browseSource: `gridView({ ${args.join(", ")} })` };
 }
 
 /// Why a group has no form, or null when the wizard can edit it. A
@@ -645,6 +698,7 @@ function groupRow(g: ConfiguredGroup, children: Row[]): Row {
     runBlocked,
     editBlocked,
     revealBlocked: onDisk ? null : "Nothing on disk yet — this group hasn't produced anything.",
+    ...groupBrowse(g, ordered, droppedWhy),
     seeds,
     editGroup: editBlocked ? null : g.id,
     lastSynced: dropped
@@ -739,6 +793,8 @@ const windowPhrase = computed(() => {
 /// 24×24 Material-ish glyphs, drawn in `currentColor` so they follow the
 /// button's own colour through hover, disabled and the dark theme.
 const ICON_PATHS: Record<string, string> = {
+  // A table: what Browse opens is this row's data as rows and columns.
+  browse: "M3 5h18v4H3V5zm0 6h8v8H3v-8zm10 0h8v8h-8v-8z",
   run: "M8 5v14l11-7z",
   // The play button's other face. A row whose work is already queued or
   // in flight can't usefully be started again, so the button becomes
@@ -799,6 +855,7 @@ function setButton(
 class ActionsRenderer implements ICellRendererComp<Row> {
   private wrap!: HTMLSpanElement;
   private row!: Row;
+  private browse!: HTMLButtonElement;
   private run!: HTMLButtonElement;
   private edit!: HTMLButtonElement;
   private reveal: HTMLButtonElement | null = null;
@@ -808,6 +865,13 @@ class ActionsRenderer implements ICellRendererComp<Row> {
     this.row = p.data!;
     this.wrap = document.createElement("span");
     this.wrap.className = "m2-actions";
+    // First, and deliberately: looking at the data is the thing a
+    // person came here to do, and it is the one action on this row that
+    // changes nothing.
+    this.browse = iconButton("browse", "Browse this data", null, false, () => {
+      if (!this.row.browseBlocked) openBrowse(this.row);
+    });
+    this.wrap.appendChild(this.browse);
     // One button, two faces. While a job has this row claimed the only
     // useful thing to do with it is call it off — starting a second
     // sync of work already queued is never what was meant. A group is
@@ -850,6 +914,12 @@ class ActionsRenderer implements ICellRendererComp<Row> {
 
   private apply(): void {
     const row = this.row;
+    setButton(
+      this.browse,
+      "browse",
+      row.kind === "group" && !row.type ? "Browse every source" : "Browse this data",
+      row.browseBlocked,
+    );
     if (row.stopJobId && row.stopTarget) {
       const claim = claimedBy.value.get(row.stopTarget);
       setButton(
@@ -1670,6 +1740,17 @@ async function deleteGroup(id: string) {
     if (m.phase === "render") next = unwireFromFanIns(next, m.id);
   }
   await writeConfig(next, `Removed ${name}.`);
+}
+
+/// Leave the Manage screen for this row's data: one card, the grid,
+/// already filtered to the source and carrying its type's columns.
+///
+/// A card stack IS the URL (see router/columns.ts), so this is an
+/// ordinary navigation — the card is bookmarkable, shareable, and the
+/// back button returns here.
+function openBrowse(row: Row) {
+  if (row.browseBlocked || !row.browseSource) return;
+  void router.push(encodeColumns([{ code: row.browseSource, state: "" }]));
 }
 
 async function reveal(key: string) {

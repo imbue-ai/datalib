@@ -70,7 +70,6 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
         let app = Router::new()
             .route("/search", get(search_handler))
             .route("/qmd_state", post(qmd_state))
-            .route("/columns", get(columns))
             .route("/docs", get(list_docs))
             .route("/chat/{markdown_uuid}", get(chat))
             .route("/asset/{markdown_uuid}/{*rel}", get(asset))
@@ -135,7 +134,6 @@ pub struct SearchParams {
 pub struct SearchResponse {
     pub query_echo: serde_json::Value,
     pub rows: Vec<SearchRow>,
-    pub columns: Vec<ColumnSpec>,
     pub total_estimated: u64,
     /// Backend-side errors the user should know about even though we
     /// returned 200 + rows. Populated when a degraded path ran (qmd
@@ -144,13 +142,6 @@ pub struct SearchResponse {
     /// these as toasts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct ColumnSpec {
-    pub field: String,
-    pub header: String,
-    pub default_visible: bool,
 }
 
 /// Response shape for `/applet/unified_index/chat/{markdown_uuid}`. The body is the raw
@@ -240,7 +231,6 @@ async fn search_handler(
             "qmd_error": qmd_error,
         }),
         rows,
-        columns: default_columns(),
         total_estimated: total,
         errors,
     })
@@ -465,10 +455,6 @@ async fn qmd_state(
     })
 }
 
-async fn columns() -> Json<Vec<ColumnSpec>> {
-    Json(default_columns())
-}
-
 async fn list_docs(State(s): State<Index>) -> Result<Json<Vec<DocRow>>, StatusCode> {
     match s.repo.list_docs(500).await {
         Ok(rows) => Ok(Json(rows)),
@@ -583,43 +569,9 @@ fn strip_frontmatter(text: &str) -> &str {
     after.strip_prefix('\n').unwrap_or(after)
 }
 
-fn default_columns() -> Vec<ColumnSpec> {
-    vec![
-        col("score", "Score", true),
-        col("source", "Source", true),
-        col("kind", "Type", true),
-        col("when", "Time", true),
-        col("snippet", "Contents", true),
-        col("author", "Author", true),
-        col("account", "Account", true),
-        col("org_name", "Org", false),
-        col("conversation_name", "Conversation Name", false),
-        col("project", "Project", false),
-        col("entire_chat", "Entire Chat", false),
-        col("byte_size", "Size", false),
-        col("item_count", "Items", false),
-    ]
-}
-
-fn col(field: &str, header: &str, default_visible: bool) -> ColumnSpec {
-    ColumnSpec {
-        field: field.into(),
-        header: header.into(),
-        default_visible,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The grid's column set is part of this applet's wire contract:
-    /// the UI renders whatever `/columns` lists, so a column silently
-    /// disappearing is a blank column in the app rather than an error.
-    #[test]
-    fn default_columns_listed() {
-        assert_eq!(default_columns().len(), 13);
-    }
 
     /// Frontmatter trimming is text handling, not parsing — a body
     /// without it is returned unchanged rather than treated as broken.

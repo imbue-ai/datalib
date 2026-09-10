@@ -83,7 +83,6 @@ export type QueryEcho = {
 export type SearchResponse = {
   query_echo: QueryEcho;
   rows: SearchRow[];
-  columns: { field: string; header: string; default_visible: boolean }[];
   total_estimated: number;
   // Backend-side errors that don't fail the response — e.g. the
   // structured-search SQL errored and we returned zero rows rather than
