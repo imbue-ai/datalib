@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// The gitlab-owned slice of a `gitlab` source. `api` is its one way
 /// in; an `ingest` step without it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GitlabConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

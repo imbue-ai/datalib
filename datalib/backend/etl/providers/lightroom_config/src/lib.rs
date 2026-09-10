@@ -18,9 +18,9 @@ pub const XMP_COLUMN_PATTERNS: &[&str] = &[
 ];
 
 /// The lightroom-owned slice of a `lightroom` source. The catalog is
-/// `catalog.path`; the doltlite mirror lands in `common.raw_path`.
+/// `catalog.path`; the doltlite mirror lands in the ingest step's tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LightroomConfig {
     /// Shared per-source envelope (paths + cross-source tunables),
     /// resolved by the orchestrator's `normalize()`.

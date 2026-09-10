@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Typed config for a `linkedin` source: the data export on disk, plus
 /// `fetch_photos`, the one thing that reaches linkedin.com.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LinkedinConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

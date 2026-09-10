@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// hand has no ingest step at all: its render step names the tree on
 /// `common.input_path`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PerseusConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

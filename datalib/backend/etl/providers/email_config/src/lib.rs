@@ -10,6 +10,7 @@ use std::path::PathBuf;
 /// the orchestrator's `normalize()`) plus everything email-specific. `name`
 /// and `enabled` stay orchestrator-owned and are NOT here.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EmailConfig {
     /// Shared per-source envelope (paths + cross-source tunables).
     #[serde(default)]
@@ -130,6 +131,7 @@ impl EmailConfig {
 
 /// JMAP tunables: the `jmap` table of a `type = "email"` ingest step.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EmailSync {
     /// JMAP server hostname. Session discovered at
     /// `https://<hostname>/.well-known/jmap` (e.g. `api.fastmail.com`).
@@ -157,6 +159,7 @@ pub struct EmailSync {
 /// JMAP's shape. The row fields are optional (defaults: `account_id` ←
 /// mbox file stem, `display_name` ← `account_id`, `is_personal` ← true).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MboxSync {
     /// The `.mbox` file, or a directory containing one.
     pub path: PathBuf,

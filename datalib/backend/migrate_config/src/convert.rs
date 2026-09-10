@@ -11,7 +11,9 @@
 //!   method, and a file-backed method carries its own `path` — so `sync`
 //!   becomes `api` (or `jmap`, `carddav`, `texts`, `backup`, `github`) and
 //!   `common.input_path` becomes `export.path`, `fswalk.path`,
-//!   `mbox.path`, ….
+//!   `mbox.path`, …;
+//! - `common.raw_path` goes: the store is the step's own tree, which is
+//!   the only value the step ever accepted for it.
 //!
 //! This module parses the retired shapes itself. The runner refuses them,
 //! so the loader cannot hand the entries over, and a retired shape should
@@ -130,10 +132,30 @@ pub fn retired_shape(text: &str) -> Result<Option<Retired>> {
         .any(|g| g.r#type.as_deref().is_some_and(|t| rename_type(t) != t));
     let retired_params = cfg.steps.iter().any(|s| {
         s.command.is_none()
-            && s.function.as_deref() == Some("ingest")
-            && s.params.as_ref().is_some_and(has_retired_param_keys)
+            && s.params.as_ref().is_some_and(|p| {
+                (s.function.as_deref() == Some("ingest") && has_retired_param_keys(p))
+                    || has_raw_path(p)
+            })
     });
     Ok((retired_type || retired_params).then_some(Retired::TypesAndMethodTables))
+}
+
+fn has_raw_path(params: &toml::Value) -> bool {
+    params
+        .get("common")
+        .and_then(|c| c.get("raw_path"))
+        .is_some()
+}
+
+/// `common.raw_path` could only ever name the step's own tree; drop it,
+/// and `common` with it once empty.
+fn strip_raw_path(params: &mut toml::Table) {
+    if let Some(common) = params.get_mut("common").and_then(|c| c.as_table_mut()) {
+        common.remove("raw_path");
+        if common.is_empty() {
+            params.remove("common");
+        }
+    }
 }
 
 fn has_retired_param_keys(params: &toml::Value) -> bool {
@@ -451,15 +473,18 @@ pub fn rewrite(text: &str) -> Result<String> {
                 .as_ref()
                 .and_then(|g| groups.iter().position(|o| &o.id == g));
             let mut params = step.params.clone();
-            // A command-less ingest step is `datalib-step`'s, and its
-            // params are the provider's to reshape; a custom step's are
-            // its own program's.
-            if step.command.is_none() && step.function.as_deref() == Some("ingest") {
-                if let (Some(gi), Some(toml::Value::Table(t))) = (gi, params.as_mut()) {
-                    if let Some(ty) = groups[gi].r#type.as_deref() {
-                        rewrite_ingest_params(ty, t).with_context(|| {
-                            format!("step {}", step.old_id().unwrap_or_default())
-                        })?;
+            // A command-less step is `datalib-step`'s, and its params are
+            // the provider's to reshape; a custom step's are its own
+            // program's.
+            if step.command.is_none() {
+                if let Some(toml::Value::Table(t)) = params.as_mut() {
+                    strip_raw_path(t);
+                    if step.function.as_deref() == Some("ingest") {
+                        if let Some(ty) = gi.and_then(|gi| groups[gi].r#type.as_deref()) {
+                            rewrite_ingest_params(ty, t).with_context(|| {
+                                format!("step {}", step.old_id().unwrap_or_default())
+                            })?;
+                        }
                     }
                 }
             }
@@ -501,12 +526,13 @@ pub fn rewrite(text: &str) -> Result<String> {
             _ => {}
         }
         let mut params = step.params.clone();
-        if b.function == "ingest" {
-            if let (Some(ty), Some(toml::Value::Table(t))) =
-                (group.r#type.as_deref(), params.as_mut())
-            {
-                rewrite_ingest_params(ty, t)
-                    .with_context(|| format!("step {}", step.old_id().unwrap_or_default()))?;
+        if let Some(toml::Value::Table(t)) = params.as_mut() {
+            strip_raw_path(t);
+            if b.function == "ingest" {
+                if let Some(ty) = group.r#type.as_deref() {
+                    rewrite_ingest_params(ty, t)
+                        .with_context(|| format!("step {}", step.old_id().unwrap_or_default()))?;
+                }
             }
         }
         // The download step's name is the source's name. The old wizard named

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 /// Texts desktop app's own database — is its one way in; an `ingest`
 /// step without it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BeeperConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

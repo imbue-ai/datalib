@@ -62,29 +62,10 @@ impl std::fmt::Debug for PlannedSource {
     }
 }
 
-/// The ingest step's raw store is its tree and nothing else. An explicit
-/// `common.raw_path` is accepted only when it names that same tree; a
-/// store kept elsewhere is a symlink at the tree, not a config knob,
-/// because the runner versions and consumers read the tree by its id.
-fn ingest_writes_its_own_tree(
-    tree: &std::path::Path,
-    resolved: &std::path::Path,
-) -> Result<PathBuf> {
-    anyhow::ensure!(
-        resolved == tree,
-        "`common.raw_path` is {resolved:?}, but this step writes only the tree its id \
-         names, {tree:?}. Drop `raw_path`; to keep the store on another disk, put a \
-         symlink at {tree:?}.",
-        resolved = resolved.display(),
-        tree = tree.display(),
-    );
-    Ok(tree.to_path_buf())
-}
-
 /// `raw_dir` is the raw store this plan is about: for [`Phase::Ingest`]
-/// the tree the step writes, for [`Phase::Render`] the tree it reads. An
-/// ingest whose params point `common.raw_path` anywhere else is refused —
-/// a step writes only the tree its id names.
+/// the tree the step writes, for [`Phase::Render`] the tree it reads. A
+/// step writes only the tree its id names, and nothing in its params can
+/// say otherwise.
 pub fn plan(
     step_type: &str,
     phase: Phase,
@@ -107,9 +88,7 @@ pub fn plan(
             anyhow::anyhow!("unknown source type {step_type:?}; known types: {known}")
         }
     })?;
-    if phase == Phase::Ingest {
-        crate::methods::refuse_retired_params(source_type, &source)?;
-    }
+    crate::methods::refuse_retired_params(source_type, &source)?;
     // Read before `source` is handed to serde: which of the provider's
     // declared methods these params hold. Judged after `validate`, so a
     // misspelled table is reported as the unknown field it is.
@@ -140,7 +119,7 @@ pub fn plan(
                     cfg.common.resolve_paths(raw_dir.clone());
                     cfg.validate()
                         .with_context(|| format!("source {name:?} (type={source_type})"))?;
-                    let raw_path = ingest_writes_its_own_tree(&raw_dir, cfg.common.raw_path())?;
+                    let raw_path = cfg.common.raw_path().to_path_buf();
                     let reach = crate::methods::reach_or_refuse(source_type, &held)?;
                     let download_params = cfg.common.download_params.clone();
                     let always_clear_before_ingest = cfg.common.always_clear_before_ingest;
@@ -200,7 +179,7 @@ pub fn plan(
                     PlannedSource {
                         name: name.to_string(),
                         source_type,
-                        raw_path: ingest_writes_its_own_tree(&raw_dir, cfg.common.raw_path())?,
+                        raw_path: cfg.common.raw_path().to_path_buf(),
                         reach: Some(crate::methods::reach_or_refuse(source_type, &held)?),
                         download_params: cfg.common.download_params.clone(),
                         always_clear_before_ingest: cfg.common.always_clear_before_ingest,
@@ -777,12 +756,14 @@ mod tests {
         assert!(err.contains("slack"), "{err}");
     }
 
-    /// A `common.raw_path` pointing anywhere but the step's own tree is
-    /// refused: the runner versions, and every consumer reads, the tree
-    /// the id names, so a store written elsewhere would be one nothing
-    /// downstream ever sees.
+    /// `common.raw_path` used to name the store, and was then refused
+    /// unless it named the step's own tree. It is not a key any more:
+    /// the runner versions, and every consumer reads, the tree the id
+    /// names, so a store written elsewhere would be one nothing
+    /// downstream ever sees. A config still carrying it is refused by
+    /// name, with the migrator named.
     #[test]
-    fn an_ingest_step_refuses_a_raw_path_outside_its_tree() {
+    fn an_ingest_step_refuses_a_raw_path_key() {
         let td = tempfile::tempdir().unwrap();
         let err = plan(
             "github",
@@ -794,20 +775,17 @@ mod tests {
         .unwrap_err();
         let err = format!("{err:#}");
         assert!(err.contains("raw_path"), "{err}");
-        assert!(err.contains("gh/ingest"), "{err}");
-
-        // Naming the tree itself is redundant, and harmless.
-        let same = plan(
+        assert!(err.contains("datalib-migrate-config"), "{err}");
+        // A render step's `common` is the slim envelope, and refuses it too.
+        let err = plan(
             "github",
-            Phase::Ingest,
+            Phase::Render,
             "gh",
-            raw_dir(td.path(), "gh", Phase::Ingest),
-            serde_json::json!({
-                "common": {"raw_path": td.path().join("gh/ingest").to_str().unwrap()},
-                "api": {}
-            }),
+            raw_dir(td.path(), "gh", Phase::Render),
+            serde_json::json!({"common": {"raw_path": "/mnt/big/gh-raw"}}),
         )
-        .unwrap();
-        assert_eq!(same.raw_path, td.path().join("gh/ingest"));
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("raw_path"), "{err}");
     }
 }

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// The fsindex-owned slice of an `fsindex` source. The scan root is
 /// `fswalk.path`; `stamp` is the one knob.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FsindexConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

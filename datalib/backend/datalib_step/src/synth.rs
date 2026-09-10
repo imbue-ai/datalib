@@ -11,6 +11,7 @@ use datalib_dag::events::{Event, LogLevel};
 use datalib_etl::synthesize::Synthesizer;
 
 use crate::events::{Emitter, OutputClaim};
+use crate::source_type::SourceType;
 
 pub fn run(
     step_type: &str,
@@ -35,34 +36,34 @@ pub fn run(
         });
     };
 
-    let synth: Box<dyn Synthesizer> = match step_type {
+    let synth: Box<dyn Synthesizer> = match SourceType::parse(step_type) {
         // Only the API side of claude makes requests; an export ingest
         // has no HTTP to play back, and synthesizes the same tapes.
-        "claude" => Box::new(datalib_etl_claude::synthesize::ClaudeSynth::new(
+        Some(SourceType::Claude) => Box::new(datalib_etl_claude::synthesize::ClaudeSynth::new(
             input.clone(),
         )),
-        "chatgpt" => Box::new(datalib_etl_chatgpt::synthesize::ChatgptSynth::new(
+        Some(SourceType::Chatgpt) => Box::new(datalib_etl_chatgpt::synthesize::ChatgptSynth::new(
             input.clone(),
         )),
-        "slack" => Box::new(datalib_etl_slack::synthesize::SlackSynth::new(
+        Some(SourceType::Slack) => Box::new(datalib_etl_slack::synthesize::SlackSynth::new(
             input.clone(),
         )),
-        "github" => Box::new(datalib_etl_github::synthesize::GithubSynth::new(
+        Some(SourceType::Github) => Box::new(datalib_etl_github::synthesize::GithubSynth::new(
             input.clone(),
         )),
-        "gitlab" => Box::new(datalib_etl_gitlab::synthesize::GitlabSynth::new(
+        Some(SourceType::Gitlab) => Box::new(datalib_etl_gitlab::synthesize::GitlabSynth::new(
             input.clone(),
         )),
-        "notion" => Box::new(datalib_etl_notion::synthesize::NotionSynth::new(
+        Some(SourceType::Notion) => Box::new(datalib_etl_notion::synthesize::NotionSynth::new(
             input.clone(),
         )),
-        "beeper" => Box::new(datalib_etl_beeper::synthesize::BeeperSynth::new(
+        Some(SourceType::Beeper) => Box::new(datalib_etl_beeper::synthesize::BeeperSynth::new(
             input.clone(),
         )),
         // LinkedIn is file-backed except the optional connection-photo
         // fetch; there are playback fixtures to synthesize iff that's
         // enabled.
-        "linkedin"
+        Some(SourceType::Linkedin)
             if source
                 .get("fetch_photos")
                 .and_then(|v| v.as_bool())
@@ -74,9 +75,9 @@ pub fn run(
         }
         // Everything else is file-backed or otherwise synth-less: no
         // download HTTP to play back. Skip quietly like sync did.
-        other => {
+        _ => {
             log(format!(
-                "synthesize {name} ({other}): skipped (no HTTP synthesizer for this source type)"
+                "synthesize {name} ({step_type}): skipped (no HTTP synthesizer for this source type)"
             ));
             return Ok(vec![]);
         }

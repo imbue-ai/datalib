@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 /// neither is refused (`IngestMethods` below), and one with both is
 /// refused by [`ClaudeConfig::validate`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClaudeConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

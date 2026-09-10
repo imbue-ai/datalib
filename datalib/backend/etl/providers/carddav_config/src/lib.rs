@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// `carddav` mirrors a live CardDAV server, `vcf` ingests `.vcf` exports
 /// under a directory on disk.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CarddavConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

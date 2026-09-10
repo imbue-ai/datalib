@@ -10,7 +10,8 @@
 //!
 //! What the rewrite covers today is the header of `convert.rs`: the
 //! `datalib-step download <type>` command lines, the `_api` / `_backup`
-//! type words, and the `sync` / `common.input_path` params.
+//! type words, and the `sync` / `common.input_path` / `common.raw_path`
+//! params.
 
 pub mod convert;
 
@@ -173,7 +174,15 @@ group = "claude-export"
 function = "ingest"
 [steps.params.common]
 input_path = "~/claude-export"
+raw_path = "/big/disk/claude-export/ingest"
 blob_size_limit_bytes = 5000000
+
+[[steps]]
+group = "claude-export"
+function = "render_markdown"
+inputs = ["claude-export/ingest"]
+[steps.params.common]
+raw_path = "/big/disk/claude-export/ingest"
 
 [[groups]]
 id = "mail"
@@ -272,6 +281,7 @@ inputs = ["slack/render_markdown"]
             );
         }
         assert!(!out.contains("input_path"), "{out}");
+        assert!(!out.contains("raw_path"), "{out}");
         assert!(!out.contains("[steps.params.sync]"), "{out}");
         assert!(out.contains("type = \"slack\""), "{out}");
         assert!(

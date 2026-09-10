@@ -42,16 +42,27 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
     }
 }
 
-/// The two keys every method table replaced. A config still writing
-/// either was written before the tables existed and is refused whole,
-/// rather than read with the method silently missing.
-const RETIRED_PARAM_PATHS: &[&str] = &["sync", "common.input_path"];
+/// Keys a params tree can no longer carry, each with why. A config still
+/// writing one was written against an earlier shape and is refused
+/// whole, naming the tool that rewrites it, rather than read with the
+/// key silently ignored.
+const RETIRED_PARAM_PATHS: &[(&str, &str)] = &[
+    ("sync", "the ingest method is its own table now"),
+    (
+        "common.input_path",
+        "a file-backed method carries its own `path` now",
+    ),
+    (
+        "common.raw_path",
+        "the store is the step's own tree; to keep it on another disk, put a symlink there",
+    ),
+];
 
 pub fn refuse_retired_params(source_type: SourceType, params: &serde_json::Value) -> Result<()> {
-    let written: Vec<&str> = RETIRED_PARAM_PATHS
+    let written: Vec<String> = RETIRED_PARAM_PATHS
         .iter()
-        .copied()
-        .filter(|p| params.pointer(&json_pointer(p)).is_some())
+        .filter(|(p, _)| params.pointer(&json_pointer(p)).is_some())
+        .map(|(p, why)| format!("`{p}` ({why})"))
         .collect();
     if written.is_empty() {
         return Ok(());
@@ -62,14 +73,10 @@ pub fn refuse_retired_params(source_type: SourceType, params: &serde_json::Value
         .collect::<Vec<_>>()
         .join(", ");
     anyhow::bail!(
-        "this step's params still use {}, the shape written before an ingest step named its \
-         method as its own table ({tables} for {source_type}). Rewrite the file once: \
+        "this step's params still use {}, a shape written before the current one; a {source_type} \
+         ingest step names its method as one of {tables}. Rewrite the file once: \
          `datalib-migrate-config <data root> --force`.",
-        written
-            .iter()
-            .map(|p| format!("`{p}`"))
-            .collect::<Vec<_>>()
-            .join(" and "),
+        written.join(" and "),
     )
 }
 
@@ -202,6 +209,11 @@ mod tests {
         .to_string();
         assert!(err.contains("`common.input_path`"), "{err}");
         assert!(err.contains("`fswalk`"), "{err}");
+        let err = refuse_retired_params(SourceType::Pdf, &json!({"common": {"raw_path": "/x"}}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`common.raw_path`"), "{err}");
+        assert!(err.contains("symlink"), "{err}");
         // `common` with only its surviving keys is fine.
         refuse_retired_params(
             SourceType::Pdf,

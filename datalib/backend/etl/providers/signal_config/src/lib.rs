@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 /// newest snapshot under its `path`) is its one way in; an `ingest`
 /// step without it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignalConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

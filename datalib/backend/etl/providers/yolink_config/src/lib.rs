@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// The yolink-owned slice of a `yolink` source. `api` drives the
 /// per-device download.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct YolinkConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

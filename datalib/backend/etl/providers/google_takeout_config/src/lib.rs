@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 /// — the unzipped Takeout root, plus which of its feeds to read — is its
 /// one way in.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GoogleTakeoutConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

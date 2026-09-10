@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// `backup` — the app's XML export, or a directory of them — is its one
 /// way in, and its only knob.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SmsBackupRestoreConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.

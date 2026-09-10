@@ -31,14 +31,18 @@ impl Default for EventTapeConfig {
 /// [`Self::raw_path`] is always `Some` (absolute), and the knobs have the
 /// global [`Defaults`] folded in. Where a file-backed source reads *from*
 /// is not here: that is the `path` of the method table that reads it
-/// (`[steps.params.export] path = …`), declared per provider.
+/// (`[steps.params.export] path = …`), declared per provider. Strict: a
+/// misspelled knob is refused, not ignored.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceCommon {
     /// Where *we* keep this source's raw store (`entities.doltlite_db`,
-    /// `blobs.doltlite_db`, the `events/` tape). Defaults to
-    /// the tree the ingest step writes; `resolve_paths` fills this so it is
-    /// always `Some` afterward.
-    #[serde(default)]
+    /// `blobs.doltlite_db`, the `events/` tape): the tree the ingest step
+    /// writes, `<data_root>/<group>/ingest`, filled by `resolve_paths`.
+    /// Not a config key — the runner versions and every consumer reads
+    /// the tree by its id, so a store kept elsewhere is a symlink at the
+    /// tree.
+    #[serde(skip)]
     pub raw_path: Option<PathBuf>,
     /// Skip downloading any blob attachment larger than this many bytes.
     /// `None` = no limit. Consumed only by providers that download attachments.
@@ -94,14 +98,10 @@ impl SourceCommon {
         self.event_tape = self.event_tape.take().or_else(|| d.event_tape.clone());
     }
 
-    /// Resolve paths. Fills [`Self::raw_path`] with `default_raw` — the
-    /// tree the ingest step writes, `<data_root>/<group>/ingest` — when
-    /// unset. Run once, before anything reads the paths.
-    pub fn resolve_paths(&mut self, default_raw: PathBuf) {
-        self.raw_path = Some(match self.raw_path.take() {
-            Some(p) => expand_tilde(&p),
-            None => default_raw,
-        });
+    /// Fills [`Self::raw_path`] with the tree the ingest step writes,
+    /// `<data_root>/<group>/ingest`. Run once, before anything reads it.
+    pub fn resolve_paths(&mut self, raw: PathBuf) {
+        self.raw_path = Some(raw);
     }
 
     pub fn raw_path(&self) -> &Path {
@@ -159,19 +159,16 @@ pub struct RenderCommon {
     /// [`Self::raw_path`].
     #[serde(default)]
     pub input_path: Option<PathBuf>,
-    /// See [`SourceCommon::raw_path`].
-    #[serde(default)]
+    /// The raw store this render reads — the tree its ingest input
+    /// names, filled by `resolve_paths`. Not a config key, for the same
+    /// reason as [`SourceCommon::raw_path`].
+    #[serde(skip)]
     pub raw_path: Option<PathBuf>,
 }
 
 impl RenderCommon {
-    /// `default_raw` is the raw store this render reads — the tree its
-    /// ingest input names.
-    pub fn resolve_paths(&mut self, default_raw: PathBuf) {
-        self.raw_path = Some(match self.raw_path.take() {
-            Some(p) => expand_tilde(&p),
-            None => default_raw,
-        });
+    pub fn resolve_paths(&mut self, raw: PathBuf) {
+        self.raw_path = Some(raw);
         if let Some(p) = self.input_path.take() {
             self.input_path = Some(expand_tilde(&p));
         }
@@ -403,21 +400,32 @@ mod tests {
     }
 
     #[test]
-    fn resolve_paths_defaults_raw() {
+    fn resolve_paths_sets_raw() {
         let mut common = SourceCommon::default();
         common.resolve_paths(PathBuf::from("/data/slack/ingest"));
         assert_eq!(common.raw_path(), Path::new("/data/slack/ingest"));
     }
 
     /// `common.input_path` was where every file-backed source read from
-    /// before each method table carried its own `path`. It is gone from
-    /// the envelope rather than ignored, so a config still writing it is
-    /// refused by `datalib-step` (which names the migrator) instead of
-    /// quietly reading the wrong tree.
+    /// before each method table carried its own `path`, and
+    /// `common.raw_path` named a store the step then refused unless it was
+    /// its own tree. Both are gone from the envelope rather than ignored,
+    /// so a config still writing either is refused (and `datalib-step`
+    /// names the migrator) instead of quietly reading the wrong tree.
     #[test]
-    fn the_envelope_has_no_input_path() {
+    fn the_envelope_has_no_path_keys() {
         let v: serde_json::Value = serde_json::to_value(SourceCommon::default()).unwrap();
         assert!(v.get("input_path").is_none(), "{v}");
+        assert!(v.get("raw_path").is_none(), "{v}");
+        for key in ["input_path", "raw_path", "blob_size_limit"] {
+            let err = serde_json::from_value::<SourceCommon>(serde_json::json!({ key: "/x" }))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("unknown field"), "{key}: {err}");
+        }
+        let r: RenderCommon = serde_json::from_str("{}").unwrap();
+        assert!(r.raw_path.is_none());
+        assert!(serde_json::from_str::<RenderCommon>(r#"{"raw_path": "/x"}"#).is_err());
     }
 
     #[test]

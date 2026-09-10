@@ -89,13 +89,13 @@ set $DATALIB_CURL_DISPATCH / $LATCHKEY_CURL explicitly, and that \
 /// app, else `npx -y latchkey@<pin>`, so the printed commands are
 /// copy-pasteable as-is in both worlds.
 pub fn auth_hint_for(source_type: SourceType) -> String {
-    let template: &str = match source_type.as_str() {
+    let template: &str = match source_type {
         // All hints route the secret through the macOS clipboard so it
         // never lands in shell history: a one-liner copies the token to
         // the pasteboard, then the printed `… auth set …` command
         // expands `$(pbpaste)` at exec time. zsh/bash record the literal
         // `$(pbpaste)`, not the resolved value.
-        "chatgpt" => {
+        SourceType::Chatgpt => {
             "\
 chatgpt access token expired or missing.
 
@@ -122,7 +122,7 @@ chatgpt access token expired or missing.
 
 See datalib/backend/etl/providers/chatgpt/DOWNLOAD.md for details."
         }
-        "claude" => {
+        SourceType::Claude => {
             "\
 Claude sessionKey expired or missing.
 
@@ -138,7 +138,7 @@ Claude sessionKey expired or missing.
 
 See datalib/backend/etl/providers/claude/DOWNLOAD.md for details."
         }
-        "slack" => {
+        SourceType::Slack => {
             "\
 slack token expired or missing.
 
@@ -151,7 +151,7 @@ slack token expired or missing.
 
 See datalib/backend/etl/providers/slack/DOWNLOAD.md for details."
         }
-        "github" => {
+        SourceType::Github => {
             "\
 github PAT expired or missing.
 
@@ -164,7 +164,7 @@ github PAT expired or missing.
 
 See datalib/backend/etl/providers/github/DOWNLOAD.md for details."
         }
-        "gitlab" => {
+        SourceType::Gitlab => {
             "\
 gitlab token expired or missing.
 
@@ -177,7 +177,7 @@ gitlab token expired or missing.
 
 See datalib/backend/etl/providers/gitlab/DOWNLOAD.md for details."
         }
-        "notion" => {
+        SourceType::Notion => {
             "\
 notion integration token expired or missing.
 
@@ -192,7 +192,7 @@ notion integration token expired or missing.
 
 See datalib/backend/etl/providers/notion/DOWNLOAD.md for details."
         }
-        "email" => {
+        SourceType::Email => {
             "\
 Email source: JMAP (Fastmail / generic) auth missing or expired.
 
@@ -233,7 +233,7 @@ service and routes to it by URL host:
 
 See datalib/backend/etl/providers/email/DOWNLOAD.md for details."
         }
-        "beeper" => {
+        SourceType::Beeper => {
             "\
 beeper download reads Beeper Texts' on-disk SQLite. No auth dance.
 
