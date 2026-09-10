@@ -30,7 +30,12 @@ pub struct AccountRow {
 
 #[derive(Debug, Clone)]
 pub struct ProjectRow {
-    pub account_uuid: String,
+    /// Whoever made the project — in a Team workspace routinely not the
+    /// account that downloaded it. The name rides in the payload beside
+    /// the UUID, which is the only place it is available: an org
+    /// colleague has no `users` row here to look up.
+    pub creator_uuid: String,
+    pub creator_name: Option<String>,
     pub project_uuid: String,
     /// Owning Anthropic organization, same provenance as
     /// [`ConversationRow::org_uuid`] — a project lives in exactly one
@@ -160,6 +165,10 @@ pub struct ScanResult {
 #[derive(Clone, Default)]
 pub struct ParsedExport {
     pub accounts: Vec<AccountRow>,
+    /// Anthropic's UUID for the account whose login produced this
+    /// mirror. Every page here belongs to it, including a project
+    /// somebody else in the org created.
+    pub viewer_account_uuid: Option<String>,
     /// The projects to render this pass — narrowed by the diff scan,
     /// exactly like [`Self::conversations`].
     pub projects: Vec<ProjectRow>,
@@ -178,6 +187,29 @@ pub struct ParsedExport {
     /// against.
     pub vanished_buckets: Vec<String>,
     pub scan: ScanResult,
+}
+
+impl ParsedExport {
+    /// What the grid's Account column shows for one of Anthropic's user
+    /// UUIDs. The email first — an account is a login, and two people in
+    /// one org can share a full name — then the name, and the UUID only
+    /// when the `users` table has no row at all.
+    pub fn account_label(&self, uuid: &str) -> Option<String> {
+        if uuid.is_empty() {
+            return None;
+        }
+        let nonblank = |s: &Option<String>| s.clone().filter(|s| !s.trim().is_empty());
+        let label = self
+            .accounts
+            .iter()
+            .find(|a| a.account_uuid == uuid)
+            .and_then(|a| nonblank(&a.email).or_else(|| nonblank(&a.full_name)));
+        Some(label.unwrap_or_else(|| uuid.to_string()))
+    }
+
+    pub fn viewer_account_label(&self) -> Option<String> {
+        self.account_label(self.viewer_account_uuid.as_deref()?)
+    }
 }
 
 fn str_field(v: &Map<String, Value>, k: &str) -> Option<String> {
@@ -408,7 +440,8 @@ fn project_row(
         .cloned()
         .unwrap_or_default();
     ProjectRow {
-        account_uuid: str_field(&creator, "uuid").unwrap_or_default(),
+        creator_uuid: str_field(&creator, "uuid").unwrap_or_default(),
+        creator_name: str_field(&creator, "full_name").filter(|n| !n.trim().is_empty()),
         project_uuid,
         org_uuid,
         org_name,
@@ -490,6 +523,7 @@ pub fn parse_loaded(raw: datalib_etl_claude::ingest::db::LoadedRaw) -> ParsedExp
             raw_json: u.clone(),
         });
     }
+    out.viewer_account_uuid = raw.first_user_uuid.clone();
     let account_uuid = raw.first_user_uuid.as_deref();
     for LoadedConversation {
         id: _,
@@ -670,5 +704,62 @@ mod no_data_tests {
         assert!(parsed.conversations.is_empty());
         assert!(parsed.accounts.is_empty());
         assert!(parsed.projects.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod account_label_tests {
+    use super::*;
+
+    fn parsed(accounts: &[(&str, Option<&str>, Option<&str>)]) -> ParsedExport {
+        ParsedExport {
+            accounts: accounts
+                .iter()
+                .map(|(uuid, email, full_name)| AccountRow {
+                    account_uuid: (*uuid).to_string(),
+                    email: email.map(str::to_string),
+                    full_name: full_name.map(str::to_string),
+                    raw_json: Value::Null,
+                })
+                .collect(),
+            ..ParsedExport::default()
+        }
+    }
+
+    #[test]
+    fn prefers_email_then_name() {
+        let p = parsed(&[
+            ("u1", Some("jlp@x.test"), Some("Picard")),
+            ("u2", None, Some("Crusher")),
+            ("u3", Some("  "), Some("Data")),
+        ]);
+        assert_eq!(p.account_label("u1").as_deref(), Some("jlp@x.test"));
+        assert_eq!(p.account_label("u2").as_deref(), Some("Crusher"));
+        assert_eq!(p.account_label("u3").as_deref(), Some("Data"));
+    }
+
+    /// The `users` table holds only the account that did the
+    /// downloading, so a conversation belonging to somebody else has no
+    /// row to resolve against. Show the UUID rather than dropping the
+    /// value — a blank Account cell would hide that the rows came from
+    /// two different accounts.
+    #[test]
+    fn falls_back_to_the_uuid_for_an_account_with_no_users_row() {
+        let p = parsed(&[("u1", Some("jlp@x.test"), None)]);
+        assert_eq!(p.account_label("u9").as_deref(), Some("u9"));
+    }
+
+    #[test]
+    fn no_account_at_all_stays_none() {
+        let p = parsed(&[("u1", Some("jlp@x.test"), None)]);
+        assert_eq!(p.account_label(""), None);
+        assert_eq!(p.viewer_account_label(), None, "no viewer uuid recorded");
+    }
+
+    #[test]
+    fn the_viewer_is_the_first_user_of_the_store() {
+        let mut p = parsed(&[("u1", Some("jlp@x.test"), None)]);
+        p.viewer_account_uuid = Some("u1".into());
+        assert_eq!(p.viewer_account_label().as_deref(), Some("jlp@x.test"));
     }
 }

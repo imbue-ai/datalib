@@ -40,7 +40,10 @@ use datalib_schema::providers::Provider;
 ///     — gets a null `when_ts` instead of a real-looking
 ///     `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
-pub const RENDER_VERSION: u32 = 6;
+/// v7: `account` is the account's email rather than Anthropic's user
+///     UUID, and a project page carries the account that downloaded it
+///     rather than its creator — who moves to `author`.
+pub const RENDER_VERSION: u32 = 7;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -124,7 +127,7 @@ pub fn render_all(
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     for c in &parsed.conversations {
         let shredded = shred(c);
-        let chat = build_chat(&shredded, &parsed.project_name_by_uuid);
+        let chat = build_chat(&shredded, &parsed.project_name_by_uuid, parsed);
         blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
         chats.push(chat);
     }
@@ -151,7 +154,7 @@ pub fn render_all(
         let project_chats: Vec<NormalizedChat> = parsed
             .projects
             .iter()
-            .map(|p| build_project_page(p, &options))
+            .map(|p| build_project_page(p, &options, parsed))
             .collect();
         let no_blobs: HashMap<String, BlobBundle> = HashMap::new();
         cc_render_all(
@@ -178,6 +181,7 @@ pub fn render_all(
 fn build_chat(
     shredded: &ShreddedConversation,
     project_names: &HashMap<String, String>,
+    parsed: &ParsedExport,
 ) -> NormalizedChat {
     let conv = &shredded.conv;
     let conv_uuid = conv.conversation_uuid.clone();
@@ -369,7 +373,8 @@ fn build_chat(
         chat_uuid: chat_uuid.clone(),
         display: title.clone(),
         title: Some(title),
-        account: Some(conv.account_uuid.clone()),
+        author: None,
+        account: parsed.account_label(&conv.account_uuid),
         project: conv.project_uuid.as_ref().map(|uuid| {
             project_names
                 .get(uuid)
@@ -393,7 +398,11 @@ fn build_chat(
     }
 }
 
-fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> NormalizedChat {
+fn build_project_page(
+    project: &ProjectRow,
+    options: &RenderOptions,
+    parsed: &ParsedExport,
+) -> NormalizedChat {
     let project_uuid = project.project_uuid.clone();
     let page_uuid = ids::project(&project_uuid).uuid;
     let name = project
@@ -484,7 +493,11 @@ fn build_project_page(project: &ProjectRow, options: &RenderOptions) -> Normaliz
         // without it chat-common derives the same "Claude · {name}"
         // heading it gives conversations.
         title: Some(format!("Claude Project · {name}")),
-        account: filter_nonempty(project.account_uuid.clone()),
+        author: project.creator_name.clone(),
+        // The account that downloaded the project, not the colleague who
+        // created it: a shared Team project is here because of the same
+        // login every conversation is.
+        account: parsed.viewer_account_label(),
         // A project's own `project` column is itself, so the grid groups
         // the project page together with its conversations.
         project: Some(name),

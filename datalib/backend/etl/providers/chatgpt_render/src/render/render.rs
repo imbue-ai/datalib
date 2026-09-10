@@ -195,6 +195,7 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
         chat_uuid: chat_uuid.clone(),
         display: title.clone(),
         title: Some(title),
+        author: None,
         account: conv.account_id.clone(),
         project: None,
         // ChatGPT's own conversation id — the round-trip route back

@@ -24,8 +24,7 @@ export type BrowseColumn = keyof SearchRow;
 /// Columns every source's browse opens with, in this order. `kind` leads
 /// because it is the within-source discriminator: one source is rarely
 /// one kind of thing (Slack has threads and messages, PDFs have documents
-/// and pages), and it is also what separates a source's content rows from
-/// the storage rows every render emits.
+/// and pages).
 const ALWAYS: BrowseColumn[] = ["kind", "when", "conversation_name", "snippet"];
 
 /// Extra columns per source type, inserted before `snippet`.
@@ -80,8 +79,10 @@ export function browseColumns(type: string | null): BrowseColumn[] | null {
 }
 
 /// The search a Browse of this group opens: everything filed under it.
-/// A group id is its directory under the data root, which is exactly
-/// what `source_name:` matches on (the first segment of `qmd_path`).
+/// A group id is its directory under the data root, which is what
+/// `source_name:` matches on. Its own data, not datalib's report on it:
+/// the storage rows sit in the same directory but are filed under
+/// `datalib`, and the filter leaves them out.
 export function browseQuery(groupId: string): string {
   return `source_name:${groupId}`;
 }

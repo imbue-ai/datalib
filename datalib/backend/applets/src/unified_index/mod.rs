@@ -14,6 +14,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use datalib_unified_index::db::datalib_source_name;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport};
 use datalib_unified_index::qmd::{
     CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdIndexReader, QmdIndexSummary,
@@ -323,11 +324,18 @@ async fn run_qmd_search(
 /// collection but this one", which needs a list this function has no way
 /// to obtain; it stays unscoped and is left to the SQL filter, which is
 /// no worse than before.
+///
+/// `source_name:datalib` names no collection: the storage rows are filed
+/// under datalib but their markdown still sits in the measured source's
+/// tree, so there is nothing called `datalib` to retrieve from. It is
+/// dropped here and left to the SQL filter — scoping to a collection
+/// that does not exist would come back empty.
 fn collection_scope(parsed: &ParsedQuery) -> CollectionScope {
     let names: Vec<String> = parsed
         .terms
         .iter()
         .filter(|t| t.field == Field::SourceName && !t.negate)
+        .filter(|t| t.value != datalib_source_name())
         .map(|t| t.value.clone())
         .collect();
     if names.is_empty() {

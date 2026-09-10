@@ -41,11 +41,15 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
 use datalib_schema::providers::Provider;
 
-/// The `grid_rows.source_label` — the grid's Source column, and what
+/// The `grid_rows.source_label` — the grid's Provider column, and what
 /// `source:` filters on. One label for every source's measurements, so
-/// `source:Storage` is "show me what everything weighs"; `source_name:`
-/// still narrows to one source, since these rows live under that
-/// source's `render_markdown/`.
+/// `source:Storage` is "show me what everything weighs".
+///
+/// The grid's *Source* column is not this. These rows live under the
+/// measured source's `render_markdown/`, which is where a source name
+/// is normally read from, but they are filed under `datalib` — the
+/// measurement never appears beside the data it measures. Which source
+/// each one describes is in `account` and `conversation_name`.
 pub const SOURCE_LABEL: &str = "Storage";
 
 /// Where the report lands inside the source's render output.
@@ -53,7 +57,7 @@ const REPORT_REL: &str = "_datalib/storage.md";
 
 /// Bumped when the shape of what this emits changes, so an older
 /// report is re-rendered rather than left to disagree with a newer one.
-pub const RENDER_VERSION: u32 = 1;
+pub const RENDER_VERSION: u32 = 2;
 
 /// One measured thing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,7 +429,10 @@ pub fn plan(
                 .kind(s.kind.label())
                 .source_label(SOURCE_LABEL)
                 .when_ts(Some(now.to_string()))
-                .account(Some(source_name.to_string()))
+                // No `account`: this row measures a source, it belongs
+                // to no upstream login, and the group id it used to
+                // carry here polluted every `account:` filter. The
+                // group id is on `upstream_scope` below.
                 .conversation_name(Some(format!("{source_name} storage")))
                 .conversation_uuid(markdown_uuid.clone())
                 .entire_chat(format!("/chat/{markdown_uuid}"))

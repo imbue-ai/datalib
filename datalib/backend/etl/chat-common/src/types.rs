@@ -214,10 +214,16 @@ pub struct NormalizedChat {
     /// still comes from `display`. `None` falls back to the derived
     /// heading — the default for anything that doesn't set it.
     pub title: Option<String>,
-    /// Optional account scope (Beeper's account_id, slack's
-    /// team_id). Surfaced in the chat-level grid_row's `account`
-    /// column.
+    /// Optional account scope (Beeper's account_id, slack's team_id),
+    /// surfaced in the chat-level grid_row's `account` column. Whose
+    /// mirror this is, never who wrote the thing: a page someone else
+    /// created still belongs to the account that downloaded it.
     pub account: Option<String>,
+    /// Who the page is by, where it has a single author (a Claude
+    /// project's creator). Surfaced in the chat-level grid_row's
+    /// `author`, which is otherwise null — a chat's authors are on its
+    /// items.
+    pub author: Option<String>,
     /// Optional sub-group context (matrix workspace, slack
     /// channel-network). Surfaced in `project`.
     pub project: Option<String>,

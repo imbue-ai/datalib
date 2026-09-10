@@ -240,11 +240,12 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(first.length, "the PDFs should be indexed").toBeGreaterThan(0);
     // `source_name`, not `source`: the question is whether a row leaked
     // in from another *configured source*, and this library has exactly
-    // one. `source` is the provider label, and the storage rows every
-    // source now emits carry "Storage" there while still belonging to
-    // this one — see docs/dev/grid_rows.md.
+    // one. `source` is the provider label. `datalib` is not a second
+    // source — it is where the storage rows every source emits are
+    // filed, so that a measurement never sits in the same bucket as
+    // what it measures. See docs/dev/grid_rows.md.
     expect(
-      first.every((r) => r.source_name === "pdfs"),
+      first.every((r) => r.source_name === "pdfs" || r.source_name === "datalib"),
       `every row should come from the one source configured: ${JSON.stringify(first)}`,
     ).toBe(true);
     expect(first.map((r) => r.conversation_name)).toContain("Captain's Log");

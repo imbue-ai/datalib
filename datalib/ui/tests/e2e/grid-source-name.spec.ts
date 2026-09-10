@@ -58,9 +58,9 @@ test.afterEach(async ({ page }) => {
 test("the Source column shows the configured name, and source_name: filters by id", async ({
   page,
 }) => {
-  // Two config writes plus four searches, any of which may land after
+  // Two config writes plus five searches, any of which may land after
   // an applet restart and pay a qmd model load — see `SEARCH_SETTLE`.
-  test.setTimeout(180_000);
+  test.setTimeout(210_000);
 
   // --- With no config entry, the column falls back to the id -------
   await openGrid(page);
@@ -81,6 +81,15 @@ test("the Source column shows the configured name, and source_name: filters by i
   expect(
     await distinctSourceCells(page),
   ).toEqual(["claude-api"]);
+
+  // Datalib's own rows — every source's storage report — are filed
+  // under `datalib` rather than the source they measure, which is why
+  // neither search above turned one up. They have their own bucket,
+  // and the column spells it out.
+  await searchAndSettle(page, "source_name:datalib type:all");
+  expect(
+    await distinctSourceCells(page),
+  ).toEqual(["Datalib"]);
 
   // --- A name in the config changes the column's text --------------
   await writeConfig(

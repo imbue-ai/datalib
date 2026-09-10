@@ -4,8 +4,17 @@
 //! [`crate::dolt_repo::DoltRepo`].
 
 use crate::query::{extract_uuid_suffix, Field, ParsedQuery, RowType};
+use datalib_schema::providers::Provider;
 
 const SNIPPET_LEN: usize = 240;
+
+/// The source datalib's own rows are filed under — the storage reports,
+/// which describe a source's mirror rather than belonging to it. Same
+/// spelling as their `provider` tag, because that tag is what the filter
+/// and the Source column both test.
+pub fn datalib_source_name() -> &'static str {
+    Provider::Datalib.as_str()
+}
 
 /// Per-conversation header data read from `grid_rows`. The chat preview
 /// renders the QMD body verbatim and pulls the page header from here —
@@ -123,14 +132,33 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
         // reads as a wildcard — `source_name:slack_work` would then also
         // match a `slackXwork` stanza. INSTR takes the needle verbatim
         // and exists in both SQLite and MySQL with this argument order.
+        //
+        // The storage rows are where the path stops answering: they sit
+        // under the source they measure and are filed under datalib
+        // anyway, so they match `source_name:datalib` and no source's
+        // own name. `provider` is where that already holds, so it is
+        // what both branches test — `source_name_for` in `dolt_repo` is
+        // the half of the pair that decides what the column shows.
         if term.field == Field::SourceName {
+            let datalib = datalib_source_name();
+            if term.value == datalib {
+                let clause = if term.negate {
+                    "(provider IS NULL OR provider != ?)"
+                } else {
+                    "provider = ?"
+                };
+                clauses.push(clause.into());
+                params.push(datalib.to_string());
+                continue;
+            }
             let clause = if term.negate {
-                "(qmd_path IS NULL OR INSTR(qmd_path, ?) != 1)"
+                "(qmd_path IS NULL OR INSTR(qmd_path, ?) != 1 OR provider = ?)"
             } else {
-                "INSTR(qmd_path, ?) = 1"
+                "INSTR(qmd_path, ?) = 1 AND (provider IS NULL OR provider != ?)"
             };
             clauses.push(clause.into());
             params.push(format!("{}/", term.value));
+            params.push(datalib.to_string());
             continue;
         }
         let Some(col) = column_for_field(&term.field) else {
@@ -214,12 +242,38 @@ mod tests {
     #[test]
     fn source_name_filter_matches_the_qmd_path_prefix() {
         let (sql, params) = build_where(&parse_query("source_name:slack type:all"), "");
-        assert_eq!(sql, " WHERE INSTR(qmd_path, ?) = 1");
-        assert_eq!(params, vec!["slack/"]);
+        assert_eq!(
+            sql,
+            " WHERE INSTR(qmd_path, ?) = 1 AND (provider IS NULL OR provider != ?)"
+        );
+        assert_eq!(params, vec!["slack/", "datalib"]);
 
         let (sql, params) = build_where(&parse_query("-source_name:slack type:all"), "");
-        assert_eq!(sql, " WHERE (qmd_path IS NULL OR INSTR(qmd_path, ?) != 1)");
-        assert_eq!(params, vec!["slack/"]);
+        assert_eq!(
+            sql,
+            " WHERE (qmd_path IS NULL OR INSTR(qmd_path, ?) != 1 OR provider = ?)"
+        );
+        assert_eq!(params, vec!["slack/", "datalib"]);
+    }
+
+    /// The storage rows live under the source they measure, so a plain
+    /// prefix test would file every one of them under that source. They
+    /// belong to datalib, and `source_name:` has to say so in both
+    /// directions: `datalib` selects them by their provider tag, and a
+    /// real source's name has to exclude them despite the path.
+    #[test]
+    fn source_name_filter_files_measurements_under_datalib() {
+        let (sql, params) = build_where(&parse_query("source_name:datalib type:all"), "");
+        assert_eq!(sql, " WHERE provider = ?");
+        assert_eq!(params, vec!["datalib"]);
+
+        let (sql, params) = build_where(&parse_query("-source_name:datalib type:all"), "");
+        assert_eq!(sql, " WHERE (provider IS NULL OR provider != ?)");
+        assert_eq!(params, vec!["datalib"]);
+
+        // The other direction: `slack`'s own rows, not what slack weighs.
+        let (sql, _) = build_where(&parse_query("source_name:slack type:all"), "");
+        assert!(sql.contains("provider != ?"), "{sql}");
     }
 
     /// A source name may legally contain `_`, which LIKE reads as
@@ -230,7 +284,7 @@ mod tests {
     fn source_name_filter_does_not_go_through_like() {
         let (sql, params) = build_where(&parse_query("source_name:slack_work type:all"), "");
         assert!(!sql.contains("LIKE"), "{sql}");
-        assert_eq!(params, vec!["slack_work/"]);
+        assert_eq!(params, vec!["slack_work/", "datalib"]);
     }
 
     /// The trailing separator is what keeps the prefix a whole path
@@ -239,7 +293,7 @@ mod tests {
     #[test]
     fn source_name_filter_matches_whole_segments_only() {
         let (_, params) = build_where(&parse_query("source_name:slack type:all"), "");
-        assert_eq!(params, vec!["slack/"]);
+        assert_eq!(params, vec!["slack/", "datalib"]);
         assert!(!"slack-personal/render_markdown/x.md".starts_with("slack/"));
     }
 

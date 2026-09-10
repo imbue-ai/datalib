@@ -199,6 +199,7 @@ fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat>
             chat_uuid: uuid5(&format!("chat:posts:{key}")),
             display: thread_title(thread.share, &thread.comments),
             title: None,
+            author: None,
             account: None,
             project: None,
             external_id: nonempty(&key).map(str::to_string),
