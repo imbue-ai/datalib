@@ -676,9 +676,6 @@ export const CATALOG: CatalogEntry[] = [
     icon: null,
     defaultName: "media",
     wizard: true,
-    // Download-only: media has no text to convert, so nothing is
-    // rendered and no render step is declared.
-    renderStep: false,
     fields: [
       {
         kind: "path",
@@ -725,9 +722,6 @@ export const CATALOG: CatalogEntry[] = [
     icon: null,
     defaultName: "lightroom",
     wizard: true,
-    // Download-only: a photo catalog isn't chat-shaped, so nothing is
-    // rendered and no render step is declared.
-    renderStep: false,
     fields: [
       {
         kind: "path",

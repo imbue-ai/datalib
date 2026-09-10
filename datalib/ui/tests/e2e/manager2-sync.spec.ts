@@ -13,8 +13,9 @@
 // `pdf` is the local-only provider that has *both* halves, which is why
 // it carries this spec: an `ingest -> render_markdown` edge is what makes
 // "everything downstream is queued too" a real assertion about the DAG
-// rather than a contrived one. `fsindex` (download-only) is the
-// unrelated second source — the one whose history must not move.
+// rather than a contrived one. `fsindex`, declared here with an ingest
+// step and nothing else, is the unrelated second source — the one whose
+// history must not move.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
@@ -241,9 +242,9 @@ ${applets()}`;
 
     // Syncing a source claims everything downstream of it, so the
     // render step is queued from the same first frame — before the
-    // runner exists, let alone reaches it. This is the assertion a
-    // download-only provider could not support, and the reason this
-    // spec is built on `pdf`.
+    // runner exists, let alone reaches it. A source with a single step
+    // could not support this assertion, which is the reason this spec
+    // is built on `pdf`.
     const downstream = (await statusLog(page, "pdfs/render_markdown")).slice(beforeDown);
     expect(
       statusWord(downstream[0]),

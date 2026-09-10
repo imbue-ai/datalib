@@ -48,8 +48,11 @@ a grid of text rows is the wrong surface for this data. It wants
 thumbnails, a map, a time scrubber and an album view — a UI of its own,
 which is separate work.
 
-Nothing here reaches `grid_rows`. Query the store directly; see
-§"Inspecting a scan".
+None of the *items* reaches `grid_rows`. Query the store directly; see
+§"Inspecting a scan". The render step is still worth declaring, and the
+config examples declare it: it emits the storage report every source
+gets — a handful of `provider = "datalib"` rows saying what the mirror
+weighs — which is the only thing that puts `media` in the grid at all.
 
 ## The payload hash
 

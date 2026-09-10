@@ -10,7 +10,9 @@ The result is an incremental, versioned backup that costs one pass over
 the catalog per run and stores only what actually changed, with every
 prior state still queryable.
 
-**Status: download-only prototype.** There is no render step yet — see
+**Status: download-only prototype.** The render step renders no
+documents — it only emits the storage report every source gets, which is
+what puts a lightroom mirror in the grid at all. For documents, see
 [What render will need](#what-render-will-need).
 
 ## The model

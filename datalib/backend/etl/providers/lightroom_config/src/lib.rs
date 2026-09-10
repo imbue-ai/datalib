@@ -111,9 +111,9 @@ impl LightroomConfig {
     }
 }
 
-/// Params for the render step. `lightroom` is download-only for now (see
-/// the provider crate's `processor::plan_render`), so this is the shared
-/// bare envelope.
+/// Params for the render step. `lightroom` renders no documents for now
+/// (see the provider crate's `processor::plan_render`), so this is the
+/// shared bare envelope.
 pub type LightroomRenderConfig = datalib_source_common::BareRenderConfig;
 
 /// Minimal glob match: `*` (any run, including empty) and `?` (exactly

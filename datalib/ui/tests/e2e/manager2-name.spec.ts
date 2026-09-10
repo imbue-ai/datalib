@@ -280,14 +280,12 @@ test("a provider with render options writes them on the render step, from the on
   expect(text.match(/id = "signal-work"/g)).toHaveLength(1);
 });
 
-test("a hand-written render step under a download-only type is called out, then removed", async ({
-  page,
-}) => {
-  // Lightroom renders nothing, so the form writes one step. A render
-  // step someone wrote by hand under it cannot be kept — the provider
-  // has no render side — and the dialog says so before Save, the way
-  // it does for a missing step. (Unwiring it from the fan-ins is
-  // covered by the unit tests; this root's config declares none.)
+/// A source that renders no *documents* still gets a render step, and
+/// the regression this guards is a real one: with the step missing, a
+/// Lightroom or media mirror emitted no storage report and so reached
+/// the grid nowhere at all, while the same source written from
+/// `all_sources.toml` did.
+test("a source that renders only the storage report still gets a render step", async ({ page }) => {
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "+ Data Source" }).click();
   await wizard(page)
@@ -295,32 +293,19 @@ test("a hand-written render step under a download-only type is called out, then 
     .click();
   await nameField(page).fill("Photos");
   await wizard(page).locator("input.wiz-path").fill("/tmp/cat.lrcat");
-  await expect(wizard(page).locator(".wiz-section-head")).toHaveCount(0);
+  // The Rendering section is offered, on by default, and says it has no
+  // settings of its own — this provider's render step takes no params.
+  await expect(renderToggle(page)).toBeChecked();
+  await expect(wizard(page)).toContainText("It has no settings of its own.");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Photos.")).toBeVisible();
 
-  const text = await editor.inputValue();
-  expect(text).toContain('group = "photos"\nfunction = "ingest"');
-  expect(text).not.toContain('group = "photos"\nfunction = "render_markdown"');
-  await page.getByText("Advanced — edit config.toml directly").click();
-  await editor.fill(
-    `${text.trimEnd()}\n\n[[steps]]\ngroup = "photos"\nfunction = "render_markdown"\ninputs = ["photos/ingest"]\n`,
-  );
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
   await expandGroup(page, "photos");
   await expect(row(page, "photos/render_markdown")).toBeVisible();
-
-  await clickUntil(
-    groupRow(page, "photos").getByRole("button", { name: "Edit settings" }),
-    wizard(page),
-  );
-  await expect(wizard(page)).toContainText("Lightroom renders nothing. Saving removes it");
-  await wizard(page).getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved Photos.")).toBeVisible();
-  await expect(page.locator('.ag-row[row-id="photos/render_markdown"]')).toHaveCount(0);
-  await expect(editor).not.toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
-  await expect(editor).toHaveValue(/group = "photos"\nfunction = "ingest"/);
+  const text = await editor.inputValue();
+  expect(text).toContain('group = "photos"\nfunction = "ingest"');
+  expect(text).toContain('group = "photos"\nfunction = "render_markdown"');
+  expect(text).toContain('inputs = ["photos/ingest"]');
 });
 
 test("deleting a fetch step takes its render step with it", async ({ page }) => {

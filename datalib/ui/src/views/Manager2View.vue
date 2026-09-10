@@ -292,10 +292,9 @@ type Row = {
   editBlocked: string | null;
   revealBlocked: string | null;
   /// Why this row has nothing to browse, or null when it does. A source
-  /// reaches the grid only through a `render_markdown` step — the three
-  /// download-only providers (fsindex, media, lightroom) declare none,
-  /// and even their storage rows come from render, so they have no rows
-  /// at all rather than a few.
+  /// reaches the grid only through a `render_markdown` step, and even the
+  /// storage rows come from render — so a config that declares no render
+  /// step has no rows at all rather than a few.
   browseBlocked: string | null;
   /// The card source a Browse of this row opens. Empty for the index
   /// group, whose browse is the unified projection over every source.
@@ -1639,10 +1638,10 @@ async function onWizardSubmit(payload: {
     );
     next = replaceSteps(configText.value, existing, payload.stepsBody);
     next = renameGroup(next, current.group.id, payload.name);
-    // A render step the provider does not write back — hand-written
-    // under a download-only type — leaves with the cut above, so its
-    // edges have to go too, or the fan-ins name a step that no longer
-    // exists and the loader refuses the whole file.
+    // A render step the dialog does not write back — rendering was
+    // turned off — leaves with the cut above, so its edges have to go
+    // too, or the fan-ins name a step that no longer exists and the
+    // loader refuses the whole file.
     if (current.steps.render && !payload.renderId) {
       next = unwireFromFanIns(next, current.steps.render.id);
     }

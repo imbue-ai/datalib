@@ -71,12 +71,12 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "fsindex-home/render_markdown", "media/render_markdown", "lightroom/render_markdown"]
 
 [[steps]]
 group = "unified_index"
 function = "qmd_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "fsindex-home/render_markdown", "media/render_markdown", "lightroom/render_markdown"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -899,9 +899,10 @@ inputs = ["media/ingest"]
 # `dolt_history_<table>` and `dolt_diff_<table>`. A run over an unchanged
 # catalog produces no commit at all.
 #
-# DOWNLOAD-ONLY: it renders nothing yet (a photo isn't chat-shaped), so
-# there is no render step — query the raw store directly. See
-# datalib/backend/etl/providers/lightroom/INGEST.md.
+# It renders no documents (a photo catalog isn't chat-shaped) — query the
+# raw store directly. The render step below still earns its place: it emits
+# the storage report every source gets, which is what puts lightroom in the
+# grid at all. See datalib/backend/etl/providers/lightroom/INGEST.md.
 #
 # The engine is not Lightroom-specific: any app whose data format is a
 # SQLite file (Quicken for Mac, Apple Photos, …) works with the same step,
@@ -954,6 +955,12 @@ function = "ingest"
 # gc = false
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
+
+# Renders no documents, only the storage report — see above.
+[[steps]]
+group = "lightroom"
+function = "render_markdown"
+inputs = ["lightroom/ingest"]
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

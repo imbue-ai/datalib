@@ -97,9 +97,9 @@ type that is not one product spells its sources out — email's are
 | YoLink | `yolink` | Web API | Per-device sensor CSV history, rendered as one page of interactive plots |
 | Perseus | `perseus` | Public download | TEI editions of Greek and Latin texts from PerseusDL |
 | PDFs | `pdf` | Local directory tree | Every PDF under it, converted to markdown and keyed on content hash (no OCR yet) |
-| Music / photos / video | `media` | Local directory tree | Every audio, image and video file with its metadata, plus `.m3u` playlists; download-only, no rendered markdown |
-| Local files | `fsindex` | Local directory tree | An index of every entry (path, kind, size, blake3); download-only, no rendered markdown |
-| Photos | `lightroom` | Adobe Lightroom Classic catalog (`.lrcat`) | A deduplicated, versioned mirror of every table — an incremental backup with full history; download-only, no rendered markdown |
+| Music / photos / video | `media` | Local directory tree | Every audio, image and video file with its metadata, plus `.m3u` playlists; renders no documents, only the storage report every source emits |
+| Local files | `fsindex` | Local directory tree | An index of every entry (path, kind, size, blake3); renders no documents, only the storage report every source emits |
+| Photos | `lightroom` | Adobe Lightroom Classic catalog (`.lrcat`) | A deduplicated, versioned mirror of every table — an incremental backup with full history; renders no documents, only the storage report every source emits |
 
 See [`docs/user/config_examples/all_sources.toml`](docs/user/config_examples/all_sources.toml)
 for one fully-commented config entry per source, and
