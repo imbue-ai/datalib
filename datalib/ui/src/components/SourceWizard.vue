@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The "Add Data Source" / "Edit" dialog: pick a type, fill one form,
+// The "+ Data Source" / "Edit" dialog: pick a type, fill one form,
 // review the TOML that will be written. One form writes one source —
 // the `[[groups]]` entry, its `ingest` step and its `render_markdown`
 // step — and editing a source reopens the same form over all three.

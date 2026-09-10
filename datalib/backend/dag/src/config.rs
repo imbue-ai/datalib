@@ -1694,7 +1694,7 @@ mod tests {
         assert!(err.contains("tree it writes"), "{err}");
     }
 
-    /// Two sources of the same type, which is what "Add Data Source"
+    /// Two sources of the same type, which is what "+ Data Source"
     /// produces the second time someone connects a Slack workspace.
     #[test]
     fn distinct_ids_are_fine() {

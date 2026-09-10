@@ -1,4 +1,4 @@
-// The source catalog the "Add Data Source" picker renders, and the form
+// The source catalog the "+ Data Source" picker renders, and the form
 // descriptors the wizard fills in.
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
