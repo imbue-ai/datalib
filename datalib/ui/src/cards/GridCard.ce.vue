@@ -1042,9 +1042,12 @@ const gridOptions: GridOptions<SearchRow> = {
   // and the bar that does it reads as decoration until you know. So it
   // says what it is for. AG Grid's own text ("Drag here to set row
   // groups") names the mechanism and not the result.
+  //
+  // Plural throughout: more than one column is not an edge case here but
+  // the useful case — source then type, say — and the sentence is the
+  // only place that is visible before you have tried it.
   localeText: {
-    rowGroupColumnsEmptyMessage:
-      "Drag a column here to group the rows by it — Source, Type, Author…",
+    rowGroupColumnsEmptyMessage: "Drag columns here to group rows by them",
   },
   // The other half, for once a grouping exists: the placeholder above is
   // gone by then, replaced by the chip for the column now in it, which

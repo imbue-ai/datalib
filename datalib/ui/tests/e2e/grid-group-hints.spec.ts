@@ -47,7 +47,7 @@ test("the empty row-group bar explains what dropping a column there does", async
   // meets. AG Grid's stock text names the mechanism ("set row groups");
   // ours names the result.
   await expect(page.locator(ROWS + '[row-id^="row-group-"]')).toHaveCount(0);
-  await expect(placeholder(page)).toContainText("group the rows by it");
+  await expect(placeholder(page)).toContainText("group rows by them");
 });
 
 test("once grouped, the group column explains how to change it", async ({
