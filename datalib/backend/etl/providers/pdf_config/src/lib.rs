@@ -60,6 +60,13 @@ impl PdfConfig {
 /// envelope (see the per-phase params split).
 pub type PdfRenderConfig = datalib_source_common::BareRenderConfig;
 
+impl datalib_source_common::IngestMethods for PdfConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local(
+            "common.input_path",
+        )];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

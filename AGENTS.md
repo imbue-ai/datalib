@@ -1402,6 +1402,7 @@ One enum per vocabulary, living with whoever mints it:
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what render could not do | `Outcome`, `Reason`, `ScopeKind`, `Stage` | `schema/src/render_problems.rs` |
 | a config's `[[steps]]` source type | `SourceType` | `datalib_step/src/source_type.rs` |
+| whether an ingest method reaches a live service or reads files on disk | `Reach` | `source_common/src/lib.rs`, declared per method by each `<p>_config` crate |
 
 The TypeScript side mirrors these as string-literal unions in
 `datalib/ui/src/api.ts` (`DagRunState`, `SyncTaskState`, `SyncJobState`,

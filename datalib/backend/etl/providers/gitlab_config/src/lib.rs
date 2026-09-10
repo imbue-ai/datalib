@@ -5,9 +5,8 @@
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The gitlab-owned slice of a `gitlab_api` source. `sync:` present → live
-/// mirror (the download path); absent → no download wave, and render
-/// reads whatever an earlier run already mirrored.
+/// The gitlab-owned slice of a `gitlab_api` source. `sync` is its one
+/// way in; an `ingest` step without it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GitlabConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -50,3 +49,8 @@ pub struct GitlabApiSync {
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope (see the per-phase params split).
 pub type GitlabRenderConfig = datalib_source_common::BareRenderConfig;
+
+impl datalib_source_common::IngestMethods for GitlabConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::origin("sync")];
+}

@@ -1,12 +1,12 @@
 # Groups and functions: one row per source
 
-**Status: agreed design (2026-09-09); slices 1, 2 and 4a built
-(2026-09-09 and 2026-09-10), slices 3, 4b and 5 not.** Written against
+**Status: agreed design (2026-09-09); slices 1, 2, 3a and 4a built
+(2026-09-09 and 2026-09-10), slices 3b, 4b and 5 not.** Written against
 `eee381c3`. Per [`AGENTS.md`](../../../AGENTS.md), don't cite this
 file as a description of the tree. Where it says "today", that was
 checked against that commit; where it says "will", check the slice
-list under "Order of work" — slices 1, 2 and 4a are in the tree, and the
-places each departed from this text are recorded there.
+list under "Order of work" — slices 1, 2, 3a and 4a are in the tree,
+and the places each departed from this text are recorded there.
 
 **Reverses** the "Sources stop being a grouping" section of
 [`step_identity.md`](completed/step_identity.md) and the header of
@@ -506,7 +506,8 @@ Each slice is a PR; each leaves the tree green.
 3. **`type` as data type**, in two halves, because the first is small
    and unblocks a label while the second is a config-shape change
    across every provider:
-   - **3a. The `Origin` / `Local` property.** Every method table a
+   - **3a. The `Origin` / `Local` property** — *built (2026-09-10)*.
+     Every method table a
      provider's config crate accepts declares itself `Origin` (reaches
      a live service) or `Local` (reads files already on disk), as a
      closed set (`strum`, per `AGENTS.md`), and the catalog mirrors
@@ -522,6 +523,48 @@ Each slice is a PR; each leaves the tree green.
      `ingest` step whose params hold no method table at all (decision
      5's check). The wizard's latchkey section gating on `Origin` is
      4b's, since 4b rewrites that dialog.
+
+     Where it departed from that text:
+     - The declaration is `impl IngestMethods for <P>Config` in each
+       config crate: a list of `IngestMethod { path, reach }`, where
+       `path` is a dotted path into the params rather than a table
+       name, because one method is a flag — linkedin's `fetch_photos`
+       is the only thing that provider fetches from the network, so it
+       is declared `Origin` and a step with it on reads "Download"
+       (the shape the Deferred section describes). A method is *held*
+       when its path is written and its value is neither `null` nor
+       `false`. `datalib_step/src/methods.rs` maps a type to its list
+       and holds the rule; `datalib_source_common` gained `strum` for
+       the enum, so it is no longer serde-only.
+     - The catalog does not carry the mirror by hand.
+       `ui/src/config/ingestMethods.json` is generated from the
+       declarations by
+       `bazel run //datalib/backend/datalib_step:ingest_methods.update`,
+       a test in `methods.rs` fails when it drifts, and
+       `ui/src/config/ingestMethods.ts` applies the same held rule to a
+       type and a params tree. 4b's latchkey gating asks `ingestReach`
+       there with the params the form would write.
+     - **The reset reader was not built, because the tree disagrees
+       with the prose it cited.** `test_pipeline_resume_and_reset` in
+       `tests/fixtures/ingested_tng_test.py` pins that a reset run
+       wipes Signal's `ingested_backups` cursor, and Signal reads a
+       backup on disk — a `Local` method. Every file-backed provider
+       does the same: pdf and media re-hash, fsindex drops its rescan
+       cursor, sms and the Claude export truncate. That is the only
+       button a user has for "re-read this from scratch", so `Local`
+       keeps honouring the flag; the protocol doc and
+       `subprocess.rs` now say "honor it if you bring data in from
+       outside the pipeline", which is what the steps do. The planned
+       source carries its `reach` and the ingest driver logs it, and
+       nothing else acts on it yet.
+     - Two declarations that are not obvious from the table names:
+       beeper's `sync` is `Local` (it reads Beeper Texts' own SQLite),
+       and perseus declares both `sync` (`Origin`, TEI files from
+       GitHub) and `common.input_path` (`Local`, the staged tree).
+       google_takeout's `sync` is *not* a method — it is the feed
+       toggles — so only its `common.input_path` is.
+     - The step-role glyph's accessible name still says "Ingest": it
+       names the phase, which is true of both words.
    - **3b. One type per data shape, one table per method.** `SourceType`
      drops the `_api` suffixes (`slack`, `chatgpt`, `github`, …) and
      `claude_export` folds into `claude`, so a group's `type` names the
@@ -598,12 +641,11 @@ Each slice is a PR; each leaves the tree green.
    review noise, not build time. After 3b rather than before it, so
    the `git mv` does not land on files 3b is rewriting.
 
-With 1, 2 and 4a in the tree, what is left runs as: **3a and 4b in
-parallel** (3a is provider config crates, the catalog and one label;
-4b is the wizard and `sourceSteps.ts`; the only file both touch is
-`catalog.ts`, where 3a adds a property per method and 4b reads it),
-then **3b**, then **5**. 3b is the last config-shape change, so the
-migrator's rewrite is settled once it lands.
+With 1, 2, 3a and 4a in the tree, what is left runs as: **4b**, then
+**3b**, then **5**. 3b is the last config-shape change, so the
+migrator's rewrite is settled once it lands. When 3b renames the
+tables, the `IngestMethods` lists are where the new names go, and the
+mirror is regenerated rather than edited.
 
 ## Deferred
 

@@ -6,9 +6,8 @@ use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The Claude-owned slice of a `claude_api` source: the live
-/// claude.ai mirror. `sync:` present → the download wave fetches from
-/// the API; absent → no download wave this run, and render reads
-/// whatever an earlier run already put in the raw store.
+/// claude.ai mirror. `sync` is its one way in; an `ingest` step without
+/// it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClaudeConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -128,6 +127,18 @@ impl Default for ClaudeRenderConfig {
             max_project_doc_bytes: default_max_project_doc_bytes(),
         }
     }
+}
+
+impl datalib_source_common::IngestMethods for ClaudeConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::origin("sync")];
+}
+
+impl datalib_source_common::IngestMethods for ClaudeExportConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local(
+            "common.input_path",
+        )];
 }
 
 #[cfg(test)]

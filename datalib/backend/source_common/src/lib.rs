@@ -205,6 +205,82 @@ impl RenderCommon {
     }
 }
 
+/// Whether an ingest method reaches a live service or reads what is
+/// already on this machine. Every method table a provider accepts
+/// declares one ([`IngestMethods`]), and a step's reach is read off its
+/// written params against that list — so the Manage row's "Download" /
+/// "Import", the wizard's credentials section and
+/// `DATALIB_DAG_RESET_AND_REDOWNLOAD` all answer from one place.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum Reach {
+    /// Fetches from a live origin: an HTTP API, a JMAP or CardDAV server.
+    Origin,
+    /// Reads files already on disk: an export, a backup, a folder.
+    Local,
+}
+
+impl Reach {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Reach> {
+        s.parse().ok()
+    }
+}
+
+/// One way an ingest step's params can say where its data comes from:
+/// a dotted path into the params (`sync`, `gmail_api`,
+/// `common.input_path`) and what holding it means. A method is *held*
+/// when the path is written and its value is neither `null` nor
+/// `false`, so a table counts by presence (`sync = {}` is a complete
+/// selection) and a flag such as linkedin's `fetch_photos` only when on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct IngestMethod {
+    pub path: &'static str,
+    pub reach: Reach,
+}
+
+impl IngestMethod {
+    pub const fn origin(path: &'static str) -> IngestMethod {
+        IngestMethod {
+            path,
+            reach: Reach::Origin,
+        }
+    }
+
+    pub const fn local(path: &'static str) -> IngestMethod {
+        IngestMethod {
+            path,
+            reach: Reach::Local,
+        }
+    }
+}
+
+/// The methods a provider's ingest config accepts, declared by the one
+/// crate that knows the answer. Every `<P>Config` implements it;
+/// `datalib-step` refuses an `ingest` step that holds none of them, and
+/// the UI reads the same lists through a golden generated from them
+/// (`datalib/ui/src/config/ingestMethods.json`).
+pub trait IngestMethods {
+    const METHODS: &'static [IngestMethod];
+}
+
 /// Render config for providers with no render-specific knobs — just the
 /// shared envelope. Provider config crates alias this as their
 /// `<P>RenderConfig` so every provider exposes the same per-phase pair.
@@ -231,6 +307,7 @@ fn expand_tilde(s: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strum::VariantArray;
 
     /// Omitting the block is the "only stored account" case and must stay
     /// the zero-config default -- every source that predates it relies on
@@ -271,6 +348,18 @@ mod tests {
         let s: LatchkeySettings = serde_json::from_str(r#"{"account": "thad@imbue.com"}"#).unwrap();
         assert_eq!(s.account(), Some("thad@imbue.com"));
         assert!(s.validate().is_ok());
+    }
+
+    /// `Reach` derives both strum and serde; the two spell the variants
+    /// independently, so their agreement is a real check.
+    #[test]
+    fn reach_spellings_agree_between_strum_and_serde() {
+        for &r in Reach::VARIANTS {
+            let via_serde = serde_json::to_value(r).unwrap();
+            assert_eq!(via_serde.as_str(), Some(r.as_str()));
+            assert_eq!(Reach::parse(r.as_str()), Some(r));
+        }
+        assert_eq!(Reach::parse("remote"), None);
     }
 
     #[test]

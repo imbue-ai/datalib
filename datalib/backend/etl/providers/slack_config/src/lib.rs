@@ -121,6 +121,11 @@ impl SlackApiSync {
 /// this is the shared bare envelope (see the per-phase params split).
 pub type SlackRenderConfig = datalib_source_common::BareRenderConfig;
 
+impl datalib_source_common::IngestMethods for SlackConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::origin("sync")];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,8 +180,8 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.validate().is_err());
-        // No `sync` table at all = unmanaged, no download wave;
-        // nothing to check.
+        // No `sync` table: nothing for the schema to check. Refusing an
+        // ingest step without one is `datalib-step`'s job.
         SlackConfig::default().validate().unwrap();
     }
 }

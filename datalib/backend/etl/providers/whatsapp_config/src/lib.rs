@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
-/// The whatsapp-owned slice of a `whatsapp_backup` source. `sync:` present →
-/// the decrypt+mirror download path; absent → no download wave, and
-/// render reads whatever an earlier run already ingested.
+/// The whatsapp-owned slice of a `whatsapp_backup` source. `sync` (the
+/// decrypt+mirror path) is its one way in; an `ingest` step without it is
+/// refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WhatsappConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -48,3 +48,9 @@ pub struct WhatsAppSync {
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope (see the per-phase params split).
 pub type WhatsappRenderConfig = datalib_source_common::BareRenderConfig;
+
+// `sync.backup_dir` is a backup on disk.
+impl datalib_source_common::IngestMethods for WhatsappConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local("sync")];
+}

@@ -48,3 +48,12 @@ pub struct PerseusSync {
     #[serde(default)]
     pub alignment_pairs: Vec<[String; 2]>,
 }
+
+// `sync` fetches the TEI files from GitHub; without it, render reads the
+// tree already staged at `common.input_path`.
+impl datalib_source_common::IngestMethods for PerseusConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] = &[
+        datalib_source_common::IngestMethod::origin("sync"),
+        datalib_source_common::IngestMethod::local("common.input_path"),
+    ];
+}

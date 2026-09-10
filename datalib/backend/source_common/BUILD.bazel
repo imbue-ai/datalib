@@ -1,10 +1,11 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # Schema-only foundation crate (Program A): the shared per-source `common`
-# envelope (SourceCommon), the global Defaults block, and the cross-source
-# ExtractParams knobs. Sits BELOW the providers (datalib_etl depends on it
-# for ExtractParams) and is composed by every provider `*-config` crate, so it
-# must stay dependency-light — serde only. Bazel-only.
+# envelope (SourceCommon), the global Defaults block, the cross-source
+# download knobs, and the `Origin` / `Local` reach an ingest method
+# declares. Sits BELOW the providers (datalib_etl depends on it) and is
+# composed by every provider `*-config` crate, so it must stay
+# dependency-light: serde, and strum for the closed sets. Bazel-only.
 rust_library(
     name = "datalib_source_common",
     srcs = glob(["src/**/*.rs"]),
@@ -13,6 +14,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "@datalib_crates//:serde",
+        "@datalib_crates//:strum",
     ],
 )
 
@@ -21,8 +23,7 @@ rust_test(
     size = "small",
     crate = ":datalib_source_common",
     edition = "2021",
-    # Test-only. The library itself stays serde-only (see above) so that
-    # every provider config crate can compose it for free; the tests need
-    # a concrete format to prove the deserialize contract in.
+    # Test-only. The library carries no concrete format (see above); the
+    # tests need one to prove the deserialize contract in.
     deps = ["@datalib_crates//:serde_json"],
 )

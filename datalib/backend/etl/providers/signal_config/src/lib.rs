@@ -7,10 +7,9 @@ use std::path::PathBuf;
 use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The signal-owned slice of a `signal_backup` source. `sync:` present →
-/// managed (the download path: decrypt the newest snapshot under
-/// `snapshot_dir`); absent → no download wave, and render reads
-/// whatever an earlier run already ingested.
+/// The signal-owned slice of a `signal_backup` source. `sync` (decrypt
+/// the newest snapshot under `snapshot_dir`) is its one way in; an
+/// `ingest` step without it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SignalConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -66,4 +65,10 @@ pub struct SignalSync {
     /// the download planner rejects it with a pointer to the new home.
     #[serde(default)]
     pub period: Option<String>,
+}
+
+// `sync.snapshot_dir` is a backup on disk.
+impl datalib_source_common::IngestMethods for SignalConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local("sync")];
 }

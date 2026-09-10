@@ -27,8 +27,9 @@ pub const ENV_CHANGED_INPUTS: &str = "DATALIB_DAG_CHANGED_INPUTS";
 /// prefer it over sampling their own clock.
 pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
 /// Set to `1` when the user asked for a from-scratch re-download.
-/// Steps that fetch from an origin should wipe their bookkeeping and
-/// re-fetch; everything else ignores it.
+/// A step that brings data in from outside the pipeline wipes its
+/// bookkeeping and ingests again — re-fetching from an origin, or
+/// re-reading its files in full; a step fed by other steps ignores it.
 pub const ENV_RESET_AND_REDOWNLOAD: &str = "DATALIB_DAG_RESET_AND_REDOWNLOAD";
 /// Set to `1` when the user asked for attachments/blobs to re-fetch.
 pub const ENV_REFETCH_BLOBS: &str = "DATALIB_DAG_REFETCH_BLOBS";

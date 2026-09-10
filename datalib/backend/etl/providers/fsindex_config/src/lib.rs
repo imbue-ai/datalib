@@ -33,3 +33,10 @@ impl FsindexConfig {
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope (see the per-phase params split).
 pub type FsindexRenderConfig = datalib_source_common::BareRenderConfig;
+
+impl datalib_source_common::IngestMethods for FsindexConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local(
+            "common.input_path",
+        )];
+}
