@@ -556,7 +556,9 @@ Each slice is a PR; each leaves the tree green.
        `subprocess.rs` now say "honor it if you bring data in from
        outside the pipeline", which is what the steps do. The planned
        source carries its `reach` and the ingest driver logs it, and
-       nothing else acts on it yet.
+       nothing else acts on it yet. Give it a real reader when 3b
+       lands, or drop it then: a field that is only ever logged is
+       one the unused-field lint will eventually ask about.
      - Two declarations that are not obvious from the table names:
        beeper's `sync` is `Local` (it reads Beeper Texts' own SQLite),
        and perseus declares both `sync` (`Origin`, TEI files from

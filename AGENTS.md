@@ -986,7 +986,11 @@ insta snapshots are the golden tests that do exist; see the
 sandbox where they can't be reviewed. The standard fix is to invoke
 the update via `bazel run` against a sibling `.update` target. Every
 insta-using `rust_test` in this tree has one declared via the
-`insta_update` macro in `//tools:insta.bzl`:
+`insta_update` macro in `//tools:insta.bzl`. The same wrapper is how a
+generated golden that is not an insta snapshot gets regenerated: a
+test that writes its file when `INSTA_UPDATE=always` is set, under
+`INSTA_WORKSPACE_ROOT`, and compares against it otherwise
+(`//datalib/backend/datalib_step:ingest_methods.update` is one).
 
 ```bash
 # Hermetic snapshot tests — no host prereqs.
