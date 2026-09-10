@@ -210,27 +210,15 @@ test("a typed label the account doesn't have is called out before saving", async
   await expect(wizard(page).getByText(/Not on this account: Bridg\/Logs/)).toBeVisible();
 });
 
-test("the render step is offered folders, never flags", async ({ page }) => {
+test("the render filter is offered folders, never flags", async ({ page }) => {
   await pickTile(page, "gmail", "Mirror a Gmail account through Google's API.");
   await field(page, "Name").fill("Bridge mail");
   await wizard(page).locator("select.wiz-accountpick").selectOption("picard@enterprise.gov");
 
-  // Email's render step has options, so it comes as a second dialog
-  // rather than the checkbox. Decline the chained offer and reach the
-  // same form through the row action, so this spec doesn't depend on
-  // the confirm() that carries it.
-  page.once("dialog", (d) => void d.dismiss());
-  await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Bridge mail.")).toBeVisible();
-
-  await expandGroup(page, "bridge-mail");
-  await page
-    .locator('.ag-row[row-id="bridge-mail/ingest"]')
-    .getByRole("button", { name: "Render to markdown" })
-    .click();
-
-  // A render step holds no credentials. Its probe authenticates with
-  // the params of the step it reads — which is why this works at all.
+  // One probe fills both pickers: the ingest step's, and the render
+  // step's under the Rendering heading. The render step holds no
+  // credentials of its own — the probe authenticates with what the
+  // ingest step will write.
   await wizard(page).getByRole("button", { name: "Test connection" }).click();
   await expect
     .poll(() => lastProbeRequest.params)
@@ -249,12 +237,19 @@ test("the render step is offered folders, never flags", async ({ page }) => {
   ]);
 
   await chips(page, "Render only these labels").filter({ hasText: "Inbox" }).click();
-  await wizard(page).getByRole("button", { name: "Add render step" }).click();
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText("Added Bridge mail.")).toBeVisible();
+  await expandGroup(page, "bridge-mail");
   await expect(page.locator('.ag-row[row-id="bridge-mail/render_markdown"]')).toBeVisible();
   // The outlink is a preset: a Gmail source's webmail links are
   // Gmail's, and there is no second answer to ask about.
   await expect(page.locator(".m2-editor")).toHaveValue(/outlink_format = "gmail"/);
   await expect(page.locator(".m2-editor")).toHaveValue(/only_render_labels = \["Inbox"\]/);
+  // ...and it landed on the render step, not the ingest step.
+  const text = await page.locator(".m2-editor").inputValue();
+  expect(text.indexOf("only_render_labels")).toBeGreaterThan(
+    text.indexOf('function = "render_markdown"'),
+  );
 });
 
 test("Fastmail writes its JMAP host without asking, and shows folder counts", async ({
@@ -288,19 +283,19 @@ test("Fastmail writes its JMAP host without asking, and shows folder counts", as
   await expect(toml).not.toContainText("gmail_api");
 });
 
-test("an existing step reopens on the form that wrote it", async ({ page }) => {
+test("an existing source reopens on the form that wrote it", async ({ page }) => {
   await pickTile(page, "fastmail", "Mirror a Fastmail mailbox over JMAP.");
   await field(page, "Name").fill("Personal mail");
-  page.once("dialog", (d) => void d.dismiss());
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Personal mail.")).toBeVisible();
 
-  // Not "Email (mbox or other server)": the step's own params say which
-  // variant it is, and a preset with no field must still count as
-  // modeled or Edit would be disabled on the wizard's own output.
+  // Not "Email (mbox or other server)": the ingest step's own params say
+  // which variant it is, and a preset with no field — on either step —
+  // must still count as modeled, or Edit would be disabled on the
+  // wizard's own output.
   await expandGroup(page, "personal-mail");
   await page
-    .locator('.ag-row[row-id="personal-mail/ingest"]')
+    .locator('.ag-row[row-id="personal-mail/render_markdown"]')
     .getByRole("button", { name: "Edit" })
     .click();
   await expect(wizard(page).locator(".wiz-chosen")).toContainText("Fastmail");
