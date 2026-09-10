@@ -45,24 +45,37 @@ reference doc it relates to.
   entirely. Read it for why; it was written as the design and kept as
   the explanation.
 - [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md)
-  — *agreed design (2026-09-09); slices 1, 2 and 4a built (2026-09-09
-  and 2026-09-10), the rest not*: one row per source in the Manage
-  screen, done by making the grouping a config entity. A `[[groups]]`
-  table with `id`/`name`/`type`; a step is `(group, function)` with its
-  id composed and never written; `datalib-step` dispatches on the
-  function and the group's type from the environment and writes the
-  tree its id names, so a built-in step carries no `command`; the
-  trees are named after the functions (`ingest`, `render_markdown`,
-  `grid_index`, `qmd_index`) — **that much is in the tree** (the
-  loader, the runner's environment, the fingerprint rule,
-  `datalib-step`, every config and fixture), **and so is the row**: the
+  — *agreed design (2026-09-09); every slice but 5 built (2026-09-09
+  and 2026-09-10)*: one row per source in the
+  Manage screen, done by making the grouping a config entity. A
+  `[[groups]]` table with `id`/`name`/`type`; a step is `(group,
+  function)` with its id composed and never written; `datalib-step`
+  dispatches on the function and the group's type from the environment
+  and writes the tree its id names, so a built-in step carries no
+  `command`; the trees are named after the functions (`ingest`,
+  `render_markdown`, `grid_index`, `qmd_index`) — **that much is in the
+  tree** (the loader, the runner's environment, the fingerprint rule,
+  `datalib-step`, every config and fixture), **and so is the UI**: the
   Manage screen is a tree, one row per group with its steps and applets
   under a chevron, the group row reading status, last-synced and bytes
   off its own folder and its children (`ui/src/config/groupRows.ts`
-  holds the rules). Still to come: `type` as the data type with the
-  fetch method as a params table, each declared `Origin` or `Local`,
-  which is what makes a row read "Download" or "Import"; the one-dialog
-  wizard; the mechanical crate rename.
+  holds the rules), and the wizard is one dialog that writes and edits
+  a source as a group plus both its steps, with the render step's
+  settings under a "Rendering" heading (`SourceWizard.vue`,
+  `ui/src/config/sourceSteps.ts`). Nothing in the UI splits a step id
+  any more: phase is read off `function`, the source column off the
+  group. Every ingest method a provider accepts declares itself
+  `Origin` or `Local` (`IngestMethods` in `datalib_source_common`,
+  mirrored into `ui/src/config/ingestMethods.json` by a generator),
+  which is what makes a step's row read "Download" or "Import" and
+  what makes `datalib-step` refuse an ingest step that names no
+  method. A group's `type` names the thing mirrored (`slack`,
+  `claude`, `contacts`), never the way it is reached, and the ingest
+  step's params hold one table per method, named for it (`api`,
+  `export`, `mbox`, `backup`, `fswalk`, …), a file-backed one carrying
+  its own `path` — the shape `datalib-migrate-config` rewrites any
+  earlier one into. Still to come, optional: the mechanical crate
+  rename (slice 5).
   Read it before touching step ids, the wizard, or `datalib-step`'s
   dispatch. It reverses the "ungrouping" section of `step_identity.md`.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
@@ -986,7 +999,11 @@ insta snapshots are the golden tests that do exist; see the
 sandbox where they can't be reviewed. The standard fix is to invoke
 the update via `bazel run` against a sibling `.update` target. Every
 insta-using `rust_test` in this tree has one declared via the
-`insta_update` macro in `//tools:insta.bzl`:
+`insta_update` macro in `//tools:insta.bzl`. The same wrapper is how a
+generated golden that is not an insta snapshot gets regenerated: a
+test that writes its file when `INSTA_UPDATE=always` is set, under
+`INSTA_WORKSPACE_ROOT`, and compares against it otherwise
+(`//datalib/backend/datalib_step:ingest_methods.update` is one).
 
 ```bash
 # Hermetic snapshot tests — no host prereqs.
@@ -1218,17 +1235,17 @@ bazelisk build //datalib/backend:bin
 bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 ```
 
-## Provenance: `claude_api` vs `claude_export`
+## Provenance: Claude's `api` and `export` methods
 
-Claude data can come from the live web API (`type: claude_api`) or an
-unpacked bulk export (`type: claude_export`) — two separate source
-types, each its own download + render step pair, both served by one
-provider crate.
+Claude data can come from the live web API or an unpacked bulk export.
+Both are the one `claude` type; which one an ingest step uses is the
+method table in its params, `[steps.params.api]` or
+`[steps.params.export] path = …`, and the step refuses both at once.
 
-**They write the same raw store.** `claude_api` walks the API and
-`claude_export` reads the export's JSON off `common.input_path`, and
-both land rows in the same six tables of `<name>/ingest`, so the render
-step has exactly one input shape. The API downloader gets there by
+**They write the same raw store.** The `api` method walks the API and
+the `export` method reads the export's JSON off its `path`, and both
+land rows in the same six tables of `<name>/ingest`, so the render step
+has exactly one input shape. The API downloader gets there by
 normalizing every response into the bulk-export on-disk shape
 (`normalize_to_export_shape` in
 `datalib/backend/etl/providers/claude/src/download/normalize.rs`,
@@ -1237,13 +1254,14 @@ export ingest stores what the export already said, with the org columns
 NULL — which is how the renderer tells the two apart and knows not to
 normalize an already-normalized payload a second time.
 
-Until #207 the export type had no download wave at all: the renderer
-read the export tree in place through a second parser, and the source
-had no raw store, no `sync_runs` row and no way to notice a deleted
-conversation. If you find prose calling `claude_export` "render-only",
-it predates that fix.
+Until #207 the export had no download wave at all: the renderer read
+the export tree in place through a second parser, and the source had no
+raw store, no `sync_runs` row and no way to notice a deleted
+conversation. If you find prose calling the export "render-only", or
+naming a `claude_export` *type*, it predates that fix or the method
+tables.
 
-Because the two types share a store, seeding one from an export and
+Because the two methods share a store, seeding one from an export and
 then keeping it fresh with the API nearly works today — and has one
 destructive edge (the export ingest prunes to its own snapshot, so
 re-running it over an API-extended store deletes what the API added).
@@ -1253,15 +1271,18 @@ it. See `datalib/backend/etl/providers/claude/DOWNLOAD.md`.
 ### "Claude", not "Anthropic"
 
 **Claude is the product; that is the name we use.** The provider crate is
-`datalib_etl_claude` under `providers/claude/`, the source types are
-`claude_api` / `claude_export`, the `grid_rows.provider` tag is
-`claude`, the tables are `claude_attachments`, processor ids are
-`claude/<name>/…`, and tracing events are `claude_*`.
+`datalib_etl_claude` under `providers/claude/`, the source type is
+`claude`, the `grid_rows.provider` tag is `claude`, the tables are
+`claude_attachments`, processor ids are `claude/<name>/…`, and tracing
+events are `claude_*`.
 
 The rule that settled it is the sibling comparison, not a headcount:
 **every source type in this tree is named for the product a person
-recognizes, never for the vendor** — `chatgpt_api`, not `openai_api`;
-`lightroom`, not `adobe_catalog`. The provider directory was the single
+recognizes, never for the vendor** — `chatgpt`, not `openai`;
+`lightroom`, not `adobe_catalog`. And never for the way it is reached:
+`claude` whether over the API or from an export, `contacts` whether
+over CardDAV or from `.vcf` files — the method is a table on the ingest
+step, not part of the type. The provider directory was the single
 exception until #269, where `anthropic` sat next to `chatgpt` and named
 the company instead of the thing.
 
@@ -1402,6 +1423,7 @@ One enum per vocabulary, living with whoever mints it:
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what render could not do | `Outcome`, `Reason`, `ScopeKind`, `Stage` | `schema/src/render_problems.rs` |
 | a config's `[[steps]]` source type | `SourceType` | `datalib_step/src/source_type.rs` |
+| whether an ingest method reaches a live service or reads files on disk | `Reach` | `source_common/src/lib.rs`, declared per method by each `<p>_config` crate |
 
 The TypeScript side mirrors these as string-literal unions in
 `datalib/ui/src/api.ts` (`DagRunState`, `SyncTaskState`, `SyncJobState`,

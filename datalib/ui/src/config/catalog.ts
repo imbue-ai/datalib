@@ -2,7 +2,7 @@
 // descriptors the wizard fills in.
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
-/// (`sync.channels` → `[steps.params.sync] channels`).
+/// (`api.channels` → `[steps.params.api] channels`).
 export type FieldPhase = "download" | "render";
 
 type FieldBase = {
@@ -77,8 +77,18 @@ export type Field =
     });
 
 export type CatalogEntry = {
-  /// The group's `type`: the provider word (`slack_api`, `email`, …).
+  /// The group's `type`: the thing mirrored (`slack`, `email`, …).
+  /// Which of a step's params tables reach a live origin and which read
+  /// files on disk is not recorded here: `ingestMethods.ts` answers that
+  /// from the provider's own declaration, for this type and the params
+  /// a form would write.
   type: string;
+  /// The params table that selects this entry's ingest method when no
+  /// field or preset names it — `api` for a live service whose knobs
+  /// are all optional, so that a form with nothing filled in still
+  /// writes `api = {}`. A file-backed method has a required `path`
+  /// field and needs none.
+  method?: string;
   label: string;
   blurb: string;
   /// Matched by the picker's filter box alongside label and type.
@@ -94,7 +104,10 @@ export type CatalogEntry = {
   /// False for download-only providers, which render nothing and so
   /// declare no render step (`lightroom`, `fsindex`). Defaults to true.
   renderStep?: boolean;
-  /// The latchkey service name, when the source needs credentials.
+  /// The latchkey service name, when the source needs credentials. The
+  /// wizard shows its Connection section only while the params the form
+  /// would write reach an origin (`ingestReach`): an import has nothing
+  /// to log in to.
   credentialService?: string;
   /// Dotted params path whose presence identifies this entry among the
   /// several that share one `type`. Undefined on a type with only one
@@ -126,7 +139,8 @@ export type Preset = {
 /// descriptor is data owned by one provider, not a class hierarchy.
 export const CATALOG: CatalogEntry[] = [
   {
-    type: "slack_api",
+    type: "slack",
+    method: "api",
     label: "Slack",
     blurb: "Mirror channels and DMs from one Slack workspace.",
     keywords: ["slack", "chat", "workspace", "channels", "messages"],
@@ -138,7 +152,7 @@ export const CATALOG: CatalogEntry[] = [
     fields: [
       {
         kind: "string_list",
-        target: "sync.channels",
+        target: "api.channels",
         label: "Channels",
         placeholder: "general, engineering",
         help:
@@ -147,7 +161,7 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "date",
-        target: "sync.since",
+        target: "api.since",
         label: "Mirror messages since",
         help:
           "Oldest message to fetch (YYYY-MM-DD). This is what decides how far back the " +
@@ -155,7 +169,7 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "bool",
-        target: "sync.media",
+        target: "api.media",
         label: "Download file attachments",
         default: true,
         help: "Off stores JSON metadata only.",
@@ -163,7 +177,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "int",
         target: "common.blob_size_limit_bytes",
-        requires: "sync.media",
+        requires: "api.media",
         label: "Skip attachments larger than (bytes)",
         default: 5_000_000,
         help:
@@ -175,14 +189,14 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "bool",
-        target: "sync.all_channels",
+        target: "api.all_channels",
         label: "Include channels you're not a member of",
         default: false,
         help: "Ignored when Channels is set.",
       },
       {
         kind: "bool",
-        target: "sync.dms",
+        target: "api.dms",
         label: "Download direct messages",
         default: false,
         help:
@@ -191,8 +205,8 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "string_list",
-        target: "sync.dm_users",
-        requires: "sync.dms",
+        target: "api.dm_users",
+        requires: "api.dms",
         label: "Only DMs with these people",
         placeholder: "@riker, Jean-Luc Picard, U024BE7LH",
         help:
@@ -202,7 +216,7 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "int",
-        target: "sync.refresh_window_days",
+        target: "api.refresh_window_days",
         label: "Edit-catcher window (days)",
         help:
           "Re-query the trailing N days of channels that already have history, to pick up " +
@@ -211,7 +225,9 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
-    type: "claude_api",
+    type: "claude",
+    variantKey: "api",
+    method: "api",
     label: "Claude",
     blurb: "Mirror your claude.ai conversations and projects.",
     keywords: ["claude", "anthropic", "chat", "llm", "conversations"],
@@ -223,13 +239,13 @@ export const CATALOG: CatalogEntry[] = [
     fields: [
       {
         kind: "date",
-        target: "sync.since",
+        target: "api.since",
         label: "Mirror conversations updated since",
         help: "YYYY-MM-DD. Leave empty to sync everything.",
       },
       {
         kind: "bool",
-        target: "sync.projects",
+        target: "api.projects",
         label: "Also mirror Claude Projects",
         default: true,
         help:
@@ -238,13 +254,13 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "int",
-        target: "sync.refresh_most_recent_n_chat_count",
+        target: "api.refresh_most_recent_n_chat_count",
         label: "Force-refresh the N most recent chats each run",
         help: "Leave empty to rely on updated_at alone.",
       },
       {
         kind: "string_list",
-        target: "sync.conv_uuids",
+        target: "api.conv_uuids",
         label: "Only these conversations",
         placeholder: "https://claude.ai/chat/…",
         help:
@@ -255,15 +271,15 @@ export const CATALOG: CatalogEntry[] = [
   },
 
   // Listed for completeness; no form yet.
-  { type: "chatgpt_api", label: "ChatGPT", blurb: "Mirror your ChatGPT conversations.", keywords: ["chatgpt", "openai", "gpt"], kind: "api", icon: "chatgpt", defaultName: "chatgpt", wizard: false, credentialService: "chatgpt" },
-  { type: "github_api", label: "GitHub", blurb: "Mirror pull requests and their review threads.", keywords: ["github", "pr", "code", "review"], kind: "api", icon: "github", defaultName: "github", wizard: false, credentialService: "github" },
-  { type: "gitlab_api", label: "GitLab", blurb: "Mirror merge requests and their discussions.", keywords: ["gitlab", "mr", "code"], kind: "api", icon: "gitlab", defaultName: "gitlab", wizard: false, credentialService: "gitlab" },
-  { type: "notion_api", label: "Notion", blurb: "Mirror pages and comment threads.", keywords: ["notion", "wiki", "docs", "pages"], kind: "api", icon: "notion", defaultName: "notion", wizard: false, credentialService: "notion" },
+  { type: "chatgpt", method: "api", label: "ChatGPT", blurb: "Mirror your ChatGPT conversations.", keywords: ["chatgpt", "openai", "gpt"], kind: "api", icon: "chatgpt", defaultName: "chatgpt", wizard: false, credentialService: "chatgpt" },
+  { type: "github", method: "api", label: "GitHub", blurb: "Mirror pull requests and their review threads.", keywords: ["github", "pr", "code", "review"], kind: "api", icon: "github", defaultName: "github", wizard: false, credentialService: "github" },
+  { type: "gitlab", method: "api", label: "GitLab", blurb: "Mirror merge requests and their discussions.", keywords: ["gitlab", "mr", "code"], kind: "api", icon: "gitlab", defaultName: "gitlab", wizard: false, credentialService: "gitlab" },
+  { type: "notion", method: "api", label: "Notion", blurb: "Mirror pages and comment threads.", keywords: ["notion", "wiki", "docs", "pages"], kind: "api", icon: "notion", defaultName: "notion", wizard: false, credentialService: "notion" },
 
   // ── the two `email` variants ──────────────────────────────────────
   //
   // Gmail must come before the JMAP entry: `variantKey` matching takes
-  // the first hit, and a Gmail step has no `sync` table to confuse it
+  // the first hit, and a Gmail step has no `jmap` table to confuse it
   // — but a future entry keyed on something broader would.
   {
     type: "email",
@@ -344,7 +360,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "email",
-    variantKey: "sync",
+    variantKey: "jmap",
     label: "Fastmail",
     blurb: "Mirror a Fastmail mailbox over JMAP.",
     keywords: ["fastmail", "jmap", "email", "mail", "inbox", "folders"],
@@ -359,7 +375,7 @@ export const CATALOG: CatalogEntry[] = [
       // entry *is* Fastmail — a different host is a different service
       // and wants its own entry (the downloader hardcodes nothing:
       // everything after discovery comes off the session document).
-      { target: "sync.hostname", value: "api.fastmail.com" },
+      { target: "jmap.hostname", value: "api.fastmail.com" },
       { target: "outlink_format", value: "fastmail", phase: "render" },
     ],
     fields: [
@@ -393,7 +409,7 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "int",
-        target: "sync.blob_download_concurrency",
+        target: "jmap.blob_download_concurrency",
         label: "Message downloads in flight",
         help:
           "JMAP has no bulk download — each message body is its own request — so this is " +
@@ -420,14 +436,39 @@ export const CATALOG: CatalogEntry[] = [
   // Fastmail. No form, because the thing it stands for is "some other
   // way of getting mail", which is not one form.
   { type: "email", label: "Email (mbox or other server)", blurb: "A Google Takeout .mbox, or a JMAP server other than Fastmail.", keywords: ["email", "mail", "jmap", "imap", "mbox", "takeout"], kind: "api", icon: "email", defaultName: "email", wizard: false },
-  { type: "carddav", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: null, defaultName: "contacts", wizard: false },
-  { type: "yolink", label: "YoLink", blurb: "Per-device temperature, humidity and water history.", keywords: ["yolink", "sensor", "temperature", "iot", "yosmart"], kind: "api", icon: "yolink", defaultName: "yolink", wizard: false },
+  { type: "contacts", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: null, defaultName: "contacts", wizard: false },
+  { type: "yolink", method: "api", label: "YoLink", blurb: "Per-device temperature, humidity and water history.", keywords: ["yolink", "sensor", "temperature", "iot", "yosmart"], kind: "api", icon: "yolink", defaultName: "yolink", wizard: false },
 
-  { type: "claude_export", label: "Claude export", blurb: "Ingest an unpacked Claude data export already on disk.", keywords: ["claude", "anthropic", "export", "backup"], kind: "export", icon: "claude", defaultName: "claude-export", wizard: false },
+  {
+    type: "claude",
+    variantKey: "export",
+    label: "Claude export",
+    blurb: "Ingest an unpacked Claude data export already on disk.",
+    keywords: ["claude", "anthropic", "export", "backup"],
+    kind: "export",
+    icon: "claude",
+    defaultName: "claude-export",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the unpacked Claude export",
+        required: true,
+        target: "export.path",
+        label: "Export folder",
+        placeholder: "~/Downloads/claude-export",
+        help:
+          "The directory you unpacked the export into — the one holding conversations.json. " +
+          "The export is a complete snapshot: a conversation it no longer mentions is " +
+          "dropped from the mirror.",
+      },
+    ],
+  },
   { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: null, defaultName: "google-takeout", wizard: false },
   { type: "linkedin", label: "LinkedIn", blurb: "Messages and connections from a data export.", keywords: ["linkedin", "export", "connections"], kind: "export", icon: "linkedin", defaultName: "linkedin", wizard: false },
   {
-    type: "signal_backup",
+    type: "signal",
     label: "Signal",
     blurb: "Decrypt and mirror an Android Signal backup.",
     keywords: ["signal", "backup", "messages", "sms", "chat"],
@@ -441,7 +482,7 @@ export const CATALOG: CatalogEntry[] = [
         picks: "dir",
         pickTitle: "Choose your Signal backups folder",
         required: true,
-        target: "sync.snapshot_dir",
+        target: "backup.path",
         label: "Backup folder",
         placeholder: "~/backups/SignalBackups",
         help:
@@ -450,7 +491,7 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "text",
-        target: "sync.aep_env_var",
+        target: "backup.aep_env_var",
         label: "Passphrase environment variable",
         placeholder: "SIGNAL_BACKUP_PASSPHRASE",
         help:
@@ -474,7 +515,7 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
-    type: "whatsapp_backup",
+    type: "whatsapp",
     label: "WhatsApp",
     blurb: "Decrypt and mirror an Android crypt15 backup.",
     keywords: ["whatsapp", "backup", "messages", "chat"],
@@ -488,7 +529,7 @@ export const CATALOG: CatalogEntry[] = [
         picks: "dir",
         pickTitle: "Choose your WhatsApp backup folder",
         required: true,
-        target: "sync.backup_dir",
+        target: "backup.path",
         label: "WhatsApp folder",
         placeholder: "~/backups/WhatsApp",
         help:
@@ -497,7 +538,7 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "text",
-        target: "sync.key_env_var",
+        target: "backup.key_env_var",
         label: "Decryption-key environment variable",
         placeholder: "WHATSAPP_BACKUP_DECRYPTION_KEY",
         help:
@@ -524,7 +565,7 @@ export const CATALOG: CatalogEntry[] = [
         picks: "dir",
         pickTitle: "Choose the folder of PDFs to index",
         required: true,
-        target: "common.input_path",
+        target: "fswalk.path",
         label: "PDF folder",
         placeholder: "~/Documents",
         help:
@@ -570,7 +611,7 @@ export const CATALOG: CatalogEntry[] = [
         picks: "dir",
         pickTitle: "Choose your media folder",
         required: true,
-        target: "common.input_path",
+        target: "fswalk.path",
         label: "Media folder",
         placeholder: "~/Music",
         help:
@@ -620,7 +661,7 @@ export const CATALOG: CatalogEntry[] = [
         pickTitle: "Choose your Lightroom catalog",
         extensions: ["lrcat"],
         required: true,
-        target: "common.input_path",
+        target: "catalog.path",
         label: "Catalog file",
         placeholder: "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat",
         help:
@@ -656,7 +697,7 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "perseus", label: "Perseus library", blurb: "Classical texts from the Perseus Digital Library.", keywords: ["perseus", "greek", "latin", "classics", "sample"], kind: "local", icon: null, defaultName: "perseus", wizard: false },
+  { type: "perseus", method: "github", label: "Perseus library", blurb: "Classical texts from the Perseus Digital Library.", keywords: ["perseus", "greek", "latin", "classics", "sample"], kind: "local", icon: null, defaultName: "perseus", wizard: false },
 ];
 
 export const KIND_LABELS: Record<CatalogEntry["kind"], string> = {

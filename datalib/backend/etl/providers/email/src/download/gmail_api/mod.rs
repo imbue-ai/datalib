@@ -92,6 +92,10 @@ pub struct FetchSummary {
     pub budget_exhausted: bool,
     /// True when a stored cursor had aged out and we re-enumerated.
     pub full_sync: bool,
+    /// Messages the enumeration named that `messages.get` would not
+    /// return, for a reason other than the message being gone. Holds the
+    /// cursor: see where it is written.
+    pub messages_failed: usize,
     /// Configured labels this account does not have. Reported rather
     /// than fatal: one misspelling costs that label, not the run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -214,7 +218,8 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
             throttle.acquire(api::UNITS_HISTORY_LIST).await;
             match collect_history(&user_id, &opts.latchkey, cursor, &mut throttle).await {
                 Ok(changes) => Plan::Partial(changes),
-                Err(e) if is_history_too_old(&e) => {
+                // Only `history.list` reads a 404 this way.
+                Err(e) if is_not_found(&e) => {
                     warn!(
                         event = "gmail_history_expired",
                         account = %account_id,
@@ -315,18 +320,25 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
     flush(&mut state, &mut summary).await?;
     flush_threads(&mut state, &mut summary).await?;
 
-    // Only advance the cursor when the run drained its work. A run that
-    // stopped at `message_budget` has messages it never fetched; storing
-    // the cursor would tell the next run "you are caught up", and the
-    // remainder of the mailbox would never be downloaded. Leaving the
-    // cursor put means the next run re-enumerates — cheap, because
-    // `messages.list` is 5 units a page and every id already fetched is
-    // skipped before spending `messages.get`'s 20.
-    if summary.budget_exhausted {
+    // Only advance the cursor when the run drained its work, and a run
+    // has two ways not to: it stopped at `message_budget`, or a
+    // `messages.get` failed for a reason other than the message being
+    // gone. Either way storing the cursor tells the next run "you are
+    // caught up" — and because the next run is then incremental,
+    // `history.list` only names what *changed*, so a message that merely
+    // failed to fetch is never named again. It would be missing until
+    // the cursor aged out or someone set `full_resync`.
+    //
+    // Leaving the cursor put means the next run re-enumerates — cheap,
+    // because `messages.list` is 5 units a page and every id already
+    // fetched is skipped before spending `messages.get`'s 20.
+    if summary.budget_exhausted || summary.messages_failed > 0 {
         info!(
             event = "gmail_cursor_held",
             fetched = summary.emails_upserted,
-            "budget exhausted; leaving the cursor so the next run resumes",
+            failed = summary.messages_failed,
+            budget_exhausted = summary.budget_exhausted,
+            "work this run did not do; leaving the cursor so the next run resumes",
         );
     } else if let Some(h) = &next_cursor {
         db.save_scope(&state_scope(&account_id), h).await?;
@@ -349,9 +361,9 @@ struct Changes {
     history_id: Option<String>,
 }
 
-fn is_history_too_old(e: &anyhow::Error) -> bool {
+fn is_not_found(e: &anyhow::Error) -> bool {
     e.downcast_ref::<api::GmailApiError>()
-        .is_some_and(|e| matches!(e, api::GmailApiError::HistoryTooOld))
+        .is_some_and(|e| matches!(e, api::GmailApiError::NotFound))
 }
 
 async fn collect_history(
@@ -515,10 +527,17 @@ async fn fetch_ids(
         throttle.acquire(api::UNITS_MESSAGES_GET).await;
         let msg = match api::get_message_raw(state.user_id, state.latchkey, id).await {
             Ok(m) => m,
+            Err(e) if is_not_found(&e) => {
+                // Deleted between the list and the get: normal on a busy
+                // mailbox, and nothing to come back for.
+                info!(event = "gmail_message_deleted_before_fetch", id = %id);
+                continue;
+            }
             Err(e) => {
-                // A message deleted between the list and the get is
-                // normal on a busy mailbox, not a run-ending failure.
-                warn!(event = "gmail_message_skipped", id = %id, error = %e);
+                // Not a deletion, so this message still exists and we
+                // still want it. Counted, and the count holds the cursor.
+                warn!(event = "gmail_message_failed", id = %id, error = %e);
+                summary.messages_failed += 1;
                 continue;
             }
         };
@@ -767,15 +786,17 @@ mod tests {
         assert_eq!(enumeration_walks(&[]), vec![None]);
     }
 
-    /// A 404 from history.list is the documented "cursor aged out"
-    /// signal, and must be recognized through anyhow's context chain —
-    /// it arrives wrapped.
+    /// A 404 has to be recognized through anyhow's context chain — it
+    /// arrives wrapped. Both callers depend on this: `history.list`
+    /// reads it as an expired cursor, `messages.get` as a deleted
+    /// message, and everything else is a failure worth holding the
+    /// cursor for.
     #[test]
-    fn recognizes_an_expired_cursor_through_context() {
-        let e = anyhow::Error::new(api::GmailApiError::HistoryTooOld)
+    fn recognizes_a_404_through_context() {
+        let e = anyhow::Error::new(api::GmailApiError::NotFound)
             .context("users.history.list")
             .context("while syncing");
-        assert!(is_history_too_old(&e));
-        assert!(!is_history_too_old(&anyhow::anyhow!("some other failure")));
+        assert!(is_not_found(&e));
+        assert!(!is_not_found(&anyhow::anyhow!("some other failure")));
     }
 }

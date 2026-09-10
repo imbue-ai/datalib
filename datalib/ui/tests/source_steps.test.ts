@@ -1,32 +1,34 @@
 // `listSteps` and the splice-based writers behind the Pipeline table.
 //
-// The table is one row per step — no grouping yet. A fetch step and the
-// render step that reads it are two rows, two forms and two things to
-// run; what relates them is the `[[groups]]` entry they are both filed
-// under, which is where the source's name and type live.
+// A source is a `[[groups]]` entry with an ingest step and a render step
+// filed under it; the group carries the name and the type, and each
+// step's id is composed from its group and its function. The wizard
+// writes and rewrites all three as one unit (`buildSource`,
+// `replaceSteps`).
 import { describe, expect, it } from "vitest";
 import {
   appendSource,
   buildGroup,
+  buildSource,
   buildStep,
   fieldIsActive,
   listGroups,
   listSteps,
   paramsAreRepresentable,
-  phaseOf,
+  producerOf,
   removeSteps,
   renameGroup,
-  renderIdFor,
-  replaceStep,
-  stemOf,
+  replaceSteps,
+  sourceStepsOf,
+  stepIdFor,
   unwireFromFanIns,
   wireIntoFanIns,
 } from "../src/config/sourceSteps";
 import { catalogFor } from "../src/config/catalog";
 
-const SLACK = catalogFor("slack_api")!;
+const SLACK = catalogFor("slack")!;
 const LIGHTROOM = catalogFor("lightroom")!;
-const SIGNAL = catalogFor("signal_backup")!;
+const SIGNAL = catalogFor("signal")!;
 
 /** One source's group and two steps plus the index group and its steps. */
 const PAIR = `data_root = "~/datalib"
@@ -48,12 +50,12 @@ inputs = ["slack/render_markdown"]
 [[groups]]
 id = "slack"
 name = "Work Slack"
-type = "slack_api"
+type = "slack"
 
 [[steps]]
 group = "slack"
 function = "ingest"
-[steps.params.sync]
+[steps.params.api]
 channels = ["general"]
 
 [[steps]]
@@ -72,16 +74,27 @@ describe("listSteps", () => {
     ]);
   });
 
-  // The distinction the Kind column shows, and what gates every row
-  // action. Derived from the id's shape and nothing else.
-  it("classifies a step by the shape of its id", () => {
-    expect(phaseOf("slack/ingest")).toBe("ingest");
-    expect(phaseOf("slack/render_markdown")).toBe("render");
-    expect(phaseOf("unified_index/grid_index")).toBe("index");
-    expect(phaseOf("unified_index/qmd_index")).toBe("index");
-    // A custom executable writing its own tree is a step and nothing more.
-    expect(phaseOf("exports/csv")).toBe("other");
-    expect(phaseOf("solo")).toBe("other");
+  // The distinction the step-role mark shows, and what gates every row
+  // action. Read off the step's `function` — never off the shape of
+  // its id, which nothing here takes apart.
+  it("classifies a step by its function", () => {
+    const by = new Map(listSteps(PAIR).map((s) => [s.id, s.phase]));
+    expect(by.get("slack/ingest")).toBe("ingest");
+    expect(by.get("slack/render_markdown")).toBe("render");
+    expect(by.get("unified_index/grid_index")).toBe("index");
+    expect(by.get("unified_index/qmd_index")).toBe("index");
+    // A custom function under a group, and a step outside any group,
+    // are steps and nothing more — whatever their ids look like.
+    const custom = listSteps(`[[steps]]
+group = "slack"
+function = "embed"
+command = "my-embedder"
+
+[[steps]]
+id = "exports/render_markdown"
+command = "my-exporter"
+`);
+    expect(custom.map((s) => s.phase)).toEqual(["other", "other"]);
   });
 
   it("reads group, function, type and inputs off each step", () => {
@@ -90,7 +103,7 @@ describe("listSteps", () => {
     expect(fetch.group).toBe("slack");
     expect(fetch.function).toBe("ingest");
     // The type comes from the group, not from the command.
-    expect(fetch.type).toBe("slack_api");
+    expect(fetch.type).toBe("slack");
     expect(fetch.inputs).toEqual([]);
     expect(by.get("slack/render_markdown")!.inputs).toEqual(["slack/ingest"]);
     expect(by.get("unified_index/grid_index")!.type).toBeNull();
@@ -147,41 +160,117 @@ describe("listGroups", () => {
     const groups = listGroups(PAIR);
     expect(groups.map((g) => g.id)).toEqual(["unified_index", "slack"]);
     expect(groups[0]).toMatchObject({ name: null, type: null });
-    expect(groups[1]).toMatchObject({ name: "Work Slack", type: "slack_api" });
-    expect(PAIR.slice(groups[1].start, groups[1].end)).toContain('type = "slack_api"');
+    expect(groups[1]).toMatchObject({ name: "Work Slack", type: "slack" });
+    expect(PAIR.slice(groups[1].start, groups[1].end)).toContain('type = "slack"');
   });
 });
 
-describe("stems and siblings", () => {
-  it("stemOf takes the first segment", () => {
-    expect(stemOf("work-slack/ingest")).toBe("work-slack");
-    expect(stemOf("a/b/c")).toBe("a");
-    expect(stemOf("solo")).toBe("solo");
+describe("a source's two steps", () => {
+  // The one place this side composes an id, and it composes it the way
+  // the loader does: group, slash, function.
+  it("stepIdFor composes group and function", () => {
+    expect(stepIdFor("work-slack", "download")).toBe("work-slack/ingest");
+    expect(stepIdFor("work-slack", "render")).toBe("work-slack/render_markdown");
   });
 
-  // The one place a `/` is split off an id to mint another. Both the
-  // chained "also render this?" and the standalone row action come
-  // through here, because two code paths minting one string is how they
-  // drift apart.
-  it("renderIdFor names the sibling under the same group", () => {
-    expect(renderIdFor("work-slack/ingest")).toBe("work-slack/render_markdown");
-    expect(renderIdFor("slack-2/ingest")).toBe("slack-2/render_markdown");
+  it("sourceStepsOf finds a group's ingest and render steps by phase", () => {
+    const all = listSteps(PAIR);
+    const { ingest, render } = sourceStepsOf("slack", all);
+    expect(ingest?.id).toBe("slack/ingest");
+    expect(render?.id).toBe("slack/render_markdown");
+    // The index group has neither.
+    expect(sourceStepsOf("unified_index", all)).toEqual({ ingest: undefined, render: undefined });
+  });
+
+  // A render step's producer is what its inputs name; one that declares
+  // none reads its group's ingest step, which is the fallback
+  // `datalib-step` itself makes. Nothing splits the id to find it.
+  it("producerOf follows inputs, then the group's ingest step", () => {
+    const all = listSteps(PAIR);
+    const render = all.find((s) => s.id === "slack/render_markdown")!;
+    expect(producerOf(render, all)?.id).toBe("slack/ingest");
+    const orphan = listSteps(
+      PAIR.replace('inputs = ["slack/ingest"]\n', ""),
+    );
+    const unlinked = orphan.find((s) => s.id === "slack/render_markdown")!;
+    expect(unlinked.inputs).toEqual([]);
+    expect(producerOf(unlinked, orphan)?.id).toBe("slack/ingest");
+    // A step outside any group has no group to fall back to.
+    const [solo] = listSteps('[[steps]]\nid = "solo/render_markdown"\ncommand = "x"\n');
+    expect(producerOf(solo, [solo])).toBeUndefined();
+  });
+});
+
+describe("buildSource", () => {
+  it("writes the group, the ingest step and a render step reading it", () => {
+    const out = buildSource({
+      entry: SLACK,
+      group: "slack",
+      name: "Work Slack",
+      values: { "api.channels": ["general"] },
+      withGroup: true,
+    });
+    expect(out.groupBody).toContain('id = "slack"');
+    expect(out.groupBody).toContain('name = "Work Slack"');
+    expect(out.stepsBody).toContain('function = "ingest"');
+    expect(out.stepsBody).toContain('channels = ["general"]');
+    expect(out.stepsBody).toContain('function = "render_markdown"');
+    expect(out.stepsBody).toContain('inputs = ["slack/ingest"]');
+    expect(out.renderId).toBe("slack/render_markdown");
+    // Ingest first: the render step names it.
+    expect(out.stepsBody.indexOf('function = "ingest"')).toBeLessThan(
+      out.stepsBody.indexOf('function = "render_markdown"'),
+    );
+    // And the whole thing parses back as the two steps under the group.
+    const text = `${out.groupBody}\n\n${out.stepsBody}`;
+    expect(listSteps(text).map((s) => s.id)).toEqual(["slack/ingest", "slack/render_markdown"]);
+  });
+
+  it("writes no group when editing, and no render step for a provider that renders nothing", () => {
+    const out = buildSource({
+      entry: LIGHTROOM,
+      group: "photos",
+      name: "",
+      values: { "catalog.path": "~/cat.lrcat" },
+      withGroup: false,
+    });
+    expect(out.groupBody).toBeNull();
+    expect(out.stepsBody).not.toContain("render_markdown");
+    expect(out.renderId).toBeNull();
+  });
+
+  // Each phase's fields land on its own step and nowhere else — a
+  // render knob on the ingest step is a config the ingest side's
+  // deny_unknown_fields refuses at run time.
+  it("puts render fields on the render step", () => {
+    const out = buildSource({
+      entry: SIGNAL,
+      group: "signal",
+      name: "",
+      values: { "backup.path": "~/backups", period: "year" },
+      withGroup: true,
+    });
+    const [ingest, render] = out.stepsBody.split("\n\n[[steps]]");
+    expect(ingest).toContain('[steps.params.backup]\npath = "~/backups"');
+    expect(ingest).not.toContain("period");
+    expect(render).toContain('period = "year"');
+    expect(render).not.toContain("backup");
   });
 });
 
 describe("buildGroup", () => {
   it("writes the id, the name and the type", () => {
-    const body = buildGroup({ id: "slack", name: "Work Slack", type: "slack_api" });
+    const body = buildGroup({ id: "slack", name: "Work Slack", type: "slack" });
     expect(body).toContain("[[groups]]");
     expect(body).toContain('id = "slack"');
     expect(body).toContain('name = "Work Slack"');
-    expect(body).toContain('type = "slack_api"');
+    expect(body).toContain('type = "slack"');
   });
 
   it("writes no name when there is nothing to say", () => {
-    expect(buildGroup({ id: "slack", name: "", type: "slack_api" })).not.toContain("name =");
+    expect(buildGroup({ id: "slack", name: "", type: "slack" })).not.toContain("name =");
     // A name that only respells the id is not a name.
-    expect(buildGroup({ id: "slack", name: " slack ", type: "slack_api" })).not.toContain("name =");
+    expect(buildGroup({ id: "slack", name: " slack ", type: "slack" })).not.toContain("name =");
   });
 });
 
@@ -190,7 +279,7 @@ describe("buildStep", () => {
     buildStep({ entry: SLACK, group: "slack", phase: "download", values });
 
   it("writes a fetch step as group + function, with its params and no inputs", () => {
-    const body = fetch({ "sync.channels": ["general", "random"], "sync.since": "" });
+    const body = fetch({ "api.channels": ["general", "random"], "api.since": "" });
     expect(body).toContain('group = "slack"');
     expect(body).toContain('function = "ingest"');
     // No command: a built-in step is `datalib-step`, and the loader
@@ -223,7 +312,7 @@ describe("buildStep", () => {
   // Getting this wrong writes a config the step's own deny_unknown
   // render config rejects at run time.
   it("writes only the phase's own params", () => {
-    const values = { "sync.channels": ["general"] };
+    const values = { "api.channels": ["general"] };
     expect(fetch(values)).toContain("channels");
     const render = buildStep({
       entry: SLACK,
@@ -239,28 +328,40 @@ describe("buildStep", () => {
       entry: LIGHTROOM,
       group: "lightroom",
       phase: "download",
-      values: { "common.input_path": "~/Pictures/cat.lrcat", skip_xmp: true },
+      values: { "catalog.path": "~/Pictures/cat.lrcat", skip_xmp: true },
     });
-    expect(body.indexOf("[steps.params]")).toBeLessThan(body.indexOf("[steps.params.common]"));
+    expect(body.indexOf("[steps.params]")).toBeLessThan(body.indexOf("[steps.params.catalog]"));
+  });
+
+  // The method table is what names the ingest method, so it is written
+  // even when none of its knobs is: `api = {}` is a complete selection,
+  // and a step naming no method is refused by `datalib-step`.
+  it("writes the method table even when nothing under it is set", () => {
+    expect(fetch({})).toContain("[steps.params]\napi = {}");
+    // …and not once a knob under it is written, whatever else is.
+    const knobs = fetch({ "api.media": true, "common.blob_size_limit_bytes": 5 });
+    expect(knobs).not.toContain("api = {}");
+    expect(knobs).toContain("[steps.params.api]\nmedia = true");
+    expect(knobs).toContain("[steps.params.common]");
   });
 
   // A bare `2026-01-01` is a TOML date; the providers validate a string.
   it("quotes dates", () => {
-    expect(fetch({ "sync.since": "2026-01-01" })).toContain('since = "2026-01-01"');
+    expect(fetch({ "api.since": "2026-01-01" })).toContain('since = "2026-01-01"');
   });
 
   // Off is a real setting, and it is the backward-compatible one — a
   // config that omits `dms` gets DMs off, so writing it explicitly is
   // what makes the wizard's answer visible in the file.
   it("writes the direct-message switch even when it is off", () => {
-    const body = fetch({ "sync.dms": false });
+    const body = fetch({ "api.dms": false });
     expect(body).toContain("dms = false");
   });
 
   it("writes the DM allowlist when direct messages are on", () => {
     const body = fetch({
-      "sync.dms": true,
-      "sync.dm_users": ["@riker", "Jean-Luc Picard"],
+      "api.dms": true,
+      "api.dm_users": ["@riker", "Jean-Luc Picard"],
     });
     expect(body).toContain("dms = true");
     expect(body).toContain('dm_users = ["@riker", "Jean-Luc Picard"]');
@@ -297,8 +398,8 @@ describe("buildStep", () => {
   // The gate has to drop the value, not just hide the input.
   it("drops a gated field whose switch is off", () => {
     const body = fetch({
-      "sync.dms": false,
-      "sync.dm_users": ["@riker"],
+      "api.dms": false,
+      "api.dm_users": ["@riker"],
     });
     expect(body).toContain("dms = false");
     expect(body).not.toContain("dm_users");
@@ -306,12 +407,12 @@ describe("buildStep", () => {
 });
 
 describe("fieldIsActive", () => {
-  const dmUsers = SLACK.fields!.find((f) => f.target === "sync.dm_users")!;
-  const channels = SLACK.fields!.find((f) => f.target === "sync.channels")!;
+  const dmUsers = SLACK.fields!.find((f) => f.target === "api.dm_users")!;
+  const channels = SLACK.fields!.find((f) => f.target === "api.channels")!;
 
   it("gates a field on its `requires` target", () => {
-    expect(fieldIsActive(dmUsers, { "sync.dms": true })).toBe(true);
-    expect(fieldIsActive(dmUsers, { "sync.dms": false })).toBe(false);
+    expect(fieldIsActive(dmUsers, { "api.dms": true })).toBe(true);
+    expect(fieldIsActive(dmUsers, { "api.dms": false })).toBe(false);
     // Unset reads as off, which is what a freshly opened form has.
     expect(fieldIsActive(dmUsers, {})).toBe(false);
   });
@@ -344,7 +445,7 @@ download_params = { maximum_sequential_failed_requests = 3 }
   });
 });
 
-describe("removeSteps / replaceStep", () => {
+describe("removeSteps / replaceSteps", () => {
   it("removes one step and leaves its group, its sibling and the rest", () => {
     const fetch = listSteps(PAIR).find((s) => s.id === "slack/ingest")!;
     const after = removeSteps(PAIR, [fetch]);
@@ -379,9 +480,9 @@ describe("removeSteps / replaceStep", () => {
       entry: SLACK,
       group: "slack",
       phase: "download",
-      values: { "sync.channels": ["random"] },
+      values: { "api.channels": ["random"] },
     });
-    const after = replaceStep(PAIR, fetch, body);
+    const after = replaceSteps(PAIR, [fetch], body);
     expect(after).toContain('channels = ["random"]');
     expect(after).not.toContain('channels = ["general"]');
     expect(after).toContain('name = "Work Slack"');
@@ -394,8 +495,60 @@ describe("removeSteps / replaceStep", () => {
     ]);
   });
 
+  // The edit path: both steps cut against the text as parsed, then one
+  // append. Cutting one, appending, then cutting the other would use
+  // offsets into text the first cut had already shifted.
+  it("replaces a source's pair in one pass, leaving exactly one of each", () => {
+    const { ingest, render } = sourceStepsOf("slack", listSteps(PAIR));
+    const out = buildSource({
+      entry: SLACK,
+      group: "slack",
+      name: "Work Slack",
+      values: { "api.channels": ["random"] },
+      withGroup: false,
+    });
+    const after = replaceSteps(PAIR, [ingest!, render!], out.stepsBody);
+    expect(after.match(/function = "ingest"/g)).toHaveLength(1);
+    expect(after.match(/function = "render_markdown"/g)).toHaveLength(1);
+    expect(after).toContain('channels = ["random"]');
+    expect(after).not.toContain('channels = ["general"]');
+    // The group and the index steps are untouched.
+    expect(after).toContain('name = "Work Slack"');
+    expect(listSteps(after).map((s) => s.id).sort()).toEqual([
+      "slack/ingest",
+      "slack/render_markdown",
+      "unified_index/grid_index",
+      "unified_index/qmd_index",
+    ]);
+  });
+
+  // A hand-edited group can be missing one of its steps; saving from
+  // the form writes it alongside the other, and nothing is duplicated.
+  it("adds the step a source was missing", () => {
+    const fetchOnly = PAIR.replace(
+      /\n\[\[steps\]\]\ngroup = "slack"\nfunction = "render_markdown"\ninputs = \["slack\/ingest"\]\n/,
+      "\n",
+    );
+    const { ingest, render } = sourceStepsOf("slack", listSteps(fetchOnly));
+    expect(render).toBeUndefined();
+    const out = buildSource({
+      entry: SLACK,
+      group: "slack",
+      name: "",
+      values: {},
+      withGroup: false,
+    });
+    const after = replaceSteps(fetchOnly, [ingest!], out.stepsBody);
+    expect(listSteps(after).map((s) => s.id).sort()).toEqual([
+      "slack/ingest",
+      "slack/render_markdown",
+      "unified_index/grid_index",
+      "unified_index/qmd_index",
+    ]);
+  });
+
   it("appends where a new source can safely go", () => {
-    const body = `${buildGroup({ id: "extra", name: "", type: "slack_api" })}\n\n${buildStep({
+    const body = `${buildGroup({ id: "extra", name: "", type: "slack" })}\n\n${buildStep({
       entry: SLACK,
       group: "extra",
       phase: "download",
@@ -426,7 +579,7 @@ describe("renameGroup", () => {
       expect(after).not.toContain("name =");
       expect(listSteps(after).find((s) => s.id === "slack/ingest")!.name).toBe("slack/ingest");
       // The rest of the entry is intact.
-      expect(after).toContain('id = "slack"\ntype = "slack_api"');
+      expect(after).toContain('id = "slack"\ntype = "slack"');
     }
   });
 

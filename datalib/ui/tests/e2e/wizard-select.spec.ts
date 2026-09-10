@@ -39,22 +39,8 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   await field(page, "Name").fill("Phone Signal");
   await wizard(page).locator("input.wiz-path").fill("/Users/x/backups/SignalBackups");
 
-  // Signal's render step has options, so it is offered as a second
-  // dialog rather than the checkbox. Decline it here and reach the same
-  // form through the row action, so this spec doesn't also depend on
-  // the confirm() that carries the offer.
-  page.once("dialog", (d) => void d.dismiss());
-  await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Phone Signal.")).toBeVisible();
-
-  // The steps sit under the group's row; open it to reach the fetch
-  // step's own action.
-  await expandGroup(page, "phone-signal");
-  await page
-    .locator('.ag-row[row-id="phone-signal/ingest"]')
-    .getByRole("button", { name: "Render to markdown" })
-    .click();
-
+  // Signal's render step has the option; it sits under the Rendering
+  // heading of the same form.
   const span = field(page, "Document span");
   // A <select>, not an <input>: the whole point is that there is no
   // free text to get wrong.
@@ -73,13 +59,11 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   await wizard(page).getByText("Review the TOML this writes").click();
   await expect(wizard(page).locator(".wiz-review pre")).toContainText('period = "year"');
 
-  // And the form can actually be submitted. `missingRequired` used to
-  // read the whole descriptor rather than the fields on screen, so this
-  // button sat disabled on Signal's required *download* field — leaving
-  // the render step, and therefore this dropdown, unreachable.
-  const submit = wizard(page).getByRole("button", { name: "Add render step" });
+  const submit = wizard(page).getByRole("button", { name: "Add source" });
   await expect(submit).toBeEnabled();
   await submit.click();
+  await expect(page.getByText("Added Phone Signal.")).toBeVisible();
+  await expandGroup(page, "phone-signal");
   await expect(page.locator('.ag-row[row-id="phone-signal/render_markdown"]')).toBeVisible();
   await expect(page.locator(".m2-editor")).toHaveValue(/period = "year"/);
 });

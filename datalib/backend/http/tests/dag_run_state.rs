@@ -52,7 +52,7 @@ async fn get_dag(root: &Path) -> serde_json::Value {
 const CONFIG: &str = r#"
 [[groups]]
 id = "slack"
-type = "slack_api"
+type = "slack"
 
 [[steps]]
 group = "slack"

@@ -48,13 +48,13 @@ mkdir -p "$root"
 cat > "$root/config.toml" <<CONFIG
 [[groups]]
 id = "contacts"
-type = "carddav"
+type = "contacts"
 
 [[steps]]
 group = "contacts"
 function = "ingest"
-[steps.params.common]
-input_path = "$fixture_dir"
+[steps.params.vcf]
+path = "$fixture_dir"
 
 [[steps]]
 group = "contacts"

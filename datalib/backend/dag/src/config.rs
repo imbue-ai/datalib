@@ -109,7 +109,7 @@ pub struct GroupEntry {
     /// fingerprinted, so a rename re-runs nothing.
     #[serde(default)]
     pub name: Option<String>,
-    /// The kind of data this group mirrors (`slack_api`, `email`, …), which
+    /// The kind of data this group mirrors (`slack`, `email`, …), which
     /// is what makes it a *source*. Forwarded to every step under the group
     /// and folded into their fingerprints. Absent for a group that mirrors
     /// nothing, such as the unified index.
@@ -175,8 +175,8 @@ pub struct StepEntry {
     pub name: Option<String>,
     /// The ids of the steps this one reads. A step id *is* the tree that step
     /// writes, so an entry here is both a step reference and an artifact path.
-    /// A directory staged by hand is named by `params.common.input_path`
-    /// instead, and is not an artifact the DAG knows about.
+    /// A directory staged by hand is the `path` of a method table in
+    /// `params` instead, and is not an artifact the DAG knows about.
     pub inputs: Vec<String>,
     /// The command to run, split shell-style into an argv. `None` means the
     /// built-in `datalib-step`, which reads its function and its group's
@@ -1508,7 +1508,7 @@ mod tests {
                 [[steps]]
                 id = "slack/ingest"
                 command = "fetch-slack"
-                params.sync = {{ since = "{since}" }}
+                params.api = {{ since = "{since}" }}
                 "#
             ))
             .expect("parse");
@@ -1529,7 +1529,7 @@ mod tests {
             r#"
             [[groups]]
             id = "slack"
-            type = "slack_api"
+            type = "slack"
 
             [[groups]]
             id = "unified_index"
@@ -1537,13 +1537,13 @@ mod tests {
             [[steps]]
             group = "slack"
             function = "ingest"
-            params.sync = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
+            params.api = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
 
             [[steps]]
             group = "slack"
             function = "render_markdown"
             inputs = ["slack/ingest"]
-            params.sync = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
+            params.api = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
 
             [[steps]]
             group = "unified_index"
@@ -1563,7 +1563,7 @@ mod tests {
         assert_eq!(dl[0], BUILTIN_STEP_PROGRAM);
         assert_eq!(dl[1], "--params");
         let params: serde_json::Value = serde_json::from_str(&dl[2]).unwrap();
-        assert_eq!(params["sync"]["channels"][0], "chat-qi");
+        assert_eq!(params["api"]["channels"][0], "chat-qi");
         // No inputs declared → no --inputs, and nothing else: the one tree
         // a step writes is its id, which it reads from the environment,
         // and so are the function and the provider.
@@ -1589,7 +1589,7 @@ mod tests {
         assert_eq!(specs[0].id, "slack/ingest");
         assert_eq!(specs[2].id, "unified_index/grid_index");
         assert_eq!(specs[0].group.as_deref(), Some("slack"));
-        assert_eq!(specs[0].group_type.as_deref(), Some("slack_api"));
+        assert_eq!(specs[0].group_type.as_deref(), Some("slack"));
         assert_eq!(specs[0].function.as_deref(), Some("ingest"));
         assert_eq!(specs[2].group_type, None);
     }
@@ -1614,7 +1614,7 @@ mod tests {
         };
         let untyped = with("");
         let email = with(r#"type = "email""#);
-        let slack = with(r#"type = "slack_api""#);
+        let slack = with(r#"type = "slack""#);
         let named = with("type = \"email\"\nname = \"Fastmail\"");
         assert_ne!(untyped.fingerprint_material(), email.fingerprint_material());
         assert_ne!(email.fingerprint_material(), slack.fingerprint_material());
@@ -1838,7 +1838,7 @@ mod tests {
             [[steps]]
             id = "x/raw"
             command = "s"
-            params.sync = {since = 2026-06-15, at = 2026-06-15T10:30:00Z}
+            params.api = {since = 2026-06-15, at = 2026-06-15T10:30:00Z}
             "#,
         )
         .unwrap();
@@ -1847,8 +1847,8 @@ mod tests {
             panic!("expected subprocess");
         };
         let params: serde_json::Value = serde_json::from_str(&argv[2]).unwrap();
-        assert_eq!(params["sync"]["since"], "2026-06-15");
-        assert_eq!(params["sync"]["at"], "2026-06-15T10:30:00Z");
+        assert_eq!(params["api"]["since"], "2026-06-15");
+        assert_eq!(params["api"]["at"], "2026-06-15T10:30:00Z");
     }
 
     #[test]
@@ -2222,7 +2222,7 @@ inputs = ["slack/rendered_md", "pdfs/raw"]
             help.contains("pdfs/raw"),
             "should list the declared steps: {help}"
         );
-        assert!(help.contains("input_path"), "{help}");
+        assert!(help.contains("path = "), "{help}");
 
         // …and the one that merely hangs off it is told the fix is
         // elsewhere, so nobody goes editing the wrong entry.
@@ -2505,7 +2505,7 @@ mod group_tests {
 [[groups]]
 id = "work-slack"
 name = "Work Slack"
-type = "slack_api"
+type = "slack"
 
 [[steps]]
 group = "work-slack"

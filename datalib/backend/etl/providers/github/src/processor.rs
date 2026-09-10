@@ -1,6 +1,6 @@
-//! Program-A `DataProcessor`s for the github (`github_api`) source. github
+//! Program-A `DataProcessor`s for the `github` source. github
 //! contributes a render processor (always) and a download processor when
-//! `sync:` is present (managed). The source owns its raw store (open/commit/
+//! `api` is present. The source owns its raw store (open/commit/
 //! checkpoint); the orchestrator only drives `run`.
 
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ use datalib_etl_github_config::{GithubApiSync, GithubConfig};
 
 use crate::download;
 
-/// Download wave: present iff `sync:` (managed).
+/// Download wave: present iff `api`.
 pub fn plan_download(
     ctx: PlanContext,
     config: GithubConfig,
@@ -24,7 +24,7 @@ pub fn plan_download(
     let raw_path = config.common.raw_path().to_path_buf();
     let latchkey_settings = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
-    if let Some(sync) = config.sync {
+    if let Some(sync) = config.api {
         procs.push(Box::new(GithubDownload {
             id: format!("github/{name}/download"),
             raw_path,

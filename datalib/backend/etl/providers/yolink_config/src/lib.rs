@@ -1,21 +1,22 @@
 //! Provider-owned config schema for the `yolink` source (Program A goal #1).
 //! Schema-only (serde + anyhow), so the orchestrator can name `YolinkConfig`
-//! without linking the provider. Yolink is EXTRACT-ONLY: `sync:` present →
-//! live per-device CSV mirror; absent → nothing to do (no render path).
+//! without linking the provider. Yolink is EXTRACT-ONLY (no render
+//! path); `api`, the live per-device CSV mirror, is its one way in.
 
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
-/// The yolink-owned slice of a `yolink` source. `sync:` drives the
-/// per-device download; absent means no download is contributed.
+/// The yolink-owned slice of a `yolink` source. `api` drives the
+/// per-device download.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct YolinkConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.
     #[serde(default)]
     pub common: SourceCommon,
     #[serde(default)]
-    pub sync: Option<YolinkSync>,
+    pub api: Option<YolinkSync>,
 }
 
 /// Per-device download knobs. WARNING: `family_device_id` + `device_udid`
@@ -60,13 +61,13 @@ impl YolinkConfig {
     /// is `YYYY-MM-DD`, and `family_device_id`/`device_udid` are 32
     /// lowercase-hex.
     pub fn validate(&self) -> anyhow::Result<()> {
-        let Some(sync) = &self.sync else {
+        let Some(api) = &self.api else {
             return Ok(());
         };
-        if sync.devices.is_empty() {
-            anyhow::bail!("yolink: sync.devices must list at least one device");
+        if api.devices.is_empty() {
+            anyhow::bail!("yolink: api.devices must list at least one device");
         }
-        let mut dev_names: Vec<&str> = sync.devices.iter().map(|d| d.name.as_str()).collect();
+        let mut dev_names: Vec<&str> = api.devices.iter().map(|d| d.name.as_str()).collect();
         dev_names.sort_unstable();
         let mut dupes: Vec<String> = dev_names
             .windows(2)
@@ -77,7 +78,7 @@ impl YolinkConfig {
             dupes.dedup();
             anyhow::bail!("yolink: duplicate device names: {}", dupes.join(", "));
         }
-        for d in &sync.devices {
+        for d in &api.devices {
             match d.kind.as_str() {
                 "temperature_humidity" | "watermeter" => {}
                 other => anyhow::bail!(
@@ -135,6 +136,11 @@ fn is_hex32(s: &str) -> bool {
 /// this is the shared bare envelope (see the per-phase params split).
 pub type YolinkRenderConfig = datalib_source_common::BareRenderConfig;
 
+impl datalib_source_common::IngestMethods for YolinkConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::origin("api")];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,7 +158,7 @@ mod tests {
     fn cfg(devices: Vec<YolinkDevice>) -> YolinkConfig {
         YolinkConfig {
             common: Default::default(),
-            sync: Some(YolinkSync {
+            api: Some(YolinkSync {
                 overlap_minutes: None,
                 window_days: None,
                 devices,
@@ -161,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn no_sync_is_ok() {
+    fn no_api_is_ok() {
         assert!(YolinkConfig::default().validate().is_ok());
     }
 

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use datalib_etl::processor::{DataProcessor, PlanContext};
 use datalib_etl_render::processor::RenderProcessor;
-use datalib_source_common::{Defaults, DownloadParams};
+use datalib_source_common::{Defaults, DownloadParams, Reach};
 
 use crate::source_type::SourceType;
 
@@ -23,6 +23,9 @@ pub struct PlannedSource {
     /// The raw store: the ingest step's own tree, or for a render the
     /// tree its input names.
     pub raw_path: PathBuf,
+    /// Whether the method the ingest step's params hold reaches a live
+    /// origin or reads files on disk. `None` for a render.
+    pub reach: Option<Reach>,
     /// Resolved rate-limit give-up bounds for the download wave.
     pub download_params: DownloadParams,
     /// `common.always_clear_before_ingest`, resolved. Download wave only —
@@ -59,29 +62,10 @@ impl std::fmt::Debug for PlannedSource {
     }
 }
 
-/// The ingest step's raw store is its tree and nothing else. An explicit
-/// `common.raw_path` is accepted only when it names that same tree; a
-/// store kept elsewhere is a symlink at the tree, not a config knob,
-/// because the runner versions and consumers read the tree by its id.
-fn ingest_writes_its_own_tree(
-    tree: &std::path::Path,
-    resolved: &std::path::Path,
-) -> Result<PathBuf> {
-    anyhow::ensure!(
-        resolved == tree,
-        "`common.raw_path` is {resolved:?}, but this step writes only the tree its id \
-         names, {tree:?}. Drop `raw_path`; to keep the store on another disk, put a \
-         symlink at {tree:?}.",
-        resolved = resolved.display(),
-        tree = tree.display(),
-    );
-    Ok(tree.to_path_buf())
-}
-
 /// `raw_dir` is the raw store this plan is about: for [`Phase::Ingest`]
-/// the tree the step writes, for [`Phase::Render`] the tree it reads. An
-/// ingest whose params point `common.raw_path` anywhere else is refused —
-/// a step writes only the tree its id names.
+/// the tree the step writes, for [`Phase::Render`] the tree it reads. A
+/// step writes only the tree its id names, and nothing in its params can
+/// say otherwise.
 pub fn plan(
     step_type: &str,
     phase: Phase,
@@ -92,26 +76,31 @@ pub fn plan(
     // Declared before `arm!`: a `macro_rules!` body only sees bindings
     // that exist at its definition site.
     let source_type = SourceType::parse(step_type).ok_or_else(|| {
-        anyhow::anyhow!(
-            "unknown source type {step_type:?}; known types: {}",
-            SourceType::known_list()
-        )
+        let known = SourceType::known_list();
+        if SourceType::looks_retired(step_type) {
+            anyhow::anyhow!(
+                "{step_type:?} is a type spelled the way configs were written before a \
+                 group's `type` named the thing mirrored rather than the way it is reached. \
+                 Rewrite the file once: `datalib-migrate-config <data root> --force`. Known \
+                 types: {known}"
+            )
+        } else {
+            anyhow::anyhow!("unknown source type {step_type:?}; known types: {known}")
+        }
     })?;
+    crate::methods::refuse_retired_params(source_type, &source)?;
+    // Read before `source` is handed to serde: which of the provider's
+    // declared methods these params hold. Judged after `validate`, so a
+    // misspelled table is reported as the unknown field it is.
+    let held = crate::methods::held(&source, crate::methods::ingest_methods(source_type));
 
     // Each arm names two crates, because a provider is two crates: the
     // download half and the `_render` half that links `datalib_schema`.
+    // A provider's two waves are its `plan_download` / `plan_render`
+    // pair; which *method* runs is the provider's own reading of its
+    // params.
     macro_rules! arm {
-        // The usual shape: a provider's two waves are its
-        // `plan_download` / `plan_render` pair.
-        ($cfgty:ty, $rcfgty:ty, $dlp:ident, $rnp:ident) => {
-            arm!($cfgty, $rcfgty, $dlp, $rnp, plan_download, plan_render)
-        };
-        // …and the shape for a provider serving more than one source
-        // type, which needs a different entry point per type. Only
-        // claude does: `claude_api` walks the live API,
-        // `claude_export` ingests an export off disk, and they share
-        // one `plan_render`.
-        ($cfgty:ty, $rcfgty:ty, $dlp:ident, $rnp:ident, $dl:ident, $rn:ident) => {{
+        ($cfgty:ty, $rcfgty:ty, $dlp:ident, $rnp:ident) => {{
             let ctx = PlanContext {
                 name: name.to_string(),
                 // Playback redirection goes through the
@@ -130,16 +119,18 @@ pub fn plan(
                     cfg.common.resolve_paths(raw_dir.clone());
                     cfg.validate()
                         .with_context(|| format!("source {name:?} (type={source_type})"))?;
-                    let raw_path = ingest_writes_its_own_tree(&raw_dir, cfg.common.raw_path())?;
+                    let raw_path = cfg.common.raw_path().to_path_buf();
+                    let reach = crate::methods::reach_or_refuse(source_type, &held)?;
                     let download_params = cfg.common.download_params.clone();
                     let always_clear_before_ingest = cfg.common.always_clear_before_ingest;
                     PlannedSource {
                         name: name.to_string(),
                         source_type,
                         raw_path,
+                        reach: Some(reach),
                         download_params,
                         always_clear_before_ingest,
-                        processors: Wave::Download($dlp::processor::$dl(ctx, cfg)?),
+                        processors: Wave::Download($dlp::processor::plan_download(ctx, cfg)?),
                     }
                 }
                 Phase::Render => {
@@ -156,10 +147,11 @@ pub fn plan(
                         name: name.to_string(),
                         source_type,
                         raw_path,
+                        reach: None,
                         // Rate-limit bounds are download-only machinery.
                         download_params: Default::default(),
                         always_clear_before_ingest: false,
-                        processors: Wave::Render($rnp::processor::$rn(ctx, cfg)?),
+                        processors: Wave::Render($rnp::processor::plan_render(ctx, cfg)?),
                     }
                 }
             }
@@ -187,7 +179,8 @@ pub fn plan(
                     PlannedSource {
                         name: name.to_string(),
                         source_type,
-                        raw_path: ingest_writes_its_own_tree(&raw_dir, cfg.common.raw_path())?,
+                        raw_path: cfg.common.raw_path().to_path_buf(),
+                        reach: Some(crate::methods::reach_or_refuse(source_type, &held)?),
                         download_params: cfg.common.download_params.clone(),
                         always_clear_before_ingest: cfg.common.always_clear_before_ingest,
                         processors: Wave::Download($dlp::processor::plan_download(ctx, cfg)?),
@@ -202,6 +195,7 @@ pub fn plan(
                         name: name.to_string(),
                         source_type,
                         raw_path: cfg.common.raw_path().to_path_buf(),
+                        reach: None,
                         download_params: Default::default(),
                         always_clear_before_ingest: false,
                         processors: Wave::Render(Vec::new()),
@@ -214,45 +208,37 @@ pub fn plan(
     // Exhaustive on purpose: a `SourceType` variant with no arm here is
     // a compile error, which is the whole reason the type exists.
     Ok(match source_type {
-        SourceType::ClaudeApi => arm!(
+        SourceType::Claude => arm!(
             datalib_etl_claude_config::ClaudeConfig,
             datalib_etl_claude_config::ClaudeRenderConfig,
             datalib_etl_claude,
             datalib_etl_claude_render
         ),
-        SourceType::ClaudeExport => arm!(
-            datalib_etl_claude_config::ClaudeExportConfig,
-            datalib_etl_claude_config::ClaudeExportRenderConfig,
-            datalib_etl_claude,
-            datalib_etl_claude_render,
-            plan_export_download,
-            plan_render
-        ),
-        SourceType::ChatgptApi => arm!(
+        SourceType::Chatgpt => arm!(
             datalib_etl_chatgpt_config::ChatgptConfig,
             datalib_etl_chatgpt_config::ChatgptRenderConfig,
             datalib_etl_chatgpt,
             datalib_etl_chatgpt_render
         ),
-        SourceType::SlackApi => arm!(
+        SourceType::Slack => arm!(
             datalib_etl_slack_config::SlackConfig,
             datalib_etl_slack_config::SlackRenderConfig,
             datalib_etl_slack,
             datalib_etl_slack_render
         ),
-        SourceType::GithubApi => arm!(
+        SourceType::Github => arm!(
             datalib_etl_github_config::GithubConfig,
             datalib_etl_github_config::GithubRenderConfig,
             datalib_etl_github,
             datalib_etl_github_render
         ),
-        SourceType::GitlabApi => arm!(
+        SourceType::Gitlab => arm!(
             datalib_etl_gitlab_config::GitlabConfig,
             datalib_etl_gitlab_config::GitlabRenderConfig,
             datalib_etl_gitlab,
             datalib_etl_gitlab_render
         ),
-        SourceType::NotionApi => arm!(
+        SourceType::Notion => arm!(
             datalib_etl_notion_config::NotionConfig,
             datalib_etl_notion_config::NotionRenderConfig,
             datalib_etl_notion,
@@ -270,7 +256,7 @@ pub fn plan(
             datalib_etl_beeper,
             datalib_etl_beeper_render
         ),
-        SourceType::Carddav => arm!(
+        SourceType::Contacts => arm!(
             datalib_etl_carddav_config::CarddavConfig,
             datalib_etl_carddav_config::CarddavRenderConfig,
             datalib_etl_contacts,
@@ -311,13 +297,13 @@ pub fn plan(
             datalib_etl_yolink,
             datalib_etl_yolink_render
         ),
-        SourceType::SignalBackup => arm!(
+        SourceType::Signal => arm!(
             datalib_etl_signal_config::SignalConfig,
             datalib_etl_signal_config::SignalRenderConfig,
             datalib_etl_signal,
             datalib_etl_signal_render
         ),
-        SourceType::WhatsappBackup => arm!(
+        SourceType::Whatsapp => arm!(
             datalib_etl_whatsapp_config::WhatsappConfig,
             datalib_etl_whatsapp_config::WhatsappRenderConfig,
             datalib_etl_whatsapp,
@@ -368,10 +354,8 @@ mod tests {
             "sms",
             raw_dir(td.path(), "sms", Phase::Ingest),
             serde_json::json!({
-                "common": {
-                    "input_path": "/tmp/sms",
-                    "always_clear_before_ingest": true,
-                }
+                "backup": {"path": "/tmp/sms"},
+                "common": {"always_clear_before_ingest": true}
             }),
         )
         .unwrap();
@@ -384,7 +368,7 @@ mod tests {
             Phase::Ingest,
             "sms",
             raw_dir(td.path(), "sms", Phase::Ingest),
-            serde_json::json!({ "common": { "input_path": "/tmp/sms" } }),
+            serde_json::json!({ "backup": {"path": "/tmp/sms"} }),
         )
         .unwrap();
         assert!(!default.always_clear_before_ingest);
@@ -394,23 +378,23 @@ mod tests {
     fn plans_slack_download_and_render_from_phase_params() {
         let td = tempfile::tempdir().unwrap();
         let source: serde_json::Value = serde_json::json!({
-            "sync": {"media": true, "channels": ["chat-qi"], "since": "2026-06-15"}
+            "api": {"media": true, "channels": ["chat-qi"], "since": "2026-06-15"}
         });
         let dl = plan(
-            "slack_api",
+            "slack",
             Phase::Ingest,
             "slack",
             raw_dir(td.path(), "slack", Phase::Ingest),
             source.clone(),
         )
         .unwrap();
-        assert_eq!(dl.source_type, SourceType::SlackApi);
+        assert_eq!(dl.source_type, SourceType::Slack);
         assert_eq!(dl.raw_path, td.path().join("slack/ingest"));
         assert_eq!(dl.processors.len(), 1);
 
         // Render params are phase-specific: slack render needs none.
         let rn = plan(
-            "slack_api",
+            "slack",
             Phase::Render,
             "slack",
             raw_dir(td.path(), "slack", Phase::Render),
@@ -422,7 +406,7 @@ mod tests {
         // Download-shaped params on a render step fail loudly instead
         // of being silently ignored.
         let err = plan(
-            "slack_api",
+            "slack",
             Phase::Render,
             "slack",
             raw_dir(td.path(), "slack", Phase::Render),
@@ -441,12 +425,12 @@ mod tests {
     #[test]
     fn slack_config_without_dms_still_parses_and_leaves_dms_off() {
         let cfg: datalib_etl_slack_config::SlackConfig = serde_json::from_value(
-            serde_json::json!({"sync": {"media": true, "channels": ["chat-qi"]}}),
+            serde_json::json!({"api": {"media": true, "channels": ["chat-qi"]}}),
         )
         .expect("a pre-dms config must still parse");
-        let sync = cfg.sync.expect("sync");
-        assert!(!sync.dms, "an upgrade must not start mirroring DMs");
-        assert!(sync.dm_users.is_none());
+        let api = cfg.api.expect("api");
+        assert!(!api.dms, "an upgrade must not start mirroring DMs");
+        assert!(api.dm_users.is_none());
     }
 
     /// The one combination the provider refuses, refused where the
@@ -456,27 +440,27 @@ mod tests {
     fn slack_dm_users_without_dms_fails_at_plan_time() {
         let td = tempfile::tempdir().unwrap();
         let err = plan(
-            "slack_api",
+            "slack",
             Phase::Ingest,
             "slack",
             raw_dir(td.path(), "slack", Phase::Ingest),
-            serde_json::json!({"sync": {"dm_users": ["@riker"]}}),
+            serde_json::json!({"api": {"dm_users": ["@riker"]}}),
         )
         .unwrap_err();
         // `{:#}` walks the cause chain, which is what `main.rs` prints
         // (one line per `e.chain()` entry) — the bare `to_string()` is
-        // only the outermost "source ... (type=slack_api)" context.
+        // only the outermost "source ... (type=slack)" context.
         let err = format!("{err:#}");
         assert!(err.contains("dm_users"), "{err}");
         assert!(err.contains("dms = true"), "{err}");
 
         // …and is accepted with the switch on.
         plan(
-            "slack_api",
+            "slack",
             Phase::Ingest,
             "slack",
             raw_dir(td.path(), "slack", Phase::Ingest),
-            serde_json::json!({"sync": {"dms": true, "dm_users": ["@riker"]}}),
+            serde_json::json!({"api": {"dms": true, "dm_users": ["@riker"]}}),
         )
         .expect("dms = true with an allowlist is the supported shape");
     }
@@ -484,14 +468,14 @@ mod tests {
     #[test]
     fn render_knobs_are_rejected_on_download_and_read_on_render() {
         let td = tempfile::tempdir().unwrap();
-        // `period` used to live in `sync:`; the download planner points
-        // at its new home on the render step.
+        // `period` used to live in the ingest table; the download
+        // planner points at its new home on the render step.
         let err = plan(
             "beeper",
             Phase::Ingest,
             "beeper",
             raw_dir(td.path(), "beeper", Phase::Ingest),
-            serde_json::json!({"sync": {"sources": ["signal"], "period": "day"}}),
+            serde_json::json!({"texts": {"sources": ["signal"], "period": "day"}}),
         )
         .unwrap_err()
         .to_string();
@@ -508,46 +492,142 @@ mod tests {
         assert_eq!(rn.processors.len(), 1);
     }
 
-    /// An API source with no `sync:` block has nothing to fetch this
-    /// run, so its download wave is empty — render still reads whatever
-    /// an earlier run put in the store.
+    /// An `ingest` step whose params hold none of its provider's methods
+    /// is refused at plan time, where `datalib-dag --check` sees it. A
+    /// step with no method used to plan an empty download wave and
+    /// succeed, which read exactly like a working sync that found nothing.
     #[test]
-    fn download_without_sync_plans_empty_for_api_sources() {
+    fn an_ingest_step_with_no_method_is_refused() {
         let td = tempfile::tempdir().unwrap();
-        let dl = plan(
-            "claude_api",
+        let err = plan(
+            "claude",
             Phase::Ingest,
             "claude",
             raw_dir(td.path(), "claude", Phase::Ingest),
             serde_json::json!({}),
         )
-        .unwrap();
-        assert_eq!(dl.processors.len(), 0, "no sync: means nothing to fetch");
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("`api`"), "{err}");
+        assert!(err.contains("`export`"), "{err}");
+        assert!(err.contains("where the claude data comes from"), "{err}");
+
+        // A misspelled table is reported as what it is, not as a missing
+        // method: serde's unknown-field error comes first (where the
+        // provider's config is `deny_unknown_fields`, as pdf's is).
+        let err = plan(
+            "pdf",
+            Phase::Ingest,
+            "pdfs",
+            raw_dir(td.path(), "pdfs", Phase::Ingest),
+            serde_json::json!({"fswlk": {"path": "/scans"}}),
+        )
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("unknown field"), "{err}");
+        assert!(!err.contains("where the pdf data comes from"), "{err}");
     }
 
-    /// `claude_export` is file-backed, not render-only: it ingests the
-    /// export at `input_path` into the same raw store `claude_api`
-    /// writes, so it plans a download wave like every other file-backed
-    /// source (issue #207).
+    /// A config in the shape written before method tables — `sync`, or
+    /// `common.input_path` — is refused whole, naming the migrator, on
+    /// every type. The old type spellings are refused the same way.
     #[test]
-    fn claude_export_plans_an_ingest_from_its_input_path() {
+    fn the_retired_shape_is_refused_and_names_the_migrator() {
+        let td = tempfile::tempdir().unwrap();
+        for (ty, params) in [
+            ("slack", serde_json::json!({"sync": {"channels": ["x"]}})),
+            (
+                "pdf",
+                serde_json::json!({"common": {"input_path": "/scans"}}),
+            ),
+            (
+                "email",
+                serde_json::json!({"common": {"input_path": "/m.mbox"}, "mbox": {}}),
+            ),
+        ] {
+            let err = plan(
+                ty,
+                Phase::Ingest,
+                "s",
+                raw_dir(td.path(), "s", Phase::Ingest),
+                params,
+            )
+            .unwrap_err();
+            let err = format!("{err:#}");
+            assert!(err.contains("datalib-migrate-config"), "{ty}: {err}");
+        }
+        for old in ["slack_api", "claude_export", "signal_backup", "carddav"] {
+            let err = plan(
+                old,
+                Phase::Ingest,
+                "s",
+                raw_dir(td.path(), "s", Phase::Ingest),
+                serde_json::json!({}),
+            )
+            .unwrap_err();
+            let err = format!("{err:#}");
+            assert!(err.contains("datalib-migrate-config"), "{old}: {err}");
+        }
+    }
+
+    /// The planned source carries what its method reaches, read off the
+    /// params by the provider's declaration.
+    #[test]
+    fn a_planned_ingest_knows_its_reach() {
+        let td = tempfile::tempdir().unwrap();
+        let dl = plan(
+            "slack",
+            Phase::Ingest,
+            "slack",
+            raw_dir(td.path(), "slack", Phase::Ingest),
+            serde_json::json!({"api": {}}),
+        )
+        .unwrap();
+        assert_eq!(dl.reach, Some(Reach::Origin));
+        let dl = plan(
+            "pdf",
+            Phase::Ingest,
+            "pdfs",
+            raw_dir(td.path(), "pdfs", Phase::Ingest),
+            serde_json::json!({"fswalk": {"path": td.path().to_str().unwrap()}}),
+        )
+        .unwrap();
+        assert_eq!(dl.reach, Some(Reach::Local));
+        let rn = plan(
+            "pdf",
+            Phase::Render,
+            "pdfs",
+            raw_dir(td.path(), "pdfs", Phase::Render),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(rn.reach, None);
+    }
+
+    /// One `claude` type, two methods: `export` is file-backed, not
+    /// render-only. It ingests the export at its `path` into the same
+    /// raw store `api` writes, so it plans a download wave like every
+    /// other file-backed source (issue #207).
+    #[test]
+    fn claude_export_plans_an_ingest_from_its_path() {
         let td = tempfile::tempdir().unwrap();
         let export = td.path().join("unpacked");
         std::fs::create_dir_all(&export).unwrap();
         let dl = plan(
-            "claude_export",
+            "claude",
             Phase::Ingest,
             "claude-export",
             raw_dir(td.path(), "claude-export", Phase::Ingest),
-            serde_json::json!({"common": {"input_path": export.to_str().unwrap()}}),
+            serde_json::json!({"export": {"path": export.to_str().unwrap()}}),
         )
         .unwrap();
         assert_eq!(dl.processors.len(), 1);
+        assert_eq!(dl.reach, Some(Reach::Local));
         assert_eq!(dl.raw_path, td.path().join("claude-export/ingest"));
 
-        // …and its render wave reads that store, same as claude_api's.
+        // …and its render wave reads that store, same as the API's.
         let rn = plan(
-            "claude_export",
+            "claude",
             Phase::Render,
             "claude-export",
             raw_dir(td.path(), "claude-export", Phase::Render),
@@ -555,42 +635,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rn.processors.len(), 1);
-    }
 
-    /// An export pointed at nothing would ingest the raw dir into
-    /// itself. Refuse at plan time, which is where `datalib-dag --check`
-    /// will see it.
-    #[test]
-    fn claude_export_without_an_input_path_is_a_config_error() {
-        let td = tempfile::tempdir().unwrap();
+        // Both at once is refused at plan time, where `--check` sees it.
         let err = plan(
-            "claude_export",
+            "claude",
             Phase::Ingest,
-            "claude-export",
-            raw_dir(td.path(), "claude-export", Phase::Ingest),
-            serde_json::json!({}),
+            "claude",
+            raw_dir(td.path(), "claude", Phase::Ingest),
+            serde_json::json!({"api": {}, "export": {"path": export.to_str().unwrap()}}),
         )
         .unwrap_err();
         let err = format!("{err:#}");
-        assert!(err.contains("input_path"), "{err}");
-    }
-
-    /// The API-shaped knobs are meaningless on an export and are
-    /// rejected rather than ignored — a `sync:` block on a
-    /// `claude_export` step used to silently start a live API download.
-    #[test]
-    fn claude_export_rejects_api_only_params() {
-        let td = tempfile::tempdir().unwrap();
-        let err = plan(
-            "claude_export",
-            Phase::Ingest,
-            "claude-export",
-            raw_dir(td.path(), "claude-export", Phase::Ingest),
-            serde_json::json!({"sync": {}}),
-        )
-        .unwrap_err();
-        let err = format!("{err:#}");
-        assert!(err.contains("sync"), "{err}");
+        assert!(err.contains("both"), "{err}");
     }
 
     /// Download-only sources are not in the `ingested_tng` fixture
@@ -613,8 +669,8 @@ mod tests {
                 {
                     let mut v = params.clone();
                     v.as_object_mut().unwrap().insert(
-                        "common".into(),
-                        serde_json::json!({"input_path": td.path().to_str().unwrap()}),
+                        "fswalk".into(),
+                        serde_json::json!({"path": td.path().to_str().unwrap()}),
                     );
                     v
                 },
@@ -697,40 +753,39 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("slack_api"), "{err}");
+        assert!(err.contains("slack"), "{err}");
     }
 
-    /// A `common.raw_path` pointing anywhere but the step's own tree is
-    /// refused: the runner versions, and every consumer reads, the tree
-    /// the id names, so a store written elsewhere would be one nothing
-    /// downstream ever sees.
+    /// `common.raw_path` used to name the store, and was then refused
+    /// unless it named the step's own tree. It is not a key any more:
+    /// the runner versions, and every consumer reads, the tree the id
+    /// names, so a store written elsewhere would be one nothing
+    /// downstream ever sees. A config still carrying it is refused by
+    /// name, with the migrator named.
     #[test]
-    fn an_ingest_step_refuses_a_raw_path_outside_its_tree() {
+    fn an_ingest_step_refuses_a_raw_path_key() {
         let td = tempfile::tempdir().unwrap();
         let err = plan(
-            "github_api",
+            "github",
             Phase::Ingest,
             "gh",
             raw_dir(td.path(), "gh", Phase::Ingest),
-            serde_json::json!({"common": {"raw_path": "/mnt/big/gh-raw"}, "sync": {}}),
+            serde_json::json!({"common": {"raw_path": "/mnt/big/gh-raw"}, "api": {}}),
         )
         .unwrap_err();
         let err = format!("{err:#}");
         assert!(err.contains("raw_path"), "{err}");
-        assert!(err.contains("gh/ingest"), "{err}");
-
-        // Naming the tree itself is redundant, and harmless.
-        let same = plan(
-            "github_api",
-            Phase::Ingest,
+        assert!(err.contains("datalib-migrate-config"), "{err}");
+        // A render step's `common` is the slim envelope, and refuses it too.
+        let err = plan(
+            "github",
+            Phase::Render,
             "gh",
-            raw_dir(td.path(), "gh", Phase::Ingest),
-            serde_json::json!({
-                "common": {"raw_path": td.path().join("gh/ingest").to_str().unwrap()},
-                "sync": {}
-            }),
+            raw_dir(td.path(), "gh", Phase::Render),
+            serde_json::json!({"common": {"raw_path": "/mnt/big/gh-raw"}}),
         )
-        .unwrap();
-        assert_eq!(same.raw_path, td.path().join("gh/ingest"));
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("raw_path"), "{err}");
     }
 }

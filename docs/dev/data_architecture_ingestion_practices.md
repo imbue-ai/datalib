@@ -116,6 +116,13 @@ Reach for the simplest existing provider that's shaped like yours,
    `config_examples_test.rs` beside it plans every documented example
    through, so a source added to `all_sources.toml` is checked against
    its real schema with no further registration.
+   The same wiring asks the config crate which of its params tables
+   are ways in, and whether each reaches a live service or reads files
+   on disk: `impl IngestMethods for <Name>Config` in
+   `providers/<name>_config`. An `ingest` step holding none of them is
+   refused, the Manage row reads "Download" or "Import" from it, and
+   `bazel run //datalib/backend/datalib_step:ingest_methods.update`
+   regenerates the UI's copy.
 
 7. Write `providers/<name>/DOWNLOAD.md`, and
    `providers/<name>_render/TRANSLATE.md` too if the provider has a

@@ -2,20 +2,23 @@
 //! goal #1). Schema-only (serde + anyhow), so the orchestrator can name
 //! `GoogleTakeoutConfig` without linking the provider.
 
+use std::path::PathBuf;
+
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
-/// The google_takeout-owned slice of a `google_takeout` source. File-backed:
-/// `input_path:` points at the unzipped Takeout root. `sync:` opts into
-/// individual feeds; absent → all feeds off (default).
+/// The google_takeout-owned slice of a `google_takeout` source. `export`
+/// — the unzipped Takeout root, plus which of its feeds to read — is its
+/// one way in.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GoogleTakeoutConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.
     #[serde(default)]
     pub common: SourceCommon,
     #[serde(default)]
-    pub sync: Option<GoogleTakeoutSync>,
+    pub export: Option<GoogleTakeoutSync>,
 }
 
 impl GoogleTakeoutConfig {
@@ -24,13 +27,16 @@ impl GoogleTakeoutConfig {
     }
 }
 
-/// Per-feed opt-in switches for a Google Takeout export. Mirrors
+/// The `export` table: where the unzipped Takeout is, and per-feed
+/// opt-in switches. The switches mirror
 /// `datalib_etl_google_takeout::download::SyncFlags` (the provider's
-/// `plan()` maps one to the other); defaults are all `false` so a fresh user
-/// enables each feed consciously.
+/// `plan()` maps one to the other); they default to `false` so a fresh
+/// user enables each feed consciously.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct GoogleTakeoutSync {
+    /// The unzipped Takeout root (the directory holding `Takeout/`).
+    pub path: PathBuf,
     pub maps_reviews: bool,
     pub maps_saved_places: bool,
     pub maps_photos: bool,
@@ -44,6 +50,17 @@ pub struct GoogleTakeoutSync {
     pub google_voice_include_spam: bool,
 }
 
+impl GoogleTakeoutSync {
+    pub fn path(&self) -> PathBuf {
+        datalib_source_common::expand_tilde(&self.path)
+    }
+}
+
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope (see the per-phase params split).
 pub type GoogleTakeoutRenderConfig = datalib_source_common::BareRenderConfig;
+
+impl datalib_source_common::IngestMethods for GoogleTakeoutConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local("export")];
+}

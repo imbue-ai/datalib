@@ -1,11 +1,25 @@
-//! The one rewrite: steps that named their function and provider on a
-//! `datalib-step download|render|grid_index|qmd_index …` command line —
-//! grouped or not — into `[[groups]]` plus `group` + `function` steps with
-//! no command, under the function names the trees are now called by.
+//! The one rewrite, from any earlier shape to the current one:
 //!
-//! This module parses the retired shape itself. The runner refuses it, so
-//! the loader cannot hand the entries over, and the retired shape should
-//! be understood in exactly one place.
+//! - steps that named their function and provider on a `datalib-step
+//!   download|render|grid_index|qmd_index …` command line — grouped or
+//!   not — become `[[groups]]` plus `group` + `function` steps with no
+//!   command, under the function names the trees are now called by;
+//! - a group's `type` names the thing mirrored (`slack`, `claude`,
+//!   `contacts`), not the way it was reached (`slack_api`,
+//!   `claude_export`, `carddav`);
+//! - an ingest step's params hold one table per method, named for the
+//!   method, and a file-backed method carries its own `path` — so `sync`
+//!   becomes `api` (or `jmap`, `carddav`, `texts`, `backup`, `github`) and
+//!   `common.input_path` becomes `export.path`, `fswalk.path`,
+//!   `mbox.path`, …;
+//! - `common.raw_path` goes: the store is the step's own tree, which is
+//!   the only value the step ever accepted for it.
+//!
+//! This module parses the retired shapes itself. The runner refuses them,
+//! so the loader cannot hand the entries over, and a retired shape should
+//! be understood in exactly one place. [`RETIRED_TYPES`] and
+//! [`rewrite_ingest_params`] are that place for the type and method words;
+//! `datalib-step` only recognises them well enough to name this tool.
 //!
 //! Value-level: the config is parsed, regrouped and serialized again, so
 //! comments and formatting do not survive. The output says so at the top.
@@ -93,14 +107,214 @@ fn parse_old(text: &str) -> Result<OldConfig> {
     toml::from_str(text).context("parse the config to rewrite")
 }
 
-/// Whether anything in this config is a `datalib-step` step written the
-/// retired way. A config of only custom steps, or one already in the
-/// current shape, has nothing for this rewrite to do.
-pub fn needs_rewrite(text: &str) -> Result<bool> {
-    Ok(parse_old(text)?
-        .steps
+/// The shapes this rewrite recognises, most retired first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retired {
+    /// Steps naming their function and provider on a `datalib-step`
+    /// subcommand line.
+    StepSubcommands,
+    /// A group `type` spelled for the method (`slack_api`), or an
+    /// ingest step whose params still say `sync` / `common.input_path`.
+    TypesAndMethodTables,
+}
+
+/// Which retired shape this config is in, or `None` when it is already
+/// current. A config of only custom steps has nothing for this rewrite to
+/// do either.
+pub fn retired_shape(text: &str) -> Result<Option<Retired>> {
+    let cfg = parse_old(text)?;
+    if cfg.steps.iter().any(|s| builtin_of(s).is_some()) {
+        return Ok(Some(Retired::StepSubcommands));
+    }
+    let retired_type = cfg
+        .groups
         .iter()
-        .any(|s| builtin_of(s).is_some()))
+        .any(|g| g.r#type.as_deref().is_some_and(|t| rename_type(t) != t));
+    let retired_params = cfg.steps.iter().any(|s| {
+        s.command.is_none()
+            && s.params.as_ref().is_some_and(|p| {
+                (s.function.as_deref() == Some("ingest") && has_retired_param_keys(p))
+                    || has_raw_path(p)
+            })
+    });
+    Ok((retired_type || retired_params).then_some(Retired::TypesAndMethodTables))
+}
+
+fn has_raw_path(params: &toml::Value) -> bool {
+    params
+        .get("common")
+        .and_then(|c| c.get("raw_path"))
+        .is_some()
+}
+
+/// `common.raw_path` could only ever name the step's own tree; drop it,
+/// and `common` with it once empty.
+fn strip_raw_path(params: &mut toml::Table) {
+    if let Some(common) = params.get_mut("common").and_then(|c| c.as_table_mut()) {
+        common.remove("raw_path");
+        if common.is_empty() {
+            params.remove("common");
+        }
+    }
+}
+
+fn has_retired_param_keys(params: &toml::Value) -> bool {
+    params.get("sync").is_some()
+        || params
+            .get("common")
+            .and_then(|c| c.get("input_path"))
+            .is_some()
+}
+
+/// The type words configs used before a group's `type` named the thing
+/// mirrored, and what each is now.
+pub const RETIRED_TYPES: &[(&str, &str)] = &[
+    ("carddav", "contacts"),
+    ("chatgpt_api", "chatgpt"),
+    ("claude_api", "claude"),
+    ("claude_export", "claude"),
+    ("github_api", "github"),
+    ("gitlab_api", "gitlab"),
+    ("notion_api", "notion"),
+    ("signal_backup", "signal"),
+    ("slack_api", "slack"),
+    ("whatsapp_backup", "whatsapp"),
+];
+
+fn rename_type(t: &str) -> &str {
+    RETIRED_TYPES
+        .iter()
+        .find(|(old, _)| *old == t)
+        .map(|(_, new)| *new)
+        .unwrap_or(t)
+}
+
+/// An ingest step's params, from the shape where the method was a `sync`
+/// table (or implied by `common.input_path`) to one table per method
+/// carrying its own `path`. `ty` is the group's type under its current
+/// spelling. Params already in the current shape pass through untouched.
+fn rewrite_ingest_params(ty: &str, params: &mut toml::Table) -> Result<()> {
+    let input_path = params
+        .get_mut("common")
+        .and_then(|c| c.as_table_mut())
+        .and_then(|c| c.remove("input_path"));
+    if params
+        .get("common")
+        .and_then(|c| c.as_table())
+        .is_some_and(|c| c.is_empty())
+    {
+        params.remove("common");
+    }
+    let mut sync = params.remove("sync");
+    if sync.is_none() && input_path.is_none() {
+        return Ok(());
+    }
+    let table_from_sync = |sync: Option<toml::Value>, name: &str| -> Result<toml::Table> {
+        match sync {
+            Some(toml::Value::Table(t)) => Ok(t),
+            Some(other) => bail!("`sync` on a {ty} ingest step is {other}, not a table"),
+            None => bail!(
+                "a {ty} ingest step with no `sync` table names no method; add \
+                 `[steps.params.{name}]` by hand"
+            ),
+        }
+    };
+    let with_path = |mut t: toml::Table, path: Option<toml::Value>| -> toml::Table {
+        if let Some(p) = path {
+            t.insert("path".into(), p);
+        }
+        t
+    };
+    let insert = |params: &mut toml::Table, name: &str, t: toml::Table| {
+        params.insert(name.to_string(), toml::Value::Table(t));
+    };
+    match ty {
+        "slack" | "chatgpt" | "github" | "gitlab" | "notion" | "yolink" => {
+            insert(params, "api", table_from_sync(sync.take(), "api")?);
+        }
+        "claude" => {
+            // `claude_api` had `sync`; `claude_export` had `input_path`.
+            if let Some(p) = input_path {
+                insert(params, "export", with_path(toml::Table::new(), Some(p)));
+            } else {
+                insert(params, "api", table_from_sync(sync.take(), "api")?);
+            }
+        }
+        "email" => {
+            if let Some(t) = sync.take() {
+                params.insert("jmap".into(), t);
+            }
+            if let Some(p) = input_path {
+                let mbox = match params.remove("mbox") {
+                    Some(toml::Value::Table(t)) => t,
+                    _ => toml::Table::new(),
+                };
+                insert(params, "mbox", with_path(mbox, Some(p)));
+            }
+        }
+        "contacts" => {
+            if let Some(t) = sync.take() {
+                params.insert("carddav".into(), t);
+            }
+            if let Some(p) = input_path {
+                insert(params, "vcf", with_path(toml::Table::new(), Some(p)));
+            }
+        }
+        "beeper" => {
+            let mut t = table_from_sync(sync.take(), "texts")?;
+            if let Some(dir) = t.remove("beeper_data_dir") {
+                t.insert("path".into(), dir);
+            }
+            insert(params, "texts", t);
+        }
+        "perseus" => {
+            if input_path.is_some() {
+                bail!(
+                    "perseus: `common.input_path` on the ingest step has no home any more. \
+                     A fetched tree is the ingest tree itself; a tree staged by hand is \
+                     named on the *render* step's `common.input_path`, with no ingest step. \
+                     Move or drop it, then run this again."
+                );
+            }
+            insert(params, "github", table_from_sync(sync.take(), "github")?);
+        }
+        "signal" | "whatsapp" => {
+            let mut t = table_from_sync(sync.take(), "backup")?;
+            for old in ["snapshot_dir", "backup_dir"] {
+                if let Some(dir) = t.remove(old) {
+                    t.insert("path".into(), dir);
+                }
+            }
+            insert(params, "backup", t);
+        }
+        "sms_backup_restore" => {
+            insert(params, "backup", with_path(toml::Table::new(), input_path));
+        }
+        "google_takeout" => {
+            let feeds = match sync.take() {
+                Some(toml::Value::Table(t)) => t,
+                _ => toml::Table::new(),
+            };
+            insert(params, "export", with_path(feeds, input_path));
+        }
+        "linkedin" => {
+            insert(params, "export", with_path(toml::Table::new(), input_path));
+        }
+        "fsindex" | "pdf" | "media" => {
+            insert(params, "fswalk", with_path(toml::Table::new(), input_path));
+        }
+        "lightroom" => {
+            insert(params, "catalog", with_path(toml::Table::new(), input_path));
+        }
+        other => bail!(
+            "no known method tables for type {other:?}; this tool rewrites only the \
+             built-in providers' params"
+        ),
+    }
+    if sync.is_some() {
+        bail!("a {ty} ingest step has a `sync` table, and {ty} never selected its method that way");
+    }
+    Ok(())
 }
 
 /// What a retired-shape `datalib-step` step declared, read off its command
@@ -235,7 +449,7 @@ pub fn rewrite(text: &str) -> Result<String> {
         .map(|g| GroupOut {
             id: g.id.clone(),
             name: g.name.clone(),
-            r#type: g.r#type.clone(),
+            r#type: g.r#type.as_deref().map(|t| rename_type(t).to_string()),
         })
         .collect();
     // Every built-in step's id moves with its function; everything that
@@ -254,10 +468,28 @@ pub fn rewrite(text: &str) -> Result<String> {
     let mut steps: Vec<(Option<usize>, StepOut)> = Vec::with_capacity(cfg.steps.len());
     for step in &cfg.steps {
         let Some(b) = builtin_of(step) else {
+            let gi = step
+                .group
+                .as_ref()
+                .and_then(|g| groups.iter().position(|o| &o.id == g));
+            let mut params = step.params.clone();
+            // A command-less step is `datalib-step`'s, and its params are
+            // the provider's to reshape; a custom step's are its own
+            // program's.
+            if step.command.is_none() {
+                if let Some(toml::Value::Table(t)) = params.as_mut() {
+                    strip_raw_path(t);
+                    if step.function.as_deref() == Some("ingest") {
+                        if let Some(ty) = gi.and_then(|gi| groups[gi].r#type.as_deref()) {
+                            rewrite_ingest_params(ty, t).with_context(|| {
+                                format!("step {}", step.old_id().unwrap_or_default())
+                            })?;
+                        }
+                    }
+                }
+            }
             steps.push((
-                step.group
-                    .as_ref()
-                    .and_then(|g| groups.iter().position(|o| &o.id == g)),
+                gi,
                 StepOut {
                     group: step.group.clone(),
                     function: step.function.clone(),
@@ -267,7 +499,7 @@ pub fn rewrite(text: &str) -> Result<String> {
                     inputs: rename_all(&step.inputs),
                     env: step.env.clone(),
                     code_version: step.code_version.clone(),
-                    params: step.params.clone(),
+                    params,
                 },
             ));
             continue;
@@ -284,13 +516,24 @@ pub fn rewrite(text: &str) -> Result<String> {
             }
         };
         let group = &mut groups[gi];
-        match (&group.r#type, &b.r#type) {
+        let want = b.r#type.as_deref().map(|t| rename_type(t).to_string());
+        match (&group.r#type, &want) {
             (Some(have), Some(want)) if have != want => bail!(
                 "steps under {:?} disagree about its type: {have:?} and {want:?}",
                 b.group
             ),
             (None, Some(want)) => group.r#type = Some(want.clone()),
             _ => {}
+        }
+        let mut params = step.params.clone();
+        if let Some(toml::Value::Table(t)) = params.as_mut() {
+            strip_raw_path(t);
+            if b.function == "ingest" {
+                if let Some(ty) = group.r#type.as_deref() {
+                    rewrite_ingest_params(ty, t)
+                        .with_context(|| format!("step {}", step.old_id().unwrap_or_default()))?;
+                }
+            }
         }
         // The download step's name is the source's name. The old wizard named
         // the render step `<that> (render markdown)`, falling back to the fetch
@@ -320,7 +563,7 @@ pub fn rewrite(text: &str) -> Result<String> {
                 inputs: rename_all(&step.inputs),
                 env: step.env.clone(),
                 code_version: step.code_version.clone(),
-                params: step.params.clone(),
+                params,
             },
         ));
     }
@@ -349,7 +592,7 @@ pub fn rewrite(text: &str) -> Result<String> {
         .collect();
 
     let mut out = String::from(
-        "# Rewritten by datalib-migrate-config into the [[groups]] shape.\n\
+        "# Rewritten by datalib-migrate-config into the current shape.\n\
          # Comments and formatting from the previous file are not carried\n\
          # over; review before relying on it.\n\n",
     );

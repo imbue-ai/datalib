@@ -1,5 +1,5 @@
-//! Program-A `DataProcessor`s for the `signal_backup` source. A managed
-//! signal source (`sync:` present) contributes download + render; the
+//! Program-A `DataProcessor`s for the `signal` source. A signal source
+//! with a `backup` table contributes download + render; the
 //! render processor is always present (renders whatever is in the raw
 //! store). The source owns its raw store (open/commit/checkpoint); the
 //! orchestrator only drives `run`.
@@ -22,11 +22,11 @@ pub fn plan_download(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let sync = config
-        .sync
-        .ok_or_else(|| anyhow!("signal_backup source {name} missing sync.snapshot_dir"))?;
+        .backup
+        .ok_or_else(|| anyhow!("signal source {name} missing `backup.path`"))?;
     if sync.period.is_some() {
         anyhow::bail!(
-            "signal `sync.period` is a render knob — put `period` in the \
+            "signal `backup.period` is a render knob — put `period` in the \
              render step's params instead"
         );
     }
@@ -39,7 +39,7 @@ pub fn plan_download(
 
 /// Signal's download processor. Owns its raw doltlite store end to end: opens
 /// it, registers an opaque interrupt-commit hook, decrypts the newest snapshot
-/// under `snapshot_dir`, commits, closes.
+/// under `backup.path`, commits, closes.
 struct SignalDownload {
     id: String,
     raw_path: PathBuf,
@@ -59,7 +59,7 @@ impl DataProcessor for SignalDownload {
         let s = download::fetch(download::FetchOptions {
             db,
             cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            snapshot_root: self.sync.snapshot_dir.clone(),
+            snapshot_root: self.sync.path(),
             // Default: `<snapshot_root>/files/XX/<name>` — the layout Signal
             // Android produces. Override via a future SignalSync knob if it
             // matters.

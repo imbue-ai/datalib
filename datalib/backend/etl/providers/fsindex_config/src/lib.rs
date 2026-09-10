@@ -2,17 +2,22 @@
 //! Schema-only (serde + anyhow), so the orchestrator can name [`FsindexConfig`]
 //! without linking the provider.
 
-use datalib_source_common::SourceCommon;
+use datalib_source_common::{LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The fsindex-owned slice of an `fsindex` source. The scan root is
-/// `common.input_path`; `stamp` is the one knob.
+/// `fswalk.path`; `stamp` is the one knob.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FsindexConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
-    /// the orchestrator's `normalize()`. The scanned tree is `input_path`.
+    /// the orchestrator's `normalize()`.
     #[serde(default)]
     pub common: SourceCommon,
+
+    /// The tree to scan.
+    #[serde(default)]
+    pub fswalk: Option<LocalPath>,
 
     /// Write `.fsindex.yaml` UUID breadcrumbs into the scanned tree for any
     /// directory that opts in via `stamp_me_with_uuid`. **Off by default** for
@@ -33,3 +38,8 @@ impl FsindexConfig {
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope (see the per-phase params split).
 pub type FsindexRenderConfig = datalib_source_common::BareRenderConfig;
+
+impl datalib_source_common::IngestMethods for FsindexConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local("fswalk")];
+}

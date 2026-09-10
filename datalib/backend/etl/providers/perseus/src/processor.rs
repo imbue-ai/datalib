@@ -11,25 +11,22 @@ use datalib_etl_perseus_config::PerseusConfig;
 use crate::download;
 
 // Perseus is genuinely file-tree-backed — it reads TEI `.xml` directly,
-// with no doltlite store, so `raw_path` (our store dir) has no meaning
-// here. Both waves key off the input path (the TEI tree): download fetches
-// into it, render reads from it. For a managed source `input_path:` is
-// unset and `input_or_raw_path()` falls back to `<data_root>/raw/perseus`;
-// without a `sync:` block it is the pre-staged tree named by `input_path:`.
+// with no doltlite store. The ingest tree *is* the TEI tree: `github`
+// fetches into it, and render reads it (or a tree staged by hand, named
+// on the render step's `common.input_path`).
 
-/// Download wave: present iff `sync:` — fetch the TEI files; otherwise
-/// nothing is fetched and render reads the files already on disk.
+/// Download wave: present iff `github` — fetch the TEI files.
 pub fn plan_download(
     ctx: PlanContext,
     config: PerseusConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
-    let input_path = config.common.input_or_raw_path().to_path_buf();
+    let input_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
-    if let Some(sync) = config.sync {
+    if let Some(sync) = config.github {
         if !sync.alignment_pairs.is_empty() {
             anyhow::bail!(
-                "perseus `sync.alignment_pairs` is a render knob — put \
+                "perseus `github.alignment_pairs` is a render knob — put \
                  `alignment_pairs` in the render step's params instead"
             );
         }

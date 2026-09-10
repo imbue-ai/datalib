@@ -1,0 +1,142 @@
+{
+  "beeper": [
+    {
+      "path": "texts",
+      "reach": "local"
+    }
+  ],
+  "chatgpt": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
+  "claude": [
+    {
+      "path": "api",
+      "reach": "origin"
+    },
+    {
+      "path": "export",
+      "reach": "local"
+    }
+  ],
+  "contacts": [
+    {
+      "path": "carddav",
+      "reach": "origin"
+    },
+    {
+      "path": "vcf",
+      "reach": "local"
+    }
+  ],
+  "email": [
+    {
+      "path": "jmap",
+      "reach": "origin"
+    },
+    {
+      "path": "gmail_api",
+      "reach": "origin"
+    },
+    {
+      "path": "mbox",
+      "reach": "local"
+    }
+  ],
+  "fsindex": [
+    {
+      "path": "fswalk",
+      "reach": "local"
+    }
+  ],
+  "github": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
+  "gitlab": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
+  "google_takeout": [
+    {
+      "path": "export",
+      "reach": "local"
+    }
+  ],
+  "lightroom": [
+    {
+      "path": "catalog",
+      "reach": "local"
+    }
+  ],
+  "linkedin": [
+    {
+      "path": "export",
+      "reach": "local"
+    },
+    {
+      "path": "fetch_photos",
+      "reach": "origin"
+    }
+  ],
+  "media": [
+    {
+      "path": "fswalk",
+      "reach": "local"
+    }
+  ],
+  "notion": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
+  "pdf": [
+    {
+      "path": "fswalk",
+      "reach": "local"
+    }
+  ],
+  "perseus": [
+    {
+      "path": "github",
+      "reach": "origin"
+    }
+  ],
+  "signal": [
+    {
+      "path": "backup",
+      "reach": "local"
+    }
+  ],
+  "slack": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
+  "sms_backup_restore": [
+    {
+      "path": "backup",
+      "reach": "local"
+    }
+  ],
+  "whatsapp": [
+    {
+      "path": "backup",
+      "reach": "local"
+    }
+  ],
+  "yolink": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ]
+}

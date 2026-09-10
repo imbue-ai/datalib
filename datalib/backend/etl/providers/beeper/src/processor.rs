@@ -1,6 +1,6 @@
 //! Program-A `DataProcessor`s for the beeper source. Beeper contributes an
 //! **download** processor ([`BeeperDownload`] — reads Beeper Texts' on-disk
-//! SQLite stores) when `sync:` is present, plus an always-present
+//! SQLite stores) when `texts` is present, plus an always-present
 //! **render** processor ([`BeeperRender`]). [`plan_download`] /
 //! [`plan_render`] build the per-wave processors the orchestrator drives.
 
@@ -14,7 +14,7 @@ use datalib_etl_beeper_config::{BeeperConfig, BeeperSync};
 
 use crate::download;
 
-/// Download wave: present iff `sync:` (managed).
+/// Download wave: present iff `texts`.
 pub fn plan_download(
     ctx: PlanContext,
     config: BeeperConfig,
@@ -22,10 +22,10 @@ pub fn plan_download(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
-    if let Some(sync) = config.sync {
+    if let Some(sync) = config.texts {
         if sync.period.is_some() {
             anyhow::bail!(
-                "beeper `sync.period` is a render knob — put `period` in the \
+                "beeper `texts.period` is a render knob — put `period` in the \
                  render step's params instead"
             );
         }
@@ -58,7 +58,7 @@ impl DataProcessor for BeeperDownload {
         let s = download::fetch(download::FetchOptions {
             db,
             sources: self.sync.sources.clone(),
-            beeper_data_dir: self.sync.beeper_data_dir.clone(),
+            beeper_data_dir: self.sync.path(),
             media: self.sync.media,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),

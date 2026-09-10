@@ -1,14 +1,14 @@
 # The `email` source's download modes
 
-**Status:** current as of 2026-08-25.
+**Status:** current as of 2026-09-10.
 
 `type: email` has three download modes, all writing one raw schema:
 
 | mode | selected by | for |
 |------|-------------|-----|
-| JMAP | `[steps.params.sync]` | Fastmail, Stalwart, any RFC 8620+8621 server |
+| JMAP | `[steps.params.jmap]` | Fastmail, Stalwart, any RFC 8620+8621 server |
 | Gmail API | `[steps.params.gmail_api]` | a Gmail / Google Workspace account |
-| mbox | neither, plus an `.mbox` at `common.input_path` | a Google Takeout export |
+| mbox | `[steps.params.mbox] path = …` | a Google Takeout export |
 
 Render reads only the raw store, so it is mode-agnostic and needs no
 changes when a mode is added. See

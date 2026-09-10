@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("//tools:insta.bzl", "insta_update")
 
 # `datalib-step` — the built-in step program for the DAG runner
 # (//datalib/backend/dag:datalib_dag_bin). Reads its function (ingest /
@@ -108,6 +109,9 @@ rust_test(
         "//docs/user/config_examples:all_sources.toml",
         "//docs/user/config_examples:claude_only.toml",
         "//docs/user/config_examples:sample_config.toml",
+        # The UI's copy of the ingest-method declarations, which
+        # `methods.rs` checks is generated from the config crates.
+        "//datalib/ui:src/config/ingestMethods.json",
     ],
     edition = "2021",
     # Stub `DataProcessor`s for the render-version staleness tests.
@@ -116,4 +120,12 @@ rust_test(
         "@datalib_crates//:runfiles",
         "@datalib_crates//:tempfile",
     ],
+)
+
+# Regenerates datalib/ui/src/config/ingestMethods.json from the provider
+# config crates' `IngestMethods` declarations.
+insta_update(
+    name = "ingest_methods.update",
+    test = ":datalib_step_unittests",
+    test_args = ["ui_mirror_matches_the_declarations"],
 )

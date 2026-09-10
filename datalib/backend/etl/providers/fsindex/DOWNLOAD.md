@@ -259,8 +259,8 @@ type = "fsindex"
 [[steps]]
 group = "laptop_home"
 function = "ingest"
-[steps.params.common]
-input_path = "/Users/thad"
+[steps.params.fswalk]
+path = "/Users/thad"
 
 [[groups]]
 id = "nas_backup"
@@ -269,8 +269,8 @@ type = "fsindex"
 [[steps]]
 group = "nas_backup"
 function = "ingest"
-[steps.params.common]
-input_path = "/Volumes/nas/thad"
+[steps.params.fswalk]
+path = "/Volumes/nas/thad"
 ```
 
 Today each of those two steps gets its own raw store under

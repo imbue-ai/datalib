@@ -1,7 +1,8 @@
 //! The `synthesize` subcommand: build HTTP playback fixtures for one
-//! source, reading its `input_path` (interpreted as a checked-in raw
-//! fixture tree) and writing replay tapes into `--out`. A dev utility,
-//! not a step: it takes the group id from `--name`, not the environment.
+//! source, reading a checked-in raw fixture tree (`--params` may name it
+//! as `fixture_path`; else the group's ingest tree) and writing replay
+//! tapes into `--out`. A dev utility, not a step: it takes the group id
+//! from `--name`, not the environment.
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,7 @@ use datalib_dag::events::{Event, LogLevel};
 use datalib_etl::synthesize::Synthesizer;
 
 use crate::events::{Emitter, OutputClaim};
+use crate::source_type::SourceType;
 
 pub fn run(
     step_type: &str,
@@ -20,17 +22,10 @@ pub fn run(
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
     std::fs::create_dir_all(out).with_context(|| format!("create {}", out.display()))?;
-    // input_path, resolved like SourceCommon::resolve_paths: explicit
-    // (tilde-expanded) else the group's ingest tree.
-    let input: PathBuf = match source
-        .pointer("/common/input_path")
-        .and_then(|v| v.as_str())
-    {
-        Some(p) if p.starts_with("~/") => match std::env::var("HOME") {
-            Ok(home) => Path::new(&home).join(&p[2..]),
-            Err(_) => PathBuf::from(p),
-        },
-        Some(p) => PathBuf::from(p),
+    // The fixture tree: explicit (tilde-expanded) else the group's
+    // ingest tree. A synth-only key, not a method table.
+    let input: PathBuf = match source.get("fixture_path").and_then(|v| v.as_str()) {
+        Some(p) => datalib_source_common::expand_tilde(Path::new(p)),
         None => datalib_etl::layout::ingest_root(data_root, name),
     };
     let log = |msg: String| {
@@ -41,35 +36,34 @@ pub fn run(
         });
     };
 
-    let synth: Box<dyn Synthesizer> = match step_type {
-        // `claude_export` is deliberately absent: its download reads an
-        // export off disk and makes no requests, so there is no HTTP to
-        // play back.
-        "claude_api" => Box::new(datalib_etl_claude::synthesize::ClaudeSynth::new(
+    let synth: Box<dyn Synthesizer> = match SourceType::parse(step_type) {
+        // Only the API side of claude makes requests; an export ingest
+        // has no HTTP to play back, and synthesizes the same tapes.
+        Some(SourceType::Claude) => Box::new(datalib_etl_claude::synthesize::ClaudeSynth::new(
             input.clone(),
         )),
-        "chatgpt_api" => Box::new(datalib_etl_chatgpt::synthesize::ChatgptSynth::new(
+        Some(SourceType::Chatgpt) => Box::new(datalib_etl_chatgpt::synthesize::ChatgptSynth::new(
             input.clone(),
         )),
-        "slack_api" => Box::new(datalib_etl_slack::synthesize::SlackSynth::new(
+        Some(SourceType::Slack) => Box::new(datalib_etl_slack::synthesize::SlackSynth::new(
             input.clone(),
         )),
-        "github_api" => Box::new(datalib_etl_github::synthesize::GithubSynth::new(
+        Some(SourceType::Github) => Box::new(datalib_etl_github::synthesize::GithubSynth::new(
             input.clone(),
         )),
-        "gitlab_api" => Box::new(datalib_etl_gitlab::synthesize::GitlabSynth::new(
+        Some(SourceType::Gitlab) => Box::new(datalib_etl_gitlab::synthesize::GitlabSynth::new(
             input.clone(),
         )),
-        "notion_api" => Box::new(datalib_etl_notion::synthesize::NotionSynth::new(
+        Some(SourceType::Notion) => Box::new(datalib_etl_notion::synthesize::NotionSynth::new(
             input.clone(),
         )),
-        "beeper" => Box::new(datalib_etl_beeper::synthesize::BeeperSynth::new(
+        Some(SourceType::Beeper) => Box::new(datalib_etl_beeper::synthesize::BeeperSynth::new(
             input.clone(),
         )),
         // LinkedIn is file-backed except the optional connection-photo
         // fetch; there are playback fixtures to synthesize iff that's
         // enabled.
-        "linkedin"
+        Some(SourceType::Linkedin)
             if source
                 .get("fetch_photos")
                 .and_then(|v| v.as_bool())
@@ -81,9 +75,9 @@ pub fn run(
         }
         // Everything else is file-backed or otherwise synth-less: no
         // download HTTP to play back. Skip quietly like sync did.
-        other => {
+        _ => {
             log(format!(
-                "synthesize {name} ({other}): skipped (no HTTP synthesizer for this source type)"
+                "synthesize {name} ({step_type}): skipped (no HTTP synthesizer for this source type)"
             ));
             return Ok(vec![]);
         }

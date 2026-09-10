@@ -1,14 +1,14 @@
-//! Provider-owned config schema for the `github_api` source (Program A goal
+//! Provider-owned config schema for the `github` source (Program A goal
 //! #1). Schema-only (serde + anyhow), so the orchestrator can name
 //! `GithubConfig` without linking the provider.
 
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The github-owned slice of a `github_api` source. `sync:` present → managed
-/// (the download path); absent → no download wave, and render reads
-/// whatever an earlier run already mirrored.
+/// The github-owned slice of a `github` source. `api` is its one way
+/// in; an `ingest` step without it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GithubConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.
@@ -20,7 +20,7 @@ pub struct GithubConfig {
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
     #[serde(default)]
-    pub sync: Option<GithubApiSync>,
+    pub api: Option<GithubApiSync>,
 }
 
 impl GithubConfig {
@@ -52,3 +52,8 @@ pub struct GithubApiSync {
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope (see the per-phase params split).
 pub type GithubRenderConfig = datalib_source_common::BareRenderConfig;
+
+impl datalib_source_common::IngestMethods for GithubConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::origin("api")];
+}

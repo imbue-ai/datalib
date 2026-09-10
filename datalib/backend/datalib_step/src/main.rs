@@ -13,6 +13,7 @@ mod function;
 mod grid_index;
 mod hints;
 mod introspect;
+mod methods;
 mod probe;
 mod qmd_index;
 mod render;
@@ -95,13 +96,12 @@ enum Cmd {
     /// credentials can reach, and print one JSON object on stdout.
     /// Writes nothing and needs no data root.
     Probe {
-        /// Source type (`slack_api`, `claude_api`, …): the provider to
-        /// ask.
+        /// Source type (`slack`, `claude`, …): the provider to ask.
         source_type: String,
     },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
-    /// for one source from its `input_path` raw fixture tree, for
-    /// later replay via `--playback-root`.
+    /// for one source from a raw fixture tree (`--params
+    /// '{"fixture_path": …}'`), for later replay via `--playback-root`.
     Synthesize {
         /// Source type, as a group's `type` would name it.
         source_type: String,

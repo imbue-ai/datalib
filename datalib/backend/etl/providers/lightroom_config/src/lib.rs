@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use datalib_source_common::SourceCommon;
+use datalib_source_common::{LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// Columns folded in by [`LightroomConfig::skip_xmp`]. These are the
@@ -18,14 +18,16 @@ pub const XMP_COLUMN_PATTERNS: &[&str] = &[
 ];
 
 /// The lightroom-owned slice of a `lightroom` source. The catalog is
-/// `common.input_path`; the doltlite mirror lands in `common.raw_path`.
+/// `catalog.path`; the doltlite mirror lands in the ingest step's tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LightroomConfig {
     /// Shared per-source envelope (paths + cross-source tunables),
-    /// resolved by the orchestrator's `normalize()`. The catalog to
-    /// mirror is `input_path`.
+    /// resolved by the orchestrator's `normalize()`.
     pub common: SourceCommon,
+
+    /// The `.lrcat` to mirror.
+    pub catalog: Option<LocalPath>,
 
     /// Table-name globs to mirror. Default `["*"]` — every table in the
     /// catalog. Matched against the bare table name; `*` and `?` are the
@@ -66,6 +68,7 @@ impl Default for LightroomConfig {
     fn default() -> Self {
         Self {
             common: SourceCommon::default(),
+            catalog: None,
             include_tables: vec!["*".to_string()],
             exclude_tables: Vec::new(),
             exclude_columns: Vec::new(),
@@ -144,6 +147,11 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     }
     // Trailing stars in the pattern match the empty remainder.
     p[pi..].iter().all(|c| *c == '*')
+}
+
+impl datalib_source_common::IngestMethods for LightroomConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local("catalog")];
 }
 
 #[cfg(test)]

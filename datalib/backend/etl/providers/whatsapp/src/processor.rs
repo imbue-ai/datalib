@@ -1,7 +1,7 @@
-//! Program-A `DataProcessor`s for the `whatsapp_backup` source. WhatsApp
+//! Program-A `DataProcessor`s for the `whatsapp` source. WhatsApp
 //! contributes an **download** processor ([`WhatsappDownload`] — decrypts the
 //! on-disk `msgstore.db.crypt15`, mirrors the curated `wa_*` tables into its
-//! raw doltlite store) when `sync:` is present, plus an always-present
+//! raw doltlite store) when `backup` is present, plus an always-present
 //! **render** processor ([`WhatsappRender`]). [`plan_download`] /
 //! [`plan_render`] build the per-wave processors the orchestrator drives.
 
@@ -23,8 +23,8 @@ pub fn plan_download(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let sync = config
-        .sync
-        .ok_or_else(|| anyhow!("whatsapp_backup source {name} missing sync.backup_dir"))?;
+        .backup
+        .ok_or_else(|| anyhow!("whatsapp source {name} missing `backup.path`"))?;
     Ok(vec![Box::new(WhatsappDownload {
         id: format!("whatsapp/{name}/download"),
         raw_path,
@@ -64,7 +64,7 @@ impl DataProcessor for WhatsappDownload {
         let root_key = key_hex.and_then(|h| datalib_whatsapp_backup::decode_hex_key(&h))?;
 
         let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
-        let s = download::fetch(&self.sync.backup_dir, &root_key, &db, &cache).await?;
+        let s = download::fetch(&self.sync.path(), &root_key, &db, &cache).await?;
         let summary = format!(
             "jids={} chats={} messages={} message_text={} message_media={} \
              reactions={} media_files={}",

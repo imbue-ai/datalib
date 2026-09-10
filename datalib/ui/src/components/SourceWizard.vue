@@ -1,6 +1,10 @@
 <script setup lang="ts">
-// The "Add Data Source" / "Edit" flow: pick a type, fill its form,
-// review the TOML that will be written.
+// The "Add Data Source" / "Edit" dialog: pick a type, fill one form,
+// review the TOML that will be written. One form writes one source —
+// the `[[groups]]` entry, its `ingest` step and its `render_markdown`
+// step — and editing a source reopens the same form over all three.
+// Ingest fields sit on the main screen; a provider's render fields sit
+// under a "Rendering" heading and land on the render step.
 //
 // Two fields carry the identity, and only one of them is permanent.
 // **Name** is what you type and what every screen shows; it is free
@@ -15,9 +19,9 @@
 // browser login, and "Test connection", which calls the provider's own
 // probe (`datalib-step probe <type>`). What comes back is not just a
 // green tick — it names the account actually reached, and it fills
-// every `probe:` field's checklist. A label picker built from the live
-// account is the difference between a filter that works and a filter
-// that is a spelling test.
+// every `probe:` field's checklist, the render step's included. A
+// label picker built from the live account is the difference between a
+// filter that works and a filter that is a spelling test.
 import { computed, onUnmounted, ref, watch } from "vue";
 import {
   CATALOG,
@@ -28,19 +32,17 @@ import {
   type Field,
 } from "@/config/catalog";
 import {
-  buildGroup,
-  buildStep,
+  buildSource,
   fieldIsActive,
-  fieldPhaseOf,
   fieldsFor,
-  functionOf,
   paramsObject,
-  renderIdFor,
   seedFieldValues,
   slugify,
+  stepIdFor,
   suggestId,
-  type ConfiguredStep,
+  type ConfiguredGroup,
   type FieldValues,
+  type SourceSteps,
 } from "@/config/sourceSteps";
 import {
   latchkeyService,
@@ -50,30 +52,21 @@ import {
   type ProbeReport,
   type StoredAccount,
 } from "@/api";
-import type { FieldPhase } from "@/config/catalog";
 import { iconUrl } from "@/config/icons";
+import { ingestReach } from "@/config/ingestMethods";
 import { isDesktopApp, pickPath } from "@/desktop";
 
 const props = defineProps<{
-  /// Id stems already in the config, so a new step can't collide with
-  /// a tree that exists. A stem rather than a full id: creating
-  /// `work-slack/ingest` reserves `work-slack/` for its render sibling
-  /// too.
+  /// Group ids already in the config, plus the id of every step outside
+  /// a group, so a new source can't land on a tree that exists.
   takenIds: Set<string>;
-  /// Present → edit that step instead of creating one.
+  /// Present → edit that source instead of creating one. `steps` holds
+  /// whichever of its two steps the config has; one it lacks is written
+  /// on save, and the form says so.
   editing?: {
-    step: ConfiguredStep;
+    group: ConfiguredGroup;
     entry: CatalogEntry;
-    downloadParams?: Record<string, unknown>;
-  } | null;
-  /// Present → create the render step that reads this fetch step,
-  /// pre-filled from it. The chained half of "also render this?".
-  /// `downloadParams` as above.
-  renderFor?: {
-    fetchId: string;
-    fetchName: string;
-    entry: CatalogEntry;
-    downloadParams?: Record<string, unknown>;
+    steps: SourceSteps;
   } | null;
 }>();
 
@@ -82,138 +75,97 @@ const emit = defineEmits<{
   (
     e: "submit",
     payload: {
+      /// The group's id.
       id: string;
       /// The group's name as typed. The caller writes it on the group —
       /// as part of `groupBody` when creating, by renaming when editing.
       name: string;
-      /// The `[[steps]]` block for this step alone.
-      body: string;
-      /// The `[[groups]]` block to write above it, when this dialog is
-      /// creating a source. Null when editing or chaining a render step:
-      /// the group already exists.
-      groupBody: string | null;
       entry: CatalogEntry;
-      phase: FieldPhase;
-      /// Set when this step reads another — the render step's fetch
-      /// step. The caller wires fan-ins off it.
-      inputs: string[];
-      /// The fetch step just written, when the caller should now open a
-      /// second dialog to render it — only for providers whose render
-      /// step has options. Null otherwise. `downloadParams` is what was
-      /// just written for it, so the render dialog can probe the same
-      /// account without re-reading the config it has not saved yet.
-      offerRenderFor: {
-        fetchId: string;
-        fetchName: string;
-        downloadParams: Record<string, unknown>;
-      } | null;
-      /// The render step to write alongside this one, when the user
-      /// left the checkbox ticked and there was nothing to ask about.
-      /// Null when a render step is not being created here.
-      alsoRender: { id: string; body: string } | null;
+      /// The `[[groups]]` block, when this dialog is creating a source.
+      /// Null when editing: the group already exists.
+      groupBody: string | null;
+      /// The `[[steps]]` blocks: the ingest step, then the render step
+      /// for a provider that renders.
+      stepsBody: string;
+      /// The render step's composed id, for the caller to wire into the
+      /// fan-ins. Null for a provider that renders nothing.
+      renderId: string | null;
     },
   ): void;
 }>();
 
 type Stage = "pick" | "configure";
 
-/// Which of the three ways this dialog was opened. Only `create` shows
-/// the type picker: editing knows its type, and a chained render step
-/// inherits its fetch step's.
-const mode = computed<"create" | "edit" | "render">(() =>
-  props.editing ? "edit" : props.renderFor ? "render" : "create",
-);
+const mode = computed<"create" | "edit">(() => (props.editing ? "edit" : "create"));
 const isEdit = computed(() => mode.value === "edit");
 
-/// Which half of the descriptor's fields this dialog writes, and which
-/// function the step is written with.
-const phase = computed<FieldPhase>(() => {
-  if (props.editing) return fieldPhaseOf(props.editing.step);
-  return props.renderFor ? "render" : "download";
-});
-
-const stage = ref<Stage>(props.editing || props.renderFor ? "configure" : "pick");
+const stage = ref<Stage>(props.editing ? "configure" : "pick");
 const query = ref("");
-const chosen = ref<CatalogEntry | null>(
-  props.editing?.entry ?? props.renderFor?.entry ?? null,
-);
+const chosen = ref<CatalogEntry | null>(props.editing?.entry ?? null);
 
 /// Blank means "no name" — a group with none is shown by its id, so the
 /// field takes the id as its placeholder rather than pre-filling one,
 /// and clearing it removes the key.
-const name = ref(
-  props.editing && props.editing.step.name !== props.editing.step.id
-    ? props.editing.step.name
-    : "",
-);
-
-/// Whether this dialog has a name to offer. The name belongs to the
-/// group and is edited from its fetch step; a render step's label is
-/// derived from it, so a render dialog shows none.
-const nameEditable = computed(() => phase.value === "download");
-const id = ref(
-  props.editing?.step.id ?? (props.renderFor ? renderIdFor(props.renderFor.fetchId) : ""),
-);
+const name = ref(props.editing?.group.name ?? "");
+/// The group's id: the directory its steps write under. Typed while
+/// creating, fixed while editing.
+const id = ref(props.editing?.group.id ?? "");
 const values = ref<FieldValues>({});
 /// Once the id has been typed into directly, the name stops driving it.
 /// A derived id is a convenience, never something that overwrites a
-/// choice the user made. A chained render step starts touched: its id
-/// is the sibling of a step that already exists, not a guess from a
-/// name.
-const idTouched = ref(!!props.renderFor);
+/// choice the user made.
+const idTouched = ref(false);
 
-/// The fields this dialog shows. Empty for most render steps, which is
-/// why one is usually a checkbox below rather than a dialog of its own.
-const shownFields = computed(() =>
-  chosen.value
-    ? fieldsFor(chosen.value, phase.value).filter((f) => fieldIsActive(f, values.value))
-    : [],
-);
+/// Does this provider write a render step at all? A download-only
+/// provider (a photo catalog, a media tree) has no text to render.
+const renders = computed(() => !!chosen.value && chosen.value.renderStep !== false);
 
-/// The fields the main form renders. The latchkey account is one of
-/// this descriptor's fields like any other — it lands on the same
+/// The fields the form shows for one phase: the descriptor's, less any
+/// whose gate is shut.
+function activeFields(phase: "download" | "render"): Field[] {
+  return chosen.value
+    ? fieldsFor(chosen.value, phase).filter((f) => fieldIsActive(f, values.value))
+    : [];
+}
+
+const downloadFields = computed(() => activeFields("download"));
+const renderFields = computed(() => (renders.value ? activeFields("render") : []));
+
+/// The ingest fields the main form renders. The latchkey account is one
+/// of this descriptor's fields like any other — it lands on the same
 /// params target and is written by the same code — but it is *shown*
 /// inside the Connection block, next to the button that populates it.
 /// Rendering it twice is the bug this exists to prevent.
 const formFields = computed(() =>
-  shownFields.value.filter((f) => f !== (accountField.value as Field | undefined)),
+  downloadFields.value.filter((f) => f !== (accountField.value as Field | undefined)),
 );
 
-/// Does this provider's render step have anything to configure? The
-/// question that decides checkbox-or-dialog.
-const renderHasOptions = computed(
-  () => !!chosen.value && fieldsFor(chosen.value, "render").length > 0,
-);
+/// The form in two parts: the ingest fields, then the render fields
+/// under their own heading, drawn by one template.
+const sections = computed(() => [
+  { key: "ingest", heading: null as string | null, fields: formFields.value },
+  { key: "render", heading: "Rendering", fields: renderFields.value },
+]);
 
-/// Can a render step be offered at all here — a new fetch step, for a
-/// provider that produces markdown?
-const canOfferRender = computed(
-  () =>
-    mode.value === "create" &&
-    phase.value === "download" &&
-    !!chosen.value &&
-    chosen.value.renderStep !== false,
-);
-
-/// Ticked by default: rendering is what makes the data searchable, and
-/// a fetch step on its own is the unusual choice. Only shown when the
-/// render step has nothing to ask about.
-const alsoRender = ref(true);
-
-/// The render step's TOML, for the review pane, so the checkbox shows
-/// its consequence rather than asserting it.
-const alsoRenderPreview = computed(() => {
-  if (!chosen.value || !canOfferRender.value || renderHasOptions.value || !alsoRender.value) {
-    return "";
-  }
-  return `\n\n${buildStep({
-    entry: chosen.value,
-    group: stem.value,
-    phase: "render",
-    inputs: [stepId.value],
-    values: values.value,
-  })}`;
+/// Steps this source is missing, which saving writes. Only while
+/// editing — a hand-edited group can have one step and not the other —
+/// and worth a sentence, since Save then does more than change a value.
+const missingSteps = computed<string[]>(() => {
+  if (!props.editing) return [];
+  const out: string[] = [];
+  if (!props.editing.steps.ingest) out.push(stepIdFor(id.value, "download"));
+  if (renders.value && !props.editing.steps.render) out.push(stepIdFor(id.value, "render"));
+  return out;
 });
+
+/// A render step this source has that its provider does not write — a
+/// hand-written one under a download-only type. Saving removes it, and
+/// that is worth a sentence for the same reason a missing step is.
+const orphanRender = computed<string | null>(() =>
+  props.editing && !renders.value && props.editing.steps.render
+    ? props.editing.steps.render.id
+    : null,
+);
 
 const groups = computed(() => {
   const matches = filterCatalog(query.value);
@@ -238,12 +190,7 @@ function selectOptions(f: Field & { kind: "select" }): { value: string; label: s
   return [...f.options, { value: current, label: `${current} (not a known value)` }];
 }
 
-function seedValues(entry: CatalogEntry, step?: ConfiguredStep) {
-  values.value = seedFieldValues(entry, step);
-}
-
-if (props.editing) seedValues(props.editing.entry, props.editing.step);
-else if (props.renderFor) seedValues(props.renderFor.entry);
+if (props.editing) values.value = seedFieldValues(props.editing.entry, props.editing.steps);
 
 function choose(entry: CatalogEntry) {
   if (!entry.wizard) return;
@@ -252,7 +199,7 @@ function choose(entry: CatalogEntry) {
   // Typing a name re-derives it, until the id is touched directly.
   id.value = suggestId(props.takenIds, "", entry.defaultName);
   idTouched.value = false;
-  seedValues(entry);
+  values.value = seedFieldValues(entry);
   stage.value = "configure";
 }
 
@@ -281,14 +228,13 @@ function onPickKeydown(e: KeyboardEvent) {
   }
 }
 
-/// The id the *user* edits is the stem: creating an ingest step means
-/// choosing `work-slack`, and the steps written under it are
-/// `work-slack/ingest` and (later) `work-slack/render_markdown`. So the
-/// field validates a single path segment, and the step ids are built
-/// from it.
+/// The id is a single path segment: the steps written under it are
+/// `<id>/ingest` and `<id>/render_markdown`, and the loader composes
+/// those itself.
 const RESERVED = new Set(["system", "unified_index"]);
+const groupId = computed(() => id.value.trim());
 const idError = computed(() => {
-  const n = stem.value;
+  const n = groupId.value;
   if (!n) return "An id is required.";
   if (RESERVED.has(n)) return `"${n}" is reserved — it names a directory the pipeline owns.`;
   if (n === "." || n === "..") return "The id must not be '.' or '..'.";
@@ -300,27 +246,12 @@ const idError = computed(() => {
   return null;
 });
 
-/// The stem the user typed. In edit and render mode the id field holds
-/// a full step id (`work-slack/ingest`), so the stem is its first
-/// segment; while creating, the field *is* the stem.
-const stem = computed(() => {
-  const raw = id.value.trim();
-  return mode.value === "create" ? raw : raw.split("/")[0];
-});
-
-/// The step id actually written: `<stem>/ingest` or
-/// `<stem>/render_markdown` while creating, and the id as-is when
-/// editing or chaining (both of which start from a real step id).
-const stepId = computed(() =>
-  mode.value === "create" ? `${stem.value}/${functionOf(phase.value)}` : id.value.trim(),
-);
-
 /// Fields the provider's Rust struct declares non-optional — a
 /// `PathBuf` rather than an `Option<PathBuf>` — so a config missing one
 /// fails at deserialize time rather than at sync time. Caught here so
 /// the message lands under the field instead of in a job log.
 const missingRequired = computed(() =>
-  shownFields.value
+  [...downloadFields.value, ...renderFields.value]
     .filter((f) => "required" in f && f.required)
     .filter((f) => String(values.value[f.target] ?? "").trim() === "")
     .map((f) => f.label),
@@ -328,40 +259,24 @@ const missingRequired = computed(() =>
 
 const canSubmit = computed(() => !idError.value && missingRequired.value.length === 0);
 
-/// What this step reads. A fetch step names nothing — its real input is
-/// a remote service, or a path in its own params. A render step names
-/// the fetch step it was chained from, or (when editing) whatever it
-/// already declared.
-const inputs = computed<string[]>(() => {
-  if (props.renderFor) return [props.renderFor.fetchId];
-  if (props.editing) return props.editing.step.inputs;
-  return [];
-});
-
-const body = computed(() =>
+/// What this dialog writes: the group while creating, and the source's
+/// steps either way.
+const source = computed(() =>
   chosen.value
-    ? buildStep({
+    ? buildSource({
         entry: chosen.value,
-        group: stem.value,
-        phase: phase.value,
-        inputs: inputs.value,
+        group: groupId.value,
+        name: name.value,
         values: values.value,
+        withGroup: mode.value === "create",
       })
-    : "",
-);
-
-/// The `[[groups]]` entry a new source gets, above its steps. Only while
-/// creating: editing and chaining both work under a group that exists.
-const groupBody = computed(() =>
-  chosen.value && mode.value === "create"
-    ? buildGroup({ id: stem.value, name: name.value, type: chosen.value.type })
     : null,
 );
 
-/// What the review pane shows: the group (when one is being created),
-/// this step, and the render step the checkbox adds.
 const preview = computed(() =>
-  `${groupBody.value ? `${groupBody.value}\n\n` : ""}${body.value}${alsoRenderPreview.value}`,
+  source.value
+    ? `${source.value.groupBody ? `${source.value.groupBody}\n\n` : ""}${source.value.stepsBody}`
+    : "",
 );
 
 function listText(field: Field): string {
@@ -406,18 +321,30 @@ async function browse(f: Field) {
 
 // Connection: which latchkey account, and what it can reach
 
-/// The latchkey service this descriptor authenticates against, on the
-/// step that actually authenticates. A render step reads a directory,
-/// so it has no credentials of its own even for a credentialed source.
-const service = computed(() =>
-  phase.value === "download" ? (chosen.value?.credentialService ?? null) : null,
+/// The params a probe authenticates with: the ingest step's, as this
+/// form would write them. That is where the credentials and the mode
+/// live, and the render step's pickers are filled from the same answer.
+const probeParams = computed<Record<string, unknown> | null>(() =>
+  chosen.value ? paramsObject(chosen.value, values.value, "download") : null,
 );
+
+/// The latchkey service this source authenticates against — and only
+/// while the params the form would write reach an origin. An import
+/// (`ingestReach` says `local`) has nothing to log in to, however the
+/// descriptor is labelled, so it gets no Connection section.
+const service = computed(() => {
+  const entry = chosen.value;
+  if (!entry?.credentialService) return null;
+  return ingestReach(entry.type, probeParams.value ?? {}) === "origin"
+    ? entry.credentialService
+    : null;
+});
 
 /// The one field, if any, that holds a latchkey account. There is at
 /// most one per descriptor: a step mirrors one identity.
 const accountField = computed(
   () =>
-    shownFields.value.find((f) => f.kind === "text" && f.latchkey) as
+    downloadFields.value.find((f) => f.kind === "text" && f.latchkey) as
       | (Field & { kind: "text" })
       | undefined,
 );
@@ -502,15 +429,6 @@ const probe = ref<{
   report: ProbeReport | null;
 }>({ state: "idle", message: "", report: null });
 
-/// The params a probe should authenticate with: this form's, when it is
-/// the download step, and the *producing* step's when it is a render
-/// step. Either way they are download-shaped — that is where the
-/// credentials and the mode live.
-const probeParams = computed<Record<string, unknown> | null>(() => {
-  if (!chosen.value) return null;
-  if (phase.value === "download") return paramsObject(chosen.value, values.value, "download");
-  return props.renderFor?.downloadParams ?? props.editing?.downloadParams ?? null;
-});
 
 /// Can "Test connection" be offered here at all?
 const canProbe = computed(() => !!chosen.value?.canProbe && !!probeParams.value);
@@ -574,7 +492,7 @@ function labelCount(label: ProbeReport["labels"][number]): string {
 }
 
 // Load the account list as soon as there is a service to load it for:
-// on open in edit/render mode, and on picking a tile in create mode.
+// on open in edit mode, and on picking a tile in create mode.
 watch(
   service,
   (name) => {
@@ -584,64 +502,23 @@ watch(
 );
 
 function submit() {
-  if (!canSubmit.value || !chosen.value) return;
-  const fetchName = name.value.trim() || stepId.value;
-
-  // The render step comes one of two ways, never both. With options, a
-  // second dialog the caller opens; without, the checkbox above, and
-  // the step is written here alongside the fetch step.
-  const offer =
-    canOfferRender.value && renderHasOptions.value
-      ? {
-          fetchId: stepId.value,
-          fetchName,
-          // What was just written for the fetch step. The render
-          // dialog probes with it rather than re-reading a config that
-          // has not been saved yet.
-          downloadParams: paramsObject(chosen.value, values.value, "download"),
-        }
-      : null;
-  const alsoBody =
-    canOfferRender.value && !renderHasOptions.value && alsoRender.value
-      ? {
-          id: renderIdFor(stepId.value),
-          body: buildStep({
-            entry: chosen.value,
-            group: stem.value,
-            phase: "render",
-            inputs: [stepId.value],
-            values: values.value,
-          }),
-        }
-      : null;
-
+  if (!canSubmit.value || !chosen.value || !source.value) return;
   emit("submit", {
-    id: stepId.value,
+    id: groupId.value,
     name: name.value.trim(),
-    body: body.value,
-    groupBody: groupBody.value,
     entry: chosen.value,
-    phase: phase.value,
-    inputs: inputs.value,
-    offerRenderFor: offer,
-    alsoRender: alsoBody,
+    groupBody: source.value.groupBody,
+    stepsBody: source.value.stepsBody,
+    renderId: source.value.renderId,
   });
 }
 </script>
 
 <template>
   <div class="wiz-backdrop" @click.self="emit('close')">
-    <div class="wiz" role="dialog" aria-modal="true" :aria-label="mode === 'edit' ? 'Edit step' : mode === 'render' ? 'Add render step' : 'Add data source'">
+    <div class="wiz" role="dialog" aria-modal="true" :aria-label="isEdit ? 'Edit source' : 'Add data source'">
       <header class="wiz-head">
-        <h2>
-          {{
-            mode === "edit"
-              ? `Edit ${name || id}`
-              : mode === "render"
-                ? "Render to markdown"
-                : "Add a data source"
-          }}
-        </h2>
+        <h2>{{ isEdit ? `Edit ${name || id}` : "Add a data source" }}</h2>
         <button class="wiz-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
 
@@ -693,15 +570,7 @@ function submit() {
           </button>
         </div>
 
-        <p v-if="mode === 'render'" class="wiz-cred">
-          Configure an optional second step that turns what
-          <code>{{ renderFor?.fetchId }}</code> downloaded into markdown, and makes it
-          searchable. It runs on its own and can be re-run without re-downloading anything.
-          It is written as <code>{{ stepId }}</code>, the sibling of the step it reads.
-        </p>
-
-        <!-- Connection. Only on the step that authenticates: a render
-             step reads a directory. -->
+        <!-- Connection: the account the ingest step authenticates as. -->
         <section v-if="service" class="wiz-conn">
           <h3 class="wiz-conn-head">Connection</h3>
           <p class="wiz-help wiz-conn-intro">
@@ -788,197 +657,188 @@ function submit() {
           </p>
         </section>
 
-        <!-- A render step has no credentials of its own; say where its
-             connection came from rather than showing a second, empty
-             Connection block. -->
-        <p v-else-if="chosen.credentialService && canProbe" class="wiz-cred">
-          This step reads what <code>{{ renderFor?.fetchId ?? editing?.step.inputs[0] }}</code>
-          downloaded, so it needs no credentials of its own. “Test connection” below uses that
-          step’s account to list the folders you can filter on.
-          <button
-            type="button"
-            class="btn ghost wiz-inline-btn"
-            :disabled="probe.state === 'running'"
-            @click="testConnection"
-          >
-            {{ probe.state === "running" ? "Testing…" : "Test connection" }}
-          </button>
-          <span v-if="probe.state === 'failed'" class="wiz-error">{{ probe.message }}</span>
-        </p>
-        <p v-else-if="chosen.credentialService && phase === 'download'" class="wiz-cred">
-          Credentials come from latchkey’s <code>{{ chosen.credentialService }}</code> service.
-          Connecting from here isn’t wired up for this source yet — if a sync fails on auth, the
-          job log carries the exact command to run.
-        </p>
-
-        <label v-if="nameEditable" class="wiz-field">
+        <label class="wiz-field">
           <span class="wiz-label">Name</span>
           <input
             v-model="name"
             class="wiz-input"
-            :placeholder="stem || '…'"
+            :placeholder="groupId || '…'"
           />
           <small class="wiz-help">
             What this source is called on screen. Change it whenever you like — nothing on disk
-            moves and no step re-runs. Leave it blank to be shown as <code>{{ stem || "…" }}</code>.
+            moves and no step re-runs. Leave it blank to be shown as <code>{{ groupId || "…" }}</code>.
           </small>
         </label>
 
-        <!-- Only while creating. In the other two modes the id is not a
-             choice — editing cannot change it without a migration, and a
-             render step's is dictated by the step it reads — and a
-             disabled box holding a value you cannot alter is a control
-             that exists only to be refused. What it was telling you is
-             worth keeping, so it moves into prose: the render intro
-             above names the id it will write, and Edit shows it below
-             as the fact it is. -->
+        <!-- Only while creating. Editing cannot change the id without a
+             migration, and a disabled box holding a value you cannot
+             alter is a control that exists only to be refused. What it
+             was telling you is worth keeping, so Edit says it below as
+             the fact it is. -->
         <label v-if="mode === 'create'" class="wiz-field">
           <span class="wiz-label">Id</span>
           <input v-model="id" class="wiz-input" spellcheck="false" @input="idTouched = true" />
           <small class="wiz-help">
             Suggested from the name, and yours to override. Creates
-            <code>{{ stepId }}</code> under the data root.
-            <template v-if="chosen?.renderStep !== false">
-              A render step, if you add one, becomes
-              <code>{{ stem || "…" }}/render_markdown</code> beside it.
+            <code>{{ stepIdFor(groupId || "…", "download") }}</code>
+            <template v-if="renders">
+              and <code>{{ stepIdFor(groupId || "…", "render") }}</code>
             </template>
+            under the data root.
           </small>
           <small v-if="idError && idTouched" class="wiz-error">{{ idError }}</small>
         </label>
-        <p v-else-if="isEdit" class="wiz-help wiz-fixed-id">
-          Writes <code>{{ stepId }}</code> — this step’s folder on disk, and the path the search
-          index has already recorded for every document in it, so it can’t change here. Use
-          <b>Name</b> above for something you can.
+        <p v-else class="wiz-help wiz-fixed-id">
+          Writes under <code>{{ groupId }}/</code> — this source’s folder on disk, and the path the
+          search index has already recorded for every document in it, so it can’t change here.
+          Use <b>Name</b> above for something you can.
         </p>
         <!-- With no Id field there is nowhere for its validator to
              speak, and `canSubmit` still consults it — so a bad
              inherited id would disable Save with no explanation. -->
         <p v-if="idError && mode !== 'create'" class="wiz-error wiz-fixed-id">{{ idError }}</p>
 
-        <p v-if="formFields.length === 0 && mode !== 'create'" class="wiz-help wiz-nofields">
-          This step has no options — its id, its name and what it reads are its whole
+        <p v-if="missingSteps.length" class="wiz-cred">
+          This source is missing
+          <template v-for="(step, i) in missingSteps" :key="step"
+            ><template v-if="i > 0"> and </template><code>{{ step }}</code></template
+          >. Saving writes {{ missingSteps.length === 1 ? "it" : "them" }}.
+        </p>
+        <p v-if="orphanRender" class="wiz-cred">
+          This source has a render step, <code>{{ orphanRender }}</code>, but
+          {{ chosen.label }} renders nothing. Saving removes it, and takes it out of the index
+          steps’ inputs.
+        </p>
+
+        <p
+          v-if="formFields.length === 0 && renderFields.length === 0 && isEdit"
+          class="wiz-help wiz-nofields"
+        >
+          This source has no options — its id, its name and what it reads are its whole
           configuration.
         </p>
 
-        <label v-for="f in formFields" :key="f.target" class="wiz-field">
-          <span class="wiz-label">
-            {{ f.label }}
-            <em v-if="'required' in f && f.required" class="wiz-req">required</em>
-          </span>
+        <template v-for="section in sections" :key="section.key">
+          <section v-if="section.heading && renders" class="wiz-section">
+            <h3 class="wiz-section-head">{{ section.heading }}</h3>
+            <p class="wiz-help wiz-section-intro">
+              A second step, <code>{{ stepIdFor(groupId || "…", "render") }}</code>, turns what
+              this brings in into markdown and makes it searchable. It runs on its own and can be
+              re-run without fetching anything again.<template v-if="section.fields.length === 0">
+                It has no settings of its own.</template
+              >
+            </p>
+          </section>
 
-          <input
-            v-if="f.kind === 'bool'"
-            type="checkbox"
-            class="wiz-bool"
-            :checked="!!values[f.target]"
-            @change="values[f.target] = ($event.target as HTMLInputElement).checked"
-          />
-          <select
-            v-else-if="f.kind === 'select'"
-            class="wiz-input wiz-select"
-            :value="values[f.target] as string"
-            @change="values[f.target] = ($event.target as HTMLSelectElement).value"
-          >
-            <option v-for="o in selectOptions(f)" :key="o.value" :value="o.value">
-              {{ o.label }}
-            </option>
-          </select>
-          <input
-            v-else-if="f.kind === 'date'"
-            type="date"
-            class="wiz-input"
-            :value="values[f.target] as string"
-            @input="values[f.target] = ($event.target as HTMLInputElement).value"
-          />
-          <input
-            v-else-if="f.kind === 'int'"
-            type="number"
-            class="wiz-input"
-            :value="values[f.target] as string"
-            @input="values[f.target] = ($event.target as HTMLInputElement).value"
-          />
-          <!-- Typed path + native picker. The input stays even in the
-               app: paste is a legitimate way in, and in a browser it is
-               the only one. docs/dev/wizard_file_pickers.md. -->
-          <span v-else-if="f.kind === 'path'" class="wiz-pathrow">
+          <label v-for="f in section.fields" :key="f.target" class="wiz-field">
+            <span class="wiz-label">
+              {{ f.label }}
+              <em v-if="'required' in f && f.required" class="wiz-req">required</em>
+            </span>
+
             <input
-              class="wiz-input wiz-path"
+              v-if="f.kind === 'bool'"
+              type="checkbox"
+              class="wiz-bool"
+              :checked="!!values[f.target]"
+              @change="values[f.target] = ($event.target as HTMLInputElement).checked"
+            />
+            <select
+              v-else-if="f.kind === 'select'"
+              class="wiz-input wiz-select"
+              :value="values[f.target] as string"
+              @change="values[f.target] = ($event.target as HTMLSelectElement).value"
+            >
+              <option v-for="o in selectOptions(f)" :key="o.value" :value="o.value">
+                {{ o.label }}
+              </option>
+            </select>
+            <input
+              v-else-if="f.kind === 'date'"
+              type="date"
+              class="wiz-input"
+              :value="values[f.target] as string"
+              @input="values[f.target] = ($event.target as HTMLInputElement).value"
+            />
+            <input
+              v-else-if="f.kind === 'int'"
+              type="number"
+              class="wiz-input"
+              :value="values[f.target] as string"
+              @input="values[f.target] = ($event.target as HTMLInputElement).value"
+            />
+            <!-- Typed path + native picker. The input stays even in the
+                 app: paste is a legitimate way in, and in a browser it is
+                 the only one. docs/dev/wizard_file_pickers.md. -->
+            <span v-else-if="f.kind === 'path'" class="wiz-pathrow">
+              <input
+                class="wiz-input wiz-path"
+                :placeholder="f.placeholder"
+                :value="values[f.target] as string"
+                spellcheck="false"
+                @input="values[f.target] = ($event.target as HTMLInputElement).value"
+              />
+              <button
+                v-if="canPick"
+                type="button"
+                class="btn ghost wiz-browse"
+                @click="browse(f)"
+              >
+                {{ f.picks === "file" ? "Choose file…" : "Choose folder…" }}
+              </button>
+            </span>
+            <span v-else-if="f.kind === 'string_list'" class="wiz-listfield">
+              <input
+                class="wiz-input"
+                :placeholder="f.placeholder"
+                :value="listText(f)"
+                spellcheck="false"
+                @input="setListText(f, ($event.target as HTMLInputElement).value)"
+              />
+              <!-- The checklist is an *addition* to the box above, never
+                   a replacement: a probe needs credentials that may not
+                   exist yet, and this form has to stay usable before one
+                   has ever succeeded. Both edit the same array. -->
+              <span v-if="f.probe && probeOptions(f).length" class="wiz-labels">
+                <button
+                  v-for="l in probeOptions(f)"
+                  :key="l.path"
+                  type="button"
+                  class="wiz-labelchip"
+                  :class="{ on: isChosenLabel(f, l.path) }"
+                  @click="toggleLabel(f, l.path)"
+                >
+                  <span class="wiz-labeltick">{{ isChosenLabel(f, l.path) ? "✓" : "" }}</span>
+                  <span class="wiz-labelname">{{ l.path }}</span>
+                  <span v-if="labelCount(l)" class="wiz-labelcount">{{ labelCount(l) }}</span>
+                </button>
+              </span>
+              <small v-if="f.probe && unknownLabels(f).length" class="wiz-error">
+                Not on this account: {{ unknownLabels(f).join(", ") }}. A download filter naming a
+                label the account doesn’t have fails the run; a render filter naming one renders
+                nothing.
+              </small>
+              <small v-else-if="f.probe && !probe.report" class="wiz-help">
+                Run “Test connection” to pick from this account’s real
+                {{ f.probe === "mailboxes" ? "folders" : "labels" }} instead of typing them.
+              </small>
+            </span>
+            <input
+              v-else
+              class="wiz-input"
               :placeholder="f.placeholder"
               :value="values[f.target] as string"
               spellcheck="false"
               @input="values[f.target] = ($event.target as HTMLInputElement).value"
             />
-            <button
-              v-if="canPick"
-              type="button"
-              class="btn ghost wiz-browse"
-              @click="browse(f)"
-            >
-              {{ f.picks === "file" ? "Choose file…" : "Choose folder…" }}
-            </button>
-          </span>
-          <span v-else-if="f.kind === 'string_list'" class="wiz-listfield">
-            <input
-              class="wiz-input"
-              :placeholder="f.placeholder"
-              :value="listText(f)"
-              spellcheck="false"
-              @input="setListText(f, ($event.target as HTMLInputElement).value)"
-            />
-            <!-- The checklist is an *addition* to the box above, never
-                 a replacement: a probe needs credentials that may not
-                 exist yet, and this form has to stay usable before one
-                 has ever succeeded. Both edit the same array. -->
-            <span v-if="f.probe && probeOptions(f).length" class="wiz-labels">
-              <button
-                v-for="l in probeOptions(f)"
-                :key="l.path"
-                type="button"
-                class="wiz-labelchip"
-                :class="{ on: isChosenLabel(f, l.path) }"
-                @click="toggleLabel(f, l.path)"
-              >
-                <span class="wiz-labeltick">{{ isChosenLabel(f, l.path) ? "✓" : "" }}</span>
-                <span class="wiz-labelname">{{ l.path }}</span>
-                <span v-if="labelCount(l)" class="wiz-labelcount">{{ labelCount(l) }}</span>
-              </button>
-            </span>
-            <small v-if="f.probe && unknownLabels(f).length" class="wiz-error">
-              Not on this account: {{ unknownLabels(f).join(", ") }}. A download filter naming a
-              label the account doesn’t have fails the run; a render filter naming one renders
-              nothing.
-            </small>
-            <small v-else-if="f.probe && !probe.report" class="wiz-help">
-              Run “Test connection” to pick from this account’s real
-              {{ f.probe === "mailboxes" ? "folders" : "labels" }} instead of typing them.
-            </small>
-          </span>
-          <input
-            v-else
-            class="wiz-input"
-            :placeholder="f.placeholder"
-            :value="values[f.target] as string"
-            @input="values[f.target] = ($event.target as HTMLInputElement).value"
-          />
 
-          <small v-if="f.help" class="wiz-help">{{ f.help }}</small>
-          <small v-if="pickFailed[f.target]" class="wiz-error">
-            Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste the path
-            instead.
-          </small>
-        </label>
-
-        <label v-if="canOfferRender && !renderHasOptions" class="wiz-check">
-          <input v-model="alsoRender" type="checkbox" />
-          <span>
-            <b>Also render this to markdown</b>
-            <small>
-              An optional second step, <code>{{ stem || "…" }}/render_markdown</code>, that turns what this
-              downloads into markdown and makes it searchable. It has no settings of its own,
-              runs separately, and can be added later from the row’s actions.
+            <small v-if="f.help" class="wiz-help">{{ f.help }}</small>
+            <small v-if="pickFailed[f.target]" class="wiz-error">
+              Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste the path
+              instead.
             </small>
-          </span>
-        </label>
+          </label>
+        </template>
 
         <details class="wiz-review">
           <summary>Review the TOML this writes</summary>
@@ -997,7 +857,7 @@ function submit() {
           :disabled="!canSubmit"
           @click="submit"
         >
-          {{ mode === "edit" ? "Save changes" : mode === "render" ? "Add render step" : "Add source" }}
+          {{ isEdit ? "Save changes" : "Add source" }}
         </button>
       </footer>
     </div>
@@ -1057,12 +917,8 @@ function submit() {
   font: inherit;
 }
 .wiz-filter { margin-bottom: 16px; }
-/* A bool field's own checkbox. Named apart from `.wiz-check` — the
-   "also render this" card further down — because the two were one
-   class, and this 16px box was being applied to that whole card:
-   its label and its paragraph of help got a 16px-wide column to wrap
-   inside, and overlapped the disclosure below it. Two elements, two
-   names. */
+/* A bool field's own checkbox, sized as a box rather than stretched to
+   the field's width like a text input. */
 .wiz-bool { width: 16px; height: 16px; }
 /* Shares `.wiz-input`'s box; keeps the platform disclosure arrow so it
    doesn't read as a text field you can type into. */
@@ -1129,22 +985,10 @@ function submit() {
 
 .wiz-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
 .wiz-label { font-size: 12.5px; font-weight: 600; }
-.wiz-nofields { margin: 0; }
+.wiz-nofields { margin: 0 0 16px; }
 /* The id where it is a fact rather than a field, and the id error that
-   then has nowhere else to go. Both sit in the form's flow, so they
-   only need their default paragraph margin dropped. */
-.wiz-fixed-id { margin: 0; }
-.wiz-check {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 10px 12px;
-  border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-}
-.wiz-check input { margin-top: 3px; }
-.wiz-check span { display: flex; flex-direction: column; gap: 3px; }
-.wiz-check small { color: var(--datalib-muted); }
+   then has nowhere else to go. Both sit in the form's flow. */
+.wiz-fixed-id { margin: 0 0 16px; }
 .wiz-help { color: var(--datalib-muted); font-size: 11.5px; line-height: 1.45; }
 .wiz-error { color: #b8481a; font-size: 11.5px; }
 .wiz-req {
@@ -1163,6 +1007,24 @@ function submit() {
 .wiz-browse { white-space: nowrap; }
 .wiz-foot-note { margin-right: auto; font-size: 12px; color: var(--datalib-muted); }
 
+/* The Rendering heading: a rule and a small-caps title, so the render
+   step's settings read as a second part of one form rather than a
+   second form. */
+.wiz-section {
+  border-top: 1px solid var(--datalib-border);
+  padding-top: 14px;
+  margin: 20px 0 12px;
+}
+.wiz-section-head,
+.wiz-conn-head {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--datalib-muted);
+}
+.wiz-section-intro { margin: 0; }
+
 /* The Connection block: latchkey account + the two buttons. Boxed
    because it is about the *account*, not about one setting — the
    fields below it are all things you type, and this is the one place
@@ -1173,17 +1035,9 @@ function submit() {
   padding: 12px 14px 4px;
   margin-bottom: 16px;
 }
-.wiz-conn-head {
-  margin: 0 0 6px;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--datalib-muted);
-}
 .wiz-conn-intro { margin: 0 0 12px; }
 .wiz-conn-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .wiz-conn-note { margin: 0 0 10px; }
-.wiz-inline-btn { margin-left: 6px; padding: 3px 8px; font-size: 12px; }
 /* Dropdown over box, not side by side: an account is an email address
    and both halves need the width. */
 .wiz-accountrow { display: flex; flex-direction: column; gap: 6px; }

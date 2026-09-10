@@ -1,11 +1,11 @@
 # Groups and functions: one row per source
 
-**Status: agreed design (2026-09-09); slices 1, 2 and 4a built
-(2026-09-09 and 2026-09-10), slices 3, 4b and 5 not.** Written against
+**Status: agreed design (2026-09-09); slices 1, 2, 3a, 3b, 4a and 4b
+built (2026-09-09 and 2026-09-10), slice 5 not.** Written against
 `eee381c3`. Per [`AGENTS.md`](../../../AGENTS.md), don't cite this
 file as a description of the tree. Where it says "today", that was
 checked against that commit; where it says "will", check the slice
-list under "Order of work" — slices 1, 2 and 4a are in the tree, and the
+list under "Order of work" — every slice but 5 is in the tree, and the
 places each departed from this text are recorded there.
 
 **Reverses** the "Sources stop being a grouping" section of
@@ -376,12 +376,14 @@ backlog reporting are follow-ons (below).
 
 ## The wizard
 
+*Built as slice 4b; see "Order of work" for what it settled.*
+
 One dialog creates a group and its two steps. Ingest-phase catalog
 fields are shown on the main screen and written to the ingest step;
 render-phase fields and presets (`outlink_format` for the email
 providers, beeper's `period`, `signal_backup`'s knob) go under a
-"Rendering" heading and are written to the render step. There is one name box, for the group. The
-"also render this?" chain goes away.
+"Rendering" heading and are written to the render step. There is one
+name box, for the group. The "also render this?" chain goes away.
 
 `stemOf`, `renderIdFor`, `phaseOf`, `PHASE_BY_LEAF` and the
 `<stem>/raw` fallback in `producerOf` are deleted. `wireIntoFanIns`
@@ -503,8 +505,130 @@ Each slice is a PR; each leaves the tree green.
      `download_only!` became `ingest_only!`, and the UI's `fetch` phase
      became `ingest`, labelled "Ingest" until slice 4 labels it
      "Download" or "Import".
-3. **`type` as data type.** `SourceType` shrinks, Claude gains method
-   tables, `common.input_path` becomes per-method `path`.
+3. **`type` as data type**, in two halves, because the first is small
+   and unblocks a label while the second is a config-shape change
+   across every provider:
+   - **3a. The `Origin` / `Local` property** — *built (2026-09-10)*.
+     Every method table a
+     provider's config crate accepts declares itself `Origin` (reaches
+     a live service) or `Local` (reads files already on disk), as a
+     closed set (`strum`, per `AGENTS.md`), and the catalog mirrors
+     the declaration per method. No config shape changes: today's
+     tables (`sync`, `gmail_api`, `mbox`, `common.input_path`) get the
+     property under their current names. Three readers land with it:
+     the Manage row's child label reads "Download" or "Import" instead
+     of "Ingest" (`CHILD_LABEL` in `Manager2View.vue`, derived from
+     which tables the step's params hold — written config, no
+     parsing); `DATALIB_DAG_RESET_AND_REDOWNLOAD` is honoured by an
+     `Origin` method and ignored by a `Local` one, which is what the
+     protocol doc already says in prose; and `datalib-step` refuses an
+     `ingest` step whose params hold no method table at all (decision
+     5's check). The wizard's latchkey section gating on `Origin` is
+     4b's, since 4b rewrites that dialog.
+
+     Where it departed from that text:
+     - The declaration is `impl IngestMethods for <P>Config` in each
+       config crate: a list of `IngestMethod { path, reach }`, where
+       `path` is a dotted path into the params rather than a table
+       name, because one method is a flag — linkedin's `fetch_photos`
+       is the only thing that provider fetches from the network, so it
+       is declared `Origin` and a step with it on reads "Download"
+       (the shape the Deferred section describes). A method is *held*
+       when its path is written and its value is neither `null` nor
+       `false`. `datalib_step/src/methods.rs` maps a type to its list
+       and holds the rule; `datalib_source_common` gained `strum` for
+       the enum, so it is no longer serde-only.
+     - The catalog does not carry the mirror by hand.
+       `ui/src/config/ingestMethods.json` is generated from the
+       declarations by
+       `bazel run //datalib/backend/datalib_step:ingest_methods.update`,
+       a test in `methods.rs` fails when it drifts, and
+       `ui/src/config/ingestMethods.ts` applies the same held rule to a
+       type and a params tree. 4b's latchkey gating asks `ingestReach`
+       there with the params the form would write.
+     - **The reset reader was not built, because the tree disagrees
+       with the prose it cited.** `test_pipeline_resume_and_reset` in
+       `tests/fixtures/ingested_tng_test.py` pins that a reset run
+       wipes Signal's `ingested_backups` cursor, and Signal reads a
+       backup on disk — a `Local` method. Every file-backed provider
+       does the same: pdf and media re-hash, fsindex drops its rescan
+       cursor, sms and the Claude export truncate. That is the only
+       button a user has for "re-read this from scratch", so `Local`
+       keeps honouring the flag; the protocol doc and
+       `subprocess.rs` now say "honor it if you bring data in from
+       outside the pipeline", which is what the steps do. The planned
+       source carries its `reach` and the ingest driver logs it, and
+       nothing else acts on it yet. Give it a real reader when 3b
+       lands, or drop it then: a field that is only ever logged is
+       one the unused-field lint will eventually ask about.
+     - Two declarations that are not obvious from the table names:
+       beeper's `sync` is `Local` (it reads Beeper Texts' own SQLite),
+       and perseus declares both `sync` (`Origin`, TEI files from
+       GitHub) and `common.input_path` (`Local`, the staged tree).
+       google_takeout's `sync` is *not* a method — it is the feed
+       toggles — so only its `common.input_path` is.
+     - The step-role glyph's accessible name still says "Ingest": it
+       names the phase, which is true of both words.
+   - **3b. One type per data shape, one table per method** — *built
+     (2026-09-10)*. `SourceType` drops the `_api` suffixes (`slack`,
+     `chatgpt`, `github`, …) and `claude_export` folds into `claude`, so
+     a group's `type` names the thing mirrored and the render side is a
+     function of it. The ingest step's params hold one table per
+     method, named for the method: `sync` becomes `api` (or `jmap` for
+     email), `claude`'s export becomes `[steps.params.export]`, and
+     every file-backed method (`export`, `mbox`, `fswalk` for the three
+     `fswalk` sources, the backup readers) carries its own `path`
+     instead of the shared `common.input_path`. That is a rewrite of
+     every provider config crate, the catalog, every example and fixture
+     config, and the fixture bake — and a second config-shape change, so
+     `datalib-migrate-config`'s one rewrite becomes "any earlier shape
+     → this one": it already parses the pre-`[[groups]]` and slice-1
+     shapes, and gains the type and method-table renames. Expect a cold
+     CI run: every provider crate rebuilds. `Provider` in
+     `schema/src/providers.rs` (the `grid_rows.provider` tag) is a
+     separate vocabulary and does not move.
+
+     Where it departed from that text, and what it settled:
+     - The `_backup` suffixes went with the `_api` ones (`signal`,
+       `whatsapp`), for the same reason: they named the method. And
+       `carddav` became `contacts` — CardDAV is a protocol, the thing
+       mirrored is contacts, and the `Provider` tag and the crate already
+       said so. The rule is now stated in `source_type.rs` and a test
+       there pins that every type with a `grid_rows.provider` tag spells
+       it the same way. Only `sms_backup_restore` and `google_takeout`
+       keep a method word, because each *is* the product's name.
+     - The method tables: `api` for slack, chatgpt, github, gitlab,
+       notion, yolink and claude; `export` (with `path`) for claude,
+       linkedin and google_takeout, whose feed toggles moved inside it;
+       `jmap`, `gmail_api` and `mbox` (with `path`) for email; `carddav`
+       and `vcf` for contacts; `texts` for beeper (the Beeper Texts
+       app's own database, with `path` optional); `backup` for signal,
+       whatsapp and sms_backup_restore; `fswalk` for fsindex, pdf and
+       media; `catalog` for lightroom; `github` for perseus. A provider
+       with two tables refuses a step naming both, so the
+       "bootstrap from an export" door stays one-way by construction.
+     - Perseus lost its `Local` method. A tree staged by hand was never
+       an ingest: with no `sync` the download wave was empty and the
+       step refused, so the staged tree is what it always was, a
+       render-only step, and it stays on `RenderCommon.input_path`.
+       `SourceCommon.input_path` is gone; `RenderCommon.input_path`
+       survives for that one reader.
+     - `datalib-step` refuses the retired shape by name: a type spelled
+       `*_api`, `*_backup`, `claude_export` or `carddav`, or an ingest
+       step whose params still carry `sync` or `common.input_path`,
+       fails naming `datalib-migrate-config` rather than falling through
+       to "no method set". The migrator holds the rename tables
+       (`RETIRED_TYPES`, `rewrite_ingest_params` in `convert.rs`) and
+       refuses a perseus ingest step carrying `common.input_path` with
+       directions instead of dropping it.
+     - The catalog gained `method`, the table an entry writes as `= {}`
+       when none of its fields is set, because presence is the
+       selection; the wizard's "Claude export" entry gained a form (one
+       path field) since a `claude` step now has two variants and the
+       export one is a single path.
+     - The synth subcommand's fixture tree is `--params
+       '{"fixture_path": …}'` rather than a `common.input_path` it
+       shared with the config shape.
 4. **Manage screen and wizard**, in two halves, because the second
    rewrites the files slice 2 renames through:
    - **4a. The tree grid** — *built (2026-09-10)*: one row per group,
@@ -527,33 +651,71 @@ Each slice is a PR; each leaves the tree green.
        what the loader's note on that key says. The "Download" /
        "Import" word waits for slice 3's `Origin` / `Local`
        declaration. A step outside any group keeps its own name.
-     - A group's Edit and "Render to markdown" open its *fetch step's*
-       form, since that is where the name and the download settings
-       live until 4b's one-dialog wizard; a group with no fetch step
-       has no form. The aggregation rules live in
+     - A group's Edit opened its *fetch step's* form until 4b landed
+       the one dialog. The aggregation rules live in
        `ui/src/config/groupRows.ts`, tested without a grid; a failed
        applet counts as a failed child, since the group row is the
        only place its health shows while the group is folded.
-   - **4b. The one-dialog wizard** — group + both steps from one form,
-     render fields under a "Rendering" heading, one name box; delete
-     `stemOf`, `phaseOf`, `renderIdFor`, `PHASE_BY_LEAF` and the
-     `<stem>/raw` fallback in `producerOf`; rewrite the
-     `sourceSteps.ts` header. **After slice 2**: it rewrites
-     `SourceWizard.vue` and `sourceSteps.ts`, which is where slice 2's
-     rename lands, and a wizard written against `raw` would be rewritten
-     twice.
+   - **4b. The one-dialog wizard** — *built (2026-09-10)*: group + both
+     steps from one form, render fields under a "Rendering" heading,
+     one name box; `stemOf`, `phaseOf`, `renderIdFor`, `PHASE_BY_LEAF`
+     and the `<stem>/raw` fallback in `producerOf` deleted; the
+     `sourceSteps.ts` header rewritten. It came after slice 2 because
+     it rewrites `SourceWizard.vue` and `sourceSteps.ts`, which is
+     where slice 2's rename landed. Where it departed from the text
+     above, and what it settled that the text left open:
+     - A step's phase is read off its `function` (`ingest`,
+       `render_markdown`, `grid_index`, `qmd_index`; anything else is
+       a custom step), never off the shape of its id. The grid's
+       Source column joins `source_name` to a *group's* name the same
+       way, so nothing in the UI splits an id any more.
+     - The "Render to markdown" row action went with the chain: a
+       source's render step is written with its ingest step, and Edit
+       on the group row *or on any step under it* opens the one form.
+       A hand-edited source missing one of its two steps gets it back
+       on save, and the dialog says so before Save is pressed. A
+       provider that renders nothing (`renderStep: false`) is written
+       as one step and shows no Rendering heading.
+     - Edit replaces both steps in one cut-and-append
+       (`replaceSteps`); the group is renamed in place. Cutting and
+       appending one step at a time would use offsets the first cut
+       had shifted.
+     - `producerOf` follows a render step's `inputs`, then falls back
+       to the ingest step filed under the same *group* — the fallback
+       `datalib-step` itself makes — rather than to a stem split.
+     - The probe runs once, with the ingest step's params as the form
+       would write them, and fills the render step's pickers too;
+       the wizard no longer threads a `downloadParams` copy between
+       two dialogs.
+     - The Sources tab's quick-add snippets (`ui/src/config/snippets.ts`)
+       write through `buildGroup` and `stepToml` — the same writers the
+       wizard uses — so the shape of a source is spelled out in
+       `sourceSteps.ts` alone. They keep hand-written params bodies
+       rather than going through `buildSource`, because some carry
+       params the catalog does not model (`carddav`'s
+       `common.input_path`).
+     - A hand-written render step under a download-only type
+       (`renderStep: false`) is removed on save and unwired from the
+       fan-ins; the dialog says so beforehand, the way it does for a
+       missing step.
+     - The latchkey / credentials section is gated on `ingestReach`
+       (`ui/src/config/ingestMethods.ts`) reading `origin` off the
+       params the form would write (landed with 3b): an import shows
+       no Connection section, however its descriptor is labelled.
 
-5. **Mechanical rename** (optional, any time after 3): crate names,
+5. **Mechanical rename** (optional, after 3b): crate names,
    `download/` module directories, `DOWNLOAD.md` files, and the
    `AGENTS.md` section "Download and render are separate crates", all
    to "ingest". `git mv` plus `sed`, no logic, reviewed as "does it
-   build". Slice 3 already rebuilds every provider crate, so the CI
+   build". Slice 3b already rebuilds every provider crate, so the CI
    cold-run cost is paid either way; isolating this slice is about
-   review noise, not build time.
+   review noise, not build time. After 3b rather than before it, so
+   the `git mv` does not land on files 3b is rewriting.
 
-Slices 2 and 3 are backend with a mechanical UI edge; 4a is the row the
-UI review asked for and depends on 1 only, so it was built beside 2;
-4b waits for 2. Slice 3 is independent of 4a and 4b.
+With every slice but 5 in the tree, the thing the UI review asked for
+is done: one row per source, edited as one thing, with the steps under
+it, and the config shape has stopped moving. What is left is **5**, the
+mechanical crate rename, which changes nothing the app does.
 
 ## Deferred
 

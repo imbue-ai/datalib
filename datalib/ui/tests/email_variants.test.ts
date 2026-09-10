@@ -4,8 +4,8 @@
 // the wizard must *write* a step the backend recognizes as the right
 // mode, and it must *read* an existing step back onto the descriptor
 // that wrote it. Getting either wrong is quiet — a Gmail source written
-// with no `gmail_api` table falls through to the mbox path and fails
-// with "no live download mode"; a Fastmail step read back as the
+// with no `gmail_api` table names no method and is refused by
+// `datalib-step`; a Fastmail step read back as the
 // catch-all `email` entry loses its form and its Edit button.
 import { describe, expect, it } from "vitest";
 import { CATALOG, catalogFor, catalogForStep, entryKey } from "../src/config/catalog";
@@ -19,15 +19,15 @@ import {
 } from "../src/config/sourceSteps";
 
 const GMAIL = CATALOG.find((e) => e.type === "email" && e.variantKey === "gmail_api")!;
-const FASTMAIL = CATALOG.find((e) => e.type === "email" && e.variantKey === "sync")!;
+const FASTMAIL = CATALOG.find((e) => e.type === "email" && e.variantKey === "jmap")!;
 
 describe("the catalog's email variants", () => {
   it("gives each variant a key of its own", () => {
     expect(entryKey(GMAIL)).toBe("email:gmail_api");
-    expect(entryKey(FASTMAIL)).toBe("email:sync");
+    expect(entryKey(FASTMAIL)).toBe("email:jmap");
     // The catch-all keeps the bare type, which is what every
     // single-descriptor entry uses.
-    expect(entryKey(catalogFor("slack_api")!)).toBe("slack_api");
+    expect(entryKey(catalogFor("slack")!)).toBe("slack");
   });
 
   it("has no two entries sharing a key", () => {
@@ -55,7 +55,7 @@ describe("writing a step", () => {
     expect(toml).toContain("[steps.params.gmail_api]");
     expect(toml).toContain('user_id = "me"');
     expect(toml).not.toContain("command");
-    expect(toml).not.toContain("sync");
+    expect(toml).not.toContain("jmap");
   });
 
   it("writes Fastmail's JMAP hostname without asking for it", () => {
@@ -65,7 +65,7 @@ describe("writing a step", () => {
       phase: "download",
       values: seedFieldValues(FASTMAIL),
     });
-    expect(toml).toContain("[steps.params.sync]");
+    expect(toml).toContain("[steps.params.jmap]");
     expect(toml).toContain('hostname = "api.fastmail.com"');
     expect(toml).not.toContain("gmail_api");
   });
@@ -118,7 +118,7 @@ describe("writing a step", () => {
       values: seedFieldValues(FASTMAIL),
     })}\n`;
     const [step] = listSteps(toml);
-    expect(step.params).toMatchObject({ sync: { hostname: "api.fastmail.com" } });
+    expect(step.params).toMatchObject({ jmap: { hostname: "api.fastmail.com" } });
   });
 });
 
@@ -149,7 +149,7 @@ type = "email"
 [[steps]]
 group = "fastmail"
 function = "ingest"
-[steps.params.sync]
+[steps.params.jmap]
 hostname = "api.fastmail.com"
 
 [[steps]]
@@ -166,8 +166,8 @@ type = "email"
 [[steps]]
 group = "archive"
 function = "ingest"
-[steps.params.common]
-input_path = "~/takeout/mail.mbox"
+[steps.params.mbox]
+path = "~/takeout/mail.mbox"
 `;
   const STEPS = listSteps(CONFIG);
   const byId = (id: string) => STEPS.find((s) => s.id === id)!;
@@ -246,7 +246,7 @@ describe("the params a probe is sent", () => {
 
   it("carries Fastmail's hostname, which is the whole of its mode", () => {
     expect(paramsObject(FASTMAIL, seedFieldValues(FASTMAIL), "download")).toEqual({
-      sync: { hostname: "api.fastmail.com" },
+      jmap: { hostname: "api.fastmail.com" },
     });
   });
 

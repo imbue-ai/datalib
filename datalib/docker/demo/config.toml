@@ -20,21 +20,21 @@
 [[groups]]
 id = "claude-export"
 name = "Claude export"
-type = "claude_export"
+type = "claude"
 
 [[steps]]
 group = "claude-export"
 function = "ingest"
-[steps.params.common]
-input_path = "/opt/datalib/demo-sources/claude-export"
+[steps.params.export]
+path = "/opt/datalib/demo-sources/claude-export"
 
 [[steps]]
 group = "claude-export"
 function = "render_markdown"
 inputs = ["claude-export/ingest"]
 
-# Google Takeout Gmail: no `sync` block, so the email source reads the
-# `.mbox` at `input_path`. The `mbox` block labels the account row.
+# Google Takeout Gmail: the `mbox` table selects the file-backed method;
+# `path` is the file and the rest labels the account row.
 [[groups]]
 id = "gmail-takeout"
 name = "Gmail (Takeout .mbox)"
@@ -43,9 +43,8 @@ type = "email"
 [[steps]]
 group = "gmail-takeout"
 function = "ingest"
-[steps.params.common]
-input_path = "/opt/datalib/demo-sources/gmail-takeout/star_trek.mbox"
 [steps.params.mbox]
+path = "/opt/datalib/demo-sources/gmail-takeout/star_trek.mbox"
 account_id = "picard@enterprise.starfleet"
 display_name = "Jean-Luc Picard"
 email_address = "picard@enterprise.starfleet"
@@ -66,9 +65,8 @@ type = "google_takeout"
 [[steps]]
 group = "google-takeout"
 function = "ingest"
-[steps.params.common]
-input_path = "/opt/datalib/demo-sources/google-takeout/Takeout"
-[steps.params.sync]
+[steps.params.export]
+path = "/opt/datalib/demo-sources/google-takeout/Takeout"
 google_chat = true
 google_voice = true
 google_voice_include_spam = true
@@ -86,8 +84,8 @@ type = "sms_backup_restore"
 [[steps]]
 group = "sms-backup-restore"
 function = "ingest"
-[steps.params.common]
-input_path = "/opt/datalib/demo-sources/sms-backup-restore"
+[steps.params.backup]
+path = "/opt/datalib/demo-sources/sms-backup-restore"
 
 [[steps]]
 group = "sms-backup-restore"
@@ -102,25 +100,25 @@ type = "linkedin"
 [[steps]]
 group = "linkedin"
 function = "ingest"
-[steps.params.common]
-input_path = "/opt/datalib/demo-sources/linkedin"
+[steps.params.export]
+path = "/opt/datalib/demo-sources/linkedin"
 
 [[steps]]
 group = "linkedin"
 function = "render_markdown"
 inputs = ["linkedin/ingest"]
 
-# No `sync` block: file mode, reading the `.vcf` files under `input_path`.
+# The `vcf` table selects the file-backed method: `.vcf` files under `path`.
 [[groups]]
 id = "contacts"
 name = "Contacts (vCard)"
-type = "carddav"
+type = "contacts"
 
 [[steps]]
 group = "contacts"
 function = "ingest"
-[steps.params.common]
-input_path = "/opt/datalib/demo-sources/contacts"
+[steps.params.vcf]
+path = "/opt/datalib/demo-sources/contacts"
 
 [[steps]]
 group = "contacts"
@@ -135,8 +133,8 @@ type = "pdf"
 [[steps]]
 group = "pdfs"
 function = "ingest"
-[steps.params.common]
-input_path = "/opt/datalib/demo-sources/pdfs"
+[steps.params.fswalk]
+path = "/opt/datalib/demo-sources/pdfs"
 
 [[steps]]
 group = "pdfs"

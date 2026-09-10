@@ -24,12 +24,16 @@ pub async fn run(
     };
     anyhow::ensure!(
         !processors.is_empty(),
-        "source {:?} (type={}) has no download work — it needs a `sync:` block \
-         (or a staged input_path for file-backed sources)",
+        "source {:?} (type={}) has no download work — its params name no ingest method",
         planned.name,
         planned.source_type
     );
 
+    tracing::info!(
+        source = %planned.name,
+        reach = ?planned.reach,
+        "download: ingest method declared by the provider",
+    );
     let progress = emitter.progress();
     let metrics = datalib_etl::download_metrics::DownloadMetrics::new();
     let diagnostics = datalib_obs::diagnostics::Diagnostics::new();

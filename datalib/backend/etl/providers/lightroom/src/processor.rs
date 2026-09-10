@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
@@ -11,9 +11,14 @@ use datalib_etl_lightroom_config::LightroomConfig;
 
 use crate::download::{self, MirrorOptions};
 
-pub fn mirror_options(config: &LightroomConfig) -> MirrorOptions {
-    MirrorOptions {
-        source_path: config.common.input_or_raw_path().to_path_buf(),
+pub fn mirror_options(config: &LightroomConfig) -> Result<MirrorOptions> {
+    let source_path = config
+        .catalog
+        .as_ref()
+        .ok_or_else(|| anyhow!("lightroom: missing `catalog.path` (the .lrcat to mirror)"))?
+        .path();
+    Ok(MirrorOptions {
+        source_path,
         snapshot: config.snapshot,
         include_tables: config.include_tables.clone(),
         exclude_tables: config.exclude_tables.clone(),
@@ -21,7 +26,7 @@ pub fn mirror_options(config: &LightroomConfig) -> MirrorOptions {
         stable_key_columns: config.stable_key_columns.clone(),
         primary_keys: config.primary_keys.clone(),
         gc: config.gc,
-    }
+    })
 }
 
 pub fn plan_download(
@@ -32,7 +37,7 @@ pub fn plan_download(
     Ok(vec![Box::new(LightroomDownload {
         id: format!("lightroom/{name}/download"),
         raw_path: config.common.raw_path().to_path_buf(),
-        options: mirror_options(&config),
+        options: mirror_options(&config)?,
     })])
 }
 

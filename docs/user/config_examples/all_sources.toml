@@ -14,7 +14,7 @@
 # `[[groups]]` entry with a `type`, plus two steps under it, each
 # declared as `group` + `function`: `ingest` brings the data into
 # `<group>/ingest` (its `params` carry the provider's knobs — the shared
-# `common` envelope, the `sync` block, …), and `render_markdown` turns
+# `common` envelope, the method table, …), and `render_markdown` turns
 # that raw store into markdown under `<group>/render_markdown` (its
 # `params` carry only render-phase knobs; most providers have none).
 # Neither writes a `command`: a step without one is the built-in
@@ -57,9 +57,9 @@ data_root = "~/datalib"  # Base dir; everything is written under here. `~` is ex
 # ingest step's tree, `<data_root>/<group>/ingest/`, and nothing else —
 # the runner versions that tree and the render step reads it by that
 # name. To keep a store on a bigger disk, put a symlink there. This is
-# purely about where WE store our copy; it's independent of
-# `common.input_path`, which says where a file-backed source's data is
-# read FROM.
+# purely about where WE store our copy; where a file-backed source's
+# data is read FROM is the `path` of its method table (`export`,
+# `backup`, `fswalk`, …) on the ingest step.
 
 # --- Shared index steps -------------------------------------------------
 
@@ -81,17 +81,17 @@ inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgp
 # --- Claude / Anthropic -------------------------------------------------
 
 # Claude.ai conversation mirror over the web API. Credentials come from
-# latchkey at runtime (see first_time_user.md). An empty `sync` fetches
-# every conversation across every org; the knobs bound the work.
+# latchkey at runtime (see first_time_user.md). An empty `api` table
+# fetches every conversation across every org; the knobs bound the work.
 [[groups]]
 id = "claude-api"
-type = "claude_api"
+type = "claude"
 
 [[steps]]
 group = "claude-api"
 function = "ingest"
 
-[steps.params.sync]
+[steps.params.api]
 since = "2025-01-01"                  # only sync conversations updated at/after this
                                       # (RFC 3339 or YYYY-MM-DD; move it back to backfill)
 refresh_most_recent_n_chat_count = 3  # force-refetch top-N by updated_at
@@ -112,25 +112,26 @@ group = "claude-api"
 function = "render_markdown"
 inputs = ["claude-api/ingest"]
 
-# An unpacked Claude data export already on disk. No network and no
-# credentials — the download step just reads the export's JSON and
-# writes it into the same raw store the `claude_api` download fills, so
-# one renderer serves both. Note the split every file-backed source
-# uses: `input_path` is where the export is read FROM; our copy lives
-# in the ingest step's tree, `<data_root>/claude-export/ingest`.
+# An unpacked Claude data export already on disk: the same `claude`
+# type, with `export` as the method instead of `api`. No network and no
+# credentials — the ingest step just reads the export's JSON and writes
+# it into the same raw store the API download fills, so one renderer
+# serves both. Note the split every file-backed source uses: `path` is
+# where the export is read FROM; our copy lives in the ingest step's
+# tree, `<data_root>/claude-export/ingest`.
 #
 # The export is a complete snapshot, so a re-exported tree that no
 # longer mentions a conversation drops it from the store — the one
 # thing reading the tree in place could never notice.
 [[groups]]
 id = "claude-export"
-type = "claude_export"
+type = "claude"
 
 [[steps]]
 group = "claude-export"
 function = "ingest"
-[steps.params.common]
-input_path = "~/backups/claude-export"
+[steps.params.export]
+path = "~/backups/claude-export"
 
 [[steps]]
 group = "claude-export"
@@ -142,12 +143,12 @@ inputs = ["claude-export/ingest"]
 # ChatGPT conversation mirror. Credentials via latchkey.
 [[groups]]
 id = "chatgpt"
-type = "chatgpt_api"
+type = "chatgpt"
 
 [[steps]]
 group = "chatgpt"
 function = "ingest"
-[steps.params.sync]
+[steps.params.api]
 since = "2025-01-01"   # only sync conversations updated at/after this
                        # (RFC 3339 or YYYY-MM-DD; move it back to backfill)
 max_pages = 20         # pagination cap on listing
@@ -166,7 +167,7 @@ inputs = ["chatgpt/ingest"]
 # (or set `all_channels = true`) to mirror every channel the account sees.
 [[groups]]
 id = "slack"
-type = "slack_api"
+type = "slack"
 
 [[steps]]
 group = "slack"
@@ -183,7 +184,7 @@ blob_size_limit_bytes = 1000000  # skip file/media uploads larger than 1 MB
 [steps.params.common.download_params]
 maximum_sequential_failed_requests = 100
 
-[steps.params.sync]
+[steps.params.api]
 since = "2025-01-01"     # oldest message to mirror (YYYY-MM-DD or RFC 3339;
                          # default 2024-01-01). This is the knob that decides
                          # how far back to go — for just the last week, set it
@@ -236,12 +237,12 @@ inputs = ["slack/ingest"]
 # paste-able refs (`owner/repo#NUM`, `owner/repo/pull/NUM`, or a URL).
 [[groups]]
 id = "github"
-type = "github_api"
+type = "github"
 
 [[steps]]
 group = "github"
 function = "ingest"
-[steps.params.sync]
+[steps.params.api]
 refresh_window_days = 30
 max_prs = 50
 pull_requests = [
@@ -260,12 +261,12 @@ inputs = ["github/ingest"]
 # are `namespace/project!IID` or a gitlab.com MR URL.
 [[groups]]
 id = "gitlab"
-type = "gitlab_api"
+type = "gitlab"
 
 [[steps]]
 group = "gitlab"
 function = "ingest"
-[steps.params.sync]
+[steps.params.api]
 refresh_window_days = 30
 max_mrs = 50
 merge_requests = [
@@ -290,16 +291,16 @@ inputs = ["gitlab/ingest"]
 #     -H "Notion-Version: 2026-03-11"
 #
 # A personal access token sees whatever its creator can see, so an empty
-# `sync` mirrors the whole workspace and needs no starting point.
+# `api` table mirrors the whole workspace and needs no starting point.
 [[groups]]
 id = "notion"
-type = "notion_api"
+type = "notion"
 
 [[steps]]
 group = "notion"
 function = "ingest"
 
-[steps.params.sync]
+[steps.params.api]
 refresh_window_days = 7
 
 # Optional allowlist: mirror only these pages and everything under them
@@ -326,7 +327,7 @@ inputs = ["notion/ingest"]
 # --- Email: two input modes ---------------------------------------------
 
 # Mode A — JMAP server (Fastmail or any RFC 8620/8621 server). The
-# presence of `sync` selects JMAP mode; `hostname` is required.
+# `jmap` table selects it; `hostname` is required.
 # Credentials via latchkey.
 [[groups]]
 id = "fastmail"
@@ -346,7 +347,7 @@ function = "ingest"
 # (`only_render_labels`) lives on the render step below.
 only_extract_labels = []          # extract only these mailboxes; empty = all
 
-[steps.params.sync]
+[steps.params.jmap]
 hostname = "api.fastmail.com"
 # account_id = "u12345678"        # defaults to the session's primary mail account
 full_resync = false
@@ -429,9 +430,8 @@ inputs = ["gmail/ingest"]
 outlink_format = "gmail"
 only_render_labels = []
 
-# Mode C — Google Takeout .mbox on disk. No live block at all →
-# file-backed mbox mode, reading the file at `common.input_path`. The
-# `mbox` block just labels the synthesized account row.
+# Mode C — Google Takeout .mbox on disk. The `mbox` table selects it:
+# `path` is the file, and the rest labels the synthesized account row.
 [[groups]]
 id = "gmail-takeout"
 type = "email"
@@ -448,7 +448,6 @@ function = "ingest"
 only_extract_labels = []          # ingest only messages carrying these labels
 
 [steps.params.common]
-input_path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
 # The .mbox is a complete snapshot, so a message that is no longer in it
 # was deleted. Wipe the entity tables before each ingest and rewrite them
 # from the file, and the deletion falls out. The old rows stay in doltlite
@@ -456,6 +455,7 @@ input_path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
 always_clear_before_ingest = true
 
 [steps.params.mbox]
+path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
 account_id = "gmail_alice"
 display_name = "Alice's Gmail"
 email_address = "alice@gmail.com"
@@ -469,19 +469,19 @@ inputs = ["gmail-takeout/ingest"]
 outlink_format = "gmail"   # render each message's `↗` outlink to Gmail
 only_render_labels = []    # render only threads touching these labels; empty = all
 
-# --- Contacts (CardDAV): two input modes --------------------------------
+# --- Contacts: two input modes ------------------------------------------
 
-# Mode A — CalDAV/CardDAV server. The presence of `sync` selects server
-# mode; `server_url` is required. Credentials via latchkey. Omit
-# `addressbooks` to sync every addressbook under the principal.
+# Mode A — CardDAV server. The `carddav` table selects it; `server_url`
+# is required. Credentials via latchkey. Omit `addressbooks` to sync
+# every addressbook under the principal.
 [[groups]]
 id = "icloud-contacts"
-type = "carddav"
+type = "contacts"
 
 [[steps]]
 group = "icloud-contacts"
 function = "ingest"
-[steps.params.sync]
+[steps.params.carddav]
 server_url = "https://contacts.icloud.com/"
 addressbooks = ["Contacts"]
 
@@ -490,17 +490,18 @@ group = "icloud-contacts"
 function = "render_markdown"
 inputs = ["icloud-contacts/ingest"]
 
-# Mode B — local vCard files. No `sync` block → reads `.vcf` files from
-# the directory at `common.input_path`.
+# Mode B — local vCard files. The `vcf` table selects it: `.vcf` files
+# are read from the directory at its `path`.
 [[groups]]
 id = "vcard-contacts"
-type = "carddav"
+type = "contacts"
 
 [[steps]]
 group = "vcard-contacts"
 function = "ingest"
+[steps.params.vcf]
+path = "~/backups/contacts_vcf"
 [steps.params.common]
-input_path = "~/backups/contacts_vcf"
 # The directory is the whole address book, so a `.vcf` that is gone means
 # the contact is gone. (CardDAV mode above doesn't need this: the server
 # reports deletions itself.)
@@ -513,8 +514,8 @@ inputs = ["vcard-contacts/ingest"]
 
 # --- Beeper -------------------------------------------------------------
 
-# Beeper Texts mirror. Reads the local Beeper Texts data dir; pick the
-# chat networks to ingest (at least one required).
+# Beeper Texts mirror. The `texts` table reads the desktop app's own
+# data dir; pick the chat networks to ingest (at least one required).
 # Poorly supported — nobody is using it, so expect rough edges. It never
 # notices a deletion, and `always_clear_before_ingest` is the wrong fix
 # here (see the provider's DOWNLOAD.md).
@@ -525,10 +526,10 @@ type = "beeper"
 [[steps]]
 group = "beeper"
 function = "ingest"
-[steps.params.sync]
+[steps.params.texts]
 sources = ["signal", "googlechat"]
 media = true
-# beeper_data_dir = "~/Library/Application Support/BeeperTexts"  # macOS default
+# path = "~/Library/Application Support/BeeperTexts"  # macOS default
 
 [[steps]]
 group = "beeper"
@@ -539,10 +540,11 @@ period = "month"   # month (default) | day | year | all — span of each rendere
 
 # --- Perseus Digital Library --------------------------------------------
 
-# TEI editions from PerseusDL/canonical-greekLit. An empty `sync` pulls
-# the default Thucydides Histories pair; list `files` to pick others.
-# Perseus renders straight from the staged tree, so the render step
-# carries `common.input_path` too.
+# TEI editions from PerseusDL/canonical-greekLit. The `github` table
+# fetches them into the ingest tree; empty, it pulls the default
+# Thucydides Histories pair, and `files` picks others. Perseus renders
+# straight from that tree. (A tree staged by hand instead has no ingest
+# step: its render step names the tree as `common.input_path`.)
 [[groups]]
 id = "perseus"
 type = "perseus"
@@ -550,9 +552,7 @@ type = "perseus"
 [[steps]]
 group = "perseus"
 function = "ingest"
-[steps.params.common]
-input_path = "~/backups/perseus"
-[steps.params.sync]
+[steps.params.github]
 files = []
 
 [[steps]]
@@ -563,8 +563,6 @@ inputs = ["perseus/ingest"]
 # alignment_pairs = [   # edition pairs to sentence-align, e.g.
 #   ["perseus-grc2", "perseus-eng2"],
 # ]
-[steps.params.common]
-input_path = "~/backups/perseus"
 
 # --- YoLink sensors -----------------------------------------------------
 
@@ -580,13 +578,13 @@ type = "yolink"
 group = "yolink"
 function = "ingest"
 
-[steps.params.sync]
+[steps.params.api]
 window_days = 7
 overlap_minutes = 5
 
 # One table per device. Quote `start`: a bare 2026-01-01 is a TOML date
 # rather than the string the provider validates.
-[[steps.params.sync.devices]]
+[[steps.params.api.devices]]
 name = "basement_freezer"
 kind = "temperature_humidity"
 start = "2026-01-01"
@@ -609,18 +607,18 @@ inputs = ["yolink/ingest"]
 
 # --- Signal (Android backup) --------------------------------------------
 
-# Decrypts the newest `signal-backup-*` snapshot under `snapshot_dir`
+# Decrypts the newest `signal-backup-*` snapshot under `backup.path`
 # using the AEP read from the named env var at download time. See
 # docs/user/getting_your_data.md for pulling the backup off the phone.
 [[groups]]
 id = "signal"
-type = "signal_backup"
+type = "signal"
 
 [[steps]]
 group = "signal"
 function = "ingest"
-[steps.params.sync]
-snapshot_dir = "~/backups/SignalBackups"
+[steps.params.backup]
+path = "~/backups/SignalBackups"
 aep_env_var = "SIGNAL_BACKUP_PASSPHRASE"   # default if omitted
 [steps.params.common]
 # Each backup is a full snapshot of the phone, so a message missing from
@@ -641,13 +639,13 @@ period = "month"   # month (default) | day | year | all — span of each rendere
 # key is hex-encoded in the named env var.
 [[groups]]
 id = "whatsapp"
-type = "whatsapp_backup"
+type = "whatsapp"
 
 [[steps]]
 group = "whatsapp"
 function = "ingest"
-[steps.params.sync]
-backup_dir = "~/backups/WhatsApp"
+[steps.params.backup]
+path = "~/backups/WhatsApp"
 key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"   # default if omitted
 
 [[steps]]
@@ -657,7 +655,7 @@ inputs = ["whatsapp/ingest"]
 
 # --- LinkedIn (data export) ---------------------------------------------
 
-# File-backed: point `common.input_path` at an unzipped LinkedIn "Get a copy
+# File-backed: point `export.path` at an unzipped LinkedIn "Get a copy
 # of your data" export. Download ingests every CSV; render emits the
 # message feeds and your connections (as first-class contacts).
 #
@@ -677,8 +675,10 @@ function = "ingest"
 [steps.params]
 fetch_photos = true
 
+[steps.params.export]
+path = "~/backups/LinkedInDataExport"
+
 [steps.params.common]
-input_path = "~/backups/LinkedInDataExport"
 # Each export is complete. Without this a CSV that LinkedIn stopped
 # including keeps its whole table from the previous export forever.
 always_clear_before_ingest = true
@@ -692,12 +692,12 @@ inputs = ["linkedin/ingest"]
 
 # --- Google Takeout (data export) ---------------------------------------
 
-# File-backed: point `common.input_path` at the unzipped Google Takeout root
+# File-backed: point `export.path` at the unzipped Google Takeout root
 # (the directory that contains `Maps/`, `YouTube and YouTube Music/`,
 # `Google Chat/`, etc.). No credentials — Takeout is your own export.
 #
 # One provider, many feeds: every feed is OFF by default, so opt into the
-# slices you want under `sync`. Today only `google_chat` and
+# slices you want beside the path. Today only `google_chat` and
 # `google_voice` render into browsable Markdown conversations; the rest
 # (maps, youtube, gemini) are downloaded into the per-source raw store and
 # queryable there, but don't render to Markdown yet.
@@ -713,13 +713,13 @@ group = "google-takeout"
 function = "ingest"
 
 [steps.params.common]
-input_path = "~/backups/Takeout"
 # Each Takeout is a complete snapshot of the feeds it covers — so point
 # this at a full export, not one you requested a single product from, or
 # the wipe drops what the narrower export simply doesn't mention.
 always_clear_before_ingest = true
 
-[steps.params.sync]
+[steps.params.export]
+path = "~/backups/Takeout"
 google_chat = true                # DMs + bots + attachments → Markdown
 google_voice = true               # texts, voicemails, calls → Markdown
 google_voice_include_spam = false # also walk Voice/Spam/ when google_voice is on
@@ -737,7 +737,7 @@ inputs = ["google-takeout/ingest"]
 
 # --- SMS Backup & Restore (Android export) ------------------------------
 
-# File-backed: point `common.input_path` at the directory holding the Android
+# File-backed: point `backup.path` at the directory holding the Android
 # "SMS Backup & Restore" app's `sms-*.xml` / `calls-*.xml` files. No API,
 # no credentials. Download ingests each SMS / MMS / call as its own raw row
 # (MMS attachment bytes go to the CAS); render emits one chat per
@@ -749,8 +749,9 @@ type = "sms_backup_restore"
 [[steps]]
 group = "sms-backup-restore"
 function = "ingest"
+[steps.params.backup]
+path = "~/backups/SMSBackupRestore"
 [steps.params.common]
-input_path = "~/backups/SMSBackupRestore"
 # The export directory is the whole archive, so a message no longer in it
 # was deleted on the phone.
 always_clear_before_ingest = true
@@ -762,7 +763,7 @@ inputs = ["sms-backup-restore/ingest"]
 
 # --- fsindex (directory-tree scanner) -----------------------------------
 
-# File-backed: point `common.input_path` at any local directory tree. fsindex
+# File-backed: point `fswalk.path` at any local directory tree. fsindex
 # walks it Unison-style (fast incremental rescans keyed on mtime/size/inode)
 # and records `(path, kind, size, blake3, optional identity uuid)` for every
 # entry in a raw store. It renders no documents of its own (filesystem entries
@@ -782,8 +783,8 @@ group = "fsindex-home"
 function = "ingest"
 [steps.params]
 # stamp = false   # default; true → write UUID breadcrumbs into the tree
-[steps.params.common]
-input_path = "~/Documents"
+[steps.params.fswalk]
+path = "~/Documents"
 
 # Renders no documents, only the storage report — see above.
 [[steps]]
@@ -793,7 +794,7 @@ inputs = ["fsindex-home/ingest"]
 
 # --- pdf (local PDF corpus → markdown) ----------------------------------
 
-# File-backed: point `common.input_path` at a directory tree. Every `*.pdf`
+# File-backed: point `fswalk.path` at a directory tree. Every `*.pdf`
 # under it is hashed, classified (text-based vs scanned), and — when it
 # carries real text — converted to markdown and indexed like any other
 # source, so PDFs show up in the grid and in qmd search.
@@ -819,8 +820,8 @@ function = "ingest"
 # ignore = ["node_modules/**", "**/.Trash/**"]
 # Skip anything larger than this (default 512 MiB).
 # max_bytes = 536870912
-[steps.params.common]
-input_path = "~/Documents"
+[steps.params.fswalk]
+path = "~/Documents"
 
 # The render step needs no params: it reads the scan root back out of
 # the raw store (`pdf_scan_meta`), so it always converts exactly the
@@ -832,7 +833,7 @@ inputs = ["pdfs/ingest"]
 
 # --- media (local music / photos / video / playlists) --------------------
 
-# File-backed: point `common.input_path` at a directory tree. Every audio,
+# File-backed: point `fswalk.path` at a directory tree. Every audio,
 # image and video file under it is hashed, sniffed for what it really is
 # (the bytes decide, not the extension), and recorded with its metadata
 # hoisted into typed columns — artist/album/track for music, camera/lens/
@@ -881,8 +882,8 @@ function = "ingest"
 # than triggering a multi-gigabyte materialization. Default true; turn it off
 # only on a filesystem that reports no block counts at all.
 # skip_dataless = true
-[steps.params.common]
-input_path = "~/Music"
+[steps.params.fswalk]
+path = "~/Music"
 
 # Renders no documents, only the storage report — see above.
 [[steps]]
@@ -892,7 +893,7 @@ inputs = ["media/ingest"]
 
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 
-# File-backed: point `common.input_path` at a `.lrcat`, which is an ordinary
+# File-backed: point `catalog.path` at a `.lrcat`, which is an ordinary
 # SQLite database. Every table is mirrored into the source's doltlite raw
 # store, and doltlite's content-addressed storage does the deduplication —
 # so re-running after a day of editing stores only the rows that changed,
@@ -953,8 +954,8 @@ function = "ingest"
 # on a 3.3 MB catalog with two versions of history), history unaffected,
 # but it rewrites the whole chunk store every time.
 # gc = false
-[steps.params.common]
-input_path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
+[steps.params.catalog]
+path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

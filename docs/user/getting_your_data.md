@@ -43,7 +43,7 @@ for, and latchkey keeps the OAuth token:
 npx -y latchkey auth browser google-gmail
 ```
 
-Use the `gmail_api` mode of the `email` source. Incremental sync is
+Use the `email` source with a `gmail_api` table on its ingest step. Incremental sync is
 driven by Gmail's own change history, so deletions and label changes
 show up as events. Throughput is capped by Google's quota at roughly
 300 messages a minute, so a large mailbox backfills over several runs.
@@ -80,8 +80,8 @@ managed challenge with the bundled Chrome-impersonating curl, so no
 auth surface.
 
 If you would rather not store a live session at all, request a data
-export from Claude's settings and use the `claude_export` source on the
-unpacked folder instead.
+export from Claude's settings and give the `claude` source an `export`
+table pointing at the unpacked folder instead.
 
 ## ChatGPT
 
@@ -141,11 +141,11 @@ if you register its host; Fastmail is the one that is built in.
 
 ## Contacts
 
-Two routes into the `carddav` source:
+Two routes into the `contacts` source, one table each:
 
 - **A `.vcf` export.** Most address books export vCards; point
-  `common.input_path` at a directory of them. No credentials.
-- **A CardDAV server.** Credentials go in latchkey under a service
+  `vcf.path` at a directory of them. No credentials.
+- **A CardDAV server** (a `carddav` table). Credentials go in latchkey under a service
   whose base URL matches the server. Fastmail's is built in and takes
   an app password (Settings → Privacy & Security → Integrations → App
   passwords, with contacts access):
@@ -283,7 +283,7 @@ adb pull /sdcard/SMSBackupRestore ~/backups/SMSBackupRestore
 ```
 
 (Or copy them over MTP / a file manager / the app's share sheet.) Point
-the source's `input_path` at that directory — it walks every `*.xml`
+the source's `backup.path` at that directory — it walks every `*.xml`
 inside, so keeping multiple dated backups there is fine; re-ingesting a
 newer export deduplicates against what's already there.
 
@@ -297,7 +297,7 @@ when the email arrives (it can take a day):
 unzip ~/Downloads/Complete_LinkedInDataExport_*.zip -d ~/backups/LinkedInDataExport
 ```
 
-Point `common.input_path` at that directory. Each export is complete,
+Point `export.path` at that directory. Each export is complete,
 so the sample config sets `always_clear_before_ingest = true` to let a
 newer export drop what LinkedIn stopped including.
 
@@ -309,14 +309,14 @@ used — expect rough edges.
 
 ## Files already on your disk
 
-These sources need nothing but a path in `common.input_path`:
+These sources need nothing but a path on their ingest step:
 
-- **`pdf`** — a directory tree; every PDF under it is converted to
+- **`pdf`** — `fswalk.path`, a directory tree; every PDF under it is converted to
   markdown (no OCR yet, so image-only scans are recorded but produce no
   text).
-- **`media`** — a directory tree of music, photos and video.
-- **`fsindex`** — any directory tree, indexed by path.
-- **`lightroom`** — an Adobe Lightroom Classic `.lrcat` catalog.
+- **`media`** — `fswalk.path`, a directory tree of music, photos and video.
+- **`fsindex`** — `fswalk.path`, any directory tree, indexed by path.
+- **`lightroom`** — an Adobe Lightroom Classic `.lrcat` catalog (see its entry in `all_sources.toml` for the table name).
 
 ## Other sources
 

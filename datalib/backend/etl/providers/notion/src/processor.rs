@@ -1,5 +1,5 @@
-//! Program-A `DataProcessor`s for the `notion_api` source. Notion always
-//! contributes a render processor; when `sync:` is present it also
+//! Program-A `DataProcessor`s for the `notion` source. Notion always
+//! contributes a render processor; when `api` is present it also
 //! contributes a download processor (the live Notion mirror). The source
 //! owns its raw store (open/commit/checkpoint); the orchestrator only drives
 //! `run`.
@@ -18,7 +18,7 @@ use datalib_etl_notion_config::{NotionConfig, NotionSync};
 
 use crate::download;
 
-/// Download wave: present iff `sync:` (managed). Consumes the
+/// Download wave: present iff `api`. Consumes the
 /// playback root (BFS seeds in synth/playback mode).
 pub fn plan_download(
     ctx: PlanContext,
@@ -29,7 +29,7 @@ pub fn plan_download(
     let playback_root = ctx.playback_root;
     let latchkey = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
-    if let Some(sync) = config.sync {
+    if let Some(sync) = config.api {
         procs.push(Box::new(NotionDownload {
             id: format!("notion/{name}/download"),
             raw_path,

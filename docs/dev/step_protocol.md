@@ -89,7 +89,7 @@ in the environment.
 | `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty when there is no last success to compare against (never completed, or the step's own config changed) — do all your work |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
-| `DATALIB_DAG_RESET_AND_REDOWNLOAD` | `1` when the user asked for a from-scratch re-fetch — honor it if you fetch from an origin, ignore otherwise |
+| `DATALIB_DAG_RESET_AND_REDOWNLOAD` | `1` when the user asked for a from-scratch re-ingest — honor it if you bring data in from outside the pipeline, whether that is re-fetching from an origin or re-reading your files in full; a step whose inputs are other steps' trees ignores it |
 | `DATALIB_DAG_REFETCH_BLOBS` | `1` when the user asked for attachments/blobs to re-fetch |
 
 plus anything in the entry's `env:` map (which wins over the run-wide
@@ -317,7 +317,7 @@ writes the tree `DATALIB_DAG_STEP` names, after checking that it is
 `<DATALIB_DAG_GROUP>/<DATALIB_DAG_FUNCTION>`; a render reads its raw
 store from the first entry of `DATALIB_DAG_INPUTS`. It reads
 `--params` as the provider's **function-specific** config — the ingest
-step carries the provider's download config (`common` envelope, `sync`
+step carries the provider's download config (`common` envelope, the method table
 block, …), the render step only the render knobs (nothing for most
 providers; beeper/signal `period`, perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW` and

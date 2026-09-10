@@ -28,10 +28,10 @@ group = "unified_index"
 function = "qmd_index"
 inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
 
-# Google Takeout Gmail export. No JMAP `sync` block in the params —
-# that puts the email provider in file-backed mbox mode, reading the
-# file at `common.input_path` instead of talking to a mail server.
-# Point this at the .mbox unpacked from your Takeout zip.
+# Google Takeout Gmail export. The `mbox` table is the method: it puts
+# the email provider in file-backed mode, reading the file at its
+# `path` instead of talking to a mail server. Point it at the .mbox
+# unpacked from your Takeout zip.
 [[groups]]
 id = "gmail-takeout"
 type = "email"
@@ -39,8 +39,8 @@ type = "email"
 [[steps]]
 group = "gmail-takeout"
 function = "ingest"
-[steps.params.common]
-input_path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
+[steps.params.mbox]
+path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
 
 [[steps]]
 group = "gmail-takeout"
@@ -54,7 +54,7 @@ inputs = ["gmail-takeout/ingest"]
 # account can see. `media = true` pulls file attachments into blobs.
 [[groups]]
 id = "slack"
-type = "slack_api"
+type = "slack"
 
 [[steps]]
 group = "slack"
@@ -70,7 +70,7 @@ blob_size_limit_bytes = 1000000  # 1 MB — skip larger file uploads
 # maximum_time_without_progress_in_minutes = 30
 # maximum_sequential_failed_requests = 50
 
-[steps.params.sync]
+[steps.params.api]
 media = true
 channels = ["project-data-liberation"]
 # dms = true             # also mirror direct messages (1:1 and group).
@@ -89,17 +89,17 @@ inputs = ["slack/ingest"]
 
 # Anthropic / claude.ai conversation mirror. Credentials come from
 # `latchkey` at runtime (see the "Register Claude web with latchkey"
-# section in the first-time user guide). An empty `sync` fetches every
-# conversation across every org the account can see; uncomment the
-# knobs below to bound the work on incremental re-runs.
+# section in the first-time user guide). An empty `api` table fetches
+# every conversation across every org the account can see; uncomment
+# the knobs below to bound the work on incremental re-runs.
 [[groups]]
 id = "claude-api"
-type = "claude_api"
+type = "claude"
 
 [[steps]]
 group = "claude-api"
 function = "ingest"
-[steps.params.sync]
+[steps.params.api]
 # refresh_most_recent_n_chat_count = 3   # force-refetch top-N by updated_at
 # since = "2025-01-01"      # only sync conversations updated at/after this
 # projects = false          # skip Claude Projects (default: on)

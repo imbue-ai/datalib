@@ -18,7 +18,7 @@ use crate::mailbox_labels::{self, MailboxNode};
 #[derive(Debug, Serialize)]
 pub struct ProbeReport {
     /// Which download mode was probed — the same word the config uses
-    /// to select it (`gmail_api`, `sync`).
+    /// to select it (`gmail_api`, `jmap`).
     pub mode: &'static str,
     pub account: ProbeAccount,
     /// Every label/mailbox this account has, in display order (roles
@@ -76,8 +76,8 @@ pub async fn probe(config: &EmailConfig) -> Result<ProbeReport> {
         Some(EmailLiveMode::Jmap(sync)) => probe_jmap(sync, &config.latchkey_settings).await,
         None => Err(anyhow!(
             "this email source has no live download mode, so there is no connection to test. \
-             Set `gmail_api` for a Gmail account or `sync.hostname` for a JMAP server; an \
-             mbox source reads a file at `common.input_path` and needs no credentials."
+             Set `gmail_api` for a Gmail account or `jmap.hostname` for a JMAP server; an \
+             mbox source reads a file at `mbox.path` and needs no credentials."
         )),
     }
 }
@@ -149,7 +149,7 @@ async fn probe_jmap(
 ) -> Result<ProbeReport> {
     if sync.hostname.trim().is_empty() {
         return Err(anyhow!(
-            "this email source selects JMAP but sets no `sync.hostname` \
+            "this email source selects JMAP but sets no `jmap.hostname` \
              (Fastmail's is `api.fastmail.com`)"
         ));
     }
@@ -209,7 +209,7 @@ async fn probe_jmap(
         .map(str::to_string);
 
     Ok(ProbeReport {
-        mode: "sync",
+        mode: "jmap",
         account: ProbeAccount {
             id: account_id,
             // JMAP's account `name` is a display name that on Fastmail
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn names_the_missing_jmap_hostname() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
-            "sync": { "hostname": "  " },
+            "jmap": { "hostname": "  " },
         }))
         .unwrap();
         let err = tokio::runtime::Builder::new_current_thread()
@@ -303,6 +303,6 @@ mod tests {
             .block_on(probe(&cfg))
             .expect_err("an empty hostname cannot be probed")
             .to_string();
-        assert!(err.contains("sync.hostname"), "{err}");
+        assert!(err.contains("jmap.hostname"), "{err}");
     }
 }

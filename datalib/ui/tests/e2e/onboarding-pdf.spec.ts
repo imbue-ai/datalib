@@ -167,12 +167,11 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     await wizard.locator("input.wiz-path").fill(SCAN_DIR!);
 
-    // Rendering to markdown is what makes the documents searchable, so
-    // it is offered here rather than as a second dialog — `pdf`'s
-    // render step has no settings of its own. Ticked by default; this
-    // test wants it, and says so rather than assuming.
-    const alsoRender = wizard.getByRole("checkbox");
-    await expect(alsoRender).toBeChecked();
+    // Rendering to markdown is what makes the documents searchable, and
+    // it is part of the source rather than an offer: the form says so
+    // under its Rendering heading — `pdf`'s render step has no settings
+    // of its own — and the preview shows both steps.
+    await expect(wizard.locator(".wiz-section-head")).toHaveText("Rendering");
 
     // What the two steps will be, named from the catalog's default id,
     // shown before anything is written.
@@ -181,7 +180,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(toml).toContainText('id = "pdfs"');
     await expect(toml).toContainText('type = "pdf"');
     await expect(toml).toContainText('function = "ingest"');
-    await expect(toml).toContainText(`input_path = "${SCAN_DIR}"`);
+    await expect(toml).toContainText(`path = "${SCAN_DIR}"`);
     await expect(toml).toContainText('function = "render_markdown"');
     await expect(toml).toContainText('inputs = ["pdfs/ingest"]');
 
@@ -325,15 +324,10 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       .click();
     await wizard.locator("input.wiz-path").fill(SIGNAL_BACKUP_DIR!);
 
-    // The render step has a `period` option, so the offer is a confirm
-    // and then a second dialog — not the checkbox `pdf` got. The
-    // `page.on("dialog")` above accepts it.
-    await expect(wizard.locator("label.wiz-check")).toHaveCount(0);
+    // The render step has a `period` option, shown under the Rendering
+    // heading of the same form. Its default is what we want.
+    await expect(wizard.locator(".wiz-section-head")).toHaveText("Rendering");
     await wizard.getByRole("button", { name: "Add source" }).click();
-    // The second dialog, for the render step. Its defaults are what we
-    // want; taking them is still a click a person makes.
-    await expect(wizard.getByRole("button", { name: "Add render step" })).toBeEnabled();
-    await wizard.getByRole("button", { name: "Add render step" }).click();
     await expect(wizard).toHaveCount(0);
 
     // ── 2. two sources in the table ──────────────────────────────────
