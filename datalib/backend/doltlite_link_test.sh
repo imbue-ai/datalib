@@ -8,24 +8,36 @@
 # stock SQLite writes files the shell refuses (`dolt version-control
 # features are not available on stock SQLite databases`), and its
 # ingest fails the committed-schema check first anyway; either way this
-# test goes red. Under `--config=musl-x86_64` it is the one check that
-# the static release build carries the engine at all — the musl job's
-# static-ness assertion cannot see this, and #366 found a musl build
-# that passed it while writing SQLite.
+# test goes red. For the static musl release build it is the one check
+# that the binaries carry the engine at all — the musl job's static-ness
+# assertion cannot see this, and #366 found a musl build that passed it
+# while writing SQLite.
+#
+# Two ways to run it. As the Bazel test, for the build `bazel test`
+# makes. Or standalone with `DATALIB_BIN_DIR` (a `:bin` output
+# directory) and `DATALIB_VCF_DIR` (the fixture directory) set, which is
+# how test.yml's musl job runs it: a `--platforms` build has no shell
+# toolchain for `sh_test` to resolve, so the job builds `:bin` under
+# `--config=musl-x86_64` and runs this script itself.
 
 set -euo pipefail
 
-f=bazel_tools/tools/bash/runfiles/runfiles.bash
-# shellcheck disable=SC1090
-source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
-  || source "$(grep -sm1 "^$f " "${RUNFILES_MANIFEST_FILE:-/dev/null}" | cut -f 2- -d ' ')" 2>/dev/null \
-  || source "$0.runfiles/$f" 2>/dev/null \
-  || source "$0.runfiles/_main/$f" 2>/dev/null \
-  || { echo >&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
-
-dag="$(rlocation _main/datalib/backend/bin/datalib-dag)"
-shell="$(rlocation _main/datalib/backend/bin/datalib-doltlite)"
-vcf="$(rlocation _main/datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng/Bridge.vcf)"
+if [[ -n "${DATALIB_BIN_DIR:-}" ]]; then
+    dag="${DATALIB_BIN_DIR}/datalib-dag"
+    shell="${DATALIB_BIN_DIR}/datalib-doltlite"
+    vcf="${DATALIB_VCF_DIR:?set DATALIB_VCF_DIR alongside DATALIB_BIN_DIR}/Bridge.vcf"
+else
+    f=bazel_tools/tools/bash/runfiles/runfiles.bash
+    # shellcheck disable=SC1090
+    source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
+      || source "$(grep -sm1 "^$f " "${RUNFILES_MANIFEST_FILE:-/dev/null}" | cut -f 2- -d ' ')" 2>/dev/null \
+      || source "$0.runfiles/$f" 2>/dev/null \
+      || source "$0.runfiles/_main/$f" 2>/dev/null \
+      || { echo >&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
+    dag="$(rlocation _main/datalib/backend/bin/datalib-dag)"
+    shell="$(rlocation _main/datalib/backend/bin/datalib-doltlite)"
+    vcf="$(rlocation _main/datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng/Bridge.vcf)"
+fi
 for p in "$dag" "$shell" "$vcf"; do
     [[ -e "$p" ]] || { echo "missing runfile: $p" >&2; exit 1; }
 done
