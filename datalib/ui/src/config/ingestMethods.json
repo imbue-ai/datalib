@@ -37,7 +37,7 @@
       "reach": "origin"
     },
     {
-      "path": "gmail_api",
+      "path": "gmail",
       "reach": "origin"
     },
     {
@@ -81,7 +81,7 @@
       "reach": "local"
     },
     {
-      "path": "fetch_photos",
+      "path": "export.fetch_photos",
       "reach": "origin"
     }
   ],

@@ -11,12 +11,12 @@ describe("ingestReach", () => {
 
     const exp = { export: { path: "/export" } };
     expect(ingestReach("linkedin", exp)).toBe("local");
-    expect(ingestReach("linkedin", { ...exp, fetch_photos: true })).toBe("origin");
-    expect(ingestReach("linkedin", { ...exp, fetch_photos: false })).toBe("local");
+    expect(ingestReach("linkedin", { export: { ...exp.export, fetch_photos: true } })).toBe("origin");
+    expect(ingestReach("linkedin", { export: { ...exp.export, fetch_photos: false } })).toBe("local");
   });
 
   it("tells email's server modes from its mbox", () => {
-    expect(ingestReach("email", { gmail_api: { user_id: "me" } })).toBe("origin");
+    expect(ingestReach("email", { gmail: { user_id: "me" } })).toBe("origin");
     expect(ingestReach("email", { jmap: { hostname: "api.fastmail.com" } })).toBe("origin");
     expect(ingestReach("email", { mbox: { path: "/mail.mbox" } })).toBe("local");
     expect(methodsHeld("email", { mbox: { path: "/mail.mbox" } })).toHaveLength(1);

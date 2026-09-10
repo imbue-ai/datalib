@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use crate::download;
 
-/// Download wave: a live table (`jmap`, `gmail_api`) selects a server
+/// Download wave: a live table (`jmap`, `gmail`) selects a server
 /// mode; `mbox` reads the `.mbox` at its `path`.
 pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
@@ -32,23 +32,13 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
     let mode = match config.live_mode()? {
         Some(EmailLiveMode::Jmap(sync)) => Some(ExtractMode::Jmap(sync.clone())),
         Some(EmailLiveMode::GmailApi(gmail)) => Some(ExtractMode::GmailApi(gmail.clone())),
-        None => match config.mbox.clone() {
-            Some(mbox) => {
-                let input_path = mbox.path();
-                if !is_mbox_input(&input_path) {
-                    return Err(anyhow!(
-                        "email source {name}: `mbox.path` is {} — expected a .mbox file, or a \
-                         directory holding one",
-                        input_path.display()
-                    ));
-                }
-                Some(ExtractMode::Mbox {
-                    input_path,
-                    account_config: mbox,
-                })
-            }
-            None => None,
-        },
+        // Planning never touches the filesystem — `datalib-dag --check`
+        // and the schema tests run where the data is not — so whether the
+        // path really is an mbox is checked when the download runs.
+        None => config.mbox.clone().map(|mbox| ExtractMode::Mbox {
+            input_path: mbox.path(),
+            account_config: mbox,
+        }),
     };
 
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
@@ -184,6 +174,12 @@ impl DataProcessor for EmailDownload {
                 input_path,
                 account_config,
             } => {
+                if !is_mbox_input(input_path) {
+                    return Err(anyhow!(
+                        "`mbox.path` is {} — expected a .mbox file, or a directory holding one",
+                        input_path.display()
+                    ));
+                }
                 let s = download::mbox::fetch(download::mbox::FetchOptions {
                     cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
                         .await?,

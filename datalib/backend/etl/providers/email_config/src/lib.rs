@@ -23,10 +23,10 @@ pub struct EmailConfig {
     /// JMAP knobs. `Some` selects the JMAP live-server download path.
     #[serde(default)]
     pub jmap: Option<EmailSync>,
-    /// Gmail REST API knobs. `Some` selects the Gmail API download path.
+    /// Gmail REST API knobs. `Some` selects the Gmail download path.
     /// Mutually exclusive with the other two.
     #[serde(default)]
-    pub gmail_api: Option<EmailGmailApi>,
+    pub gmail: Option<EmailGmailApi>,
     /// The mbox path: where the `.mbox` is, plus the account row to
     /// synthesize for it (JMAP and Gmail learn that from the server).
     #[serde(default)]
@@ -90,8 +90,8 @@ impl EmailConfig {
         if let Some(s) = &self.jmap {
             selected.push(("jmap", EmailLiveMode::Jmap(s)));
         }
-        if let Some(g) = &self.gmail_api {
-            selected.push(("gmail_api", EmailLiveMode::GmailApi(g)));
+        if let Some(g) = &self.gmail {
+            selected.push(("gmail", EmailLiveMode::GmailApi(g)));
         }
         match selected.len() {
             0 => Ok(None),
@@ -189,13 +189,13 @@ pub enum EmailOutlink {
     Fastmail,
 }
 
-/// Gmail REST API tunables. Mirrors the `gmail_api:` sub-stanza.
+/// Gmail REST API tunables: the `gmail` table.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmailGmailApi {
     /// **Retired** — moved to the source-level `latchkey_settings.account`,
     /// which every latchkey-backed provider now shares (and which the JMAP
-    /// mode needs too, so it could not stay under `gmail_api`). Still
+    /// mode needs too, so it could not stay under `gmail`). Still
     /// parsed so a config written against the old location fails at load
     /// time with the fix rather than being silently ignored; see
     /// [`EmailGmailApi::validate`].
@@ -264,15 +264,15 @@ impl EmailGmailApi {
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.quota_units_per_minute.is_some_and(|q| q == 0) {
             anyhow::bail!(
-                "email `gmail_api.quota_units_per_minute` must be > 0 (omit it for the default \
+                "email `gmail.quota_units_per_minute` must be > 0 (omit it for the default \
                  of {DEFAULT_QUOTA_UNITS_PER_MINUTE})"
             );
         }
         if let Some(account) = &self.account {
             anyhow::bail!(
-                "email `gmail_api.account` has moved to `latchkey_settings.account`, which \
+                "email `gmail.account` has moved to `latchkey_settings.account`, which \
                  every latchkey-backed source shares. Replace it with a sibling of \
-                 `gmail_api`:\n\n    [steps.params.latchkey_settings]\n    account = \
+                 `gmail`:\n\n    [steps.params.latchkey_settings]\n    account = \
                  {account:?}\n"
             );
         }
@@ -283,7 +283,7 @@ impl EmailGmailApi {
 impl datalib_source_common::IngestMethods for EmailConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] = &[
         datalib_source_common::IngestMethod::origin("jmap"),
-        datalib_source_common::IngestMethod::origin("gmail_api"),
+        datalib_source_common::IngestMethod::origin("gmail"),
         datalib_source_common::IngestMethod::local("mbox"),
     ];
 }
@@ -298,7 +298,7 @@ mod tests {
     fn rejects_more_than_one_live_mode() {
         let cfg = EmailConfig {
             jmap: Some(EmailSync::default()),
-            gmail_api: Some(EmailGmailApi::default()),
+            gmail: Some(EmailGmailApi::default()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -311,12 +311,12 @@ mod tests {
     fn names_the_colliding_modes() {
         let cfg = EmailConfig {
             jmap: Some(EmailSync::default()),
-            gmail_api: Some(EmailGmailApi::default()),
+            gmail: Some(EmailGmailApi::default()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("jmap"), "{err}");
-        assert!(err.contains("gmail_api"), "{err}");
+        assert!(err.contains("gmail"), "{err}");
     }
 
     /// A live mode beside an mbox table is the same mistake in a
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn rejects_a_live_mode_beside_an_mbox() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
-            "gmail_api": {},
+            "gmail": {},
             "mbox": { "path": "/mail.mbox" },
         }))
         .unwrap();
@@ -367,7 +367,7 @@ mod tests {
     fn parses_a_gmail_api_step_params_payload() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
             "latchkey_settings": { "account": "thad@imbue.com" },
-            "gmail_api": { "message_budget": 5000 },
+            "gmail": { "message_budget": 5000 },
         }))
         .unwrap();
         cfg.validate().unwrap();
@@ -377,19 +377,19 @@ mod tests {
             "the account is a source-level latchkey setting, not a gmail knob",
         );
         let Some(EmailLiveMode::GmailApi(g)) = cfg.live_mode().unwrap() else {
-            panic!("expected gmail_api mode");
+            panic!("expected gmail mode");
         };
         assert_eq!(g.message_budget, Some(5000));
     }
 
-    /// The account used to live under `gmail_api`. A config written against
+    /// The account used to live under `gmail`. A config written against
     /// that location must fail with the fix rather than mirror the wrong
     /// identity (or, once `google-gmail` holds two accounts, fail deep in a
     /// download with latchkey's own ambiguity error).
     #[test]
     fn rejects_the_retired_gmail_api_account_location() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
-            "gmail_api": { "account": "thad@imbue.com" },
+            "gmail": { "account": "thad@imbue.com" },
         }))
         .unwrap();
         let err = cfg
@@ -406,7 +406,7 @@ mod tests {
     fn rejects_an_empty_latchkey_account() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({
             "latchkey_settings": { "account": "  " },
-            "gmail_api": {},
+            "gmail": {},
         }))
         .unwrap();
         assert!(cfg.validate().is_err());
@@ -434,7 +434,7 @@ mod tests {
         ));
 
         let gmail = EmailConfig {
-            gmail_api: Some(EmailGmailApi::default()),
+            gmail: Some(EmailGmailApi::default()),
             ..Default::default()
         };
         assert!(matches!(

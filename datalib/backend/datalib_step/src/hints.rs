@@ -221,7 +221,7 @@ service and routes to it by URL host:
   2. Smoke-test:
        {LK} curl -s https://gmail.googleapis.com/gmail/v1/users/me/profile
   3. Point the source at it — an empty table is a complete config:
-       [steps.params.gmail_api]
+       [steps.params.gmail]
      Signed in as more than one Google account? Name which one this
      source mirrors — latchkey requires it once a service holds two:
        [steps.params.latchkey_settings]

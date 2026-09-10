@@ -602,10 +602,14 @@ Each slice is a PR; each leaves the tree green.
        API — the qualified `slack_api` would only repeat the type — and
        it is a specific name precisely because a product has one API.
        A type that is not one product qualifies its sources: email's
-       are `jmap`, `gmail_api` and `mbox`. So the tables are `api` for
+       are `jmap`, `gmail` and `mbox`. So the tables are `api` for
        slack, chatgpt, github, gitlab, notion, yolink and claude;
-       `export` (with `path`) for claude, linkedin and google_takeout,
-       whose feed toggles moved inside it; `jmap`, `gmail_api` and
+       `export` (with `path`) for claude, linkedin and google_takeout —
+       what a method does goes in its table, so Takeout's feed toggles
+       and linkedin's `fetch_photos` (still the one `Origin` method,
+       now at `export.fetch_photos`) moved inside it, while a knob that
+       applies whatever the method (email's `only_extract_labels`)
+       stays at the top; `jmap`, `gmail` and
        `mbox` (with `path`) for email; `carddav` and `vcf` for contacts;
        `texts` for beeper (the Beeper Texts app's own database, with
        `path` optional); `backup` for signal, whatsapp and

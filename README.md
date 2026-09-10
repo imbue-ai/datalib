@@ -16,7 +16,7 @@ one table on the source's ingest step, and its name is read under the
 type: `api` is the product's own API, `export` an unpacked export,
 `backup` a phone backup, `fswalk` a folder to scan. A type that is
 not one product spells its sources out — email's are `jmap`,
-`gmail_api` and `mbox`. A table that reads files carries its own
+`gmail` and `mbox`. A table that reads files carries its own
 `path`. See `docs/user/config_examples/all_sources.toml` for every
 shape.
 
@@ -28,7 +28,7 @@ shape.
 | GitHub | `github` | Web API (latchkey) | Pull requests |
 | GitLab | `gitlab` | Web API (latchkey) | Merge requests |
 | Notion | `notion` | Web API (latchkey) | Pages (inbox + page subtrees) |
-| Email | `email` | JMAP server (latchkey) **or** Google Takeout `.mbox` | Mail messages |
+| Email | `email` | JMAP server or Gmail API (latchkey) **or** Google Takeout `.mbox` | Mail messages |
 | Google Takeout | `google_takeout` | Export tree on disk | Google Chat + Voice messages (rendered to markdown); Maps reviews / saved places / photos, YouTube watch history + subscriptions, and Gemini Apps activity (extracted to the raw store, not yet rendered) |
 | Contacts | `contacts` | CardDAV server (latchkey) **or** local `.vcf` files | Contacts |
 | Beeper | `beeper` | Local Beeper Texts data dir | Signal, Google Chat, etc. |

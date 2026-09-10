@@ -274,10 +274,11 @@ just one source's step pair) straight into `<data_root>/config.toml`:
   — every supported source type with realistic defaults (including
   both input modes for email and contacts).
 
-(Upgrading from an earlier datalib? A `config.toml` whose steps still
-name a `datalib-step download …` or `datalib-step render …` command —
-with or without `[[groups]]` — is refused by this version, and is
-rewritten once:
+(Upgrading from an earlier datalib? A `config.toml` written for an
+earlier version — steps naming a `datalib-step download …` command, a
+group `type` spelled for its method (`slack_api`, `claude_export`), or
+an ingest step whose params still say `sync` or `common.input_path` —
+is refused by this version, and is rewritten once:
 
 ```sh
 datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml

@@ -323,7 +323,7 @@ export function paramsAreRepresentable(
   const phase = fieldPhaseOf(step);
   // Presets count as known. They are values this descriptor *writes*,
   // just without a box to type them in, so a Gmail step's
-  // `gmail_api.user_id` is modeled even though no field names it —
+  // `gmail.user_id` is modeled even though no field names it —
   // and without this, every source with a preset would be permanently
   // un-editable.
   const known = new Set([
@@ -481,7 +481,7 @@ export function paramsObject(
     cur[segs[segs.length - 1]] = jsonValue(field, value);
   }
   // A mode-selecting table with no keys of its own still has to exist —
-  // `gmail_api = {}` is how a config says "this is a Gmail source" — and so
+  // `gmail = {}` is how a config says "this is a Gmail source" — and so
   // does the params object the probe receives.
   for (const preset of presetsFor(entry, phase)) {
     const head = preset.target.split(".")[0];

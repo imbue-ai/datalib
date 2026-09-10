@@ -270,7 +270,7 @@ def main() -> int:
         if type_str == "linkedin":
             # The photo fetch is linkedin's one HTTP path; the synth
             # gate checks this flag.
-            source["fetch_photos"] = True
+            source["export"] = {"fetch_photos": True}
         _run(
             [
                 str(step_bin),
@@ -529,8 +529,7 @@ def _source_config(
         # the pipeline exercises the og:image → CAS path — hermetically,
         # against the playback fixtures LinkedinSynth wrote in the synth
         # phase.
-        source["export"] = {"path": str(input_path)}
-        source["fetch_photos"] = True
+        source["export"] = {"path": str(input_path), "fetch_photos": True}
     elif type_str == "google_takeout":
         # Opt into the rendering feeds: Google Chat and Google Voice
         # (incl. its Spam folder, to exercise that path). The other
