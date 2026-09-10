@@ -224,9 +224,9 @@ pub async fn start_connect(
     let mut args: Vec<String> = Vec::new();
     if !account.is_empty() {
         args.push("--account".into());
-        args.push(account);
+        args.push(account.clone());
     }
-    args.extend(["auth".to_string(), "browser".to_string(), service]);
+    args.extend(["auth".to_string(), "browser".to_string(), service.clone()]);
 
     tokio::spawn(async move {
         // Registering is what makes the browser login exist at all, so
@@ -244,7 +244,38 @@ pub async fn start_connect(
                 }
             }
         }
+        // latchkey's `auth browser` *refreshes* an account; it will not
+        // create one, and refuses a name it has never seen. Seeding it
+        // is the whole remedy — the login overwrites the placeholder —
+        // so do that rather than handing the person a command. Only on
+        // that exact refusal: any other failure is its own problem.
+        let mut seeded = false;
+        if !account.is_empty() {
+            if let Err(e) = latchkey_output(&args).await {
+                if e.to_string().contains("No credentials stored for account") {
+                    if let Err(e) = latchkey_output(&seed_args(&service, &account)).await {
+                        let mut slot = slot.lock().expect("connect slot mutex");
+                        slot.status = ConnectState::Failed;
+                        slot.output = tail(&e.to_string());
+                        return;
+                    }
+                    seeded = true;
+                }
+            } else {
+                // It succeeded on the first pass; nothing left to do.
+                let mut slot = slot.lock().expect("connect slot mutex");
+                slot.status = ConnectState::Ok;
+                return;
+            }
+        }
+
         let outcome = tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output(&args)).await;
+        // A placeholder outliving a login that never finished is a
+        // stored credential that cannot work, and it would make the
+        // account look connected in every account list.
+        if seeded && !matches!(outcome, Ok(Ok(_))) {
+            let _ = latchkey_output(&clear_args(&service, &account)).await;
+        }
         let mut slot = slot.lock().expect("connect slot mutex");
         match outcome {
             Ok(Ok(output)) => {
@@ -268,6 +299,32 @@ pub async fn start_connect(
         status: ConnectState::Running,
         output: String::new(),
     }))
+}
+
+/// The placeholder that brings a named account into existence so the
+/// browser login has something to refresh. Never used as a credential:
+/// the login overwrites it, and a login that does not finish has it
+/// cleared again.
+fn seed_args(service: &str, account: &str) -> Vec<String> {
+    vec![
+        "--account".to_string(),
+        account.to_string(),
+        "auth".to_string(),
+        "set".to_string(),
+        service.to_string(),
+        "-H".to_string(),
+        "X-Datalib-Placeholder: pending-browser-login".to_string(),
+    ]
+}
+
+fn clear_args(service: &str, account: &str) -> Vec<String> {
+    vec![
+        "--account".to_string(),
+        account.to_string(),
+        "auth".to_string(),
+        "clear".to_string(),
+        service.to_string(),
+    ]
 }
 
 /// `latchkey services register <name> --base-api-url=… --login-url=…

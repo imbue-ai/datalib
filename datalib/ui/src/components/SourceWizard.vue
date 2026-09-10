@@ -446,14 +446,6 @@ const conversionCommands = computed(() => {
   ].join("\n");
 });
 
-/// Pasting a credential works on every service latchkey holds, browser
-/// login or not: a cookie-capture service reports `["browser", "set"]`
-/// and takes `auth set` per account just the same. Said out loud
-/// wherever a Connect button would otherwise read as the only way in.
-const canPasteCredential = computed(
-  () => authOptions.value.includes("set") || !!wouldRegister.value,
-);
-
 const connect = ref<{ state: "idle" | "running" | "ok" | "failed"; message: string }>({
   state: "idle",
   message: "",
@@ -501,21 +493,6 @@ async function connectViaLatchkey() {
 /// empty is a real answer, not a missing one.
 const accountValue = computed(() =>
   accountField.value ? String(values.value[accountField.value.target] ?? "").trim() : "",
-);
-
-/// A name in the account box that latchkey does not hold.
-///
-/// `--account` *selects* a credential to refresh; latchkey refuses a
-/// name it has never seen ("No credentials stored for account 'x' of
-/// service 'y'"), so a browser login cannot create one. Dropping the
-/// flag would sign in successfully and store the credential under
-/// latchkey's default account — while the config being written says
-/// `account = "<name>"`, which then resolves to nothing at sync time.
-/// Succeeding wrongly is the worse outcome, so this blocks the button
-/// and says what to run.
-const accountIsNew = computed(
-  () =>
-    !!accountValue.value && !accounts.value?.some((a) => a.account === accountValue.value),
 );
 
 // The probe
@@ -747,12 +724,7 @@ function submit() {
               v-if="canConnect"
               type="button"
               class="btn ghost"
-              :disabled="connect.state === 'running' || accountIsNew"
-              :title="
-                accountIsNew
-                  ? `latchkey has no ${accountValue} yet, and a browser login can only refresh an account that exists`
-                  : ''
-              "
+              :disabled="connect.state === 'running'"
               @click="connectViaLatchkey"
             >
               {{ connect.state === "running" ? "Waiting for the browser…" : "Latchkey auth" }}
@@ -774,16 +746,6 @@ function submit() {
           >
             {{ chosen.credentialConnectWarning }}
           </p>
-          <!-- Where a browser login actually puts the credential, said
-               before the button is pressed rather than after. -->
-          <p v-if="canConnect && accountIsNew" class="wiz-help wiz-conn-note wiz-newaccount">
-            latchkey has no <code>{{ accountValue }}</code> yet, and a browser login only ever
-            refreshes an account that already exists. Create it once — any value will do, the
-            login replaces it — and the button above comes back:
-            <code
-              >{{ latchkeyCli }} --account {{ accountValue }} auth set {{ service }} -H "…"</code
-            >. Or clear the box to sign in as latchkey’s unnamed default account.
-          </p>
           <!-- What the button says on a service that has no browser
                login. Shown rather than done: latchkey refuses to
                re-register a name it holds, so the only way to add one
@@ -802,19 +764,10 @@ function submit() {
             </p>
           </div>
 
-          <!-- A service somebody registered by hand is theirs: latchkey
-               refuses to re-register a name, and nothing here should
-               want to. Either way, pasting a credential stays available
-               and this dialog never takes it away. -->
-          <p v-if="canPasteCredential" class="wiz-help wiz-conn-note">
-            <template v-if="setOnlyService">
-              latchkey holds <code>{{ service }}</code> with no browser login, so a credential is
-              stored by hand — which keeps working, and nothing here changes it:
-            </template>
-            <template v-else>
-              A credential can always be pasted instead, one per account, alongside the browser
-              login above:
-            </template>
+          <!-- Only where the button cannot help: a service its owner
+               registered without a browser login. -->
+          <p v-if="setOnlyService" class="wiz-help wiz-conn-note">
+            <code>{{ service }}</code> has no browser login, so its credential is pasted:
             <code>latchkey auth set {{ service }} -H "…"</code>
           </p>
           <p v-if="connect.state !== 'idle'" class="wiz-help wiz-conn-note">
@@ -1224,7 +1177,6 @@ function submit() {
   padding-left: 10px;
 }
 .wiz-convert-head { margin: 0; }
-.wiz-newaccount code { overflow-wrap: anywhere; }
 .wiz-req {
   font-style: normal;
   font-weight: 400;
