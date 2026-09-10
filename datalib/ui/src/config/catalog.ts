@@ -258,10 +258,10 @@ export const CATALOG: CatalogEntry[] = [
       login_flow: "cookie-capture",
       login_flow_params: { cookieKeys: ["sessionKey"] },
     },
-    credentialConnectWarning:
-      "This signs in a second time, and claude.ai appears to evict the older session when it " +
-      "does — observed 2026-08-31, the captured cookie and the browser you normally use kept " +
-      "logging each other out. Pasting the sessionKey avoids that.",
+    // Kept to one line on purpose: the point is that clicking has a
+    // cost, not the history of how we found out (2026-08-31, the
+    // captured cookie and the everyday browser evicting each other).
+    credentialConnectWarning: "Signing in again may log out your other claude.ai session.",
     canProbe: true,
     fields: [
       {
