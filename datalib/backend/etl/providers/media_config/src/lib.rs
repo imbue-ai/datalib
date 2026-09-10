@@ -85,6 +85,13 @@ impl MediaConfig {
 /// not a flag. Same shape as `fsindex`.
 pub type MediaRenderConfig = datalib_source_common::BareRenderConfig;
 
+impl datalib_source_common::IngestMethods for MediaConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local(
+            "common.input_path",
+        )];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

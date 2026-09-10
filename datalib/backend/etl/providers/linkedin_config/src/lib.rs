@@ -26,3 +26,12 @@ impl LinkedinConfig {
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope (see the per-phase params split).
 pub type LinkedinRenderConfig = datalib_source_common::BareRenderConfig;
+
+// The export is read off disk; `fetch_photos` alone reaches linkedin.com,
+// so a step with it on reads "Download".
+impl datalib_source_common::IngestMethods for LinkedinConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] = &[
+        datalib_source_common::IngestMethod::local("common.input_path"),
+        datalib_source_common::IngestMethod::origin("fetch_photos"),
+    ];
+}

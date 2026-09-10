@@ -30,6 +30,11 @@ pub async fn run(
         planned.source_type
     );
 
+    tracing::info!(
+        source = %planned.name,
+        reach = ?planned.reach,
+        "download: ingest method declared by the provider",
+    );
     let progress = emitter.progress();
     let metrics = datalib_etl::download_metrics::DownloadMetrics::new();
     let diagnostics = datalib_obs::diagnostics::Diagnostics::new();

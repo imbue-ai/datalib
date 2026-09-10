@@ -1,7 +1,7 @@
 //! Provider-owned config schema for the `yolink` source (Program A goal #1).
 //! Schema-only (serde + anyhow), so the orchestrator can name `YolinkConfig`
-//! without linking the provider. Yolink is EXTRACT-ONLY: `sync:` present →
-//! live per-device CSV mirror; absent → nothing to do (no render path).
+//! without linking the provider. Yolink is EXTRACT-ONLY (no render
+//! path); `sync`, the live per-device CSV mirror, is its one way in.
 
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
@@ -134,6 +134,11 @@ fn is_hex32(s: &str) -> bool {
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope (see the per-phase params split).
 pub type YolinkRenderConfig = datalib_source_common::BareRenderConfig;
+
+impl datalib_source_common::IngestMethods for YolinkConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::origin("sync")];
+}
 
 #[cfg(test)]
 mod tests {

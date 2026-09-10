@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The beeper-owned slice of a `beeper` source. `sync:` present → live
-/// Beeper Texts ingest (the download path); absent → no download wave,
-/// and render reads whatever an earlier run already ingested.
+/// The beeper-owned slice of a `beeper` source. `sync` (the Beeper Texts
+/// ingest) is its one way in; an `ingest` step without it is refused
+/// (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BeeperConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -71,4 +71,11 @@ pub struct BeeperSync {
 
 fn default_true() -> bool {
     true
+}
+
+// Beeper Texts' own SQLite, read off this machine: `sync` selects the
+// ingest, and nothing reaches a service.
+impl datalib_source_common::IngestMethods for BeeperConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local("sync")];
 }

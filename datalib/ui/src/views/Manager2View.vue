@@ -74,6 +74,7 @@ import {
   groupStatus,
   pipelineOrder,
 } from "@/config/groupRows";
+import { ingestLabel } from "@/config/ingestMethods";
 import { iconUrl } from "@/config/icons";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { stepLogLines, type StepLogLine } from "@/config/stepLog";
@@ -356,6 +357,9 @@ function childLabel(s: ConfiguredStep): string {
   if (s.kind === "applet") return s.name;
   if (s.phase === "index") return INDEX_LABEL[s.function ?? ""] ?? CHILD_LABEL.index;
   if (s.phase === "other") return s.function ?? s.name;
+  // "Download" or "Import", read off the step's params against what its
+  // provider declares; "Ingest" only when they name no method.
+  if (s.phase === "ingest") return ingestLabel(s.type, s.params) ?? CHILD_LABEL.ingest;
   return CHILD_LABEL[s.phase];
 }
 

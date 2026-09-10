@@ -113,10 +113,11 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   await expect(row(page, "personal-claude/ingest")).toHaveCount(0);
 
   // Opened, the two steps are labelled by what they do; the group owns
-  // the name. The phase is a glyph suffixed onto the label, so it is
-  // asserted through the accessible name rather than cell text.
+  // the name. The ingest step reads "Download" because its `sync` table
+  // reaches claude.ai. The phase is a glyph suffixed onto the label, so
+  // it is asserted through the accessible name rather than cell text.
   await expandGroup(page, "personal-claude");
-  await expect(row(page, "personal-claude/ingest")).toContainText("Ingest");
+  await expect(row(page, "personal-claude/ingest")).toContainText("Download");
   await expect(row(page, "personal-claude/ingest")).toContainText("personal-claude/ingest");
   await expect(stepMark(page, "personal-claude/ingest")).toHaveAttribute("aria-label", "Ingest");
   await expect(row(page, "personal-claude/render_markdown")).toContainText("Render markdown");

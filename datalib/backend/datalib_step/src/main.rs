@@ -13,6 +13,7 @@ mod function;
 mod grid_index;
 mod hints;
 mod introspect;
+mod methods;
 mod probe;
 mod qmd_index;
 mod render;

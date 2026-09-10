@@ -1,11 +1,11 @@
 # Groups and functions: one row per source
 
-**Status: agreed design (2026-09-09); slices 1, 2, 4a and 4b built
-(2026-09-09 and 2026-09-10), slices 3 and 5 not.** Written against
+**Status: agreed design (2026-09-09); slices 1, 2, 3a, 4a and 4b built
+(2026-09-09 and 2026-09-10), slices 3b and 5 not.** Written against
 `eee381c3`. Per [`AGENTS.md`](../../../AGENTS.md), don't cite this
 file as a description of the tree. Where it says "today", that was
 checked against that commit; where it says "will", check the slice
-list under "Order of work" — slices 1, 2, 4a and 4b are in the tree,
+list under "Order of work" — slices 1, 2, 3a, 4a and 4b are in the tree,
 and the places each departed from this text are recorded there.
 
 **Reverses** the "Sources stop being a grouping" section of
@@ -505,8 +505,88 @@ Each slice is a PR; each leaves the tree green.
      `download_only!` became `ingest_only!`, and the UI's `fetch` phase
      became `ingest`, labelled "Ingest" until slice 4 labels it
      "Download" or "Import".
-3. **`type` as data type.** `SourceType` shrinks, Claude gains method
-   tables, `common.input_path` becomes per-method `path`.
+3. **`type` as data type**, in two halves, because the first is small
+   and unblocks a label while the second is a config-shape change
+   across every provider:
+   - **3a. The `Origin` / `Local` property** — *built (2026-09-10)*.
+     Every method table a
+     provider's config crate accepts declares itself `Origin` (reaches
+     a live service) or `Local` (reads files already on disk), as a
+     closed set (`strum`, per `AGENTS.md`), and the catalog mirrors
+     the declaration per method. No config shape changes: today's
+     tables (`sync`, `gmail_api`, `mbox`, `common.input_path`) get the
+     property under their current names. Three readers land with it:
+     the Manage row's child label reads "Download" or "Import" instead
+     of "Ingest" (`CHILD_LABEL` in `Manager2View.vue`, derived from
+     which tables the step's params hold — written config, no
+     parsing); `DATALIB_DAG_RESET_AND_REDOWNLOAD` is honoured by an
+     `Origin` method and ignored by a `Local` one, which is what the
+     protocol doc already says in prose; and `datalib-step` refuses an
+     `ingest` step whose params hold no method table at all (decision
+     5's check). The wizard's latchkey section gating on `Origin` is
+     4b's, since 4b rewrites that dialog.
+
+     Where it departed from that text:
+     - The declaration is `impl IngestMethods for <P>Config` in each
+       config crate: a list of `IngestMethod { path, reach }`, where
+       `path` is a dotted path into the params rather than a table
+       name, because one method is a flag — linkedin's `fetch_photos`
+       is the only thing that provider fetches from the network, so it
+       is declared `Origin` and a step with it on reads "Download"
+       (the shape the Deferred section describes). A method is *held*
+       when its path is written and its value is neither `null` nor
+       `false`. `datalib_step/src/methods.rs` maps a type to its list
+       and holds the rule; `datalib_source_common` gained `strum` for
+       the enum, so it is no longer serde-only.
+     - The catalog does not carry the mirror by hand.
+       `ui/src/config/ingestMethods.json` is generated from the
+       declarations by
+       `bazel run //datalib/backend/datalib_step:ingest_methods.update`,
+       a test in `methods.rs` fails when it drifts, and
+       `ui/src/config/ingestMethods.ts` applies the same held rule to a
+       type and a params tree. 4b's latchkey gating asks `ingestReach`
+       there with the params the form would write.
+     - **The reset reader was not built, because the tree disagrees
+       with the prose it cited.** `test_pipeline_resume_and_reset` in
+       `tests/fixtures/ingested_tng_test.py` pins that a reset run
+       wipes Signal's `ingested_backups` cursor, and Signal reads a
+       backup on disk — a `Local` method. Every file-backed provider
+       does the same: pdf and media re-hash, fsindex drops its rescan
+       cursor, sms and the Claude export truncate. That is the only
+       button a user has for "re-read this from scratch", so `Local`
+       keeps honouring the flag; the protocol doc and
+       `subprocess.rs` now say "honor it if you bring data in from
+       outside the pipeline", which is what the steps do. The planned
+       source carries its `reach` and the ingest driver logs it, and
+       nothing else acts on it yet. Give it a real reader when 3b
+       lands, or drop it then: a field that is only ever logged is
+       one the unused-field lint will eventually ask about.
+     - Two declarations that are not obvious from the table names:
+       beeper's `sync` is `Local` (it reads Beeper Texts' own SQLite),
+       and perseus declares both `sync` (`Origin`, TEI files from
+       GitHub) and `common.input_path` (`Local`, the staged tree).
+       google_takeout's `sync` is *not* a method — it is the feed
+       toggles — so only its `common.input_path` is.
+     - The step-role glyph's accessible name still says "Ingest": it
+       names the phase, which is true of both words.
+   - **3b. One type per data shape, one table per method.** `SourceType`
+     drops the `_api` suffixes (`slack`, `chatgpt`, `github`, …) and
+     `claude_export` folds into `claude`, so a group's `type` names the
+     thing mirrored and the render side is a function of it. The ingest
+     step's params hold one table per method, named for the method:
+     `sync` becomes `api` (or `jmap` for email), `claude`'s export
+     becomes `[steps.params.export]`, and every file-backed method
+     (`export`, `mbox`, `fswalk` for the three `fswalk` sources, the
+     backup readers) carries its own `path` instead of the shared
+     `common.input_path`. That is a rewrite of every provider config
+     crate, the catalog, every example and fixture config, and the
+     fixture bake — and a second config-shape change, so
+     `datalib-migrate-config`'s one rewrite becomes "any earlier shape
+     → this one": it already parses the pre-`[[groups]]` and slice-1
+     shapes, and gains the type and method-table renames. Expect a cold
+     CI run: every provider crate rebuilds. `Provider` in
+     `schema/src/providers.rs` (the `grid_rows.provider` tag) is a
+     separate vocabulary and does not move.
 4. **Manage screen and wizard**, in two halves, because the second
    rewrites the files slice 2 renames through:
    - **4a. The tree grid** — *built (2026-09-10)*: one row per group,
@@ -576,18 +656,25 @@ Each slice is a PR; each leaves the tree green.
        (`renderStep: false`) is removed on save and unwired from the
        fan-ins; the dialog says so beforehand, the way it does for a
        missing step.
+     - The latchkey / credentials section still shows as it did
+       before 3a: gating it on `ingestReach` (`ui/src/config/ingestMethods.ts`)
+       for an `Origin` method is the one piece of 4b that waited for
+       3a, and the two landed side by side. It is the next UI edit.
 
-5. **Mechanical rename** (optional, any time after 3): crate names,
+5. **Mechanical rename** (optional, after 3b): crate names,
    `download/` module directories, `DOWNLOAD.md` files, and the
    `AGENTS.md` section "Download and render are separate crates", all
    to "ingest". `git mv` plus `sed`, no logic, reviewed as "does it
-   build". Slice 3 already rebuilds every provider crate, so the CI
+   build". Slice 3b already rebuilds every provider crate, so the CI
    cold-run cost is paid either way; isolating this slice is about
-   review noise, not build time.
+   review noise, not build time. After 3b rather than before it, so
+   the `git mv` does not land on files 3b is rewriting.
 
-Slices 2 and 3 are backend with a mechanical UI edge; 4a is the row the
-UI review asked for and depends on 1 only, so it was built beside 2;
-4b waited for 2. Slice 3 is independent of 4a and 4b.
+With 1, 2, 3a, 4a and 4b in the tree, what is left runs as: the
+wizard's latchkey gating (above), then **3b**, then **5**. 3b is the
+last config-shape change, so the migrator's rewrite is settled once it
+lands. When 3b renames the tables, the `IngestMethods` lists are where
+the new names go, and the mirror is regenerated rather than edited.
 
 ## Deferred
 
