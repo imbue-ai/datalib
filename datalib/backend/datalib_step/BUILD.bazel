@@ -105,6 +105,7 @@ rust_test(
     # from the provider schemas.
     data = [
         "//configs:dag_example.toml",
+        "//datalib/docker:demo/config.toml",
         "//docs/user/config_examples:all_sources.toml",
         "//docs/user/config_examples:claude_only.toml",
         "//docs/user/config_examples:sample_config.toml",

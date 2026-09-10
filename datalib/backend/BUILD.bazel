@@ -174,3 +174,19 @@ copy_to_directory(
     ],
     visibility = ["//visibility:public"],
 )
+
+# The shipped binaries write doltlite stores, not plain SQLite. Runs
+# :bin over a two-vCard fixture and reads dolt_log back through the
+# shell; see the script header. In `bazel test //...` this covers the
+# glibc / darwin build; the musl job in test.yml runs it under
+# `--config=musl-x86_64` to cover the static release build.
+sh_test(
+    name = "doltlite_link_test",
+    size = "small",
+    srcs = ["doltlite_link_test.sh"],
+    data = [
+        ":bin",
+        "//datalib/backend/etl/providers/contacts:tng_fixture",
+    ],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)

@@ -1,81 +1,106 @@
-# Project Data Liberation ✊ - First-time user guide
+# datalib (Project Data Liberation ✊) — first-time user guide
 
-Liberate your data from silos. Run SOTA AI and data tools on it, on your own terms.
+Liberate and own your data. Run powerful AI tools on it, on your terms.
 
-> 🛑 **<span style="color:red">WITH GREAT POWER COMES GREAT RESPONSIBILITY</span>** 🛑
+This guide installs the command-line tools and walks you through your
+first mirror. Two other ways in, if this one doesn't fit: the macOS
+desktop app on the [latest release](https://github.com/imbue-ai/datalib/releases/latest)
+does the same thing behind a folder picker, and the
+[Docker image](docker.md) keeps everything inside a container that
+sees only the folders you mount, with a demo library already loaded.
+The sections on credentials (step 2) and on getting your data back out
+(step 8) apply to all three.
+
+> 🛑 **WITH GREAT POWER COMES GREAT RESPONSIBILITY** 🛑
 >
-> <span style="color:red">**These tools allow you to accumulate a lot of high-value
-> data into a single place. Hopefully, the computer where you run these tools is a
-> safe place to store this data.**</span>
+> These tools accumulate a lot of high-value data in one place. Make
+> sure the computer you run them on is a safe place to keep it.
 >
-> <span style="color:red">**Please think at least 3x before running an agent on this
-> data, then think again. Make sure you understand the full implications of the
-> [lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/).
-> Most of the data accumulated by these tools should be considered both <span style="color:red">**Private
-> Data**</span> and <span style="color:red">**Untrusted Content**</span>.**</span>
+> Think at least three times before running an agent on this data,
+> then think again. Understand the
+> [lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/):
+> nearly everything these tools collect is both **private data** and
+> **untrusted content**.
 >
-> <span style="color:red">**Also remember that most agentic harnesses are effectively
-> (!!!) EXFILTRATION SCRIPTS (!!!), and running them on your private data will
-> upload it to a third party where you have very little control over what happens
-> with it next. Ask yourself: "would the people who sent me these messages be
-> OK with me sending them to Anthropic, OpenAI, or Google?"  Because that's exactly what
-> you're doing when you run an agentic harness on this data.**</span>
+> Most agentic harnesses are effectively **exfiltration scripts**.
+> Running one on your private data uploads that data to a third party,
+> where you have very little control over what happens next. Ask
+> yourself: "would the people who sent me these messages be OK with me
+> sending them to Anthropic, OpenAI, or Google?" Because that is what
+> you are doing when you run an agent on this data.
+>
+> **Deletes might not actually delete from your local copy.** The
+> stores are doltlite databases (SQLite with git-shaped history), which
+> keep every version of your data as it changes. That helps you recover
+> from unintended data loss, and it cuts both ways: a message deleted at
+> the source is gone from the current view but still recoverable from
+> the history. If you truly need something gone, delete the whole
+> `.doltlite_db` file. We lean toward keeping: history you have is easy
+> to delete, and history you lost is gone for good.
+>
+> **Terms of service.** The Claude.ai and ChatGPT sources use the same
+> undocumented web APIs your browser does, with your own session. Check
+> the terms of the services you use.
 
- <span style="color:red">**Deletes might not actually delete from your local copy.**
- We use Doltlite (a version of SQLite) to keep versions of your data as it changes over time. 
- This can help you recover from unintended data loss, but is a double-edged sword.
- Deletions in your data sources, even if they propagate into the current
- version of your data, as stored and presented by our tools, are still in theory recoverable from
- the version history.  If you truly need to delete, you'll have to remove the whole doltlite_db file,
- not just delete from the data source.
- **</span>
+## 0. Prerequisites
 
-## 0. Setup pre-reqs
-
-If you don't already have it, you'll need `node` on `PATH`:
+You need `node` on your `PATH`:
 
 ```sh
 brew install node
 ```
 
-- `node` — the qmd indexer shells out to latchkey, and `npx -y @tobilu/qmd@<version>` 
-  during the `qmd_index` step.
+The tools shell out to two Node programs at sync time, fetching each
+on demand with `npx`: `latchkey`, which holds your credentials, and
+`qmd`, which builds the semantic search index. Nothing else is needed.
 
-## 1. Install the CLI and make a data_root playground (here it's `~/datalib`)
+## 1. Install the tools and make a data root (here it's `~/datalib`)
 
-Now that the repo is public, you can install the binaries straight from the
-GitHub Releases with a one-line `curl` script — no `gh` and no GitHub auth:
+One command installs the binaries from the GitHub Releases page — no
+`gh`, no GitHub account:
 
 ```sh
 curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/install.sh | sh
 ```
 
-This downloads the latest release tarball, verifies its checksum, and drops
-`datalib-dag`, `datalib-step`, `datalib-http`, `datalib-doltlite` (the
-shell for reading and exporting your stores — see step 8), and the
-latchkey curl shim into `~/.local/bin`. If that directory isn't already on your `PATH`,
-the script prints the exact line to add to your `~/.zshrc` — add it and
-restart your shell so the installed commands resolve.
+This downloads the latest release tarball, verifies its checksum, and
+drops the tools into `~/.local/bin`. The ones you will meet in this
+guide:
+
+- `datalib-http` — the app: a local web server with the UI built in.
+- `datalib-dag` and `datalib-step` — the sync pipeline, which the app
+  runs for you and which you can also run from the terminal.
+- `datalib-applet` — serves the search grid inside the app.
+- `datalib-doltlite` — the shell for reading and exporting your stores
+  (step 8).
+- `datalib-migrate-config` — rewrites a config file from an older
+  datalib (step 3).
+
+Also installed: `datalib-fsindex` and `datalib-dirtree-diff` (a
+standalone directory scanner and a diff of two scans) and the two
+`latchkey-curl-*` binaries the web-API sources fetch through. If
+`~/.local/bin` isn't already on your `PATH`, the script prints the exact
+line to add to your `~/.zshrc` — add it and restart your shell.
 
 Three optional knobs:
 
 - `DATALIB_INSTALL_DIR` — install somewhere else, e.g.
   `DATALIB_INSTALL_DIR=~/bin curl -LsSf …/install.sh | sh`.
 - `DATALIB_VERSION` — pin a release tag instead of `latest`, e.g.
-  `DATALIB_VERSION=v0.13.0 curl -LsSf …/install.sh | sh`.
+  `DATALIB_VERSION=v0.30.1 curl -LsSf …/install.sh | sh`.
 - `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected (musl
   distros like Alpine get the fully-static musl build); set
   `DATALIB_LIBC=musl` to force the static build on a glibc distro —
   it runs on any Linux of the right architecture.
 
-> The install script supports macOS arm64 (Apple Silicon) and Linux
-> (x86_64 / arm64, glibc or musl); it auto-detects your platform and pulls
-> the matching release tarball. The rest of this guide is written
+> The install script supports macOS on Apple Silicon and Linux
+> (x86_64 / arm64, glibc or musl); it auto-detects your platform and
+> pulls the matching tarball. The rest of this guide is written
 > macOS-first (Homebrew, `pbpaste`) — on Linux, substitute your package
 > manager and clipboard tool.
 
-Next, make the data_root playground — this is where the tools will download
-your data — and work from there:
+Next, make the data root — the folder everything gets written into —
+and work from there:
 
 ```sh
 mkdir -p ~/datalib && cd ~/datalib
@@ -89,40 +114,39 @@ datalib-dag --version
 
 ## 2. Get access to some data
 
-The options below cover the sources wired into the sample config. For a
-fuller per-source cheat sheet on getting your data onto disk — including
-Signal and WhatsApp backups off an Android phone — see
-[**getting your data**](/docs/user/getting_your_data.md).
+The options below cover the sources in the sample config. For every
+other source — Gmail over the API, Fastmail, ChatGPT, Notion, GitHub,
+Signal and WhatsApp backups off an Android phone, LinkedIn exports, and
+the rest — see [**getting your data**](getting_your_data.md).
 
-> 🛑 **RED WARNING — READ BEFORE PROCEEDING** 🛑
+> 🛑 **READ BEFORE PROCEEDING** 🛑
 >
-> The commands in this section store live session cookies for `claude.ai`
-> and Slack on your machine via `latchkey`. **Any process, script, or AI
-> agent that can run CLI programs as your user account can invoke
-> `latchkey` (or read its store) and thereby ACT AS YOU on these
-> services** — read every conversation, send messages, change settings,
-> impersonate you to coworkers, etc. There is no additional password
-> prompt, MFA challenge, or confirmation gate between a shell command
-> and your identity on these services.
+> The commands in this section store live session cookies and tokens on
+> your machine via `latchkey`. **Any process, script, or AI agent that
+> can run commands as your user can invoke `latchkey` (or read its
+> store) and thereby ACT AS YOU on these services** — read every
+> conversation, send messages, change settings, impersonate you to
+> coworkers. There is no password prompt, MFA challenge, or confirmation
+> gate between a shell command and your identity on these services.
 >
 > Only run these steps on a machine you trust, and be aware that *every*
-> local agent inherits this authority for as long as the cookies remain valid.
+> local agent inherits this authority for as long as the credentials
+> remain valid.
 
-You don't necessarily need to install `latchkey` — the commands below invoke it via
+You don't need to install `latchkey`: the commands below run it through
 `npx`, which fetches it on demand (the `node` install from step 0 ships
 with `npx`).
 
-### Option 1: Download some Google Takeout data (no Latchkey necessary)
+### Option 1: A Google Takeout export (no credentials needed)
 
 Google Takeout (<https://takeout.google.com>) lets you export your own
-data out of Google's silos. Useful targets for this project:
+data out of Google's silos. Useful targets:
 
 - **Mail** — exports as a single `.mbox` (one file for "All mail
-  Including Spam and Trash"). The email source below ingests this
-  directly; no credentials needed.
-- **Chat**, **Maps (Your Timeline)**, **YouTube history** — also
-  exportable; not wired into the sample config yet but live on disk
-  the same way once you've unpacked them.
+  Including Spam and Trash"). The email source reads it directly.
+- **Chat**, **Voice**, **Maps**, **YouTube history**, **Gemini** — the
+  `google_takeout` source reads the unpacked tree. Chat and Voice
+  render to markdown today; the rest land in the raw store.
 
 Steps:
 
@@ -147,27 +171,26 @@ Steps:
    ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
    ```
 
-   The sample config in the next step has an `email` source
-   that points at exactly that path.
+   The sample config in the next step has an `email` source that
+   points at exactly that path.
 
+### Option 2: Slack (easy, supported flow)
 
-### Option 2: Register Slack with latchkey (easy, supported flow)
+Slack is built into latchkey. One command opens a browser, you sign in,
+and latchkey keeps the session:
 
-  Register Slack via latchkey's browser flow (the sample config in the
-  next step includes a Slack source, so this is needed for the sync to
-  succeed):
+```sh
+npx -y latchkey auth browser slack
+```
 
-  ```sh
-  npx -y latchkey auth browser slack
-  ```
+The sample config includes a Slack source, so do this before the first
+sync if you keep that source.
 
-### Option 3: Register Claude web with latchkey (tricky)
+### Option 3: Claude.ai (fiddly)
 
-This is tricky, requires you to do sketchy things in your browser.
-
-It also might not work inside Minds because of the Chrome handshake issues.
-When Minds runs latchkey, it doesn't use our curl shim with the Chrome 131 handshake
-because latchkey reaches out to its gateway.
+Claude.ai has no official API for your conversations, so this uses the
+session cookie your browser already has. It takes a trip through
+DevTools.
 
 a. Register the `claude-ai` service with latchkey (one-time):
 
@@ -175,12 +198,12 @@ a. Register the `claude-ai` service with latchkey (one-time):
    npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
    ```
 
-b. Paste the registration command into your terminal **but don't run it
-   yet** — the next step puts the cookie on your clipboard, so you want
-   this command staged first. `pbpaste` is used (instead of pasting the
-   cookie value literally) because zsh/bash record the pre-expansion
-   command in history, so history ends up storing the harmless
-   `$(pbpaste)` text instead of your live session token:
+b. Paste the next command into your terminal **but don't run it yet** —
+   the following step puts the cookie on your clipboard, so you want
+   this staged first. `$(pbpaste)` is used instead of pasting the cookie
+   value literally because zsh and bash record the command before
+   expansion, so your shell history keeps the harmless `$(pbpaste)`
+   text rather than your live session token:
 
    ```sh
    npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
@@ -188,24 +211,26 @@ b. Paste the registration command into your terminal **but don't run it
 
 c. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
    copy your `sessionKey` cookie. It's `HttpOnly`, so it's not visible
-   to `document.cookie` — you have to read it from DevTools directly:
+   to `document.cookie` — read it from DevTools directly:
 
    - Open DevTools → **Application** tab → **Storage** → **Cookies** →
      `https://claude.ai`.
    - Find the row named `sessionKey` and copy its **Value**.
 
    Now switch back to your terminal and press Enter to run the staged
-   command — `$(pbpaste)` will expand to the cookie you just copied.
+   command — `$(pbpaste)` expands to the cookie you just copied.
 
+If a sync later fails with an auth error, the error message repeats
+these steps for whichever source failed.
 
 ## 3. Configuration
 
-The running config lives at `config.toml` in your data_root. Each
-source is a **group** with an `ingest` + `render_markdown` step pair
-under it, plus two shared index steps that fan in over everything
-rendered. None of them names a command: a step without one is
-datalib's own, and the group's `type` says which provider it runs. A
-one-source config looks like this:
+The config lives at `config.toml` in your data root. Each source is a
+**group** with an `ingest` step (bring the data in) and a
+`render_markdown` step (turn it into readable markdown), plus two shared
+index steps that fan in over everything rendered. None of them names a
+command: a step without one is datalib's own, and the group's `type`
+says which source it is. A one-source config looks like this:
 
 ```toml
 data_root = "~/datalib"
@@ -245,40 +270,42 @@ id = "unified_index"
 command = "datalib-applet unified_index"
 ```
 
-A source is a `[[groups]]` entry with a `type`, plus its steps: each
-step says which group it belongs to and what it does there, and the
-pair names a directory — `claude/ingest`, `claude/render_markdown` — that the
-next step's `inputs` refer to. Two TOML rules worth knowing before you
-hand-edit: `data_root` has to come *above* the first `[[…]]` header,
-and within a step the `params` sub-table comes last — anything you
-write after a `[…]` header belongs to that header's table until the
+Each step says which group it belongs to and what it does there, and
+the pair names a directory — `claude/ingest`, `claude/render_markdown`
+— that the next step's `inputs` refer to. Two TOML rules worth knowing
+before you hand-edit: `data_root` has to come *above* the first `[[…]]`
+header, and within a step the `params` sub-table comes last — anything
+you write after a `[…]` header belongs to that header's table until the
 next one.
 
-You normally don't write this by hand — the app's **Setup** tab
-scaffolds it for you (next step). If you'd rather hand-edit, copy
+You normally don't write this by hand. The app's first-run screen
+writes the index steps and the applet for an empty folder, and the
+**Manage** tab's **Add a source** button fills in a source (next step).
+If you'd rather hand-edit, copy
 [**configs/dag_example.toml**](https://github.com/imbue-ai/datalib/blob/main/configs/dag_example.toml),
 a complete commented example.
 
 For ready-made configs and each source's knobs, the files in
 [docs/user/config_examples/](https://github.com/imbue-ai/datalib/tree/main/docs/user/config_examples)
-are the reference — all in the steps format, so you can copy a file (or
-just one source's step pair) straight into `<data_root>/config.toml`:
+are the reference — copy a file, or just one source's entries, straight
+into `<data_root>/config.toml`:
 
 - [**sample_config.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/sample_config.toml)
-  — the Slack source, the Claude API source, and an email source that
+  — the Slack source, the Claude source, and an email source that
   reads a Google Takeout `.mbox` from disk (the trio step 2 above sets
   up).
 - [**claude_only.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/claude_only.toml)
   — just the Claude source, plus the two index steps.
 - [**all_sources.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/all_sources.toml)
   — every supported source type with realistic defaults (including
-  both input modes for email and contacts).
+  every input mode for email and contacts).
 
-(Upgrading from an earlier datalib? A `config.toml` written for an
-earlier version — steps naming a `datalib-step download …` command, a
-group `type` spelled for its method (`slack_api`, `claude_export`), or
+Upgrading from an earlier datalib? A `config.toml` written for one —
+steps naming a `datalib-step download …` command, a group `type`
+spelled for its method (`slack_api`, `claude_export`, `carddav`), or
 an ingest step whose params still say `sync` or `common.input_path` —
-is refused by this version, and is rewritten once:
+is refused by this version, with an error naming the fix, and is
+rewritten once:
 
 ```sh
 datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml
@@ -287,25 +314,26 @@ datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml
 It keeps the original beside the result as `config.toml.orig`. Comments
 from the old file don't carry over, so review the result. A much older
 root with only a `config.yaml` is not convertible any more: set it up
-again from the app.)
+again from the app.
 
-Credentials are not in the config — downloaders that need them use `latchkey` at runtime.
+Credentials are never in the config — sources that need them ask
+`latchkey` at run time.
 
-Whichever route you take, eyeball the `data_root` parameter at the top
-to make sure it is writing to the directory you created.
+Whichever route you take, eyeball the `data_root` line at the top to
+make sure it points at the folder you created.
 
 ## 4. Run the sync
 
-The easiest way is through the app. From your data_root:
+The easiest way is through the app. From your data root:
 
 ```sh
 datalib-http ./
 ```
 
 It binds to `http://127.0.0.1:8731` by default and opens that URL in
-your default browser. The **Setup** tab scaffolds `config.toml` if you
-don't have one yet and lets you add sources; **Sync now** then runs the
-pipeline (`datalib-dag` under the hood).
+your browser. On an empty folder the first-run screen offers to write a
+config; the **Manage** tab then lets you add sources, and **Sync all**
+runs the pipeline (`datalib-dag` under the hood).
 
 The URL it opens carries a one-time `?token=…`, the way a Jupyter
 notebook server's does — the local API is authenticated, so that no web
@@ -316,7 +344,7 @@ you closed the tab and lost the URL), the line the server printed is
 still in your terminal, and the token is on disk at
 `<data_root>/system/api-token`.
 
-Prefer the terminal? Run the pipeline directly on your steps config:
+Prefer the terminal? Run the pipeline directly on your config:
 
 ```sh
 datalib-dag config.toml
@@ -324,95 +352,97 @@ datalib-dag config.toml
 
 (`datalib-step` must be findable: on `PATH`, next to `datalib-dag` —
 which is how the installer lays them out — or via `--binary-dir`. Pass
-`--sync <step-id>` to sync just a subset of your sources.)
+`--sync <group>/ingest` to sync just one source and what depends on it.)
 
-The first time you run this, it is slow and takes a long time to download everything.
-All of the data will be going into the data_root directory.
+The first run is slow: it downloads everything. All of the data goes
+into the data root.
 
-This process is meant to be stoppable and resumable, so you can control-C it,
-Then run the same command again to resume downloading.
-It does do some database commits when you control-C, so that part is not instant. 
+The run is stoppable and resumable. Ctrl-C it, then run the same
+command again to pick up where it left off. It commits what it has when
+you Ctrl-C, so stopping is not instant.
 
-Subsequent runs of the same command are meant to be incremental delta downloads,
-and should be faster.
+Later runs of the same command are incremental and should be much
+faster.
 
 **During the run** you'll see, roughly in order:
 
-- A `download` step per source: per-org conversation enumeration, then
-  a progress bar as each new / updated / overlap conversation is
-  fetched from `claude.ai/api`. New conversations are fetched first.
-- A `render` step per source: each conversation rendered into intelligible Markdown (including image attachments).
-- The `grid_index` step: rows written into the doltlite SQL store at `<data_root>/unified_index/grid_index/db.doltlite_db`.
-- The `qmd_index` step: builds the search index. **First run is slow** —
-  embedding ~5–10 minutes per thousand chunks on CPU. It's resumable, so
-  Ctrl-C and re-run is safe. Re-runs after the backlog drains take
-  seconds.
+- An `ingest` step per source: enumerate what the source has, then a
+  progress bar as each new or changed item is fetched. New items come
+  first.
+- A `render_markdown` step per source: each conversation or document
+  rendered into readable markdown, attachments included.
+- The `grid_index` step: one row per message or document written into
+  the SQL store at `<data_root>/unified_index/grid_index/db.doltlite_db`.
+- The `qmd_index` step: builds the semantic search index. **The first
+  run is slow** — embedding takes roughly 5–10 minutes per thousand
+  chunks on CPU, after a one-time download of the models. It's
+  resumable, so Ctrl-C and re-run is safe. Re-runs after the backlog
+  drains take seconds.
 
-**On disk afterwards** (with `data_root: ~/datalib`):
+**On disk afterwards** (with `data_root = "~/datalib"`):
 
 ```
 ~/datalib/
-├── claude_web/                     # one directory per source stanza …
-│   ├── ingest/                     #   its captured raw stores …
+├── config.toml
+├── claude/                         # one directory per group …
+│   ├── ingest/                     #   the captured raw stores (precious) …
 │   │   ├── entities.doltlite_db
 │   │   └── blobs.doltlite_db
-│   └── render_markdown/            #   … and its rendered .md tree (UUID-keyed)
+│   └── render_markdown/            #   … and the rendered .md tree
 │       └── …
 ├── slack/
 │   ├── ingest/
-│   │   ├── entities.doltlite_db
-│   │   └── blobs.doltlite_db
 │   └── render_markdown/
-├── fastmail/                       # (mbox source lands here too)
+├── gmail-takeout/
 │   └── …
-├── …
 ├── unified_index/                  # the shared indexes, rebuildable
 │   ├── grid_index/db.doltlite_db   #   grid rows + markdowns + edges
-│   └── qmd_index/qmd/index.sqlite  #   search index for hybrid / vector queries
+│   └── qmd_index/qmd/index.sqlite  #   the semantic search index
 └── system/                         # everything that isn't a source
     ├── dag_state.json              # scheduler state (which steps are up to date)
     ├── api-token                   # the running server's bearer token
+    ├── lock                        # held by the running server
     ├── feedback.doltlite_db        # feedback you filed (nothing regenerates it)
     ├── jobs.doltlite_db            # sync job queue + history
-    └── job-logs/                   # one log per sync job
+    ├── job-logs/                   # one log per sync job
+    ├── usage.doltlite_db           # bytes on disk over time
+    ├── media/                      # attachment bytes served to the UI
+    └── frontend/                   # UI components the applets contribute
 ```
 
-> **Backups:** the bulky **derived** artifacts — each `<name>/render_markdown/`
-> tree, the search DB (`unified_index/grid_index/`), the qmd index (`unified_index/qmd_index/qmd/`),
-> and served attachments (`system/media/`) — are all rebuildable from your raw
-> stores, and each carries a `CACHEDIR.TAG`, so cache-aware backups skip them
-> automatically:
+> **Backups:** the bulky **derived** trees — each `<name>/render_markdown/`,
+> `unified_index/`, and `system/media/` — are rebuilt from your raw
+> stores by re-running the pipeline, and each carries a `CACHEDIR.TAG`,
+> so cache-aware backup tools skip them automatically:
 >
 > ```sh
 > restic backup ~/datalib --exclude-caches        # or: borg create --exclude-caches
 > tar --exclude-caches -czf datalib-backup.tgz ~/datalib
 > ```
 >
-> What's left in the backup is exactly what you want to keep: the per-stanza
-> `<name>/ingest/` stores (your precious captured data), `config.toml`, and
-> `system/` (scheduler state + sync job logs — operational
-> history, not rebuildable).
+> What's left in the backup is exactly what you want to keep: every
+> `<name>/ingest/` store (the captured data), `config.toml`, and
+> `system/` (scheduler state, filed feedback, sync history).
 
-A final per-step report prints when the run finishes, and a
-machine-readable `run_summary` event lands on `datalib-dag`'s stderr
-(NDJSON — tee stderr if you want to keep it). Exit code is non-zero if
-any step failed.
+A per-step report prints when the run finishes, and a machine-readable
+`run_summary` event lands on `datalib-dag`'s stderr (NDJSON — tee
+stderr if you want to keep it). The exit code is non-zero if any step
+failed.
 
 ## 5. Browse the result
 
 If you synced from the app, you're already looking at the result —
-`datalib-http` is the single-binary search backend with the web UI
-embedded. If you ran `datalib-dag` from the terminal instead, start it
-now from your data_root:
+`datalib-http` is the single-binary backend with the web UI embedded.
+If you ran `datalib-dag` from the terminal instead, start it now from
+your data root:
 
 ```sh
 datalib-http ./
 ```
 
 It binds to `http://127.0.0.1:8731` by default and opens that URL in
-your default browser. Pass `--no-open` if you'd rather click in
-yourself, and set `DATALIB_BIND=127.0.0.1:<port>` to override the
-listen address.
+your browser. Pass `--no-open` if you'd rather click in yourself, and
+set `DATALIB_BIND=127.0.0.1:<port>` to change the listen address.
 
 The API requires a token (see step 4). With `--no-open` you'll want the
 URL the server prints, which already has it; to reach the API from a
@@ -429,14 +459,14 @@ need it stable across restarts.
 
 ## 6. Re-syncing
 
-Re-run the sync (**Sync now** in the app, or `datalib-dag config.toml`)
-whenever you want to pull new conversations.
-The downloader is incremental and the qmd index is content-hashed, so
-re-runs against an unchanged corpus are relatively fast no-ops.
+Re-run the sync (**Sync all** in the app, or `datalib-dag config.toml`)
+whenever you want to pull in what's new. Downloads are incremental and
+the semantic index is content-hashed, so a re-run over an unchanged
+corpus is a fast no-op.
 
-## 7. Querying the index directly with qmd
+## 7. Querying the search index directly with qmd
 
-To find relevant markdown content, you can also query the search index directly from the command line by
+You can also query the semantic index from the command line, by
 pointing `qmd` at the sqlite file under your data root via the
 `INDEX_PATH` env var:
 
@@ -445,8 +475,8 @@ INDEX_PATH=~/datalib/unified_index/qmd_index/qmd/index.sqlite \
     npx -y @tobilu/qmd query "hello"
 ```
 
-Use `qmd status` against the same `INDEX_PATH` to confirm collections
-and document counts.
+`qmd status` against the same `INDEX_PATH` shows collections and
+document counts.
 
 ## 8. Getting your data back out
 
@@ -461,9 +491,9 @@ are already in open formats you can read with no datalib at all:
 - **The databases.** The `.doltlite_db` files are
   [doltlite](https://github.com/dolthub/doltlite) stores — SQLite's SQL
   engine over a versioned, content-addressed file format, which is what
-  lets datalib show you what a source *changed or deleted* between
-  syncs. The trade is that the file itself is not a SQLite file: point
-  stock `sqlite3` at one and it says `file is not a database`.
+  keeps the record of what a source *changed or deleted* between syncs.
+  The trade is that the file itself is not a SQLite file: point stock
+  `sqlite3` at one and it says `file is not a database`.
 
   So export it. `datalib-doltlite` was installed alongside
   `datalib-dag` in step 1, and one pipe writes a plain SQLite database
@@ -490,6 +520,8 @@ are already in open formats you can read with no datalib at all:
 `datalib-doltlite` is a `sqlite3`-compatible shell, so you can also
 just explore in place — `datalib-doltlite -readonly <file>` drops you
 in a REPL. Pass `-readonly` whenever you are only looking: a second
-writer against a live store can wedge your next sync. More recipes,
-including the commit history and per-sync diffs, are in
-[`docs/dev/doltlite.md`](/docs/dev/doltlite.md).
+writer against a live store can wedge your next sync. If you prefer a
+GUI, a build of DB Browser for SQLite patched to open doltlite files is
+at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). More
+recipes, including the commit history and per-sync diffs, are in
+[`docs/dev/doltlite.md`](../dev/doltlite.md).

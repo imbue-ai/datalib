@@ -31,9 +31,9 @@
 #   REPO          owner/name on GitHub (default imbue-ai/datalib)
 #   IMAGE_NAME    registry image ref (default ghcr.io/imbue-ai/datalib)
 #
-# Requires: docker (with buildx), gh, tar. `gh auth login` must have been
-# run — the repo is private, so anonymous releases/download/<tag>/<file>
-# URLs return 404. The `--tarball-dir` mode skips both gh and auth.
+# Requires: docker (with buildx), gh, tar. The tarballs come via
+# `gh release download`, so `gh auth login` must have been run; the
+# `--tarball-dir` mode skips both gh and auth.
 
 set -euo pipefail
 
@@ -73,10 +73,12 @@ fi
 ctx="$(mktemp -d -t datalib-docker-XXXXXX)"
 trap 'rm -rf "${ctx}"' EXIT INT TERM
 
-# Stage the build context: Dockerfile + per-arch tarballs at the layout
-# the Dockerfile expects (`dist/<arch>/...tar.gz`).
+# Stage the build context: Dockerfile + entrypoint + the demo library's
+# inputs + per-arch tarballs at the layout the Dockerfile expects
+# (`dist/<arch>/...tar.gz`).
 cp datalib/docker/Dockerfile "${ctx}/Dockerfile"
 cp datalib/docker/entrypoint.sh "${ctx}/entrypoint.sh"
+datalib/docker/stage_demo.sh "${ctx}"
 mkdir -p "${ctx}/dist/amd64" "${ctx}/dist/arm64"
 
 fetch_tarball() {
@@ -90,11 +92,9 @@ fetch_tarball() {
         fi
         cp "${TARBALL_DIR}/${name}" "${dest_dir}/${name}"
     else
-        # `gh release download` instead of curl: the repo is private, so
-        # plain HTTPS GETs against releases/download/<tag>/<file> return
-        # 404 to anonymous clients. `gh` handles auth via the host
-        # config from `gh auth login`. See docs/user/first_time_user.md for
-        # the same pattern.
+        # `gh release download` rather than curl, so a fork's private
+        # releases work too; `gh` handles auth via the host config from
+        # `gh auth login`.
         echo "build_docker: gh release download v${VERSION} ${name} (repo ${REPO})"
         gh release download "v${VERSION}" \
             --repo "${REPO}" \

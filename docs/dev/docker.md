@@ -1,221 +1,161 @@
-# Running datalib in Docker
+# The Docker image: what is in it and how it is built
 
-The `ghcr.io/imbue-ai/datalib` image bundles the four release
-binaries (`datalib-dag`, `datalib-step`, `datalib-http`,
-`latchkey-curl-impersonate`) and the `latchkey` CLI on top of an
-Ubuntu 24.04 base, so you can register service credentials and run syncs
-from a single self-contained container instead of dropping arbitrary
-binaries onto your host PATH.
+The user-facing walkthrough — pull the image, serve the baked-in demo,
+ingest a file of your own, put credentials in the container — is
+[`docs/user/docker.md`](../user/docker.md). This page is about the
+image itself: what it contains, how it is built and published, and the
+security model the walkthrough's bind-mount rules rest on.
 
-Published for `linux/amd64` and `linux/arm64`. The build is driven by
-[`datalib/docker/Dockerfile`](../../datalib/docker/Dockerfile) and
-published from [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
-on every `v*` tag.
+## What is in the image
 
-## 🛑 Why this exists — and why you should care 🛑
+`ghcr.io/imbue-ai/datalib:<tag>` is Ubuntu 24.04 plus:
 
-`datalib-dag` exists to mirror conversations and personal data out of
-services you are logged into (Slack, Anthropic, Notion, GitHub, GitLab,
-…). The credentials those mirrors require are **live session cookies and
-API tokens that confer the full power of your account on those
-services**. Any process running as your user that can spawn
-`datalib-dag` or read your `latchkey` store can therefore *act as
-you* on those services with no further prompt, MFA, or confirmation gate.
+- every binary from the release tarball (`datalib-dag`, `datalib-step`,
+  `datalib-http` with the web UI embedded, `datalib-applet`,
+  `datalib-migrate-config`, `datalib-doltlite` — also as plain
+  `doltlite` — and the two `latchkey-curl-*` binaries), installed under
+  `/usr/local/bin`;
+- Node 22, the pinned `latchkey` CLI, and the pinned `qmd` with its
+  three models pre-fetched into `/root/.cache/qmd/models`, so a first
+  sync never stalls on a multi-gigabyte download;
+- the demo data library at `/opt/datalib/demo`, ingested and rendered
+  at image build time from the TNG fixtures under
+  `/opt/datalib/demo-sources` (see below);
+- `tini` as PID 1 and [`entrypoint.sh`](../../datalib/docker/entrypoint.sh),
+  which provisions latchkey's encryption key.
 
-The Docker image is here so you don't have to install these scary
-binaries — or paste these scary credentials — directly into your host
-shell environment. By isolating both the binaries and the credentials
-inside a container with a deliberately narrow bind-mount contract, you
-limit the blast radius to **just** the paths you explicitly map in.
-That isolation only works **if you stick to the bind-mount layout
-described below**. Bind-mounting `$HOME` or running the container with
-`--privileged` defeats the entire point.
+The `:<version>-slim` variant is the same image without the qmd
+models; the devcontainer builds on it. It is amd64 only and not tagged
+`latest`.
 
-## Quickstart
+Published for `linux/amd64` and `linux/arm64` from
+[`datalib/docker/Dockerfile`](../../datalib/docker/Dockerfile) by the
+`docker-publish` job in
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml)
+on every `v*` tag. The image is not built from source: it consumes the
+Linux tarballs the same release just produced, so what a user pulls is
+byte-for-byte what `curl | sh` installs.
+
+## The demo library
+
+[`datalib/docker/demo/config.toml`](../../datalib/docker/demo/config.toml)
+names seven file-backed sources — Claude export, a Gmail `.mbox`,
+Google Takeout, SMS Backup & Restore, LinkedIn, vCard contacts, PDFs —
+whose inputs are the same TNG fixtures the test suite uses.
+[`stage_demo.sh`](../../datalib/docker/stage_demo.sh) copies them into
+the build context, and a `RUN` step in the Dockerfile ingests, renders
+and grid-indexes them. That run is also the one end-to-end smoke test
+of the shipped pipeline: a tarball whose binaries cannot ingest the
+fixtures fails the image build.
+
+The semantic index is deliberately not built at image time. The
+config's `qmd_index` step sits below a `BUILD-TIME CUT` marker that the
+Dockerfile drops for its run and keeps in the shipped file, so the
+first sync in a container builds it. Embedding under the arm64 leg's
+QEMU emulation would add tens of minutes to every release for an index
+that takes about a minute natively.
+
+## Checking the walkthrough against an image
+
+[`datalib/docker/doc_test.sh`](../../datalib/docker/doc_test.sh)
+executes every shell block in `docs/user/docker.md` that carries a
+`<!-- doc-test: run <name> -->` marker, in page order, against one
+image, then checks what each should have produced: the demo serves and
+answers a search, the index builds, a mounted `.mbox` ingests, the
+stores read back. The page's setup block is swapped for a free port, a
+temp data root, and the TNG mbox fixture. So the page cannot drift from
+the image without the test saying so.
+
+It is `manual` in Bazel (it needs the host's docker daemon and a
+registry pull) and release.yml runs it against every image it pushes:
 
 ```sh
-IMG=ghcr.io/imbue-ai/datalib:latest
-docker pull "$IMG"
+# a published tag
+bazelisk test //datalib/docker:doc_test --test_env=DATALIB_DOCKER_IMAGE=ghcr.io/imbue-ai/datalib:0.31.0
 
-# Pick host paths for the two bind mounts.
-LATCHKEY_DIR="$HOME/.datalib-docker/latchkey"
-DATA_ROOT="$HOME/datalib"
-mkdir -p "$LATCHKEY_DIR" "$DATA_ROOT"
-
-# Drop a config.toml into the data root — the `[[groups]]` +
-# `[[steps]]` format (see docs/dev/step_protocol.md); the datalib-http
-# Setup tab scaffolds and validates it. Upgrading a root whose
-# config.toml predates `[[groups]]`? Rewrite it first:
-#   docker run --rm -v "$DATA_ROOT:/data" "$IMG" \
-#       datalib-migrate-config /data --force
-
-# 1. Register a self-hosted service entry.
-docker run --rm -it -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
-    latchkey services register claude-ai --base-api-url=https://claude.ai/
-
-# 2. Store the credential. Paste your live session cookie value into
-#    your clipboard first (see docs/user/first_time_user.md section 2 for
-#    where to copy it from).
-docker run --rm -it -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
-    sh -c 'latchkey auth set claude-ai -H "Cookie: sessionKey=$(cat)"'
-
-# 3. Verify the credential is stored and decryptable.
-docker run --rm -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
-    latchkey auth list
-
-# 4. Run a sync. Latchkey RO, data root RW.
-docker run --rm \
-    -v "$LATCHKEY_DIR:/root/.latchkey:ro" \
-    -v "$DATA_ROOT:/data" \
-    "$IMG" datalib-dag /data/config.toml
-
-# 5. Serve the HTTP backend (UI bundle not included in this image — point
-#    a local Vite dev server or another openhost UI container at
-#    http://127.0.0.1:8731/api).
-#
-#    Every route needs the API token (see docs/dev/first_time_dev.md).
-#    Publishing 8731 makes the API reachable from outside the container,
-#    so pin a token you generated rather than letting the container mint
-#    a random one you'd have to read back out of the data root:
-TOKEN="$(openssl rand -hex 32)"
-docker run --rm -p 8731:8731 \
-    -e DATALIB_TOKEN="$TOKEN" \
-    -v "$LATCHKEY_DIR:/root/.latchkey:ro" \
-    -v "$DATA_ROOT:/data" \
-    "$IMG" datalib-http
-
-# …and give the same value to whatever talks to it:
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8731/api/health
+# an image you just built and loaded (below), from a checkout, no bazel
+DATALIB_DOCKER_IMAGE=ghcr.io/imbue-ai/datalib:latest datalib/docker/doc_test.sh
 ```
-
-## Bind-mount contract
-
-| Host path                      | Container path             | Mode at sync time | Why                                                                                          |
-|--------------------------------|----------------------------|-------------------|----------------------------------------------------------------------------------------------|
-| `$LATCHKEY_DIR`                | `/root/.latchkey`          | `:ro`             | latchkey's encrypted credential store. Needs RW only during `services register` / `auth set` / `auth browser-prepare`. |
-| `$DATA_ROOT`                   | `/data`                    | RW                | `config.toml`, one directory per source stanza (`<name>/ingest/` + `<name>/render_markdown/`), the shared indexes under `unified_index/` (`grid_index/db.doltlite_db`, `qmd_index/`), and the server's own state under `system/`. |
-| `~/.cache/qmd/models`          | `/root/.cache/qmd/models`  | RW (optional)     | qmd's embedding/reranker/expansion model cache (~2.25 GB). The image already ships the three default models pre-baked at `/root/.cache/qmd/models/`, so this mount is only needed if you've set `QMD_EMBED_MODEL=…` to override the default to an unbaked model, or you want to share a cache with a host `qmd` install. |
-
-Default `ENV` inside the image already sets `DATALIB_ROOT=/data` and
-`LATCHKEY_CURL=/usr/local/bin/latchkey-curl-impersonate`, so
-`datalib-http` finds the data root and `datalib-dag`'s download steps
-find the Chrome-impersonating curl shim without further configuration.
-
-## Latchkey encryption key — auto-provisioned inside the bind mount
-
-On a host install, latchkey gets its symmetric encryption key from the
-OS keyring (macOS Keychain, Linux Secret Service). Inside this image,
-neither is available — there's no Secret Service running in a minimal
-Ubuntu container. To avoid asking every user to invent and
-persist a key by hand (lose the key, lose the credentials), the
-container entrypoint
-([`datalib/docker/entrypoint.sh`](../../datalib/docker/entrypoint.sh))
-auto-provisions one on first run:
-
-- If `LATCHKEY_ENCRYPTION_KEY` is already set in the env when you `docker
-  run`, that value wins. Use this for ephemeral / no-persistence runs.
-- Otherwise, the entrypoint looks for `/root/.latchkey/encryption_key`
-  inside the bind mount. If absent, it generates one (`openssl rand
-  -base64 32`, mode `0600`) into that file. Either way, the file's
-  contents are exported as `LATCHKEY_ENCRYPTION_KEY` before `latchkey` /
-  `datalib-dag` runs.
-- This means the key is bound to the host directory you bind-mount.
-  Move the dir, take the key with you. Lose the dir, lose the
-  credentials.
-
-**Security caveat:** the key lives in the same directory as the encrypted
-`*.enc` blobs it protects. This is roughly equivalent to running a
-desktop Linux box with an auto-unlocked keyring — protection against
-accidental disclosure of `credentials.json.enc` alone, but no defense
-against an attacker who can read both files. Keep the host directory
-mode-restricted (`chmod 700 "$LATCHKEY_DIR"`) and treat it with the
-same care you'd treat a file of bearer tokens, because that's
-effectively what it is.
-
-## Latchkey credential portability — IMPORTANT
-
-`latchkey` encrypts `~/.latchkey/credentials.json.enc` and
-`~/.latchkey/browser_state.json.enc` using a key obtained via
-`@napi-rs/keyring`. On a host macOS install, that key is held by the
-macOS Keychain; on a desktop Linux install, by the Secret Service
-(GNOME Keyring, KWallet, …); inside this container, by latchkey's
-file-based fallback (no Secret Service is running in a minimal Ubuntu
-container).
-
-The fallback uses a file living alongside the encrypted blobs, so:
-
-- **A `~/.latchkey` directory created inside this container can always be
-  read back by this container** — including across `docker run`
-  invocations, host reboots, and `docker pull` of a newer image tag,
-  provided the bind mount points at the same host path each time.
-- **A `~/.latchkey` directory you populated on your macOS or desktop
-  Linux host probably CANNOT be decrypted inside this container.** The
-  keyring entry the host wrote isn't reachable from inside the
-  container, so the `.enc` blobs can't be opened. Symptom: `latchkey
-  auth list` shows the credential as present but
-  `latchkey curl …` (and therefore `datalib-dag`) fails to send the
-  expected headers.
-
-**Recommendation:** dedicate a fresh host directory (the docs above use
-`$HOME/.datalib-docker/latchkey`) to this container's latchkey
-store, and only ever populate it via `docker run …  latchkey auth set
-…`. Don't try to bind-mount your existing host `~/.latchkey`.
-
-The CI release pipeline runs an end-to-end roundtrip
-(`services register` → `auth set` → `auth list`) inside the freshly built
-image on every tag push. If you ever see that smoke step fail in
-[release.yml](../../.github/workflows/release.yml), latchkey's
-encryption-at-rest behavior has changed and this whole flow needs
-revisiting.
-
-## What does NOT work inside the container
-
-- **`latchkey auth browser <service>`.** The browser flow launches
-  Playwright-driven Chrome and needs a display. The container has no X
-  server and no Playwright browsers baked in. Use the header-paste
-  flows (`latchkey auth set <service> -H "…"`) instead. The header
-  values you need are documented in the `datalib-dag` error output
-  when a service is missing credentials, in each provider's `INGEST.md`
-  under `datalib/backend/etl/providers/<name>/`, and in
-  [docs/user/first_time_user.md](/docs/user/first_time_user.md).
-- **Tauri desktop UI / Vite dev server.** This image is the backend
-  only. To serve the UI in a browser, run `datalib-http` (port
-  8731) and point the upstream openhost UI container or a local
-  `pnpm dev` at it.
-
-## Permissions, signals, file ownership
-
-The image runs as `root` inside the container so that latchkey's
-keyring fallback file (which lives under `/root/.latchkey`) and the
-data root (`/data`) are owned by a predictable user. Files written into
-the bind-mounted host paths will be owned by `uid=0` on the host. If
-that's awkward (e.g. you want to edit `config.toml` from your normal
-host user without `sudo`), pass `--user $(id -u):$(id -g)` on every
-`docker run` — but be aware that latchkey may need to recreate its
-internal state under the new uid the first time.
-
-PID 1 is [tini](https://github.com/krallin/tini), so `docker stop`
-delivers SIGTERM cleanly to `datalib-dag` (which in turn forwards it
-to its running step subprocesses).
 
 ## Building locally
 
 ```sh
-# Pull tarballs from the latest tagged release and build for both arches
-# (no push, just verify the build):
+# Both arches against the latest tagged release, into the buildx cache
+# only: a "does it still build?" smoke.
 scripts/build_docker.sh
 
-# Same, but load the host-native arch into your local docker daemon so
-# you can `docker run ghcr.io/imbue-ai/datalib:<version>` it:
+# Same, but load the host-native arch into the local daemon so you can
+# `docker run` it.
 scripts/build_docker.sh --load
 
-# Build against tarballs you produced locally via `bazel build
-# //datalib/backend:dist` (and then named to match the release
-# filenames):
+# Against tarballs you built yourself, named like the release's. The
+# easiest source of a current Linux build is a PR's CI: the "bazel test
+# //..." check uploads the x86_64 glibc tarball as an artifact for
+# three days, built in the same mode the release uses.
 scripts/build_docker.sh --tarball-dir /path/to/tarballs --load
 
-# Push to your own registry:
-REPO=your-fork/datalib \
-IMAGE_NAME=ghcr.io/your-fork/datalib \
-scripts/build_docker.sh --push
+# Push to your own registry.
+REPO=your-fork/datalib IMAGE_NAME=ghcr.io/your-fork/datalib scripts/build_docker.sh --push
 ```
+
+Don't run `docker build` on the directory directly: the Dockerfile
+expects `dist/<arch>/*.tar.gz` and `demo/` in its context, and
+`build_docker.sh` is what stages them.
+
+## Security model
+
+`datalib-dag` exists to mirror data out of services you are logged into,
+and the credentials that takes are live session cookies and API tokens
+that confer the full power of your account. Any process running as you
+that can spawn `datalib-dag` or read your latchkey store can act as you
+on those services with no further prompt.
+
+The image is here so those binaries and those credentials never have
+to land in your host shell. The container sees only what you
+bind-mount, so the blast radius is exactly the folders you map in.
+That only holds if you stick to the walkthrough's mount table:
+mounting `$HOME`, or running with `--privileged`, defeats the point.
+
+### Latchkey's encryption key is provisioned inside the bind mount
+
+On a host install latchkey keeps its encryption key in the OS keyring.
+The container has no keyring, so
+[`entrypoint.sh`](../../datalib/docker/entrypoint.sh) does this on every
+start:
+
+- if `LATCHKEY_ENCRYPTION_KEY` is already in the environment, use it
+  (for ephemeral, no-persistence runs);
+- else read `/root/.latchkey/encryption_key` from the bind mount,
+  generating it (`openssl rand -base64 32`, mode `0600`) on the first
+  run against that folder;
+- if the folder is read-only and has no key, warn and use an ephemeral
+  key, so credentials written that run are unreadable next run.
+
+The key lives beside the blobs it protects, which is roughly a desktop
+Linux box with an auto-unlocked keyring: it protects against disclosure
+of `credentials.json.enc` alone and not against someone who can read
+both files. Keep the host folder mode 700 and treat it as the file of
+bearer tokens it effectively is. Moving the folder moves the
+credentials; losing it loses them.
+
+A store populated on the host cannot be read in the container as-is,
+because its key is in the host keyring. `latchkey auth re-encrypt`
+bridges that: it rewrites chosen services under a key read from stdin,
+into a destination directory, which is how the walkthrough gets a
+browser-login credential (Slack, Gmail, GitHub, Fastmail) into the
+container. The browser flows themselves cannot run inside the image,
+which has no browser.
+
+## Permissions and signals
+
+The container runs as root so that `/root/.latchkey` and `/data` have
+a predictable owner. On a Linux host, files written into bind mounts
+are therefore owned by `uid 0`; Docker Desktop on macOS maps them to
+your user. `--user "$(id -u):$(id -g)"` is possible but moves `HOME`,
+and with it the pre-baked model cache and latchkey's store, so prefer a
+`chown` afterwards.
+
+PID 1 is [tini](https://github.com/krallin/tini), so `docker stop`
+delivers SIGTERM cleanly to `datalib-dag`, which forwards it to its
+running steps, and to `datalib-http`, which stops its applets on the
+way out.

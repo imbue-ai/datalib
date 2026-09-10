@@ -137,6 +137,14 @@ cc_library(
         # fastbuild is a strict win. See hack/slack_open_debug for the
         # A/B that established this.
         "-O2",
+        # Position-independent even in the non-PIC archive. rustc bundles
+        # this archive into the libsqlite3-sys rlib (the build script's
+        # `rustc-link-lib=static=sqlite3`), and every Rust binary on Linux
+        # links as PIE, so a non-PIC `sqlite3.o` fails the x86_64 link with
+        # "relocation R_X86_64_32S ... can not be used when making a PIE
+        # object". The amalgamation the crate used to compile itself was
+        # built -fPIC by the `cc` crate; this keeps ours the same.
+        "-fPIC",
     ],
     linkopts = select({
         # POSIX threads for SQLITE_THREADSAFE=1; dl is needed if anyone

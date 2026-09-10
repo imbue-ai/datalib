@@ -97,11 +97,13 @@ tower-http = { version = "0.7.1", features = ["cors", "fs"] }
 # builds) the linked libsqlite3 happens to be stock SQLite.
 #
 # We use sqlx's `sqlite` feature (NOT `sqlite-unbundled`). Under Bazel,
-# the `crate.annotation` on `libsqlite3-sys` in MODULE.bazel overrides
-# the bundled amalgamation with the doltlite archive built by
+# the `crate.annotation` on `libsqlite3-sys` in MODULE.bazel points its
+# build script at the doltlite archive built by
 # `//third-party/doltlite:sqlite3` (via `SQLITE3_LIB_DIR` +
-# `SQLITE3_STATIC=1`), so what's actually statically linked is doltlite,
-# not stock SQLite.
+# `SQLITE3_STATIC=1`), and the patch it applies makes the script take
+# the linked path when that variable is set — the `bundled` feature
+# would otherwise compile stock SQLite beside it and leave the linker to
+# choose. So what's statically linked is doltlite, and only doltlite.
 #
 # `sqlite-unbundled` was a holdover that caused sqlx-sqlite to emit
 # `cargo:rustc-link-lib=dylib=sqlite3` on its own — producing a release

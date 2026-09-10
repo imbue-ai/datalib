@@ -7,6 +7,17 @@ touch — config, sync, querying, extending — and points to the deeper
 docs for each. It is about *using* datalib; for working on the datalib
 codebase itself, see [`AGENTS.md`](../AGENTS.md).
 
+The human-facing guides are worth reading first, and worth pointing the
+user at: the [first-time user guide](user/first_time_user.md) is the
+walkthrough from install to first sync, with the warnings about what a
+pile of private data in one place means and what these credentials can
+do; [getting your data](user/getting_your_data.md) is the per-source
+recipe for credentials and exports; and [running in
+Docker](user/docker.md) is the sandboxed way to try it, with a demo
+library already loaded. The README's source table and "what we are
+aiming for" say what datalib is for and where it is going, which is
+the context for anything the user asks you to build on top of it.
+
 ## The mental model
 
 Everything lives under one **data root** directory. A sync is a DAG of
@@ -83,7 +94,7 @@ header, and a step's `params` sub-tables come after its plain keys — a
   [`docs/user/getting_your_data.md`](user/getting_your_data.md).
   On auth failure, sync events include a `hint` with the exact
   `latchkey auth set …` recipe for that provider.
-- The web UI's **Setup** tab scaffolds and validates the config
+- The web UI's **Manage** tab scaffolds and validates the config
   (`GET /api/config/scaffold`, `PUT /api/config` validates before
   writing).
 
@@ -93,7 +104,7 @@ CLI:
 
 ```sh
 datalib-dag <data_root>/config.toml            # everything
-datalib-dag <data_root>/config.toml --sync slack.download   # one source
+datalib-dag <data_root>/config.toml --sync slack/ingest      # one source
 datalib-dag --check <data_root>/config.toml   # validate, run nothing
 ```
 
@@ -129,7 +140,7 @@ and `/cancel` do what they say.
 Pick the surface that fits the question:
 
 - **SQL over everything** — the `grid_rows` union table in
-  `unified_index/grid/db.doltlite_db`: one row per
+  `unified_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
   `when_ts`, `author`, `channel`, `conversation_uuid`, `text`,
   `entire_chat`, etc.
@@ -142,7 +153,7 @@ Pick the surface that fits the question:
   can wedge later syncs:
 
   ```sh
-  datalib-doltlite -readonly unified_index/grid/db.doltlite_db \
+  datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db \
     "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
 
@@ -153,7 +164,7 @@ Pick the surface that fits the question:
   any tool that speaks only SQLite.
 
   ```sh
-  datalib-doltlite -readonly unified_index/grid/db.doltlite_db .dump \
+  datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db .dump \
     | sqlite3 grid.sqlite
   ```
 
@@ -174,7 +185,7 @@ Pick the surface that fits the question:
 - **Semantic search** — the qmd index:
 
   ```sh
-  INDEX_PATH=<data_root>/unified_index/qmd/index.sqlite \
+  INDEX_PATH=<data_root>/unified_index/qmd_index/qmd/index.sqlite \
       npx -y @tobilu/qmd query "that thing about the boat"
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
@@ -205,7 +216,7 @@ Pick the surface that fits the question:
 
 - **Custom step commands** — the headline extension point. Any
   executable can be a pipeline step: declare it in `config.toml` with
-  `command`/`inputs`/`outputs`/`params`, and the runner feeds it
+  `command`/`inputs`/`params`, and the runner feeds it
   flags + env vars and (optionally) parses NDJSON progress/outcome
   events from its stdout. A plain shell script works; adopting more of
   the protocol buys incrementality, live progress, and retry
@@ -235,7 +246,7 @@ Pick the surface that fits the question:
   recovery recipes in [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **A config the runner rejects**: `datalib-dag --check
   <data_root>/config.toml` lists every problem with a line number;
-  `PUT /api/config` (or the Setup tab) returns the same list in
+  `PUT /api/config` (or the Manage tab) returns the same list in
   `diagnostics` and writes nothing. A data root still holding a
   pre-TOML `config.yaml` reads as unconfigured — set it up again from
   the app.

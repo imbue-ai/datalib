@@ -1,0 +1,3 @@
+# The Docker walkthrough is read at test time by //datalib/docker:doc_test,
+# which runs its shell blocks against a published image.
+exports_files(["docker.md"])

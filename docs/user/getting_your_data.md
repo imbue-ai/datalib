@@ -1,12 +1,22 @@
 # Getting your data
 
-A short, per-source cheat sheet for how to get a copy of your data onto
-disk so the sync pipeline can ingest it. This doc is just about
-*acquisition* — for credential setup, config, and running the sync, see
-the [first-time user guide](/docs/user/first_time_user.md).
+A per-source cheat sheet for getting a copy of your data where the
+pipeline can read it: either credentials stored in `latchkey`, or an
+export on disk. This doc is only about *access* — for the config file
+and running the sync, see the
+[first-time user guide](first_time_user.md).
 
-Conventions below: exports land under `~/backups/`. Adjust paths to taste
-and point the matching source step in your config at them.
+Conventions: exports land under `~/backups/`, and `latchkey` runs
+through `npx` so there is nothing to install. Adjust paths to taste and
+point the matching source in your config at them. Wherever a command
+takes a secret, it is written as `$(pbpaste)`: copy the secret to your
+clipboard, then run the command. Your shell history keeps the harmless
+`$(pbpaste)` text rather than the secret itself.
+
+The credentials `latchkey` stores are the same session your browser
+has. Anything that can run commands as you can use them to act as you
+on that service — see the warning in the first-time guide before
+storing any.
 
 ## Google Takeout
 
@@ -17,23 +27,40 @@ tick just what you want, request a `.zip`, and unpack it:
 unzip ~/Downloads/takeout-*.zip -d ~/backups/
 ```
 
-Useful products: **Mail** (a single `.mbox`, ingested directly),
-**Chat**, **Maps (Your Timeline)**, **YouTube history**, **Gemini**.
+Useful products: **Mail** (a single `.mbox`, read by the `email`
+source), and **Chat**, **Voice**, **Maps**, **YouTube history** and
+**Gemini** (read by the `google_takeout` source from the unpacked
+tree). A Takeout is a complete snapshot, so it is also the way to notice
+what Google has deleted since the last one.
+
+## Gmail (live, over the API)
+
+The least setup of any web source. Gmail is built into latchkey; one
+command opens a browser, you sign in and approve every scope it asks
+for, and latchkey keeps the OAuth token:
+
+```sh
+npx -y latchkey auth browser google-gmail
+```
+
+Use the `email` source with a `gmail` table on its ingest step. Incremental sync is
+driven by Gmail's own change history, so deletions and label changes
+show up as events. Throughput is capped by Google's quota at roughly
+300 messages a minute, so a large mailbox backfills over several runs.
 
 ## Slack
 
-Credentials are captured at runtime via `latchkey` — no manual export:
+Built into latchkey — no manual export:
 
 ```sh
 npx -y latchkey auth browser slack
 ```
 
-## Claude web (Anthropic)
+## Claude.ai
 
-`claude.ai` is not a built-in latchkey service, so it needs a one-time
-custom registration before credentials can be set. Register the service,
-then stage the cookie command (`$(pbpaste)` keeps the live token out of
-your shell history):
+`claude.ai` has no official API for your conversations, so this uses
+the session cookie your browser already has. Register the service once,
+then stage the cookie command:
 
 ```sh
 npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
@@ -44,20 +71,22 @@ Open [claude.ai](https://claude.ai) in a logged-in tab and copy your
 `sessionKey` cookie — it's `HttpOnly`, so read it from DevTools →
 **Application** → **Storage** → **Cookies** → `https://claude.ai`, find
 the `sessionKey` row, and copy its **Value**. With it on the clipboard,
-run the staged `auth set` command. See the "Register Claude web with
-latchkey" steps in the [first-time guide](/docs/user/first_time_user.md)
-for the full walkthrough.
+run the staged `auth set` command. The first-time guide has the same
+steps with more hand-holding.
 
-The downloader fetches over `latchkey curl` and clears Cloudflare's
-managed challenge via the in-tree Chrome-impersonating shim, so no
+The downloader fetches through `latchkey curl` and clears Cloudflare's
+managed challenge with the bundled Chrome-impersonating curl, so no
 `cf_clearance` cookie is needed — the `sessionKey` cookie is the entire
 auth surface.
 
-## ChatGPT (OpenAI)
+If you would rather not store a live session at all, request a data
+export from Claude's settings and give the `claude` source an `export`
+table pointing at the unpacked folder instead.
 
-`chatgpt.com` is not a built-in latchkey service either, so it needs a
-one-time custom registration. It authenticates with a bearer access
-token (not a cookie):
+## ChatGPT
+
+Same idea as Claude.ai: a one-time custom registration, then a bearer
+access token (not a cookie):
 
 ```sh
 npx -y latchkey services register chatgpt --base-api-url="https://chatgpt.com/"
@@ -84,71 +113,106 @@ Click anywhere on the page to copy the token, then run the staged
 `auth set` command. The token rotates frequently — when `latchkey
 services info chatgpt` reports `invalid` or requests come back `HTTP
 401 token_expired`, re-run the console snippet and `auth set`. As with
-Claude, the Chrome-impersonating shim clears Cloudflare, so no
+Claude.ai, the impersonating curl clears Cloudflare, so no
 `cf_clearance` cookie is needed.
 
 ## Fastmail
 
-`fastmail` isn't a built-in latchkey service, so it needs a one-time
-custom registration. It serves the JMAP API from `api.fastmail.com` and
-downloads (attachments, blobs) from `fastmailusercontent.com`. Latchkey
-routes by URL host but `register` only takes one `--base-api-url` per
-service, so register the two hosts as two services:
+Built into latchkey, including the region-prefixed API hosts
+(`phl.api.fastmail.com` and the like) that an account homed in a
+regional datacenter gets. The browser flow stores an OAuth token:
 
 ```sh
-npx -y latchkey services register fastmail \
-  --base-api-url="https://api.fastmail.com/"
-npx -y latchkey services register fastmail-content \
-  --base-api-url="https://www.fastmailusercontent.com/"
+npx -y latchkey auth browser fastmail
 ```
 
-Fastmail authenticates with an API token (a bearer token, not a
-password). Create one at
+If you would rather use an API token, create one at
 [app.fastmail.com/settings/security](https://app.fastmail.com/settings/security)
 under **Integrations** → **API tokens** → **New API token**, give it
-read access to your mail, and copy it. Then attach the same token to
-both services (`$(pbpaste)` keeps the live token out of your shell
-history):
+read access to your mail, copy it, and store it instead:
 
 ```sh
-npx -y latchkey auth set fastmail         -H "Authorization: Bearer $(pbpaste)"
-npx -y latchkey auth set fastmail-content -H "Authorization: Bearer $(pbpaste)"
+npx -y latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
 ```
 
-### If your account lives in a regional datacenter
+Use the JMAP mode of the `email` source with `hostname =
+"api.fastmail.com"`. The same service works for any other JMAP server
+if you register its host; Fastmail is the one that is built in.
 
-Fastmail's JMAP session discovery may hand back **region-prefixed** hosts
-rather than the plain ones above — e.g. `phl.api.fastmail.com` and
-`phl-www.fastmailusercontent.com` for an account homed in Philadelphia.
-Latchkey matches by URL prefix, so the two services registered above
-won't match those, and the download fails with:
+## Contacts
 
-```
-No service matches URL: https://phl.api.fastmail.com/jmap/api/
-```
+Two routes into the `contacts` source, one table each:
 
-The prefix reflects where your *account* lives, not where you are, so it
-is stable — you don't need to redo this when you travel. Check what your
-session actually returns:
+- **A `.vcf` export.** Most address books export vCards; point
+  `vcf.path` at a directory of them. No credentials.
+- **A CardDAV server** (a `carddav` table). Credentials go in latchkey under a service
+  whose base URL matches the server. Fastmail's is built in and takes
+  an app password (Settings → Privacy & Security → Integrations → App
+  passwords, with contacts access):
+
+  ```sh
+  npx -y latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+  ```
+
+## GitHub and GitLab
+
+GitHub is built into latchkey; the browser flow creates a personal
+access token during login:
 
 ```sh
-npx -y latchkey curl "https://api.fastmail.com/jmap/session"
+npx -y latchkey auth browser github
 ```
 
-If `apiUrl` / `downloadUrl` carry a prefix, register those hosts too and
-attach the same token to each:
+GitLab is built in too, but takes a personal access token you create
+yourself (User settings → Access tokens, with API read access):
 
 ```sh
-npx -y latchkey services register fastmail-phl \
-  --base-api-url="https://phl.api.fastmail.com/"
-npx -y latchkey services register fastmail-content-phl \
-  --base-api-url="https://phl-www.fastmailusercontent.com/"
-npx -y latchkey auth set fastmail-phl         -H "Authorization: Bearer $(pbpaste)"
-npx -y latchkey auth set fastmail-content-phl -H "Authorization: Bearer $(pbpaste)"
+npx -y latchkey auth set gitlab -H "PRIVATE-TOKEN: $(pbpaste)"
 ```
 
-Register both — fixing only the API host gets you past session discovery
-and then fails on the first attachment, which comes from the content host.
+## Notion
+
+Notion authenticates with an **internal integration** token. Create one
+at [notion.so/my-integrations](https://www.notion.so/my-integrations) →
+**New integration**, associate it with your workspace, give it read
+capabilities, and copy the **Internal Integration Secret**.
+
+Two things about Notion trip people up, and both fail in ways that don't
+look like credential problems:
+
+**1. The integration starts with access to nothing.** A token is not
+enough — Notion scopes access per page. In Notion, open each page (or
+top-level page of a subtree) you want mirrored, use the **⋯** menu →
+**Connections** → **Connect to**, and pick your integration. Access is
+inherited by child pages, so connecting the root of a subtree is enough.
+Skip this and the API returns `404 object_not_found` for a page you can
+plainly see in the app.
+
+**2. Every request needs a `Notion-Version` header.** The client
+deliberately sends neither the bearer token nor the version — latchkey
+injects both — so the credential must carry the version too. Set both
+headers in one `auth set`:
+
+```sh
+npx -y latchkey auth set notion \
+  -H "Authorization: Bearer $(pbpaste)" \
+  -H "Notion-Version: 2022-06-28"
+```
+
+Omitting the version header gets every request rejected with
+`400 missing_version`. Verify the whole path — token, version header,
+and page access — in one call before running a sync:
+
+```sh
+npx -y latchkey curl "https://api.notion.com/v1/pages/<page-id>"
+```
+
+A `200` with a JSON page body means you're set. `400 missing_version`
+means the version header is missing from the credential;
+`404 object_not_found` means the page hasn't been connected to the
+integration.
+
+Point the source's `subtrees.pages` at the page URLs you connected.
 
 ## Signal
 
@@ -223,53 +287,40 @@ the source's `backup.path` at that directory — it walks every `*.xml`
 inside, so keeping multiple dated backups there is fine; re-ingesting a
 newer export deduplicates against what's already there.
 
-## Notion
+## LinkedIn
 
-Notion authenticates with an **internal integration** token. Create one
-at [notion.so/my-integrations](https://www.notion.so/my-integrations) →
-**New integration**, associate it with your workspace, give it read
-capabilities, and copy the **Internal Integration Secret**.
-
-Two things about Notion trip people up, and both fail in ways that don't
-look like credential problems:
-
-**1. The integration starts with access to nothing.** A token is not
-enough — Notion scopes access per page. In Notion, open each page (or
-top-level page of a subtree) you want mirrored, use the **⋯** menu →
-**Connections** → **Connect to**, and pick your integration. Access is
-inherited by child pages, so connecting the root of a subtree is enough.
-Skip this and the API returns `404 object_not_found` for a page you can
-plainly see in the app.
-
-**2. Every request needs a `Notion-Version` header.** The client
-deliberately sends neither the bearer token nor the version — latchkey
-injects both — so the credential must carry the version too. Set both
-headers in one `auth set` (`$(pbpaste)` keeps the live token out of your
-shell history):
+LinkedIn's own export: **Settings & Privacy** → **Data privacy** →
+**Get a copy of your data**, request the full archive, and unzip it
+when the email arrives (it can take a day):
 
 ```sh
-npx -y latchkey auth set notion \
-  -H "Authorization: Bearer $(pbpaste)" \
-  -H "Notion-Version: 2022-06-28"
+unzip ~/Downloads/Complete_LinkedInDataExport_*.zip -d ~/backups/LinkedInDataExport
 ```
 
-Omitting the version header gets every request rejected with
-`400 missing_version`. Verify the whole path — token, version header,
-and page access — in one call before running a sync:
+Point `export.path` at that directory. Each export is complete,
+so the sample config sets `always_clear_before_ingest = true` to let a
+newer export drop what LinkedIn stopped including.
 
-```sh
-npx -y latchkey curl "https://api.notion.com/v1/pages/<page-id>"
-```
+## Beeper
 
-A `200` with a JSON page body means you're set. `400 missing_version`
-means the version header is missing from the credential;
-`404 object_not_found` means the page hasn't been connected to the
-integration.
+Reads the Beeper Texts desktop app's local data directory (on macOS,
+`~/Library/Application Support/BeeperTexts`); no credentials. Lightly
+used — expect rough edges.
 
-Point the source's `subtrees.pages` at the page URLs you connected.
+## Files already on your disk
+
+These sources need nothing but a path on their ingest step:
+
+- **`pdf`** — `fswalk.path`, a directory tree; every PDF under it is converted to
+  markdown (no OCR yet, so image-only scans are recorded but produce no
+  text).
+- **`media`** — `fswalk.path`, a directory tree of music, photos and video.
+- **`fsindex`** — `fswalk.path`, any directory tree, indexed by path.
+- **`lightroom`** — an Adobe Lightroom Classic `.lrcat` catalog (see its entry in `all_sources.toml` for the table name).
 
 ## Other sources
 
-These are wired into the pipeline; acquisition is via `latchkey` or a
-provider export. Fill in details as we use them: GitHub, GitLab, Beeper,
-Contacts, generic email (JMAP).
+**YoLink** is configured with per-device ids that are effectively
+read secrets, written straight into the config; **Perseus** downloads
+public texts and needs no credentials. Both are documented in
+[`all_sources.toml`](config_examples/all_sources.toml).

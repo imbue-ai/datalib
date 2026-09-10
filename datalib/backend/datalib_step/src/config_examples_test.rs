@@ -76,6 +76,8 @@ fn example_configs_load_and_plan() {
         "docs/user/config_examples/all_sources.toml",
         // The walkthrough config AGENTS.md sends people to.
         "configs/dag_example.toml",
+        // The demo library the docker image bakes in.
+        "datalib/docker/demo/config.toml",
     ] {
         validate_config(name, &example_config(name));
     }
