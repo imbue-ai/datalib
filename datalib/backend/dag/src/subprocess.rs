@@ -395,7 +395,7 @@ mod tests {
         let passes = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
 
         // A real child process: the capability and the checkpoints cross
-        // stdout as NDJSON, which is the path a `datalib-step render` takes.
+        // stdout as NDJSON, which is the path a `datalib-step` render takes.
         // It re-announces until the consumer has run, because a checkpoint
         // arriving while the consumer is busy is dropped by design.
         let producer = StepSpec::new(

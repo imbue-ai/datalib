@@ -12,19 +12,25 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_QMD_VERSION: &str = "2.8.3";
 
 /// Canonical sub-path of the qmd index, relative to `<root>`. qmd writes
-/// here when invoked with `XDG_CACHE_HOME=<root>/unified_index` (see
-/// [`qmd_cache_home`]).
-pub const QMD_INDEX_REL: &str = "unified_index/qmd/index.sqlite";
+/// `qmd/index.sqlite` under whatever `XDG_CACHE_HOME` it is given, and
+/// it is given the `qmd_index` step's own tree (see [`qmd_cache_home`]),
+/// so the step writes only the tree its id names.
+pub const QMD_INDEX_REL: &str = "unified_index/qmd_index/qmd/index.sqlite";
 
-pub fn qmd_index_path(root: &Path) -> PathBuf {
-    crate::layout::qmd_dir(root).join("index.sqlite")
+/// The `XDG_CACHE_HOME` the qmd CLI runs with for a data root: the
+/// `qmd_index` step's tree, `<root>/unified_index/qmd_index`.
+pub fn qmd_cache_home(root: &Path) -> PathBuf {
+    crate::layout::qmd_dir(root)
 }
 
-/// Resolve the `XDG_CACHE_HOME` the qmd CLI should run with for a data
-/// root: `<root>/unified_index`, so qmd writes its `qmd/index.sqlite`
-/// beside the grid index rather than under the server's own `system/`.
-pub fn qmd_cache_home(root: &Path) -> PathBuf {
-    crate::layout::unified_index_dir(root)
+/// Where qmd keeps its state under [`qmd_cache_home`]: the index, and the
+/// `models` symlink the indexer maintains. qmd fixes the `qmd/` segment.
+pub fn qmd_state_dir(root: &Path) -> PathBuf {
+    qmd_cache_home(root).join("qmd")
+}
+
+pub fn qmd_index_path(root: &Path) -> PathBuf {
+    qmd_state_dir(root).join("index.sqlite")
 }
 
 /// Entry script of the `@tobilu/qmd` package inside a staged runtime

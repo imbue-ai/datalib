@@ -21,38 +21,36 @@ type = "slack_api"
 
 [[steps]]
 group = "slack"
-function = "raw"
-command = "datalib-step download slack_api"
+function = "ingest"
 [steps.params]
 sync = {}
 
 [[steps]]
 group = "slack"
-function = "rendered_md"
-command = "datalib-step render slack_api"
-inputs = ["slack/raw"]
+function = "render_markdown"
+inputs = ["slack/ingest"]
 `;
 
 /// The fetch step in a config, which is where a source's name shows.
 const fetchStep = (text: string) => {
-  const step = listSteps(text).find((e) => e.id === "slack/raw");
-  expect(step, `no slack/raw in:\n${text}`).toBeTruthy();
+  const step = listSteps(text).find((e) => e.id === "slack/ingest");
+  expect(step, `no slack/ingest in:\n${text}`).toBeTruthy();
   return step!;
 };
 
 describe("reading a name", () => {
   it("falls back to the id when the group declares none", () => {
     const step = fetchStep(UNNAMED);
-    expect(step.id).toBe("slack/raw");
-    expect(step.name).toBe("slack/raw");
+    expect(step.id).toBe("slack/ingest");
+    expect(step.name).toBe("slack/ingest");
   });
 
   it("takes the group's name", () => {
     const named = renameGroup(UNNAMED, "slack", "Work Slack");
-    expect(fetchStep(named).id).toBe("slack/raw");
+    expect(fetchStep(named).id).toBe("slack/ingest");
     expect(fetchStep(named).name).toBe("Work Slack");
     // The render step is the same source, said again.
-    expect(listSteps(named).find((e) => e.id === "slack/rendered_md")!.name).toBe(
+    expect(listSteps(named).find((e) => e.id === "slack/render_markdown")!.name).toBe(
       "Work Slack (render markdown)",
     );
   });
@@ -61,17 +59,17 @@ describe("reading a name", () => {
   /// put one there — and the loader tells them it is not shown.
   it("lets a step's own name beat the group's", () => {
     const text = renameGroup(UNNAMED, "slack", "Work Slack").replace(
-      'function = "rendered_md"',
-      'function = "rendered_md"\nname = "The markdown"',
+      'function = "render_markdown"',
+      'function = "render_markdown"\nname = "The markdown"',
     );
     const by = new Map(listSteps(text).map((e) => [e.id, e.name]));
-    expect(by.get("slack/raw")).toBe("Work Slack");
-    expect(by.get("slack/rendered_md")).toBe("The markdown");
+    expect(by.get("slack/ingest")).toBe("Work Slack");
+    expect(by.get("slack/render_markdown")).toBe("The markdown");
   });
 
   it("ignores a blank name rather than showing an empty cell", () => {
     const blank = UNNAMED.replace('id = "slack"', 'id = "slack"\nname = "   "');
-    expect(fetchStep(blank).name).toBe("slack/raw");
+    expect(fetchStep(blank).name).toBe("slack/ingest");
   });
 });
 
@@ -86,16 +84,14 @@ id = "unified_index"
 
 [[steps]]
 group = "unified_index"
-function = "grid"
+function = "grid_index"
 name = "Search index"
-command = "datalib-step grid_index"
-inputs = ["slack/rendered_md"]
+inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd"
-command = "datalib-step qmd_index"
-inputs = ["slack/rendered_md"]
+function = "qmd_index"
+inputs = ["slack/render_markdown"]
 
 [[applets]]
 group = "unified_index"
@@ -105,13 +101,13 @@ command = "datalib-applet unified_index"
 
   it("lets a written name beat the shared step's default label", () => {
     const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
-    expect(byId.get("unified_index/grid")?.kind).toBe("step");
-    expect(byId.get("unified_index/grid")?.name).toBe("Search index");
+    expect(byId.get("unified_index/grid_index")?.kind).toBe("step");
+    expect(byId.get("unified_index/grid_index")?.name).toBe("Search index");
   });
 
   it("gives an unnamed shared step its default label", () => {
     const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
-    expect(byId.get("unified_index/qmd")?.name).toBe("Unified Index (QMD)");
+    expect(byId.get("unified_index/qmd_index")?.name).toBe("Unified Index (QMD)");
   });
 
   it("labels the applet too, which has no config key to name it", () => {
@@ -127,15 +123,14 @@ type = "fsindex"
 
 [[steps]]
 group = "notes"
-function = "raw"
-command = "datalib-step download fsindex"
+function = "ingest"
 
 [[applets]]
 id = "slack"
 command = "datalib-applet slack"
 `;
     const byId = new Map(listSteps(custom).map((e) => [e.id, e]));
-    expect(byId.get("notes/raw")?.name).toBe("notes/raw");
+    expect(byId.get("notes/ingest")?.name).toBe("notes/ingest");
     expect(byId.get("slack")?.name).toBe("slack");
   });
 });
@@ -150,7 +145,7 @@ describe("writing a name", () => {
     expect(next).toContain('name = "Work Slack"');
     expect(fetchStep(next).name).toBe("Work Slack");
     // The id is untouched: still the tree the step writes.
-    expect(fetchStep(next).id).toBe("slack/raw");
+    expect(fetchStep(next).id).toBe("slack/ingest");
   });
 
   it("writes no key at all when there is nothing to say", () => {
@@ -163,7 +158,7 @@ describe("writing a name", () => {
   it("clearing a name removes the key", () => {
     const cleared = save(save(UNNAMED, "Work Slack"), "");
     expect(cleared).not.toContain("name =");
-    expect(fetchStep(cleared).name).toBe("slack/raw");
+    expect(fetchStep(cleared).name).toBe("slack/ingest");
   });
 
   it("survives quotes, backslashes and a pasted newline", () => {
@@ -182,7 +177,7 @@ describe("writing a name", () => {
     )}`;
     const next = appendSource(UNNAMED, body);
     expect(next.indexOf('name = "Second Slack"')).toBeLessThan(next.indexOf('group = "slack-2"'));
-    expect(listSteps(next).find((s) => s.id === "slack-2/raw")!.name).toBe("Second Slack");
+    expect(listSteps(next).find((s) => s.id === "slack-2/ingest")!.name).toBe("Second Slack");
   });
 });
 

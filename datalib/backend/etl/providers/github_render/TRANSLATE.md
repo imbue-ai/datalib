@@ -5,9 +5,9 @@
 plus that document's `grid_rows` for the UI's flat-row view.
 
 ```
-<root>/<stanza>/rendered_md/<owner>/<repo>/pr-<num>/
+<root>/<stanza>/render_markdown/<owner>/<repo>/pr-<num>/
     index.md                # the unified PR doc
-<root>/<stanza>/rendered_md/indexed_markdown.doltlite_db
+<root>/<stanza>/render_markdown/indexed_markdown.doltlite_db
                             # its rows: one for the PR + one per comment
 ```
 
@@ -59,7 +59,7 @@ The translate step is an in-process library (the `render_and_index_md`
 module, called from `datalib-sync`); there is no standalone
 `github-translate` binary and no Bazel target for it. Run a sync to
 exercise it, and rendered docs land under
-`/tmp/github-mirror/<stanza>/rendered_md/...`.
+`/tmp/github-mirror/<stanza>/render_markdown/...`.
 
 To exercise the renderer in isolation, run its tests:
 

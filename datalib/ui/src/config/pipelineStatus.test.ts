@@ -29,7 +29,7 @@ import type { ConfiguredStep } from "./sourceSteps";
 import type { DagRun, DagStep, SyncJob, SyncTask } from "@/api";
 
 /// A two-source graph with a shared fan-in, which is the shape every
-/// real config has: `a/raw → a/rendered_md → unified_index/grid`, and
+/// real config has: `a/ingest → a/render_markdown → unified_index/grid`, and
 /// the same for `b`.
 function steps(): ConfiguredStep[] {
   const mk = (id: string, inputs: string[]): ConfiguredStep => ({
@@ -46,11 +46,11 @@ function steps(): ConfiguredStep[] {
     end: 0,
   });
   return [
-    mk("a/raw", []),
-    mk("a/rendered_md", ["a/raw"]),
-    mk("b/raw", []),
-    mk("b/rendered_md", ["b/raw"]),
-    mk("unified_index/grid", ["a/rendered_md", "b/rendered_md"]),
+    mk("a/ingest", []),
+    mk("a/render_markdown", ["a/ingest"]),
+    mk("b/ingest", []),
+    mk("b/render_markdown", ["b/ingest"]),
+    mk("unified_index/grid_index", ["a/render_markdown", "b/render_markdown"]),
   ];
 }
 
@@ -66,7 +66,7 @@ function job(over: Partial<SyncJob> = {}): SyncJob {
   return {
     id: "job-1",
     kind: "all",
-    source_name: "a/raw",
+    source_name: "a/ingest",
     state: "running",
     progress_pct: null,
     progress_msg: null,
@@ -80,7 +80,7 @@ function job(over: Partial<SyncJob> = {}): SyncJob {
 
 function dagStep(over: Partial<DagStep> = {}): DagStep {
   return {
-    id: "a/raw",
+    id: "a/ingest",
     command: "",
     inputs: [],
     outputs: [],
@@ -114,7 +114,7 @@ function statusIn(frame: Frame, id: string): StatusView {
 
 describe("what a single snapshot means", () => {
   it("a step nothing has ever touched has never run", () => {
-    const s = statusIn({ jobs: [], run: null, dag: {} }, "a/raw");
+    const s = statusIn({ jobs: [], run: null, dag: {} }, "a/ingest");
     expect(s.key).toBe("never_run");
     expect(s.at).toBeNull();
   });
@@ -124,13 +124,13 @@ describe("what a single snapshot means", () => {
     // This is the window that used to show nothing at all.
     const claims = claimedBy(steps(), [job({ state: "pending", started_at: null })]);
     expect([...claims.keys()].sort()).toEqual([
-      "a/raw",
-      "a/rendered_md",
-      "unified_index/grid",
+      "a/ingest",
+      "a/render_markdown",
+      "unified_index/grid_index",
     ]);
     // ...and not the other source's chain, which this sync never reaches.
-    expect(claims.has("b/raw")).toBe(false);
-    expect(claims.has("b/rendered_md")).toBe(false);
+    expect(claims.has("b/ingest")).toBe(false);
+    expect(claims.has("b/render_markdown")).toBe(false);
   });
 
   it("a job naming no source claims every step", () => {
@@ -143,9 +143,9 @@ describe("what a single snapshot means", () => {
       {
         jobs: [],
         run: { ...liveRun, live: false },
-        dag: { "a/raw": dagStep({ current_state: "running" }) },
+        dag: { "a/ingest": dagStep({ current_state: "running" }) },
       },
-      "a/raw",
+      "a/ingest",
     );
     expect(s.key).toBe("interrupted");
     expect(s.detail).toContain("killed or crashed");
@@ -161,8 +161,8 @@ describe("what a single snapshot means", () => {
         jobs: [],
         run: liveRun,
         dag: {
-          "b/raw": dagStep({
-            id: "b/raw",
+          "b/ingest": dagStep({
+            id: "b/ingest",
             current_state: "not_selected",
             last_run: {
               started_at: T.yesterday,
@@ -174,7 +174,7 @@ describe("what a single snapshot means", () => {
           }),
         },
       },
-      "b/raw",
+      "b/ingest",
     );
     expect(s.key).toBe("succeeded");
     expect(s.at).toBe(T.yesterday);
@@ -183,14 +183,14 @@ describe("what a single snapshot means", () => {
 
 describe("what a step can be run from", () => {
   it("names the source steps a fan-in would be carried by", () => {
-    expect(sourcesFeeding(steps(), "unified_index/grid")).toEqual(["a/raw", "b/raw"]);
-    expect(sourcesFeeding(steps(), "a/rendered_md")).toEqual(["a/raw"]);
+    expect(sourcesFeeding(steps(), "unified_index/grid_index")).toEqual(["a/ingest", "b/ingest"]);
+    expect(sourcesFeeding(steps(), "a/render_markdown")).toEqual(["a/ingest"]);
     // A source step is not fed by anything, including itself.
-    expect(sourcesFeeding(steps(), "a/raw")).toEqual([]);
+    expect(sourcesFeeding(steps(), "a/ingest")).toEqual([]);
   });
 });
 
-// The sequence of frames a grid really sees across one "Sync a/raw",
+// The sequence of frames a grid really sees across one "Sync a/ingest",
 // including the two places the queue and the runner's record disagree
 // because they are fetched separately.
 const TIMELINE: { note: string; frame: Frame }[] = [
@@ -212,7 +212,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
       jobs: [job()],
       run: liveRun,
       dag: {
-        "a/raw": dagStep({
+        "a/ingest": dagStep({
           current_state: "running",
           last_run: { started_at: T.runStart, finished_at: null, status: "", attempts: 0, error: null },
           progress: { done: 3, total: 10, msg: "page 3", updated_at: T.runStart },
@@ -226,7 +226,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
       jobs: [job()],
       run: liveRun,
       dag: {
-        "a/raw": dagStep({
+        "a/ingest": dagStep({
           current_state: "succeeded",
           last_run: { started_at: T.runStart, finished_at: T.aDone, status: "succeeded", attempts: 1, error: null },
         }),
@@ -239,7 +239,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
       jobs: [job()],
       run: { ...liveRun, finished_at: T.runEnd, live: false },
       dag: {
-        "a/raw": dagStep({
+        "a/ingest": dagStep({
           current_state: "succeeded",
           last_run: { started_at: T.runStart, finished_at: T.aDone, status: "succeeded", attempts: 1, error: null },
         }),
@@ -252,7 +252,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
       jobs: [job({ state: "done", finished_at: T.runEnd })],
       run: { ...liveRun, finished_at: T.runEnd, live: false },
       dag: {
-        "a/raw": dagStep({
+        "a/ingest": dagStep({
           current_state: "succeeded",
           last_run: { started_at: T.runStart, finished_at: T.aDone, status: "succeeded", attempts: 1, error: null },
         }),
@@ -262,7 +262,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
 ];
 
 describe("the sequence a sync actually produces", () => {
-  const seen = TIMELINE.map((t) => ({ note: t.note, s: statusIn(t.frame, "a/raw") }));
+  const seen = TIMELINE.map((t) => ({ note: t.note, s: statusIn(t.frame, "a/ingest") }));
 
   it("shows something is happening from the very first frame", () => {
     // The whole complaint: pressing the button and seeing nothing. The
@@ -274,7 +274,7 @@ describe("the sequence a sync actually produces", () => {
 
   it("reaches Running, with the step's own progress", () => {
     expect(seen[2].s.key).toBe("running");
-    expect(TIMELINE[2].frame.dag["a/raw"].progress).toMatchObject({ done: 3, total: 10 });
+    expect(TIMELINE[2].frame.dag["a/ingest"].progress).toMatchObject({ done: 3, total: 10 });
   });
 
   it("ends on the real outcome, with the time it actually happened", () => {
@@ -303,7 +303,7 @@ describe("the sequence a sync actually produces", () => {
     // The button's face is `claimedBy`, so this is the same question as
     // "is there work outstanding for this row". It must not linger once
     // the queue settles, or the row can never be run again.
-    const claimed = TIMELINE.map((t) => claimedBy(steps(), t.frame.jobs).has("a/raw"));
+    const claimed = TIMELINE.map((t) => claimedBy(steps(), t.frame.jobs).has("a/ingest"));
     expect(claimed).toEqual([true, true, true, true, true, false]);
   });
 
@@ -312,9 +312,9 @@ describe("the sequence a sync actually produces", () => {
     // else": b's rows are outside this sync, and nothing in the whole
     // sequence may give them a status or a timestamp.
     for (const { note, frame } of TIMELINE) {
-      const s = statusIn(frame, "b/raw");
-      expect(s.key, `b/raw changed at: ${note}`).toBe("never_run");
-      expect(s.at, `b/raw got a timestamp at: ${note}`).toBeNull();
+      const s = statusIn(frame, "b/ingest");
+      expect(s.key, `b/ingest changed at: ${note}`).toBe("never_run");
+      expect(s.at, `b/ingest got a timestamp at: ${note}`).toBeNull();
     }
   });
 });
@@ -341,24 +341,24 @@ describe("the pushed sequence, with the polled record still stale", () => {
       note: "worker claimed it; the plan is known, nothing dispatched",
       state: "running",
       tasks: [
-        { id: "a/raw", state: "todo" },
-        { id: "a/rendered_md", state: "todo" },
+        { id: "a/ingest", state: "todo" },
+        { id: "a/render_markdown", state: "todo" },
       ],
     },
     {
       note: "the step is dispatched — this is the frame that has to say Running",
       state: "running",
       tasks: [
-        { id: "a/raw", state: "running", detail: "3/10 page 3" },
-        { id: "a/rendered_md", state: "todo" },
+        { id: "a/ingest", state: "running", detail: "3/10 page 3" },
+        { id: "a/render_markdown", state: "todo" },
       ],
     },
     {
       note: "further into the same step",
       state: "running",
       tasks: [
-        { id: "a/raw", state: "running", detail: "7/10 page 7" },
-        { id: "a/rendered_md", state: "todo" },
+        { id: "a/ingest", state: "running", detail: "7/10 page 7" },
+        { id: "a/render_markdown", state: "todo" },
       ],
     },
   ];
@@ -377,29 +377,29 @@ describe("the pushed sequence, with the polled record still stale", () => {
   }
 
   it("says Queued from the enqueue frame — before any runner exists", () => {
-    expect(readPushed(frames[0], "a/raw").key).toBe("queued");
+    expect(readPushed(frames[0], "a/ingest").key).toBe("queued");
   });
 
   it("says Queued while the plan is known but nothing is dispatched", () => {
-    expect(readPushed(frames[1], "a/raw").key).toBe("queued");
+    expect(readPushed(frames[1], "a/ingest").key).toBe("queued");
   });
 
   it("says Running on the dispatch frame, without waiting for a poll", () => {
     // The property that makes this push rather than poll. A stale
     // polled record must not be able to veto it: `effectiveRun` is what
     // stops a closed `finished_at` from forcing this back to Queued.
-    const s = readPushed(frames[2], "a/raw");
+    const s = readPushed(frames[2], "a/ingest");
     expect(s.key).toBe("running");
   });
 
   it("carries the step's own words while it runs", () => {
     const overlay = pushedOverlay(frames[2].tasks, T.runStart);
-    expect(overlay["a/raw"].progress?.msg).toBe("3/10 page 3");
+    expect(overlay["a/ingest"].progress?.msg).toBe("3/10 page 3");
   });
 
   it("never goes backwards across the pushed sequence either", () => {
     const rank: Record<string, number> = { queued: 0, running: 1, succeeded: 2 };
-    const seq = frames.map((f) => readPushed(f, "a/raw").key);
+    const seq = frames.map((f) => readPushed(f, "a/ingest").key);
     expect(seq).toEqual(["queued", "queued", "running", "running"]);
     for (let i = 1; i < seq.length; i++) {
       expect(rank[seq[i]]).toBeGreaterThanOrEqual(rank[seq[i - 1]]);
@@ -409,7 +409,7 @@ describe("the pushed sequence, with the polled record still stale", () => {
   it("leaves the downstream step queued, not running", () => {
     // One step running does not make its consumer running. The board
     // says `todo` for it, which must produce no overlay at all.
-    expect(readPushed(frames[2], "a/rendered_md").key).toBe("queued");
+    expect(readPushed(frames[2], "a/render_markdown").key).toBe("queued");
   });
 
   it("asks the runner's record only when a step goes terminal", () => {
@@ -417,8 +417,8 @@ describe("the pushed sequence, with the polled record still stale", () => {
     // the transitions that cost a fetch — and the only ones.
     expect(boardWentTerminal(frames[1].tasks)).toBe(false);
     expect(boardWentTerminal(frames[2].tasks)).toBe(false);
-    expect(boardWentTerminal([{ id: "a/raw", state: "done" }])).toBe(true);
-    expect(boardWentTerminal([{ id: "a/raw", state: "failed" }])).toBe(true);
+    expect(boardWentTerminal([{ id: "a/ingest", state: "done" }])).toBe(true);
+    expect(boardWentTerminal([{ id: "a/ingest", state: "failed" }])).toBe(true);
   });
 
   it("does not invent a live run when nothing is running", () => {
@@ -433,7 +433,7 @@ describe("the pushed sequence, with the polled record still stale", () => {
       current_state: "running",
       progress: { done: 5, total: 10, msg: "polled", updated_at: T.runStart },
     });
-    const merged = withOverlay(polled, "a/raw", {
+    const merged = withOverlay(polled, "a/ingest", {
       current_state: "running",
       progress: { done: null, total: null, msg: "pushed", updated_at: T.runStart },
     });
@@ -450,27 +450,27 @@ describe("what a queued row is waiting for", () => {
   const finishedAll = () => true;
 
   it("names the direct inputs that have not finished", () => {
-    expect(waitingOn(steps(), "unified_index/grid", finishedNone)).toEqual([
-      "a/rendered_md",
-      "b/rendered_md",
+    expect(waitingOn(steps(), "unified_index/grid_index", finishedNone)).toEqual([
+      "a/render_markdown",
+      "b/render_markdown",
     ]);
-    // Only the direct ones. `a/raw` is upstream too, but naming the
+    // Only the direct ones. `a/ingest` is upstream too, but naming the
     // whole transitive set is the rest of the pipeline.
-    expect(waitingOn(steps(), "a/rendered_md", finishedNone)).toEqual(["a/raw"]);
+    expect(waitingOn(steps(), "a/render_markdown", finishedNone)).toEqual(["a/ingest"]);
   });
 
   it("drops inputs that already finished this run", () => {
-    const done = (id: string) => id === "a/rendered_md";
-    expect(waitingOn(steps(), "unified_index/grid", done)).toEqual(["b/rendered_md"]);
-    expect(waitingOn(steps(), "unified_index/grid", finishedAll)).toEqual([]);
+    const done = (id: string) => id === "a/render_markdown";
+    expect(waitingOn(steps(), "unified_index/grid_index", done)).toEqual(["b/render_markdown"]);
+    expect(waitingOn(steps(), "unified_index/grid_index", finishedAll)).toEqual([]);
   });
 
   it("a source step waits on nothing upstream", () => {
-    expect(waitingOn(steps(), "a/raw", finishedNone)).toEqual([]);
+    expect(waitingOn(steps(), "a/ingest", finishedNone)).toEqual([]);
   });
 
   function queuedDetail(id: string, blockers: string[], state: SyncJob["state"]) {
-    const j = job({ state, source_name: "a/raw", started_at: state === "pending" ? null : T.jobStart });
+    const j = job({ state, source_name: "a/ingest", started_at: state === "pending" ? null : T.jobStart });
     return stepStatus({
       id,
       step: undefined,
@@ -481,16 +481,16 @@ describe("what a queued row is waiting for", () => {
   }
 
   it("says what it is behind when something upstream is outstanding", () => {
-    expect(queuedDetail("a/rendered_md", ["a/raw"], "running")).toBe(
-      "Waiting for a/raw to finish, in the sync of a/raw.",
+    expect(queuedDetail("a/render_markdown", ["a/ingest"], "running")).toBe(
+      "Waiting for a/ingest to finish, in the sync of a/ingest.",
     );
   });
 
   it("reads as a sentence with more than one blocker", () => {
     expect(
-      queuedDetail("unified_index/grid", ["a/rendered_md", "b/rendered_md"], "running"),
+      queuedDetail("unified_index/grid_index", ["a/render_markdown", "b/render_markdown"], "running"),
     ).toBe(
-      "Waiting for a/rendered_md and b/rendered_md to finish, in the sync of a/raw.",
+      "Waiting for a/render_markdown and b/render_markdown to finish, in the sync of a/ingest.",
     );
   });
 
@@ -498,10 +498,10 @@ describe("what a queued row is waiting for", () => {
     // Nothing upstream to name, so the job itself is the answer — and
     // "hasn't started" and "started, not my turn yet" are different
     // things to be told.
-    // On `a/raw`'s own row "the sync of a/raw" is a mouthful that says
+    // On `a/ingest`'s own row "the sync of a/ingest" is a mouthful that says
     // nothing — it *is* that row. Named only when it is someone else's.
-    expect(queuedDetail("a/raw", [], "pending")).toBe("Waiting for this sync to start.");
-    expect(queuedDetail("a/raw", [], "running")).toBe("Waiting its turn in this sync.");
+    expect(queuedDetail("a/ingest", [], "pending")).toBe("Waiting for this sync to start.");
+    expect(queuedDetail("a/ingest", [], "running")).toBe("Waiting its turn in this sync.");
   });
 });
 
@@ -534,10 +534,10 @@ describe("a second sync of a row that has already run", () => {
     const live = jobs.find((j) => j.state === "running");
     const run = effectiveRun(PREVIOUS, live);
     return stepStatus({
-      id: "a/raw",
-      step: withOverlay(alreadySucceeded, "a/raw", overlay["a/raw"], !!run?.synthesized),
+      id: "a/ingest",
+      step: withOverlay(alreadySucceeded, "a/ingest", overlay["a/ingest"], !!run?.synthesized),
       run,
-      claim: claimedBy(steps(), jobs).get("a/raw"),
+      claim: claimedBy(steps(), jobs).get("a/ingest"),
     });
   }
 
@@ -552,7 +552,7 @@ describe("a second sync of a row that has already run", () => {
   });
 
   it("reaches Running on the pushed board, without waiting for the fetch", () => {
-    const overlay = pushedOverlay([{ id: "a/raw", state: "running" }], T.jobStart);
+    const overlay = pushedOverlay([{ id: "a/ingest", state: "running" }], T.jobStart);
     expect(paint([job({ state: "running" })], overlay).key).toBe("running");
   });
 
@@ -562,13 +562,13 @@ describe("a second sync of a row that has already run", () => {
     // between that board and `/api/dag` catching up there was no
     // evidence left that the step had ever been reached — and the row
     // went back to Queued.
-    const done = pushedOverlay([{ id: "a/raw", state: "done" }], T.jobStart);
+    const done = pushedOverlay([{ id: "a/ingest", state: "done" }], T.jobStart);
     expect(paint([job({ state: "running" })], done).key).not.toBe("queued");
   });
 
   it("never goes backwards across the whole re-sync", () => {
-    const board = pushedOverlay([{ id: "a/raw", state: "running" }], T.jobStart);
-    const finished = pushedOverlay([{ id: "a/raw", state: "done" }], T.jobStart);
+    const board = pushedOverlay([{ id: "a/ingest", state: "running" }], T.jobStart);
+    const finished = pushedOverlay([{ id: "a/ingest", state: "done" }], T.jobStart);
     const seen = [
       paint([job({ state: "pending", started_at: null })], {}),
       paint([job({ state: "running" })], {}),
@@ -577,7 +577,7 @@ describe("a second sync of a row that has already run", () => {
       paint([job({ state: "running" })], finished),
       // The record finally lands, describing the run that just ended.
       stepStatus({
-        id: "a/raw",
+        id: "a/ingest",
         step: dagStep({
           current_state: "succeeded",
           last_run: {
@@ -613,27 +613,27 @@ describe("the floor under a row's status within one run", () => {
 
   it("holds a row that has been Running against a lapse back to Queued", () => {
     const hold = statusFloor();
-    expect(hold("a/raw", "job-1", view("queued")).key).toBe("queued");
-    expect(hold("a/raw", "job-1", view("running")).key).toBe("running");
+    expect(hold("a/ingest", "job-1", view("queued")).key).toBe("queued");
+    expect(hold("a/ingest", "job-1", view("running")).key).toBe("running");
     // The frame the e2e caught: claim still running, no `current_state`
     // from either source, so `stepStatus` reads it as Queued.
-    expect(hold("a/raw", "job-1", view("queued")).key).toBe("running");
-    expect(hold("a/raw", "job-1", view("succeeded")).key).toBe("succeeded");
+    expect(hold("a/ingest", "job-1", view("queued")).key).toBe("running");
+    expect(hold("a/ingest", "job-1", view("succeeded")).key).toBe("succeeded");
   });
 
   it("lets the next sync of the same row start at Queued again", () => {
     const hold = statusFloor();
-    hold("a/raw", "job-1", view("running"));
-    hold("a/raw", "job-1", view("succeeded"));
+    hold("a/ingest", "job-1", view("running"));
+    hold("a/ingest", "job-1", view("succeeded"));
     // A new job is a new key, so the floor lifts. Without this a row
     // could never be seen queued twice.
-    expect(hold("a/raw", "job-2", view("queued")).key).toBe("queued");
+    expect(hold("a/ingest", "job-2", view("queued")).key).toBe("queued");
   });
 
   it("keeps rows apart", () => {
     const hold = statusFloor();
-    hold("a/raw", "job-1", view("running"));
-    expect(hold("b/raw", "job-1", view("queued")).key).toBe("queued");
+    hold("a/ingest", "job-1", view("running"));
+    expect(hold("b/ingest", "job-1", view("queued")).key).toBe("queued");
   });
 
   it("returns the held view whole, not just its rank", () => {
@@ -646,18 +646,18 @@ describe("the floor under a row's status within one run", () => {
       at: T.runStart,
       detail: "downloading 3/10",
     };
-    hold("a/raw", "job-1", running);
-    expect(hold("a/raw", "job-1", view("queued"))).toEqual(running);
+    hold("a/ingest", "job-1", running);
+    expect(hold("a/ingest", "job-1", view("queued"))).toEqual(running);
   });
 
   it("passes through a status it cannot rank rather than freezing on it", () => {
     // A vocabulary this table has not met is exactly when holding a row
     // would be worst: we would be pinning it at a rank we invented.
     const hold = statusFloor();
-    hold("a/raw", "job-1", view("running"));
-    expect(hold("a/raw", "job-1", view("something_new")).key).toBe("something_new");
+    hold("a/ingest", "job-1", view("running"));
+    expect(hold("a/ingest", "job-1", view("something_new")).key).toBe("something_new");
     // ...and having forgotten it, the next real status is free too.
-    expect(hold("a/raw", "job-1", view("queued")).key).toBe("queued");
+    expect(hold("a/ingest", "job-1", view("queued")).key).toBe("queued");
   });
 
   /// Two statuses in the column are *not* points in a run, and must
@@ -686,19 +686,19 @@ describe("the floor under a row's status within one run", () => {
   /// statuses are unranked.
   it("lets a dropped entry override a status it already showed", () => {
     const hold = statusFloor();
-    hold("a/raw", "job-1", view("succeeded"));
+    hold("a/ingest", "job-1", view("succeeded"));
     const dropped = view("config_rejected");
-    expect(hold("a/raw", "job-1", dropped).key).toBe("config_rejected");
+    expect(hold("a/ingest", "job-1", dropped).key).toBe("config_rejected");
     // …and the row's memory is cleared with it, so fixing the config
     // does not leave it pinned at the dropped state either.
-    expect(hold("a/raw", "job-1", view("queued")).key).toBe("queued");
+    expect(hold("a/ingest", "job-1", view("queued")).key).toBe("queued");
   });
 });
 
 describe("an entry the config loader dropped", () => {
   const diag = (severity: "rejected" | "blocked", message: string, help?: string) => ({
     severity,
-    entry: { kind: "step" as const, index: null, id: "slack/raw" },
+    entry: { kind: "step" as const, index: null, id: "slack/ingest" },
     message,
     help: help ?? null,
     span: null,
@@ -711,7 +711,7 @@ describe("an entry the config loader dropped", () => {
   /// table looks healthy and the data has silently stopped moving.
   it("outranks whatever the runner's record still remembers", () => {
     const step: DagStep = {
-      id: "slack/raw",
+      id: "slack/ingest",
       current_state: null,
       last_run: {
         run_id: "r1",
@@ -724,11 +724,11 @@ describe("an entry the config loader dropped", () => {
       progress: null,
     } as unknown as DagStep;
 
-    const healthy = stepStatus({ id: "slack/raw", step, run: null, claim: undefined });
+    const healthy = stepStatus({ id: "slack/ingest", step, run: null, claim: undefined });
     expect(healthy.key).toBe("succeeded");
 
     const now = stepStatus({
-      id: "slack/raw",
+      id: "slack/ingest",
       step,
       run: null,
       claim: undefined,
@@ -746,7 +746,7 @@ describe("an entry the config loader dropped", () => {
   /// somewhere else, and the row has to carry that distinction.
   it("distinguishes a broken entry from one broken by another", () => {
     const blocked = stepStatus({
-      id: "slack/raw",
+      id: "slack/ingest",
       step: undefined,
       run: null,
       claim: undefined,
@@ -761,7 +761,7 @@ describe("an entry the config loader dropped", () => {
   /// out before they get here; this pins that they would be harmless
   /// even if it didn't.
   it("is not triggered by a status the loader still ran", () => {
-    const v = stepStatus({ id: "slack/raw", step: undefined, run: null, claim: undefined });
+    const v = stepStatus({ id: "slack/ingest", step: undefined, run: null, claim: undefined });
     expect(v.key).toBe("never_run");
   });
 });

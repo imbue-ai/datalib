@@ -34,9 +34,9 @@ const LATECOMER = process.env.FW_E2E_PDF_LATECOMER;
 /// one. Built by playwright.config.ts from the checked-in TNG spec.
 const SIGNAL_BACKUP_DIR = process.env.FW_E2E_SIGNAL_BACKUP_DIR;
 
-/// The three rows a sync of `pdfs/raw` drives: the source, its render
+/// The three rows a sync of `pdfs/ingest` drives: the source, its render
 /// sibling, and the fan-in that makes the documents searchable.
-const SYNCED_ROWS = ["pdfs/raw", "pdfs/rendered_md", "unified_index/grid"];
+const SYNCED_ROWS = ["pdfs/ingest", "pdfs/render_markdown", "unified_index/grid_index"];
 
 /// "Bytes on disk" as a number, read back off the label drawn over the
 /// sparkline — the number a person actually sees. `null` for a row with
@@ -142,17 +142,22 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(groupRow(page, "unified_index")).toContainText("Unified Index");
     await expect(page.locator(".ag-row")).toHaveCount(1);
     await expandGroup(page, "unified_index");
-    for (const id of ["unified_index/grid", "unified_index/qmd", "unified_index"]) {
+    for (const id of ["unified_index/grid_index", "unified_index/qmd_index", "unified_index"]) {
       await expect(row(page, id)).toHaveCount(1);
     }
+    // The two index steps are labelled by their function, not by the
+    // generic "Index" the label map falls through to when a key is
+    // stale — which is what happened when the functions were renamed.
+    await expect(row(page, "unified_index/grid_index")).toContainText("Grid index");
+    await expect(row(page, "unified_index/qmd_index")).toContainText("QMD index");
 
     // The qmd index step, removed before anything can queue it. See the
     // header: it is real work this test cannot afford, and the delete
     // action is the honest way to not run it.
-    await row(page, "unified_index/qmd")
+    await row(page, "unified_index/qmd_index")
       .getByRole("button", { name: "Remove from config" })
       .click();
-    await expect(row(page, "unified_index/qmd")).toHaveCount(0);
+    await expect(row(page, "unified_index/qmd_index")).toHaveCount(0);
 
     // ── 4-6. the wizard ──────────────────────────────────────────────
     await page.getByRole("button", { name: "+ Add Data Source" }).click();
@@ -175,10 +180,10 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const toml = wizard.locator("pre");
     await expect(toml).toContainText('id = "pdfs"');
     await expect(toml).toContainText('type = "pdf"');
-    await expect(toml).toContainText('function = "raw"');
+    await expect(toml).toContainText('function = "ingest"');
     await expect(toml).toContainText(`input_path = "${SCAN_DIR}"`);
-    await expect(toml).toContainText('function = "rendered_md"');
-    await expect(toml).toContainText('inputs = ["pdfs/raw"]');
+    await expect(toml).toContainText('function = "render_markdown"');
+    await expect(toml).toContainText('inputs = ["pdfs/ingest"]');
 
     await wizard.getByRole("button", { name: "Add source" }).click();
     await expect(wizard).toHaveCount(0);
@@ -191,42 +196,42 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(await statusOf(page, "group:pdfs")).toBe("Never run");
     expect(await bytesOf(page, "group:pdfs")).toBeNull();
     await expandGroup(page, "pdfs");
-    await expect(row(page, "pdfs/raw")).toHaveCount(1);
-    await expect(row(page, "pdfs/rendered_md")).toHaveCount(1);
-    expect(await statusOf(page, "pdfs/raw")).toBe("Never run");
-    expect(await bytesOf(page, "pdfs/raw")).toBeNull();
-    await expect(row(page, "pdfs/raw").locator('[col-id="lastSynced"]')).toHaveText("—");
+    await expect(row(page, "pdfs/ingest")).toHaveCount(1);
+    await expect(row(page, "pdfs/render_markdown")).toHaveCount(1);
+    expect(await statusOf(page, "pdfs/ingest")).toBe("Never run");
+    expect(await bytesOf(page, "pdfs/ingest")).toBeNull();
+    await expect(row(page, "pdfs/ingest").locator('[col-id="lastSynced"]')).toHaveText("—");
 
     // The render step was wired into the surviving fan-in, which is
     // what gets these documents indexed rather than merely converted.
     const wired = await (await request.get(`${BASE}/api/config`)).json();
     expect(wired.parsed_ok, wired.error ?? "config must load").toBe(true);
-    expect(wired.text).toContain('inputs = ["pdfs/rendered_md"]');
+    expect(wired.text).toContain('inputs = ["pdfs/render_markdown"]');
 
     // ── 7-8. run it ──────────────────────────────────────────────────
     const firstRun = await stampsBefore(page, SYNCED_ROWS);
-    await row(page, "pdfs/raw").getByRole("button", { name: "Sync now" }).click();
+    await row(page, "pdfs/ingest").getByRole("button", { name: "Sync now" }).click();
 
     // Download, render and index all run — syncing a source claims
     // everything downstream of it, and the index step is the reason the
     // grid below has anything in it.
     const firstDone = await settleRows(page, SYNCED_ROWS, firstRun);
-    expect(firstDone["pdfs/raw"]).toBe("Succeeded");
-    expect(firstDone["pdfs/rendered_md"]).toMatch(/^(Succeeded|Up to date)$/);
-    expect(firstDone["unified_index/grid"]).toMatch(/^(Succeeded|Up to date)$/);
+    expect(firstDone["pdfs/ingest"]).toBe("Succeeded");
+    expect(firstDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
+    expect(firstDone["unified_index/grid_index"]).toMatch(/^(Succeeded|Up to date)$/);
 
     // ── 9. the two columns that report it ────────────────────────────
-    const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
+    const cell = row(page, "pdfs/ingest").locator('[col-id="lastSynced"]');
     await expect(cell).toHaveText("seconds ago");
-    const stamp = await stampOf(page, "pdfs/raw");
+    const stamp = await stampOf(page, "pdfs/ingest");
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(
       Math.abs(Date.now() - Date.parse(stamp!)),
       `Last synced claims ${stamp}, which is not a moment ago`,
     ).toBeLessThan(5 * 60_000);
 
-    const rawBytes = await bytesOf(page, "pdfs/raw");
-    const renderedBytes = await bytesOf(page, "pdfs/rendered_md");
+    const rawBytes = await bytesOf(page, "pdfs/ingest");
+    const renderedBytes = await bytesOf(page, "pdfs/render_markdown");
     expect(rawBytes, "the raw store should be on disk now").toBeGreaterThan(0);
     expect(renderedBytes, "so should the markdown").toBeGreaterThan(0);
 
@@ -255,26 +260,26 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
     // Re-read rather than reuse: this is a fresh page, and the numbers
     // it shows are the ones the assertion below is about.
-    const beforeSecond = await bytesOf(page, "pdfs/raw");
+    const beforeSecond = await bytesOf(page, "pdfs/ingest");
     expect(beforeSecond).toBe(rawBytes);
 
     const secondRun = await stampsBefore(page, SYNCED_ROWS);
-    await row(page, "pdfs/raw").getByRole("button", { name: "Sync now" }).click();
+    await row(page, "pdfs/ingest").getByRole("button", { name: "Sync now" }).click();
     const secondDone = await settleRows(page, SYNCED_ROWS, secondRun);
-    expect(secondDone["pdfs/raw"]).toBe("Succeeded");
-    expect(secondDone["pdfs/rendered_md"]).toMatch(/^(Succeeded|Up to date)$/);
-    expect(secondDone["unified_index/grid"]).toMatch(/^(Succeeded|Up to date)$/);
+    expect(secondDone["pdfs/ingest"]).toBe("Succeeded");
+    expect(secondDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
+    expect(secondDone["unified_index/grid_index"]).toMatch(/^(Succeeded|Up to date)$/);
 
     // A document more on disk.
     await expect
-      .poll(async () => (await bytesOf(page, "pdfs/rendered_md")) ?? 0, {
+      .poll(async () => (await bytesOf(page, "pdfs/render_markdown")) ?? 0, {
         timeout: 10_000,
         intervals: [250],
         message: `the rendered markdown never grew past ${renderedBytes}`,
       })
       .toBeGreaterThan(renderedBytes!);
     expect(
-      (await bytesOf(page, "pdfs/raw"))!,
+      (await bytesOf(page, "pdfs/ingest"))!,
       "the raw store should have gained a document, not just per-run churn",
     ).toBeGreaterThan(rawBytes! + 4_000);
 
@@ -333,7 +338,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 2. two sources in the table ──────────────────────────────────
     await expandGroup(page, "signal");
-    for (const id of ["pdfs/raw", "pdfs/rendered_md", "signal/raw", "signal/rendered_md"]) {
+    for (const id of ["pdfs/ingest", "pdfs/render_markdown", "signal/ingest", "signal/render_markdown"]) {
       await expect(row(page, id), `${id} should be a row`).toHaveCount(1);
     }
 
@@ -342,30 +347,30 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The distinction the whole test rests on, so it is asserted on
     // both columns: a never-run row has no state to report *and* no
     // instant to report it at.
-    expect(await statusOf(page, "pdfs/raw")).toBe("Succeeded");
-    expect(await statusOf(page, "signal/raw")).toBe("Never run");
-    await expect(row(page, "signal/raw").locator('[col-id="lastSynced"]')).toHaveText("—");
+    expect(await statusOf(page, "pdfs/ingest")).toBe("Succeeded");
+    expect(await statusOf(page, "signal/ingest")).toBe("Never run");
+    await expect(row(page, "signal/ingest").locator('[col-id="lastSynced"]')).toHaveText("—");
     expect(
-      await stampOf(page, "signal/raw"),
+      await stampOf(page, "signal/ingest"),
       "a row that never ran has no instant to reveal",
     ).toBeNull();
     expect(
-      await bytesOf(page, "signal/raw"),
+      await bytesOf(page, "signal/ingest"),
       "a source that never ran has written nothing",
     ).toBeNull();
 
     // ── 4. re-running one source leaves the other alone ──────────────
-    const pdfBefore = await stampOf(page, "pdfs/raw");
-    await row(page, "pdfs/raw").getByRole("button", { name: "Sync now" }).click();
-    expect(await settle(page, "pdfs/raw", pdfBefore)).toBe("Succeeded");
+    const pdfBefore = await stampOf(page, "pdfs/ingest");
+    await row(page, "pdfs/ingest").getByRole("button", { name: "Sync now" }).click();
+    expect(await settle(page, "pdfs/ingest", pdfBefore)).toBe("Succeeded");
     expect(
-      await statusOf(page, "signal/raw"),
+      await statusOf(page, "signal/ingest"),
       "a sync of pdfs must not give signal a history it never earned",
     ).toBe("Never run");
-    expect(await stampOf(page, "signal/raw")).toBeNull();
+    expect(await stampOf(page, "signal/ingest")).toBeNull();
 
     // ── 5. Sync everything reaches both ──────────────────────────────
-    const ALL = ["pdfs/raw", "pdfs/rendered_md", "signal/raw", "signal/rendered_md"];
+    const ALL = ["pdfs/ingest", "pdfs/render_markdown", "signal/ingest", "signal/render_markdown"];
     const was = await stampsBefore(page, ALL);
 
     await page.getByRole("button", { name: "Sync everything" }).click();
@@ -374,7 +379,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       expect(done[id], `${id} after Sync everything`).toMatch(/^(Succeeded|Up to date)$/);
     }
 
-    // Everything now has a history and something on disk. `signal/raw`
+    // Everything now has a history and something on disk. `signal/ingest`
     // is the row that proves it: it had neither a moment ago, and no
     // per-row button was pressed for it.
     for (const id of ALL) {

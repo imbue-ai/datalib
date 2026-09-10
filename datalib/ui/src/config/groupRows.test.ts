@@ -38,25 +38,25 @@ describe("pipelineOrder", () => {
   const mk = (id: string, inputs: string[], kind: EntryKind = "step") => ({ id, kind, inputs });
 
   it("puts a step after the sibling it reads, whatever the config order", () => {
-    const out = pipelineOrder([mk("s/rendered_md", ["s/raw"]), mk("s/raw", [])]);
-    expect(out.map((c) => c.id)).toEqual(["s/raw", "s/rendered_md"]);
+    const out = pipelineOrder([mk("s/render_markdown", ["s/ingest"]), mk("s/ingest", [])]);
+    expect(out.map((c) => c.id)).toEqual(["s/ingest", "s/render_markdown"]);
   });
 
   it("keeps config order between steps that do not read each other", () => {
     const out = pipelineOrder([
-      mk("u/grid", ["a/rendered_md"]),
-      mk("u/qmd", ["a/rendered_md"]),
+      mk("u/grid_index", ["a/render_markdown"]),
+      mk("u/qmd_index", ["a/render_markdown"]),
     ]);
-    expect(out.map((c) => c.id)).toEqual(["u/grid", "u/qmd"]);
+    expect(out.map((c) => c.id)).toEqual(["u/grid_index", "u/qmd_index"]);
   });
 
   it("trails the applets, which are never scheduled", () => {
     const out = pipelineOrder([
       mk("u", [], "applet"),
-      mk("u/qmd", []),
-      mk("u/grid", []),
+      mk("u/qmd_index", []),
+      mk("u/grid_index", []),
     ]);
-    expect(out.map((c) => c.id)).toEqual(["u/qmd", "u/grid", "u"]);
+    expect(out.map((c) => c.id)).toEqual(["u/qmd_index", "u/grid_index", "u"]);
   });
 
   it("does not spin on a cycle, which unsaved text can contain", () => {
@@ -71,35 +71,35 @@ describe("groupStatus", () => {
   });
 
   it("is running while any child runs, whichever it is", () => {
-    const got = groupStatus([child("s/raw", "succeeded"), child("s/rendered_md", "running")]);
+    const got = groupStatus([child("s/ingest", "succeeded"), child("s/render_markdown", "running")]);
     expect(got?.status.key).toBe("running");
-    expect(got?.from).toBe("s/rendered_md");
+    expect(got?.from).toBe("s/render_markdown");
   });
 
   it("is failed when any child failed, even if a later one is up to date", () => {
     const got = groupStatus([
-      child("s/raw", "failed"),
-      child("s/rendered_md", "skipped_up_to_date"),
+      child("s/ingest", "failed"),
+      child("s/render_markdown", "skipped_up_to_date"),
     ]);
     expect(got?.status.key).toBe("failed");
-    expect(got?.from).toBe("s/raw");
+    expect(got?.from).toBe("s/ingest");
   });
 
   it("otherwise reads the last step in pipeline order", () => {
     // The fetch succeeded and the render is still queued: the group
     // has not finished, and the last step is what says so.
-    const got = groupStatus([child("s/raw", "succeeded"), child("s/rendered_md", "queued")]);
+    const got = groupStatus([child("s/ingest", "succeeded"), child("s/render_markdown", "queued")]);
     expect(got?.status.key).toBe("queued");
-    expect(got?.from).toBe("s/rendered_md");
+    expect(got?.from).toBe("s/render_markdown");
   });
 
   it("reads the last step, not a trailing applet", () => {
     const got = groupStatus([
-      child("u/grid", "succeeded"),
-      child("u/qmd", "skipped_up_to_date"),
+      child("u/grid_index", "succeeded"),
+      child("u/qmd_index", "skipped_up_to_date"),
       child("u", "succeeded", "applet"),
     ]);
-    expect(got?.from).toBe("u/qmd");
+    expect(got?.from).toBe("u/qmd_index");
   });
 
   it("falls back to an applet when the group has only applets", () => {
@@ -111,8 +111,8 @@ describe("groupStatus", () => {
     // The group row is the only place an applet's health shows while
     // the group is folded.
     const got = groupStatus([
-      child("s/raw", "succeeded"),
-      child("s/rendered_md", "succeeded"),
+      child("s/ingest", "succeeded"),
+      child("s/render_markdown", "succeeded"),
       child("s_view", "failed", "applet"),
     ]);
     expect(got?.status.key).toBe("failed");
@@ -121,16 +121,16 @@ describe("groupStatus", () => {
 
   it("names the child in the detail so the tooltip says where the word came from", () => {
     const withDetail: ChildStatus = {
-      id: "s/raw",
+      id: "s/ingest",
       kind: "step",
       status: view("failed", null, "boom"),
     };
-    expect(groupStatus([withDetail])?.status.detail).toBe("s/raw: boom");
-    expect(groupStatus([child("s/raw", "succeeded")])?.status.detail).toBe("s/raw");
+    expect(groupStatus([withDetail])?.status.detail).toBe("s/ingest: boom");
+    expect(groupStatus([child("s/ingest", "succeeded")])?.status.detail).toBe("s/ingest");
   });
 
   it("keeps the child's instant, which feeds Last synced", () => {
-    const got = groupStatus([child("s/raw", "succeeded", "step", "2026-09-10T10:00:00+02:00")]);
+    const got = groupStatus([child("s/ingest", "succeeded", "step", "2026-09-10T10:00:00+02:00")]);
     expect(got?.status.at).toBe("2026-09-10T10:00:00+02:00");
   });
 });
@@ -139,7 +139,7 @@ describe("groupLastSynced", () => {
   it("is the fetch step's instant, even when the render ran later", () => {
     expect(
       groupLastSynced([
-        { kind: "step", phase: "fetch", at: "2026-09-10T10:00:00+02:00" },
+        { kind: "step", phase: "ingest", at: "2026-09-10T10:00:00+02:00" },
         { kind: "step", phase: "render", at: "2026-09-10T10:05:00+02:00" },
       ]),
     ).toBe("2026-09-10T10:00:00+02:00");
@@ -148,7 +148,7 @@ describe("groupLastSynced", () => {
   it("is null while the fetch step has never run, whatever the render says", () => {
     expect(
       groupLastSynced([
-        { kind: "step", phase: "fetch", at: null },
+        { kind: "step", phase: "ingest", at: null },
         { kind: "step", phase: "render", at: "2026-09-10T10:05:00+02:00" },
       ]),
     ).toBeNull();
@@ -175,15 +175,15 @@ describe("groupSeeds", () => {
 
   it("is the group's steps with no inputs", () => {
     expect(
-      groupSeeds([mk("s/raw", []), mk("s/rendered_md", ["s/raw"]), mk("v", [], "applet")], () => false),
-    ).toEqual(["s/raw"]);
+      groupSeeds([mk("s/ingest", []), mk("s/render_markdown", ["s/ingest"]), mk("v", [], "applet")], () => false),
+    ).toEqual(["s/ingest"]);
   });
 
   it("leaves out a step the loader dropped", () => {
-    expect(groupSeeds([mk("s/raw", [])], (c) => c.id === "s/raw")).toEqual([]);
+    expect(groupSeeds([mk("s/ingest", [])], (c) => c.id === "s/ingest")).toEqual([]);
   });
 
   it("is empty for a group whose steps all read something", () => {
-    expect(groupSeeds([mk("u/grid", ["a/rendered_md"])], () => false)).toEqual([]);
+    expect(groupSeeds([mk("u/grid_index", ["a/render_markdown"])], () => false)).toEqual([]);
   });
 });

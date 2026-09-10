@@ -51,7 +51,7 @@ fn materialize_root(dst: &Path) {
 
 fn materialize_root_with_grid(dst: &Path) {
     materialize_root(dst);
-    let grid_dir = dst.join("unified_index").join("grid");
+    let grid_dir = datalib_core::layout::grid_index_dir(dst);
     std::fs::create_dir_all(&grid_dir).expect("create grid dir");
     let db = grid_dir.join("db.doltlite_db");
     std::fs::copy(fixture("ingested/backend_index.doltlite_db"), &db).expect("copy grid index");
@@ -75,7 +75,7 @@ fn rendered_markdowns(root: &Path) -> Vec<PathBuf> {
             if p.is_dir() {
                 stack.push(p);
             } else if p.extension().is_some_and(|x| x == "md")
-                && p.components().any(|c| c.as_os_str() == "rendered_md")
+                && p.components().any(|c| c.as_os_str() == "render_markdown")
             {
                 out.push(p);
             }

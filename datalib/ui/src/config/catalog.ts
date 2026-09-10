@@ -77,7 +77,7 @@ export type Field =
     });
 
 export type CatalogEntry = {
-  /// The `datalib-step download|render <type>` word.
+  /// The group's `type`: the provider word (`slack_api`, `email`, …).
   type: string;
   label: string;
   blurb: string;

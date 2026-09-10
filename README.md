@@ -40,7 +40,7 @@ for one fully-commented step pair per source.
 
 A mirror you can't leave is just another silo, so the exits are plain:
 
-- **Markdown** — `<name>/rendered_md/` is ordinary `.md` files, one per
+- **Markdown** — `<name>/render_markdown/` is ordinary `.md` files, one per
   conversation or document. Nothing to export.
 - **SQL** — the stores are
   [doltlite](https://github.com/dolthub/doltlite) databases (SQLite's
@@ -50,7 +50,7 @@ A mirror you can't leave is just another silo, so the exits are plain:
   SQLite file for any tool that wants one:
 
   ```sh
-  datalib-doltlite -readonly unified_index/grid/db.doltlite_db .dump | sqlite3 grid.sqlite
+  datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db .dump | sqlite3 grid.sqlite
   ```
 
   Details, and what a snapshot does and doesn't carry, in

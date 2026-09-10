@@ -54,7 +54,7 @@ describe("writing a step", () => {
     // is the key that makes the table exist and is Gmail's own default.
     expect(toml).toContain("[steps.params.gmail_api]");
     expect(toml).toContain('user_id = "me"');
-    expect(toml).toContain('command = "datalib-step download email"');
+    expect(toml).not.toContain("command");
     expect(toml).not.toContain("sync");
   });
 
@@ -95,10 +95,10 @@ describe("writing a step", () => {
         entry,
         group: "mail",
         phase: "render",
-        inputs: ["mail/raw"],
+        inputs: ["mail/ingest"],
         values: seedFieldValues(entry),
       });
-      expect(toml).toContain('command = "datalib-step render email"');
+      expect(toml).not.toContain("command");
       expect(toml).toContain(`outlink_format = "${outlink}"`);
       // The download-mode params must not leak onto the render step:
       // `EmailRenderConfig` is deny_unknown_fields, so one would make
@@ -131,16 +131,14 @@ type = "email"
 
 [[steps]]
 group = "gmail"
-function = "raw"
-command = "datalib-step download email"
+function = "ingest"
 [steps.params.gmail_api]
 user_id = "me"
 
 [[steps]]
 group = "gmail"
-function = "rendered_md"
-command = "datalib-step render email"
-inputs = ["gmail/raw"]
+function = "render_markdown"
+inputs = ["gmail/ingest"]
 [steps.params]
 outlink_format = "gmail"
 
@@ -150,16 +148,14 @@ type = "email"
 
 [[steps]]
 group = "fastmail"
-function = "raw"
-command = "datalib-step download email"
+function = "ingest"
 [steps.params.sync]
 hostname = "api.fastmail.com"
 
 [[steps]]
 group = "fastmail"
-function = "rendered_md"
-command = "datalib-step render email"
-inputs = ["fastmail/raw"]
+function = "render_markdown"
+inputs = ["fastmail/ingest"]
 [steps.params]
 outlink_format = "fastmail"
 
@@ -169,8 +165,7 @@ type = "email"
 
 [[steps]]
 group = "archive"
-function = "raw"
-command = "datalib-step download email"
+function = "ingest"
 [steps.params.common]
 input_path = "~/takeout/mail.mbox"
 `;
@@ -178,12 +173,12 @@ input_path = "~/takeout/mail.mbox"
   const byId = (id: string) => STEPS.find((s) => s.id === id)!;
 
   it("tells a Gmail fetch step from a Fastmail one by its params", () => {
-    expect(catalogForStep("email", byId("gmail/raw").params)!.label).toBe("Gmail");
-    expect(catalogForStep("email", byId("fastmail/raw").params)!.label).toBe("Fastmail");
+    expect(catalogForStep("email", byId("gmail/ingest").params)!.label).toBe("Gmail");
+    expect(catalogForStep("email", byId("fastmail/ingest").params)!.label).toBe("Fastmail");
   });
 
   it("falls back to the catch-all for a mode it has no form for", () => {
-    const entry = catalogForStep("email", byId("archive/raw").params)!;
+    const entry = catalogForStep("email", byId("archive/ingest").params)!;
     expect(entry.variantKey).toBeUndefined();
     expect(entry.wizard).toBe(false);
   });
@@ -193,19 +188,19 @@ input_path = "~/takeout/mail.mbox"
   /// `entryForStep` reaching through `inputs`, every email render step
   /// would resolve to the formless catch-all.
   it("resolves a render step through the step it reads", () => {
-    expect(entryForStep(byId("gmail/rendered_md"), STEPS)!.label).toBe("Gmail");
-    expect(entryForStep(byId("fastmail/rendered_md"), STEPS)!.label).toBe("Fastmail");
+    expect(entryForStep(byId("gmail/render_markdown"), STEPS)!.label).toBe("Gmail");
+    expect(entryForStep(byId("fastmail/render_markdown"), STEPS)!.label).toBe("Fastmail");
   });
 
   it("leaves a fetch step resolved by its own params", () => {
-    expect(entryForStep(byId("fastmail/raw"), STEPS)!.label).toBe("Fastmail");
+    expect(entryForStep(byId("fastmail/ingest"), STEPS)!.label).toBe("Fastmail");
   });
 
   /// A preset has no field, so without counting presets as known the
   /// grid would disable Edit on every source these descriptors write —
   /// the wizard refusing to reopen its own output.
   it("keeps a step it wrote editable", () => {
-    for (const id of ["gmail/raw", "fastmail/raw", "gmail/rendered_md"]) {
+    for (const id of ["gmail/ingest", "fastmail/ingest", "gmail/render_markdown"]) {
       const step = byId(id);
       const entry = entryForStep(step, STEPS)!;
       expect(paramsAreRepresentable(step, entry), id).toEqual({ ok: true });
@@ -217,8 +212,7 @@ input_path = "~/takeout/mail.mbox"
   it("still refuses a step carrying something no field models", () => {
     const [step] = listSteps(`[[steps]]
 group = "gmail"
-function = "raw"
-command = "datalib-step download email"
+function = "ingest"
 [steps.params.gmail_api]
 user_id = "me"
 quota_units_per_minute = 4000

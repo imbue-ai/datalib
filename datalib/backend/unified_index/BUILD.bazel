@@ -63,6 +63,7 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_unified_index",
+        "//datalib/backend/core:datalib_core",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

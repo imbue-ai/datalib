@@ -8,10 +8,13 @@
 //! replaces it. Nothing pre-TOML is convertible any more: a root that still
 //! has a `config.yaml` is set up again from the app.
 //!
-//! The rewrite today: `[[steps]]` written with verbatim ids and
-//! `datalib-step download|render <type>` commands — the shape before
-//! `[[groups]]` — into groups, with each step declared as `group` +
-//! `function`.
+//! The rewrite today: `[[steps]]` whose `datalib-step` command named the
+//! function and the provider (`datalib-step download <type>`,
+//! `datalib-step grid_index`, …), whether under a `[[groups]]` entry or
+//! carrying a verbatim id — into groups, with each step declared as
+//! `group` + `function` and no command, under the function names the
+//! trees are now called by (`ingest`, `render_markdown`, `grid_index`,
+//! `qmd_index`).
 
 pub mod convert;
 
@@ -23,9 +26,10 @@ use anyhow::{bail, Context, Result};
 /// next one has a place to go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LegacyFormat {
-    /// Steps carrying a verbatim `id` and a `datalib-step` command, from
-    /// before `[[groups]]` existed.
-    UngroupedSteps,
+    /// Steps naming their function and provider on a `datalib-step`
+    /// subcommand line, from before `datalib-step` read them from the
+    /// environment.
+    StepSubcommands,
 }
 
 /// Which shape this text is in. Not TOML at all, and already current, are
@@ -38,16 +42,15 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
              convertible — set the root up again from the app, then delete the old file."
         );
     }
-    let (cfg, _) = datalib_dag::config::parse_graded(text);
-    if convert::needs_grouping(&cfg) {
-        return Ok(LegacyFormat::UngroupedSteps);
+    if convert::needs_rewrite(text)? {
+        return Ok(LegacyFormat::StepSubcommands);
     }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
 pub fn convert(text: &str) -> Result<String> {
     let out = match detect(text)? {
-        LegacyFormat::UngroupedSteps => convert::group_steps(text),
+        LegacyFormat::StepSubcommands => convert::rewrite(text),
     }?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
@@ -114,9 +117,54 @@ command = "datalib-applet slack"
 tree = "slack/rendered_md"
 "#;
 
+    /// The shape slice 1 of the groups plan wrote: grouped, but with the
+    /// function and the provider still on the command line and the old
+    /// function names.
+    const GROUPED_WITH_COMMANDS: &str = r#"
+[[groups]]
+id = "slack"
+name = "Work Slack"
+type = "slack_api"
+
+[[steps]]
+group = "slack"
+function = "raw"
+command = "datalib-step download slack_api"
+
+[[steps]]
+group = "slack"
+function = "rendered_md"
+command = "datalib-step render slack_api"
+inputs = ["slack/raw"]
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid"
+command = "datalib-step grid_index"
+inputs = ["slack/rendered_md"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd"
+command = "datalib-step qmd_index"
+inputs = ["slack/rendered_md"]
+
+[[applets]]
+group = "unified_index"
+id = "unified_index"
+command = "datalib-applet unified_index"
+"#;
+
     #[test]
     fn detects_the_ungrouped_shape() {
-        assert_eq!(detect(UNGROUPED).unwrap(), LegacyFormat::UngroupedSteps);
+        assert_eq!(detect(UNGROUPED).unwrap(), LegacyFormat::StepSubcommands);
+        assert_eq!(
+            detect(GROUPED_WITH_COMMANDS).unwrap(),
+            LegacyFormat::StepSubcommands
+        );
     }
 
     /// Running the tool twice is the likeliest mistake, so an
@@ -157,19 +205,27 @@ tree = "slack/rendered_md"
         // The name moves from the download step to the group.
         assert_eq!(out.matches("name = \"Work Slack\"").count(), 1, "{out}");
         assert!(
-            out.contains("group = \"slack\"\nfunction = \"raw\""),
+            out.contains("group = \"slack\"\nfunction = \"ingest\""),
             "{out}"
         );
         assert!(
-            out.contains("group = \"slack\"\nfunction = \"rendered_md\""),
+            out.contains("group = \"slack\"\nfunction = \"render_markdown\""),
             "{out}"
         );
         assert!(
-            out.contains("group = \"unified_index\"\nfunction = \"grid\""),
+            out.contains("group = \"unified_index\"\nfunction = \"grid_index\""),
             "{out}"
         );
         assert!(!out.contains("id = \"slack/raw\""), "{out}");
+        assert!(
+            !out.contains("datalib-step"),
+            "the provider word leaves: {out}"
+        );
         assert!(out.contains("channels = [\"chat-qi\"]"), "{out}");
+        // Everything that named an old id follows it to the new one.
+        assert!(out.contains("inputs = [\"slack/ingest\"]"), "{out}");
+        assert!(out.contains("tree = \"slack/render_markdown\""), "{out}");
+        assert!(!out.contains("rendered_md"), "{out}");
         // A custom step keeps its verbatim id, and the group it is not in.
         assert!(out.contains("id = \"exports/csv\""), "{out}");
         assert!(out.contains("command = \"my-exporter --flag\""), "{out}");
@@ -184,6 +240,30 @@ tree = "slack/rendered_md"
         assert_eq!(by_id("slack_view").group.as_deref(), Some("slack"));
         assert_eq!(cfg.groups.len(), 2);
         assert_eq!(cfg.steps.len(), 4);
+    }
+
+    /// The grouped-with-commands shape rewrites the same way: the groups
+    /// are kept as declared, the functions are renamed, and the commands
+    /// go.
+    #[test]
+    fn a_grouped_config_with_subcommands_loses_them_and_renames_its_functions() {
+        let out = convert(GROUPED_WITH_COMMANDS).unwrap();
+        assert!(!out.contains("datalib-step"), "{out}");
+        assert!(
+            !out.contains("\"raw\"") && !out.contains("rendered_md"),
+            "{out}"
+        );
+        assert!(out.contains("function = \"qmd_index\""), "{out}");
+        assert!(
+            out.contains("inputs = [\"slack/render_markdown\"]"),
+            "{out}"
+        );
+        let (cfg, diags) = datalib_dag::config::parse_graded(&out);
+        assert!(diags.is_empty(), "{diags:?}\n{out}");
+        assert_eq!(cfg.groups.len(), 2);
+        assert_eq!(cfg.groups[0].name.as_deref(), Some("Work Slack"));
+        assert_eq!(cfg.groups[0].r#type.as_deref(), Some("slack_api"));
+        assert!(cfg.steps.iter().all(|s| s.command.is_none()), "{out}");
     }
 
     /// The old wizard named only the render step when the name box was

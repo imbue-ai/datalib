@@ -48,7 +48,7 @@ The framing constraint from the ingestion doc still holds — single user, singl
 The pipeline was three stages running in-process inside datalib-sync — one binary, statically dispatched over a closed enum of sources (SourceConfig, `core/src/config.rs`):
 
 ```
-raw/<source>/*.doltlite_db  →  rendered_md/<source>/*.md + *.grid_rows.json  →  dolt_db/ (index)
+raw/<source>/*.doltlite_db  →  render_markdown/<source>/*.md + *.grid_rows.json  →  dolt_db/ (index)
         (extract)                          (translate)                              (load)
 ```
 
@@ -202,7 +202,7 @@ A side goal here is to report enough information to get a sense of USE metrics: 
 > *What the prototype chose:* the macro layer was dropped entirely — the
 > config declares steps directly, each an arbitrary `command:` with
 > declared `params`/`inputs`/`outputs` appended as JSON flags (see
-> docs/dev/step_protocol.md; per source a `datalib-step download` /
+> docs/dev/step_protocol.md; per source an `ingest` /
 > `render` pair, plus shared `grid_index`/`qmd_index` fan-ins).
 > Wildcard inputs (`*`/`**`) exist and match against declared output
 > *roots* only — true tree-intersection semantics would make `**/x`
@@ -227,7 +227,7 @@ Similarly, a YAML stanza for processing a Google Takeout ingestion might, under 
 
 > **Addendum — storage layout.** Not settled; do whatever results in the
 > least change for now. The prototype kept the existing by-source layout
-> (`<stanza>/raw`, `<stanza>/rendered_md`, `system/…`), which already
+> (`<stanza>/ingest`, `<stanza>/render_markdown`, `system/…`), which already
 > groups data by source as sketched above.
 
 
@@ -305,11 +305,11 @@ rough dependency order:
   docs/dev/step_protocol.md.
 * **Per-provider step types.** Download *and* render are provider-
   specific (each render reads its own raw-store schema), so the
-  built-in commands are written `datalib-step download|render
+  built-in steps were once written `datalib-step download|render
   <source_type>`; the genuinely shared step types are `grid_index` and
-  `qmd_index`. Params carry neither a `type:` tag (the command's
-  nested subcommand names the provider) nor a `name:` (the step
-  derives its `<name>/…` prefix from its first declared output).
+  `qmd_index`. Params carry neither a `type:` tag (today the group's
+  `type` names the provider, read from the environment) nor a `name:`
+  (the step's tree is its composed id).
 * **Params are per-phase.** Each step's params carry only what that
   wave reads: the download step gets the provider's full config
   struct (`common:` envelope + `sync:` + download knobs), the render
@@ -348,7 +348,7 @@ rough dependency order:
   (no two steps' output trees may overlap) makes per-source writes into
   the shared index impossible, so `grid_index` is one fan-in step that
   stacks every source's render store
-  (`<name>/rendered_md/indexed_markdown.doltlite_db`) into the unified
+  (`<name>/render_markdown/indexed_markdown.doltlite_db`) into the unified
   index, asking each store `dolt_diff` since the commit the index last
   consumed. Render uses that same store as its own prior-fingerprint
   store — the artifact is the resume state, no index-DB peeking.
@@ -384,7 +384,7 @@ rough dependency order:
   Inside the subgraph, ordinary change propagation applies, so the
   shared fan-in still re-runs only if a selected chain actually moved.
   The UI's per-source / multi-select "Sync now" maps onto it (the
-  `<group>/raw` step ids), the whole selection as one run.
+  `<group>/ingest` step ids), the whole selection as one run.
 
   The rule is *reachability in the graph*, deliberately not a function
   of run-time state (what succeeded before, whether an input exists,
@@ -465,8 +465,8 @@ rough dependency order:
   naming the tool — but nothing writes it and the editor cannot change
   it; the rewrite lives in the tool and nowhere else, and the pre-TOML
   `config.yaml` era is no longer convertible at all.
-* **The data-root layout is unchanged** (`<name>/raw`,
-  `<name>/rendered_md`, `system/…`), so roots move freely between the
+* **The data-root layout is unchanged** (`<name>/ingest`,
+  `<name>/render_markdown`, `system/…`), so roots move freely between the
   old and new binaries; the only addition is `dag_state.json`.
 
 ## Unresolved questions

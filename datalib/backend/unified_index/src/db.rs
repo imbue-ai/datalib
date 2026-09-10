@@ -240,7 +240,7 @@ mod tests {
     fn source_name_filter_matches_whole_segments_only() {
         let (_, params) = build_where(&parse_query("source_name:slack type:all"), "");
         assert_eq!(params, vec!["slack/"]);
-        assert!(!"slack-personal/rendered_md/x.md".starts_with("slack/"));
+        assert!(!"slack-personal/render_markdown/x.md".starts_with("slack/"));
     }
 
     #[test]

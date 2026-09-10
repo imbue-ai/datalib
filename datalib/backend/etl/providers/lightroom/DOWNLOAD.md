@@ -380,7 +380,7 @@ periodically is a fine alternative:
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite
-bazel-bin/third-party/doltlite/doltlite <root>/lightroom/raw/entities.doltlite_db "SELECT dolt_gc();"
+bazel-bin/third-party/doltlite/doltlite <root>/lightroom/ingest/entities.doltlite_db "SELECT dolt_gc();"
 ```
 
 ## Running it
@@ -395,8 +395,7 @@ type = "lightroom"
 
 [[steps]]
 group = "lightroom"
-function = "raw"
-command = "datalib-step download lightroom"
+function = "ingest"
 [steps.params.common]
 input_path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 ```

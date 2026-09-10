@@ -130,7 +130,7 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
         3
     );
 
-    let page_dir = root.join(STANZA).join("rendered_md");
+    let page_dir = root.join(STANZA).join("render_markdown");
     let md = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
     let plots = page_dir.join("plots");
 
@@ -291,13 +291,13 @@ async fn an_empty_store_renders_a_page_without_plots() {
 
     let emitted = render_once(&raw_path, root);
     assert_eq!(emitted.len(), 1);
-    let md = std::fs::read_to_string(root.join(STANZA).join("rendered_md/index.md")).unwrap();
+    let md = std::fs::read_to_string(root.join(STANZA).join("render_markdown/index.md")).unwrap();
     assert!(md.contains("nothing to plot"), "{md}");
     assert!(md.contains("main_fridge"), "{md}");
     assert!(
         !root
             .join(STANZA)
-            .join("rendered_md/plots/temperature.html")
+            .join("render_markdown/plots/temperature.html")
             .exists(),
         "an empty quantity must not produce an empty plot file"
     );

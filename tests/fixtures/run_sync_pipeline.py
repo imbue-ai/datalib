@@ -20,7 +20,7 @@ Args (positional):
         WhatsApp TNG spec — produces a `WhatsApp/` backup dir with
         `Databases/msgstore.db.crypt15` + `Media/`)
     5:  --now stamp (ISO-8601)
-    6:  data_root for the pipeline (rendered_md/, system/, raw/ land
+    6:  data_root for the pipeline (render_markdown/, ingest/, system/ land
         directly underneath; the DAG config + playback also stashed here)
     7:  claude_export fixture dir (input)
     8:  chatgpt_api   fixture dir
@@ -153,8 +153,8 @@ def main() -> int:
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
     # stashed under the data_root. The pipeline lays out its own
-    # `<name>/raw`, `<name>/rendered_md`, and `system/` directly under
-    # data_root. The enclosing genrule is sandboxed (no `no-sandbox`
+    # `<name>/ingest`, `<name>/render_markdown`, and `system/` directly
+    # under data_root. The enclosing genrule is sandboxed (no `no-sandbox`
     # tag; see scripts/lint_repo.py), so this dir is fresh per
     # action — no need to clean it ourselves.
     workspace = data_root
@@ -212,7 +212,7 @@ def main() -> int:
     # cursor IS the store's HEAD, so a workspace shared across pipeline
     # runs (ingested_tng_test runs three) would re-render every time
     # instead of exercising the skip.
-    yolink_raw = data_root / "yolink" / "raw"
+    yolink_raw = data_root / "yolink" / "ingest"
     if not (yolink_raw / "entities.doltlite_db").exists():
         # `--now` is the same stamp the pipeline pins below, so the
         # fixture's bookkeeping columns and its `dolt_commit` date read
@@ -233,7 +233,7 @@ def main() -> int:
     # what the provider walks at pipeline time (per-source raw subdirs
     # for the HTTP providers, the fixture/export trees for the
     # file-backed ones). Raw doltlite stores always land at the
-    # canonical `<data_root>/<name>/raw` regardless.
+    # ingest step's tree, `<data_root>/<name>/ingest`, regardless.
     sources: dict[str, tuple[str, Path, Path]] = {
         "claude-api": ("claude_api", anth_fx, raw_root / "claude-api"),
         "chatgpt-api": ("chatgpt_api", cgpt_fx, raw_root / "chatgpt-api"),
@@ -294,8 +294,9 @@ def main() -> int:
     steps: list[str] = []
     for name, (type_str, _synth_input, extract_input) in sources.items():
         # Per-phase params, as a TOML inline table. The source name
-        # isn't in either — each step takes it from its own id. Download gets the provider config subtree;
-        # render gets only the render-side knobs (most sources: none).
+        # isn't in either — each step takes it from its group. Ingest gets
+        # the provider config subtree; render gets only the render-side
+        # knobs (most sources: none).
         params = _toml_value(
             _source_config(
                 type_str,
@@ -311,46 +312,45 @@ def main() -> int:
             f"\nparams = {_toml_value(render_params)}" if render_params else ""
         )
         # One group per source; each step is `group` + `function`, and its
-        # id — the tree it writes — is composed from the two.
+        # id — the tree it writes — is composed from the two. No
+        # `command`: a built-in step is `datalib-step`, which reads the
+        # function and the group's type from the environment.
         group_block = f"""[[groups]]
 id = "{name}"
 type = "{type_str}"
 
 """
-        download_block = (
+        ingest_block = (
             ""
             if name in PRESEEDED_RAW
             else f"""[[steps]]
 group = "{name}"
-function = "raw"
-command = "datalib-step download {type_str}"
+function = "ingest"
 params = {params}
 
 """
         )
-        # A source whose store this harness pre-seeded has no download
+        # A source whose store this harness pre-seeded has no ingest
         # step to name, so its render declares no inputs — which also
         # makes it a fringe step the runner always runs.
-        inputs_line = "" if name in PRESEEDED_RAW else f'\ninputs = ["{name}/raw"]'
+        inputs_line = "" if name in PRESEEDED_RAW else f'\ninputs = ["{name}/ingest"]'
         steps.append(
             group_block
-            + download_block
+            + ingest_block
             + f"""[[steps]]
 group = "{name}"
-function = "rendered_md"
-command = "datalib-step render {type_str}"{inputs_line}{render_params_line}"""
+function = "render_markdown"{inputs_line}{render_params_line}"""
         )
     # The fan-in names its inputs; there is no glob to stand in for
     # "every render step".
-    rendered = ", ".join(f'"{n}/rendered_md"' for n in sources)
+    rendered = ", ".join(f'"{n}/render_markdown"' for n in sources)
     steps.append(
         f"""[[groups]]
 id = "unified_index"
 
 [[steps]]
 group = "unified_index"
-function = "grid"
-command = "datalib-step grid_index"
+function = "grid_index"
 inputs = [{rendered}]"""
     )
     dag_config = workspace / "dag.toml"
@@ -458,7 +458,7 @@ def _source_config(
     """The provider config subtree (step `params:`) for one fixture source.
 
     Mirrors the knobs the old sync YAML carried, minus the `type:` tag
-    (the command's subcommand names the provider now).
+    (the group's `type` names the provider now).
     """
     source: dict = {"common": {"input_path": str(input_path)}}
     if type_str == "notion_api":

@@ -2,7 +2,7 @@
 source: datalib/backend/etl/providers/chatgpt/tests/chatgpt_render.rs
 expression: bundle
 ---
-=== chatgpt_api/rendered_md/40497823-e5f8-5775-9407-65834d6381ae/all.md ===
+=== chatgpt_api/render_markdown/40497823-e5f8-5775-9407-65834d6381ae/all.md ===
 ---
 title: "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom? (all)"
 provider: chatgpt
@@ -36,7 +36,7 @@ The premise has merit, but the trilithium containment problem is the load-bearin
 </div>
 
 
-=== chatgpt_api/rendered_md/62b1d972-57f0-5b4c-a81b-805d6c650bde/all.md ===
+=== chatgpt_api/render_markdown/62b1d972-57f0-5b4c-a81b-805d6c650bde/all.md ===
 ---
 title: "Sonnet on a Cat Named Spot (all)"
 provider: chatgpt
@@ -102,7 +102,7 @@ Curious. The closing couplet is satisfying. Thank you.
 </div>
 
 
-=== chatgpt_api/rendered_md/d1f64243-f79a-5057-a85b-b5f6908ecf52/all.md ===
+=== chatgpt_api/render_markdown/d1f64243-f79a-5057-a85b-b5f6908ecf52/all.md ===
 ---
 title: "Polynomial Fit for Sensor Calibration (all)"
 provider: chatgpt

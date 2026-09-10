@@ -12,14 +12,18 @@ use tower::ServiceExt;
 const TEST_TOKEN: &str = "pipeline-storage-test-token";
 
 const CONFIG: &str = r#"
-[[steps]]
-id = "pdfs/raw"
-command = "datalib-step download pdf"
+[[groups]]
+id = "pdfs"
+type = "pdf"
 
 [[steps]]
-id = "pdfs/rendered_md"
-command = "datalib-step render pdf"
-inputs = ["pdfs/raw"]
+group = "pdfs"
+function = "ingest"
+
+[[steps]]
+group = "pdfs"
+function = "render_markdown"
+inputs = ["pdfs/ingest"]
 "#;
 
 /// The same two steps filed under a `[[groups]]` entry.
@@ -31,14 +35,12 @@ type = "pdf"
 
 [[steps]]
 group = "pdfs"
-function = "raw"
-command = "datalib-step download pdf"
+function = "ingest"
 
 [[steps]]
 group = "pdfs"
-function = "rendered_md"
-command = "datalib-step render pdf"
-inputs = ["pdfs/raw"]
+function = "render_markdown"
+inputs = ["pdfs/ingest"]
 "#;
 
 async fn state(root: &Path) -> AppState {
@@ -105,9 +107,9 @@ async fn a_step_that_has_written_nothing_is_present_false() {
     let app = router(state(td.path()).await);
 
     let v = storage(&app, "?refresh=1").await;
-    assert_eq!(tree(&v, "pdfs/raw")["present"], false);
-    assert_eq!(tree(&v, "pdfs/raw")["bytes"], 0);
-    assert_eq!(tree(&v, "pdfs/rendered_md")["present"], false);
+    assert_eq!(tree(&v, "pdfs/ingest")["present"], false);
+    assert_eq!(tree(&v, "pdfs/ingest")["bytes"], 0);
+    assert_eq!(tree(&v, "pdfs/render_markdown")["present"], false);
 }
 
 /// A refresh sees what was written since the last one.
@@ -119,24 +121,24 @@ async fn a_refresh_sees_bytes_written_since_the_last_walk() {
 
     // First walk: nothing on disk.
     let before = storage(&app, "?refresh=1").await;
-    assert_eq!(tree(&before, "pdfs/raw")["present"], false);
+    assert_eq!(tree(&before, "pdfs/ingest")["present"], false);
     let root_before = before["root"]["bytes"].as_u64().unwrap();
 
     // Now something writes — as a sync would.
-    std::fs::create_dir_all(td.path().join("pdfs/raw")).unwrap();
+    std::fs::create_dir_all(td.path().join("pdfs/ingest")).unwrap();
     std::fs::write(
-        td.path().join("pdfs/raw/entities.doltlite_db"),
+        td.path().join("pdfs/ingest/entities.doltlite_db"),
         vec![7u8; 4096],
     )
     .unwrap();
     std::fs::write(
-        td.path().join("pdfs/raw/blobs.doltlite_db"),
+        td.path().join("pdfs/ingest/blobs.doltlite_db"),
         vec![7u8; 1024],
     )
     .unwrap();
 
     let after = storage(&app, "?refresh=1").await;
-    let raw = tree(&after, "pdfs/raw");
+    let raw = tree(&after, "pdfs/ingest");
     assert_eq!(raw["present"], true);
     assert_eq!(raw["bytes"], 5120);
     // The raw store's split — attachments dwarf the entity rows on a
@@ -205,14 +207,14 @@ async fn a_group_directory_is_a_measured_tree_of_its_own() {
     let before = storage(&app, "?refresh=1").await;
     assert_eq!(tree(&before, "pdfs")["present"], false);
 
-    std::fs::create_dir_all(td.path().join("pdfs/raw")).unwrap();
-    std::fs::create_dir_all(td.path().join("pdfs/rendered_md")).unwrap();
+    std::fs::create_dir_all(td.path().join("pdfs/ingest")).unwrap();
+    std::fs::create_dir_all(td.path().join("pdfs/render_markdown")).unwrap();
     std::fs::write(
-        td.path().join("pdfs/raw/blobs.doltlite_db"),
+        td.path().join("pdfs/ingest/blobs.doltlite_db"),
         vec![7u8; 1024],
     )
     .unwrap();
-    std::fs::write(td.path().join("pdfs/rendered_md/a.md"), vec![7u8; 100]).unwrap();
+    std::fs::write(td.path().join("pdfs/render_markdown/a.md"), vec![7u8; 100]).unwrap();
 
     let after = storage(&app, "?refresh=1").await;
     let group = tree(&after, "pdfs");
@@ -222,7 +224,7 @@ async fn a_group_directory_is_a_measured_tree_of_its_own() {
         group.get("parts").is_none(),
         "the entities/attachments split belongs to the raw store, not the folder above it"
     );
-    assert_eq!(tree(&after, "pdfs/raw")["bytes"], 1024);
-    assert_eq!(tree(&after, "pdfs/rendered_md")["bytes"], 100);
+    assert_eq!(tree(&after, "pdfs/ingest")["bytes"], 1024);
+    assert_eq!(tree(&after, "pdfs/render_markdown")["bytes"], 100);
     assert!(group["abs"].as_str().unwrap().ends_with("/pdfs"));
 }

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Hermetic tars of the per-stanza `rendered_md/` trees.
+"""Hermetic tars of the per-stanza `render_markdown/` trees.
 
 Run by the `:ingested_tng` genrule after the pipeline has produced its
 raw outputs. We deliberately keep tar packaging out of the sync binary
 so the pipeline operates at the layer of DB + qmd files; the genrule is
 the Bazel-distribution boundary that wants archives.
 
-Layout: `data_root` holds one dir per source stanza (`<stanza>/rendered_md/…`)
+Layout: `data_root` holds one dir per source stanza (`<stanza>/render_markdown/…`)
 plus the reserved `system/` and `unified_index/` dirs. We tar every stanza's
-`rendered_md` subtree, each entry prefixed with `qmd/<stanza>/rendered_md/<rel>`,
+`render_markdown` subtree, each entry prefixed with `qmd/<stanza>/render_markdown/<rel>`,
 so callers can extract with `--strip-components=1` to land
-`<stanza>/rendered_md/…` at a root data directory.
+`<stanza>/render_markdown/…` at a root data directory.
 
 TWO archives come out, and the split is a build-cache decision:
 
@@ -21,7 +21,7 @@ TWO archives come out, and the split is a build-cache decision:
     actually browse.
 
   * `qmd_md.tar` — markdown only, matching the mask the qmd indexer scans
-    with (`datalib_qmd_indexer::DEFAULT_MASK` = `*/rendered_md/**/*.md`).
+    with (`datalib_qmd_indexer::DEFAULT_MASK` = `*/render_markdown/**/*.md`).
     This is the ONLY input to the `:ingested_tng_qmd` embedding action.
 
 Why the second archive exists: bazel keys an action on the content of
@@ -40,7 +40,7 @@ Determinism guarantees for both archives: mtime / uid / gid / uname /
 gname zeroed, entries sorted.
 
 Args (positional):
-    1: path to the data root (containing `<stanza>/rendered_md/`)
+    1: path to the data root (containing `<stanza>/render_markdown/`)
     2: output path for qmd.tar (the whole rendered tree)
     3: output path for qmd_md.tar (markdown only)
 """
@@ -79,14 +79,14 @@ def main() -> int:
     out_md_tar = Path(sys.argv[3]).resolve()
 
     # Every top-level dir that is not owned by the app itself is a source
-    # stanza with a `rendered_md/` subtree. Tar them all, rooted at
+    # stanza with a `render_markdown/` subtree. Tar them all, rooted at
     # `qmd/<stanza>/...`. `system/` is the server's own state and
     # `unified_index/` is the index the steps write, so neither is a
     # stanza even though both sit at the same level.
     not_stanzas = {"system", "unified_index"}
     rendered_dirs = sorted(
         d
-        for d in src_root.glob("*/rendered_md")
+        for d in src_root.glob("*/render_markdown")
         if d.is_dir() and d.parent.name not in not_stanzas
     )
 

@@ -5,21 +5,21 @@ const FULL = `# Datalib config for this data root.
 data_root = "/tmp/data"
 
 [[steps]]
-id = "unified_index/grid"
-command = "datalib-step grid_index"
-inputs = ["claude/rendered_md"]
+id = "unified_index/grid_index"
+command = "index-it"
+inputs = ["claude/render_markdown"]
 
 # my main claude account
 [[steps]]
-id = "claude/raw"
-command = "datalib-step download claude_api"
+id = "claude/ingest"
+command = "fetch-claude"
 [steps.params]
 sync = {}
 
 [[steps]]
-id = "claude/rendered_md"
-command = "datalib-step render claude_api"
-inputs = ["claude/raw"]
+id = "claude/render_markdown"
+command = "render-claude"
+inputs = ["claude/ingest"]
 
 [[steps]]
 id = "custom/out"
@@ -31,7 +31,7 @@ describe("listSources", () => {
     const rows = listSources(FULL);
     // grid_index and claude.render declare inputs → infrastructure;
     // any input-less step is a source, whatever its command runs.
-    expect(rows.map((r) => r.id)).toEqual(["claude/raw", "custom/out"]);
+    expect(rows.map((r) => r.id)).toEqual(["claude/ingest", "custom/out"]);
   });
 
   it("returns ranges that select the step entry", () => {
@@ -41,7 +41,7 @@ describe("listSources", () => {
     // The range is widened past the step's own table to cover its
     // [steps.params] sub-table, which is a sibling in the document.
     expect(claude).toContain("sync = {}");
-    expect(claude).not.toContain("claude/rendered_md");
+    expect(claude).not.toContain("claude/render_markdown");
     const custom = FULL.slice(rows[1].start, rows[1].end);
     expect(custom.startsWith("[[steps]]")).toBe(true);
     expect(custom).toContain("my-exporter --flag");
@@ -53,10 +53,10 @@ describe("listSources", () => {
   it("lists a grouped step under its composed id", () => {
     const text =
       '[[groups]]\nid = "perseus"\ntype = "perseus"\n\n' +
-      '[[steps]]\ngroup = "perseus"\nfunction = "raw"\ncommand = "c"\n\n' +
-      '[[steps]]\ngroup = "perseus"\nfunction = "rendered_md"\ncommand = "c"\ninputs = ["perseus/raw"]\n';
+      '[[steps]]\ngroup = "perseus"\nfunction = "ingest"\ncommand = "c"\n\n' +
+      '[[steps]]\ngroup = "perseus"\nfunction = "render_markdown"\ncommand = "c"\ninputs = ["perseus/ingest"]\n';
     const rows = listSources(text);
-    expect(rows.map((r) => r.id)).toEqual(["perseus/raw"]);
+    expect(rows.map((r) => r.id)).toEqual(["perseus/ingest"]);
     const range = text.slice(rows[0].start, rows[0].end);
     expect(range.startsWith("[[steps]]")).toBe(true);
     expect(range).not.toContain("[[groups]]");
@@ -64,9 +64,9 @@ describe("listSources", () => {
 
   it("treats an empty inputs list as input-less", () => {
     const rows = listSources(
-      '[[steps]]\nid = "x/raw"\ncommand = "fetch-x"\ninputs = []\n',
+      '[[steps]]\nid = "x/ingest"\ncommand = "fetch-x"\ninputs = []\n',
     );
-    expect(rows.map((r) => r.id)).toEqual(["x/raw"]);
+    expect(rows.map((r) => r.id)).toEqual(["x/ingest"]);
   });
 
   it("handles empty, scaffold, and stepless files", () => {
@@ -79,9 +79,9 @@ describe("listSources", () => {
     // An inline step has no table of its own, so it lists with a zero
     // range ("not locatable") rather than pointing at something else.
     const rows = listSources(
-      'steps = [{id = "i/raw", command = "c"}]\n',
+      'steps = [{id = "i/ingest", command = "c"}]\n',
     );
-    expect(rows.map((r) => r.id)).toEqual(["i/raw"]);
+    expect(rows.map((r) => r.id)).toEqual(["i/ingest"]);
     expect(rows[0]).toMatchObject({ start: 0, end: 0 });
   });
 

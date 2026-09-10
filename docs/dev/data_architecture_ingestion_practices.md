@@ -46,7 +46,7 @@ catches what happens against the actual world. The
 `//datalib/backend/dag:manual_e2e_live_sync_golden` target runs
 the full pipeline, every source, against live upstreams using
 host-side latchkey credentials, snapshotting a file-tree manifest of
-each stanza's `raw/` + `rendered_md/` and per-file content
+each stanza's `raw/` + `render_markdown/` and per-file content
 snapshots into a private dir named by `$DATALIB_MANUAL_E2E_DIR`
 (kept outside the repo so the slightly sensitive source data isn't
 shared when the repo is open-sourced). It is the only test that
@@ -123,7 +123,7 @@ Reach for the simplest existing provider that's shaped like yours,
    [Every provider documents itself, in the same place](#every-provider-documents-itself-in-the-same-place).
 
 Grid index needs no per-provider changes — the `grid_index` step
-(`datalib-step grid_index`, `build_grid_index` in
+(the `grid_index` step, `build_grid_index` in
 `etl/render/src/grid_index.rs`) picks up the new source's store on its next
 run.
 
@@ -256,7 +256,7 @@ Note: This is not yet handled in a meaningful way.  We haven't decided yet what 
 
 **Desired principle**: removing a `sources:` entry should leave the
 system clean. A single GC pass should reclaim the source's raw store,
-its blob CAS contribution, its `<name>/rendered_md/` tree, and its
+its blob CAS contribution, its `<name>/render_markdown/` tree, and its
 `grid_rows` rows — without disturbing other sources that share the CAS.
 
 **Open**: there is no GC at all today — not for the blob side either.
@@ -273,7 +273,7 @@ edge table points at any more?
 provider type (two Slack workspaces, three GitHub orgs, two ChatGPT
 accounts) by virtue of each having its own `sources:` entry with a
 distinct `name:`. `GridRow.account` and the per-account segments in
-`<stanza>/rendered_md/<account>/...` exist to keep them disjoint.
+`<stanza>/render_markdown/<account>/...` exist to keep them disjoint.
 
 **Open**: this should be documented as a first-class case, not an
 incidental side effect of "each `name:` gets its own raw store." Are
@@ -349,7 +349,7 @@ deleted 2026-09-03 (see [Deferred work](#deferred-work)).
 ### grid_rows itself lives in doltlite
 
 The `grid_rows` table (the projection consumed by the UI) lives in
-`<data_root>/unified_index/grid/db.doltlite_db`, just like raw stores. The "doltlite
+`<data_root>/unified_index/grid_index/db.doltlite_db`, just like raw stores. The "doltlite
 is our storage layer" claim should apply to every store the system writes —
 raw, blob CAS, and the backend index — not just to raw. Worth saying
 explicitly in

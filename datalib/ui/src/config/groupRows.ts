@@ -92,7 +92,7 @@ export type ChildStamp = {
 /// any child reports. The fetch step is what "synced" means for a
 /// source, so a render that ran later does not move the group's stamp.
 export function groupLastSynced(children: ChildStamp[]): string | null {
-  const fetch = children.find((c) => c.kind === "step" && c.phase === "fetch");
+  const fetch = children.find((c) => c.kind === "step" && c.phase === "ingest");
   if (fetch) return fetch.at;
   let newest: string | null = null;
   for (const c of children) {

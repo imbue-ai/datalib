@@ -36,7 +36,7 @@ impl RenderProcessor for PdfRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
-        let out_dir = datalib_etl::layout::rendered_md_root(ctx.root, ctx.name);
+        let out_dir = datalib_etl::layout::render_markdown_root(ctx.root, ctx.name);
         // Load first, render second: the document sink borrows `ctx`
         // and is not `Send`, so it must not be alive across an await.
         // `None`, not an empty corpus: this list is the membership test the

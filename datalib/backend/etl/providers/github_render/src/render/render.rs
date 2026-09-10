@@ -51,12 +51,15 @@ pub fn pr_qmd_path_rel(stanza: &str, repo_full_name: &str, pr_number: u32) -> St
     let (owner, repo) = repo_full_name
         .split_once('/')
         .unwrap_or(("unknown", repo_full_name));
-    format!("{stanza}/rendered_md/{owner}/{repo}/pr-{pr_number}/index.md")
+    format!(
+        "{stanza}/{}/{owner}/{repo}/pr-{pr_number}/index.md",
+        datalib_etl::layout::RENDER_MARKDOWN_DIR
+    )
 }
 
 fn pr_dir(root: &Path, stanza: &str, repo: &str, num: u32) -> PathBuf {
     let (owner, name) = repo.split_once('/').unwrap_or(("unknown", repo));
-    datalib_etl::layout::rendered_md_root(root, stanza)
+    datalib_etl::layout::render_markdown_root(root, stanza)
         .join(owner)
         .join(name)
         .join(format!("pr-{num}"))

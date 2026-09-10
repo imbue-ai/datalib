@@ -11,13 +11,14 @@
 //     like nothing had happened until it was over.
 //
 // `pdf` is the local-only provider that has *both* halves, which is why
-// it carries this spec: a `raw -> rendered_md` edge is what makes
+// it carries this spec: an `ingest -> render_markdown` edge is what makes
 // "everything downstream is queued too" a real assertion about the DAG
 // rather than a contrived one. `fsindex` (download-only) is the
 // unrelated second source — the one whose history must not move.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
+  expandGroup,
   pipelineRow as row,
   recordStatuses,
   settle,
@@ -83,6 +84,14 @@ async function writeConfig(page: Page, text: string) {
   await openManager(page);
 }
 
+/// The step rows this file drives live under groups, and a group's
+/// steps have rows only while it is open. Opened once per test; the
+/// grid remembers across the remounts `settle` does.
+async function writeConfigAndOpenGroups(page: Page, text: string) {
+  await writeConfig(page, text);
+  for (const id of ["pdfs", "docs", "unsynced"]) await expandGroup(page, id);
+}
+
 let original = "";
 
 test.beforeEach(async ({ page, request }) => {
@@ -125,20 +134,31 @@ test.describe("a real sync, driven from the grid", () => {
 
   const config = () => `data_root = "${dataRoot}"
 
+[[groups]]
+id = "pdfs"
+type = "pdf"
+
 [[steps]]
-id = "pdfs/raw"
-command = "'${STEP_BIN}' download pdf"
+group = "pdfs"
+function = "ingest"
+command = "'${STEP_BIN}'"
 [steps.params.common]
 input_path = "${PDF_DIR}"
 
 [[steps]]
-id = "pdfs/rendered_md"
-command = "'${STEP_BIN}' render pdf"
-inputs = ["pdfs/raw"]
+group = "pdfs"
+function = "render_markdown"
+command = "'${STEP_BIN}'"
+inputs = ["pdfs/ingest"]
+
+[[groups]]
+id = "docs"
+type = "fsindex"
 
 [[steps]]
-id = "docs/raw"
-command = "'${STEP_BIN}' download fsindex"
+group = "docs"
+function = "ingest"
+command = "'${STEP_BIN}'"
 [steps.params.common]
 input_path = "${dataRoot}/fsindex_scan"
 
@@ -148,9 +168,14 @@ input_path = "${dataRoot}/fsindex_scan"
 # is sorted. Without a row like this the sort test passes with the
 # comparator deleted, because same-offset ISO stamps happen to sort
 # correctly as text.
+[[groups]]
+id = "unsynced"
+type = "fsindex"
+
 [[steps]]
-id = "unsynced/raw"
-command = "'${STEP_BIN}' download fsindex"
+group = "unsynced"
+function = "ingest"
+command = "'${STEP_BIN}'"
 [steps.params.common]
 input_path = "${dataRoot}/fsindex_scan"
 ${applets()}`;
@@ -158,29 +183,29 @@ ${applets()}`;
   test("syncing one source leaves another source's history untouched", async ({
     page,
   }) => {
-    await writeConfig(page, config());
+    await writeConfigAndOpenGroups(page, config());
 
     // Give docs a real history to protect.
-    const docsWas = await lastSyncedOf(page, "docs/raw");
-    await syncBtn(page, "docs/raw").click();
-    expect(await settle(page, "docs/raw", docsWas)).toBe("Succeeded");
-    const docsStatus = await statusOf(page, "docs/raw");
-    const docsSynced = await lastSyncedOf(page, "docs/raw");
+    const docsWas = await lastSyncedOf(page, "docs/ingest");
+    await syncBtn(page, "docs/ingest").click();
+    expect(await settle(page, "docs/ingest", docsWas)).toBe("Succeeded");
+    const docsStatus = await statusOf(page, "docs/ingest");
+    const docsSynced = await lastSyncedOf(page, "docs/ingest");
     expect(docsSynced, "a synced row should carry an exact stamp").toBeTruthy();
 
     // Now sync the *other* source. The runner still walks docs/raw, to
     // publish its output version, and reports it `not_selected` — the
     // fact that used to be written over its record.
-    const pdfsWas = await lastSyncedOf(page, "pdfs/raw");
-    await syncBtn(page, "pdfs/raw").click();
-    expect(await settle(page, "pdfs/raw", pdfsWas)).toBe("Succeeded");
+    const pdfsWas = await lastSyncedOf(page, "pdfs/ingest");
+    await syncBtn(page, "pdfs/ingest").click();
+    expect(await settle(page, "pdfs/ingest", pdfsWas)).toBe("Succeeded");
 
     expect(
-      await statusOf(page, "docs/raw"),
+      await statusOf(page, "docs/ingest"),
       "a sync of pdfs must not restate what docs did",
     ).toBe(docsStatus);
     expect(
-      await lastSyncedOf(page, "docs/raw"),
+      await lastSyncedOf(page, "docs/ingest"),
       "nor when it did it — this timestamp used to move on every unrelated sync",
     ).toBe(docsSynced);
   });
@@ -188,21 +213,21 @@ ${applets()}`;
   test("the row shows the sync happening, and never goes backwards", async ({
     page,
   }) => {
-    await writeConfig(page, config());
+    await writeConfigAndOpenGroups(page, config());
 
     // Watch the row the way the grid paints it, from before the click
     // until it settles. This is the real sequence — the unit suite
     // replays a synthetic one through the same state machine.
-    await recordStatuses(page, ["pdfs/raw", "pdfs/rendered_md"]);
+    await recordStatuses(page, ["pdfs/ingest", "pdfs/render_markdown"]);
     // Whatever the rows say before the click. The recorder seeds itself
     // with the current value, so this is 1 for a row with a status and
     // 0 for one still painting; everything past it is what the click
     // caused.
-    const beforeUp = (await statusLog(page, "pdfs/raw")).length;
-    const beforeDown = (await statusLog(page, "pdfs/rendered_md")).length;
+    const beforeUp = (await statusLog(page, "pdfs/ingest")).length;
+    const beforeDown = (await statusLog(page, "pdfs/render_markdown")).length;
 
-    const was = await stampsBefore(page, ["pdfs/raw", "pdfs/rendered_md"]);
-    await syncBtn(page, "pdfs/raw").click();
+    const was = await stampsBefore(page, ["pdfs/ingest", "pdfs/render_markdown"]);
+    await syncBtn(page, "pdfs/ingest").click();
     // Gate on the queue having accepted before *asserting*. `click()`
     // resolves when the event is dispatched, not when the async handler
     // behind it finishes, so an assertion straight after it races the
@@ -219,20 +244,20 @@ ${applets()}`;
     // runner exists, let alone reaches it. This is the assertion a
     // download-only provider could not support, and the reason this
     // spec is built on `pdf`.
-    const downstream = (await statusLog(page, "pdfs/rendered_md")).slice(beforeDown);
+    const downstream = (await statusLog(page, "pdfs/render_markdown")).slice(beforeDown);
     expect(
       statusWord(downstream[0]),
       `downstream sequence was ${JSON.stringify(downstream)}`,
     ).toBe("Queued");
     // ...while the unrelated source is not claimed at all.
-    expect(await statusOf(page, "docs/raw")).not.toBe("Queued");
+    expect(await statusOf(page, "docs/ingest")).not.toBe("Queued");
 
     // `settleRow`, not `settle`: the log lives in the page, and
     // `settle` remounts, which would throw it away. The before-stamp is
     // still passed — a terminal status on its own is answerable by the
     // *previous* run's frame, which is what #237 fixed.
-    await settleRow(page, "pdfs/raw", was["pdfs/raw"]);
-    const seen = (await statusLog(page, "pdfs/raw")).slice(beforeUp);
+    await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
+    const seen = (await statusLog(page, "pdfs/ingest")).slice(beforeUp);
 
     // What the sequence must contain. "Queued" is the frame that used
     // to be missing entirely — the click produced no visible change
@@ -285,12 +310,12 @@ ${applets()}`;
     }
 
     // The render step follows the download it depends on: it may not
-    // reach a terminal state before its input does. `pdfs/raw` is
+    // reach a terminal state before its input does. `pdfs/ingest` is
     // already terminal here, so waiting on the render is bounded.
-    expect(await settleRow(page, "pdfs/rendered_md", was["pdfs/rendered_md"])).toMatch(
+    expect(await settleRow(page, "pdfs/render_markdown", was["pdfs/render_markdown"])).toMatch(
       /^(Succeeded|Up to date)$/,
     );
-    const downstreamFinal = (await statusLog(page, "pdfs/rendered_md")).slice(beforeDown);
+    const downstreamFinal = (await statusLog(page, "pdfs/render_markdown")).slice(beforeDown);
     expect(
       statusWord(downstreamFinal[0]),
       `downstream never started Queued: ${JSON.stringify(downstreamFinal)}`,
@@ -317,16 +342,16 @@ ${applets()}`;
     // that the column is wired to the relative form at all, that the
     // absolute stamp survives as the hover, and that the cell does not
     // tick while a person is looking at it.
-    await writeConfig(page, config());
-    const countUpWas = await lastSyncedOf(page, "pdfs/raw");
-    await syncBtn(page, "pdfs/raw").click();
-    expect(await settle(page, "pdfs/raw", countUpWas)).toBe("Succeeded");
+    await writeConfigAndOpenGroups(page, config());
+    const countUpWas = await lastSyncedOf(page, "pdfs/ingest");
+    await syncBtn(page, "pdfs/ingest").click();
+    expect(await settle(page, "pdfs/ingest", countUpWas)).toBe("Succeeded");
 
-    const cell = row(page, "pdfs/raw").locator('[col-id="lastSynced"]');
+    const cell = row(page, "pdfs/ingest").locator('[col-id="lastSynced"]');
     await expect(cell).toHaveText("seconds ago");
 
     // The exact instant is still reachable, on the hover.
-    const stamp = await lastSyncedOf(page, "pdfs/raw");
+    const stamp = await lastSyncedOf(page, "pdfs/ingest");
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(stamp).toMatch(/\d{2}:\d{2}:\d{2}/);
 
@@ -351,16 +376,16 @@ ${applets()}`;
     // next data change repaints the grid.
 
     // The stamp underneath is unchanged — the row is not re-syncing.
-    expect(await lastSyncedOf(page, "pdfs/raw")).toBe(stamp);
+    expect(await lastSyncedOf(page, "pdfs/ingest")).toBe(stamp);
 
     // A row that never ran has no time to be relative to, and nothing
-    // to reveal. `unsynced/raw` exists in the config for exactly this:
+    // to reveal. `unsynced/ingest` exists in the config for exactly this:
     // the data root is shared by every test in this file, so any step
     // one of them syncs would make this order-dependent.
     await expect(
-      row(page, "unsynced/raw").locator('[col-id="lastSynced"]'),
+      row(page, "unsynced/ingest").locator('[col-id="lastSynced"]'),
     ).toHaveText("—");
-    expect(await lastSyncedOf(page, "unsynced/raw")).toBeNull();
+    expect(await lastSyncedOf(page, "unsynced/ingest")).toBeNull();
   });
 
   test("sorting Last synced orders by time, not by how the cell reads", async ({
@@ -371,17 +396,17 @@ ${applets()}`;
     // makes this worth asserting through the real header rather than
     // only against the comparator: alphabetically "1 hour ago" precedes
     // "seconds ago", while chronologically it follows it.
-    await writeConfig(page, config());
+    await writeConfigAndOpenGroups(page, config());
 
     // Two rows with a real gap between them, so the orders differ. Each
     // sync must be finished before the next begins, or the stamps can
     // land in either order — which is the thing being sorted.
-    const sortWas = await stampsBefore(page, ["docs/raw", "pdfs/raw", "pdfs/rendered_md"]);
-    await syncBtn(page, "docs/raw").click();
-    expect(await settle(page, "docs/raw", sortWas["docs/raw"])).toBe("Succeeded");
-    await syncBtn(page, "pdfs/raw").click();
-    expect(await settle(page, "pdfs/raw", sortWas["pdfs/raw"])).toBe("Succeeded");
-    expect(await settle(page, "pdfs/rendered_md", sortWas["pdfs/rendered_md"])).toMatch(
+    const sortWas = await stampsBefore(page, ["docs/ingest", "pdfs/ingest", "pdfs/render_markdown"]);
+    await syncBtn(page, "docs/ingest").click();
+    expect(await settle(page, "docs/ingest", sortWas["docs/ingest"])).toBe("Succeeded");
+    await syncBtn(page, "pdfs/ingest").click();
+    expect(await settle(page, "pdfs/ingest", sortWas["pdfs/ingest"])).toBe("Succeeded");
+    expect(await settle(page, "pdfs/render_markdown", sortWas["pdfs/render_markdown"])).toMatch(
       /^(Succeeded|Up to date)$/,
     );
 
@@ -442,7 +467,7 @@ ${applets()}`;
     const unrun = (rows: { id: string; stamp: string | null }[]) =>
       rows.filter((r) => r.stamp === null).map((r) => r.id);
     expect(unrun(asc), "the un-synced row should be in the table").toContain(
-      "unsynced/raw",
+      "unsynced/ingest",
     );
     expect(
       asc.slice(0, unrun(asc).length).every((r) => r.stamp === null),
@@ -465,16 +490,16 @@ ${applets()}`;
   test("a downstream step can't be synced on its own, and says what would carry it", async ({
     page,
   }) => {
-    await writeConfig(page, config());
+    await writeConfigAndOpenGroups(page, config());
 
     // `datalib-dag` rejects a `--sync` naming anything but a source
     // step, so this button would only ever queue a job that fails on
     // startup. It is disabled, and names the row that does carry it.
-    const btn = syncBtn(page, "pdfs/rendered_md");
+    const btn = syncBtn(page, "pdfs/render_markdown");
     await expect(btn).toBeDisabled();
-    await expect(btn).toHaveAttribute("title", /Run pdfs\/raw/);
+    await expect(btn).toHaveAttribute("title", /Run pdfs\/ingest/);
 
     // A source step, by contrast, is runnable.
-    await expect(syncBtn(page, "pdfs/raw")).toBeEnabled();
+    await expect(syncBtn(page, "pdfs/ingest")).toBeEnabled();
   });
 });

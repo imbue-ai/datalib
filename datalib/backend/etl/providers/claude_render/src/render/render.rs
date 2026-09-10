@@ -143,7 +143,7 @@ pub fn render_all(
     .context("claude chat-common render")?;
 
     // Projects are a second pass with their own profile. They share the
-    // page-path namespace with conversations (`rendered_md/<source>/
+    // page-path namespace with conversations (`render_markdown/<source>/
     // <uuid>/all.md`) and can't collide: a project UUID is never a
     // conversation UUID. No blobs — knowledge docs carry their text
     // inline.

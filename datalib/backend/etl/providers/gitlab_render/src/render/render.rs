@@ -48,11 +48,14 @@ pub fn slugify(name: &str) -> String {
 }
 
 pub fn mr_qmd_path_rel(stanza: &str, project_full_path: &str, iid: u32) -> String {
-    format!("{stanza}/rendered_md/{project_full_path}/mr-{iid}/index.md")
+    format!(
+        "{stanza}/{}/{project_full_path}/mr-{iid}/index.md",
+        datalib_etl::layout::RENDER_MARKDOWN_DIR
+    )
 }
 
 fn mr_dir(root: &Path, stanza: &str, project: &str, iid: u32) -> PathBuf {
-    let mut p = datalib_etl::layout::rendered_md_root(root, stanza);
+    let mut p = datalib_etl::layout::render_markdown_root(root, stanza);
     for part in project.split('/') {
         p = p.join(part);
     }

@@ -28,7 +28,7 @@ impl Default for EventTapeConfig {
 
 /// The shared tunables every source carries, composed (not flattened) into each
 /// provider's `*-config` crate as `common:`. After the orchestrator's
-/// `normalize()` these hold fully-resolved values: [`Self::raw_path`] is always
+/// `resolve_paths()` these hold fully-resolved values: [`Self::raw_path`] is always
 /// `Some` (absolute), [`Self::input_path`] is tilde-expanded when set (and stays
 /// `None` when omitted — its presence is load-bearing for "is this file-backed
 /// source configured?"), and the knobs have the global [`Defaults`] folded in.
@@ -42,8 +42,8 @@ pub struct SourceCommon {
     pub input_path: Option<PathBuf>,
     /// Where *we* keep this source's raw store (`entities.doltlite_db`,
     /// `blobs.doltlite_db`, the `events/` tape). Defaults to
-    /// `<data_root>/<name>/raw`; `normalize()` fills this so it is always
-    /// `Some` afterward.
+    /// the tree the ingest step writes; `resolve_paths` fills this so it is
+    /// always `Some` afterward.
     #[serde(default)]
     pub raw_path: Option<PathBuf>,
     /// Skip downloading any blob attachment larger than this many bytes.
@@ -100,13 +100,11 @@ impl SourceCommon {
         self.event_tape = self.event_tape.take().or_else(|| d.event_tape.clone());
     }
 
-    /// Resolve paths against the (already tilde-expanded) `data_root` and the
-    /// source's `name`. Fills [`Self::raw_path`] with the
-    /// `<data_root>/<name>/raw` default when unset; tilde-expands an explicit
-    /// `input_path` but leaves it `None` when omitted. Run once in
-    /// `normalize()`.
-    pub fn resolve_paths(&mut self, data_root: &Path, name: &str) {
-        let default_raw = data_root.join(name).join("raw");
+    /// Resolve paths. Fills [`Self::raw_path`] with `default_raw` — the
+    /// tree the ingest step writes, `<data_root>/<group>/ingest` — when
+    /// unset; tilde-expands an explicit `input_path` but leaves it `None`
+    /// when omitted. Run once, before anything reads the paths.
+    pub fn resolve_paths(&mut self, default_raw: PathBuf) {
         self.raw_path = Some(match self.raw_path.take() {
             Some(p) => expand_tilde(&p.display().to_string()),
             None => default_raw,
@@ -119,7 +117,7 @@ impl SourceCommon {
     pub fn raw_path(&self) -> &Path {
         self.raw_path
             .as_deref()
-            .expect("SourceCommon::raw_path read before normalize()")
+            .expect("SourceCommon::raw_path read before resolve_paths()")
     }
 
     pub fn input_or_raw_path(&self) -> &Path {
@@ -182,8 +180,9 @@ pub struct RenderCommon {
 }
 
 impl RenderCommon {
-    pub fn resolve_paths(&mut self, data_root: &Path, name: &str) {
-        let default_raw = data_root.join(name).join("raw");
+    /// `default_raw` is the raw store this render reads — the tree its
+    /// ingest input names.
+    pub fn resolve_paths(&mut self, default_raw: PathBuf) {
         self.raw_path = Some(match self.raw_path.take() {
             Some(p) => expand_tilde(&p.display().to_string()),
             None => default_raw,
@@ -313,12 +312,12 @@ mod tests {
     #[test]
     fn resolve_paths_defaults_raw_keeps_input_none() {
         let mut common = SourceCommon::default();
-        common.resolve_paths(Path::new("/data"), "slack");
-        assert_eq!(common.raw_path(), Path::new("/data/slack/raw"));
+        common.resolve_paths(PathBuf::from("/data/slack/ingest"));
+        assert_eq!(common.raw_path(), Path::new("/data/slack/ingest"));
         // input_path stays None (load-bearing for is_managed); input_or_raw
         // then falls back to the raw dir for API sources.
         assert!(common.input_path.is_none());
-        assert_eq!(common.input_or_raw_path(), Path::new("/data/slack/raw"));
+        assert_eq!(common.input_or_raw_path(), Path::new("/data/slack/ingest"));
     }
 
     #[test]
@@ -327,8 +326,8 @@ mod tests {
             input_path: Some(PathBuf::from("/exports/mail.mbox")),
             ..Default::default()
         };
-        common.resolve_paths(Path::new("/data"), "gmail");
-        assert_eq!(common.raw_path(), Path::new("/data/gmail/raw")); // still defaulted
+        common.resolve_paths(PathBuf::from("/data/gmail/ingest"));
+        assert_eq!(common.raw_path(), Path::new("/data/gmail/ingest")); // still defaulted
         assert_eq!(common.input_or_raw_path(), Path::new("/exports/mail.mbox"));
     }
 }

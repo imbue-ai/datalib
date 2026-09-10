@@ -1,6 +1,6 @@
 //! `grid-rows-load` — provider-agnostic Load step. Stacks every
 //! source's render store
-//! (`<out>/<stanza>/rendered_md/indexed_markdown.doltlite_db`, written
+//! (`<out>/<stanza>/render_markdown/indexed_markdown.doltlite_db`, written
 //! by that source's render step) into the doltlite file at
 //! `<out>/unified_index/grid/db.doltlite_db`.
 
@@ -23,7 +23,7 @@ use tracing::{debug, info, info_span};
 )]
 struct Args {
     /// Input root. The loader reads each stanza's render store at
-    /// `<out>/<stanza>/rendered_md/indexed_markdown.doltlite_db`.
+    /// `<out>/<stanza>/render_markdown/indexed_markdown.doltlite_db`.
     #[arg(long, env = "FW_OUT")]
     out: PathBuf,
 

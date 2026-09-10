@@ -225,7 +225,7 @@ test("the render step is offered folders, never flags", async ({ page }) => {
 
   await expandGroup(page, "bridge-mail");
   await page
-    .locator('.ag-row[row-id="bridge-mail/raw"]')
+    .locator('.ag-row[row-id="bridge-mail/ingest"]')
     .getByRole("button", { name: "Render to markdown" })
     .click();
 
@@ -250,7 +250,7 @@ test("the render step is offered folders, never flags", async ({ page }) => {
 
   await chips(page, "Render only these labels").filter({ hasText: "Inbox" }).click();
   await wizard(page).getByRole("button", { name: "Add render step" }).click();
-  await expect(page.locator('.ag-row[row-id="bridge-mail/rendered_md"]')).toBeVisible();
+  await expect(page.locator('.ag-row[row-id="bridge-mail/render_markdown"]')).toBeVisible();
   // The outlink is a preset: a Gmail source's webmail links are
   // Gmail's, and there is no second answer to ask about.
   await expect(page.locator(".m2-editor")).toHaveValue(/outlink_format = "gmail"/);
@@ -300,7 +300,7 @@ test("an existing step reopens on the form that wrote it", async ({ page }) => {
   // modeled or Edit would be disabled on the wizard's own output.
   await expandGroup(page, "personal-mail");
   await page
-    .locator('.ag-row[row-id="personal-mail/raw"]')
+    .locator('.ag-row[row-id="personal-mail/ingest"]')
     .getByRole("button", { name: "Edit" })
     .click();
   await expect(wizard(page).locator(".wiz-chosen")).toContainText("Fastmail");

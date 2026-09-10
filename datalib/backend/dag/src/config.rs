@@ -178,10 +178,13 @@ pub struct StepEntry {
     /// A directory staged by hand is named by `params.common.input_path`
     /// instead, and is not an artifact the DAG knows about.
     pub inputs: Vec<String>,
-    /// The command to run, split shell-style into an argv. The child's cwd is
-    /// `data_root`, so a relative multi-component argv[0] resolves against the
-    /// data root; use a bare name or an absolute path for binaries elsewhere.
-    pub command: String,
+    /// The command to run, split shell-style into an argv. `None` means the
+    /// built-in `datalib-step`, which reads its function and its group's
+    /// type from the environment — so a step with no command needs a group.
+    /// The child's cwd is `data_root`, so a relative multi-component argv[0]
+    /// resolves against the data root; use a bare name or an absolute path
+    /// for binaries elsewhere.
+    pub command: Option<String>,
     /// Arbitrary step parameters, forwarded verbatim as JSON via
     /// `--params`.
     pub params: Option<toml::Value>,
@@ -209,7 +212,8 @@ struct StepTable {
     name: Option<String>,
     #[serde(default)]
     inputs: Vec<String>,
-    command: String,
+    #[serde(default)]
+    command: Option<String>,
     #[serde(default)]
     params: Option<toml::Value>,
     #[serde(default)]
@@ -849,22 +853,40 @@ fn accept_steps(
                     ));
                     continue;
                 }
-                if is_ungrouped_builtin(&c.entry.command) {
+                if c.entry.command.is_none() {
                     diags.push(
                         c.diag(
-                            Severity::Warning,
+                            Severity::Rejected,
                             text,
                             Some("id"),
-                            "a `datalib-step` download or render step outside any group is the \
-                             shape written before `[[groups]]` existed. It still runs, but the \
-                             editor cannot change it and `datalib-step` will stop accepting it.",
+                            "a step with no `command` runs `datalib-step`, which takes the \
+                             provider from its group's `type` and the tree it writes from \
+                             `<group>/<function>` — so it has to be declared under a group",
                         )
                         .with_help(
-                            "rewrite the file once: `datalib-migrate-config <data root> --force`",
+                            "write `group` and `function` instead of `id`, or give this step a \
+                             `command` of its own",
                         ),
                     );
+                    continue;
                 }
             }
+        }
+        if let Some(word) = c.entry.command.as_deref().and_then(retired_subcommand) {
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    Some("command"),
+                    format!(
+                        "`datalib-step {word} …` is the shape written before `datalib-step` read \
+                         its function from the environment, and it no longer runs. A built-in \
+                         step is `group` + `function` with no `command` at all."
+                    ),
+                )
+                .with_help("rewrite the file once: `datalib-migrate-config <data root> --force`"),
+            );
+            continue;
         }
         // Where the composed-vs-written distinction stops mattering: every
         // rule below is about the id itself. A grouped step's id has no key
@@ -918,7 +940,7 @@ fn accept_steps(
                 )
                 .with_help(
                     "move one of them out from under the other — sibling functions under one \
-                     group, like `raw` and `rendered_md`, are the usual shape",
+                     group, like `ingest` and `render_markdown`, are the usual shape",
                 ),
             );
             continue;
@@ -953,12 +975,18 @@ fn is_datalib_step(prog: &str) -> bool {
     prog == "datalib-step" || prog.ends_with("/datalib-step")
 }
 
-/// The retired shape: a built-in fetch or render step carrying a verbatim
-/// id. Tokenised the way the migrator and the UI do, so the three agree on
-/// what the retired shape looks like.
-fn is_ungrouped_builtin(command: &str) -> bool {
+/// The retired shape: `datalib-step` with the function and the provider on
+/// its command line. Returns the subcommand word, for the message.
+/// Tokenised the way the migrator does, so the two agree on what the
+/// retired shape looks like.
+fn retired_subcommand(command: &str) -> Option<&str> {
     let mut words = command.split_whitespace();
-    words.next().is_some_and(is_datalib_step) && matches!(words.next(), Some("download" | "render"))
+    if !words.next().is_some_and(is_datalib_step) {
+        return None;
+    }
+    words
+        .next()
+        .filter(|w| matches!(*w, "download" | "render" | "grid_index" | "qmd_index"))
 }
 
 fn nests_with(a: &str, b: &str) -> bool {
@@ -975,24 +1003,18 @@ fn id_list<'a>(ids: impl Iterator<Item = &'a str>) -> String {
     all.join(", ")
 }
 
+/// The program a step runs when it writes no `command`. Resolved like any
+/// other bare name: `binary_dir`, then `PATH`.
+pub const BUILTIN_STEP_PROGRAM: &str = "datalib-step";
+
 fn spec_of(e: &StepEntry, group_type: Option<&str>) -> Result<StepSpec> {
-    let mut argv = shlex::split(&e.command)
-        .with_context(|| format!("command {:?} has unbalanced quoting", e.command))?;
+    let mut argv = match &e.command {
+        Some(command) => shlex::split(command)
+            .with_context(|| format!("command {command:?} has unbalanced quoting"))?,
+        None => vec![BUILTIN_STEP_PROGRAM.to_string()],
+    };
     if argv.is_empty() {
         bail!("empty command");
-    }
-    // Until `datalib-step` reads the type from the environment the provider is
-    // written twice, and the UI trusts the group's while the step runs the
-    // command's; a disagreement has to be refused rather than run.
-    if let (Some(want), true) = (group_type, is_datalib_step(&argv[0])) {
-        if matches!(argv.get(1).map(String::as_str), Some("download" | "render")) {
-            if let Some(have) = argv.get(2).filter(|have| *have != want) {
-                bail!(
-                    "command names provider {have:?} but the group's type is {want:?}; the \
-                     two must agree"
-                );
-            }
-        }
     }
     if let Some(params) = &e.params {
         let json =
@@ -1452,9 +1474,9 @@ mod tests {
             let cfg: DagConfig = toml::from_str(&format!(
                 r#"
                 [[steps]]
-                id = "slack/rendered_md"
-                inputs = ["slack/raw"]
-                command = "datalib-step render slack_api"
+                id = "slack/render_markdown"
+                inputs = ["slack/ingest"]
+                command = "render-slack"
                 {line}
                 "#
             ))
@@ -1484,8 +1506,8 @@ mod tests {
             let cfg: DagConfig = toml::from_str(&format!(
                 r#"
                 [[steps]]
-                id = "slack/raw"
-                command = "datalib-step download slack_api"
+                id = "slack/ingest"
+                command = "fetch-slack"
                 params.sync = {{ since = "{since}" }}
                 "#
             ))
@@ -1498,8 +1520,11 @@ mod tests {
         );
     }
 
+    /// A built-in step writes no `command`: its argv is `datalib-step`
+    /// plus the declared fields as JSON flags, and the function, group and
+    /// type it dispatches on travel in the environment instead.
     #[test]
-    fn command_gets_declared_fields_as_json_flags() {
+    fn a_builtin_step_runs_datalib_step_with_declared_fields_as_json_flags() {
         let cfg: DagConfig = toml::from_str(
             r#"
             [[groups]]
@@ -1511,22 +1536,19 @@ mod tests {
 
             [[steps]]
             group = "slack"
-            function = "raw"
-            command = "datalib-step download slack_api"
+            function = "ingest"
             params.sync = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
 
             [[steps]]
             group = "slack"
-            function = "rendered_md"
-            inputs = ["slack/raw"]
-            command = "datalib-step render slack_api"
+            function = "render_markdown"
+            inputs = ["slack/ingest"]
             params.sync = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
 
             [[steps]]
             group = "unified_index"
-            function = "grid"
-            inputs = ["slack/rendered_md"]
-            command = "datalib-step grid_index"
+            function = "grid_index"
+            inputs = ["slack/render_markdown"]
             "#,
         )
         .unwrap();
@@ -1538,47 +1560,40 @@ mod tests {
             other => panic!("expected subprocess, got {other:?}"),
         };
         let dl = argv(0);
-        assert_eq!(&dl[..3], &["datalib-step", "download", "slack_api"]);
-        assert_eq!(dl[3], "--params");
-        let params: serde_json::Value = serde_json::from_str(&dl[4]).unwrap();
+        assert_eq!(dl[0], BUILTIN_STEP_PROGRAM);
+        assert_eq!(dl[1], "--params");
+        let params: serde_json::Value = serde_json::from_str(&dl[2]).unwrap();
         assert_eq!(params["sync"]["channels"][0], "chat-qi");
         // No inputs declared → no --inputs, and nothing else: the one tree
-        // a step writes is its id, which it reads from the environment.
-        assert_eq!(dl.len(), 5);
+        // a step writes is its id, which it reads from the environment,
+        // and so are the function and the provider.
+        assert_eq!(dl.len(), 3);
 
         // TOML has no anchors, so the render step repeats the subtree —
         // and must produce byte-identical JSON for it.
         let rn = argv(1);
-        assert_eq!(rn[1], "render");
-        assert_eq!(rn[4], dl[4]);
-        assert_eq!(&rn[5..], &["--inputs", r#"["slack/raw"]"#]);
+        assert_eq!(rn[2], dl[2]);
+        assert_eq!(&rn[3..], &["--inputs", r#"["slack/ingest"]"#]);
 
         // Param-less step: just inputs.
         assert_eq!(
             argv(2),
             vec![
-                "datalib-step",
-                "grid_index",
+                BUILTIN_STEP_PROGRAM,
                 "--inputs",
-                r#"["slack/rendered_md"]"#,
+                r#"["slack/render_markdown"]"#,
             ]
         );
 
         // The composed ids are what everything downstream sees.
-        assert_eq!(specs[0].id, "slack/raw");
-        assert_eq!(specs[2].id, "unified_index/grid");
+        assert_eq!(specs[0].id, "slack/ingest");
+        assert_eq!(specs[2].id, "unified_index/grid_index");
         assert_eq!(specs[0].group.as_deref(), Some("slack"));
         assert_eq!(specs[0].group_type.as_deref(), Some("slack_api"));
-        assert_eq!(specs[0].function.as_deref(), Some("raw"));
+        assert_eq!(specs[0].function.as_deref(), Some("ingest"));
         assert_eq!(specs[2].group_type, None);
-
-        // Edges are the declared inputs, nothing more.
-        let g = crate::Graph::build(specs).unwrap();
-        assert_eq!(g.deps[g.by_id["unified_index/grid"]].len(), 1);
     }
 
-    /// A group's `type` is part of what its steps are: changing it re-runs
-    /// them. Its `name` is not, so a rename re-runs nothing.
     #[test]
     fn a_groups_type_moves_the_fingerprint_and_its_name_does_not() {
         let with = |group_line: &str| {
@@ -1642,12 +1657,10 @@ mod tests {
     /// rename in the UI silently re-runs a download.
     #[test]
     fn a_name_changes_neither_argv_nor_fingerprint() {
-        let bare: DagConfig = toml::from_str(
-            r#"steps = [{id = "slack/raw", command = "datalib-step download slack_api"}]"#,
-        )
-        .unwrap();
+        let bare: DagConfig =
+            toml::from_str(r#"steps = [{id = "slack/ingest", command = "fetch-slack"}]"#).unwrap();
         let named: DagConfig = toml::from_str(
-            r#"steps = [{id = "slack/raw", name = "Work Slack", command = "datalib-step download slack_api"}]"#,
+            r#"steps = [{id = "slack/ingest", name = "Work Slack", command = "fetch-slack"}]"#,
         )
         .unwrap();
         assert_eq!(named.steps[0].name.as_deref(), Some("Work Slack"));
@@ -1780,12 +1793,14 @@ mod tests {
         assert!(to_specs(&clash).is_err());
     }
 
+    /// No `command` means `datalib-step`, and `datalib-step` needs a group
+    /// to know what to do — so the one shape that gets neither is refused.
     #[test]
-    fn missing_command_is_rejected_at_parse() {
-        let err = toml::from_str::<DagConfig>(r#"steps = [{id = "x/out"}]"#)
-            .unwrap_err()
-            .to_string();
+    fn a_step_with_no_command_needs_a_group() {
+        let cfg: DagConfig = toml::from_str(r#"steps = [{id = "x/out"}]"#).unwrap();
+        let err = to_specs(&cfg).unwrap_err().to_string();
         assert!(err.contains("command"), "{err}");
+        assert!(err.contains("group"), "{err}");
     }
 
     /// A step is `group` + `function` or a verbatim `id`, and the loader
@@ -2024,18 +2039,18 @@ mod graded_tests {
         let check = check_text(
             r#"
 [[steps]]
-id = "slack/raw"
-command = "datalib-step download slack_api"
+id = "slack/ingest"
+command = "fetch-slack"
 title = "Work Slack"
 
 [[steps]]
-id = "pdfs/raw"
-command = "datalib-step download pdf"
+id = "pdfs/ingest"
+command = "fetch-pdfs"
 
 [[steps]]
-id = "unified_index/grid"
-command = "datalib-step grid_index"
-inputs = ["pdfs/raw"]
+id = "unified_index/grid_index"
+command = "index-it"
+inputs = ["pdfs/ingest"]
 
 [[applets]]
 id = "unified_index"
@@ -2043,10 +2058,10 @@ command = "datalib-applet unified_index"
 "#,
         );
         // The broken step is gone and named; everything else loaded.
-        assert_eq!(ids(&check), vec!["pdfs/raw", "unified_index/grid"]);
+        assert_eq!(ids(&check), vec!["pdfs/ingest", "unified_index/grid_index"]);
         assert_eq!(check.cfg.applets.len(), 1, "the applet must survive");
         assert_eq!(
-            sev_of(&check.diagnostics, "slack/raw"),
+            sev_of(&check.diagnostics, "slack/ingest"),
             Some(Severity::Rejected)
         );
         assert!(!check.is_fatal());
@@ -2057,7 +2072,7 @@ command = "datalib-applet unified_index"
         let d = check
             .diagnostics
             .iter()
-            .find(|d| d.id() == Some("slack/raw"))
+            .find(|d| d.id() == Some("slack/ingest"))
             .unwrap();
         assert!(d.message.contains("title"), "{}", d.message);
         assert_eq!(
@@ -2110,20 +2125,24 @@ command = "datalib-applet unified_index"
 
     /// Applet ids and step ids are separate namespaces, and the scaffold
     /// depends on it: `unified_index` the applet sits beside
-    /// `unified_index/grid` the step.
+    /// `unified_index/grid_index` the step.
     #[test]
     fn the_scaffold_shape_loads_clean() {
         let check = check_text(
             r#"
-[[steps]]
-id = "unified_index/grid"
-command = "datalib-step grid_index"
+[[groups]]
+id = "unified_index"
 
 [[steps]]
-id = "unified_index/qmd"
-command = "datalib-step qmd_index"
+group = "unified_index"
+function = "grid_index"
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
 
 [[applets]]
+group = "unified_index"
 id = "unified_index"
 command = "datalib-applet unified_index"
 "#,
@@ -2343,7 +2362,7 @@ inputs = ["a"]
              [[steps]]\nid = \"x/raw\"\ncommand = \"second\"\n",
         );
         assert_eq!(check.cfg.steps.len(), 1);
-        assert!(check.cfg.steps[0].command.contains("first"));
+        assert_eq!(check.cfg.steps[0].command.as_deref(), Some("first"));
         assert_eq!(
             check.diagnostics[0].line,
             Some(6),
@@ -2490,23 +2509,20 @@ type = "slack_api"
 
 [[steps]]
 group = "work-slack"
-function = "raw"
-command = "datalib-step download slack_api"
+function = "ingest"
 
 [[steps]]
 group = "work-slack"
-function = "rendered_md"
-command = "datalib-step render slack_api"
-inputs = ["work-slack/raw"]
+function = "render_markdown"
+inputs = ["work-slack/ingest"]
 
 [[groups]]
 id = "unified_index"
 
 [[steps]]
 group = "unified_index"
-function = "grid"
-command = "datalib-step grid_index"
-inputs = ["work-slack/rendered_md"]
+function = "grid_index"
+inputs = ["work-slack/render_markdown"]
 
 [[applets]]
 group = "unified_index"
@@ -2525,15 +2541,15 @@ command = "datalib-applet unified_index"
         assert_eq!(
             ids,
             vec![
-                "unified_index/grid",
-                "work-slack/raw",
-                "work-slack/rendered_md"
+                "unified_index/grid_index",
+                "work-slack/ingest",
+                "work-slack/render_markdown"
             ]
         );
         assert_eq!(check.cfg.groups.len(), 2);
         assert_eq!(check.cfg.groups[0].name.as_deref(), Some("Work Slack"));
         assert_eq!(check.cfg.applets[0].group.as_deref(), Some("unified_index"));
-        assert!(check.graph.by_id.contains_key("work-slack/rendered_md"));
+        assert!(check.graph.by_id.contains_key("work-slack/render_markdown"));
     }
 
     /// A step naming a group that does not exist is unusable — its id
@@ -2714,37 +2730,34 @@ command = "datalib-applet unified_index"
         assert_eq!(spec.function, None);
     }
 
-    /// The shape written before `[[groups]]` still runs, and says so: a
-    /// warning naming the migrator, nothing dropped.
+    /// The shape written before `datalib-step` read its function from the
+    /// environment cannot run any more, so it is refused rather than run
+    /// into an "unrecognized subcommand" at sync time — and the refusal
+    /// names the migrator, whether the step was grouped or not.
     #[test]
-    fn an_ungrouped_builtin_step_loads_with_a_warning() {
-        let check = check_text(
+    fn the_retired_subcommand_shape_is_rejected_and_names_the_migrator() {
+        for text in [
             "[[steps]]\nid = \"slack/raw\"\ncommand = \"datalib-step download slack_api\"\n",
-        );
-        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
-        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
-        assert_eq!(check.diagnostics[0].severity, Severity::Warning);
-        assert!(check.diagnostics[0]
-            .describe()
-            .contains("datalib-migrate-config"));
-        assert_eq!(check.graph.steps[0].id, "slack/raw");
-    }
-
-    /// Until `datalib-step` reads the type from the environment the provider
-    /// is written twice; a hand edit that makes them disagree is refused.
-    #[test]
-    fn a_command_whose_provider_disagrees_with_the_groups_type_is_rejected() {
+            "[[groups]]\nid = \"slack\"\ntype = \"slack_api\"\n\n\
+             [[steps]]\ngroup = \"slack\"\nfunction = \"raw\"\ncommand = \"datalib-step download slack_api\"\n",
+            "[[groups]]\nid = \"unified_index\"\n\n\
+             [[steps]]\ngroup = \"unified_index\"\nfunction = \"grid\"\ncommand = \"datalib-step grid_index\"\n",
+        ] {
+            let check = check_text(text);
+            assert_eq!(check.dropped(), 1, "{text}\n{:?}", check.diagnostics);
+            let d = check
+                .diagnostics
+                .iter()
+                .find(|d| d.severity == Severity::Rejected)
+                .expect("rejected");
+            assert!(d.describe().contains("datalib-migrate-config"), "{}", d.describe());
+        }
+        // An explicit `datalib-step` with no subcommand is the built-in
+        // step spelled out, and fine.
         let check = check_text(
-            "[[groups]]\nid = \"mail\"\ntype = \"slack_api\"\n\n\
-             [[steps]]\ngroup = \"mail\"\nfunction = \"raw\"\ncommand = \"datalib-step download email\"\n",
+            "[[groups]]\nid = \"slack\"\ntype = \"slack_api\"\n\n\
+             [[steps]]\ngroup = \"slack\"\nfunction = \"ingest\"\ncommand = \"datalib-step --playback-root /tmp/pb\"\n",
         );
-        assert_eq!(check.dropped(), 1, "{:?}", check.diagnostics);
-        let d = check
-            .diagnostics
-            .iter()
-            .find(|d| d.severity == Severity::Rejected)
-            .expect("rejected");
-        assert!(d.describe().contains("\"email\""), "{}", d.describe());
-        assert!(d.describe().contains("\"slack_api\""), "{}", d.describe());
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
     }
 }

@@ -5,9 +5,9 @@
 plus that document's `grid_rows`.
 
 ```
-<root>/<stanza>/rendered_md/<namespace>/<project>/mr-<iid>__<slug>/
+<root>/<stanza>/render_markdown/<namespace>/<project>/mr-<iid>__<slug>/
     index.md                # the unified MR doc
-<root>/<stanza>/rendered_md/indexed_markdown.doltlite_db
+<root>/<stanza>/render_markdown/indexed_markdown.doltlite_db
                             # its rows: one for the MR + one per note
 ```
 
@@ -49,7 +49,7 @@ The translate step is an in-process library (the `render_and_index_md`
 module, called from `datalib-sync`); there is no standalone
 `gitlab-translate` binary and no Bazel target for it. Run a sync to
 exercise it, and rendered docs land under
-`/tmp/gitlab-mirror/<stanza>/rendered_md/...`.
+`/tmp/gitlab-mirror/<stanza>/render_markdown/...`.
 
 To exercise the renderer in isolation, run its tests:
 

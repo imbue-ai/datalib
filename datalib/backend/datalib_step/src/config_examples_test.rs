@@ -1,12 +1,13 @@
 //! The checked-in example configs — `docs/user/config_examples/*.toml` and
 //! `configs/dag_example.toml` — have to load as the runner would and plan as
 //! this binary would, so the documentation cannot drift from the real
-//! schemas. Every `datalib-step download|render <type>` step's params go
-//! through `dispatch::plan`, the same parse a sync performs.
+//! schemas. Every `ingest` and `render_markdown` step's params go through
+//! `dispatch::plan`, the same parse a sync performs.
 
 use std::path::PathBuf;
 
 use crate::dispatch::{self, Phase};
+use crate::function::Function;
 
 fn example_config(repo_rel: &str) -> PathBuf {
     let r = runfiles::Runfiles::create().expect("runfiles tree");
@@ -16,19 +17,6 @@ fn example_config(repo_rel: &str) -> PathBuf {
         .unwrap_or_else(|| panic!("rlocation for {rel}"));
     assert!(path.exists(), "example config missing in runfiles: {rel}");
     path
-}
-
-fn phase_and_type(command: &str) -> Option<(Phase, String)> {
-    let mut words = command.split_whitespace();
-    if words.next()? != "datalib-step" {
-        return None;
-    }
-    let phase = match words.next()? {
-        "download" => Phase::Download,
-        "render" => Phase::Render,
-        _ => return None,
-    };
-    Some((phase, words.next()?.to_string()))
 }
 
 /// `name` is only used for panic messages.
@@ -41,36 +29,37 @@ fn validate_config(name: &str, path: &std::path::Path) {
 
     let data_root = tempfile::tempdir().expect("tempdir");
     for step in &cfg.steps {
-        let Some((phase, ty)) = phase_and_type(&step.command) else {
+        // A custom command is somebody else's program; this binary only
+        // vouches for the steps it will run itself.
+        if step.command.is_some() {
             continue;
+        }
+        let (Some(group), Some(function)) = (step.group.as_deref(), step.function.as_deref())
+        else {
+            panic!("{name}: step {} has no command and no group", step.id);
         };
-        // A built-in step is always under a group whose type is the one the
-        // command names — the pair is written twice until `datalib-step`
-        // dispatches on the environment, and the examples must not disagree
-        // with themselves.
-        let group = step.group.as_deref().unwrap_or_else(|| {
-            panic!(
-                "{name}: step {} is a datalib-step step outside any group",
+        let phase = match Function::parse(function) {
+            Some(Function::Ingest) => Phase::Ingest,
+            Some(Function::RenderMarkdown) => Phase::Render,
+            Some(Function::GridIndex | Function::QmdIndex) => continue,
+            None => panic!(
+                "{name}: step {}: datalib-step has no function {function:?}",
                 step.id
-            )
-        });
-        let group_type = cfg
+            ),
+        };
+        let ty = cfg
             .groups
             .iter()
             .find(|g| g.id == group)
-            .and_then(|g| g.r#type.as_deref());
-        assert_eq!(
-            group_type,
-            Some(ty.as_str()),
-            "{name}: step {}: the group's type and the command's type disagree",
-            step.id
-        );
+            .and_then(|g| g.r#type.as_deref())
+            .unwrap_or_else(|| panic!("{name}: step {}: its group declares no type", step.id));
         let params = match &step.params {
             Some(p) => serde_json::to_value(p)
                 .unwrap_or_else(|e| panic!("{name}: step {}: params → JSON: {e}", step.id)),
             None => serde_json::json!({}),
         };
-        dispatch::plan(&ty, phase, group, params, data_root.path()).unwrap_or_else(|e| {
+        let raw_dir = datalib_etl::layout::ingest_root(data_root.path(), group);
+        dispatch::plan(ty, phase, group, raw_dir, params).unwrap_or_else(|e| {
             panic!(
                 "{name}: step {}: params don't plan as a {ty} {phase:?} step: {e:#}",
                 step.id

@@ -51,7 +51,7 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   // step's own action.
   await expandGroup(page, "phone-signal");
   await page
-    .locator('.ag-row[row-id="phone-signal/raw"]')
+    .locator('.ag-row[row-id="phone-signal/ingest"]')
     .getByRole("button", { name: "Render to markdown" })
     .click();
 
@@ -80,6 +80,6 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   const submit = wizard(page).getByRole("button", { name: "Add render step" });
   await expect(submit).toBeEnabled();
   await submit.click();
-  await expect(page.locator('.ag-row[row-id="phone-signal/rendered_md"]')).toBeVisible();
+  await expect(page.locator('.ag-row[row-id="phone-signal/render_markdown"]')).toBeVisible();
   await expect(page.locator(".m2-editor")).toHaveValue(/period = "year"/);
 });

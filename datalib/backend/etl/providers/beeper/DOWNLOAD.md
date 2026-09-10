@@ -40,17 +40,15 @@ bridge-agnostic schema. We re-shape that into our `rooms` / `users` /
 
    [[steps]]
    group = "beeper"
-   function = "raw"
-   command = "datalib-step download beeper"
+   function = "ingest"
    [steps.params.sync]
    sources = ["signal", "googlechat"]
    media = true
 
    [[steps]]
    group = "beeper"
-   function = "rendered_md"
-   command = "datalib-step render beeper"
-   inputs = ["beeper/raw"]
+   function = "render_markdown"
+   inputs = ["beeper/ingest"]
    ```
 
 That's it.
@@ -59,7 +57,7 @@ That's it.
 
 `beeper-download` (or `datalib-sync` with a `beeper` source)
 writes a single doltlite file at
-`<data_root>/raw/<name>/entities.doltlite_db`. Tables:
+`<data_root>/ingest/<name>/entities.doltlite_db`. Tables:
 
 - `rooms` — one row per Beeper "thread" matching the configured
   networks. `bridge_network` is the canonical network name

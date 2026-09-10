@@ -548,24 +548,33 @@ mod tests {
     fn one_walk_totals_the_root_and_each_declared_tree() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
-        std::fs::create_dir_all(root.join("slack/raw")).unwrap();
-        std::fs::create_dir_all(root.join("slack/rendered_md")).unwrap();
+        std::fs::create_dir_all(root.join("slack/ingest")).unwrap();
+        std::fs::create_dir_all(root.join("slack/render_markdown")).unwrap();
         std::fs::create_dir_all(root.join("system")).unwrap();
-        std::fs::write(root.join("slack/raw").join(BLOBS_FILE), vec![7u8; 300]).unwrap();
-        std::fs::write(root.join("slack/raw/entities.doltlite_db"), vec![7u8; 100]).unwrap();
-        std::fs::write(root.join("slack/rendered_md/a.md"), vec![7u8; 50]).unwrap();
+        std::fs::write(root.join("slack/ingest").join(BLOBS_FILE), vec![7u8; 300]).unwrap();
+        std::fs::write(
+            root.join("slack/ingest/entities.doltlite_db"),
+            vec![7u8; 100],
+        )
+        .unwrap();
+        std::fs::write(root.join("slack/render_markdown/a.md"), vec![7u8; 50]).unwrap();
         std::fs::write(root.join("system/lock"), vec![7u8; 5]).unwrap();
 
-        let want: BTreeSet<String> = ["slack", "slack/raw", "slack/rendered_md", "pdfs/raw"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let want: BTreeSet<String> = [
+            "slack",
+            "slack/ingest",
+            "slack/render_markdown",
+            "pdfs/ingest",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let m = measure(root, &want);
 
         assert_eq!(m.root_bytes, 455);
-        assert_eq!(m.trees["slack/raw"].bytes, 400);
-        assert_eq!(m.trees["slack/raw"].blob_bytes, 300);
-        assert_eq!(m.trees["slack/rendered_md"].bytes, 50);
+        assert_eq!(m.trees["slack/ingest"].bytes, 400);
+        assert_eq!(m.trees["slack/ingest"].blob_bytes, 300);
+        assert_eq!(m.trees["slack/render_markdown"].bytes, 50);
         // The group's directory is wanted too, and it nests: its total
         // is both steps' trees, measured on the same walk, with no
         // blobs split of its own — that belongs to the raw store.
@@ -573,8 +582,8 @@ mod tests {
         assert_eq!(m.trees["slack"].blob_bytes, 0);
         // Declared but never written: zero *and* absent, which is what
         // lets the UI draw "—" rather than "0 B".
-        assert!(!m.trees["pdfs/raw"].present);
-        assert_eq!(m.trees["pdfs/raw"].bytes, 0);
+        assert!(!m.trees["pdfs/ingest"].present);
+        assert_eq!(m.trees["pdfs/ingest"].bytes, 0);
     }
 
     /// The wanted set is every group's directory and every step's tree,
@@ -592,14 +601,12 @@ type = "slack_api"
 
 [[steps]]
 group = "slack"
-function = "raw"
-command = "datalib-step download slack_api"
+function = "ingest"
 
 [[steps]]
 group = "slack"
-function = "rendered_md"
-command = "datalib-step render slack_api"
-inputs = ["slack/raw"]
+function = "render_markdown"
+inputs = ["slack/ingest"]
 
 [[steps]]
 id = "custom/out"
@@ -609,9 +616,14 @@ command = "my-step"
         .unwrap();
         assert_eq!(
             declared_trees(&config),
-            ["slack", "slack/raw", "slack/rendered_md", "custom/out"]
-                .map(String::from)
-                .to_vec()
+            [
+                "slack",
+                "slack/ingest",
+                "slack/render_markdown",
+                "custom/out"
+            ]
+            .map(String::from)
+            .to_vec()
         );
     }
 

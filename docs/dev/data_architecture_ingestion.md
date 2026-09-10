@@ -23,8 +23,8 @@ Practitioner-facing material — how we test, how to add a provider, how the sch
 
 The ETL pipeline currently has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the orchestration design and [`step_protocol.md`](step_protocol.md) for the step contract:
 
-1. **Download** — pull from upstream, UPSERT into `<data_root>/<data_source>/raw/entities.doltlite_db` (entities) and `<data_root>/<data_source>/raw/blobs.doltlite_db` (a single `cas_objects` table keyed by blake3 hash).
-2. **Render** — derive `.md` files under `<stanza>/rendered_md/...` plus that source's render store (`indexed_markdown.doltlite_db`) from the raw store, deterministically (indexing with qmd is the separate `qmd_index` step).
+1. **Download** — pull from upstream, UPSERT into `<data_root>/<data_source>/ingest/entities.doltlite_db` (entities) and `<data_root>/<data_source>/ingest/blobs.doltlite_db` (a single `cas_objects` table keyed by blake3 hash).
+2. **Render** — derive `.md` files under `<stanza>/render_markdown/...` plus that source's render store (`indexed_markdown.doltlite_db`) from the raw store, deterministically (indexing with qmd is the separate `qmd_index` step).
 3. **Grid index (currently: view in UI)** — feed the sidecar tree into the canonical `grid_rows` table to drive the UI
 
 Each provider (data source) is **two** crates at [`datalib/backend/etl/providers/`](/datalib/backend/etl/providers): `datalib-etl-<name>` downloads, and `datalib-etl-<name>-render` renders. The download crate owns its bins, its integration tests, and the sample fixtures the tests run against — keeping sample data next to the code under test serves as documentation of "what this provider's wire format looks like." The split is what keeps the render schema off the download side; see AGENTS.md §"Download and render are separate crates". Grid index is provider-agnostic and lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`); a new provider needs no grid_index-side changes.
@@ -36,13 +36,13 @@ The per-stage modules within a provider crate form a strict layer with a single 
 upstream → download → render → grid_index
 ```
 
-- **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<name>/raw/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `datalib_schema::grid_rows::GridRow`, the render store, or the qmd index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
-- **`render`** depends on `download` (it reads the raw store and projects to the normalized POD + `GridRow` shape). `download::schema_raw` is part of the contract render consumes. **Render reads only the raw store, never the original source.** Its sole input is `<data_root>/<name>/raw/` (`SourceEntry::raw_path`); it must never reach back into upstream (the API) or into a file-backed source's `input_path` (the `.mbox`, the Takeout export, …). Render shows us **what we have captured and internalized**, not what is currently live at the source.
+- **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<name>/ingest/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `datalib_schema::grid_rows::GridRow`, the render store, or the qmd index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
+- **`render`** depends on `download` (it reads the raw store and projects to the normalized POD + `GridRow` shape). `download::schema_raw` is part of the contract render consumes. **Render reads only the raw store, never the original source.** Its sole input is `<data_root>/<name>/ingest/` (`SourceEntry::raw_path`); it must never reach back into upstream (the API) or into a file-backed source's `input_path` (the `.mbox`, the Takeout export, …). Render shows us **what we have captured and internalized**, not what is currently live at the source.
 - **`grid_index`** is provider-agnostic; it lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) and depends on no provider's download or render. Its input contract is the per-source render store.
 
 Why the discipline matters: download is its own deliverable — a user can run it, stop, inspect the raw store, and have something useful (a backup, or mirror, at the very least) even if render has bugs or hasn't been written yet. Render can then be re-implemented or extended without touching download, and disabling a render path for one provider doesn't disturb that provider's download.
 
-Why render's read-only-from-the-raw-store rule matters: the raw store is the boundary between "the outside world" and "our copy." Once download has captured the bytes, everything downstream is reproducible offline and stable — re-rendering yields the same result whether or not the upstream still exists, has changed, or is reachable. The original `input_path` export can be deleted, the API token can expire, the phone backup can be wiped: render still produces exactly what we hold. This is also what lets `raw_path` move a source's store anywhere (a bigger disk, an archive) without the renderer caring — it reads the resolved raw directory and nothing else.
+Why render's read-only-from-the-raw-store rule matters: the raw store is the boundary between "the outside world" and "our copy." Once download has captured the bytes, everything downstream is reproducible offline and stable — re-rendering yields the same result whether or not the upstream still exists, has changed, or is reachable. The original `input_path` export can be deleted, the API token can expire, the phone backup can be wiped: render still produces exactly what we hold. The store's location is fixed by the ingest step's id (`<group>/ingest`), and a symlink there is how it moves to a bigger disk; the renderer reads the directory its input names and nothing else, so it follows without caring.
 
 # Schemas first, but also simple
 > *"Show me your flowchart and conceal your tables, and I shall continue to be mystified. Show me your tables, and I won't usually need your flowchart; it'll be obvious."* -- Fred Brooks, The Mythical Man Month (1975)
@@ -112,7 +112,7 @@ Attachment bytes are split out of the entity database into a sibling content-add
 - Attachments can be big, and Dolt DBs are (purposefully) difficult to erase from.  Even garbage collecting unused attachments wouldn't delete them from the doltlite DB storage.
 - Someday we might want to share a BLOB store across multiple data sources (Perkeep-style).
 
- Each source has both `<name>/raw/entities.doltlite_db` (entities + a per-provider `<provider>_attachments` edge table mapping `(owning, ref) → blake3`) and `<name>/raw/blobs.doltlite_db` (`cas_objects` keyed by blake3). The universal edge shape and the three shared flush primitives are below; the code is [`blob_cas.rs`](/datalib/backend/etl/src/blob_cas.rs).
+ Each source has both `<name>/ingest/entities.doltlite_db` (entities + a per-provider `<provider>_attachments` edge table mapping `(owning, ref) → blake3`) and `<name>/ingest/blobs.doltlite_db` (`cas_objects` keyed by blake3). The universal edge shape and the three shared flush primitives are below; the code is [`blob_cas.rs`](/datalib/backend/etl/src/blob_cas.rs).
 
 **Per-provider CAS edge tables**
 
@@ -129,15 +129,17 @@ Per-bucket attachment-fetch flow is consolidated into three shared pieces in `da
 
 ## [Doltlite](https://github.com/dolthub/doltlite) is our primary raw store
 
-For raw ingestion, each data source owns a directory `<data_root>/<name>/raw/` holding two DBs:
+For raw ingestion, each data source owns a directory `<data_root>/<name>/ingest/` holding two DBs:
 
 - entities.doltlite_db: Event payloads and metadata, attachment edges
 - blobs.doltlite_db: a CAS of BLOB data specific to that database.
 
-That directory is resolved by `SourceEntry::raw_path` — defaulting
-to `<data_root>/<name>/raw` but overridable per source via `raw_path:` in the
-config, identically for every source. It's a single resolver used by both
-sides: the downloader writes there and the renderer reads there. The
+That directory is the ingest step's tree, `<data_root>/<group>/ingest`,
+identically for every source: the step writes only the tree its id
+names, and a `common.raw_path` naming anywhere else is refused. It's a
+single resolver used by both sides (`SourceCommon::resolve_paths`): the
+downloader writes there and the renderer reads there, the latter through
+its `inputs`. The
 filenames inside it (`entities.doltlite_db`, `blobs.doltlite_db`, `events/`)
 are the constants in `datalib_etl::raw_layout`, the one place the layout
 is defined. This is distinct from a file-backed source's `input_path:`, which
@@ -174,7 +176,7 @@ The doltlite store is what the stateful, incremental, version-controllable pipel
 Layout — one directory per source, one file per entity table:
 
 ```
-<data_root>/<name>/raw/events/
+<data_root>/<name>/ingest/events/
   <table>.jsonl                       # one line per upsert
   <provider>_<attachments>.jsonl      # the per-provider CAS edge table
 ```

@@ -125,7 +125,7 @@ whole migration.
 
 ### `datalib_etl::render_cursor`
 
-A small JSON file at `<out_dir>/<stanza>/rendered_md/_render_cursor.json`.
+A small JSON file at `<out_dir>/<stanza>/render_markdown/_render_cursor.json`.
 
 ```json
 {

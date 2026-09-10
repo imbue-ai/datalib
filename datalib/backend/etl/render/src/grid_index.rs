@@ -614,7 +614,7 @@ pub async fn build_grid_index(
                 continue;
             }
             let stanza = entry.file_name().to_string_lossy().into_owned();
-            let rendered_root = entry.path().join("rendered_md");
+            let rendered_root = entry.path().join(datalib_etl::layout::RENDER_MARKDOWN_DIR);
             if crate::indexed_markdown::path_for(&rendered_root).is_file() {
                 stanzas.push((stanza, rendered_root));
             }
@@ -1839,10 +1839,7 @@ mod source_cursor_tests {
             // Fingerprint follows the text, the way a renderer's does.
             source_fingerprint: format!("fp-{text}"),
             upstream_cursor: None,
-            md_path: root
-                .join(source)
-                .join("rendered_md")
-                .join(format!("{uuid}.md")),
+            md_path: rendered_root(root, source).join(format!("{uuid}.md")),
             render_version: 1,
             rows: vec![row],
             edges: Vec::new(),
@@ -1851,7 +1848,7 @@ mod source_cursor_tests {
     }
 
     fn rendered_root(root: &Path, source: &str) -> std::path::PathBuf {
-        root.join(source).join("rendered_md")
+        datalib_etl::layout::render_markdown_root(root, source)
     }
 
     fn render(root: &Path, source: &str, docs: &[RenderedMarkdown]) {

@@ -313,7 +313,7 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
 
 pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
     let tree = str_param(params, "tree")
-        .context("params.tree is required: which rendered_md tree this instance reads")?;
+        .context("params.tree is required: which render_markdown tree this instance reads")?;
     let workspace = str_param(params, "workspace")
         // `DATALIB_APPLET_ID` is what the gateway calls this instance,
         // so it is the right fallback label.

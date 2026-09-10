@@ -81,7 +81,7 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
 }
 
 /// The configured source a rendered document belongs to: the first
-/// segment of its data-root-relative path (`slack/rendered_md/x/all.md`
+/// segment of its data-root-relative path (`slack/render_markdown/x/all.md`
 /// → `slack`). This is the same derivation `datalib-step` uses to name
 /// a source from its declared outputs, and the same one `grid_index`
 /// uses when it walks one directory per stanza — the stanza directory
@@ -400,16 +400,16 @@ mod tests {
     #[test]
     fn source_name_is_the_first_path_segment() {
         assert_eq!(
-            source_name_from_qmd_path("slack/rendered_md/abc/all.md"),
+            source_name_from_qmd_path("slack/render_markdown/abc/all.md"),
             "slack"
         );
         assert_eq!(
-            source_name_from_qmd_path("claude-api/rendered_md/x/all.md"),
+            source_name_from_qmd_path("claude-api/render_markdown/x/all.md"),
             "claude-api"
         );
         // Sharded renders nest deeper; the stanza is still segment one.
         assert_eq!(
-            source_name_from_qmd_path("beeper/rendered_md/googlechat/x/2024-03.md"),
+            source_name_from_qmd_path("beeper/render_markdown/googlechat/x/2024-03.md"),
             "beeper"
         );
         // No separator means the renderer wrote outside its own tree —

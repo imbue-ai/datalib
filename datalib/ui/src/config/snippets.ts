@@ -1,11 +1,12 @@
 // Quick-add source templates for the Sources tab. Each body is one
 // `[[groups]]` entry plus its two `[[steps]]` tables appended to the
-// DAG config: the source's download step and its render step, each
+// DAG config: the source's ingest step and its render step, each
 // declared as `group` + `function` so its id is composed (see
-// `datalib_dag::config`). Params are per-phase: the download step
-// carries the provider's download config; the render step needs none
-// for any of these providers (render-side knobs like beeper's
-// `period` would go on it). Credentials are never here — they come
+// `datalib_dag::config`) and with no `command`, since a built-in step
+// is `datalib-step` reading the environment. Params are per-phase: the
+// ingest step carries the provider's download config; the render step
+// needs none for any of these providers (render-side knobs like
+// beeper's `period` would go on it). Credentials are never here — they come
 // from latchkey at runtime. Bodies are functions so date-dependent
 // parts (Slack's `since`) and the install-specific latchkey CLI hint
 // are computed at click time.
@@ -15,9 +16,9 @@ function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
-// One source: its group, then the download+render step pair, preceded
+// One source: its group, then the ingest+render step pair, preceded
 // by a light divider so sources stay visually separated in the raw
-// file. `params` is the download step's `[steps.params]` body — written
+// file. `params` is the ingest step's `[steps.params]` body — written
 // as TOML sub-table headers, so it must come last within its step.
 // `preamble` (optional) is comment lines placed between the divider
 // and the group.
@@ -38,15 +39,13 @@ type = "${type}"
 
 [[steps]]
 group = "${name}"
-function = "raw"
-command = "datalib-step download ${type}"
+function = "ingest"
 ${params}
 
 [[steps]]
 group = "${name}"
-function = "rendered_md"
-command = "datalib-step render ${type}"
-inputs = ["${name}/raw"]`;
+function = "render_markdown"
+inputs = ["${name}/ingest"]`;
 }
 
 export type Snippet = { label: string; body: (latchkeyCli: string) => string };

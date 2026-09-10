@@ -429,17 +429,17 @@ mod tests {
         assert!(err.contains("dependency cycle"), "{err}");
     }
 
-    /// Nesting is not a relationship. `work-slack/raw` sitting under the
-    /// same stem as `work-slack/rendered_md` creates no edge — only a
+    /// Nesting is not a relationship. `work-slack/ingest` sitting under the
+    /// same stem as `work-slack/render_markdown` creates no edge — only a
     /// declared input does. The stem is a display convenience.
     #[test]
     fn a_shared_stem_is_not_an_edge() {
         let g = Graph::build(vec![
-            spec("work-slack/raw", &[]),
-            spec("work-slack/rendered_md", &[]),
+            spec("work-slack/ingest", &[]),
+            spec("work-slack/render_markdown", &[]),
         ])
         .unwrap();
-        assert!(g.deps[idx_in(&g, "work-slack/rendered_md")].is_empty());
+        assert!(g.deps[idx_in(&g, "work-slack/render_markdown")].is_empty());
         assert_eq!(g.fringe_ids().len(), 2);
     }
 }

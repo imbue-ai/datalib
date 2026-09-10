@@ -66,7 +66,7 @@ pub fn render_all(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let page_dir = datalib_etl::layout::rendered_md_root(root, source_name);
+    let page_dir = datalib_etl::layout::render_markdown_root(root, source_name);
     let plots_dir = page_dir.join("plots");
     fs::create_dir_all(&plots_dir).with_context(|| format!("mkdir -p {}", plots_dir.display()))?;
 
@@ -626,7 +626,7 @@ fn yaml_safe(s: &str) -> String {
 }
 
 pub fn output_paths(root: &Path, source_name: &str) -> (PathBuf, PathBuf) {
-    let dir = datalib_etl::layout::rendered_md_root(root, source_name);
+    let dir = datalib_etl::layout::render_markdown_root(root, source_name);
     (dir.join("index.md"), dir.join("plots"))
 }
 

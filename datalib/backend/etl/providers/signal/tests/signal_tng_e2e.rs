@@ -26,7 +26,7 @@ const FIXTURE_AEP: &str = "00000000000000000000000000000000000000000000000000000
 /// 67-byte minimal valid PNG: 1×1 transparent. Hand-assembled rather
 /// than read from disk so the fixture stays self-contained — any
 /// image viewer can render the file the test writes into the
-/// rendered_md tree.
+/// render_markdown tree.
 const TINY_PNG: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
     0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR length + type

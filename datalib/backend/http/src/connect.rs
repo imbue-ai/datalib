@@ -248,7 +248,7 @@ pub async fn connect_status(
 
 #[derive(Debug, Deserialize)]
 pub struct ProbeRequest {
-    /// The `datalib-step download|render <type>` word.
+    /// The group's `type`: the provider word (`slack_api`, `email`, …).
     #[serde(rename = "type")]
     pub source_type: String,
     /// The provider's **download** params, exactly as they would be

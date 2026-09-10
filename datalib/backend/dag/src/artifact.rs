@@ -33,7 +33,7 @@ impl ArtifactPath {
     }
 
     /// The first path segment. The stem a UI groups siblings by
-    /// (`work-slack/raw` and `work-slack/rendered_md` share
+    /// (`work-slack/ingest` and `work-slack/render_markdown` share
     /// `work-slack`) — a display convenience, never how anything
     /// resolves identity.
     pub fn stem(&self) -> &str {
@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn stem_is_the_first_segment() {
         assert_eq!(
-            ArtifactPath::parse("work-slack/raw").unwrap().stem(),
+            ArtifactPath::parse("work-slack/ingest").unwrap().stem(),
             "work-slack"
         );
         assert_eq!(ArtifactPath::parse("solo").unwrap().stem(), "solo");

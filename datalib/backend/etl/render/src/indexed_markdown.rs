@@ -21,7 +21,7 @@ use datalib_schema::render_problems::{RenderProblemRow, ScopeKind, DDL as RENDER
 use crate::grid_index::{RenderedMarkdown, WriteLock};
 use datalib_etl::bulk::BulkUpsertable;
 
-/// File name inside a source's `rendered_md/`.
+/// File name inside a source's `render_markdown/`.
 pub const STORE_FILE: &str = "indexed_markdown.doltlite_db";
 
 pub fn path_for(rendered_root: &Path) -> PathBuf {
@@ -258,7 +258,7 @@ impl IndexedMarkdownStore {
 }
 
 /// Delete a rendered document's file, and the per-document directory it sat
-/// in once that is empty (`<source>/rendered_md/<uuid>/all.md` is the usual
+/// in once that is empty (`<source>/render_markdown/<uuid>/all.md` is the usual
 /// shape, and leaving the empty parent behind makes a deleted conversation
 /// still look present to anyone listing the tree).
 ///

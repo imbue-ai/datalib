@@ -1,5 +1,11 @@
-//! The one rewrite: ungrouped `[[steps]]` into `[[groups]]` plus
-//! `group` + `function` steps.
+//! The one rewrite: steps that named their function and provider on a
+//! `datalib-step download|render|grid_index|qmd_index …` command line —
+//! grouped or not — into `[[groups]]` plus `group` + `function` steps with
+//! no command, under the function names the trees are now called by.
+//!
+//! This module parses the retired shape itself. The runner refuses it, so
+//! the loader cannot hand the entries over, and the retired shape should
+//! be understood in exactly one place.
 //!
 //! Value-level: the config is parsed, regrouped and serialized again, so
 //! comments and formatting do not survive. The output says so at the top.
@@ -7,55 +13,142 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context as _, Result};
-use datalib_dag::config::{AppletEntry, DagConfig, StepEntry};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-/// Whether anything in this config is a `datalib-step` step written the
-/// old way. A config of only custom steps, or one already grouped, has
-/// nothing for this rewrite to do.
-pub fn needs_grouping(cfg: &DagConfig) -> bool {
-    cfg.steps
-        .iter()
-        .any(|s| s.group.is_none() && builtin_of(s).is_some())
+/// The file as the retired shape wrote it. Every entry key is optional
+/// here: this parser's job is to recognise the shape, and the loader's
+/// verification of the output is what refuses a half-written entry.
+#[derive(Debug, Deserialize)]
+struct OldConfig {
+    #[serde(default)]
+    data_root: Option<String>,
+    #[serde(default)]
+    binary_dir: Option<String>,
+    #[serde(default)]
+    checkpoint_cadence: Option<datalib_dag::config::CheckpointCadence>,
+    #[serde(default)]
+    groups: Vec<GroupIn>,
+    #[serde(default)]
+    steps: Vec<StepIn>,
+    #[serde(default)]
+    applets: Vec<AppletIn>,
 }
 
-/// What an old-style `datalib-step` step declared, read off its id and
-/// its command together.
+#[derive(Debug, Clone, Deserialize)]
+struct GroupIn {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    r#type: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StepIn {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    function: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    inputs: Vec<String>,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    code_version: Option<String>,
+    #[serde(default)]
+    params: Option<toml::Value>,
+}
+
+impl StepIn {
+    /// The id this step had: composed for a grouped step, written for the
+    /// rest. `None` for an entry too broken to name.
+    fn old_id(&self) -> Option<String> {
+        match (&self.group, &self.function, &self.id) {
+            (Some(g), Some(f), _) => Some(format!("{g}/{f}")),
+            (_, _, Some(id)) => Some(id.clone()),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AppletIn {
+    id: String,
+    #[serde(default)]
+    group: Option<String>,
+    command: String,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    params: Option<toml::Value>,
+}
+
+fn parse_old(text: &str) -> Result<OldConfig> {
+    toml::from_str(text).context("parse the config to rewrite")
+}
+
+/// Whether anything in this config is a `datalib-step` step written the
+/// retired way. A config of only custom steps, or one already in the
+/// current shape, has nothing for this rewrite to do.
+pub fn needs_rewrite(text: &str) -> Result<bool> {
+    Ok(parse_old(text)?
+        .steps
+        .iter()
+        .any(|s| builtin_of(s).is_some()))
+}
+
+/// What a retired-shape `datalib-step` step declared, read off its command
+/// together with its id or group.
 struct Builtin {
     group: String,
+    /// The function under its current name.
     function: &'static str,
     r#type: Option<String>,
 }
 
-fn builtin_of(step: &StepEntry) -> Option<Builtin> {
-    let words: Vec<&str> = step.command.split_whitespace().collect();
+fn builtin_of(step: &StepIn) -> Option<Builtin> {
+    let command = step.command.as_deref()?;
+    let words: Vec<&str> = command.split_whitespace().collect();
     let prog = words.first()?;
     if !(*prog == "datalib-step" || prog.ends_with("/datalib-step")) {
         return None;
     }
-    let (stem, leaf) = step.id.split_once('/')?;
-    if leaf.contains('/') {
-        return None;
-    }
+    let group = match &step.group {
+        Some(g) => g.clone(),
+        None => {
+            let id = step.id.as_deref()?;
+            let (stem, leaf) = id.split_once('/')?;
+            if leaf.contains('/') {
+                return None;
+            }
+            stem.to_string()
+        }
+    };
     let typed = |function: &'static str| {
         Some(Builtin {
-            group: stem.to_string(),
+            group: group.clone(),
             function,
             r#type: Some(words.get(2)?.to_string()),
         })
     };
     let index = |function: &'static str| {
-        (stem == "unified_index").then(|| Builtin {
-            group: stem.to_string(),
+        Some(Builtin {
+            group: group.clone(),
             function,
             r#type: None,
         })
     };
-    match (words.get(1).copied(), leaf) {
-        (Some("download"), "raw") => typed("raw"),
-        (Some("render"), "rendered_md") => typed("rendered_md"),
-        (Some("grid_index"), "grid") => index("grid"),
-        (Some("qmd_index"), "qmd") => index("qmd"),
+    match words.get(1).copied() {
+        Some("download") => typed("ingest"),
+        Some("render") => typed("render_markdown"),
+        Some("grid_index") => index("grid_index"),
+        Some("qmd_index") => index("qmd_index"),
         _ => None,
     }
 }
@@ -82,7 +175,8 @@ struct StepOut {
     id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     inputs: Vec<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -130,24 +224,47 @@ fn block<T: Serialize>(key: &str, entry: &T) -> Result<String> {
     text.with_context(|| format!("serialize a [[{key}]] entry"))
 }
 
-pub fn group_steps(text: &str) -> Result<String> {
-    let cfg = datalib_dag::config::parse(text).context("parse the config to rewrite")?;
+pub fn rewrite(text: &str) -> Result<String> {
+    let cfg = parse_old(text)?;
 
-    // Groups in the order their first step appears, so the output reads the
-    // way the input did.
-    let mut groups: Vec<GroupOut> = Vec::new();
+    // Groups in the order they were declared, then in the order their
+    // first step appears, so the output reads the way the input did.
+    let mut groups: Vec<GroupOut> = cfg
+        .groups
+        .iter()
+        .map(|g| GroupOut {
+            id: g.id.clone(),
+            name: g.name.clone(),
+            r#type: g.r#type.clone(),
+        })
+        .collect();
+    // Every built-in step's id moves with its function; everything that
+    // named the old id — `inputs`, an applet's `tree` — follows it.
+    let renames: BTreeMap<String, String> = cfg
+        .steps
+        .iter()
+        .filter_map(|s| {
+            let b = builtin_of(s)?;
+            Some((s.old_id()?, format!("{}/{}", b.group, b.function)))
+        })
+        .collect();
+    let rename = |id: &str| renames.get(id).cloned().unwrap_or_else(|| id.to_string());
+    let rename_all = |ids: &[String]| ids.iter().map(|i| rename(i)).collect::<Vec<_>>();
+
     let mut steps: Vec<(Option<usize>, StepOut)> = Vec::with_capacity(cfg.steps.len());
     for step in &cfg.steps {
-        let Some(b) = step.group.is_none().then(|| builtin_of(step)).flatten() else {
+        let Some(b) = builtin_of(step) else {
             steps.push((
-                None,
+                step.group
+                    .as_ref()
+                    .and_then(|g| groups.iter().position(|o| &o.id == g)),
                 StepOut {
                     group: step.group.clone(),
                     function: step.function.clone(),
-                    id: step.group.is_none().then(|| step.id.clone()),
+                    id: step.group.is_none().then(|| step.id.clone()).flatten(),
                     name: step.name.clone(),
                     command: step.command.clone(),
-                    inputs: step.inputs.clone(),
+                    inputs: rename_all(&step.inputs),
                     env: step.env.clone(),
                     code_version: step.code_version.clone(),
                     params: step.params.clone(),
@@ -178,15 +295,19 @@ pub fn group_steps(text: &str) -> Result<String> {
         // The download step's name is the source's name. The old wizard named
         // the render step `<that> (render markdown)`, falling back to the fetch
         // step's id, so a render step's name is only a fallback, and only once
-        // that suffix and that fallback are removed.
-        let name = step.name.as_deref().map(|n| {
-            n.strip_suffix(" (render markdown)")
-                .unwrap_or(n)
-                .to_string()
-        });
-        let name = name.filter(|n| n != &step.id && n != &format!("{}/raw", b.group));
-        if (b.function == "raw" && name.is_some()) || group.name.is_none() {
-            group.name = name;
+        // that suffix and that fallback are removed. A step under a group
+        // already has its name on the group.
+        if step.group.is_none() {
+            let old_id = step.old_id().unwrap_or_default();
+            let name = step.name.as_deref().map(|n| {
+                n.strip_suffix(" (render markdown)")
+                    .unwrap_or(n)
+                    .to_string()
+            });
+            let name = name.filter(|n| n != &old_id && n != &format!("{}/raw", b.group));
+            if name.is_some() && (b.function == "ingest" || group.name.is_none()) {
+                group.name = name;
+            }
         }
         steps.push((
             Some(gi),
@@ -195,8 +316,8 @@ pub fn group_steps(text: &str) -> Result<String> {
                 function: Some(b.function.to_string()),
                 id: None,
                 name: None,
-                command: step.command.clone(),
-                inputs: step.inputs.clone(),
+                command: None,
+                inputs: rename_all(&step.inputs),
                 env: step.env.clone(),
                 code_version: step.code_version.clone(),
                 params: step.params.clone(),
@@ -207,12 +328,23 @@ pub fn group_steps(text: &str) -> Result<String> {
     let applets: Vec<AppletOut> = cfg
         .applets
         .iter()
-        .map(|a| AppletOut {
-            group: a.group.clone().or_else(|| applet_group(a, &groups)),
-            id: a.id.clone(),
-            command: a.command.clone(),
-            env: a.env.clone(),
-            params: a.params.clone(),
+        .map(|a| {
+            let params = a.params.clone().map(|mut p| {
+                if let Some(tree) = p.get("tree").and_then(|t| t.as_str()) {
+                    let renamed = rename(tree);
+                    if let Some(table) = p.as_table_mut() {
+                        table.insert("tree".into(), toml::Value::String(renamed));
+                    }
+                }
+                p
+            });
+            AppletOut {
+                group: a.group.clone().or_else(|| applet_group(a, &groups)),
+                id: a.id.clone(),
+                command: a.command.clone(),
+                env: a.env.clone(),
+                params,
+            }
         })
         .collect();
 
@@ -234,6 +366,13 @@ pub fn group_steps(text: &str) -> Result<String> {
         }
         out.push_str(&block("steps", step)?);
     }
+    // A group nothing is filed under is still declared; keep it.
+    for (gi, group) in groups.iter().enumerate() {
+        if !emitted[gi] {
+            out.push('\n');
+            out.push_str(&block("groups", group)?);
+        }
+    }
     for a in &applets {
         out.push('\n');
         out.push_str(&block("applets", a)?);
@@ -244,7 +383,7 @@ pub fn group_steps(text: &str) -> Result<String> {
 /// The group an applet is filed under: the tree its `params.tree` names,
 /// else a group sharing its id — which is how the `unified_index` applet
 /// lands beside the index steps.
-fn applet_group(a: &AppletEntry, groups: &[GroupOut]) -> Option<String> {
+fn applet_group(a: &AppletIn, groups: &[GroupOut]) -> Option<String> {
     let known = |id: &str| groups.iter().any(|g| g.id == id).then(|| id.to_string());
     let from_tree = a
         .params
@@ -256,7 +395,7 @@ fn applet_group(a: &AppletEntry, groups: &[GroupOut]) -> Option<String> {
     from_tree.or_else(|| known(&a.id))
 }
 
-fn header(cfg: &DagConfig) -> Result<String> {
+fn header(cfg: &OldConfig) -> Result<String> {
     #[derive(Serialize)]
     struct Head {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -267,8 +406,8 @@ fn header(cfg: &DagConfig) -> Result<String> {
         checkpoint_cadence: Option<datalib_dag::config::CheckpointCadence>,
     }
     toml::to_string(&Head {
-        data_root: cfg.data_root.as_ref().map(|p| p.display().to_string()),
-        binary_dir: cfg.binary_dir.as_ref().map(|p| p.display().to_string()),
+        data_root: cfg.data_root.clone(),
+        binary_dir: cfg.binary_dir.clone(),
         checkpoint_cadence: cfg.checkpoint_cadence,
     })
     .context("serialize the top-level keys")

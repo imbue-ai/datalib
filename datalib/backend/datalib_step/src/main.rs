@@ -1,8 +1,15 @@
-//! `datalib-step` — the step-type host binary for the DAG runner.
+//! `datalib-step` — the built-in step program for the DAG runner.
+//!
+//! Run with no subcommand it is a step: it reads which function to
+//! perform, which group it is under and what tree to write from the
+//! environment the runner sets (`DATALIB_DAG_FUNCTION`, `DATALIB_DAG_GROUP`,
+//! `DATALIB_DAG_GROUP_TYPE`, `DATALIB_DAG_STEP`). The two subcommands are
+//! utilities that are not steps.
 
 mod dispatch;
 mod download;
 mod events;
+mod function;
 mod grid_index;
 mod hints;
 mod introspect;
@@ -27,25 +34,29 @@ use datalib_dag::subprocess::{
 use datalib_dag::FailureKind;
 
 use crate::events::Emitter;
+use crate::function::Function;
+use crate::source::StepEnv;
 
 #[derive(Parser)]
 #[command(
     name = "datalib-step",
-    about = "Step-type host for the datalib DAG runner"
+    about = "The built-in step program for the datalib DAG runner"
 )]
 struct Cli {
+    /// Absent means "be a step": the function, group and tree come from
+    /// the environment the runner sets.
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
     /// Step params, as JSON — the runner appends this from the config
-    /// entry's `params:`. Phase-specific: for download it is the
-    /// provider's download config subtree, for render the slim render
-    /// config (render knobs only); absent means an empty one.
+    /// entry's `params`. Phase-specific: for `ingest` it is the
+    /// provider's download config subtree, for `render_markdown` the slim
+    /// render config (render knobs only); absent means an empty one.
     #[arg(long, global = true)]
     params: Option<String>,
-    /// Declared input artifact patterns (JSON string array), appended
-    /// by the runner from the config entry's `inputs:`. Accepted so
-    /// every step command shares one flag surface; the fan-in step
-    /// types rescan the data root rather than consuming it.
+    /// Declared input step ids (JSON string array), appended by the
+    /// runner from the config entry's `inputs`. Accepted so every step
+    /// command shares one flag surface; the resolved list this binary
+    /// acts on is `DATALIB_DAG_INPUTS`.
     #[arg(long, global = true)]
     inputs: Option<String>,
     /// Fixed "now" timestamp (RFC 3339), stamped wherever this step
@@ -54,65 +65,47 @@ struct Cli {
     /// value so the whole run agrees), then the local clock.
     #[arg(long, global = true)]
     now: Option<String>,
-    /// Download only: wipe every entity table (and its bookkeeping
+    /// Ingest only: wipe every entity table (and its bookkeeping
     /// sidecar) before fetching, re-downloading every entity row. The
     /// provider's CAS edge table is preserved, so already-fetched
     /// attachment bytes are not re-pulled — see `--refetch-blobs`.
     /// Falls back to `$DATALIB_DAG_RESET_AND_REDOWNLOAD=1`.
     #[arg(long, global = true)]
     reset_and_redownload: bool,
-    /// Download only: clear the `blake3` column on the provider's CAS
+    /// Ingest only: clear the `blake3` column on the provider's CAS
     /// edge table so every attachment re-fetches on the wire (the CAS
     /// itself is never truncated). Falls back to
     /// `$DATALIB_DAG_REFETCH_BLOBS=1`.
     #[arg(long, global = true)]
     refetch_blobs: bool,
+    /// Ingest only: HTTP playback fixture tree (hermetic runs); sets
+    /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
+    #[arg(long)]
+    playback_root: Option<PathBuf>,
+    /// `qmd_index` only: directory where qmd caches its embedding model.
+    #[arg(long)]
+    models_dir: Option<PathBuf>,
     #[command(flatten)]
     obs: datalib_obs::ObsArgs,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// One source's download wave → `<name>/raw`.
-    /// Invoked `datalib-step download <source_type>` — the provider
-    /// is the next word, like a nested subcommand.
-    Download {
-        /// Source type (`slack_api`, `claude_api`, …) — the provider
-        /// this step dispatches to.
-        source_type: String,
-        /// HTTP playback fixture tree (hermetic runs); sets
-        /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
-        #[arg(long)]
-        playback_root: Option<PathBuf>,
-    },
-    /// One source's render wave → `<name>/rendered_md`. Invoked
-    /// `datalib-step render <source_type>`.
-    Render { source_type: String },
-    /// Refresh the unified grid table (`unified_index/grid`) from
-    /// every source's render store.
-    #[command(name = "grid_index")]
-    GridIndex,
-    /// Build the qmd search index → `unified_index/qmd`.
-    #[command(name = "qmd_index")]
-    QmdIndex {
-        /// Directory where qmd caches its embedding model.
-        #[arg(long)]
-        models_dir: Option<PathBuf>,
-    },
     /// Utility (not a pipeline step): ask a provider what these
     /// credentials can reach, and print one JSON object on stdout.
     /// Writes nothing and needs no data root.
     Probe {
-        /// Source type, same position as in `download <source_type>`.
+        /// Source type (`slack_api`, `claude_api`, …): the provider to
+        /// ask.
         source_type: String,
     },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
     /// for one source from its `input_path` raw fixture tree, for
-    /// later replay via `download --playback-root`.
+    /// later replay via `--playback-root`.
     Synthesize {
-        /// Source type, same position as in `download <source_type>`.
+        /// Source type, as a group's `type` would name it.
         source_type: String,
-        /// Source name (the `<name>/…` directory prefix). Explicit
+        /// Group id (the `<group>/…` directory prefix). Explicit
         /// here — a dev invocation has no step id to take it from.
         #[arg(long)]
         name: String,
@@ -153,7 +146,7 @@ fn env_flag(name: &str) -> bool {
 }
 
 /// Checkpoint hooks registered by the running step (today only
-/// `download` populates it), fired from the SIGINT handler so partial
+/// `ingest` populates it), fired from the SIGINT handler so partial
 /// state gets a tidy commit before exit.
 static CHECKPOINTS: std::sync::OnceLock<std::sync::Arc<datalib_etl::processor::CheckpointSink>> =
     std::sync::OnceLock::new();
@@ -167,7 +160,7 @@ async fn main() {
     // owns no tree, claims no outputs and must leave stdout holding
     // exactly one JSON object, so an `outcome` event line after it
     // would corrupt the only thing its caller reads.
-    if let Cmd::Probe { source_type } = &cli.cmd {
+    if let Some(Cmd::Probe { source_type }) = &cli.cmd {
         probe::run_cli(source_type, cli.params.as_deref()).await;
     }
 
@@ -213,8 +206,7 @@ async fn main() {
         checkpoint_cadence: checkpoint_cadence(),
     };
 
-    let step_io = StepIo { params: cli.params };
-    match run(cli.cmd, &step_io, &data_root, &now, &control, &emitter).await {
+    match run(cli, &data_root, &now, &control, &emitter).await {
         Ok(outputs) => {
             emitter.outcome(&outputs, None);
         }
@@ -238,71 +230,104 @@ async fn main() {
     }
 }
 
-/// The runner-appended step declaration as received; parsed on demand
-/// by the step types that consume it.
-struct StepIo {
-    params: Option<String>,
-}
-
 async fn run(
-    cmd: Cmd,
-    io: &StepIo,
+    cli: Cli,
     data_root: &Path,
     now: &str,
     control: &datalib_etl::control::DownloadControl,
     emitter: &Emitter,
 ) -> Result<Vec<events::OutputClaim>> {
-    match cmd {
-        Cmd::Download {
+    let params = source::parse_params(cli.params.as_deref())?;
+    match cli.cmd {
+        Some(Cmd::Synthesize {
             source_type,
-            playback_root,
-        } => {
+            name,
+            out,
+        }) => synth::run(&source_type, &name, &params, data_root, &out, emitter),
+        // Handled in `main` before the step machinery starts; see
+        // there for why it cannot come through the outcome path.
+        Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
+        None => {
+            let env = StepEnv::from_env()?;
+            run_function(
+                env,
+                cli.playback_root,
+                cli.models_dir,
+                params,
+                data_root,
+                now,
+                control,
+                emitter,
+            )
+            .await
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_function(
+    env: StepEnv,
+    playback_root: Option<PathBuf>,
+    models_dir: Option<PathBuf>,
+    params: serde_json::Value,
+    data_root: &Path,
+    now: &str,
+    control: &datalib_etl::control::DownloadControl,
+    emitter: &Emitter,
+) -> Result<Vec<events::OutputClaim>> {
+    match env.function {
+        Function::Ingest => {
             if let Some(pb) = playback_root {
                 let pb = pb.canonicalize().context("playback root")?;
                 std::env::set_var(datalib_etl::http::PLAYBACK_ENV, pb);
             }
-            let tree = source::tree_from_env()?;
-            let name = source::source_name(&tree).to_string();
-            let params = source::parse_params(io.params.as_deref())?;
             let planned = dispatch::plan(
-                &source_type,
-                dispatch::Phase::Download,
-                &name,
+                env.source_type()?,
+                dispatch::Phase::Ingest,
+                &env.group,
+                data_root.join(&env.step),
                 params,
-                data_root,
             )?;
-            let res = download::run(&planned, data_root, now, control, emitter).await;
+            let res = download::run(&planned, &env.step, now, control, emitter).await;
             hints::emit_auth_hint_on_failure(emitter, planned.source_type, &res);
             res
         }
-        Cmd::Render { source_type } => {
-            let tree = source::tree_from_env()?;
-            let name = source::source_name(&tree).to_string();
-            let params = source::parse_params(io.params.as_deref())?;
+        Function::RenderMarkdown => {
+            let raw_rel = env.raw_store_rel();
             let planned = dispatch::plan(
-                &source_type,
+                env.source_type()?,
                 dispatch::Phase::Render,
-                &name,
+                &env.group,
+                data_root.join(&raw_rel),
                 params,
-                data_root,
             )?;
             let source_type = planned.source_type;
-            let res = render::run(planned, data_root, now, emitter, control).await;
+            let res = render::run(planned, &env, &raw_rel, data_root, now, emitter, control).await;
             hints::emit_auth_hint_on_failure(emitter, source_type, &res);
             res
         }
-        // Handled in `main` before the step machinery starts; see
-        // there for why it cannot come through the outcome path.
-        Cmd::Probe { .. } => unreachable!("probe is answered in main"),
-        Cmd::GridIndex => grid_index::run(data_root, Some(now), emitter).await,
-        Cmd::QmdIndex { models_dir } => qmd_index::run(data_root, models_dir, emitter).await,
-        Cmd::Synthesize {
-            source_type,
-            name,
-            out,
-        } => {
-            let params = source::parse_params(io.params.as_deref())?;
-            synth::run(&source_type, &name, &params, data_root, &out, emitter)
+        Function::GridIndex => {
+            writes_the_index_tree(&env, &grid_index::out_rel())?;
+            grid_index::run(data_root, Some(now), emitter).await
+        }
+        Function::QmdIndex => {
+            writes_the_index_tree(&env, &qmd_index::out_rel())?;
+            qmd_index::run(data_root, models_dir, emitter).await
         }
     }
+}
+
+/// The two index steps have one reader each — the `unified_index`
+/// applet — which finds them from the data root alone, so their trees
+/// are fixed. A config that files them under another group would have
+/// the runner tracking a tree nothing ever writes.
+fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
+    anyhow::ensure!(
+        env.step == expected,
+        "`{}` writes {expected:?} and nothing else, but this step's id is {:?}: declare it \
+         under the `unified_index` group",
+        env.function,
+        env.step
+    );
+    Ok(())
 }

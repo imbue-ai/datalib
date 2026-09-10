@@ -1,5 +1,5 @@
-//! The render step driver: one source's render wave, un-fused from
-//! Load.
+//! The render step driver: one source's render wave, written to the tree
+//! the step id names and read from the raw store its input names.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -12,10 +12,14 @@ use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 
 use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
+use crate::source::StepEnv;
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     planned: PlannedSource,
+    env: &StepEnv,
+    raw_rel: &str,
     data_root: &Path,
     now: &str,
     emitter: &Emitter,
@@ -34,7 +38,9 @@ pub async fn run(
         anyhow::bail!("the render driver was handed source {name:?}'s download wave");
     };
     let progress = emitter.progress();
-    let rendered_root = data_root.join(&name).join("rendered_md");
+    // The providers write under `render_markdown_root(data_root, name)`;
+    // `StepEnv::from_env` checked that this is the same tree as the id.
+    let rendered_root = data_root.join(&env.step);
     // Skip state and renderer versions come from the store: two indexed
     // reads, where this used to walk the whole tree and parse every
     // document's header to rebuild the same two answers.
@@ -67,13 +73,14 @@ pub async fn run(
     // What the source's mirror weighs. Measured out here because the
     // scan is async and `blocking()` cannot drive a future from inside
     // the `spawn_blocking` thread below.
-    let measured = crate::introspect::scan(data_root, &name)
+    let measured = crate::introspect::scan(data_root, raw_rel)
         .await
         .with_context(|| format!("measure {}", name))?;
 
     let docs = Arc::new(AtomicUsize::new(0));
     let removed = Arc::new(AtomicUsize::new(0));
-    let out_rel = format!("{}/rendered_md", name);
+    let out_rel = env.step.clone();
+    let rendered_rel = env.step.clone();
     // `planned` moves into the render task below; the post-render check
     // still needs the source's name for its message.
     let source_name = name.clone();
@@ -198,7 +205,8 @@ pub async fn run(
             // then decline to write it back on any run where no number
             // moved. The report would vanish from the grid and stay
             // gone.
-            let storage = crate::introspect::plan(&data_root, &name, measured, &now)?;
+            let storage =
+                crate::introspect::plan(&data_root, &name, &rendered_rel, measured, &now)?;
             if let (Some(m), Some(keep)) = (storage.as_ref(), retained.as_mut()) {
                 keep.insert(m.doc.markdown_uuid.clone());
             }
@@ -315,13 +323,11 @@ pub async fn run(
         &versions_on_disk,
         declared.as_ref(),
     )?;
-    // The whole tree re-renders from raw/, so cache-aware backups
-    // (`restic --exclude-caches` etc.) may skip it. No-op until the
-    // first render materializes the dir.
+    // The whole tree re-renders from the raw store, so cache-aware
+    // backups (`restic --exclude-caches` etc.) may skip it. No-op until
+    // the first render materializes the dir.
     datalib_core::layout::mark_derived_cache(&rendered_root);
     match rendered_tree_version(&rendered_root) {
-        // rendered_md always lives at the canonical path (only
-        // raw_path is overridable).
         Some(version) => Ok(vec![OutputClaim {
             path: out_rel,
             version,
@@ -449,7 +455,7 @@ mod tests {
     #[test]
     fn rendered_tree_version_is_stable_and_moves_with_source_or_params() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("slack/rendered_md");
+        let root = td.path().join("slack/render_markdown");
         let cursor = root.join("_render_cursor.json");
         let params = |p: &str| serde_json::json!({ "period": p });
 
@@ -488,7 +494,7 @@ mod tests {
     #[test]
     fn rendered_tree_version_is_none_for_an_unreadable_cursor() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("slack/rendered_md");
+        let root = td.path().join("slack/render_markdown");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("_render_cursor.json"), "{ truncated").unwrap();
         assert!(rendered_tree_version(&root).is_none());
@@ -571,7 +577,7 @@ mod stale_tree_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_tree_from_an_older_renderer_is_discarded() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("claude_web/rendered_md");
+        let root = td.path().join("claude_web/render_markdown");
         write_doc(&root, "old-uuid", 4);
         assert_eq!(fingerprint_count(&root), 1, "the fixture must be readable");
 
@@ -595,7 +601,7 @@ mod stale_tree_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_current_tree_is_kept() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("claude_web/rendered_md");
+        let root = td.path().join("claude_web/render_markdown");
         write_doc(&root, "uuid-a", 5);
         write_doc(&root, "uuid-b", 5);
 
@@ -611,7 +617,7 @@ mod stale_tree_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_first_run_has_nothing_to_discard() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("claude_web/rendered_md");
+        let root = td.path().join("claude_web/render_markdown");
         assert!(!tree_is_from_an_older_renderer(
             &stored_versions(&root),
             Some(&versions(&[5]))
@@ -625,7 +631,7 @@ mod stale_tree_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn an_undeclared_version_deletes_nothing() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("claude_web/rendered_md");
+        let root = td.path().join("claude_web/render_markdown");
         write_doc(&root, "old-uuid", 4);
         assert!(!tree_is_from_an_older_renderer(
             &stored_versions(&root),
@@ -643,7 +649,7 @@ mod stale_tree_tests {
     fn writing_documents_without_declaring_a_version_is_an_error() {
         let err = every_stored_version_must_be_declared(
             "claude_web",
-            Path::new("/tmp/claude_web/rendered_md"),
+            Path::new("/tmp/claude_web/render_markdown"),
             &versions(&[5]),
             None,
         )
@@ -661,7 +667,7 @@ mod stale_tree_tests {
     fn declaring_a_version_the_renderer_does_not_write_is_an_error() {
         let err = every_stored_version_must_be_declared(
             "claude_web",
-            Path::new("/tmp/claude_web/rendered_md"),
+            Path::new("/tmp/claude_web/render_markdown"),
             &versions(&[4]),
             Some(&versions(&[5])),
         )
@@ -676,14 +682,14 @@ mod stale_tree_tests {
     fn a_matching_declaration_and_an_empty_tree_both_pass() {
         every_stored_version_must_be_declared(
             "claude_web",
-            Path::new("/tmp/claude_web/rendered_md"),
+            Path::new("/tmp/claude_web/render_markdown"),
             &versions(&[5]),
             Some(&versions(&[5])),
         )
         .expect("declared 5, wrote 5");
         every_stored_version_must_be_declared(
             "empty",
-            Path::new("/tmp/empty/rendered_md"),
+            Path::new("/tmp/empty/render_markdown"),
             &BTreeSet::new(),
             None,
         )

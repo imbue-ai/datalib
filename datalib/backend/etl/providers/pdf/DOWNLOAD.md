@@ -234,7 +234,7 @@ discards history a `dolt_diff` would otherwise still show.
 ```sh
 bazelisk build //third-party/doltlite:doltlite
 dl=bazel-bin/third-party/doltlite/doltlite
-db=<root>/pdfs/raw/entities.doltlite_db
+db=<root>/pdfs/ingest/entities.doltlite_db
 
 # How much of the corpus is out of reach without OCR?
 $dl $db "SELECT pdf_type, needs_ocr, COUNT(*) FROM pdf_documents

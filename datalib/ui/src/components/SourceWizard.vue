@@ -33,6 +33,7 @@ import {
   fieldIsActive,
   fieldPhaseOf,
   fieldsFor,
+  functionOf,
   paramsObject,
   renderIdFor,
   seedFieldValues,
@@ -56,7 +57,7 @@ import { isDesktopApp, pickPath } from "@/desktop";
 const props = defineProps<{
   /// Id stems already in the config, so a new step can't collide with
   /// a tree that exists. A stem rather than a full id: creating
-  /// `work-slack/raw` reserves `work-slack/` for its render sibling
+  /// `work-slack/ingest` reserves `work-slack/` for its render sibling
   /// too.
   takenIds: Set<string>;
   /// Present → edit that step instead of creating one.
@@ -125,7 +126,7 @@ const mode = computed<"create" | "edit" | "render">(() =>
 const isEdit = computed(() => mode.value === "edit");
 
 /// Which half of the descriptor's fields this dialog writes, and which
-/// `datalib-step` subcommand the step gets.
+/// function the step is written with.
 const phase = computed<FieldPhase>(() => {
   if (props.editing) return fieldPhaseOf(props.editing.step);
   return props.renderFor ? "render" : "download";
@@ -280,10 +281,11 @@ function onPickKeydown(e: KeyboardEvent) {
   }
 }
 
-/// The id the *user* edits is the stem: creating a fetch step means
+/// The id the *user* edits is the stem: creating an ingest step means
 /// choosing `work-slack`, and the steps written under it are
-/// `work-slack/raw` and (later) `work-slack/rendered_md`. So the field
-/// validates a single path segment, and the step ids are built from it.
+/// `work-slack/ingest` and (later) `work-slack/render_markdown`. So the
+/// field validates a single path segment, and the step ids are built
+/// from it.
 const RESERVED = new Set(["system", "unified_index"]);
 const idError = computed(() => {
   const n = stem.value;
@@ -299,20 +301,18 @@ const idError = computed(() => {
 });
 
 /// The stem the user typed. In edit and render mode the id field holds
-/// a full step id (`work-slack/raw`), so the stem is its first segment;
-/// while creating, the field *is* the stem.
+/// a full step id (`work-slack/ingest`), so the stem is its first
+/// segment; while creating, the field *is* the stem.
 const stem = computed(() => {
   const raw = id.value.trim();
   return mode.value === "create" ? raw : raw.split("/")[0];
 });
 
-/// The step id actually written: `<stem>/raw` or `<stem>/rendered_md`
-/// while creating, and the id as-is when editing or chaining (both of
-/// which start from a real step id).
+/// The step id actually written: `<stem>/ingest` or
+/// `<stem>/render_markdown` while creating, and the id as-is when
+/// editing or chaining (both of which start from a real step id).
 const stepId = computed(() =>
-  mode.value === "create"
-    ? `${stem.value}/${phase.value === "render" ? "rendered_md" : "raw"}`
-    : id.value.trim(),
+  mode.value === "create" ? `${stem.value}/${functionOf(phase.value)}` : id.value.trim(),
 );
 
 /// Fields the provider's Rust struct declares non-optional — a
@@ -840,7 +840,7 @@ function submit() {
             <code>{{ stepId }}</code> under the data root.
             <template v-if="chosen?.renderStep !== false">
               A render step, if you add one, becomes
-              <code>{{ stem || "…" }}/rendered_md</code> beside it.
+              <code>{{ stem || "…" }}/render_markdown</code> beside it.
             </template>
           </small>
           <small v-if="idError && idTouched" class="wiz-error">{{ idError }}</small>
@@ -973,7 +973,7 @@ function submit() {
           <span>
             <b>Also render this to markdown</b>
             <small>
-              An optional second step, <code>{{ stem || "…" }}/rendered_md</code>, that turns what this
+              An optional second step, <code>{{ stem || "…" }}/render_markdown</code>, that turns what this
               downloads into markdown and makes it searchable. It has no settings of its own,
               runs separately, and can be added later from the row’s actions.
             </small>

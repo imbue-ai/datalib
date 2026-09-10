@@ -86,7 +86,7 @@ worth knowing about before you invent a fourth:
   "Google Chat Message"), so it groups its chats by network and calls
   `render_all` once per group.
 - **`NormalizedChat::path_prefix`** puts a segment between
-  `rendered_md/` and the chat's directory. Beeper's `<network>/`, so
+  `render_markdown/` and the chat's directory. Beeper's `<network>/`, so
   two upstreams bridged into one stanza stay apart on disk.
 - **`NormalizedDoc::orphan_reactions`** carries reactions to a message
   the mirror does not have. A period-bucketed provider is expected to

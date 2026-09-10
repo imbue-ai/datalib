@@ -80,9 +80,9 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   await expect(preview).toContainText('id = "personal-claude"');
   await expect(preview).toContainText('name = "Personal Claude"');
   await expect(preview).toContainText('type = "claude_api"');
-  await expect(preview).toContainText('function = "raw"');
-  await expect(preview).toContainText('function = "rendered_md"');
-  await expect(preview).toContainText('inputs = ["personal-claude/raw"]');
+  await expect(preview).toContainText('function = "ingest"');
+  await expect(preview).toContainText('function = "render_markdown"');
+  await expect(preview).toContainText('inputs = ["personal-claude/ingest"]');
 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText(/Added Personal Claude, with a step to render it\./)).toBeVisible();
@@ -93,17 +93,17 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   const group = groupRow(page, "personal-claude");
   await expect(group).toContainText("Personal Claude");
   await expect(group.locator(".m2-cell-dir")).toHaveText("personal-claude");
-  await expect(row(page, "personal-claude/raw")).toHaveCount(0);
+  await expect(row(page, "personal-claude/ingest")).toHaveCount(0);
 
   // Opened, the two steps are labelled by what they do; the group owns
   // the name. The phase is a glyph suffixed onto the label, so it is
   // asserted through the accessible name rather than cell text.
   await expandGroup(page, "personal-claude");
-  await expect(row(page, "personal-claude/raw")).toContainText("Fetch");
-  await expect(row(page, "personal-claude/raw")).toContainText("personal-claude/raw");
-  await expect(stepMark(page, "personal-claude/raw")).toHaveAttribute("aria-label", "Fetch");
-  await expect(row(page, "personal-claude/rendered_md")).toContainText("Render markdown");
-  await expect(stepMark(page, "personal-claude/rendered_md")).toHaveAttribute(
+  await expect(row(page, "personal-claude/ingest")).toContainText("Ingest");
+  await expect(row(page, "personal-claude/ingest")).toContainText("personal-claude/ingest");
+  await expect(stepMark(page, "personal-claude/ingest")).toHaveAttribute("aria-label", "Ingest");
+  await expect(row(page, "personal-claude/render_markdown")).toContainText("Render markdown");
+  await expect(stepMark(page, "personal-claude/render_markdown")).toHaveAttribute(
     "aria-label",
     "Render",
   );
@@ -114,7 +114,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // wiring is covered in source_steps.test.ts against a config that has
   // fan-ins.
   const text = await editor.inputValue();
-  expect(text.match(/group = "personal-claude"\nfunction = "rendered_md"/g)).toHaveLength(1);
+  expect(text.match(/group = "personal-claude"\nfunction = "render_markdown"/g)).toHaveLength(1);
 
   // Edit from the group's row: it opens the fetch step's form, where
   // the name lives. Name free, id fixed, and renaming leaves the id
@@ -122,16 +122,16 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   await group.getByRole("button", { name: "Edit settings" }).click();
   await expect(nameField(page)).toHaveValue("Personal Claude");
   await expect(idField(page)).toHaveCount(0);
-  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/raw");
+  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/ingest");
   await nameField(page).fill("Claude Archive");
-  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/raw");
+  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/ingest");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Claude Archive.")).toBeVisible();
 
   // The name belongs to the group, so the group row renames and the
   // steps under it — labelled by what they do — do not.
   await expect(groupRow(page, "personal-claude")).toContainText("Claude Archive");
-  await expect(row(page, "personal-claude/rendered_md")).toContainText("Render markdown");
+  await expect(row(page, "personal-claude/render_markdown")).toContainText("Render markdown");
   await expect(editor).toHaveValue(/name = "Claude Archive"/);
   await expect(editor).not.toHaveValue(/Personal Claude/);
 });
@@ -147,9 +147,9 @@ test("declining the checkbox writes one step, and the group's action adds the ot
   await expect(page.getByText("Added Fetch Only.")).toBeVisible();
 
   await expandGroup(page, "fetch-only");
-  await expect(row(page, "fetch-only/raw")).toBeVisible();
-  await expect(page.locator('.ag-row[row-id="fetch-only/rendered_md"]')).toHaveCount(0);
-  await expect(editor).not.toHaveValue(/fetch-only\/rendered_md/);
+  await expect(row(page, "fetch-only/ingest")).toBeVisible();
+  await expect(page.locator('.ag-row[row-id="fetch-only/render_markdown"]')).toHaveCount(0);
+  await expect(editor).not.toHaveValue(/fetch-only\/render_markdown/);
 
   // The group's row offers the fetch step's action, so the group need
   // not be opened to add the render step. It mints the sibling id
@@ -157,17 +157,17 @@ test("declining the checkbox writes one step, and the group's action adds the ot
   const group = groupRow(page, "fetch-only");
   await group.getByRole("button", { name: "Render to markdown" }).click();
   await expect(idField(page)).toHaveCount(0);
-  await expect(wizard(page)).toContainText("fetch-only/rendered_md");
+  await expect(wizard(page)).toContainText("fetch-only/render_markdown");
   // No name box: the render step's label comes from the group's name.
   await expect(nameField(page)).toHaveCount(0);
   await wizard(page).getByRole("button", { name: "Add render step" }).click();
 
-  await expect(row(page, "fetch-only/rendered_md")).toBeVisible();
-  await expect(editor).toHaveValue(/inputs = \["fetch-only\/raw"\]/);
+  await expect(row(page, "fetch-only/render_markdown")).toBeVisible();
+  await expect(editor).toHaveValue(/inputs = \["fetch-only\/ingest"\]/);
 
   // ...and now the action is spent, on the group row and the step's
   // alike: there is already a render step.
-  for (const where of [group, row(page, "fetch-only/raw")]) {
+  for (const where of [group, row(page, "fetch-only/ingest")]) {
     const again = where.getByRole("button", { name: "Render to markdown" });
     await expect(again).toBeDisabled();
     await expect(again).toHaveAttribute("title", /already has a render step/);
@@ -194,7 +194,7 @@ test("a provider whose render step has options writes the sibling id, not the st
   // Every ref the wizard sets up in `setup()` therefore kept its
   // create-mode value, and the id is the one that mattered: the render
   // step was written as `signal-work` (the stem) instead of
-  // `signal-work/rendered_md`.
+  // `signal-work/render_markdown`.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "+ Add Data Source" }).click();
   await wizard(page)
@@ -217,16 +217,16 @@ test("a provider whose render step has options writes the sibling id, not the st
   // from the dialog that just closed. No name box — a render step's
   // label is derived from its group's name.
   await expect(nameField(page)).toHaveCount(0);
-  await expect(wizard(page)).toContainText("signal-work/rendered_md");
+  await expect(wizard(page)).toContainText("signal-work/render_markdown");
   await wizard(page).getByRole("button", { name: "Add render step" }).click();
 
   await expandGroup(page, "signal-work");
-  await expect(row(page, "signal-work/rendered_md")).toBeVisible();
-  await expect(stepMark(page, "signal-work/rendered_md")).toHaveAttribute("aria-label", "Render");
+  await expect(row(page, "signal-work/render_markdown")).toBeVisible();
+  await expect(stepMark(page, "signal-work/render_markdown")).toHaveAttribute("aria-label", "Render");
 
   const text = await editor.inputValue();
-  expect(text).toContain('group = "signal-work"\nfunction = "rendered_md"');
-  expect(text).toContain('inputs = ["signal-work/raw"]');
+  expect(text).toContain('group = "signal-work"\nfunction = "render_markdown"');
+  expect(text).toContain('inputs = ["signal-work/ingest"]');
   // One group, written once, by the first dialog — the second wrote a
   // step under it and nothing else.
   expect(text.match(/id = "signal-work"/g)).toHaveLength(1);
@@ -238,7 +238,7 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   await nameField(page).fill("Doomed");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expandGroup(page, "doomed");
-  await expect(row(page, "doomed/rendered_md")).toBeVisible();
+  await expect(row(page, "doomed/render_markdown")).toBeVisible();
 
   // A render step whose input is gone is a config datalib refuses to
   // load, so delete offers both or neither.
@@ -246,12 +246,12 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
     expect(d.message()).toContain("Doomed (render markdown)");
     void d.accept();
   });
-  await row(page, "doomed/raw").getByRole("button", { name: "Remove from config" }).click();
+  await row(page, "doomed/ingest").getByRole("button", { name: "Remove from config" }).click();
   await expect(page.getByText("Removed Doomed.")).toBeVisible();
 
   // The group went with its last step, so its row is gone too.
-  await expect(page.locator('.ag-row[row-id="doomed/raw"]')).toHaveCount(0);
-  await expect(page.locator('.ag-row[row-id="doomed/rendered_md"]')).toHaveCount(0);
+  await expect(page.locator('.ag-row[row-id="doomed/ingest"]')).toHaveCount(0);
+  await expect(page.locator('.ag-row[row-id="doomed/render_markdown"]')).toHaveCount(0);
   await expect(groupRow(page, "doomed")).toHaveCount(0);
   // Including the fan-in references, or the config would not load.
   await expect(editor).not.toHaveValue(/doomed/);
@@ -263,7 +263,7 @@ test("deleting the group takes every step under it", async ({ page }) => {
   await nameField(page).fill("Whole Group");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(groupRow(page, "whole-group")).toBeVisible();
-  await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "rendered_md"/);
+  await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "render_markdown"/);
 
   // The confirm says what goes: the group and the two steps under it.
   page.once("dialog", (d) => {

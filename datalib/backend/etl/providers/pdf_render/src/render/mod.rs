@@ -22,7 +22,10 @@ fn md_path_for(out_dir: &Path, blake3: &str) -> PathBuf {
 }
 
 pub fn doc_qmd_path_rel(stanza: &str, blake3: &str) -> String {
-    format!("{stanza}/rendered_md/docs/{blake3}.md")
+    format!(
+        "{stanza}/{}/docs/{blake3}.md",
+        datalib_etl::layout::RENDER_MARKDOWN_DIR
+    )
 }
 
 pub fn render_fingerprint(blake3: &str) -> String {
@@ -269,7 +272,7 @@ mod tests {
         // The bug this pins: `docs/abc123.md` (out-dir-relative) can
         // never match a qmd hit path, which is data-root-rooted.
         let rel = doc_qmd_path_rel("tng_pdfs", "abc123");
-        assert_eq!(rel, "tng_pdfs/rendered_md/docs/abc123.md");
+        assert_eq!(rel, "tng_pdfs/render_markdown/docs/abc123.md");
         assert!(!rel.starts_with("docs/"), "{rel}");
     }
 
@@ -281,7 +284,7 @@ mod tests {
         // absolute path, so building the two independently here and
         // comparing is what keeps them from drifting apart again.
         let root = Path::new("/data");
-        let out_dir = datalib_etl::layout::rendered_md_root(root, "tng_pdfs");
+        let out_dir = datalib_etl::layout::render_markdown_root(root, "tng_pdfs");
         let md_path = md_path_for(&out_dir, "abc123");
         let from_md_path = md_path.strip_prefix(root).unwrap().to_string_lossy();
         assert_eq!(from_md_path, doc_qmd_path_rel("tng_pdfs", "abc123"));

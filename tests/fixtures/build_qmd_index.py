@@ -12,8 +12,8 @@ can invalidate a ~90s embed without changing its output. See
 The OUTPUT is an *overlay* on top of `qmd.tar`: it shares the same `qmd/`
 staging prefix so the two tars layer cleanly. Extracting both with
 `tar -x --strip-components=1` into a directory yields a complete root data
-directory — markdown trees under `<root>/<stanza>/rendered_md/...` plus the
-qmd index at `<root>/unified_index/qmd/index.sqlite`.
+directory — markdown trees under `<root>/<stanza>/render_markdown/...` plus the
+qmd index at `<root>/unified_index/qmd_index/qmd/index.sqlite`.
 
 Why a script:
   1. The ingested fixture is a tar (`qmd_md.tar`) — we have to extract it to
@@ -170,19 +170,20 @@ def main() -> int:
     if r.returncode != 0:
         return r.returncode
 
-    # The indexer pins XDG_CACHE_HOME at `<root>/unified_index`, so qmd
-    # writes its index under `<root>/unified_index/qmd/` (see core::layout).
-    produced = work / "unified_index" / "qmd" / "index.sqlite"
+    # The indexer pins XDG_CACHE_HOME at the `qmd_index` step's tree, so
+    # qmd writes its index under `<root>/unified_index/qmd_index/qmd/`
+    # (see runtime::qmd).
+    produced = work / "unified_index" / "qmd_index" / "qmd" / "index.sqlite"
     if not produced.exists():
         sys.stderr.write(f"qmd_indexer did not produce {produced}\n")
         return 1
 
     # Emit an overlay tar that layers onto qmd.tar: every entry is prefixed
     # with the `qmd/` staging dir so callers strip one component and land the
-    # index at `<root>/unified_index/qmd/index.sqlite`. Skip the `models` symlink —
-    # it points at a shared cache outside the data root.
-    overlay_root = work / "unified_index" / "qmd"
-    models_link = overlay_root / "models"
+    # index at `<root>/unified_index/qmd_index/qmd/index.sqlite`. Skip the
+    # `models` symlink — it points at a shared cache outside the data root.
+    overlay_root = work / "unified_index" / "qmd_index"
+    models_link = overlay_root / "qmd" / "models"
 
     def is_under(p: Path, parent: Path) -> bool:
         try:
@@ -199,8 +200,9 @@ def main() -> int:
         and not is_under(p, models_link)
     )
     with tarfile.open(out_tar_path, "w") as tf:
-        # Include the `qmd/unified_index/qmd/` directory entry itself for completeness.
-        ti = tf.gettarinfo(str(overlay_root), arcname="qmd/unified_index/qmd")
+        # Include the `qmd/unified_index/qmd_index/` directory entry itself
+        # for completeness.
+        ti = tf.gettarinfo(str(overlay_root), arcname="qmd/unified_index/qmd_index")
         ti.mtime = 0
         ti.uid = 0
         ti.gid = 0
@@ -208,7 +210,7 @@ def main() -> int:
         ti.gname = ""
         tf.addfile(ti)
         for p in entries:
-            arcname = "qmd/unified_index/qmd/" + str(p.relative_to(overlay_root))
+            arcname = "qmd/unified_index/qmd_index/" + str(p.relative_to(overlay_root))
             ti = tf.gettarinfo(str(p), arcname=arcname)
             ti.mtime = 0
             ti.uid = 0

@@ -89,13 +89,13 @@ fn write_md(root: &Path, qmd_path: &str, section_uuids: &[&str]) -> Vec<usize> {
         .collect()
 }
 
-/// Synthesize a two-document fixture tree under `root/rendered_md/`:
+/// Synthesize a two-document fixture tree under `root/render_markdown/`:
 ///
 ///   * One claude chat doc (Chat row + 2 message rows).
 ///   * One github PR thread doc (3 PR Comment rows).
 fn make_fixture(_root: &Path) -> Rendered {
     let mut r = Rendered::default();
-    let chat = "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md";
+    let chat = "render_markdown/claude/acct/llm_chats/c001__klingon_diplomacy.md";
     r.push_doc(vec![
         row(
             "c0000001-1701-4d00-8000-00000000c001",
@@ -117,7 +117,7 @@ fn make_fixture(_root: &Path) -> Rendered {
         ),
     ]);
 
-    let pr_thread = "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md";
+    let pr_thread = "render_markdown/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md";
     r.push_doc(vec![
         row(
             "aaaaaaaa-bbbb-cccc-dddd-000000000001",
@@ -185,7 +185,7 @@ fn line_resolves_to_single_message_row() {
     // qmd_path — no snippet anchor required.
     let tmp = tempfile::tempdir().unwrap();
     let rendered = make_fixture(tmp.path());
-    let chat = "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md";
+    let chat = "render_markdown/claude/acct/llm_chats/c001__klingon_diplomacy.md";
     let anchors = write_md(
         tmp.path(),
         chat,
@@ -218,7 +218,7 @@ fn path_fallback_returns_all_rows_for_doc() {
     let idx = GridIndex::new(tmp.path(), rendered.grid_rows());
 
     let stdout = fake_stdout(&[(
-        "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md",
+        "render_markdown/claude/acct/llm_chats/c001__klingon_diplomacy.md",
         "no anchors here",
     )]);
     let hits = parse_stdout(&stdout).unwrap();
@@ -240,7 +240,7 @@ fn thread_hit_returns_comment_rows_not_container() {
     let idx = GridIndex::new(tmp.path(), rendered.grid_rows());
 
     let stdout = fake_stdout(&[(
-        "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md",
+        "render_markdown/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md",
         "water temperature drift",
     )]);
     let hits = parse_stdout(&stdout).unwrap();
@@ -260,7 +260,7 @@ fn hits_for_row_reverse_mapping() {
     let tmp = tempfile::tempdir().unwrap();
     let rendered = make_fixture(tmp.path());
     let pr_thread =
-        "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md";
+        "render_markdown/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md";
     let anchors = write_md(
         tmp.path(),
         pr_thread,
@@ -291,7 +291,7 @@ fn hits_for_row_reverse_mapping() {
         (pr_thread, "nothing anchored"),
         // Different doc altogether → must NOT match.
         (
-            "rendered_md/claude/acct/llm_chats/c001__klingon_diplomacy.md",
+            "render_markdown/claude/acct/llm_chats/c001__klingon_diplomacy.md",
             s_diff.as_str(),
         ),
     ]);

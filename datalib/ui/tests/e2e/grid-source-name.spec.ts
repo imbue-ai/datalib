@@ -86,15 +86,19 @@ test("the Source column shows the configured name, and source_name: filters by i
   await writeConfig(
     page,
     `${original.replace(/\s*$/, "")}\n
-[[steps]]
-id = "slack/raw"
+[[groups]]
+id = "slack"
 name = "Work Slack"
-command = "datalib-step download slack_api"
+type = "slack_api"
 
 [[steps]]
-id = "slack/rendered_md"
-command = "datalib-step render slack_api"
-inputs = ["slack/raw"]
+group = "slack"
+function = "ingest"
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]
 `,
   );
 

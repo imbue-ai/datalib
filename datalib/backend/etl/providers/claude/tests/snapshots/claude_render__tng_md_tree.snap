@@ -2,7 +2,7 @@
 source: datalib/backend/etl/providers/claude/tests/claude_render.rs
 expression: bundle
 ---
-=== claude_export/rendered_md/1c72c68f-86f5-577e-93a8-53e634460711/all.md ===
+=== claude_export/render_markdown/1c72c68f-86f5-577e-93a8-53e634460711/all.md ===
 ---
 title: "Tricorder Image Diagnostic (all)"
 provider: claude
@@ -38,7 +38,7 @@ The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depress
 </div>
 
 
-=== claude_export/rendered_md/2efdd321-ada2-5000-911f-feb635f27954/all.md ===
+=== claude_export/render_markdown/2efdd321-ada2-5000-911f-feb635f27954/all.md ===
 ---
 title: "Claude Project · Stellar Cartography (all)"
 provider: claude
@@ -87,7 +87,7 @@ Bearings are given from the ship's current heading, not from galactic north.
 </div>
 
 
-=== claude_export/rendered_md/bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0/all.md ===
+=== claude_export/render_markdown/bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0/all.md ===
 ---
 title: "Claude Project · Bridge Operations (all)"
 provider: claude
@@ -146,7 +146,7 @@ Medical emergencies route directly to Sickbay (Crusher).
 </div>
 
 
-=== claude_export/rendered_md/ecb57e3b-24ce-546b-9201-61bf610b0783/all.md ===
+=== claude_export/render_markdown/ecb57e3b-24ce-546b-9201-61bf610b0783/all.md ===
 ---
 title: "Borg Encryption Signature Lookup (all)"
 provider: claude
@@ -248,7 +248,7 @@ Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulatio
 </details>
 
 
-=== claude_export/rendered_md/f6cad624-37b7-5673-af29-80ba9aac61a5/all.md ===
+=== claude_export/render_markdown/f6cad624-37b7-5673-af29-80ba9aac61a5/all.md ===
 ---
 title: "Klingon Diplomatic Greeting Drafting (all)"
 provider: claude

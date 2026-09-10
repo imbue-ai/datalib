@@ -2,7 +2,7 @@
 source: datalib/backend/etl/providers/slack/tests/slack_render.rs
 expression: bundle
 ---
-=== slack_api/rendered_md/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md ===
+=== slack_api/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md ===
 ---
 title: "#bridge: Mr. Data, status report. (all)"
 provider: slack
@@ -48,7 +48,7 @@ Set a course, Mr. Data. Warp factor five.
 </div>
 
 
-=== slack_api/rendered_md/1803e003-56a7-5c12-9024-5265850e9eaa/all.md ===
+=== slack_api/render_markdown/1803e003-56a7-5c12-9024-5265850e9eaa/all.md ===
 ---
 title: "@William T. Riker: Thank you, Number One. Make it so. (all)"
 provider: slack
@@ -74,7 +74,7 @@ Thank you, Number One. Make it so.
 </div>
 
 
-=== slack_api/rendered_md/56f6c1d9-495c-5104-8a26-be13bc28718e/all.md ===
+=== slack_api/render_markdown/56f6c1d9-495c-5104-8a26-be13bc28718e/all.md ===
 ---
 title: "#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  (all)"
 provider: slack
@@ -100,7 +100,7 @@ Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 27
 </div>
 
 
-=== slack_api/rendered_md/658ccd8e-50ad-527c-8cc3-401cf8b315db/all.md ===
+=== slack_api/render_markdown/658ccd8e-50ad-527c-8cc3-401cf8b315db/all.md ===
 ---
 title: "@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. (all)"
 provider: slack
@@ -126,7 +126,7 @@ Noted, Mr. Worf. Phasers on stun.
 </div>
 
 
-=== slack_api/rendered_md/68000dc2-0cb1-5eb4-ba26-89498049dfa8/all.md ===
+=== slack_api/render_markdown/68000dc2-0cb1-5eb4-ba26-89498049dfa8/all.md ===
 ---
 title: "#engineering: Warp core efficiency at 99.7%. (all)"
 provider: slack
@@ -152,7 +152,7 @@ Warp core efficiency at 99.7%.
 </div>
 
 
-=== slack_api/rendered_md/777b8f58-706d-549a-82b8-699fc856030e/all.md ===
+=== slack_api/render_markdown/777b8f58-706d-549a-82b8-699fc856030e/all.md ===
 ---
 title: "@William T. Riker: Captain, the away team roster is ready for your review. (all)"
 provider: slack
@@ -178,7 +178,7 @@ Captain, the away team roster is ready for your review.
 </div>
 
 
-=== slack_api/rendered_md/aa7f900b-31b9-5603-995a-5ed36db03478/all.md ===
+=== slack_api/render_markdown/aa7f900b-31b9-5603-995a-5ed36db03478/all.md ===
 ---
 title: "#bridge: I recommend raising shields, Captain. (all)"
 provider: slack
@@ -204,7 +204,7 @@ I recommend raising shields, Captain.
 </div>
 
 
-=== slack_api/rendered_md/b168a24b-fddb-55c2-88fe-523dec59fd5c/all.md ===
+=== slack_api/render_markdown/b168a24b-fddb-55c2-88fe-523dec59fd5c/all.md ===
 ---
 title: "@William T. Riker, Worf: I must object to beaming down unarmed. (all)"
 provider: slack
@@ -230,7 +230,7 @@ I must object to beaming down unarmed.
 </div>
 
 
-=== slack_api/rendered_md/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md ===
+=== slack_api/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md ===
 ---
 title: "#ten-forward: Anyone up for poker tonight? (all)"
 provider: slack
@@ -266,7 +266,7 @@ I do not understand the appeal of this Earth game.
 </div>
 
 
-=== slack_api/rendered_md/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md ===
+=== slack_api/render_markdown/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md ===
 ---
 title: "@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all)"
 provider: slack
@@ -294,7 +294,7 @@ Sir, I have completed my analysis of the Romulan signature.
 </div>
 
 
-=== slack_api/rendered_md/efd7f060-7cc7-508b-811f-afbb133a9ff6/all.md ===
+=== slack_api/render_markdown/efd7f060-7cc7-508b-811f-afbb133a9ff6/all.md ===
 ---
 title: "#bridge: New combadge prototypes — thoughts? (all)"
 provider: slack

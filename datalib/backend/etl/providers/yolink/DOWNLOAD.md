@@ -1,11 +1,11 @@
 # YoLink Download
 
-`datalib-step download yolink` mirrors per-device sensor history from
+The ingest step of a `yolink` group mirrors per-device sensor history from
 `us.yosmart.com/download/...` into a doltlite raw store. One
 forward-marching window per request:
 
 ```
-<data_root>/<stanza>/raw/entities.doltlite_db
+<data_root>/<stanza>/ingest/entities.doltlite_db
   yolink_devices    one row per configured device + its high-water cursor
   yolink_readings   one row per sample, keyed device#ts_ms#metric
 ```
@@ -80,7 +80,7 @@ earliest served timestamp has moved forward since.
   `MAX(ts_ms)` per device against wall-clock time is how you notice:
 
   ```sh
-  $dl <data_root>/<stanza>/raw/entities.doltlite_db \
+  $dl <data_root>/<stanza>/ingest/entities.doltlite_db \
     "SELECT device_name, datetime(MAX(ts_ms)/1000,'unixepoch') AS last_seen
        FROM yolink_readings GROUP BY device_name ORDER BY last_seen;"
   ```
@@ -113,7 +113,7 @@ than assume:
 
 ```sh
 # every id in the source matches the current recipe?
-$dl <backup>/raw/entities.doltlite_db \
+$dl <backup>/ingest/entities.doltlite_db \
   "SELECT COUNT(*) AS total,
           SUM(id = device_name || '#' || ts_ms || '#' || metric) AS matching
      FROM yolink_readings;"
@@ -123,8 +123,8 @@ Then check what the merge would gain and whether the overlap agrees.
 `ATTACH` works, so this is one query:
 
 ```sh
-$dl <data_root>/<stanza>/raw/entities.doltlite_db "
-ATTACH DATABASE '<backup>/raw/entities.doltlite_db' AS src;
+$dl <data_root>/<stanza>/ingest/entities.doltlite_db "
+ATTACH DATABASE '<backup>/ingest/entities.doltlite_db' AS src;
 SELECT 'gained', COUNT(*) FROM src.yolink_readings s
   WHERE NOT EXISTS (SELECT 1 FROM yolink_readings c WHERE c.id = s.id);
 SELECT 'overlap', COUNT(*) FROM src.yolink_readings s JOIN yolink_readings c USING(id);
@@ -148,12 +148,12 @@ not matter.
 Back up first; this mutates the store in place.
 
 ```sh
-cp <data_root>/<stanza>/raw/entities.doltlite_db{,.pre-backfill}
+cp <data_root>/<stanza>/ingest/entities.doltlite_db{,.pre-backfill}
 ```
 
 ```sh
-$dl <data_root>/<stanza>/raw/entities.doltlite_db <<'SQL'
-ATTACH DATABASE '<backup>/raw/entities.doltlite_db' AS src;
+$dl <data_root>/<stanza>/ingest/entities.doltlite_db <<'SQL'
+ATTACH DATABASE '<backup>/ingest/entities.doltlite_db' AS src;
 
 INSERT INTO yolink_readings
        (id, payload, device_name, ts_ms, metric, value)
@@ -208,7 +208,7 @@ By hand it is the same thing. Between the generation that wrote
 `extract yolink …` commits and today, the entire delta was one table:
 
 ```sh
-$dl <backup>/raw/entities.doltlite_db "
+$dl <backup>/ingest/entities.doltlite_db "
 CREATE TABLE IF NOT EXISTS sync_scope_config(
   scope TEXT PRIMARY KEY, config TEXT NOT NULL, updated_at TEXT NOT NULL);
 SELECT dolt_commit('-Am', 'schema: apply DDL');"
@@ -217,8 +217,8 @@ SELECT dolt_commit('-Am', 'schema: apply DDL');"
 Diff the schemas before trusting that for any particular pair of stores:
 
 ```sh
-diff <($dl <backup>/raw/entities.doltlite_db ".schema" | sort) \
-     <($dl <data_root>/<stanza>/raw/entities.doltlite_db ".schema" | sort)
+diff <($dl <backup>/ingest/entities.doltlite_db ".schema" | sort) \
+     <($dl <data_root>/<stanza>/ingest/entities.doltlite_db ".schema" | sort)
 ```
 
 ## Config

@@ -135,7 +135,7 @@ fn to_chat(room: &Room, doc: &DocBucket) -> NormalizedChat {
         org_uuid: None,
         org_name: None,
         // A Beeper stanza bridges several networks, so they stay apart
-        // on disk: `rendered_md/<network>/<room_uuid>/<period>.md`.
+        // on disk: `render_markdown/<network>/<room_uuid>/<period>.md`.
         path_prefix: Some(room.network.clone()),
         buckets: vec![NormalizedDoc {
             period_key: doc.period_key.clone(),

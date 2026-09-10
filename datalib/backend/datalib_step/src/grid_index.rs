@@ -1,5 +1,5 @@
-//! The `grid_index` step type: Load, un-fused into a first-class
-//! fan-in step — everything lands in the unified grid table.
+//! The `grid_index` function: every source's render store, stacked into
+//! the unified grid table at `unified_index/grid_index`.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -10,7 +10,15 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use crate::events::{Emitter, OutputClaim};
 
-pub const OUT_REL: &str = "unified_index/grid";
+/// The one tree this step writes, `unified_index/grid_index`, as the
+/// applet that reads it resolves it from the data root.
+pub fn out_rel() -> String {
+    format!(
+        "{}/{}",
+        datalib_core::layout::UNIFIED_INDEX_DIR,
+        datalib_core::layout::GRID_DIR
+    )
+}
 
 pub async fn run(
     data_root: &Path,
@@ -92,7 +100,7 @@ pub async fn run(
     // so the runner hashes the index instead.
     match version {
         Some(version) => Ok(vec![OutputClaim {
-            path: OUT_REL.to_string(),
+            path: out_rel(),
             version,
         }]),
         None => Ok(vec![]),
@@ -120,10 +128,12 @@ mod tests {
 
         assert!(
             data_root.join("unified_index/CACHEDIR.TAG").is_file(),
-            "unified_index/ must be tagged, so one tag covers grid/ and qmd/"
+            "unified_index/ must be tagged, so one tag covers both index trees"
         );
         assert!(
-            !data_root.join("unified_index/grid/CACHEDIR.TAG").exists(),
+            !data_root
+                .join("unified_index/grid_index/CACHEDIR.TAG")
+                .exists(),
             "the per-index tag was replaced by the one on the parent"
         );
         // `system/` is operational history — feedback, the job queue — and is

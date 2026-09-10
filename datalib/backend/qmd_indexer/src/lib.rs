@@ -12,10 +12,10 @@ use datalib_obs::status_line;
 pub use datalib_runtime::qmd::DEFAULT_QMD_VERSION;
 
 pub const DEFAULT_COLLECTION_NAME: &str = "mirror";
-/// Only index per-stanza rendered markdown — `<root>/<stanza>/rendered_md/**`.
-/// The leading `*/` is exactly one stanza segment, so this never descends into
-/// `<root>/system/` (where the qmd index itself and other aggregates live).
-pub const DEFAULT_MASK: &str = "*/rendered_md/**/*.md";
+/// Only index per-group rendered markdown — `<root>/<group>/render_markdown/**`.
+/// The leading `*/` is exactly one group segment, so this never descends into
+/// `<root>/system/` or `<root>/unified_index/`.
+pub const DEFAULT_MASK: &str = "*/render_markdown/**/*.md";
 
 /// Options for an indexer run. Construct with `IndexOptions::new(root)` and
 /// override fields as needed.
@@ -94,20 +94,21 @@ pub struct IndexOutcome {
     pub status_output: Option<String>,
 }
 
-/// Run an incremental qmd index pass over `<root>/rendered_md/*.md` (and
-/// every other `.md` under root). Creates the collection lazily on first
-/// run; subsequent runs only `update` + optional `embed`.
+/// Run an incremental qmd index pass over every group's `render_markdown/`
+/// tree under `<root>`. Creates the collection lazily on first run;
+/// subsequent runs only `update` + optional `embed`.
 pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     let root = opts
         .root
         .canonicalize()
         .with_context(|| format!("root does not exist: {}", opts.root.display()))?;
 
-    // qmd writes `<XDG_CACHE_HOME>/qmd/index.sqlite`; point it at `<root>/system`
-    // so the index lands at `<root>/unified_index/qmd/`. The collection-add scan root
-    // below stays `<root>` so qmd still sees every stanza's `rendered_md/`.
+    // qmd writes `<XDG_CACHE_HOME>/qmd/index.sqlite`; point it at the
+    // `qmd_index` step's own tree so that is the only tree the step writes.
+    // The collection-add scan root below stays `<root>` so qmd still sees
+    // every group's `render_markdown/`.
     let cache_home = datalib_runtime::qmd::qmd_cache_home(&root);
-    let qmd_dir = cache_home.join("qmd");
+    let qmd_dir = datalib_runtime::qmd::qmd_state_dir(&root);
     std::fs::create_dir_all(&qmd_dir)
         .with_context(|| format!("failed to create {}", qmd_dir.display()))?;
 

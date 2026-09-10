@@ -19,5 +19,5 @@ pub use runner::{QmdRunner, QmdRunnerConfig, DEFAULT_COLLECTION};
 /// existing `datalib_unified_index::qmd::…` call site are unchanged, and
 /// so there is still exactly one definition of each.
 pub use datalib_runtime::qmd::{
-    qmd_cache_home, qmd_command, qmd_index_path, DEFAULT_QMD_VERSION, QMD_INDEX_REL,
+    qmd_cache_home, qmd_command, qmd_index_path, qmd_state_dir, DEFAULT_QMD_VERSION, QMD_INDEX_REL,
 };

@@ -1,6 +1,117 @@
-//! Parsing of the runner-appended step declaration flags.
+//! What the runner tells a step about itself: the environment it sets and
+//! the `--params` flag it appends.
 
 use anyhow::{Context, Result};
+
+use crate::function::Function;
+
+/// Mirrors `datalib_dag::subprocess::ENV_*`; spelled out here because
+/// `datalib-step` reads them as its contract with any runner, not as an
+/// implementation detail of this one.
+pub const STEP_ID_ENV: &str = "DATALIB_DAG_STEP";
+pub const GROUP_ENV: &str = "DATALIB_DAG_GROUP";
+pub const GROUP_TYPE_ENV: &str = "DATALIB_DAG_GROUP_TYPE";
+pub const FUNCTION_ENV: &str = "DATALIB_DAG_FUNCTION";
+pub const INPUTS_ENV: &str = "DATALIB_DAG_INPUTS";
+
+/// The step as the runner declared it. `step` is the composed id, and
+/// the one tree this process may write; the loader composed it from
+/// `group` and `function`, and [`StepEnv::from_env`] checks that the
+/// three still agree before anything is written.
+#[derive(Debug, Clone)]
+pub struct StepEnv {
+    pub step: String,
+    pub group: String,
+    pub group_type: Option<String>,
+    pub function: Function,
+    /// The trees this step reads, data-root-relative, as the runner
+    /// resolved them from the config's `inputs`.
+    pub inputs: Vec<String>,
+}
+
+impl StepEnv {
+    pub fn from_env() -> Result<StepEnv> {
+        let step = required(STEP_ID_ENV)?;
+        let group = required(GROUP_ENV).context(
+            "`datalib-step` runs only under a `[[groups]]` entry: it takes the provider \
+             from the group's `type` and the tree it writes from `<group>/<function>`",
+        )?;
+        let function_word = required(FUNCTION_ENV)?;
+        let function = Function::parse(&function_word).with_context(|| {
+            format!(
+                "`datalib-step` has no function {function_word:?}. It performs {}; a step \
+                 doing anything else needs its own `command`.",
+                Function::known_list()
+            )
+        })?;
+        let composed = format!("{group}/{}", function.as_str());
+        anyhow::ensure!(
+            step == composed,
+            "{STEP_ID_ENV}={step:?} but {GROUP_ENV}={group:?} and {FUNCTION_ENV}=\
+             {function_word:?} compose to {composed:?}. A step writes only the tree its id \
+             names, and the two must agree."
+        );
+        let group_type = std::env::var(GROUP_TYPE_ENV)
+            .ok()
+            .filter(|t| !t.trim().is_empty());
+        let inputs = std::env::var(INPUTS_ENV)
+            .unwrap_or_default()
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect();
+        Ok(StepEnv {
+            step,
+            group,
+            group_type,
+            function,
+            inputs,
+        })
+    }
+
+    /// The group's type, which is the provider to run. Only the two
+    /// per-source functions need one; the index steps are typeless.
+    pub fn source_type(&self) -> Result<&str> {
+        self.group_type.as_deref().with_context(|| {
+            format!(
+                "step {:?} is `{}` under group {:?}, which declares no `type`; `datalib-step` \
+                 needs the group's type to know which provider to run",
+                self.step, self.function, self.group
+            )
+        })
+    }
+
+    /// The raw store a render reads: the first input, which is the
+    /// ingest step's tree. A render with no inputs — a store seeded by
+    /// hand, with no ingest step in front of it — reads the group's own
+    /// `ingest` tree, and says so.
+    pub fn raw_store_rel(&self) -> String {
+        match self.inputs.first() {
+            Some(input) => input.clone(),
+            None => {
+                let rel = format!("{}/{}", self.group, Function::Ingest.as_str());
+                tracing::warn!(
+                    step = %self.step,
+                    raw = %rel,
+                    "render: this step declares no inputs; reading the group's own ingest tree"
+                );
+                rel
+            }
+        }
+    }
+}
+
+fn required(name: &str) -> Result<String> {
+    let v = std::env::var(name).with_context(|| {
+        format!(
+            "{name} is not set. `datalib-step` expects to be run by `datalib-dag`, which \
+             sets it from the step's config entry."
+        )
+    })?;
+    anyhow::ensure!(!v.trim().is_empty(), "{name} is set but empty");
+    Ok(v)
+}
 
 pub fn parse_params(params: Option<&str>) -> Result<serde_json::Value> {
     match params {
@@ -15,29 +126,6 @@ pub fn parse_params(params: Option<&str>) -> Result<serde_json::Value> {
             Ok(v)
         }
     }
-}
-
-pub fn tree_from_env() -> Result<String> {
-    let id = std::env::var(STEP_ID_ENV).with_context(|| {
-        format!(
-            "{STEP_ID_ENV} is not set. `datalib-step` expects to be run by `datalib-dag`, \
-             which sets it to the step's config id — the tree the step writes."
-        )
-    })?;
-    anyhow::ensure!(
-        !id.trim().is_empty(),
-        "{STEP_ID_ENV} is empty; it must be the step's config id"
-    );
-    Ok(id)
-}
-
-/// The runner's name for the environment variable carrying a step's
-/// config id. Mirrors `datalib_dag::subprocess::ENV_STEP`; not imported
-/// because `datalib-step` deliberately does not depend on the runner.
-pub const STEP_ID_ENV: &str = "DATALIB_DAG_STEP";
-
-pub fn source_name(tree: &str) -> &str {
-    tree.split('/').next().unwrap_or(tree)
 }
 
 #[cfg(test)]
@@ -61,12 +149,29 @@ mod tests {
         assert!(parse_params(Some("not json")).is_err());
     }
 
+    fn env(step: &str, group: &str, function: &str, inputs: &[&str]) -> StepEnv {
+        StepEnv {
+            step: step.into(),
+            group: group.into(),
+            group_type: Some("slack_api".into()),
+            function: Function::parse(function).unwrap(),
+            inputs: inputs.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// The raw store is whatever the render's input names — which is how
+    /// a render can read an ingest under another group — and only falls
+    /// back to the group's own tree when nothing is declared.
     #[test]
-    fn source_name_is_the_first_segment() {
-        assert_eq!(source_name("slack/raw"), "slack");
-        assert_eq!(source_name("slack/rendered_md"), "slack");
-        assert_eq!(source_name("work-slack/raw"), "work-slack");
-        // A single-segment id is its own name.
-        assert_eq!(source_name("solo"), "solo");
+    fn render_reads_its_input_tree_else_the_groups_ingest() {
+        let e = env(
+            "slack/render_markdown",
+            "slack",
+            "render_markdown",
+            &["elsewhere/ingest"],
+        );
+        assert_eq!(e.raw_store_rel(), "elsewhere/ingest");
+        let e = env("slack/render_markdown", "slack", "render_markdown", &[]);
+        assert_eq!(e.raw_store_rel(), "slack/ingest");
     }
 }
