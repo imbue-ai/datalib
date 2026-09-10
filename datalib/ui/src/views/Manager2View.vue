@@ -214,9 +214,13 @@ const emptyDiagnosis = computed(() =>
   }),
 );
 
-/// Ids already spoken for: every group, plus the tree of every step
-/// outside a group — a custom step's tree is reserved the same way a
-/// group's is. An applet id lives in another namespace and may coincide.
+/// Ids already spoken for: every group, plus the written id of every
+/// step outside a group. A custom step's id is reserved whole, not by
+/// its first path segment: the loader allows a group `exports` beside a
+/// custom `exports/csv` (their trees differ), and nothing here splits an
+/// id — the cost is that the group's measured folder then counts the
+/// custom tree too. An applet id lives in another namespace and may
+/// coincide.
 const takenIds = computed(
   () =>
     new Set([
@@ -474,8 +478,10 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
     editBlocked = "No form for applets — edit this one in Advanced below.";
   } else if (s.phase === "index") {
     editBlocked = "A shared index step has no options — its inputs are its whole config.";
-  } else if (group) {
-    editBlocked = groupEditBlocked(group);
+  } else if (s.group !== null) {
+    // The written group, not the declared one: a step naming a group
+    // the config lacks should hear that, not "outside any group".
+    editBlocked = groupEditBlocked(s.group);
   } else {
     editBlocked = "No guided form for a step outside a group — edit it in Advanced below.";
   }
@@ -1516,6 +1522,13 @@ async function onWizardSubmit(payload: {
     );
     next = replaceSteps(configText.value, existing, payload.stepsBody);
     next = renameGroup(next, current.group.id, payload.name);
+    // A render step the provider does not write back — hand-written
+    // under a download-only type — leaves with the cut above, so its
+    // edges have to go too, or the fan-ins name a step that no longer
+    // exists and the loader refuses the whole file.
+    if (current.steps.render && !payload.renderId) {
+      next = unwireFromFanIns(next, current.steps.render.id);
+    }
   } else {
     next = appendSource(
       configText.value,

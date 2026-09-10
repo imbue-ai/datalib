@@ -157,6 +157,15 @@ const missingSteps = computed<string[]>(() => {
   return out;
 });
 
+/// A render step this source has that its provider does not write — a
+/// hand-written one under a download-only type. Saving removes it, and
+/// that is worth a sentence for the same reason a missing step is.
+const orphanRender = computed<string | null>(() =>
+  props.editing && !renders.value && props.editing.steps.render
+    ? props.editing.steps.render.id
+    : null,
+);
+
 const groups = computed(() => {
   const matches = filterCatalog(query.value);
   return (["api", "export", "local"] as const)
@@ -683,6 +692,11 @@ function submit() {
           <template v-for="(step, i) in missingSteps" :key="step"
             ><template v-if="i > 0"> and </template><code>{{ step }}</code></template
           >. Saving writes {{ missingSteps.length === 1 ? "it" : "them" }}.
+        </p>
+        <p v-if="orphanRender" class="wiz-cred">
+          This source has a render step, <code>{{ orphanRender }}</code>, but
+          {{ chosen.label }} renders nothing. Saving removes it, and takes it out of the index
+          steps’ inputs.
         </p>
 
         <p

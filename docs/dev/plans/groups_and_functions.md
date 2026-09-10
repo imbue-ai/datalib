@@ -565,6 +565,17 @@ Each slice is a PR; each leaves the tree green.
        would write them, and fills the render step's pickers too;
        the wizard no longer threads a `downloadParams` copy between
        two dialogs.
+     - The Sources tab's quick-add snippets (`ui/src/config/snippets.ts`)
+       write through `buildGroup` and `stepToml` — the same writers the
+       wizard uses — so the shape of a source is spelled out in
+       `sourceSteps.ts` alone. They keep hand-written params bodies
+       rather than going through `buildSource`, because some carry
+       params the catalog does not model (`carddav`'s
+       `common.input_path`).
+     - A hand-written render step under a download-only type
+       (`renderStep: false`) is removed on save and unwired from the
+       fan-ins; the dialog says so beforehand, the way it does for a
+       missing step.
 
 5. **Mechanical rename** (optional, any time after 3): crate names,
    `download/` module directories, `DOWNLOAD.md` files, and the

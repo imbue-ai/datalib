@@ -217,6 +217,46 @@ test("a provider with render options writes them on the render step, from the on
   expect(text.match(/id = "signal-work"/g)).toHaveLength(1);
 });
 
+test("a hand-written render step under a download-only type is called out, then removed", async ({
+  page,
+}) => {
+  // Lightroom renders nothing, so the form writes one step. A render
+  // step someone wrote by hand under it cannot be kept — the provider
+  // has no render side — and the dialog says so before Save, the way
+  // it does for a missing step. (Unwiring it from the fan-ins is
+  // covered by the unit tests; this root's config declares none.)
+  const editor = page.locator(".m2-editor");
+  await page.getByRole("button", { name: "+ Add Data Source" }).click();
+  await wizard(page)
+    .locator(".wiz-tile", { hasText: "Mirror a Lightroom Classic catalog" })
+    .click();
+  await nameField(page).fill("Photos");
+  await wizard(page).locator("input.wiz-path").fill("/tmp/cat.lrcat");
+  await expect(wizard(page).locator(".wiz-section-head")).toHaveCount(0);
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText("Added Photos.")).toBeVisible();
+
+  const text = await editor.inputValue();
+  expect(text).toContain('group = "photos"\nfunction = "ingest"');
+  expect(text).not.toContain('group = "photos"\nfunction = "render_markdown"');
+  await page.getByText("Advanced — edit config.toml directly").click();
+  await editor.fill(
+    `${text.trimEnd()}\n\n[[steps]]\ngroup = "photos"\nfunction = "render_markdown"\ninputs = ["photos/ingest"]\n`,
+  );
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expandGroup(page, "photos");
+  await expect(row(page, "photos/render_markdown")).toBeVisible();
+
+  await groupRow(page, "photos").getByRole("button", { name: "Edit settings" }).click();
+  await expect(wizard(page)).toContainText("Lightroom renders nothing. Saving removes it");
+  await wizard(page).getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Saved Photos.")).toBeVisible();
+  await expect(page.locator('.ag-row[row-id="photos/render_markdown"]')).toHaveCount(0);
+  await expect(editor).not.toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
+  await expect(editor).toHaveValue(/group = "photos"\nfunction = "ingest"/);
+});
+
 test("deleting a fetch step takes its render step with it", async ({ page }) => {
   const editor = page.locator(".m2-editor");
   await pickClaude(page);
