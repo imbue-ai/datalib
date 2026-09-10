@@ -69,10 +69,13 @@ place — and most of it was written by other people. Three things follow:
 
 ## Supported data sources
 
-A source's `type` names the thing being mirrored. *How* it comes in is
-a table on the source's ingest step named for the method (`api`,
-`export`, `backup`, `fswalk`, `mbox`, …), and a file-backed method
-carries its own `path`. Every shape is in
+A source's `type` names the thing being mirrored. *Where the data
+comes from* is one table on the source's ingest step, and its name is
+read under the type: `api` is the product's own API, `export` an
+unpacked export, `backup` a phone backup, `fswalk` a folder to scan. A
+type that is not one product spells its sources out — email's are
+`jmap`, `gmail_api` and `mbox`. A table that reads files carries its
+own `path`. Every shape is in
 [`all_sources.toml`](docs/user/config_examples/all_sources.toml).
 
 | Source | `type` | Input mode | What it mirrors |
