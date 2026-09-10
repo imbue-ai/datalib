@@ -288,6 +288,22 @@ pub async fn start_connect(
             }
         }
 
+        // Before the login, not lazily after it fails: the refusal names
+        // a command, and the person reading it pressed a button
+        // precisely so they would not have to run one.
+        if let Err(e) = latchkey_output(&ensure_browser_args()).await {
+            let mut slot = slot.lock().expect("connect slot mutex");
+            slot.status = ConnectState::Failed;
+            slot.output = format!(
+                "no browser available for the login ({}). Latchkey can install one, which \
+                 downloads a Chromium of a few hundred megabytes: run `{} ensure-browser` and \
+                 try again.",
+                tail(&e.to_string()),
+                datalib_core::node_runtime::latchkey_cli_hint(),
+            );
+            return;
+        }
+
         let outcome =
             tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output_env(&args, &login_env)).await;
         // A placeholder outliving a login that never finished is a
@@ -346,6 +362,30 @@ fn clear_args(service: &str, account: &str) -> Vec<String> {
         "auth".to_string(),
         "clear".to_string(),
         service.to_string(),
+    ]
+}
+
+/// `ensure-browser`, restricted to the sources that use a browser
+/// already on the machine.
+///
+/// A latchkey store that has never done a browser login has none
+/// configured, and `auth browser` refuses outright ("No browser
+/// configured. Run 'latchkey ensure-browser' first.") — which is every
+/// new user, and was invisible to us because a developer's store is
+/// never new.
+///
+/// The default source list ends in `download-playwright-browser`, so
+/// running it unrestricted can pull a Chromium of a hundred-odd
+/// megabytes. Nobody pressing "Latchkey auth" asked for that, and a
+/// long silent stall behind a spinner is the worst way to deliver it.
+/// These three sources configure an existing browser or fail fast; the
+/// download stays a thing someone chooses, by running the command
+/// themselves.
+fn ensure_browser_args() -> Vec<String> {
+    vec![
+        "ensure-browser".to_string(),
+        "--source".to_string(),
+        "existing-config,system-browser,existing-playwright-browser".to_string(),
     ]
 }
 
@@ -585,6 +625,25 @@ fn validated_type(source_type: &str) -> Result<String, (StatusCode, Json<Value>)
 
 fn err(status: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
     (status, Json(serde_json::json!({ "error": message })))
+}
+
+#[cfg(test)]
+mod ensure_browser_tests {
+    use super::ensure_browser_args;
+
+    /// The whole point of naming sources explicitly: the default list
+    /// ends in `download-playwright-browser`, and a button press must
+    /// not turn into a few hundred megabytes nobody asked for.
+    #[test]
+    fn never_offers_to_download_a_browser() {
+        let args = ensure_browser_args();
+        let sources = args.last().expect("a --source value");
+        assert!(
+            !sources.contains("download"),
+            "ensure-browser must not reach the downloading source: {sources}"
+        );
+        assert!(sources.contains("system-browser"), "{sources}");
+    }
 }
 
 #[cfg(test)]
