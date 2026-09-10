@@ -52,6 +52,11 @@ const RETIRED_PARAM_PATHS: &[(&str, &str)] = &[
         "common.input_path",
         "a file-backed method carries its own `path` now",
     ),
+    ("gmail_api", "email's Gmail table is `gmail` now"),
+    (
+        "fetch_photos",
+        "linkedin's photo fetch is `export.fetch_photos` now",
+    ),
     (
         "common.raw_path",
         "the store is the step's own tree; to keep it on another disk, put a symlink there",
@@ -157,10 +162,10 @@ mod tests {
         let export = json!({"export": {"path": "/export"}});
         assert_eq!(reach_of(&held(&export, linkedin)), Some(Reach::Local));
         let mut with_photos = export.clone();
-        with_photos["fetch_photos"] = json!(true);
+        with_photos["export"]["fetch_photos"] = json!(true);
         assert_eq!(reach_of(&held(&with_photos, linkedin)), Some(Reach::Origin));
         let mut photos_off = export;
-        photos_off["fetch_photos"] = json!(false);
+        photos_off["export"]["fetch_photos"] = json!(false);
         assert_eq!(reach_of(&held(&photos_off, linkedin)), Some(Reach::Local));
     }
 
@@ -169,7 +174,7 @@ mod tests {
     fn email_reads_origin_for_a_server_and_local_for_an_mbox() {
         let email = ingest_methods(SourceType::Email);
         assert_eq!(
-            reach_of(&held(&json!({"gmail_api": {"user_id": "me"}}), email)),
+            reach_of(&held(&json!({"gmail": {"user_id": "me"}}), email)),
             Some(Reach::Origin)
         );
         assert_eq!(
@@ -183,7 +188,7 @@ mod tests {
         let err = reach_or_refuse(SourceType::Email, &[])
             .unwrap_err()
             .to_string();
-        for path in ["`jmap`", "`gmail_api`", "`mbox`"] {
+        for path in ["`jmap`", "`gmail`", "`mbox`"] {
             assert!(err.contains(path), "{err}");
         }
         assert!(err.contains("reads files on disk"), "{err}");

@@ -43,7 +43,7 @@ for, and latchkey keeps the OAuth token:
 npx -y latchkey auth browser google-gmail
 ```
 
-Use the `email` source with a `gmail_api` table on its ingest step. Incremental sync is
+Use the `email` source with a `gmail` table on its ingest step. Incremental sync is
 driven by Gmail's own change history, so deletions and label changes
 show up as events. Throughput is capped by Google's quota at roughly
 300 messages a minute, so a large mailbox backfills over several runs.

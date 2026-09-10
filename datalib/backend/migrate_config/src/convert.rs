@@ -160,6 +160,8 @@ fn strip_raw_path(params: &mut toml::Table) {
 
 fn has_retired_param_keys(params: &toml::Value) -> bool {
     params.get("sync").is_some()
+        || params.get("gmail_api").is_some()
+        || params.get("fetch_photos").is_some()
         || params
             .get("common")
             .and_then(|c| c.get("input_path"))
@@ -206,7 +208,8 @@ fn rewrite_ingest_params(ty: &str, params: &mut toml::Table) -> Result<()> {
         params.remove("common");
     }
     let mut sync = params.remove("sync");
-    if sync.is_none() && input_path.is_none() {
+    let renamed_table = params.contains_key("gmail_api") || params.contains_key("fetch_photos");
+    if sync.is_none() && input_path.is_none() && !renamed_table {
         return Ok(());
     }
     let table_from_sync = |sync: Option<toml::Value>, name: &str| -> Result<toml::Table> {
@@ -243,6 +246,9 @@ fn rewrite_ingest_params(ty: &str, params: &mut toml::Table) -> Result<()> {
         "email" => {
             if let Some(t) = sync.take() {
                 params.insert("jmap".into(), t);
+            }
+            if let Some(t) = params.remove("gmail_api") {
+                params.insert("gmail".into(), t);
             }
             if let Some(p) = input_path {
                 let mbox = match params.remove("mbox") {
@@ -298,7 +304,11 @@ fn rewrite_ingest_params(ty: &str, params: &mut toml::Table) -> Result<()> {
             insert(params, "export", with_path(feeds, input_path));
         }
         "linkedin" => {
-            insert(params, "export", with_path(toml::Table::new(), input_path));
+            let mut t = with_path(toml::Table::new(), input_path);
+            if let Some(photos) = params.remove("fetch_photos") {
+                t.insert("fetch_photos".into(), photos);
+            }
+            insert(params, "export", t);
         }
         "fsindex" | "pdf" | "media" => {
             insert(params, "fswalk", with_path(toml::Table::new(), input_path));

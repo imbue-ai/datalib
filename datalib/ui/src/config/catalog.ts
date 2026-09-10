@@ -283,7 +283,7 @@ export const CATALOG: CatalogEntry[] = [
   // — but a future entry keyed on something broader would.
   {
     type: "email",
-    variantKey: "gmail_api",
+    variantKey: "gmail",
     label: "Gmail",
     blurb: "Mirror a Gmail account through Google's API.",
     keywords: ["gmail", "google", "email", "mail", "inbox", "labels"],
@@ -294,12 +294,12 @@ export const CATALOG: CatalogEntry[] = [
     canProbe: true,
     credentialService: "google-gmail",
     preset: [
-      // The presence of a `gmail_api` table is what selects this mode,
+      // The presence of a `gmail` table is what selects this mode,
       // and a table needs a key. `user_id` is the one to spend: `me`
       // is both Gmail's meaning of "the authenticated user" and the
       // backend's own default, so writing it changes nothing except
       // making the mode explicit in the file.
-      { target: "gmail_api.user_id", value: "me" },
+      { target: "gmail.user_id", value: "me" },
       { target: "outlink_format", value: "gmail", phase: "render" },
     ],
     fields: [
@@ -328,7 +328,7 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "int",
-        target: "gmail_api.message_budget",
+        target: "gmail.message_budget",
         label: "Stop after this many messages each run",
         help:
           "Gmail's quota allows about 300 messages a minute, so a 100k-message account is " +
@@ -732,7 +732,7 @@ export function catalogForStep(
 }
 
 /// Does a dotted path exist in a params tree? Presence, not truthiness:
-/// `gmail_api = {}` selects the Gmail mode, and an empty table is a
+/// `gmail = {}` selects the Gmail mode, and an empty table is a
 /// perfectly ordinary way to write it by hand.
 function hasPath(params: Record<string, unknown>, path: string): boolean {
   let cur: unknown = params;

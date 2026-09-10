@@ -74,7 +74,7 @@ reference doc it relates to.
   comes from is one table on the ingest step, whose name is read
   under the type — `api` is that product's own API, `export` an
   unpacked export, `backup` a phone backup — and only a type that is
-  not one product qualifies its sources (email's `jmap`, `gmail_api`,
+  not one product qualifies its sources (email's `jmap`, `gmail`,
   `mbox`). A table that reads files carries its own `path`. There is
   no global list of these names: each type has its own two or three.
   That is the shape `datalib-migrate-config` rewrites any earlier one

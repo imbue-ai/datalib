@@ -407,8 +407,8 @@ only_extract_labels = []
 # [steps.params.latchkey_settings]
 # account = "you@gmail.com"
 
-[steps.params.gmail_api]
-# Everything here is optional; an empty `[steps.params.gmail_api]` table
+[steps.params.gmail]
+# Everything here is optional; an empty `[steps.params.gmail]` table
 # is a complete, working configuration.
 #
 # full_resync = false
@@ -672,11 +672,9 @@ type = "linkedin"
 group = "linkedin"
 function = "ingest"
 
-[steps.params]
-fetch_photos = true
-
 [steps.params.export]
 path = "~/backups/LinkedInDataExport"
+fetch_photos = true
 
 [steps.params.common]
 # Each export is complete. Without this a CSV that LinkedIn stopped

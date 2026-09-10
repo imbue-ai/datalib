@@ -18,17 +18,17 @@ pub fn plan_download(
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let input_path = config
+    let export = config
         .export
         .as_ref()
-        .ok_or_else(|| anyhow!("linkedin source {name} missing `export.path`"))?
-        .path();
+        .ok_or_else(|| anyhow!("linkedin source {name} missing `export.path`"))?;
+    let input_path = export.path();
     let max_sequential_failures = config.common.download_params.max_sequential_failures();
     Ok(vec![Box::new(LinkedinDownload {
         id: format!("linkedin/{name}/download"),
         raw_path,
         input_path,
-        fetch_photos: config.fetch_photos,
+        fetch_photos: export.fetch_photos,
         // The shared give-up knob, baked in at plan time: stop the photo
         // sweep after this many consecutive failures.
         photo_max_consecutive_failures: max_sequential_failures,

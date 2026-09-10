@@ -74,8 +74,8 @@ comes from* is one table on the source's ingest step, and its name is
 read under the type: `api` is the product's own API, `export` an
 unpacked export, `backup` a phone backup, `fswalk` a folder to scan. A
 type that is not one product spells its sources out — email's are
-`jmap`, `gmail_api` and `mbox`. A table that reads files carries its
-own `path`. Every shape is in
+`jmap`, `gmail` and `mbox`. A table that reads files carries its own
+`path`. Every shape is in
 [`all_sources.toml`](docs/user/config_examples/all_sources.toml).
 
 | Source | `type` | Input mode | What it mirrors |

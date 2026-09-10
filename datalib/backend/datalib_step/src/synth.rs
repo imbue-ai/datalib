@@ -65,7 +65,7 @@ pub fn run(
         // enabled.
         Some(SourceType::Linkedin)
             if source
-                .get("fetch_photos")
+                .pointer("/export/fetch_photos")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false) =>
         {

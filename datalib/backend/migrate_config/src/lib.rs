@@ -244,6 +244,28 @@ ignore = ["drafts/**"]
 input_path = "~/Documents"
 
 [[groups]]
+id = "gmail"
+type = "email"
+
+[[steps]]
+group = "gmail"
+function = "ingest"
+[steps.params.gmail_api]
+user_id = "me"
+
+[[groups]]
+id = "linkedin"
+type = "linkedin"
+
+[[steps]]
+group = "linkedin"
+function = "ingest"
+[steps.params]
+fetch_photos = true
+[steps.params.common]
+input_path = "~/LinkedIn"
+
+[[groups]]
 id = "unified_index"
 
 [[steps]]
@@ -325,7 +347,16 @@ inputs = ["slack/render_markdown"]
         );
         let (cfg, diags) = datalib_dag::config::parse_graded(&out);
         assert!(diags.is_empty(), "{diags:?}\n{out}");
-        assert_eq!(cfg.groups.len(), 8);
+        assert!(!out.contains("gmail_api"), "{out}");
+        assert!(
+            out.contains("[steps.params.gmail]\nuser_id = \"me\""),
+            "{out}"
+        );
+        assert!(
+            out.contains("[steps.params.export]\nfetch_photos = true\npath = \"~/LinkedIn\""),
+            "{out}"
+        );
+        assert_eq!(cfg.groups.len(), 10);
         // Running it again finds nothing to do.
         let err = detect(&out).unwrap_err().to_string();
         assert!(err.contains("already"), "{err}");

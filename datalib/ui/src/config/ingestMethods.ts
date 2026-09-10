@@ -10,13 +10,13 @@
 // The rule is `datalib-step`'s (`methods.rs`): a method is held when its
 // path is written and its value is neither null nor false — a table
 // counts by presence (`api = {}` is a complete selection), a flag such
-// as linkedin's `fetch_photos` only when on.
+// as linkedin's `export.fetch_photos` only when on.
 import DECLARED from "./ingestMethods.json";
 
 export type Reach = "origin" | "local";
 
 export type IngestMethod = {
-  /// Dotted path into the step's params: `api`, `gmail_api`, `export`.
+  /// Dotted path into the step's params: `api`, `gmail`, `export`.
   path: string;
   reach: Reach;
 };

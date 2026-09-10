@@ -227,11 +227,11 @@ impl Reach {
 }
 
 /// One way an ingest step's params can say where its data comes from:
-/// a dotted path into the params (`api`, `gmail_api`, `export`) and
+/// a dotted path into the params (`api`, `gmail`, `export`) and
 /// what holding it means. A method is *held* when the path is written
 /// and its value is neither `null` nor `false`, so a table counts by
 /// presence (`api = {}` is a complete selection) and a flag such as
-/// linkedin's `fetch_photos` only when on.
+/// linkedin's `export.fetch_photos` only when on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct IngestMethod {
     pub path: &'static str,

@@ -300,10 +300,11 @@ into `<data_root>/config.toml`:
   every input mode for email and contacts).
 
 Upgrading from an earlier datalib? A `config.toml` written for one —
-steps that name a `datalib-step download …` command, or a `type` that
-spells the method (`claude_api`, `claude_export`, `carddav`, …) with
-`sync` and `common.input_path` in its params — is refused by this
-version, with an error naming the fix, and is rewritten once:
+steps naming a `datalib-step download …` command, a group `type`
+spelled for its method (`slack_api`, `claude_export`, `carddav`), or
+an ingest step whose params still say `sync` or `common.input_path` —
+is refused by this version, with an error naming the fix, and is
+rewritten once:
 
 ```sh
 datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml

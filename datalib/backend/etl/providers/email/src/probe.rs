@@ -18,7 +18,7 @@ use crate::mailbox_labels::{self, MailboxNode};
 #[derive(Debug, Serialize)]
 pub struct ProbeReport {
     /// Which download mode was probed — the same word the config uses
-    /// to select it (`gmail_api`, `jmap`).
+    /// to select it (`gmail`, `jmap`).
     pub mode: &'static str,
     pub account: ProbeAccount,
     /// Every label/mailbox this account has, in display order (roles
@@ -76,7 +76,7 @@ pub async fn probe(config: &EmailConfig) -> Result<ProbeReport> {
         Some(EmailLiveMode::Jmap(sync)) => probe_jmap(sync, &config.latchkey_settings).await,
         None => Err(anyhow!(
             "this email source has no live download mode, so there is no connection to test. \
-             Set `gmail_api` for a Gmail account or `jmap.hostname` for a JMAP server; an \
+             Set `gmail` for a Gmail account or `jmap.hostname` for a JMAP server; an \
              mbox source reads a file at `mbox.path` and needs no credentials."
         )),
     }
@@ -125,7 +125,7 @@ async fn probe_gmail(
     dedupe_and_sort(&mut labels);
 
     Ok(ProbeReport {
-        mode: "gmail_api",
+        mode: "gmail",
         account: ProbeAccount {
             id: profile.email_address.clone(),
             address: Some(profile.email_address),
