@@ -35,6 +35,12 @@ const wizard = (page: Page) => page.getByRole("dialog");
 const field = (page: Page, caption: string) =>
   wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) > .wiz-input`);
 const nameField = (page: Page) => field(page, "Name");
+/// The Rendering section's own toggle: whether this source writes a
+/// `render_markdown` step at all.
+const renderToggle = (page: Page) =>
+  wizard(page).locator(
+    '.wiz-field:has(> .wiz-label:text-is("Render this source into markdown")) input.wiz-bool',
+  );
 const idField = (page: Page) => field(page, "Id");
 /// The step-role mark. It rides after the name — there is no Step
 /// column any more — and `aria-label` is the only place the word
@@ -43,7 +49,7 @@ const stepMark = (page: Page, id: string) =>
   row(page, id).locator('[col-id="name"] .m2-name-step [role="img"]');
 
 async function pickClaude(page: Page) {
-  await page.getByRole("button", { name: "+ Add Data Source" }).click();
+  await page.getByRole("button", { name: "+ Data Source" }).click();
   // By blurb: "Claude" alone also matches the "Claude export" tile.
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Mirror your claude.ai conversations" })
@@ -158,7 +164,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   expect(saved.match(/group = "personal-claude"\nfunction = "render_markdown"/g)).toHaveLength(1);
 });
 
-test("a step's Edit opens its source, and a hand-removed render step comes back on save", async ({
+test("a step's Edit opens its source, and Rendering brings a hand-removed render step back", async ({
   page,
 }) => {
   const editor = page.locator(".m2-editor");
@@ -199,7 +205,12 @@ test("a step's Edit opens its source, and a hand-removed render step comes back 
     wizard(page),
   );
   await expect(nameField(page)).toHaveValue("Fetch Only");
-  // The dialog says what saving will do beyond changing a value.
+  // Rendering reads the config rather than the provider: this source
+  // has no render step, so the box is clear and saving writes none.
+  // Restoring one is a thing you ask for.
+  await expect(renderToggle(page)).not.toBeChecked();
+  await renderToggle(page).check();
+  // Now the dialog says what saving will do beyond changing a value.
   await expect(wizard(page)).toContainText("This source is missing");
   await expect(wizard(page)).toContainText("fetch-only/render_markdown");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
@@ -209,6 +220,34 @@ test("a step's Edit opens its source, and a hand-removed render step comes back 
   await expect(editor).toHaveValue(/inputs = \["fetch-only\/ingest"\]/);
   const after = await editor.inputValue();
   expect(after.match(/group = "fetch-only"\nfunction = "ingest"/g)).toHaveLength(1);
+});
+
+test("clearing Rendering removes the render step and its index edge", async ({ page }) => {
+  const editor = page.locator(".m2-editor");
+  await pickClaude(page);
+  await nameField(page).fill("No Render");
+  await expect(renderToggle(page)).toBeChecked();
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText("Added No Render.")).toBeVisible();
+  await expect(editor).toHaveValue(/inputs = \["no-render\/ingest"\]/);
+
+  await expandGroup(page, "no-render");
+  await clickUntil(
+    row(page, "no-render/ingest").getByRole("button", { name: "Edit settings" }),
+    wizard(page),
+  );
+  await renderToggle(page).uncheck();
+  // Saving takes the step out, so the dialog says so before it does.
+  await expect(wizard(page)).toContainText("Rendering is off below");
+  await wizard(page).getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Saved No Render.")).toBeVisible();
+
+  await expect(page.locator('.ag-row[row-id="no-render/render_markdown"]')).toHaveCount(0);
+  // The fan-ins must lose it too: an input naming a step that no longer
+  // exists is a config the loader refuses outright.
+  const after = await editor.inputValue();
+  expect(after).not.toContain("no-render/render_markdown");
+  expect(after).toContain('group = "no-render"');
 });
 
 test("a provider with render options writes them on the render step, from the one form", async ({
@@ -222,7 +261,7 @@ test("a provider with render options writes them on the render step, from the on
   // assertion on the composed id stays because that is the config bug
   // it would catch.
   const editor = page.locator(".m2-editor");
-  await page.getByRole("button", { name: "+ Add Data Source" }).click();
+  await page.getByRole("button", { name: "+ Data Source" }).click();
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
     .click();
@@ -258,7 +297,7 @@ test("a hand-written render step under a download-only type is called out, then 
   // it does for a missing step. (Unwiring it from the fan-ins is
   // covered by the unit tests; this root's config declares none.)
   const editor = page.locator(".m2-editor");
-  await page.getByRole("button", { name: "+ Add Data Source" }).click();
+  await page.getByRole("button", { name: "+ Data Source" }).click();
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Mirror a Lightroom Classic catalog" })
     .click();

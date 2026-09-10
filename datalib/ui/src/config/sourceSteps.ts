@@ -679,11 +679,15 @@ export function buildSource(opts: {
   /// Write the `[[groups]]` block too. Off when editing: the group
   /// already exists and is renamed in place.
   withGroup: boolean;
+  /// Whether this source wants its render step. Defaults to whatever
+  /// the provider can do; the wizard passes the answer the person gave,
+  /// which is the one that decides.
+  renders?: boolean;
 }): { groupBody: string | null; stepsBody: string; renderId: string | null } {
   const { entry, group, values } = opts;
   const ingestId = stepIdFor(group, "download");
   const ingest = buildStep({ entry, group, phase: "download", values });
-  const renders = entry.renderStep !== false;
+  const renders = entry.renderStep !== false && opts.renders !== false;
   const render = renders
     ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
     : null;

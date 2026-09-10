@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use app_schema::disk_usage::{DiskUsageRow, ROOT_PATH};
+use datalib_core::disk;
 use datalib_core::repo::DynAppRepo;
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -133,53 +134,29 @@ pub fn measure(root: &Path, want: &BTreeSet<String>) -> Measurement {
         .iter()
         .map(|p| (p.clone(), TreeUsage::default()))
         .collect();
-    let root_bytes = walk(root, "", want, &mut trees);
-    Measurement { root_bytes, trees }
-}
-
-fn walk(
-    dir: &Path,
-    rel: &str,
-    want: &BTreeSet<String>,
-    out: &mut BTreeMap<String, TreeUsage>,
-) -> u64 {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    let wanted = !rel.is_empty() && want.contains(rel);
-    let mut total = 0u64;
-    let mut blob_bytes = 0u64;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let Ok(meta) = entry.path().symlink_metadata() else {
-            continue;
-        };
-        if meta.is_dir() {
-            let child = if rel.is_empty() {
-                name.to_string()
-            } else {
-                format!("{rel}/{name}")
-            };
-            total += walk(&entry.path(), &child, want, out);
-        } else {
-            total += meta.len();
-            if wanted && name == BLOBS_FILE {
-                blob_bytes = meta.len();
-            }
+    let root_bytes = disk::measure_subtrees(root, &mut |rel, size| {
+        if let Some(tree) = trees.get_mut(rel) {
+            tree.present = true;
+            tree.bytes = size.bytes;
         }
+    })
+    .bytes;
+    // One extra stat per *wanted* tree, of which there are a handful —
+    // far cheaper than teaching the shared walk about a filename only
+    // this caller cares about.
+    for (rel, tree) in trees.iter_mut() {
+        if !tree.present {
+            continue;
+        }
+        tree.blob_bytes = root
+            .join(rel)
+            .join(BLOBS_FILE)
+            .symlink_metadata()
+            .ok()
+            .filter(|m| !m.is_dir())
+            .map_or(0, |m| m.len());
     }
-    if wanted {
-        out.insert(
-            rel.to_string(),
-            TreeUsage {
-                present: true,
-                bytes: total,
-                blob_bytes,
-            },
-        );
-    }
-    total
+    Measurement { root_bytes, trees }
 }
 
 /// One series' newest value plus its recent samples.

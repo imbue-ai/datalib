@@ -3,6 +3,7 @@
 
 pub mod app_store;
 pub mod deeplink;
+pub mod disk;
 pub mod repo;
 pub mod store;
 pub mod version;

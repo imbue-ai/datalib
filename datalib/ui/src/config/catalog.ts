@@ -1,4 +1,4 @@
-// The source catalog the "Add Data Source" picker renders, and the form
+// The source catalog the "+ Data Source" picker renders, and the form
 // descriptors the wizard fills in.
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
@@ -21,8 +21,8 @@ export type Field =
       required?: boolean;
       /// Renders as the latchkey-account control rather than a bare
       /// text box: a dropdown of the accounts latchkey has stored for
-      /// the entry's `credentialService`, a "Connect via latchkey"
-      /// button, and — still — somewhere to type.
+      /// the entry's `credentialService`, a "Latchkey auth" button,
+      /// and — still — somewhere to type.
       ///
       /// Typing matters. latchkey may hold an account this server
       /// can't enumerate (no keyring access, latchkey not installed),
@@ -71,9 +71,11 @@ export type Field =
   | ({ kind: "int" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & {
       placeholder?: string;
-      /// Offer a checklist built from `POST /api/probe`, alongside the
-      /// comma-separated box. Names *which* of the probe's lists:
-      probe?: "labels" | "mailboxes";
+      /// Offer a picker built from `POST /api/probe`, alongside the
+      /// comma-separated box. Names *which* of the probe's items this
+      /// field takes: every label, only the ones a render filter can
+      /// match, or an account's conversations.
+      probe?: "labels" | "mailboxes" | "conversations";
     });
 
 export type CatalogEntry = {
@@ -101,14 +103,26 @@ export type CatalogEntry = {
   defaultName: string;
   /// False → in the picker for completeness, but no form exists yet.
   wizard: boolean;
-  /// False for download-only providers, which render nothing and so
-  /// declare no render step (`lightroom`, `fsindex`). Defaults to true.
+  /// False for a provider that declares no render step at all.
+  /// Defaults to true, and rendering no *documents* is not a reason to
+  /// set it false: the render step is also what emits the storage
+  /// report, which for a download-only source is the only thing that
+  /// puts it in the grid.
   renderStep?: boolean;
   /// The latchkey service name, when the source needs credentials. The
   /// wizard shows its Connection section only while the params the form
   /// would write reach an origin (`ingestReach`): an import has nothing
   /// to log in to.
   credentialService?: string;
+  /// How to register `credentialService` with latchkey when latchkey
+  /// has never heard of it, so that a browser login exists at all. The
+  /// login flow belongs to the *service* and is fixed when it is
+  /// registered, so this is the only moment it can be chosen; a name
+  /// latchkey already holds is left exactly as its owner set it up.
+  credentialRegister?: import("@/api").ServiceRegistration;
+  /// Shown beside the Connect button, when connecting this way costs
+  /// something the person should decide about before clicking.
+  credentialConnectWarning?: string;
   /// Dotted params path whose presence identifies this entry among the
   /// several that share one `type`. Undefined on a type with only one
   /// entry, which is nearly all of them.
@@ -236,7 +250,30 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "claude",
     wizard: true,
     credentialService: "claude-ai",
+    // The whole claude.ai credential is the `sessionKey` cookie, so
+    // cookie-capture is the flow that fits.
+    credentialRegister: {
+      base_api_url: "https://claude.ai/",
+      login_url: "https://claude.ai/login",
+      login_flow: "cookie-capture",
+      login_flow_params: { cookieKeys: ["sessionKey"] },
+    },
+    credentialConnectWarning:
+      "This signs in a second time, and claude.ai appears to evict the older session when it " +
+      "does — observed 2026-08-31, the captured cookie and the browser you normally use kept " +
+      "logging each other out. Pasting the sessionKey avoids that.",
+    canProbe: true,
     fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Claude account",
+        placeholder: "you@example.com",
+        help:
+          "Which stored claude.ai login to mirror. Leave it empty if latchkey holds only " +
+          "one — naming the wrong one mirrors someone else's conversations.",
+      },
       {
         kind: "date",
         target: "api.since",
@@ -260,6 +297,7 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "string_list",
+        probe: "conversations",
         target: "api.conv_uuids",
         label: "Only these conversations",
         placeholder: "https://claude.ai/chat/…",
@@ -592,7 +630,43 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "fsindex", label: "File index", blurb: "Index a directory tree — paths, sizes, content hashes.", keywords: ["files", "filesystem", "index", "directory", "disk"], kind: "local", icon: null, defaultName: "fsindex", wizard: false },
+  {
+    type: "fsindex",
+    label: "File index",
+    blurb: "Index a directory tree — paths, sizes, content hashes.",
+    keywords: ["files", "filesystem", "index", "directory", "disk"],
+    kind: "local",
+    icon: null,
+    defaultName: "fsindex",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder to index",
+        required: true,
+        target: "fswalk.path",
+        label: "Folder",
+        placeholder: "~/Documents",
+        help:
+          "Scanned recursively, recording every entry's path, kind, size and content " +
+          "hash. Rescans are keyed on mtime, size and inode, so an unchanged file is " +
+          "never re-read. Nothing is converted to markdown — the index is queryable in " +
+          "this source's own store, and what reaches the grid is the storage report.",
+      },
+      {
+        kind: "bool",
+        target: "stamp",
+        label: "Write UUID breadcrumbs into the tree",
+        default: false,
+        help:
+          "Off by default, so the scan stays read-only against the folder it reads. On, " +
+          "it writes a UUID into the .fsindex.yaml of any directory that opted in with " +
+          "stamp_me_with_uuid: true — which is how a directory keeps one identity " +
+          "across moves and renames.",
+      },
+    ],
+  },
   {
     type: "media",
     label: "Music, photos & video",
