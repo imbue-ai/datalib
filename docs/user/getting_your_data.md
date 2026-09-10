@@ -85,16 +85,33 @@ table pointing at the unpacked folder instead.
 
 ## ChatGPT
 
-Same idea as Claude.ai: a one-time custom registration, then a bearer
-access token (not a cookie):
+A one-time registration, then a browser login. ChatGPT uses a bearer
+access token rather than a cookie, and latchkey can go and fetch it
+for you:
 
 ```sh
-npx -y latchkey services register chatgpt --base-api-url="https://chatgpt.com/"
-npx -y latchkey auth set chatgpt -H "Authorization: Bearer $(pbpaste)"
+npx -y latchkey services register chatgpt \
+  --base-api-url="https://chatgpt.com/" \
+  --login-url="https://chatgpt.com/auth/login" \
+  --login-flow=token-capture \
+  --login-flow-params='{"tokenUrl": "https://chatgpt.com/api/auth/session", "tokenField": "accessToken"}'
+npx -y latchkey auth browser chatgpt
 ```
 
-ChatGPT doesn't expose the token as a readable cookie — grab it from a
-logged-in tab via DevTools → **Console**:
+The second command opens chatgpt.com, waits for you to log in, and
+stores the token itself — nothing to copy or paste. The token rotates
+frequently; when `latchkey services info chatgpt` reports `invalid` or
+a sync comes back `HTTP 401 token_expired`, run that same
+`auth browser` line again.
+
+If you registered `chatgpt` before this guide said to, latchkey will
+have recorded it as a `set`-only service — `latchkey services info
+chatgpt` shows `authOptions` without `browser`, and a name that
+already exists cannot be re-registered. Run `npx -y latchkey services
+deregister chatgpt` first, then the two commands above.
+
+To supply the token by hand instead (a machine with no browser, say),
+grab it from a logged-in tab via DevTools → **Console**:
 
 ```js
 (async () => {
@@ -109,11 +126,13 @@ logged-in tab via DevTools → **Console**:
 })();
 ```
 
-Click anywhere on the page to copy the token, then run the staged
-`auth set` command. The token rotates frequently — when `latchkey
-services info chatgpt` reports `invalid` or requests come back `HTTP
-401 token_expired`, re-run the console snippet and `auth set`. As with
-Claude.ai, the impersonating curl clears Cloudflare, so no
+Click anywhere on the page to copy the token, then run:
+
+```sh
+npx -y latchkey auth set chatgpt -H "Authorization: Bearer $(pbpaste)"
+```
+
+As with Claude.ai, the impersonating curl clears Cloudflare, so no
 `cf_clearance` cookie is needed.
 
 ## Fastmail

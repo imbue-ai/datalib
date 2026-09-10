@@ -26,7 +26,50 @@ the `chatgpt` service.
 
 ChatGPT rotates the bearer token frequently. When `latchkey services
 info chatgpt` reports `invalid` or requests come back with
-`HTTP 401 token_expired`, re-run this:
+`HTTP 401 token_expired`, refresh it from the browser:
+
+```sh
+latchkey auth browser chatgpt
+```
+
+That opens chatgpt.com, waits for you to log in, reads the fresh
+`accessToken` itself and stores it. No DevTools, no clipboard.
+
+It works because the `chatgpt` service is registered with latchkey's
+`token-capture` login flow. `latchkey services info chatgpt` says
+whether yours is: `authOptions` lists `browser` if it is, and only
+`set` if it was registered any other way. latchkey refuses to
+re-register a name that already exists, so switching an old
+registration over means dropping it first:
+
+```sh
+latchkey services deregister chatgpt
+latchkey services register chatgpt \
+  --base-api-url=https://chatgpt.com/ \
+  --login-url=https://chatgpt.com/auth/login \
+  --login-flow=token-capture \
+  --login-flow-params='{"tokenUrl": "https://chatgpt.com/api/auth/session", "tokenField": "accessToken"}'
+latchkey auth browser chatgpt
+```
+
+Needs latchkey >= 3.11.0 (the version this repo pins in
+`datalib/backend/runtime/src/node_runtime.rs`). chatgpt.com's page
+never calls `/api/auth/session` itself, so before that version the
+capture waited for a request that never came — and every failure mode
+of the flow is a silent hang, with no timeout.
+
+Smoke test after either path:
+
+```sh
+latchkey curl -s https://chatgpt.com/backend-api/me | head -c 200
+```
+
+Expect a JSON `{id, email, …}`.
+
+#### Pasting the token by hand
+
+Still the fallback where the browser flow can't run — a headless box,
+or a machine whose `chatgpt` service you would rather not deregister.
 
 1. Open <https://chatgpt.com> in a logged-in browser tab.
 2. DevTools → **Console** → paste:
@@ -55,14 +98,6 @@ info chatgpt` reports `invalid` or requests come back with
 3. Paste the printed `latchkey auth set …` line into your terminal
    and run it. zsh/bash record the literal `$(pbpaste)`, not the
    resolved token, so nothing sensitive lands in `~/.zsh_history`.
-
-4. Smoke test:
-
-   ```sh
-   latchkey curl -s https://chatgpt.com/backend-api/me | head -c 200
-   ```
-
-   Expect a JSON `{id, email, …}`.
 
 `chatgpt.com` is fronted by Cloudflare's managed-challenge system,
 which fingerprints TLS handshakes. To clear the challenge, point
