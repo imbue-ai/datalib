@@ -45,6 +45,10 @@ pub struct ServiceInfo {
     /// register it: latchkey refuses to re-register an existing name,
     /// and a service somebody already set up by hand is theirs.
     pub registered: bool,
+    /// How to invoke latchkey on *this* machine — the bundled binary's
+    /// path, or the `npx` fallback. The wizard prints commands people
+    /// are meant to run, and `latchkey` alone is not on everyone's PATH.
+    pub cli: String,
     /// Set when latchkey could not answer at all (not installed, no
     /// keyring access). The wizard still lets you type an account name
     /// by hand, so this is a note rather than an error.
@@ -83,6 +87,7 @@ pub async fn get_service(
                 auth_options: Vec::new(),
                 accounts: Vec::new(),
                 registered: !unknown,
+                cli: datalib_core::node_runtime::latchkey_cli_hint(),
                 error: if unknown { None } else { Some(message) },
             }))
         }
@@ -126,6 +131,7 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         auth_options,
         accounts,
         registered: true,
+        cli: datalib_core::node_runtime::latchkey_cli_hint(),
         error: None,
     }
 }

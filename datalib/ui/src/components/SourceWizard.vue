@@ -373,6 +373,10 @@ const authOptions = ref<string[]>([]);
 /// Whether latchkey holds this service already. Starts true so nothing
 /// offers to register one before the answer is in.
 const serviceRegistered = ref(true);
+/// How to invoke latchkey on the machine running the backend. `npx`
+/// until the server says otherwise, so a command is never shown naming
+/// a binary that isn't there.
+const latchkeyCli = ref("npx -y latchkey");
 /// Why the account list is empty, when latchkey could not be asked.
 /// Shown as a note, not an error — the field is still typable.
 const accountsError = ref<string | null>(null);
@@ -387,6 +391,7 @@ async function loadAccounts() {
     accounts.value = info.accounts;
     authOptions.value = info.auth_options;
     serviceRegistered.value = info.registered;
+    latchkeyCli.value = info.cli;
     accountsError.value = info.error;
   } catch (e) {
     accounts.value = [];
@@ -405,7 +410,9 @@ const wouldRegister = computed(() =>
 /// login, or when the service is ours to register with one. Offering it
 /// for a service that can do neither would produce a failure that reads
 /// like a bug in datalib.
-const canConnect = computed(() => authOptions.value.includes("browser") || !!wouldRegister.value);
+const canConnect = computed(
+  () => authOptions.value.includes("browser") || !!chosen.value?.credentialRegister,
+);
 
 /// A service latchkey holds that cannot do a browser login. Its owner
 /// set it up by hand, so the dialog says how to add a credential the
@@ -413,6 +420,31 @@ const canConnect = computed(() => authOptions.value.includes("browser") || !!wou
 const setOnlyService = computed(
   () => serviceRegistered.value && !authOptions.value.includes("browser"),
 );
+
+/// Set by the button on a service latchkey holds without a browser
+/// login: converting one means taking it apart and putting it back,
+/// which destroys the credentials stored under it. The commands are
+/// shown; running them is the owner's call, not this dialog's.
+const showConversion = ref(false);
+
+/// What converting `service` to a browser login actually takes, in the
+/// order it has to happen and naming this machine's latchkey.
+const conversionCommands = computed(() => {
+  const reg = chosen.value?.credentialRegister;
+  const name = service.value;
+  if (!reg || !name) return "";
+  const lk = latchkeyCli.value;
+  const params = JSON.stringify(reg.login_flow_params);
+  return [
+    `${lk} auth clear ${name} --all`,
+    `${lk} services deregister ${name}`,
+    `${lk} services register ${name} \\`,
+    `  --base-api-url="${reg.base_api_url}" \\`,
+    `  --login-url="${reg.login_url}" \\`,
+    `  --login-flow=${reg.login_flow} \\`,
+    `  --login-flow-params='${params}'`,
+  ].join("\n");
+});
 
 /// Pasting a credential works on every service latchkey holds, browser
 /// login or not: a cookie-capture service reports `["browser", "set"]`
@@ -437,6 +469,10 @@ onUnmounted(() => {
 async function connectViaLatchkey() {
   const name = service.value;
   if (!name || connect.value.state === "running") return;
+  if (setOnlyService.value) {
+    showConversion.value = true;
+    return;
+  }
   connect.value = { state: "running", message: "A browser window should open. Finish the login there." };
   try {
     const started = await startLatchkeyConnect(name, accountValue.value, wouldRegister.value);
@@ -492,9 +528,30 @@ async function testConnection() {
       report,
     };
   } catch (e) {
-    probe.value = { state: "failed", message: String(e), report: null };
+    probe.value = { state: "failed", message: probeFailure(e), report: null };
   }
 }
+
+/// A probe failure as something to read. What arrives is the step's own
+/// stderr — one `error: ` line per link in its cause chain, and for a
+/// credential problem a numbered setup recipe after them — wrapped in a
+/// JS `Error`. Strip the two layers of prefix that add nothing; the
+/// lines themselves are the message, and the template keeps them.
+function probeFailure(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  return raw
+    .split("\n")
+    .map((line) => line.replace(/^\s*error:\s*/, ""))
+    .join("\n")
+    .trim();
+}
+
+/// The failure in one line, which is the part that says what went
+/// wrong. Everything after it is how to fix it.
+const probeHeadline = computed(() => probe.value.message.split("\n")[0] ?? "");
+/// The rest, kept as written: it is a numbered recipe with commands in
+/// it, and reflowing it into a paragraph is what made it unreadable.
+const probeDetail = computed(() => probe.value.message.split("\n").slice(1).join("\n").trim());
 
 /// What a `probe:` field should offer, given what came back.
 function probeOptions(field: Field): ProbeItem[] {
@@ -697,6 +754,24 @@ function submit() {
           >
             {{ chosen.credentialConnectWarning }}
           </p>
+          <!-- What the button says on a service that has no browser
+               login. Shown rather than done: latchkey refuses to
+               re-register a name it holds, so the only way to add one
+               destroys the credentials already stored under it. -->
+          <div v-if="showConversion" class="wiz-conn-note wiz-convert">
+            <p class="wiz-help wiz-convert-head">
+              latchkey holds <code>{{ service }}</code> without a browser login, and won’t add one
+              to a name it already has. Adding one means taking the service apart and
+              registering it again — which <b>deletes every credential stored under
+              <code>{{ service }}</code></b>, so it is yours to run, not this dialog’s:
+            </p>
+            <pre class="wiz-probe-detail">{{ conversionCommands }}</pre>
+            <p class="wiz-help">
+              Then come back and press <b>Latchkey auth</b>. Or skip all of it and paste a
+              credential, below — that needs no conversion and is what this service does today.
+            </p>
+          </div>
+
           <!-- A service somebody registered by hand is theirs: latchkey
                refuses to re-register a name, and nothing here should
                want to. Either way, pasting a credential stays available
@@ -715,9 +790,13 @@ function submit() {
           <p v-if="connect.state !== 'idle'" class="wiz-help wiz-conn-note">
             {{ connect.message }}
           </p>
-          <p v-if="probe.state === 'failed'" class="wiz-error wiz-conn-note wiz-probe-note">
-            {{ probe.message }}
-          </p>
+          <div v-if="probe.state === 'failed'" class="wiz-conn-note wiz-probe-note">
+            <p class="wiz-error wiz-probe-headline">{{ probeHeadline }}</p>
+            <details v-if="probeDetail">
+              <summary class="wiz-help">How to fix it</summary>
+              <pre class="wiz-probe-detail">{{ probeDetail }}</pre>
+            </details>
+          </div>
           <p
             v-else-if="probe.state === 'ok' && probe.report"
             class="wiz-help wiz-conn-note wiz-probe-note"
@@ -1094,6 +1173,27 @@ function submit() {
 .wiz-fixed-id { margin: 0 0 16px; }
 .wiz-help { color: var(--datalib-muted); font-size: 11.5px; line-height: 1.45; }
 .wiz-error { color: #b8481a; font-size: 11.5px; }
+.wiz-probe-headline { margin: 0 0 4px; }
+/* The step's recipe, in the shape it was written: numbered steps and
+   shell commands, which reflowed into a paragraph are unreadable. */
+.wiz-probe-detail {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--datalib-code-bg);
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.wiz-probe-note details > summary { cursor: pointer; }
+.wiz-convert {
+  border-left: 3px solid var(--datalib-border);
+  padding-left: 10px;
+}
+.wiz-convert-head { margin: 0; }
 .wiz-req {
   font-style: normal;
   font-weight: 400;
