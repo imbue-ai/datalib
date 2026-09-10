@@ -1,10 +1,10 @@
 --- a/build.rs
 +++ b/build.rs
-@@ -1,5 +1,32 @@
+@@ -1,6 +1,32 @@
  use std::env;
 -use std::path::Path;
 +use std::path::{Path, PathBuf};
-+
+ 
 +/// Absolutize `SQLITE3_INCLUDE_DIR` / `SQLITE3_LIB_DIR` when they're
 +/// passed as workspace-relative `bazel-out/...` paths.
 +///
@@ -30,15 +30,30 @@
 +        env::set_var(name, abs.as_os_str());
 +    }
 +}
-
++
  /// Tells whether we're building for Windows. This is more suitable than a plain
  /// `cfg!(windows)`, since the latter does not properly handle cross-compilation
-@@ -37,6 +64,8 @@
+ ///
+@@ -37,6 +63,8 @@
  }
-
+ 
  fn main() {
 +    absolutize_bazel_env("SQLITE3_INCLUDE_DIR");
 +    absolutize_bazel_env("SQLITE3_LIB_DIR");
      let out_dir = env::var("OUT_DIR").unwrap();
      let out_path = Path::new(&out_dir).join("bindgen.rs");
      if cfg!(feature = "in_gecko") {
+@@ -64,6 +92,13 @@
+             );
+         }
+         build_linked::main(&out_dir, &out_path);
++    } else if cfg!(feature = "bundled") && env::var_os("SQLITE3_LIB_DIR").is_some() {
++        // A caller that names a lib dir has its own SQLite (under Bazel, the
++        // doltlite archive). Compiling the amalgamation beside it would put two
++        // `libsqlite3.a` on the link line, and which one a binary got would be
++        // whichever search path the linker walked first — the musl static
++        // build picked stock SQLite. Take the linked path: one archive.
++        build_linked::main(&out_dir, &out_path);
+     } else if cfg!(feature = "bundled")
+         || (win_target() && cfg!(feature = "bundled-windows"))
+         || cfg!(feature = "bundled-sqlcipher")
