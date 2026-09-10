@@ -597,16 +597,22 @@ Each slice is a PR; each leaves the tree green.
        there pins that every type with a `grid_rows.provider` tag spells
        it the same way. Only `sms_backup_restore` and `google_takeout`
        keep a method word, because each *is* the product's name.
-     - The method tables: `api` for slack, chatgpt, github, gitlab,
-       notion, yolink and claude; `export` (with `path`) for claude,
-       linkedin and google_takeout, whose feed toggles moved inside it;
-       `jmap`, `gmail_api` and `mbox` (with `path`) for email; `carddav`
-       and `vcf` for contacts; `texts` for beeper (the Beeper Texts
-       app's own database, with `path` optional); `backup` for signal,
-       whatsapp and sms_backup_restore; `fswalk` for fsindex, pdf and
-       media; `catalog` for lightroom; `github` for perseus. A provider
-       with two tables refuses a step naming both, so the
-       "bootstrap from an export" door stays one-way by construction.
+     - A table's name is read *under the type*, and there is no global
+       vocabulary of them. `api` under `type = "slack"` is Slack's own
+       API — the qualified `slack_api` would only repeat the type — and
+       it is a specific name precisely because a product has one API.
+       A type that is not one product qualifies its sources: email's
+       are `jmap`, `gmail_api` and `mbox`. So the tables are `api` for
+       slack, chatgpt, github, gitlab, notion, yolink and claude;
+       `export` (with `path`) for claude, linkedin and google_takeout,
+       whose feed toggles moved inside it; `jmap`, `gmail_api` and
+       `mbox` (with `path`) for email; `carddav` and `vcf` for contacts;
+       `texts` for beeper (the Beeper Texts app's own database, with
+       `path` optional); `backup` for signal, whatsapp and
+       sms_backup_restore; `fswalk` for fsindex, pdf and media;
+       `catalog` for lightroom; `github` for perseus. A provider with
+       two tables refuses a step naming both, so the "bootstrap from an
+       export" door stays one-way by construction.
      - Perseus lost its `Local` method. A tree staged by hand was never
        an ingest: with no `sync` the download wave was empty and the
        step refused, so the staged tree is what it always was, a

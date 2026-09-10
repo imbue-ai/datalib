@@ -5,8 +5,10 @@
 //! that contract, not a display convenience. A type names the thing
 //! being mirrored, never the way it is reached: `claude`, whether the
 //! data came over the API or out of an export; `contacts`, whether over
-//! CardDAV or from `.vcf` files. The method is a table in the ingest
-//! step's params (`IngestMethods` in each provider's config crate).
+//! CardDAV or from `.vcf` files. Where the data comes from is a table
+//! in the ingest step's params, named under the type — `api` is that
+//! product's own API — and declared by each provider's config crate
+//! (`IngestMethods`).
 //!
 //! The value of naming them here is that [`crate::dispatch::plan`]
 //! matches on the enum: adding a variant without wiring it up is a
