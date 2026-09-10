@@ -105,9 +105,9 @@ const stage = ref<Stage>(props.editing ? "configure" : "pick");
 const query = ref("");
 const chosen = ref<CatalogEntry | null>(props.editing?.entry ?? null);
 
-/// Blank means "no name" — a group with none is shown by its id, so the
-/// field takes the id as its placeholder rather than pre-filling one,
-/// and clearing it removes the key.
+/// Blank means "no name" — a group with none is shown by its id, and
+/// clearing the box removes the key. Nothing is ever pre-filled here;
+/// see [`nameHint`] for what the box shows instead.
 const name = ref(props.editing?.group.name ?? "");
 /// The group's id: the directory its steps write under. Typed while
 /// creating, fixed while editing.
@@ -252,6 +252,13 @@ function onPickKeydown(e: KeyboardEvent) {
 /// those itself.
 const RESERVED = new Set(["system", "unified_index"]);
 const groupId = computed(() => id.value.trim());
+
+/// The example in the Name box. The id would be the tempting thing to
+/// show, since a blank name falls back to it — but the id is a path
+/// segment and the name is display text, and showing "whatsapp" there
+/// invites a name shaped like an id. The help text below carries the
+/// fallback instead.
+const nameHint = computed(() => chosen.value?.nameHint ?? "…");
 const idError = computed(() => {
   const n = groupId.value;
   if (!n) return "An id is required.";
@@ -850,14 +857,12 @@ function submit() {
 
         <label class="wiz-field">
           <span class="wiz-label">Name</span>
-          <input
-            v-model="name"
-            class="wiz-input"
-            :placeholder="groupId || '…'"
-          />
+          <input v-model="name" class="wiz-input" :placeholder="nameHint" />
           <small class="wiz-help">
-            What this source is called on screen. Change it whenever you like — nothing on disk
-            moves and no step re-runs. Leave it blank to be shown as <code>{{ groupId || "…" }}</code>.
+            What this source is called on screen — anything you like, spaces and capitals
+            included, and <b>{{ nameHint }}</b> is only an example. Change it whenever you
+            like: nothing on disk moves and no step re-runs. Leave it blank to be shown as
+            <code>{{ groupId || "…" }}</code>.
           </small>
         </label>
 
