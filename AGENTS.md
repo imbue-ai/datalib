@@ -45,8 +45,8 @@ reference doc it relates to.
   entirely. Read it for why; it was written as the design and kept as
   the explanation.
 - [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md)
-  — *agreed design (2026-09-09); slices 1, 2, 4a and 4b built
-  (2026-09-09 and 2026-09-10), the rest not*: one row per source in the
+  — *agreed design (2026-09-09); slices 1, 2, 3a, 4a and 4b built
+  (2026-09-09 and 2026-09-10); 3b and 5 not*: one row per source in the
   Manage screen, done by making the grouping a config entity. A
   `[[groups]]` table with `id`/`name`/`type`; a step is `(group,
   function)` with its id composed and never written; `datalib-step`
@@ -64,9 +64,16 @@ reference doc it relates to.
   settings under a "Rendering" heading (`SourceWizard.vue`,
   `ui/src/config/sourceSteps.ts`). Nothing in the UI splits a step id
   any more: phase is read off `function`, the source column off the
-  group. Still to come: `type` as the data type with the fetch method
-  as a params table, each declared `Origin` or `Local`, which is what
-  makes a row read "Download" or "Import"; the mechanical crate rename.
+  group. Every ingest method a provider accepts declares itself
+  `Origin` or `Local` (`IngestMethods` in `datalib_source_common`,
+  mirrored into `ui/src/config/ingestMethods.json` by a generator),
+  which is what makes a step's row read "Download" or "Import" and
+  what makes `datalib-step` refuse an ingest step that names no
+  method. Still to come, all optional to the goal above: the wizard's
+  credentials section gated on `Origin` (a small UI edit); 3b, one
+  type per data shape and one params table per method, which is a
+  config-shape change across every provider crate and the last one;
+  and the mechanical crate rename.
   Read it before touching step ids, the wizard, or `datalib-step`'s
   dispatch. It reverses the "ungrouping" section of `step_identity.md`.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
