@@ -270,6 +270,17 @@ WORKDIR /data
 
 EXPOSE 8731
 
+# `datalib-http` binds 127.0.0.1 by default, which inside a container is
+# the container's own loopback — `-p` publishes the container's external
+# interface and so can never reach it. Every documented `docker run` had
+# to carry `-e DATALIB_BIND=0.0.0.0:8731` to undo that.
+#
+# This widens nothing outside the container: 0.0.0.0 here is the
+# container's network namespace, and what the host exposes is still
+# decided entirely by `-p` (`-p 127.0.0.1:8731:8731` stays loopback-only).
+# Override for a different port with `-e DATALIB_BIND=0.0.0.0:<port>`.
+ENV DATALIB_BIND=0.0.0.0:8731
+
 # Even short-lived commands need `datalib-entrypoint.sh` because
 # every documented use case touches latchkey, and latchkey aborts with
 # "No encryption key available." if `LATCHKEY_ENCRYPTION_KEY` isn't

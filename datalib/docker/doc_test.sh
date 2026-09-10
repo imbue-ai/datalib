@@ -39,7 +39,11 @@ for tool in docker curl python3; do
     command -v "$tool" >/dev/null || { echo "doc_test: $tool not on PATH" >&2; exit 1; }
 done
 
-tmp="${TEST_TMPDIR:-$(mktemp -d -t datalib-doc-test)}"
+# `mktemp -t PREFIX` is a BSD spelling: GNU reads the argument as a
+# template and rejects it for having no `XXXXXX`. Bazel always sets
+# TEST_TMPDIR, so this branch only ever runs from release.yml — on
+# Linux, where the BSD spelling fails.
+tmp="${TEST_TMPDIR:-$(mktemp -d "${TMPDIR:-/tmp}/datalib-doc-test.XXXXXX")}"
 mkdir -p "$tmp/import"
 # A real file, not a runfiles symlink: a bind mount does not follow a
 # symlink whose target is outside the mounted directory.
