@@ -828,7 +828,7 @@ async fn upsert_project_docs(
 /// was never registered ("No service matches URL"), or the sessionKey
 /// cookie is missing/expired (401/403). Anything else (network,
 /// claude.ai outage) passes through unembellished.
-fn credential_hint(e: ClaudeError) -> anyhow::Error {
+pub fn credential_hint(e: ClaudeError) -> anyhow::Error {
     let s = e.to_string();
     let setup_problem = s.contains("No service matches URL")
         || s.to_ascii_lowercase().contains("no credentials")

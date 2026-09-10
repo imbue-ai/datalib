@@ -40,6 +40,11 @@ pub struct ServiceInfo {
     /// its "Connect" button only when `browser` is among them.
     pub auth_options: Vec<String>,
     pub accounts: Vec<StoredAccount>,
+    /// Whether latchkey knows this service at all. False means the name
+    /// is free, which is the only state in which anything here may
+    /// register it: latchkey refuses to re-register an existing name,
+    /// and a service somebody already set up by hand is theirs.
+    pub registered: bool,
     /// Set when latchkey could not answer at all (not installed, no
     /// keyring access). The wizard still lets you type an account name
     /// by hand, so this is a note rather than an error.
@@ -66,12 +71,21 @@ pub async fn get_service(
     let service = validated_service(&service)?;
     match latchkey_json(&["services", "info", &service], SERVICES_TIMEOUT).await {
         Ok(v) => Ok(Json(parse_service_info(&service, &v))),
-        Err(e) => Ok(Json(ServiceInfo {
-            service,
-            auth_options: Vec::new(),
-            accounts: Vec::new(),
-            error: Some(e.to_string()),
-        })),
+        Err(e) => {
+            // latchkey says "Unknown service: <name>" for a name nobody
+            // has registered. That is a state the wizard can act on, so
+            // it is reported as `registered: false` rather than folded
+            // into the "latchkey could not be asked" note.
+            let message = e.to_string();
+            let unknown = message.contains("Unknown service");
+            Ok(Json(ServiceInfo {
+                service,
+                auth_options: Vec::new(),
+                accounts: Vec::new(),
+                registered: !unknown,
+                error: if unknown { None } else { Some(message) },
+            }))
+        }
     }
 }
 
@@ -111,6 +125,7 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         service: service.to_string(),
         auth_options,
         accounts,
+        registered: true,
         error: None,
     }
 }
@@ -123,6 +138,25 @@ pub struct ConnectRequest {
     /// empty) stores latchkey's unnamed default for the service.
     #[serde(default)]
     pub account: Option<String>,
+    /// How to teach latchkey this service, when it has never heard of
+    /// it. A browser login is a property of the *service*, fixed when
+    /// it is registered, so a service with none cannot grow one per
+    /// account.
+    #[serde(default)]
+    pub register: Option<ServiceRegistration>,
+}
+
+/// A `latchkey services register` invocation, as data. The wizard
+/// sends it; nothing here composes one.
+#[derive(Debug, Deserialize)]
+pub struct ServiceRegistration {
+    pub base_api_url: String,
+    pub login_url: String,
+    /// `cookie-capture` or `token-capture` — latchkey's generic
+    /// browser logins, for a service it has no built-in support for.
+    pub login_flow: String,
+    /// That flow's parameters, e.g. `{"cookieKeys": ["sessionKey"]}`.
+    pub login_flow_params: Value,
 }
 
 /// How one browser-login attempt is going. The UI switches on these
@@ -162,8 +196,9 @@ pub async fn start_connect(
     body: Option<Json<ConnectRequest>>,
 ) -> Result<Json<ConnectStatus>, (StatusCode, Json<Value>)> {
     let service = validated_service(&service)?;
-    let account = body.and_then(|Json(b)| b.account).unwrap_or_default();
-    let account = account.trim().to_string();
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let account = body.account.unwrap_or_default().trim().to_string();
+    let register = body.register.map(|r| register_args(&service, &r));
 
     let id = uuid::Uuid::new_v4().to_string();
     let slot = Arc::new(Mutex::new(ConnectStatus {
@@ -188,6 +223,21 @@ pub async fn start_connect(
     args.extend(["auth".to_string(), "browser".to_string(), service]);
 
     tokio::spawn(async move {
+        // Registering is what makes the browser login exist at all, so
+        // it has to happen first. latchkey refuses a name it already
+        // holds; that refusal is the desired outcome, not a failure —
+        // it is what keeps a hand-made registration untouched.
+        if let Some(args) = register {
+            if let Err(e) = latchkey_output(&args).await {
+                let message = e.to_string();
+                if !message.contains("already exists") {
+                    let mut slot = slot.lock().expect("connect slot mutex");
+                    slot.status = ConnectState::Failed;
+                    slot.output = tail(&message);
+                    return;
+                }
+            }
+        }
         let outcome = tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output(&args)).await;
         let mut slot = slot.lock().expect("connect slot mutex");
         match outcome {
@@ -212,6 +262,20 @@ pub async fn start_connect(
         status: ConnectState::Running,
         output: String::new(),
     }))
+}
+
+/// `latchkey services register <name> --base-api-url=… --login-url=…
+/// --login-flow=… --login-flow-params=…`, as an argv.
+fn register_args(service: &str, r: &ServiceRegistration) -> Vec<String> {
+    vec![
+        "services".to_string(),
+        "register".to_string(),
+        service.to_string(),
+        format!("--base-api-url={}", r.base_api_url),
+        format!("--login-url={}", r.login_url),
+        format!("--login-flow={}", r.login_flow),
+        format!("--login-flow-params={}", r.login_flow_params),
+    ]
 }
 
 pub async fn connect_status(

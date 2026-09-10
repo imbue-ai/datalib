@@ -826,19 +826,39 @@ export type LatchkeyService = {
   /// `browser`, `set`, … — which ways this service can be authenticated.
   auth_options: string[];
   accounts: StoredAccount[];
+  /// Whether latchkey knows this service at all. False means the name
+  /// is free — the only state in which the wizard may register it.
+  registered: boolean;
   /// Set when latchkey itself could not be asked. Not fatal: the
   /// account can still be typed.
   error: string | null;
 };
 
-export type ProbeLabel = {
-  /// The exact string to put in a label filter.
+/// How to teach latchkey a service it has never heard of, so that a
+/// browser login exists for it. Mirrors `ServiceRegistration` in
+/// datalib/backend/http/src/connect.rs.
+export type ServiceRegistration = {
+  base_api_url: string;
+  login_url: string;
+  login_flow: "cookie-capture" | "token-capture";
+  login_flow_params: Record<string, unknown>;
+};
+
+/// One row a probe offers a filter field. Mirrors `ProbeItem` in
+/// datalib/backend/source_common/src/probe.rs.
+export type ProbeItem = {
+  /// The exact string to put in the filter — a label path, a
+  /// conversation uuid.
   path: string;
-  /// `mailbox` (emails are filed here) or `keyword` (a Gmail flag —
-  /// downloadable, but never matched by the render-side filter).
+  /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
+  /// downloadable, but never matched by the render-side filter), or
+  /// `conversation` (one chat thread).
   kind: string;
+  /// A human name, when `path` is an opaque id.
+  title: string | null;
   role: string | null;
   messages: number | null;
+  updated_at: string | null;
 };
 
 export type ProbeReport = {
@@ -849,7 +869,7 @@ export type ProbeReport = {
     display_name: string | null;
     message_estimate: number | null;
   };
-  labels: ProbeLabel[];
+  items: ProbeItem[];
   notes: string[];
 };
 
@@ -899,11 +919,12 @@ export function latchkeyService(service: string): Promise<LatchkeyService> {
 export function startLatchkeyConnect(
   service: string,
   account?: string,
+  register?: ServiceRegistration,
 ): Promise<ConnectAttempt> {
   return quietJson<ConnectAttempt>(`/api/latchkey/${encodeURIComponent(service)}/connect`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ account: account ?? "" }),
+    body: JSON.stringify({ account: account ?? "", register: register ?? null }),
   });
 }
 

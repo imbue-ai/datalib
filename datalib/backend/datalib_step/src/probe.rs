@@ -12,9 +12,16 @@ pub async fn run(source_type: &str, params: &serde_json::Value) -> Result<serde_
             let report = datalib_etl_email::probe::probe(&config).await?;
             Ok(serde_json::to_value(report)?)
         }
+        "claude" => {
+            let config: datalib_etl_claude_config::ClaudeConfig =
+                serde_json::from_value(params.clone())
+                    .context("parse --params as a claude download config")?;
+            let report = datalib_etl_claude::probe::probe(&config).await?;
+            Ok(serde_json::to_value(report)?)
+        }
         other => anyhow::bail!(
             "no probe for source type {other:?}. Probing means asking a live service what an \
-             account can reach; only `email` implements it so far."
+             account can reach; only `email` and `claude` implement it so far."
         ),
     }
 }
