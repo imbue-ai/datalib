@@ -218,8 +218,12 @@ pub const WA_MESSAGE_ADD_ON_REACTION_DDL: &str =
 /// Catalog of plaintext media files from the source backup. Bytes live in the
 /// sibling CAS, and `blake3` is both this table's key and the CAS key.
 ///
-/// Deliberately one digest: the shipped join is
-/// `wa_media_files.relative_path = wa_message_media.file_path`, so a second
+/// `relative_path` is relative to the **backup root**, so it includes the
+/// `Media/` prefix that msgstore puts on `wa_message_media.file_path`. The
+/// shipped join is `wa_media_files.relative_path = wa_message_media.file_path`
+/// and it only matches because both sides are anchored there.
+///
+/// Deliberately one digest: that same join is all render needs, so a second
 /// hash was stored and never read back — and computing it forced a full
 /// re-read of every media file on every run.
 pub const WA_MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_media_files (

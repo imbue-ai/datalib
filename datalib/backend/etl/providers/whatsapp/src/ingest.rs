@@ -163,7 +163,7 @@ async fn fetch_with_pool(
     .await?;
     mirror_message_add_on_reaction(&src_pool, &dst_pool, &addon_map, &mut summary).await?;
 
-    let media_root = backup_dir.join("Media");
+    let media_root = backup_dir.join(MEDIA_DIR);
     if media_root.is_dir() {
         mirror_media_files(&dst_pool, cas, &media_root, cache, &mut summary).await?;
     } else {
@@ -762,6 +762,12 @@ async fn mirror_message_add_on_reaction(
 /// `wa_message_media.file_path` → `wa_media_files.relative_path` and uses that
 /// row's blake3 as the CAS key.
 ///
+/// **`relative_path` is relative to the backup root, not to `Media/`.** That is
+/// what makes the join above match: msgstore spells a message's attachment
+/// `Media/WhatsApp Images/IMG-….jpg`, so a registry keyed on the path below
+/// `Media/` matches nothing and every attachment renders as "not yet fetched"
+/// while its bytes sit in the CAS unreferenced.
+///
 /// One scan of `Media/` produces path, size and hash without opening a file,
 /// because the host fingerprint cache vouches for anything whose stat has not
 /// moved; bytes are read only for hashes the CAS lacks, in bounded batches.
@@ -802,7 +808,7 @@ async fn mirror_media_files(
                 (blake3, relative_path, size_bytes, mime_type) VALUES (?, ?, ?, ?)",
         )
         .bind(fsscan::hex(&f.blake3))
-        .bind(&f.rel)
+        .bind(format!("{MEDIA_DIR}/{}", f.rel))
         .bind(f.size)
         .bind(mime_from_ext(&f.path))
         .execute(&mut *tx)
@@ -853,6 +859,10 @@ async fn mirror_media_files(
 
     Ok(())
 }
+
+/// The plaintext attachment tree inside a WhatsApp backup, and the prefix
+/// msgstore puts on every `message_media.file_path`.
+const MEDIA_DIR: &str = "Media";
 
 /// How many bytes of media may sit in memory before a CAS flush.
 const PUT_BATCH_BYTES: u64 = 64 * 1024 * 1024;
@@ -924,6 +934,47 @@ async fn commit_if_dirty(pool: &SqlitePool) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The media registry and msgstore have to spell an attachment's path
+    /// the same way, because render's only link between a message and its
+    /// bytes is `wa_message_media.file_path = wa_media_files.relative_path`.
+    /// Registering the path below `Media/` made that join match nothing, so
+    /// every WhatsApp attachment rendered as "(not yet fetched)" while its
+    /// bytes sat in the CAS.
+    #[tokio::test]
+    async fn media_registry_paths_are_anchored_where_msgstore_anchors_them() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        let media_root = backup_dir.join(MEDIA_DIR);
+        std::fs::create_dir_all(media_root.join("WhatsApp Images")).expect("mkdir");
+        std::fs::write(
+            media_root.join("WhatsApp Images").join("IMG-0001.jpg"),
+            b"jpeg-ish bytes",
+        )
+        .expect("write media file");
+
+        let db = RawDb::open(&tmp.path().join("wa_raw.doltlite_db"))
+            .await
+            .expect("open raw store");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+        let mut summary = IngestSummary::default();
+        mirror_media_files(db.pool(), db.cas(), &media_root, &cache, &mut summary)
+            .await
+            .expect("mirror media");
+
+        let paths: Vec<String> =
+            sqlx::query_scalar("SELECT relative_path FROM wa_media_files ORDER BY relative_path")
+                .fetch_all(db.pool())
+                .await
+                .expect("read wa_media_files");
+        db.close().await;
+
+        // Exactly the string msgstore stores in `message_media.file_path`.
+        assert_eq!(paths, vec!["Media/WhatsApp Images/IMG-0001.jpg"]);
+        assert_eq!(summary.media_files, 1);
+    }
 
     /// End-to-end against the developer's real WhatsApp backup.
     /// Marked `#[ignore]` so `cargo test` doesn't fail on CI / on
