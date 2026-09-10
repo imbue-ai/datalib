@@ -9,8 +9,8 @@ name = "datalib_etl_beeper"
 path = "src/lib.rs"
 
 [[bin]]
-name = "beeper-download"
-path = "src/bin/beeper_download.rs"
+name = "beeper-ingest"
+path = "src/bin/beeper_ingest.rs"
 
 [[bin]]
 name = "beeper-inspect"

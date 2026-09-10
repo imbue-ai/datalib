@@ -10,8 +10,8 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 
-// The UUIDv5 identity recipes live in `download::schema_raw` (identity
+// The UUIDv5 identity recipes live in `ingest::schema_raw` (identity
 // recipes belong next to the schema). Re-export so
 // `crate::render::{contact_uuid, addressbook_uuid}` callers — here
 // and in `render.rs` — keep resolving.
-pub use datalib_etl_contacts::download::schema_raw::{addressbook_uuid, contact_uuid};
+pub use datalib_etl_contacts::ingest::schema_raw::{addressbook_uuid, contact_uuid};

@@ -20,7 +20,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use serde_json::Value;
 use uuid::Uuid;
 
-use datalib_etl_google_takeout::download::{db_path_for, RawDb};
+use datalib_etl_google_takeout::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
 
 /// v2: a `created_date` / `when` we cannot parse gets a null `when_ts`

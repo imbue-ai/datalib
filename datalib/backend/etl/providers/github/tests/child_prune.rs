@@ -12,7 +12,7 @@ use std::time::Duration;
 use datalib_etl::event_store::{diff_and_save, make_record};
 use datalib_etl::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_github::download::{
+use datalib_etl_github::ingest::{
     block_on_load_all, db_path_for, fetch, FetchOptions, RawDb, ENTITY_ISSUE_COMMENT, ENTITY_PR,
     ENTITY_SELF,
 };

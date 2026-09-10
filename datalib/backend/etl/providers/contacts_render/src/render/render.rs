@@ -153,7 +153,7 @@ fn humanize_source_label(source_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl_contacts::download::api::VcardProp;
+    use datalib_etl_contacts::ingest::api::VcardProp;
 
     fn prop(value: &str, ty: Option<&str>) -> VcardProp {
         VcardProp {

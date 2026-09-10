@@ -10,10 +10,10 @@ use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_slack_config::{SlackApiSync, SlackConfig};
 
-use crate::download;
+use crate::ingest;
 
-/// Download wave: present iff `api`.
-pub fn plan_download(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+/// Ingest wave: present iff `api`.
+pub fn plan_ingest(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let blob_size_limit_bytes = config.common.blob_size_limit_bytes;
@@ -21,7 +21,7 @@ pub fn plan_download(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dy
     let latchkey = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.api {
-        procs.push(Box::new(SlackDownload {
+        procs.push(Box::new(SlackIngest {
             id: format!("slack/{name}/download"),
             raw_path,
             sync,
@@ -33,7 +33,7 @@ pub fn plan_download(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dy
     Ok(procs)
 }
 
-struct SlackDownload {
+struct SlackIngest {
     id: String,
     raw_path: PathBuf,
     sync: SlackApiSync,
@@ -45,7 +45,7 @@ struct SlackDownload {
 }
 
 #[async_trait]
-impl DataProcessor for SlackDownload {
+impl DataProcessor for SlackIngest {
     fn id(&self) -> &str {
         &self.id
     }
@@ -61,8 +61,8 @@ impl DataProcessor for SlackDownload {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = download::db_path_for(&self.raw_path);
-        let mut db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let mut db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         // Slack owns its wire-event tape: mirror every upsert to JSONL when the
         // resolved shared config leaves it enabled. (The orchestrator used to
@@ -78,7 +78,7 @@ impl DataProcessor for SlackDownload {
             );
             db.attach_event_tape(tape);
         }
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             sealer: Some(session.sealer()),
             db,
             channels: self.sync.channels.clone(),
@@ -86,7 +86,7 @@ impl DataProcessor for SlackDownload {
                 .sync
                 .since
                 .clone()
-                .unwrap_or_else(|| download::DEFAULT_SINCE.into()),
+                .unwrap_or_else(|| ingest::DEFAULT_SINCE.into()),
             refresh_window_days: self.sync.refresh_window_days.unwrap_or(0),
             members_only: !self.sync.all_channels && self.sync.channels.is_none(),
             media: self.sync.media,

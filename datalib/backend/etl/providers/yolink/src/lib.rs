@@ -4,5 +4,5 @@
 //! land as auditable diffs in `dolt log`. Rendering lives in
 //! [`datalib_etl_yolink_render`].
 
-pub mod download;
+pub mod ingest;
 pub mod processor;

@@ -7,7 +7,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_beeper::download::{self, FetchOptions, FetchSummary};
+use datalib_etl_beeper::ingest::{self, FetchOptions, FetchSummary};
 use datalib_etl_beeper_render::render::{self, Period};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 
@@ -72,8 +72,8 @@ async fn run_extract(
     // One handle for the whole pass, the way the processor's
     // `RawStoreSession` holds one: a second live connection to the same
     // store makes one of the two `dolt_commit`s fail.
-    let db = download::RawDb::open(&download::db_path_for(&db_path)).await?;
-    let summary = download::fetch(FetchOptions {
+    let db = ingest::RawDb::open(&ingest::db_path_for(&db_path)).await?;
+    let summary = ingest::fetch(FetchOptions {
         db: db.clone(),
         sources: sources.into_iter().map(String::from).collect(),
         beeper_data_dir: Some(beeper_data_dir),

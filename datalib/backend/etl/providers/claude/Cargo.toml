@@ -9,8 +9,8 @@ name = "datalib_etl_claude"
 path = "src/lib.rs"
 
 [[bin]]
-name = "claude-download"
-path = "src/bin/claude_download.rs"
+name = "claude-ingest"
+path = "src/bin/claude_ingest.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }

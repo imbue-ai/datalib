@@ -10,9 +10,9 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_media_config::MediaConfig;
 
-use crate::download;
+use crate::ingest;
 
-pub fn plan_download(ctx: PlanContext, config: MediaConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+pub fn plan_ingest(ctx: PlanContext, config: MediaConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     config.validate()?;
     let name = ctx.name;
     let root = config
@@ -20,7 +20,7 @@ pub fn plan_download(ctx: PlanContext, config: MediaConfig) -> Result<Vec<Box<dy
         .as_ref()
         .ok_or_else(|| anyhow!("media source {name} missing `fswalk.path`"))?
         .path();
-    Ok(vec![Box::new(MediaDownload {
+    Ok(vec![Box::new(MediaIngest {
         id: format!("media/{name}/download"),
         raw_path: config.common.raw_path().to_path_buf(),
         root,
@@ -32,7 +32,7 @@ pub fn plan_download(ctx: PlanContext, config: MediaConfig) -> Result<Vec<Box<dy
     })])
 }
 
-struct MediaDownload {
+struct MediaIngest {
     id: String,
     raw_path: PathBuf,
     root: PathBuf,
@@ -44,16 +44,16 @@ struct MediaDownload {
 }
 
 #[async_trait]
-impl DataProcessor for MediaDownload {
+impl DataProcessor for MediaIngest {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = raw_layout::entities_db(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             db,
             source_name: ctx.name.to_string(),
             root: self.root.clone(),

@@ -204,7 +204,7 @@ def main() -> int:
     # routed through the HTTP transport that `datalib-step synthesize`
     # records playback tapes for, so there is nothing to replay. The
     # config below also carries no `sync:`, which yolink requires, so
-    # `plan_download` would contribute zero processors anyway.
+    # `plan_ingest` would contribute zero processors anyway.
     #
     # Skipped when the store already exists. The maker is a pure function
     # of the spec, so regenerating would be harmless content-wise, but it

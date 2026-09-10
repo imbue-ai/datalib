@@ -16,21 +16,18 @@ use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_notion_config::{NotionConfig, NotionSync};
 
-use crate::download;
+use crate::ingest;
 
-/// Download wave: present iff `api`. Consumes the
+/// Ingest wave: present iff `api`. Consumes the
 /// playback root (BFS seeds in synth/playback mode).
-pub fn plan_download(
-    ctx: PlanContext,
-    config: NotionConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+pub fn plan_ingest(ctx: PlanContext, config: NotionConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let playback_root = ctx.playback_root;
     let latchkey = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.api {
-        procs.push(Box::new(NotionDownload {
+        procs.push(Box::new(NotionIngest {
             id: format!("notion/{name}/download"),
             raw_path,
             sync,
@@ -41,7 +38,7 @@ pub fn plan_download(
     Ok(procs)
 }
 
-struct NotionDownload {
+struct NotionIngest {
     id: String,
     raw_path: PathBuf,
     sync: NotionSync,
@@ -52,14 +49,14 @@ struct NotionDownload {
 }
 
 #[async_trait]
-impl DataProcessor for NotionDownload {
+impl DataProcessor for NotionIngest {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = download::db_path_for(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         // `roots` narrows the mirror; empty means the whole workspace.
         // In playback mode the fixture tree is the workspace, so seeds
@@ -71,7 +68,7 @@ impl DataProcessor for NotionDownload {
         }
         seeds.sort();
         seeds.dedup();
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             latchkey: self.latchkey.clone(),
             subtree_pages: seeds,
             max_pages: self.sync.max_pages.map(|m| m as usize),
@@ -81,7 +78,7 @@ impl DataProcessor for NotionDownload {
             sleep_between: Duration::ZERO,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
-            ..download::FetchOptions::new(db)
+            ..ingest::FetchOptions::new(db)
         })
         .await?;
         let summary = format!(

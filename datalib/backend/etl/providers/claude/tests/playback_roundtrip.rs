@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_claude::download::{
+use datalib_etl_claude::ingest::{
     db::block_on_load_all, db::db_path_for, fetch, FetchOptions, RawDb,
 };
 use datalib_etl_claude::synthesize::ClaudeSynth;

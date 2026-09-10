@@ -3,5 +3,5 @@
 //! Fastmail, Google CardDAV, …) into a doltlite raw store of vCard
 //! payloads. Rendering lives in [`datalib_etl_contacts_render`].
 
-pub mod download;
+pub mod ingest;
 pub mod processor;

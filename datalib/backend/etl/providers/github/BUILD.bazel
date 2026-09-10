@@ -36,8 +36,8 @@ rust_library(
 )
 
 rust_binary(
-    name = "github_download",
-    srcs = ["src/bin/github_download.rs"],
+    name = "github_ingest",
+    srcs = ["src/bin/github_ingest.rs"],
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [

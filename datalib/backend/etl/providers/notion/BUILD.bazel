@@ -32,8 +32,8 @@ rust_library(
 )
 
 rust_binary(
-    name = "notion_download",
-    srcs = ["src/bin/notion_download.rs"],
+    name = "notion_ingest",
+    srcs = ["src/bin/notion_ingest.rs"],
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [

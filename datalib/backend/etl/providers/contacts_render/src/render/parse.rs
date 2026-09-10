@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use datalib_etl_contacts::download::api::{vcard_all, vcard_fn, vcard_rev, vcard_uid, VcardProp};
-use datalib_etl_contacts::download::db::{LoadedRawContact, RawDb};
+use datalib_etl_contacts::ingest::api::{vcard_all, vcard_fn, vcard_rev, vcard_uid, VcardProp};
+use datalib_etl_contacts::ingest::db::{LoadedRawContact, RawDb};
 
 /// One parsed vCard, with everything render cares about pulled
 /// out so render doesn't have to re-walk the text.

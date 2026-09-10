@@ -222,7 +222,7 @@ dm_users = ["@riker", "Jean-Luc Picard"]
                             # message: Slack has no tombstones, so a
                             # deletion is only visible by re-walking a
                             # range and finding it gone. Unset, we never
-                            # notice one. See the provider's DOWNLOAD.md,
+                            # notice one. See the provider's INGEST.md,
                             # "Noticing a deleted message".
 
 [[steps]]
@@ -518,7 +518,7 @@ inputs = ["vcard-contacts/ingest"]
 # data dir; pick the chat networks to ingest (at least one required).
 # Poorly supported — nobody is using it, so expect rough edges. It never
 # notices a deletion, and `always_clear_before_ingest` is the wrong fix
-# here (see the provider's DOWNLOAD.md).
+# here (see the provider's INGEST.md).
 [[groups]]
 id = "beeper"
 type = "beeper"
@@ -860,7 +860,7 @@ inputs = ["pdfs/ingest"]
 # own) — query the raw store directly. The render step below still earns its
 # place: it emits the storage report every source gets, which is what puts
 # media in the grid at all.
-# See datalib/backend/etl/providers/media/DOWNLOAD.md.
+# See datalib/backend/etl/providers/media/INGEST.md.
 [[groups]]
 id = "media"
 type = "media"
@@ -901,7 +901,7 @@ inputs = ["media/ingest"]
 #
 # DOWNLOAD-ONLY: it renders nothing yet (a photo isn't chat-shaped), so
 # there is no render step — query the raw store directly. See
-# datalib/backend/etl/providers/lightroom/DOWNLOAD.md.
+# datalib/backend/etl/providers/lightroom/INGEST.md.
 #
 # The engine is not Lightroom-specific: any app whose data format is a
 # SQLite file (Quicken for Mac, Apple Photos, …) works with the same step,

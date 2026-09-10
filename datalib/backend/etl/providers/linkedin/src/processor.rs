@@ -8,11 +8,11 @@ use async_trait::async_trait;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_linkedin_config::LinkedinConfig;
 
-use crate::download;
+use crate::ingest;
 
-/// Download wave: always present — ingest the export CSVs (and
+/// Ingest wave: always present — ingest the export CSVs (and
 /// optionally photos).
-pub fn plan_download(
+pub fn plan_ingest(
     ctx: PlanContext,
     config: LinkedinConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
@@ -24,7 +24,7 @@ pub fn plan_download(
         .ok_or_else(|| anyhow!("linkedin source {name} missing `export.path`"))?;
     let input_path = export.path();
     let max_sequential_failures = config.common.download_params.max_sequential_failures();
-    Ok(vec![Box::new(LinkedinDownload {
+    Ok(vec![Box::new(LinkedinIngest {
         id: format!("linkedin/{name}/download"),
         raw_path,
         input_path,
@@ -36,7 +36,7 @@ pub fn plan_download(
 }
 
 /// LinkedIn's download processor. Owns its raw doltlite store end to end.
-struct LinkedinDownload {
+struct LinkedinIngest {
     id: String,
     raw_path: PathBuf,
     input_path: PathBuf,
@@ -45,16 +45,16 @@ struct LinkedinDownload {
 }
 
 #[async_trait]
-impl DataProcessor for LinkedinDownload {
+impl DataProcessor for LinkedinIngest {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = download::db_path_for(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             db,
             input_path: self.input_path.clone(),
             fetch_photos: self.fetch_photos,

@@ -1,7 +1,7 @@
 # GitLab Translate
 
 `gitlab-translate` reads the event-store JSONL written by
-`gitlab-download` and emits **one markdown document per merge request**,
+`gitlab-ingest` and emits **one markdown document per merge request**,
 plus that document's `grid_rows`.
 
 ```

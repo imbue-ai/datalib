@@ -5,7 +5,7 @@ use crate::render::render::OutlinkFormat;
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
-use datalib_etl_email::download;
+use datalib_etl_email::ingest;
 use datalib_etl_email_config::EmailOutlink;
 use datalib_etl_email_config::EmailRenderConfig;
 use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
@@ -54,7 +54,7 @@ impl RenderProcessor for EmailRender {
         use crate::render::parse::parse;
         use crate::render::render::render_all;
 
-        let db = download::db_path_for(&self.raw_path);
+        let db = ingest::db_path_for(&self.raw_path);
         if !db.exists() {
             tracing::info!(
                 source = %self.name,

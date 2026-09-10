@@ -2,6 +2,6 @@
 //! capture from `api.notion.com`. Rendering lives in
 //! [`datalib_etl_notion_render`].
 
-pub mod download;
+pub mod ingest;
 pub mod processor;
 pub mod synthesize;

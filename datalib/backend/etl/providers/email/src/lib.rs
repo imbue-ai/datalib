@@ -2,9 +2,9 @@
 //! Gmail API, or an `.mbox` on disk, all writing one deduped raw store.
 //! Rendering lives in [`datalib_etl_email_render`].
 
-pub mod download;
+pub mod ingest;
 pub mod mailbox_labels;
 pub mod probe;
 pub mod processor;
 
-pub use download::db;
+pub use ingest::db;

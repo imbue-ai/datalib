@@ -16,7 +16,7 @@ use crate::source_type::SourceType;
 pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
     match source_type {
         SourceType::Beeper => datalib_etl_beeper_config::BeeperConfig::METHODS,
-        SourceType::Contacts => datalib_etl_carddav_config::CarddavConfig::METHODS,
+        SourceType::Contacts => datalib_etl_contacts_config::ContactsConfig::METHODS,
         SourceType::Chatgpt => datalib_etl_chatgpt_config::ChatgptConfig::METHODS,
         SourceType::Claude => datalib_etl_claude_config::ClaudeConfig::METHODS,
         SourceType::Email => datalib_etl_email_config::EmailConfig::METHODS,

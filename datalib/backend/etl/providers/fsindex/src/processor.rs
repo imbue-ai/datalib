@@ -10,12 +10,9 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
 use datalib_etl_fsindex_config::FsindexConfig;
 
-use crate::download;
+use crate::ingest;
 
-pub fn plan_download(
-    ctx: PlanContext,
-    config: FsindexConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+pub fn plan_ingest(ctx: PlanContext, config: FsindexConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let root = config
@@ -23,7 +20,7 @@ pub fn plan_download(
         .as_ref()
         .ok_or_else(|| anyhow!("fsindex source {name} missing `fswalk.path`"))?
         .path();
-    Ok(vec![Box::new(FsindexDownload {
+    Ok(vec![Box::new(FsindexIngest {
         id: format!("fsindex/{name}/download"),
         raw_path,
         root,
@@ -34,7 +31,7 @@ pub fn plan_download(
 
 /// fsindex's download processor. Owns its raw doltlite store end to end (open,
 /// register interrupt hook, scan the tree, commit+close).
-struct FsindexDownload {
+struct FsindexIngest {
     id: String,
     raw_path: PathBuf,
     root: PathBuf,
@@ -43,14 +40,14 @@ struct FsindexDownload {
 }
 
 #[async_trait]
-impl DataProcessor for FsindexDownload {
+impl DataProcessor for FsindexIngest {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = raw_layout::entities_db(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         // The fingerprint cache is host state, so it lives in this
         // machine's cache directory — never in the data root, which may
@@ -62,7 +59,7 @@ impl DataProcessor for FsindexDownload {
             "reading this host's fingerprint cache from {}",
             cache.path().display(),
         );
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             // Unused when `db` is Some (fetch reuses the open handle); kept for
             // the standalone-open path's signature.
             db,
@@ -90,7 +87,7 @@ impl DataProcessor for FsindexDownload {
             s.cache_entries_loaded,
             s.cache_entries_written,
             s.cache_entries_forgotten,
-            download::human_growth(s.cache_bytes_before, s.cache_bytes_after),
+            ingest::human_growth(s.cache_bytes_before, s.cache_bytes_after),
         );
         Ok(session.finish(ctx, summary).await)
     }

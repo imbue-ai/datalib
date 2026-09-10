@@ -14,7 +14,7 @@ use datalib_etl::event_store::{diff_and_save, make_record};
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_github::download::{db_path_for, fetch, FetchOptions, RawDb};
+use datalib_etl_github::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_github::synthesize::GithubSynth;
 use datalib_etl_github_render::render::{parse_api_dir, render_github};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -37,7 +37,7 @@ fn build_events(api: &Path, prs: &[(u64, &str)]) {
     k.insert("user_id".into(), json!(42));
     write_event(
         api,
-        datalib_etl_github::download::ENTITY_SELF,
+        datalib_etl_github::ingest::ENTITY_SELF,
         k,
         json!({"id": 42, "login": "octocat"}),
     );
@@ -47,7 +47,7 @@ fn build_events(api: &Path, prs: &[(u64, &str)]) {
         k.insert("pr_number".into(), json!(num));
         write_event(
             api,
-            datalib_etl_github::download::ENTITY_PR,
+            datalib_etl_github::ingest::ENTITY_PR,
             k,
             json!({
                 "number": num,
@@ -223,7 +223,7 @@ async fn a_pr_that_left_the_store_is_named_as_vanished() {
 
     // Delete PR 2 from the raw store and commit, the way an upstream loss
     // reaches render.
-    let db = datalib_etl_github::download::RawDb::open(&db_path_for(&out_db))
+    let db = datalib_etl_github::ingest::RawDb::open(&db_path_for(&out_db))
         .await
         .unwrap();
     sqlx::query("DELETE FROM pull_requests WHERE id = ?")

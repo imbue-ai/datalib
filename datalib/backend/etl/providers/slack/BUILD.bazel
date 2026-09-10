@@ -49,8 +49,8 @@ rust_library(
 # pretty on a TTY, NDJSON on stderr otherwise, plus optional OTLP
 # export via --otlp-endpoint. Shells out to host `latchkey` at runtime.
 rust_binary(
-    name = "slack_download",
-    srcs = ["src/bin/slack_download.rs"],
+    name = "slack_ingest",
+    srcs = ["src/bin/slack_ingest.rs"],
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
@@ -141,9 +141,9 @@ rust_test(
 )
 
 rust_test(
-    name = "slack_dm_download",
-    srcs = ["tests/dm_download.rs"],
-    crate_root = "tests/dm_download.rs",
+    name = "slack_dm_ingest",
+    srcs = ["tests/dm_ingest.rs"],
+    crate_root = "tests/dm_ingest.rs",
     edition = "2021",
     deps = [
         ":datalib_etl_slack",

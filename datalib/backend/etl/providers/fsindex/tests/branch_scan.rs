@@ -5,7 +5,7 @@ use std::path::Path;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
-use datalib_etl_fsindex::download::{self, FetchOptions, RawDb};
+use datalib_etl_fsindex::ingest::{self, FetchOptions, RawDb};
 use sqlx::Row;
 
 fn write(root: &Path, rel: &str, body: &str) {
@@ -50,7 +50,7 @@ async fn scan_and_commit(
     let o = opts(&db, root, id, branch, cache.clone());
     // `fetch` re-applies the checkout on the same pooled connection;
     // doing it here too matches the binary, which opens the db itself.
-    download::fetch(o).await.unwrap();
+    ingest::fetch(o).await.unwrap();
     db.commit(&format!("scan {id}")).await.unwrap();
     // Closed, not dropped: the next open of this store is a second
     // connection until this one is actually gone.

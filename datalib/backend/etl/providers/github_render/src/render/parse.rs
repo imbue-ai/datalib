@@ -1,4 +1,4 @@
-//! Parse the GitHub doltlite database written by [`datalib_etl_github::download`] into
+//! Parse the GitHub doltlite database written by [`datalib_etl_github::ingest`] into
 //! in-memory rows for the renderer + grid_rows pass. Each PR's
 //! `issue_comments`, `pr_reviews`, and `pr_review_comments` collapse
 //! into one `CommentRow` stream sorted (per render) by section, then by
@@ -11,7 +11,7 @@ use once_cell::sync::Lazy;
 use serde_json::Value;
 use uuid::Uuid;
 
-use datalib_etl_github::download::db::{db_path_for, LoadedChild, LoadedRaw, RawDb};
+use datalib_etl_github::ingest::db::{db_path_for, LoadedChild, LoadedRaw, RawDb};
 
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_PR: &str = "pull_request";

@@ -1,5 +1,5 @@
 //! Read raw Notion payloads from the doltlite database written by
-//! [`datalib_etl_notion::download`].
+//! [`datalib_etl_notion::ingest`].
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -7,7 +7,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::Value;
 
-use datalib_etl_notion::download::db::{block_on_load_all, db_path_for, LoadedRaw};
+use datalib_etl_notion::ingest::db::{block_on_load_all, db_path_for, LoadedRaw};
 
 #[derive(Clone, Default)]
 pub struct ParsedNotion {
@@ -95,8 +95,8 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl_notion::download::db::{PageMarkdownUpsert, PageUpsert};
-    use datalib_etl_notion::download::RawDb;
+    use datalib_etl_notion::ingest::db::{PageMarkdownUpsert, PageUpsert};
+    use datalib_etl_notion::ingest::RawDb;
     use serde_json::json;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

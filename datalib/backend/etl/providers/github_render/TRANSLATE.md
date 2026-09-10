@@ -1,7 +1,7 @@
 # GitHub Translate
 
 `github-translate` reads the event-store JSONL written by
-`github-download` and emits **one markdown document per pull request**,
+`github-ingest` and emits **one markdown document per pull request**,
 plus that document's `grid_rows` for the UI's flat-row view.
 
 ```

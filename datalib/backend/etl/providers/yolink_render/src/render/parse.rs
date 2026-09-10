@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl_yolink::download::db_path_for;
+use datalib_etl_yolink::ingest::db_path_for;
 
 /// Outcome of a parse attempt.
 pub enum Parsed {

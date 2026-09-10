@@ -7,9 +7,9 @@ use serde_json::{json, Value};
 
 use datalib_etl_email_config::{EmailConfig, EmailLiveMode};
 
-use crate::download::gmail_api::api as gmail;
-use crate::download::labels::{self, LabelMap};
-use crate::download::{api, session::Session};
+use crate::ingest::gmail_api::api as gmail;
+use crate::ingest::labels::{self, LabelMap};
+use crate::ingest::{api, session::Session};
 use crate::mailbox_labels::{self, MailboxNode};
 
 /// What a successful probe found. Serialized straight to stdout by

@@ -1,12 +1,12 @@
 //! End-to-end fixture walk: point the extractor at the checked-in
 //! TNG-themed Takeout tree and assert each feed lands the rows
-//! the provider's DOWNLOAD.md promises.
+//! the provider's INGEST.md promises.
 
 use std::path::{Path, PathBuf};
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
-use datalib_etl_google_takeout::download::{self, FetchOptions, RawDb, SyncFlags};
+use datalib_etl_google_takeout::ingest::{self, FetchOptions, RawDb, SyncFlags};
 
 fn fixture_root() -> PathBuf {
     let rel =
@@ -36,11 +36,11 @@ async fn opts(work: &Path, db: &RawDb, sync: SyncFlags) -> FetchOptions {
     }
 }
 
-async fn run_all() -> (tempfile::TempDir, download::FetchSummary, PathBuf) {
+async fn run_all() -> (tempfile::TempDir, ingest::FetchSummary, PathBuf) {
     let work = tempfile::tempdir().unwrap();
     let db_path = work.path().join("gt.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
-    let summary = download::fetch(opts(work.path(), &db, SyncFlags::all()).await)
+    let summary = ingest::fetch(opts(work.path(), &db, SyncFlags::all()).await)
         .await
         .unwrap();
     // Closed, not dropped: every caller reopens this store, and a
@@ -197,7 +197,7 @@ async fn second_run_skips_via_file_checkpoint() {
     // the first run mean every file's fingerprint matches and the
     // walkers short-circuit.
     let db = RawDb::open(&db_path).await.unwrap();
-    let summary2 = download::fetch(opts(work.path(), &db, SyncFlags::all()).await)
+    let summary2 = ingest::fetch(opts(work.path(), &db, SyncFlags::all()).await)
         .await
         .unwrap();
     db.close().await;
@@ -217,7 +217,7 @@ async fn sync_flags_default_disables_everything() {
     let db_path = work.path().join("gt.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
     // Default SyncFlags has every feed off.
-    let summary = download::fetch(opts(work.path(), &db, SyncFlags::default()).await)
+    let summary = ingest::fetch(opts(work.path(), &db, SyncFlags::default()).await)
         .await
         .unwrap();
     db.close().await;

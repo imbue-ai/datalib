@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use datalib_etl_claude::download::{self as claude, db::block_on_load_all, db::db_path_for};
+use datalib_etl_claude::ingest::{self as claude, db::block_on_load_all, db::db_path_for};
 use insta::assert_json_snapshot;
 use serde_json::{json, Value};
 

@@ -1,11 +1,11 @@
 # Groups and functions: one row per source
 
-**Status: agreed design (2026-09-09); slices 1, 2, 3a, 3b, 4a and 4b
-built (2026-09-09 and 2026-09-10), slice 5 not.** Written against
+**Status: agreed design (2026-09-09); built in full (2026-09-09 and
+2026-09-10).** Written against
 `eee381c3`. Per [`AGENTS.md`](../../../AGENTS.md), don't cite this
 file as a description of the tree. Where it says "today", that was
 checked against that commit; where it says "will", check the slice
-list under "Order of work" — every slice but 5 is in the tree, and the
+list under "Order of work" — every slice is in the tree, and the
 places each departed from this text are recorded there.
 
 **Reverses** the "Sources stop being a grouping" section of
@@ -133,7 +133,7 @@ three words for the first stage — "download" in the crates and the CLI,
 the user-facing ones. Internally: `Phase::Download` becomes
 `Phase::Ingest`, `download_only!` becomes `ingest_only!`, and the UI's
 `fetch` phase becomes `ingest`. The crate names, the 113 files under
-`download/` module directories and the 14 `DOWNLOAD.md` files are *not*
+`download/` module directories and the 14 `INGEST.md` files are *not*
 renamed in this plan; that is a separate, purely mechanical PR (slice
 5), and until it lands `AGENTS.md` says so in one sentence.
 
@@ -500,7 +500,7 @@ Each slice is a PR; each leaves the tree green.
      than reading `DATALIB_DAG_INPUTS`; making them input-driven is a
      behaviour change (a source removed from the config would stop
      being swept) and was left for the streaming plan.
-   - `Wave::Download` and the `download::` crates keep their names
+   - `Wave::Ingest` and the `ingest::` crates keep their names
      (slice 5); `Phase::Download` became `Phase::Ingest`,
      `download_only!` became `ingest_only!`, and the UI's `fetch` phase
      became `ingest`, labelled "Ingest" until slice 4 labels it
@@ -618,7 +618,7 @@ Each slice is a PR; each leaves the tree green.
        two tables refuses a step naming both, so the "bootstrap from an
        export" door stays one-way by construction.
      - Perseus lost its `Local` method. A tree staged by hand was never
-       an ingest: with no `sync` the download wave was empty and the
+       an ingest: with no `sync` the ingest wave was empty and the
        step refused, so the staged tree is what it always was, a
        render-only step, and it stays on `RenderCommon.input_path`.
        `SourceCommon.input_path` is gone; `RenderCommon.input_path`
@@ -713,7 +713,7 @@ Each slice is a PR; each leaves the tree green.
        params the form would write (landed with 3b): an import shows
        no Connection section, however its descriptor is labelled.
 
-5. **Mechanical rename** (optional, after 3b): crate names,
+5. **Mechanical rename** — *built (2026-09-10)*: crate names,
    `download/` module directories, `DOWNLOAD.md` files, and the
    `AGENTS.md` section "Download and render are separate crates", all
    to "ingest". `git mv` plus `sed`, no logic, reviewed as "does it
@@ -722,10 +722,22 @@ Each slice is a PR; each leaves the tree green.
    review noise, not build time. After 3b rather than before it, so
    the `git mv` does not land on files 3b is rewriting.
 
-With every slice but 5 in the tree, the thing the UI review asked for
-is done: one row per source, edited as one thing, with the steps under
-it, and the config shape has stopped moving. What is left is **5**, the
-mechanical crate rename, which changes nothing the app does.
+   What moved: every provider's `src/download/` module is `src/ingest/`,
+   `DOWNLOAD.md` is `INGEST.md`, the dev CLIs are `<p>_ingest`,
+   `plan_download` / `Wave::Download` / `<Provider>Download` are
+   `ingest`, and `carddav_config` is `contacts_config`. What stayed,
+   on purpose: `common.download_params` and
+   `DATALIB_DAG_RESET_AND_REDOWNLOAD` are user-facing names, and the
+   `datalib_etl` framework modules beside them (`download_params`,
+   `download_metrics`, `download_run`, `download_problems`,
+   `DownloadControl`) keep their names so the one word in a config
+   matches the one in the code that reads it; processor id strings
+   (`slack/<name>/download`) are data in `sync_runs`; and the UI's
+   `FieldPhase` word `download` is its own small edit.
+
+Every slice is in the tree: one row per source, edited as one thing,
+with the steps under it, and the config shape has stopped moving.
+Nothing in this plan is left to build.
 
 ## Deferred
 
@@ -746,13 +758,13 @@ Recorded so the reasoning is not lost, not so it is built.
   step continues from what is now in the store. The `export` method
   table stays for the person who only has an export: that is a steady
   state, the export is the truth, and pruning to its snapshot is
-  correct there. The destructive edge in Claude's `DOWNLOAD.md`
+  correct there. The destructive edge in Claude's `INGEST.md`
   ("Bootstrapping from an export") only exists because one code path
   serves both jobs today.
 - **A download that consumes an ingest.** LinkedIn ingests an
   export's CSVs and then, when `fetch_photos` is on, fetches each
   connection's public profile photo into the same raw store
-  (`download/photos.rs`). Under decision 7 that is one `ingest` step
+  (`ingest/photos.rs`). Under decision 7 that is one `ingest` step
   whose row reads "Download" whenever the photos method is on, which
   is true. The reason to factor it anyway: `linkedin/ingest` (CSVs to
   entities) and a second step, say `linkedin/photos`, with

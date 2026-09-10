@@ -29,7 +29,7 @@ rust_binary(
         "//datalib/backend/etl/providers/beeper:datalib_etl_beeper",
         "//datalib/backend/etl/providers/beeper_render:datalib_etl_beeper_render",
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
-        "//datalib/backend/etl/providers/carddav_config:datalib_etl_carddav_config",
+        "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",
         "//datalib/backend/etl/providers/chatgpt:datalib_etl_chatgpt",
         "//datalib/backend/etl/providers/chatgpt_render:datalib_etl_chatgpt_render",
         "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",

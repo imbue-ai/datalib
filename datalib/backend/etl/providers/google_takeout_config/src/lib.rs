@@ -29,7 +29,7 @@ impl GoogleTakeoutConfig {
 
 /// The `export` table: where the unzipped Takeout is, and per-feed
 /// opt-in switches. The switches mirror
-/// `datalib_etl_google_takeout::download::SyncFlags` (the provider's
+/// `datalib_etl_google_takeout::ingest::SyncFlags` (the provider's
 /// `plan()` maps one to the other); they default to `false` so a fresh
 /// user enables each feed consciously.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

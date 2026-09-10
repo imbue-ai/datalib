@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use datalib_etl::http::HttpResponse;
 use datalib_etl::synthesize::{write_fixture, SynthesizeReport, Synthesizer};
 
-use crate::download::photos::photo_request;
-use crate::download::strip_notes_preamble;
+use crate::ingest::photos::photo_request;
+use crate::ingest::strip_notes_preamble;
 
 pub struct LinkedinSynth {
     /// The unzipped export directory (holds `Connections.csv`).

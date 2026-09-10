@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_sms_backup_restore::download::{self, db_path_for, FetchOptions, RawDb};
+use datalib_etl_sms_backup_restore::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_sms_backup_restore_render::render;
 
 fn fixture_root() -> PathBuf {
@@ -36,7 +36,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // The test owns the store: one connection for both downloads and
         // the assertions, because two is what breaks a doltlite file.
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
-        let summary = download::fetch(FetchOptions {
+        let summary = ingest::fetch(FetchOptions {
             db: db.clone(),
             input_path: fixture_root(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
@@ -87,7 +87,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // hash to what the cursor already stamped, so nothing
         // re-ingests — and the host cache answers without re-reading
         // a byte, because neither file's stat moved.
-        let again = download::fetch(FetchOptions {
+        let again = ingest::fetch(FetchOptions {
             db: db.clone(),
             input_path: fixture_root(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,

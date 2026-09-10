@@ -10,7 +10,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl_email::download::db::{db_path_for, EmailJoins, LoadedEmail};
+use datalib_etl_email::ingest::db::{db_path_for, EmailJoins, LoadedEmail};
 
 /// SQL projection from the `email_blobs` edge's `blake3` to `.eml`
 /// bytes. Consumed by [`BlobBundle::load`]. After the eml-as-canonical
@@ -243,7 +243,7 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
             .chain(msg.html_body.iter().copied())
             .collect();
         let mut seen_idx: HashSet<usize> = HashSet::new();
-        let mut atts: Vec<datalib_etl_email::download::db::LoadedAttachment> = Vec::new();
+        let mut atts: Vec<datalib_etl_email::ingest::db::LoadedAttachment> = Vec::new();
         let candidate_idxs: Vec<usize> = msg
             .attachments
             .iter()
@@ -281,7 +281,7 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
             bucket
                 .blobs
                 .add(&blob_id, bytes, content_type.clone(), name.clone());
-            atts.push(datalib_etl_email::download::db::LoadedAttachment {
+            atts.push(datalib_etl_email::ingest::db::LoadedAttachment {
                 part_id: format!("p{idx}"),
                 blob_id,
                 name,

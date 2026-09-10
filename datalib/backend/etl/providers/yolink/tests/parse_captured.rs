@@ -4,7 +4,7 @@
 
 use std::{env, fs, path::PathBuf};
 
-use datalib_etl_yolink::download::parse;
+use datalib_etl_yolink::ingest::parse;
 
 fn dir() -> Option<PathBuf> {
     env::var_os("YOLINK_FIXTURE_DIR").map(PathBuf::from)

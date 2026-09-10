@@ -9,8 +9,8 @@ name = "datalib_etl_chatgpt"
 path = "src/lib.rs"
 
 [[bin]]
-name = "chatgpt-download"
-path = "src/bin/chatgpt_download.rs"
+name = "chatgpt-ingest"
+path = "src/bin/chatgpt_ingest.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }

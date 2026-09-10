@@ -13,9 +13,9 @@ use async_trait::async_trait;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_google_takeout_config::{GoogleTakeoutConfig, GoogleTakeoutSync};
 
-use crate::download;
+use crate::ingest;
 
-pub fn plan_download(
+pub fn plan_ingest(
     ctx: PlanContext,
     config: GoogleTakeoutConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
@@ -24,7 +24,7 @@ pub fn plan_download(
     let export = config
         .export
         .ok_or_else(|| anyhow!("google_takeout source {name} missing `export.path`"))?;
-    Ok(vec![Box::new(GoogleTakeoutDownload {
+    Ok(vec![Box::new(GoogleTakeoutIngest {
         id: format!("google_takeout/{name}/download"),
         raw_path,
         input_path: export.path(),
@@ -32,8 +32,8 @@ pub fn plan_download(
     })])
 }
 
-fn sync_flags(s: GoogleTakeoutSync) -> download::SyncFlags {
-    download::SyncFlags {
+fn sync_flags(s: GoogleTakeoutSync) -> ingest::SyncFlags {
+    ingest::SyncFlags {
         maps_reviews: s.maps_reviews,
         maps_saved_places: s.maps_saved_places,
         maps_photos: s.maps_photos,
@@ -46,24 +46,24 @@ fn sync_flags(s: GoogleTakeoutSync) -> download::SyncFlags {
     }
 }
 
-struct GoogleTakeoutDownload {
+struct GoogleTakeoutIngest {
     id: String,
     raw_path: PathBuf,
     input_path: PathBuf,
-    sync: download::SyncFlags,
+    sync: ingest::SyncFlags,
 }
 
 #[async_trait]
-impl DataProcessor for GoogleTakeoutDownload {
+impl DataProcessor for GoogleTakeoutIngest {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = download::db_path_for(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             db,
             input_path: self.input_path.clone(),

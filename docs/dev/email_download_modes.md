@@ -30,13 +30,13 @@ account's real labels — one `users.labels.list` or one `Mailbox/get` —
 and returns them spelled exactly the way `only_extract_labels` matches.
 That spelling is the whole point of the probe — Gmail hands us the same
 label under three different names depending on how we ask, and the
-table in `src/download/labels.rs` is where they are reconciled.
+table in `src/ingest/labels.rs` is where they are reconciled.
 
 ## 1. Why modes of one source, not separate source types
 
 The tree was already built for it, and not aspirationally:
 
-- `src/download/schema_raw.rs:3` — *"The schema is the same regardless of
+- `src/ingest/schema_raw.rs:3` — *"The schema is the same regardless of
   where the data came from."* One set of tables (`accounts`,
   `mailboxes`, `threads`, `emails`, `email_blobs`, and the two join
   tables).
@@ -62,7 +62,7 @@ mailbox ingested two ways **dedupes rather than doubles**. That is a
 property of three specific pieces of shared code, not of two
 implementations happening to agree:
 
-**`src/download/envelope.rs`** — envelope synthesis. Every non-JMAP mode
+**`src/ingest/envelope.rs`** — envelope synthesis. Every non-JMAP mode
 holds the same two things (the RFC 5322 bytes, plus per-message facts the
 transport supplied) and has to produce a JMAP-shaped `Email/get`
 envelope. One implementation, so `EmailRow::from_jmap_envelope` — and
@@ -75,7 +75,7 @@ transport-native id instead (Gmail's hex `id`, JMAP's `Email.id`) would
 fork the id space per transport, so a Takeout export followed by a live
 sync would double the mailbox.
 
-**`src/download/labels.rs`** — the label vocabulary. Gmail spells one
+**`src/ingest/labels.rs`** — the label vocabulary. Gmail spells one
 label differently depending on how you ask:
 
 | concept | Takeout `X-Gmail-Labels` | Gmail API `labels.list` |
@@ -305,7 +305,7 @@ failure is visible from a single run:
   `DATALIB_HTTP_PLAYBACK`, but it covers the label filter and nothing
   else. A full synth + playback pair matching the slack/notion pattern
   would let the rest of the live test's invariants run in CI too.
-- **`DOWNLOAD.md` is titled "JMAP Extract"** and documents only that
+- **`INGEST.md` is titled "JMAP Extract"** and documents only that
   mode. It predates the other two.
 - **Render stamps `provider: email`** in QMD frontmatter and
   `class="msg msg--email"` in the body, whatever mode produced the row —
@@ -334,7 +334,7 @@ Recorded because each was invisible from a passing single run:
    incremental and correctly found nothing new, so the mirror stayed
    empty and never said why. `messages.list` cannot express a union, so
    the enumeration is now one walk per label, deduped into one id set
-   (`enumeration_walks` in `src/download/gmail_api/mod.rs`), and
+   (`enumeration_walks` in `src/ingest/gmail_api/mod.rs`), and
    `api::list_messages` takes `Option<&str>` rather than a slice so the
    combined request cannot be built again.
 

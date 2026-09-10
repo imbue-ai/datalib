@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
-use datalib_etl_fsindex::download::{self, FetchOptions, RawDb};
+use datalib_etl_fsindex::ingest::{self, FetchOptions, RawDb};
 use sqlx::Row;
 use tempfile::TempDir;
 
@@ -75,7 +75,7 @@ async fn scans_tng_tree() {
     // The test owns the store: one connection for the scan and the
     // assertions both, because two is what breaks a doltlite file.
     let db = RawDb::open(&db_path).await.unwrap();
-    let summary = download::fetch(FetchOptions {
+    let summary = ingest::fetch(FetchOptions {
         db: db.clone(),
         source_id: "fsindex-tng".to_string(),
         root: root.clone(),

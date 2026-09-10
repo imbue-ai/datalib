@@ -43,7 +43,7 @@ pub enum SourceType {
     /// Claude.ai over the API, or an unpacked export; one raw store.
     Claude,
     /// Contacts over CardDAV, or from `.vcf` files. Served by the
-    /// `contacts` provider crate (its config crate is still `carddav_config`).
+    /// `contacts` provider crate (its config crate is still `contacts_config`).
     Contacts,
     Email,
     Fsindex,

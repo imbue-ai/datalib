@@ -1,4 +1,4 @@
 //! `fsindex` — directory-tree indexer.
 
-pub mod download;
+pub mod ingest;
 pub mod processor;

@@ -9,7 +9,7 @@ exports_files(["Cargo.toml"])
 #
 # The fixture is SQL + a couple of small media files; the consumer
 # `materialize`s a Beeper-Texts-shaped dir from those before running
-# `beeper-download`.
+# `beeper-ingest`.
 filegroup(
     name = "tng_fixture",
     srcs = glob([
@@ -51,8 +51,8 @@ rust_library(
 # Extract step (Beeper). CLI driver. Reads BeeperTexts' on-disk
 # SQLite stores (index.db, media/) directly — no network, no auth.
 rust_binary(
-    name = "beeper_download",
-    srcs = ["src/bin/beeper_download.rs"],
+    name = "beeper_ingest",
+    srcs = ["src/bin/beeper_ingest.rs"],
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [

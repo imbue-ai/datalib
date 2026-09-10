@@ -254,7 +254,7 @@ and how many repeat within one batch; per group-by field, distinct
 values, null rate, and how many collapse under case-folding; per
 timestamp field, null rate, unparseable count, min, max, and how many
 parse but are implausible; per field, the value *types* actually seen.
-Paste the output verbatim into the provider's `DOWNLOAD.md`. This is
+Paste the output verbatim into the provider's `INGEST.md`. This is
 G8, scoped to where it pays: not a tool, a habit, and only when the
 corpus is unread.
 

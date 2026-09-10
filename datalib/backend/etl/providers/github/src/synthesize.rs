@@ -9,7 +9,7 @@ use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
-use crate::download::{
+use crate::ingest::{
     BASE, DEFAULT_SCOPES, ENTITY_ISSUE_COMMENT, ENTITY_PR, ENTITY_PR_REVIEW,
     ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF, PER_PAGE,
 };

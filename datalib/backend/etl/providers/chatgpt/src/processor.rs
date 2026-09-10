@@ -11,19 +11,16 @@ use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_chatgpt_config::{ChatgptApiSync, ChatgptConfig};
 
-use crate::download;
+use crate::ingest;
 
-/// Download wave: present iff `api`.
-pub fn plan_download(
-    ctx: PlanContext,
-    config: ChatgptConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+/// Ingest wave: present iff `api`.
+pub fn plan_ingest(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let latchkey_settings = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.api {
-        procs.push(Box::new(ChatgptDownload {
+        procs.push(Box::new(ChatgptIngest {
             id: format!("chatgpt/{name}/download"),
             raw_path,
             sync,
@@ -33,7 +30,7 @@ pub fn plan_download(
     Ok(procs)
 }
 
-struct ChatgptDownload {
+struct ChatgptIngest {
     id: String,
     raw_path: PathBuf,
     sync: ChatgptApiSync,
@@ -43,7 +40,7 @@ struct ChatgptDownload {
 }
 
 #[async_trait]
-impl DataProcessor for ChatgptDownload {
+impl DataProcessor for ChatgptIngest {
     fn id(&self) -> &str {
         &self.id
     }
@@ -61,10 +58,10 @@ impl DataProcessor for ChatgptDownload {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = download::db_path_for(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             db,
             latchkey: self.latchkey.clone(),
             max_pages: self.sync.max_pages.map(|v| v as usize),

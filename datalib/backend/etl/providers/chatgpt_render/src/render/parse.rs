@@ -1,5 +1,5 @@
 //! Port of `src/ingest/providers/openai/parse.py`. Reads the doltlite
-//! database written by [`datalib_etl_chatgpt::download`] (or, when no DB is present,
+//! database written by [`datalib_etl_chatgpt::ingest`] (or, when no DB is present,
 //! the legacy JSON tree under
 //! `me.json` + `conversations.json` + `conversations/<id>.json`) and
 //! flattens it into typed rows.
@@ -17,7 +17,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use super::sentinels::clean_text;
-use datalib_etl_chatgpt::download::db::{db_path_for, LoadedConversation, LoadedRaw};
+use datalib_etl_chatgpt::ingest::db::{db_path_for, LoadedConversation, LoadedRaw};
 
 /// SQL projection that maps a ChatGPT `file_id` to its CAS blake3.
 /// Used by [`BlobBundle::load`] from `parse_doltlite_async`.
