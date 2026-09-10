@@ -503,8 +503,43 @@ Each slice is a PR; each leaves the tree green.
      `download_only!` became `ingest_only!`, and the UI's `fetch` phase
      became `ingest`, labelled "Ingest" until slice 4 labels it
      "Download" or "Import".
-3. **`type` as data type.** `SourceType` shrinks, Claude gains method
-   tables, `common.input_path` becomes per-method `path`.
+3. **`type` as data type**, in two halves, because the first is small
+   and unblocks a label while the second is a config-shape change
+   across every provider:
+   - **3a. The `Origin` / `Local` property.** Every method table a
+     provider's config crate accepts declares itself `Origin` (reaches
+     a live service) or `Local` (reads files already on disk), as a
+     closed set (`strum`, per `AGENTS.md`), and the catalog mirrors
+     the declaration per method. No config shape changes: today's
+     tables (`sync`, `gmail_api`, `mbox`, `common.input_path`) get the
+     property under their current names. Three readers land with it:
+     the Manage row's child label reads "Download" or "Import" instead
+     of "Ingest" (`CHILD_LABEL` in `Manager2View.vue`, derived from
+     which tables the step's params hold — written config, no
+     parsing); `DATALIB_DAG_RESET_AND_REDOWNLOAD` is honoured by an
+     `Origin` method and ignored by a `Local` one, which is what the
+     protocol doc already says in prose; and `datalib-step` refuses an
+     `ingest` step whose params hold no method table at all (decision
+     5's check). The wizard's latchkey section gating on `Origin` is
+     4b's, since 4b rewrites that dialog.
+   - **3b. One type per data shape, one table per method.** `SourceType`
+     drops the `_api` suffixes (`slack`, `chatgpt`, `github`, …) and
+     `claude_export` folds into `claude`, so a group's `type` names the
+     thing mirrored and the render side is a function of it. The ingest
+     step's params hold one table per method, named for the method:
+     `sync` becomes `api` (or `jmap` for email), `claude`'s export
+     becomes `[steps.params.export]`, and every file-backed method
+     (`export`, `mbox`, `fswalk` for the three `fswalk` sources, the
+     backup readers) carries its own `path` instead of the shared
+     `common.input_path`. That is a rewrite of every provider config
+     crate, the catalog, every example and fixture config, and the
+     fixture bake — and a second config-shape change, so
+     `datalib-migrate-config`'s one rewrite becomes "any earlier shape
+     → this one": it already parses the pre-`[[groups]]` and slice-1
+     shapes, and gains the type and method-table renames. Expect a cold
+     CI run: every provider crate rebuilds. `Provider` in
+     `schema/src/providers.rs` (the `grid_rows.provider` tag) is a
+     separate vocabulary and does not move.
 4. **Manage screen and wizard**, in two halves, because the second
    rewrites the files slice 2 renames through:
    - **4a. The tree grid** — *built (2026-09-10)*: one row per group,
@@ -534,26 +569,41 @@ Each slice is a PR; each leaves the tree green.
        `ui/src/config/groupRows.ts`, tested without a grid; a failed
        applet counts as a failed child, since the group row is the
        only place its health shows while the group is folded.
-   - **4b. The one-dialog wizard** — group + both steps from one form,
-     render fields under a "Rendering" heading, one name box; delete
-     `stemOf`, `phaseOf`, `renderIdFor`, `PHASE_BY_LEAF` and the
-     `<stem>/raw` fallback in `producerOf`; rewrite the
-     `sourceSteps.ts` header. **After slice 2**: it rewrites
-     `SourceWizard.vue` and `sourceSteps.ts`, which is where slice 2's
-     rename lands, and a wizard written against `raw` would be rewritten
-     twice.
+   - **4b. The one-dialog wizard** — ready once slice 2 lands, which
+     is what it waited for. Group + both steps from one form: the
+     group's name and type, the ingest method's fields, and render
+     fields under a "Rendering" heading (the catalog's render-phase
+     entries: `outlink_format`, beeper's `period`, `signal_backup`'s
+     knob). One name box. The "also render this?" checkbox goes: a
+     source with a renderer gets both steps, and the group row's Edit
+     opens this dialog instead of the ingest step's form. Saving
+     writes the group entry and both steps through `buildGroup` /
+     `buildStep` and renames through `renameGroup`, so the Sources
+     tab's quick-add snippets (`snippets.ts`) should call the same
+     writers rather than carry their own copy of the shape. Delete
+     what the row now carries as data made unnecessary: `stemOf`,
+     `phaseOf`, `renderIdFor`, `PHASE_BY_LEAF`, the `<stem>/ingest`
+     fallback in `producerOf`, and the wizard's own
+     `raw.split("/")[0]` — the row's `group` and `function` are the
+     data. Rewrite the `sourceSteps.ts` header. If 3a has landed, the
+     latchkey / credentials section shows only for an `Origin` method;
+     if not, it shows as today and 3a flips it.
 
-5. **Mechanical rename** (optional, any time after 3): crate names,
+5. **Mechanical rename** (optional, after 3b): crate names,
    `download/` module directories, `DOWNLOAD.md` files, and the
    `AGENTS.md` section "Download and render are separate crates", all
    to "ingest". `git mv` plus `sed`, no logic, reviewed as "does it
-   build". Slice 3 already rebuilds every provider crate, so the CI
+   build". Slice 3b already rebuilds every provider crate, so the CI
    cold-run cost is paid either way; isolating this slice is about
-   review noise, not build time.
+   review noise, not build time. After 3b rather than before it, so
+   the `git mv` does not land on files 3b is rewriting.
 
-Slices 2 and 3 are backend with a mechanical UI edge; 4a is the row the
-UI review asked for and depends on 1 only, so it was built beside 2;
-4b waits for 2. Slice 3 is independent of 4a and 4b.
+With 1, 2 and 4a in the tree, what is left runs as: **3a and 4b in
+parallel** (3a is provider config crates, the catalog and one label;
+4b is the wizard and `sourceSteps.ts`; the only file both touch is
+`catalog.ts`, where 3a adds a property per method and 4b reads it),
+then **3b**, then **5**. 3b is the last config-shape change, so the
+migrator's rewrite is settled once it lands.
 
 ## Deferred
 
