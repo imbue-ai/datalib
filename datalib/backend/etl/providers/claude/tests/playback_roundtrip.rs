@@ -56,9 +56,10 @@ async fn claude_synth_playback_extract_roundtrip() {
     .unwrap();
 
     let report = ClaudeSynth::new(&api).synthesize(&playback).unwrap();
-    // /organizations + 2 chat listings + 2 details + 2 project listings
-    // (one per org, empty — the downloader asks unconditionally).
-    assert_eq!(report.fixtures_written, 7);
+    // /account + /organizations + 2 chat listings + 2 details + 2
+    // project listings (one per org, empty — the downloader asks
+    // unconditionally).
+    assert_eq!(report.fixtures_written, 8);
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 

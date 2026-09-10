@@ -268,8 +268,11 @@ async fn snapshot_grid_rows_and_documents() {
         .partition(|r| r["provider"] == json!(provider_datalib()));
     let mut by_source_kind: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for r in &storage {
+        // `upstream_scope`, not `account`: a storage row measures a
+        // source and belongs to no upstream login, so it carries the
+        // source name here and nothing in `account`.
         let key = (
-            r["account"].as_str().unwrap_or_default().to_string(),
+            r["upstream_scope"].as_str().unwrap_or_default().to_string(),
             r["kind"].as_str().unwrap_or_default().to_string(),
         );
         by_source_kind.entry(key).or_default().push(format!(

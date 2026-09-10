@@ -166,6 +166,7 @@ fn build_chats(
             chat_uuid: thread_uuid.clone(),
             display: cname,
             title: Some(title),
+            author: None,
             account: Some(root.team_id.clone()),
             project: None,
             // The exact natural key the thread's `uuid` was minted

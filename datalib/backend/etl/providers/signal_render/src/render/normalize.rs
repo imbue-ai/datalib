@@ -64,6 +64,7 @@ pub fn to_chats(
             // `None`, so chat-common derives the familiar
             // "Signal · {recipient}" heading rather than us restating it.
             title: None,
+            author: None,
             account: None,
             project: None,
             external_id: None,

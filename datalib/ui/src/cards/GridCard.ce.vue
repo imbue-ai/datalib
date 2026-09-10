@@ -391,7 +391,8 @@ type FilterCtx = {
   key: string;
   // Human-facing column header for menu labels.
   header: string;
-  // Raw value to filter by (UUIDs for author/account, not display labels).
+  // Raw value to filter by: whatever the column stores, which for a
+  // uuidCol column is the sibling UUID rather than the cell's text.
   value: string;
 };
 

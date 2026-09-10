@@ -93,6 +93,18 @@ fn read_projects(api_dir: &Path) -> Result<Vec<Value>> {
     Ok(out)
 }
 
+/// The viewer, as `/api/account` reports them: the first entry of the
+/// export's `users.json`, which is the account whose login produced it.
+fn first_user(api_dir: &Path) -> Result<Option<Value>> {
+    let path = api_dir.join("users.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let v: Value = serde_json::from_slice(&fs::read(&path)?)
+        .with_context(|| format!("parse {}", path.display()))?;
+    Ok(v.as_array().and_then(|a| a.first().cloned()))
+}
+
 fn project_listing_item(project: &Value) -> Value {
     let mut obj = project.as_object().cloned().unwrap_or_default();
     obj.remove("docs");
@@ -173,6 +185,15 @@ impl Synthesizer for ClaudeSynth {
         }
 
         let mut count = 0usize;
+
+        // /account is where the downloader learns who the viewer is when
+        // its store holds no user row yet, and so is what gives the
+        // fixture's rows a readable `account` instead of a raw UUID.
+        if let Some(account) = first_user(&self.api_dir)? {
+            let req = req_get(&format!("{BASE}/account"));
+            write_fixture(out_root, &req, &json_response(&account))?;
+            count += 1;
+        }
 
         // /organizations
         let orgs: Vec<Value> = by_org
@@ -302,6 +323,42 @@ mod tests {
             let body: Value = serde_json::from_slice(&resp.body).unwrap();
             assert_eq!(body.as_array().map(Vec::len), Some(0));
         }
+    }
+
+    /// `/api/account` is what the downloader asks when its store has no
+    /// user row yet, and without it every Claude grid row's `account`
+    /// column stays a raw UUID. The fixture has to answer it.
+    #[test]
+    fn emits_the_account_endpoint_from_users_json() {
+        let d = tempdir().unwrap();
+        let api = d.path().join("claude_export");
+        fs::create_dir_all(&api).unwrap();
+        fs::write(
+            api.join("conversations.json"),
+            serde_json::to_vec(&json!([{
+                "uuid": "c1", "organization_uuid": "org-a", "chat_messages": []
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            api.join("users.json"),
+            serde_json::to_vec(&json!([
+                {"uuid": "u1", "email_address": "jlp@x.test", "full_name": "Picard"},
+                {"uuid": "u2", "email_address": "bev@x.test", "full_name": "Crusher"},
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let out = d.path().join("playback");
+        ClaudeSynth::new(&api).synthesize(&out).unwrap();
+
+        let req = req_get(&format!("{BASE}/account"));
+        let p = out.join("claude").join(fixture_key(&req));
+        let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+        let body: Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(body.get("email_address").unwrap(), "jlp@x.test");
     }
 
     /// A project file's `docs` are split off into the separate endpoint

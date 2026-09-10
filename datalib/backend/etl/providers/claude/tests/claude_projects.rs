@@ -33,7 +33,7 @@ fn other_project() -> Value {
     json!({
         "uuid": OTHER_PROJECT,
         "name": "Holodeck Scratch",
-        "creator": {"uuid": "acct-1"},
+        "creator": {"uuid": "acct-1", "full_name": "Jean-Luc Picard"},
         "created_at": "2025-01-01T00:00:00Z",
         "updated_at": "2025-01-01T00:00:00Z",
         "_source": {"org_uuid": ORG},
@@ -52,7 +52,7 @@ fn project(updated_at: &str) -> Value {
         "name": "Bridge Operations",
         "description": "Standing bridge-watch context.",
         "prompt_template": "Answer as an operations officer.",
-        "creator": {"uuid": "acct-1"},
+        "creator": {"uuid": "acct-1", "full_name": "Jean-Luc Picard"},
         "created_at": "2025-01-01T00:00:00Z",
         "updated_at": updated_at,
         "_source": {"org_uuid": ORG, "org_name": "USS Enterprise"},
@@ -237,7 +237,14 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
          the one project field with no other home"
     );
     assert_eq!(p.org_uuid.as_deref(), Some(ORG));
-    assert_eq!(p.account_uuid, "acct-1");
+    assert_eq!(p.creator_uuid, "acct-1");
+    assert_eq!(
+        p.creator_name.as_deref(),
+        Some("Jean-Luc Picard"),
+        "the creator's name rides in the project payload beside the uuid, \
+         and is the only place it is available -- an org colleague who \
+         created a shared project has no `users` row here"
+    );
 
     // Docs come back sorted by (created_at, uuid), not upstream order —
     // the fixture deliberately lists doc-2 first.

@@ -127,6 +127,7 @@ fn to_chat(room: &Room, doc: &DocBucket) -> NormalizedChat {
         // "signal · 2024-03" restated the period the heading already
         // ends with.
         title: None,
+        author: None,
         account: room.account_id.clone(),
         project: room.external_workspace_id.clone(),
         external_id: room.external_room_id.clone(),

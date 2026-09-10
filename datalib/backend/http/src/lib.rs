@@ -212,9 +212,10 @@ pub fn router(state: AppState) -> Router {
 }
 
 async fn accounts(State(s): State<AppState>) -> Json<serde_json::Value> {
-    // Ingest writes `<root>/accounts.json` mapping account UUIDs → display
-    // names. We surface it verbatim so the UI can do UUID → label lookups
-    // late, in render code, with the UUID still in hand.
+    // `<root>/accounts.json` maps account ids → display names. Nothing
+    // in this tree writes it, so this answers `{}` and the grid shows
+    // the raw value; a provider that wants a readable account resolves
+    // one into `grid_rows.account` at render time, as `claude` does.
     let path = s.root.join("accounts.json");
     let v: serde_json::Value = std::fs::read_to_string(&path)
         .ok()

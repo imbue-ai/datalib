@@ -603,6 +603,7 @@ fn build_grid_rows(
             .kind(profile.chat_kind.clone())
             .source_label(profile.source_label.clone())
             .when_ts(first_ts)
+            .author(chat.author.clone())
             .account(chat.account.clone())
             .org_uuid(chat.org_uuid.clone())
             .org_name(chat.org_name.clone())
@@ -938,6 +939,7 @@ mod tests {
             id: "100".to_string(),
             chat_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
             display: "Bridge Crew".to_string(),
+            author: None,
             account: Some("acct-1".to_string()),
             project: None,
             external_id: Some("bridge-crew@g.us".to_string()),
