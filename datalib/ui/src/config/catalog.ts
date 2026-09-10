@@ -101,8 +101,11 @@ export type CatalogEntry = {
   defaultName: string;
   /// False → in the picker for completeness, but no form exists yet.
   wizard: boolean;
-  /// False for download-only providers, which render nothing and so
-  /// declare no render step (`lightroom`, `fsindex`). Defaults to true.
+  /// False for a provider that declares no render step at all.
+  /// Defaults to true, and rendering no *documents* is not a reason to
+  /// set it false: the render step is also what emits the storage
+  /// report, which for a download-only source is the only thing that
+  /// puts it in the grid.
   renderStep?: boolean;
   /// The latchkey service name, when the source needs credentials. The
   /// wizard shows its Connection section only while the params the form
@@ -592,7 +595,43 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "fsindex", label: "File index", blurb: "Index a directory tree — paths, sizes, content hashes.", keywords: ["files", "filesystem", "index", "directory", "disk"], kind: "local", icon: null, defaultName: "fsindex", wizard: false },
+  {
+    type: "fsindex",
+    label: "File index",
+    blurb: "Index a directory tree — paths, sizes, content hashes.",
+    keywords: ["files", "filesystem", "index", "directory", "disk"],
+    kind: "local",
+    icon: null,
+    defaultName: "fsindex",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder to index",
+        required: true,
+        target: "fswalk.path",
+        label: "Folder",
+        placeholder: "~/Documents",
+        help:
+          "Scanned recursively, recording every entry's path, kind, size and content " +
+          "hash. Rescans are keyed on mtime, size and inode, so an unchanged file is " +
+          "never re-read. Nothing is converted to markdown — the index is queryable in " +
+          "this source's own store, and what reaches the grid is the storage report.",
+      },
+      {
+        kind: "bool",
+        target: "stamp",
+        label: "Write UUID breadcrumbs into the tree",
+        default: false,
+        help:
+          "Off by default, so the scan stays read-only against the folder it reads. On, " +
+          "it writes a UUID into the .fsindex.yaml of any directory that opted in with " +
+          "stamp_me_with_uuid: true — which is how a directory keeps one identity " +
+          "across moves and renames.",
+      },
+    ],
+  },
   {
     type: "media",
     label: "Music, photos & video",
