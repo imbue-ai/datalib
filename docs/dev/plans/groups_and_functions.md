@@ -436,16 +436,53 @@ Each slice is a PR; each leaves the tree green.
      with the fetch row labelled from the group's name and the render
      row from the same name suffixed, so no test that reads the table
      had to move. `stemOf` and its siblings stay until slice 4.
+
+   Its review added five things keyed on the provider word still being
+   on the command, which slice 2 has to revisit because that word
+   leaves: `is_ungrouped_builtin` and the warning it drives in
+   `accept_steps` (the retired shape becomes a step that cannot run at
+   all once dispatch is on the environment, so slice 2 decides whether
+   it stays a warning or becomes a rejection); the provider-word check
+   in `spec_of` (deleted with the word); `phase_and_type` in
+   `config_examples_test.rs` (deleted); the `stepType(command)`
+   fallback in `sourceSteps.ts` (deleted — the group's `type` becomes
+   the only source); and `convert::builtin_of` (updated, since the
+   migrator's one rewrite becomes old shape → grouped *with the new
+   function names and no command*, decision 9 allowing one rewrite at
+   a time). `PREDATES_GROUPS` in `Manager2View.vue` keys on
+   `!step.group` and stays.
 2. **`datalib-step` honors the contract.** Dispatch on the environment,
    write to the named tree, read inputs from `DATALIB_DAG_INPUTS`,
-   delete `source_name`. Vocabulary rename lands here, with the fixture
-   re-bake, because this is the slice that changes what is on disk.
-   Existing roots are re-synced, not migrated (decision 9).
+   delete `source_name`. `command` becomes optional (decision 4) and
+   the provider word leaves it. Vocabulary rename lands here, with the
+   fixture re-bake, because this is the slice that changes what is on
+   disk. Existing roots are re-synced, not migrated (decision 9).
+
+   This slice touches the UI, minimally: every writer of a function
+   name or a command — `sourceSteps.ts` (`buildStep`, `PHASE_BY_LEAF`,
+   `renderIdFor`), `snippets.ts`, `SourceWizard.vue` — and every test
+   fixture that spells `raw` / `rendered_md` (`pipelineStatus.test.ts`
+   alone has 19) move to the new names and stop writing the provider
+   word. It changes what those files *say*, not how the screen works;
+   that is slice 4b's job, and the reason the two are ordered.
 3. **`type` as data type.** `SourceType` shrinks, Claude gains method
    tables, `common.input_path` becomes per-method `path`.
-4. **Manage screen and wizard.** Tree grid, group aggregation, group
-   directory in the usage walker's wanted set, one-dialog wizard.
-   `sourceSteps.ts` header rewritten.
+4. **Manage screen and wizard**, in two halves, because the second
+   rewrites the files slice 2 renames through:
+   - **4a. The tree grid** — one row per group, the aggregation table
+     above, the group directory in the usage walker's wanted set, the
+     segmented progress bar. Reads phase through one helper and writes
+     no config. Depends on slice 1 only and runs in parallel with 2;
+     the only file both touch is `Manager2View.vue`, where 2 changes a
+     handful of literals.
+   - **4b. The one-dialog wizard** — group + both steps from one form,
+     render fields under a "Rendering" heading, one name box; delete
+     `stemOf`, `phaseOf`, `renderIdFor`, `PHASE_BY_LEAF` and the
+     `<stem>/raw` fallback in `producerOf`; rewrite the
+     `sourceSteps.ts` header. **After slice 2**: it rewrites
+     `SourceWizard.vue` and `sourceSteps.ts`, which is where slice 2's
+     rename lands, and a wizard written against `raw` would be rewritten
+     twice.
 
 5. **Mechanical rename** (optional, any time after 3): crate names,
    `download/` module directories, `DOWNLOAD.md` files, and the
@@ -455,8 +492,9 @@ Each slice is a PR; each leaves the tree green.
    cold-run cost is paid either way; isolating this slice is about
    review noise, not build time.
 
-Slices 1–3 are backend and can be reviewed without the UI; slice 4 is
-the one the UI review asked for and depends on 1 only.
+Slices 2 and 3 are backend with a mechanical UI edge; 4a is the row the
+UI review asked for and depends on 1 only, so it starts now beside 2;
+4b waits for 2. Slice 3 is independent of 4a and 4b.
 
 ## Deferred
 
