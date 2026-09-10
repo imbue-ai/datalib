@@ -102,9 +102,11 @@ export type CatalogEntry = {
   /// Seeds the source name, and thus the step ids and artifact paths.
   defaultName: string;
   /// The greyed-out example in the wizard's Name box. Write what a
-  /// person would actually call this source — "Work WhatsApp", not
+  /// person would actually call this source — "WhatsApp old phone", not
   /// "whatsapp" — since the name is display text and telling someone
   /// their choices are wider than the id is the whole job of the hint.
+  /// Where somebody plausibly has two, say which one this is: that is
+  /// the case the name exists for, and the id cannot carry it.
   /// Nothing is pre-filled from it: a blank name still falls back to
   /// the id.
   nameHint: string;
@@ -256,7 +258,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "api",
     icon: "claude",
     defaultName: "claude",
-    nameHint: "My Claude",
+    nameHint: "Claude Account 1",
     wizard: true,
     credentialService: "claude-ai",
     // The whole claude.ai credential is the `sessionKey` cookie, so
@@ -497,7 +499,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "export",
     icon: "claude",
     defaultName: "claude-export",
-    nameHint: "Claude, before the API",
+    nameHint: "Claude export",
     wizard: true,
     fields: [
       {
@@ -573,7 +575,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "export",
     icon: "whatsapp",
     defaultName: "whatsapp",
-    nameHint: "Work WhatsApp",
+    nameHint: "WhatsApp old phone",
     wizard: true,
     fields: [
       {
