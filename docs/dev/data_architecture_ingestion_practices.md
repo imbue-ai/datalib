@@ -46,7 +46,7 @@ catches what happens against the actual world. The
 `//datalib/backend/dag:manual_e2e_live_sync_golden` target runs
 the full pipeline, every source, against live upstreams using
 host-side latchkey credentials, snapshotting a file-tree manifest of
-each stanza's `raw/` + `render_markdown/` and per-file content
+each group's `ingest/` + `render_markdown/` and per-file content
 snapshots into a private dir named by `$DATALIB_MANUAL_E2E_DIR`
 (kept outside the repo so the slightly sensitive source data isn't
 shared when the repo is open-sourced). It is the only test that
