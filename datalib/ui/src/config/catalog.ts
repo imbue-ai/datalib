@@ -21,8 +21,8 @@ export type Field =
       required?: boolean;
       /// Renders as the latchkey-account control rather than a bare
       /// text box: a dropdown of the accounts latchkey has stored for
-      /// the entry's `credentialService`, a "Connect via latchkey"
-      /// button, and — still — somewhere to type.
+      /// the entry's `credentialService`, a "Latchkey auth" button,
+      /// and — still — somewhere to type.
       ///
       /// Typing matters. latchkey may hold an account this server
       /// can't enumerate (no keyring access, latchkey not installed),

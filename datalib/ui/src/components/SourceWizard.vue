@@ -15,9 +15,9 @@
 // the `[[groups]]` entry; the steps written under it carry neither.
 
 // A descriptor with a `credentialService` also gets a **Connection**
-// block: which latchkey account to use, a button that runs latchkey's
-// browser login, and "Test connection", which calls the provider's own
-// probe (`datalib-step probe <type>`). What comes back is not just a
+// block: which latchkey account to use, "Latchkey auth", which runs
+// latchkey's browser login, and "Test connection", which calls the
+// provider's own probe (`datalib-step probe <type>`). What comes back is not just a
 // green tick — it names the account actually reached, and it fills
 // every `probe:` field's checklist, the render step's included. A
 // label picker built from the live account is the difference between a
@@ -678,13 +678,7 @@ function submit() {
               :disabled="connect.state === 'running'"
               @click="connectViaLatchkey"
             >
-              {{
-                connect.state === "running"
-                  ? "Waiting for the browser…"
-                  : wouldRegister
-                    ? "Connect via browser"
-                    : "Connect via latchkey"
-              }}
+              {{ connect.state === "running" ? "Waiting for the browser…" : "Latchkey auth" }}
             </button>
             <button
               v-if="canProbe"
@@ -713,8 +707,8 @@ function submit() {
               stored by hand — which keeps working, and nothing here changes it:
             </template>
             <template v-else>
-              A credential can always be pasted instead, one per account, alongside the button
-              above:
+              A credential can always be pasted instead, one per account, alongside the browser
+              login above:
             </template>
             <code>latchkey auth set {{ service }} -H "…"</code>
           </p>
