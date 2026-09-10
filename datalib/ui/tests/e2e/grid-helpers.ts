@@ -226,12 +226,21 @@ export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${i
 /// Open a group so the steps under it have rows. Idempotent, and the
 /// grid remembers what was opened across a remount — which `settle`
 /// does — so one call per group per test is enough.
+///
+/// The click and the check are retried as a pair. A save remounts the
+/// table, and a click that lands on the chevron of a row the grid is
+/// about to replace opens nothing; the row that takes its place is
+/// folded again, and a check on its own would wait on it forever.
 export async function expandGroup(page: Page, id: string): Promise<void> {
   const row = groupRow(page, id);
   await expect(row, `group ${id} should have a row`).toBeVisible();
-  const closed = row.locator(".ag-group-contracted:not(.ag-hidden)");
-  if ((await closed.count()) > 0) await closed.click();
-  await expect(row.locator(".ag-group-expanded:not(.ag-hidden)")).toBeVisible();
+  await expect(async () => {
+    const closed = row.locator(".ag-group-contracted:not(.ag-hidden)");
+    if ((await closed.count()) > 0) await closed.click({ timeout: 1_000 });
+    await expect(row.locator(".ag-group-expanded:not(.ag-hidden)")).toBeVisible({
+      timeout: 1_000,
+    });
+  }, `group ${id} never opened`).toPass({ timeout: 15_000, intervals: [100, 250, 500] });
 }
 
 /// A row's status. The column paints an icon, so the state is the

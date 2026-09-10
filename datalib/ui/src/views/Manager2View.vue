@@ -14,6 +14,7 @@ import {
   type ColDef,
   type GridApi,
   type GridReadyEvent,
+  type ICellRendererComp,
   type ICellRendererParams,
   type IsGroupOpenByDefaultParams,
   type RowGroupOpenedEvent,
@@ -744,7 +745,8 @@ const ICON_PATHS: Record<string, string> = {
   trash: "M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
 };
 
-/// An icon button for the Actions cell.
+/// An icon button for the Actions cell. Built once per cell; its face
+/// is set by `setButton`, and re-set in place on every repaint.
 function iconButton(
   icon: keyof typeof ICON_PATHS,
   label: string,
@@ -754,24 +756,118 @@ function iconButton(
 ): HTMLButtonElement {
   const b = document.createElement("button");
   b.className = `m2-icon-btn${danger ? " danger" : ""}`;
-  b.title = disabledWhy ?? label;
-  b.setAttribute("aria-label", label);
-  if (disabledWhy) b.disabled = true;
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("width", "15");
   svg.setAttribute("height", "15");
   svg.setAttribute("aria-hidden", "true");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", ICON_PATHS[icon]);
   path.setAttribute("fill", "currentColor");
   svg.appendChild(path);
   b.appendChild(svg);
+  setButton(b, icon, label, disabledWhy);
   b.addEventListener("click", (e) => {
     e.stopPropagation();
     onClick();
   });
   return b;
+}
+
+function setButton(
+  b: HTMLButtonElement,
+  icon: keyof typeof ICON_PATHS,
+  label: string,
+  disabledWhy: string | null,
+): void {
+  b.title = disabledWhy ?? label;
+  b.setAttribute("aria-label", label);
+  b.disabled = !!disabledWhy;
+  b.querySelector("path")!.setAttribute("d", ICON_PATHS[icon]);
+}
+
+/// The Actions cell. A class rather than a function so that `refresh`
+/// can update the buttons in place and return true: `repaint()` runs
+/// on every job event — a few times a second during a sync — and a
+/// function renderer is torn down and rebuilt on each, so a click
+/// whose mousedown landed on the old button and mouseup on its
+/// replacement fired nothing. The buttons are created once and read
+/// the row current at click time.
+class ActionsRenderer implements ICellRendererComp<Row> {
+  private wrap!: HTMLSpanElement;
+  private row!: Row;
+  private run!: HTMLButtonElement;
+  private edit!: HTMLButtonElement;
+  private reveal: HTMLButtonElement | null = null;
+  private trash!: HTMLButtonElement;
+
+  init(p: ICellRendererParams<Row>): void {
+    this.row = p.data!;
+    this.wrap = document.createElement("span");
+    this.wrap.className = "m2-actions";
+    // One button, two faces. While a job has this row claimed the only
+    // useful thing to do with it is call it off — starting a second
+    // sync of work already queued is never what was meant. A group is
+    // claimed when any step under it is.
+    this.run = iconButton("run", "Sync now", null, false, () => {
+      const { stopJobId, stopTarget } = this.row;
+      if (stopJobId && stopTarget) void stopSource(stopTarget);
+      else void runRow(this.row);
+    });
+    this.wrap.appendChild(this.run);
+    // A source is one form — the group with both its steps — opened
+    // from the group's row or from either step under it.
+    this.edit = iconButton("edit", "Edit settings", null, false, () => {
+      if (this.row.editGroup) openEdit(this.row.editGroup);
+    });
+    this.wrap.appendChild(this.edit);
+    // Absent rather than disabled in a plain browser — the same "a
+    // missing menu item, not a broken one" rule desktop.ts states.
+    if (canReveal) {
+      this.reveal = iconButton("reveal", revealLabel, null, false, () => void reveal(this.row.key));
+      this.wrap.appendChild(this.reveal);
+    }
+    this.trash = iconButton("trash", "Remove from config", null, true, () => {
+      if (this.row.kind === "group") void deleteGroup(this.row.id);
+      else void deleteSource(this.row.id);
+    });
+    this.wrap.appendChild(this.trash);
+    this.apply();
+  }
+
+  getGui(): HTMLElement {
+    return this.wrap;
+  }
+
+  refresh(p: ICellRendererParams<Row>): boolean {
+    this.row = p.data!;
+    this.apply();
+    return true;
+  }
+
+  private apply(): void {
+    const row = this.row;
+    if (row.stopJobId && row.stopTarget) {
+      const claim = claimedBy.value.get(row.stopTarget);
+      setButton(
+        this.run,
+        "stop",
+        claim?.source_name ? `Stop the sync of ${claim.source_name}` : "Stop the sync in progress",
+        null,
+      );
+      this.run.classList.add("danger");
+    } else {
+      setButton(this.run, "run", "Sync now", row.runBlocked);
+      this.run.classList.remove("danger");
+    }
+    setButton(this.edit, "edit", "Edit settings", row.editBlocked);
+    if (this.reveal) setButton(this.reveal, "reveal", revealLabel, row.revealBlocked);
+    setButton(
+      this.trash,
+      "trash",
+      row.kind === "group" ? "Remove from config, with everything under it" : "Remove from config",
+      null,
+    );
+  }
 }
 
 const columnDefs: ColDef<Row>[] = [
@@ -1045,60 +1141,7 @@ const columnDefs: ColDef<Row>[] = [
     minWidth: canReveal ? 132 : 102,
     resizable: false,
     valueGetter: (p: ValueGetterParams<Row>) => p.data?.id,
-    cellRenderer: (p: ICellRendererParams<Row>) => {
-      const wrap = document.createElement("span");
-      wrap.className = "m2-actions";
-      const row = p.data!;
-      const isGroup = row.kind === "group";
-      // One button, two faces. While a job has this row claimed the
-      // only useful thing to do with it is call it off — starting a
-      // second sync of work already queued is never what was meant.
-      // A group is claimed when any step under it is.
-      if (row.stopJobId && row.stopTarget) {
-        const claim = claimedBy.value.get(row.stopTarget);
-        const target = row.stopTarget;
-        wrap.appendChild(
-          iconButton(
-            "stop",
-            claim?.source_name
-              ? `Stop the sync of ${claim.source_name}`
-              : "Stop the sync in progress",
-            null,
-            true,
-            () => stopSource(target),
-          ),
-        );
-      } else {
-        wrap.appendChild(
-          iconButton("run", "Sync now", row.runBlocked, false, () => runRow(row)),
-        );
-      }
-      // A source is one form — the group with both its steps — opened
-      // from the group's row or from either step under it.
-      const formFor = row.editGroup;
-      wrap.appendChild(
-        iconButton("edit", "Edit settings", row.editBlocked, false, () => {
-          if (formFor) openEdit(formFor);
-        }),
-      );
-      // Absent rather than disabled in a plain browser — the same
-      // "a missing menu item, not a broken one" rule desktop.ts states.
-      if (canReveal) {
-        wrap.appendChild(
-          iconButton("reveal", revealLabel, row.revealBlocked, false, () => reveal(row.key)),
-        );
-      }
-      wrap.appendChild(
-        iconButton(
-          "trash",
-          isGroup ? "Remove from config, with everything under it" : "Remove from config",
-          null,
-          true,
-          () => (isGroup ? deleteGroup(row.id) : deleteSource(row.id)),
-        ),
-      );
-      return wrap;
-    },
+    cellRenderer: ActionsRenderer,
   },
 ];
 
