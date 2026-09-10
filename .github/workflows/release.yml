@@ -565,7 +565,7 @@ jobs:
       # is being removed from newer Node distributions — install the
       # pinned pnpm (packageManager in datalib/ui/package.json)
       # directly so the runner image's Node choices can't break us.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: datalib/ui/package.json
 
