@@ -410,81 +410,99 @@ ${applets()}`;
       /^(Succeeded|Up to date)$/,
     );
 
-    /// Row ids top to bottom, paired with the exact stamp each is
-    /// claiming — read off `title`, so the check is against instants
-    /// rather than against the prose the cell happens to render.
-    const ordering = async () => {
-      const ids = await page
-        .locator('.ag-grid-scrolling-rows .ag-row')
-        .evaluateAll((rows) =>
-          rows
-            .sort(
-              (a, b) =>
-                Number((a as HTMLElement).getAttribute("aria-rowindex")) -
-                Number((b as HTMLElement).getAttribute("aria-rowindex")),
-            )
-            .map((r) => ({
-              id: r.getAttribute("row-id") ?? "",
-              stamp:
-                r.querySelector('[col-id="lastSynced"] [title]')?.getAttribute("title") ??
-                null,
-            })),
-        );
-      return ids;
+    /// Rows top to bottom, each with the exact stamp it claims — read
+    /// off `title`, so the check is against instants rather than the
+    /// prose the cell renders — and its depth in the tree, off the
+    /// `ag-row-level-N` class AG Grid puts on every row.
+    type Seen = { id: string; level: number; stamp: string | null };
+    const ordering = async (): Promise<Seen[]> =>
+      page.locator(".ag-grid-scrolling-rows .ag-row").evaluateAll((rows) =>
+        rows
+          .sort(
+            (a, b) =>
+              Number((a as HTMLElement).getAttribute("aria-rowindex")) -
+              Number((b as HTMLElement).getAttribute("aria-rowindex")),
+          )
+          .map((r) => ({
+            id: r.getAttribute("row-id") ?? "",
+            level: Number(/ag-row-level-(\d+)/.exec(r.className)?.[1] ?? "0"),
+            stamp:
+              r.querySelector('[col-id="lastSynced"] [title]')?.getAttribute("title") ?? null,
+          })),
+      );
+
+    /// The sets a tree sort actually orders: the top-level rows, and
+    /// each open group's children, keyed by the group. A sort is total
+    /// among siblings and nowhere else — a group row shows its ingest
+    /// step's stamp while its render child finished a second later, so
+    /// the flattened list puts a newer child under an older parent when
+    /// sorted descending, and no choice of the group's stamp fixes both
+    /// directions at once (the newest child's would break ascending).
+    const siblingSets = (rows: Seen[]): Map<string, Seen[]> => {
+      const sets = new Map<string, Seen[]>([["top", []]]);
+      let parent = "top";
+      for (const r of rows) {
+        if (r.level === 0) {
+          sets.get("top")!.push(r);
+          parent = r.id;
+          sets.set(parent, []);
+        } else {
+          sets.get(parent)!.push(r);
+        }
+      }
+      return sets;
+    };
+
+    /// Stamps monotone in `dir`, and never-run rows — "forever ago",
+    /// older than anything that has run — at the old end: leading
+    /// ascending, trailing descending. One click on the header is how
+    /// you ask "what has never run?".
+    const expectOrdered = (name: string, set: Seen[], dir: "asc" | "desc") => {
+      const stamps = set.map((r) => r.stamp);
+      const nulls = stamps.filter((s) => s === null).length;
+      const times = stamps.filter((s): s is string => !!s).map((s) => Date.parse(s));
+      for (let i = 1; i < times.length; i++) {
+        const ok = dir === "asc" ? times[i] >= times[i - 1] : times[i] <= times[i - 1];
+        expect(ok, `${dir} ${name} is out of order at ${i}: ${JSON.stringify(set)}`).toBe(true);
+      }
+      const nullEnd = dir === "asc" ? stamps.slice(0, nulls) : stamps.slice(stamps.length - nulls);
+      expect(
+        nullEnd.every((s) => s === null),
+        `${dir} ${name}: never-run rows should ${dir === "asc" ? "lead" : "trail"} — ${JSON.stringify(set)}`,
+      ).toBe(true);
     };
 
     const header = page.locator('.ag-header-cell[col-id="lastSynced"]');
 
     await header.click(); // ascending — oldest first
-    const asc = await ordering();
-    const ascTimes = asc.map((r) => r.stamp).filter((s): s is string => !!s);
-    expect(ascTimes.length, "need at least two stamped rows to order").toBeGreaterThan(1);
-    for (let i = 1; i < ascTimes.length; i++) {
-      expect(
-        Date.parse(ascTimes[i]),
-        `ascending is out of order at ${i}: ${JSON.stringify(asc)}`,
-      ).toBeGreaterThanOrEqual(Date.parse(ascTimes[i - 1]));
-    }
+    const asc = siblingSets(await ordering());
+    // The sets this config gives something to order: two synced groups
+    // beside a never-synced one at the top, and pdfs' two steps under
+    // it, whose stamps differ by however long the render took.
+    const stamped = (set: Seen[]) => set.filter((r) => r.stamp !== null).length;
+    expect(stamped(asc.get("top")!), "need two stamped groups to order").toBeGreaterThan(1);
+    expect(stamped(asc.get("group:pdfs")!), "need pdfs' two steps to order").toBe(2);
+    expect(
+      asc.get("group:unsynced")!.map((r) => r.id),
+      "the un-synced row should be in the table",
+    ).toEqual(["unsynced/ingest"]);
+    for (const [name, set] of asc) expectOrdered(name, set, "asc");
 
     await header.click(); // descending — newest first
-    const desc = await ordering();
-    const descTimes = desc.map((r) => r.stamp).filter((s): s is string => !!s);
-    for (let i = 1; i < descTimes.length; i++) {
-      expect(
-        Date.parse(descTimes[i]),
-        `descending is out of order at ${i}: ${JSON.stringify(desc)}`,
-      ).toBeLessThanOrEqual(Date.parse(descTimes[i - 1]));
-    }
+    const desc = siblingSets(await ordering());
+    for (const [name, set] of desc) expectOrdered(name, set, "desc");
 
-    // ...and it really did reverse, rather than the click doing nothing.
-    expect(descTimes).toEqual([...ascTimes].reverse());
-
-    // A row that never ran sorts as "forever ago" — older than anything
-    // that has run. So it leads ascending and trails descending, and
-    // the reversal above covers the whole column rather than stopping
-    // short of the nulls. Sorting by this header once is how you ask
-    // "what has never run?".
-    const unrun = (rows: { id: string; stamp: string | null }[]) =>
-      rows.filter((r) => r.stamp === null).map((r) => r.id);
-    expect(unrun(asc), "the un-synced row should be in the table").toContain(
-      "unsynced/ingest",
-    );
-    expect(
-      asc.slice(0, unrun(asc).length).every((r) => r.stamp === null),
-      `ascending: never-run rows should lead — ${JSON.stringify(asc)}`,
-    ).toBe(true);
-    expect(
-      desc.slice(-unrun(desc).length).every((r) => r.stamp === null),
-      `descending: never-run rows should trail — ${JSON.stringify(desc)}`,
-    ).toBe(true);
-
-    // The whole column reversed, nulls included — not just its stamped
+    // ...and it really did reverse, rather than the click doing
+    // nothing: every sibling set, nulls included — not just its stamped
     // middle. This is the property that makes the order a single total
     // one rather than two rules stitched together.
-    expect(
-      desc.map((r) => r.stamp),
-      "descending should be ascending reversed, end to end",
-    ).toEqual([...asc].reverse().map((r) => r.stamp));
+    expect([...desc.keys()].sort()).toEqual([...asc.keys()].sort());
+    for (const [name, set] of asc) {
+      expect(
+        desc.get(name)!.map((r) => r.stamp),
+        `${name}: descending should be ascending reversed, end to end`,
+      ).toEqual([...set].reverse().map((r) => r.stamp));
+    }
   });
 
   test("a downstream step can't be synced on its own, and says what would carry it", async ({
