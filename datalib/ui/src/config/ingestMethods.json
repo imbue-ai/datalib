@@ -1,0 +1,152 @@
+{
+  "beeper": [
+    {
+      "path": "sync",
+      "reach": "local"
+    }
+  ],
+  "carddav": [
+    {
+      "path": "sync",
+      "reach": "origin"
+    },
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    }
+  ],
+  "chatgpt_api": [
+    {
+      "path": "sync",
+      "reach": "origin"
+    }
+  ],
+  "claude_api": [
+    {
+      "path": "sync",
+      "reach": "origin"
+    }
+  ],
+  "claude_export": [
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    }
+  ],
+  "email": [
+    {
+      "path": "sync",
+      "reach": "origin"
+    },
+    {
+      "path": "gmail_api",
+      "reach": "origin"
+    },
+    {
+      "path": "mbox",
+      "reach": "local"
+    },
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    }
+  ],
+  "fsindex": [
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    }
+  ],
+  "github_api": [
+    {
+      "path": "sync",
+      "reach": "origin"
+    }
+  ],
+  "gitlab_api": [
+    {
+      "path": "sync",
+      "reach": "origin"
+    }
+  ],
+  "google_takeout": [
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    }
+  ],
+  "lightroom": [
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    }
+  ],
+  "linkedin": [
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    },
+    {
+      "path": "fetch_photos",
+      "reach": "origin"
+    }
+  ],
+  "media": [
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    }
+  ],
+  "notion_api": [
+    {
+      "path": "sync",
+      "reach": "origin"
+    }
+  ],
+  "pdf": [
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    }
+  ],
+  "perseus": [
+    {
+      "path": "sync",
+      "reach": "origin"
+    },
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    }
+  ],
+  "signal_backup": [
+    {
+      "path": "sync",
+      "reach": "local"
+    }
+  ],
+  "slack_api": [
+    {
+      "path": "sync",
+      "reach": "origin"
+    }
+  ],
+  "sms_backup_restore": [
+    {
+      "path": "common.input_path",
+      "reach": "local"
+    }
+  ],
+  "whatsapp_backup": [
+    {
+      "path": "sync",
+      "reach": "local"
+    }
+  ],
+  "yolink": [
+    {
+      "path": "sync",
+      "reach": "origin"
+    }
+  ]
+}

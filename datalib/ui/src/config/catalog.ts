@@ -78,6 +78,10 @@ export type Field =
 
 export type CatalogEntry = {
   /// The group's `type`: the provider word (`slack_api`, `email`, …).
+  /// Which of a step's params tables reach a live origin and which read
+  /// files on disk is not recorded here: `ingestMethods.ts` answers that
+  /// from the provider's own declaration, for this type and the params
+  /// a form would write.
   type: string;
   label: string;
   blurb: string;

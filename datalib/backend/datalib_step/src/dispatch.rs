@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use datalib_etl::processor::{DataProcessor, PlanContext};
 use datalib_etl_render::processor::RenderProcessor;
-use datalib_source_common::{Defaults, DownloadParams};
+use datalib_source_common::{Defaults, DownloadParams, Reach};
 
 use crate::source_type::SourceType;
 
@@ -23,6 +23,9 @@ pub struct PlannedSource {
     /// The raw store: the ingest step's own tree, or for a render the
     /// tree its input names.
     pub raw_path: PathBuf,
+    /// Whether the method the ingest step's params hold reaches a live
+    /// origin or reads files on disk. `None` for a render.
+    pub reach: Option<Reach>,
     /// Resolved rate-limit give-up bounds for the download wave.
     pub download_params: DownloadParams,
     /// `common.always_clear_before_ingest`, resolved. Download wave only —
@@ -97,6 +100,10 @@ pub fn plan(
             SourceType::known_list()
         )
     })?;
+    // Read before `source` is handed to serde: which of the provider's
+    // declared methods these params hold. Judged after `validate`, so a
+    // misspelled table is reported as the unknown field it is.
+    let held = crate::methods::held(&source, crate::methods::ingest_methods(source_type));
 
     // Each arm names two crates, because a provider is two crates: the
     // download half and the `_render` half that links `datalib_schema`.
@@ -131,12 +138,14 @@ pub fn plan(
                     cfg.validate()
                         .with_context(|| format!("source {name:?} (type={source_type})"))?;
                     let raw_path = ingest_writes_its_own_tree(&raw_dir, cfg.common.raw_path())?;
+                    let reach = crate::methods::reach_or_refuse(source_type, &held)?;
                     let download_params = cfg.common.download_params.clone();
                     let always_clear_before_ingest = cfg.common.always_clear_before_ingest;
                     PlannedSource {
                         name: name.to_string(),
                         source_type,
                         raw_path,
+                        reach: Some(reach),
                         download_params,
                         always_clear_before_ingest,
                         processors: Wave::Download($dlp::processor::$dl(ctx, cfg)?),
@@ -156,6 +165,7 @@ pub fn plan(
                         name: name.to_string(),
                         source_type,
                         raw_path,
+                        reach: None,
                         // Rate-limit bounds are download-only machinery.
                         download_params: Default::default(),
                         always_clear_before_ingest: false,
@@ -188,6 +198,7 @@ pub fn plan(
                         name: name.to_string(),
                         source_type,
                         raw_path: ingest_writes_its_own_tree(&raw_dir, cfg.common.raw_path())?,
+                        reach: Some(crate::methods::reach_or_refuse(source_type, &held)?),
                         download_params: cfg.common.download_params.clone(),
                         always_clear_before_ingest: cfg.common.always_clear_before_ingest,
                         processors: Wave::Download($dlp::processor::plan_download(ctx, cfg)?),
@@ -202,6 +213,7 @@ pub fn plan(
                         name: name.to_string(),
                         source_type,
                         raw_path: cfg.common.raw_path().to_path_buf(),
+                        reach: None,
                         download_params: Default::default(),
                         always_clear_before_ingest: false,
                         processors: Wave::Render(Vec::new()),
@@ -508,21 +520,76 @@ mod tests {
         assert_eq!(rn.processors.len(), 1);
     }
 
-    /// An API source with no `sync:` block has nothing to fetch this
-    /// run, so its download wave is empty — render still reads whatever
-    /// an earlier run put in the store.
+    /// An `ingest` step whose params hold none of its provider's methods
+    /// is refused at plan time, where `datalib-dag --check` sees it. A
+    /// step with no `sync:` used to plan an empty download wave and
+    /// succeed, which read exactly like a working sync that found nothing.
     #[test]
-    fn download_without_sync_plans_empty_for_api_sources() {
+    fn an_ingest_step_with_no_method_is_refused() {
         let td = tempfile::tempdir().unwrap();
-        let dl = plan(
+        let err = plan(
             "claude_api",
             Phase::Ingest,
             "claude",
             raw_dir(td.path(), "claude", Phase::Ingest),
             serde_json::json!({}),
         )
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("`sync`"), "{err}");
+        assert!(
+            err.contains("where the claude_api data comes from"),
+            "{err}"
+        );
+
+        // A misspelled table is reported as what it is, not as a missing
+        // method: serde's unknown-field error comes first (where the
+        // provider's config is `deny_unknown_fields`, as pdf's is).
+        let err = plan(
+            "pdf",
+            Phase::Ingest,
+            "pdfs",
+            raw_dir(td.path(), "pdfs", Phase::Ingest),
+            serde_json::json!({"comon": {"input_path": "/scans"}}),
+        )
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("unknown field"), "{err}");
+        assert!(!err.contains("where the pdf data comes from"), "{err}");
+    }
+
+    /// The planned source carries what its method reaches, read off the
+    /// params by the provider's declaration.
+    #[test]
+    fn a_planned_ingest_knows_its_reach() {
+        let td = tempfile::tempdir().unwrap();
+        let dl = plan(
+            "slack_api",
+            Phase::Ingest,
+            "slack",
+            raw_dir(td.path(), "slack", Phase::Ingest),
+            serde_json::json!({"sync": {}}),
+        )
         .unwrap();
-        assert_eq!(dl.processors.len(), 0, "no sync: means nothing to fetch");
+        assert_eq!(dl.reach, Some(Reach::Origin));
+        let dl = plan(
+            "pdf",
+            Phase::Ingest,
+            "pdfs",
+            raw_dir(td.path(), "pdfs", Phase::Ingest),
+            serde_json::json!({"common": {"input_path": td.path().to_str().unwrap()}}),
+        )
+        .unwrap();
+        assert_eq!(dl.reach, Some(Reach::Local));
+        let rn = plan(
+            "pdf",
+            Phase::Render,
+            "pdfs",
+            raw_dir(td.path(), "pdfs", Phase::Render),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(rn.reach, None);
     }
 
     /// `claude_export` is file-backed, not render-only: it ingests the

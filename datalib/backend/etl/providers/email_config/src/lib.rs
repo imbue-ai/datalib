@@ -266,6 +266,15 @@ impl EmailGmailApi {
     }
 }
 
+impl datalib_source_common::IngestMethods for EmailConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] = &[
+        datalib_source_common::IngestMethod::origin("sync"),
+        datalib_source_common::IngestMethod::origin("gmail_api"),
+        datalib_source_common::IngestMethod::local("mbox"),
+        datalib_source_common::IngestMethod::local("common.input_path"),
+    ];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

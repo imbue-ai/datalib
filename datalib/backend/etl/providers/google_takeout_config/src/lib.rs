@@ -47,3 +47,12 @@ pub struct GoogleTakeoutSync {
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope (see the per-phase params split).
 pub type GoogleTakeoutRenderConfig = datalib_source_common::BareRenderConfig;
+
+// `sync` here is the feed toggles, not where the data is; the Takeout
+// root under `common.input_path` is.
+impl datalib_source_common::IngestMethods for GoogleTakeoutConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local(
+            "common.input_path",
+        )];
+}

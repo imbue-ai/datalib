@@ -990,7 +990,11 @@ insta snapshots are the golden tests that do exist; see the
 sandbox where they can't be reviewed. The standard fix is to invoke
 the update via `bazel run` against a sibling `.update` target. Every
 insta-using `rust_test` in this tree has one declared via the
-`insta_update` macro in `//tools:insta.bzl`:
+`insta_update` macro in `//tools:insta.bzl`. The same wrapper is how a
+generated golden that is not an insta snapshot gets regenerated: a
+test that writes its file when `INSTA_UPDATE=always` is set, under
+`INSTA_WORKSPACE_ROOT`, and compares against it otherwise
+(`//datalib/backend/datalib_step:ingest_methods.update` is one).
 
 ```bash
 # Hermetic snapshot tests — no host prereqs.
@@ -1406,6 +1410,7 @@ One enum per vocabulary, living with whoever mints it:
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what render could not do | `Outcome`, `Reason`, `ScopeKind`, `Stage` | `schema/src/render_problems.rs` |
 | a config's `[[steps]]` source type | `SourceType` | `datalib_step/src/source_type.rs` |
+| whether an ingest method reaches a live service or reads files on disk | `Reach` | `source_common/src/lib.rs`, declared per method by each `<p>_config` crate |
 
 The TypeScript side mirrors these as string-literal unions in
 `datalib/ui/src/api.ts` (`DagRunState`, `SyncTaskState`, `SyncJobState`,

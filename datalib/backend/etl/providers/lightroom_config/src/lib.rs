@@ -146,6 +146,13 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     p[pi..].iter().all(|c| *c == '*')
 }
 
+impl datalib_source_common::IngestMethods for LightroomConfig {
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local(
+            "common.input_path",
+        )];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
