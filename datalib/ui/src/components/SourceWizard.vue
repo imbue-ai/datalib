@@ -144,13 +144,14 @@ function activeFields(phase: "download" | "render"): Field[] {
 const downloadFields = computed(() => activeFields("download"));
 const renderFields = computed(() => (renders.value ? activeFields("render") : []));
 
-/// The ingest fields the main form renders. The latchkey account is one
-/// of this descriptor's fields like any other — it lands on the same
-/// params target and is written by the same code — but it is *shown*
-/// inside the Connection block, next to the button that populates it.
-/// Rendering it twice is the bug this exists to prevent.
+/// The ingest fields the main form renders: the descriptor's, less the
+/// latchkey account. That one lands on the same params target and is
+/// written by the same code as any other field, but it is *shown* in
+/// the Connection block beside the button that populates it — or, where
+/// `showAccountPicker` is off, not shown at all. Either way it must not
+/// reappear here; rendering it twice is the bug this exists to prevent.
 const formFields = computed(() =>
-  downloadFields.value.filter((f) => f !== (accountField.value as Field | undefined)),
+  downloadFields.value.filter((f) => !(f.kind === "text" && f.latchkey)),
 );
 
 /// The form in two parts: the ingest fields, then the render fields
@@ -359,13 +360,34 @@ const service = computed(() => {
     : null;
 });
 
+/// Whether naming a latchkey account is offered for this source.
+///
+/// Off wherever we register the service ourselves with a generic
+/// cookie capture, because latchkey cannot honour what the control
+/// would promise: `auth browser` accepts `--account`, reports success,
+/// and files the credential under the unnamed default anyway
+/// (imbue-ai/latchkey#148), having first refused a name that does not
+/// exist yet. A picker there can only name an account the login
+/// ignores, and the config would then point at a credential that lives
+/// somewhere else.
+///
+/// On everywhere else, and deliberately: a built-in OAuth service
+/// learns an identity from the account signed into and files under it,
+/// so Fastmail and Gmail really do hold one credential per address.
+///
+/// Hidden rather than deleted — the field, the account list and the
+/// plumbing that sends one all remain, and are still tested — so this
+/// is one condition to drop when #148 is fixed.
+const showAccountPicker = computed(() => !chosen.value?.credentialRegister);
+
 /// The one field, if any, that holds a latchkey account. There is at
 /// most one per descriptor: a step mirrors one identity.
-const accountField = computed(
-  () =>
-    downloadFields.value.find((f) => f.kind === "text" && f.latchkey) as
-      | (Field & { kind: "text" })
-      | undefined,
+const accountField = computed(() =>
+  showAccountPicker.value
+    ? (downloadFields.value.find((f) => f.kind === "text" && f.latchkey) as
+        | (Field & { kind: "text" })
+        | undefined)
+    : undefined,
 );
 
 const accounts = ref<StoredAccount[] | null>(null);
@@ -467,17 +489,43 @@ async function connectViaLatchkey() {
   }
   connect.value = { state: "running", message: "A browser window should open. Finish the login there." };
   try {
-    const started = await startLatchkeyConnect(name, accountValue.value, wouldRegister.value);
+    // A cookie capture has to watch a real sign-in happen. latchkey
+    // otherwise restores the session it saved last time, so the browser
+    // opens already signed in, no new cookie is issued, and the login
+    // waits forever (imbue-ai/latchkey#150). Told from the descriptor,
+    // not from whether we are registering: the flow is the service's
+    // either way.
+    const ephemeral = chosen.value?.credentialRegister?.login_flow === "cookie-capture";
+    const started = await startLatchkeyConnect(
+      name,
+      accountValue.value,
+      wouldRegister.value,
+      ephemeral,
+    );
     for (;;) {
       await new Promise((r) => setTimeout(r, 1500));
       if (closed) return;
       const status = await latchkeyConnectStatus(started.id);
       if (status.status === "running") continue;
       if (status.status === "ok") {
-        connect.value = { state: "ok", message: "Connected. The account list below is refreshed." };
         // The point of connecting was to add an account; showing the
         // stale list would hide the one just added.
         await loadAccounts();
+        // Follow the login rather than the box. `--account` is ignored
+        // when latchkey stores (imbue-ai/latchkey#148): an OAuth login
+        // files under the address actually signed in with, so signing
+        // in as a second Fastmail address is how a second account comes
+        // to exist — and the form has to name that one, or the config
+        // points at a credential that isn't there.
+        const landed = status.account;
+        const field = accountField.value;
+        if (landed && field) values.value[field.target] = landed;
+        connect.value = {
+          state: "ok",
+          message: landed
+            ? `Connected as ${landed}.`
+            : "Connected. The account list below is refreshed.",
+        };
       } else {
         connect.value = { state: "failed", message: status.output || "The login did not complete." };
       }

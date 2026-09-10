@@ -150,6 +150,12 @@ pub struct ConnectRequest {
     /// account.
     #[serde(default)]
     pub register: Option<ServiceRegistration>,
+    /// Run the login without latchkey's saved browser session. Set for
+    /// a cookie capture, which cannot see a cookie an already
+    /// signed-in session does not re-send — see
+    /// [`EPHEMERAL_BROWSER_ENV`].
+    #[serde(default)]
+    pub ephemeral_browser: bool,
 }
 
 /// A `latchkey services register` invocation, as data. The wizard
@@ -183,6 +189,13 @@ pub enum ConnectState {
 pub struct ConnectStatus {
     pub id: String,
     pub status: ConnectState,
+    /// Which account latchkey filed the credential under, when it says.
+    /// Not the one that was asked for: `auth browser` ignores
+    /// `--account` when storing and uses the identity the login yields
+    /// (imbue-ai/latchkey#148) — the signed-in address for an OAuth
+    /// service, and the unnamed default for a flow with no identity in
+    /// it. Its own report is the only reliable way to know which.
+    pub account: Option<String>,
     /// The command's combined output, so a failure is diagnosable
     /// without going to a terminal. Trimmed to the tail — latchkey can
     /// be chatty and the useful part is always at the end.
@@ -205,11 +218,17 @@ pub async fn start_connect(
     let body = body.map(|Json(b)| b).unwrap_or_default();
     let account = body.account.unwrap_or_default().trim().to_string();
     let register = body.register.map(|r| register_args(&service, &r));
+    let login_env: Vec<(&str, &str)> = if body.ephemeral_browser {
+        vec![(EPHEMERAL_BROWSER_ENV, "1")]
+    } else {
+        Vec::new()
+    };
 
     let id = uuid::Uuid::new_v4().to_string();
     let slot = Arc::new(Mutex::new(ConnectStatus {
         id: id.clone(),
         status: ConnectState::Running,
+        account: None,
         output: String::new(),
     }));
     attempts()
@@ -269,7 +288,8 @@ pub async fn start_connect(
             }
         }
 
-        let outcome = tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output(&args)).await;
+        let outcome =
+            tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output_env(&args, &login_env)).await;
         // A placeholder outliving a login that never finished is a
         // stored credential that cannot work, and it would make the
         // account look connected in every account list.
@@ -280,6 +300,7 @@ pub async fn start_connect(
         match outcome {
             Ok(Ok(output)) => {
                 slot.status = ConnectState::Ok;
+                slot.account = stored_account(&output);
                 slot.output = tail(&output);
             }
             Ok(Err(e)) => {
@@ -297,6 +318,7 @@ pub async fn start_connect(
     Ok(Json(ConnectStatus {
         id,
         status: ConnectState::Running,
+        account: None,
         output: String::new(),
     }))
 }
@@ -325,6 +347,16 @@ fn clear_args(service: &str, account: &str) -> Vec<String> {
         "clear".to_string(),
         service.to_string(),
     ]
+}
+
+/// The account named in latchkey's "Stored credentials for account
+/// 'x'." line, which `auth browser` prints when the login yielded an
+/// identity. Absent for a cookie capture, which has none and files
+/// under the unnamed default.
+fn stored_account(output: &str) -> Option<String> {
+    let (_, rest) = output.split_once("Stored credentials for account '")?;
+    let (name, _) = rest.split_once('\'')?;
+    Some(name.to_string())
 }
 
 /// `latchkey services register <name> --base-api-url=… --login-url=…
@@ -440,7 +472,27 @@ pub async fn probe(
 
 // shared
 
+/// A browser login that must observe a *fresh* sign-in, so latchkey
+/// must not restore the session it saved last time.
+///
+/// Cookie capture reads the `Set-Cookie` headers that arrive while
+/// someone signs in. latchkey otherwise seeds the browser with its own
+/// persisted state, which lands you already signed in — and a site that
+/// sees an established session issues no new cookie, so the capture
+/// waits for something that can never arrive and the login hangs with
+/// nothing on screen to say why (imbue-ai/latchkey#150). Ephemeral mode
+/// neither loads nor saves that state.
+///
+/// Only for cookie capture. An OAuth login *benefits* from the saved
+/// session — it has an identity to re-derive either way, and being
+/// already signed in is one less password.
+const EPHEMERAL_BROWSER_ENV: &str = "LATCHKEY_EPHEMERAL_BROWSER";
+
 async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
+    latchkey_output_env(args, &[]).await
+}
+
+async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::Result<String> {
     // The same resolution `datalib_etl::latchkey` uses (bundled Node
     // runtime, else `npx -y latchkey@<pin>`), reached through
     // `datalib_core` so the pin is not spelled twice.
@@ -460,6 +512,9 @@ async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
     let out = cmd.output().await.map_err(|e| {
         anyhow::anyhow!(
             "could not run latchkey ({e}). Install it, or check that {} works.",
@@ -530,6 +585,31 @@ fn validated_type(source_type: &str) -> Result<String, (StatusCode, Json<Value>)
 
 fn err(status: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
     (status, Json(serde_json::json!({ "error": message })))
+}
+
+#[cfg(test)]
+mod account_report_tests {
+    use super::stored_account;
+
+    /// What `latchkey auth browser fastmail` prints — an OAuth login
+    /// derives the address it signed in as, and reports it even when
+    /// `--account` asked for something else entirely.
+    #[test]
+    fn reads_the_account_oauth_reports() {
+        assert_eq!(
+            stored_account("Done. Stored credentials for account 'thad_imbue@fastmail.com'.\n")
+                .as_deref(),
+            Some("thad_imbue@fastmail.com"),
+        );
+    }
+
+    /// A cookie capture has no identity to derive, so it says only
+    /// "Done" and the credential lands on latchkey's unnamed default.
+    /// `None` has to mean *that*, not "parse failed".
+    #[test]
+    fn a_capture_that_names_nothing_yields_none() {
+        assert_eq!(stored_account("Done\n"), None);
+    }
 }
 
 #[cfg(test)]

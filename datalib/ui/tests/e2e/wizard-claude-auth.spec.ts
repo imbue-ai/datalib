@@ -78,51 +78,51 @@ test("the auth button is offered even when the service can't do it yet", async (
   await expect(wizard(page)).toContainText("latchkey auth set claude-ai");
 });
 
-/// The account box, which is a dropdown *and* a free-text field.
-const accountBox = (page: Page) =>
-  wizard(page).locator('.wiz-field:has(> .wiz-label:text-is("Claude account")) input.wiz-input');
-
-test("once the service has a browser login, the button just runs it", async ({ page }) => {
+/// Naming an account is hidden *for Claude*, because latchkey cannot
+/// honour it here: a
+/// browser login accepts `--account`, reports success, and files the
+/// credential under the unnamed default anyway
+/// (imbue-ai/latchkey#148). Offering a picker whose value the login
+/// ignores is how a config comes to name an account whose credential
+/// lives somewhere else — a sync that fails later, far from the cause.
+///
+/// Scoped to services we register with a cookie capture, which is where
+/// the login has no identity to learn. `wizard-email.spec.ts` holds the
+/// other side: Fastmail and Gmail are built-in OAuth, their logins do
+/// file under the address signed in with, and their picker stays.
+test("no account picker, and the login runs as latchkey's default", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
 
-  let connectBody: { account?: string } | null = null;
+  await expect(
+    wizard(page).locator('.wiz-field:has(> .wiz-label:text-is("Claude account"))'),
+  ).toHaveCount(0);
+  await expect(wizard(page).locator("select.wiz-accountpick")).toHaveCount(0);
+
+  let connectBody: { account?: string; ephemeral_browser?: boolean } | null = null;
   await page.route("**/api/latchkey/claude-ai/connect", (route) => {
     connectBody = route.request().postDataJSON();
     return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
   });
-
-  // An account latchkey already holds is passed through: `--account` is
-  // what decides which identity the login refreshes.
-  await accountBox(page).fill(STORED_ACCOUNT);
   await wizard(page).getByRole("button", { name: "Latchkey auth" }).click();
 
-  await expect.poll(() => connectBody?.account).toBe(STORED_ACCOUNT);
-  await expect(wizard(page).locator(".wiz-convert")).toHaveCount(0);
+  // Empty means "latchkey's own default", which is addressed by sending
+  // no `--account` at all.
+  await expect.poll(() => connectBody?.account).toBe("");
+
+  // And the login must not reuse latchkey's saved session: a cookie
+  // capture reads the `Set-Cookie` of a sign-in that then never
+  // happens, and waits for it until the 15-minute timeout with an
+  // innocent-looking browser window open (imbue-ai/latchkey#150).
+  await expect.poll(() => connectBody?.ephemeral_browser).toBe(true);
 });
 
-/// The bug this guards, seen on a real machine: typing a *new* account
-/// name and pressing the button produced "No credentials stored for
-/// account 'thad_test_2' of service 'claude-ai'". latchkey's
-/// `--account` selects a credential to refresh and cannot create one,
-/// so the server seeds the name and retries — the person is not handed
-/// a command to run. This end only has to prove the button still acts
-/// on the name they typed; `connect.rs` owns the seeding.
-test("a name latchkey doesn't hold still starts a login, under that name", async ({ page }) => {
+/// The other half of "always the default": with nothing to type an
+/// account into, nothing writes one, so the step names no identity and
+/// latchkey uses its own. `source_steps.test.ts` covers the converse —
+/// the params plumbing still carries an account when one is in the
+/// values, which is what makes this hidden rather than removed.
+test("a new source writes no account at all", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
-
-  let connectBody: { account?: string } | null = null;
-  await page.route("**/api/latchkey/claude-ai/connect", (route) => {
-    connectBody = route.request().postDataJSON();
-    return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
-  });
-
-  await accountBox(page).fill("thad_test_2");
-  const auth = wizard(page).getByRole("button", { name: "Latchkey auth" });
-  await expect(auth).toBeEnabled();
-  await auth.click();
-
-  // The name reaches the server; storing under latchkey's unnamed
-  // default instead would sign in happily and leave the config naming
-  // an account that resolves to nothing at sync time.
-  await expect.poll(() => connectBody?.account).toBe("thad_test_2");
+  await wizard(page).getByText("Review the TOML this writes").click();
+  await expect(wizard(page).locator(".wiz-review pre")).not.toContainText("latchkey_settings");
 });

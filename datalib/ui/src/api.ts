@@ -883,6 +883,12 @@ export type ConnectState = "running" | "ok" | "failed";
 export type ConnectAttempt = {
   id: string;
   status: ConnectState;
+  /// Which account latchkey filed the credential under — not the one
+  /// asked for. `auth browser` ignores `--account` when storing and
+  /// uses the identity the login yields (imbue-ai/latchkey#148), so its
+  /// own report is the only reliable answer. Null when the flow had no
+  /// identity to derive and used latchkey's unnamed default.
+  account: string | null;
   output: string;
 };
 
@@ -923,11 +929,16 @@ export function startLatchkeyConnect(
   service: string,
   account?: string,
   register?: ServiceRegistration,
+  ephemeralBrowser = false,
 ): Promise<ConnectAttempt> {
   return quietJson<ConnectAttempt>(`/api/latchkey/${encodeURIComponent(service)}/connect`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ account: account ?? "", register: register ?? null }),
+    body: JSON.stringify({
+      account: account ?? "",
+      register: register ?? null,
+      ephemeral_browser: ephemeralBrowser,
+    }),
   });
 }
 
