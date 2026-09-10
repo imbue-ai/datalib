@@ -496,10 +496,24 @@ async function connectViaLatchkey() {
       const status = await latchkeyConnectStatus(started.id);
       if (status.status === "running") continue;
       if (status.status === "ok") {
-        connect.value = { state: "ok", message: "Connected. The account list below is refreshed." };
         // The point of connecting was to add an account; showing the
         // stale list would hide the one just added.
         await loadAccounts();
+        // Follow the login rather than the box. `--account` is ignored
+        // when latchkey stores (imbue-ai/latchkey#148): an OAuth login
+        // files under the address actually signed in with, so signing
+        // in as a second Fastmail address is how a second account comes
+        // to exist — and the form has to name that one, or the config
+        // points at a credential that isn't there.
+        const landed = status.account;
+        const field = accountField.value;
+        if (landed && field) values.value[field.target] = landed;
+        connect.value = {
+          state: "ok",
+          message: landed
+            ? `Connected as ${landed}.`
+            : "Connected. The account list below is refreshed.",
+        };
       } else {
         connect.value = { state: "failed", message: status.output || "The login did not complete." };
       }

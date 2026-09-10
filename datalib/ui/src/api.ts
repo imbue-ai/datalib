@@ -883,6 +883,12 @@ export type ConnectState = "running" | "ok" | "failed";
 export type ConnectAttempt = {
   id: string;
   status: ConnectState;
+  /// Which account latchkey filed the credential under — not the one
+  /// asked for. `auth browser` ignores `--account` when storing and
+  /// uses the identity the login yields (imbue-ai/latchkey#148), so its
+  /// own report is the only reliable answer. Null when the flow had no
+  /// identity to derive and used latchkey's unnamed default.
+  account: string | null;
   output: string;
 };
 

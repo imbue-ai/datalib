@@ -292,6 +292,45 @@ test("Fastmail writes its JMAP host without asking, and shows folder counts", as
   await expect(toml).not.toContainText("gmail");
 });
 
+/// Signing in is how a second account comes to exist, so the form has
+/// to follow the login rather than the box. latchkey ignores
+/// `--account` when it stores and files under the address actually
+/// signed in with (imbue-ai/latchkey#148) — it just reports which. A
+/// form left naming the old account would write a config pointing at a
+/// credential that is not there.
+test("the account follows the login, not the box", async ({ page }) => {
+  await pickTile(page, "fastmail", "Mirror a Fastmail mailbox over JMAP.");
+  await wizard(page).locator("select.wiz-accountpick").selectOption("troi@betazed.example");
+
+  await page.route("**/api/latchkey/fastmail/connect", (route) =>
+    route.fulfill({ json: { id: "c1", status: "running", account: null, output: "" } }),
+  );
+  // What `auth browser` reports for an OAuth service: a different
+  // address from the one selected above, because that is who signed in.
+  await page.route("**/api/latchkey/connect/c1/status", (route) =>
+    route.fulfill({
+      json: { id: "c1", status: "ok", account: "crusher@enterprise.gov", output: "Done." },
+    }),
+  );
+
+  await wizard(page).getByRole("button", { name: "Latchkey auth" }).click();
+  await expect(wizard(page).locator(".wiz-conn-note")).toContainText(
+    "Connected as crusher@enterprise.gov",
+  );
+  // The text box, not the dropdown beside it: both carry `.wiz-input`,
+  // and the dropdown reads `__other` because a just-created account is
+  // not in the list this stub keeps returning.
+  await expect(
+    wizard(page).locator('.wiz-field:has(> .wiz-label:text-is("Fastmail account")) input.wiz-input'),
+  ).toHaveValue("crusher@enterprise.gov");
+
+  // …and that is what the config gets, not the address that was picked.
+  await wizard(page).getByText("Review the TOML this writes").click();
+  await expect(wizard(page).locator(".wiz-review pre")).toContainText(
+    'account = "crusher@enterprise.gov"',
+  );
+});
+
 test("an existing source reopens on the form that wrote it", async ({ page }) => {
   await pickTile(page, "fastmail", "Mirror a Fastmail mailbox over JMAP.");
   await field(page, "Name").fill("Personal mail");
