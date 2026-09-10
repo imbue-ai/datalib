@@ -70,6 +70,46 @@ rust_test(
     ],
 )
 
+# The daemon's collection scoping, against a real `qmd mcp` subprocess
+# and the real fixture index. The only test in the tree that drives the
+# daemon at all: everything else stops at the JSON it would have sent, so
+# "scoped search returns that source's hits" was previously a claim no
+# test could falsify.
+#
+# Needs a Node to run qmd and the embedding model to answer the `vec`
+# half of a hybrid search. Both are bazel inputs, named through
+# `$(rlocationpath)` rather than written into the test, because their
+# repository names carry the host platform.
+rust_test(
+    name = "qmd_daemon_scope_test",
+    size = "large",
+    srcs = ["tests/qmd_daemon_scope.rs"],
+    data = [
+        "//tests/fixtures:ingested/qmd.tar",
+        "//tests/fixtures:ingested/qmd-index.tar",
+        "@nodejs_host//:node_bin",
+        "//third-party/qmd/runtime:qmd_package_dir",
+        "//third-party/qmd/runtime:qmd_tree",
+        "@qmd_model_embeddinggemma//file",
+    ],
+    edition = "2021",
+    env = {
+        "QMD_DAEMON_TEST_NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+        # Anchored on the generated package dir, not the source
+        # package.json: in the runfiles tree the latter symlinks back
+        # into the source directory, where `node_modules/` does not
+        # exist. See the same note in //datalib/ui:BUILD.bazel.
+        "QMD_DAEMON_TEST_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+        "QMD_DAEMON_TEST_EMBED_MODEL_RLOC": "$(rlocationpath @qmd_model_embeddinggemma//file)",
+    },
+    deps = [
+        ":datalib_unified_index",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:tempfile",
+    ],
+)
+
 # End-to-end test of the production DoltRepo path against a doltlite
 # file in a throwaway temp dir. No subprocess, no port — runs anywhere.
 rust_test(

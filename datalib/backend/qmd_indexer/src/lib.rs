@@ -11,11 +11,44 @@ use datalib_obs::status_line;
 /// search runner/daemon the way two same-named constants once did.
 pub use datalib_runtime::qmd::DEFAULT_QMD_VERSION;
 
-pub const DEFAULT_COLLECTION_NAME: &str = "mirror";
-/// Only index per-group rendered markdown — `<root>/<group>/render_markdown/**`.
-/// The leading `*/` is exactly one group segment, so this never descends into
-/// `<root>/system/` or `<root>/unified_index/`.
-pub const DEFAULT_MASK: &str = "*/render_markdown/**/*.md";
+/// The single collection every rendered document used to live in.
+/// Nothing indexes into it any more; the name survives so a data root
+/// built before per-source collections can be migrated off it.
+pub const LEGACY_COLLECTION_NAME: &str = "mirror";
+
+/// The glob one group's collection covers, relative to the data root.
+///
+/// Every collection is rooted at the **data root**, not at the group's own
+/// tree, so a hit's path stays `<group>/render_markdown/…` — the exact
+/// string `grid_rows.qmd_path` holds, which is what maps a hit back to its
+/// rows. Rooting a collection at `<root>/<group>/render_markdown` instead
+/// would shorten every stored path by that prefix and break the join.
+pub fn mask_for_group(group: &str) -> String {
+    format!("{group}/render_markdown/**/*.md")
+}
+
+/// The groups under `root` that have a rendered-markdown tree.
+///
+/// For a caller with no config to read — the standalone CLI. The step
+/// passes the graph's own list instead, which is the better source: it
+/// omits a directory left behind by a source that has since been removed
+/// from the config.
+pub fn discover_groups(root: &Path) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(root)
+        .with_context(|| format!("read dir {}", root.display()))?
+        .flatten()
+    {
+        if !entry.path().join("render_markdown").is_dir() {
+            continue;
+        }
+        if let Some(name) = entry.file_name().to_str() {
+            out.push(name.to_string());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
 
 /// Options for an indexer run. Construct with `IndexOptions::new(root)` and
 /// override fields as needed.
@@ -24,8 +57,15 @@ pub struct IndexOptions {
     pub root: PathBuf,
     pub embed: bool,
     pub qmd_version: String,
-    pub collection_name: String,
-    pub mask: String,
+    /// One qmd collection per group, named after the group. Scoping a
+    /// search to one source is then a `collections` argument qmd applies
+    /// *inside* retrieval, instead of a filter over a global top-N —
+    /// which drops a source's hits entirely whenever a larger source
+    /// fills that global list.
+    pub groups: Vec<String>,
+    /// Collections to unregister once this run's indexing pass is done.
+    /// See [`run_index`] for why the removal cannot come earlier.
+    pub retire_collections: Vec<String>,
     pub models_dir: PathBuf,
     /// Whether to run `qmd pull` before embedding. On by default,
     /// because it is what puts the query-expansion and reranker models
@@ -39,8 +79,8 @@ impl IndexOptions {
             root: root.into(),
             embed: true,
             qmd_version: DEFAULT_QMD_VERSION.to_string(),
-            collection_name: DEFAULT_COLLECTION_NAME.to_string(),
-            mask: DEFAULT_MASK.to_string(),
+            groups: Vec::new(),
+            retire_collections: Vec::new(),
             models_dir: default_models_dir(),
             pull: true,
         }
@@ -95,8 +135,10 @@ pub struct IndexOutcome {
 }
 
 /// Run an incremental qmd index pass over every group's `render_markdown/`
-/// tree under `<root>`. Creates the collection lazily on first run;
-/// subsequent runs only `update` + optional `embed`.
+/// tree under `<root>`, one collection per group. Registering a
+/// collection is idempotent, so this reconciles rather than assuming a
+/// first run: a source added after the index was built gets its
+/// collection here.
 pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     let root = opts
         .root
@@ -137,27 +179,49 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
         }
     );
     status_line!("[qmd-indexer] embed       = {}", opts.embed);
+    status_line!("[qmd-indexer] collections = {}", opts.groups.join(", "));
     status_line!(
         "[qmd-indexer] mode        = {}",
         if first_run { "create" } else { "incremental" }
     );
 
-    if first_run {
+    let root_arg = root.to_str().context("root is not valid UTF-8")?;
+    for group in &opts.groups {
+        let mask = mask_for_group(group);
         ensure_collection(
             &cache_home,
             &opts.qmd_version,
             &[
                 "collection",
                 "add",
-                root.to_str().context("root is not valid UTF-8")?,
+                root_arg,
                 "--name",
-                &opts.collection_name,
+                group,
                 "--mask",
-                &opts.mask,
+                &mask,
             ],
         )?;
     }
     run_qmd(&cache_home, &opts.qmd_version, &["update"])?;
+
+    // Retiring a collection is destructive and has to come *after* the
+    // indexing pass above. `qmd collection remove` deletes that
+    // collection's `documents` rows and then every `content` row whose
+    // hash no longer has an active document row anywhere.
+    //
+    // Measured on the TNG fixture (76 documents), migrating off `mirror`:
+    // in this order qmd reports "Deleted 76 documents" and cleans up no
+    // content, because the per-group collections already reference those
+    // hashes — content, vectors and every `embedded_at` come through
+    // untouched. Retire first and it reports "Cleaned up 76 orphaned
+    // content hashes" instead, emptying the index of document bodies.
+    // The vectors themselves survive that (nothing cascades to
+    // `content_vectors`), so a later re-index can re-insert the same
+    // hashes and reuse them — but only if qmd's `cleanupOrphanedVectors`
+    // has not run in the window, and it is not worth finding out.
+    for name in &opts.retire_collections {
+        retire_collection(&cache_home, &opts.qmd_version, name)?;
+    }
 
     // Pull BEFORE embed, and the order is the whole point.
     if opts.pull {
@@ -282,6 +346,45 @@ fn ensure_collection(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Res
         return Ok(());
     }
     bail!("qmd {:?} failed: {}: {}", args, out.status, combined.trim());
+}
+
+/// Unregister a collection, tolerating one that is already gone.
+/// `qmd collection remove` exits non-zero with "Collection not found"
+/// for a name it doesn't have, which for a re-run of a migration that
+/// already happened is success.
+fn retire_collection(cache_home: &Path, qmd_version: &str, name: &str) -> Result<()> {
+    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version);
+    cmd.args(["collection", "remove", name]);
+    cmd.env("XDG_CACHE_HOME", cache_home);
+    cmd.env("XDG_CONFIG_HOME", cache_home);
+    cmd.env("NO_COLOR", "1");
+    status_line!(
+        "[qmd-indexer] $ {}",
+        datalib_runtime::node_runtime::display_command(&cmd)
+    );
+    let out = cmd
+        .output()
+        .with_context(|| "failed to spawn qmd; is Node.js installed?")?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if out.status.success() {
+        status_line!(
+            "[qmd-indexer] retired collection {name:?}: {}",
+            combined.trim()
+        );
+        return Ok(());
+    }
+    if combined.contains("Collection not found") {
+        return Ok(());
+    }
+    bail!(
+        "qmd collection remove {name:?} failed: {}: {}",
+        out.status,
+        combined.trim()
+    );
 }
 
 fn run_qmd(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {

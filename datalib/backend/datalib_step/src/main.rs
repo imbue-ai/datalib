@@ -312,7 +312,7 @@ async fn run_function(
         }
         Function::QmdIndex => {
             writes_the_index_tree(&env, &qmd_index::out_rel())?;
-            qmd_index::run(data_root, models_dir, emitter).await
+            qmd_index::run(data_root, &env, models_dir, emitter).await
         }
     }
 }

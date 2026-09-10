@@ -85,6 +85,11 @@ progress until qmd prints its final `Indexed: N new, …` summary line.**
 each one's whole glob. `qmd embed` takes `-c <collection>` and nothing
 finer (`cli/qmd.ts:4404`). There is no `--only`, no path argument.
 
+Since per-source collections landed, a collection *is* one source, so
+that glob is now one source's tree rather than the whole corpus — which
+makes `-c` a usable "re-index just this source" lever it was not before.
+It is still not a file set.
+
 **The step is a black box by construction.** `qmd_index`
 (`datalib_step/src/qmd_index.rs`) calls `progress.set_message("qmd
 index")` and then blocks in `run_index` — no `progress_length`, no
@@ -187,9 +192,14 @@ the file's UTF-8 bytes (`store.ts:2365`), which we can compute exactly,
 from the same bytes, with no shared code:
 
 ```
-∃ documents row (collection='mirror', active=1) with
+∃ documents row (active=1) with
   hash = sha256(bytes of <root>/<markdowns.md_path>)
 ```
+
+The collection is deliberately not part of that test. There is now one
+collection per group, and every one of them is ours — the index has a
+single writer — so naming one could only under-report a document that is
+perfectly well indexed under a source added later.
 
 This replaced the original plan, which was to port qmd's `handelize`
 path mangling (`store.ts:1971`) to Rust and join
@@ -400,7 +410,7 @@ to fix that:
 
    ```sql
    SELECT COUNT(*) FROM documents
-    WHERE collection='mirror' AND active=1 AND hash IN (…the run's hashes…);
+    WHERE active=1 AND hash IN (…the run's hashes…);
    ```
 
    …and emits `progress_length` once and `progress_inc` as the count

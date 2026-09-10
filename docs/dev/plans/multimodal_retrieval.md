@@ -58,7 +58,7 @@ Every friction point traces back to its origin as a personal-notes tool:
 | QMD assumption | Why it fails here |
 |---|---|
 | Documents are files on disk; the only indexing entry point is `update()`, which scans the filesystem | Forecloses ever *not* materializing markdown (§4.5), and forces 250k emails to exist as files before they can be indexed |
-| Filtering is collection-scoped | Cannot express an arbitrary boolean over metadata |
+| Filtering is collection-scoped | One collection per source now buys us `source_name:`; anything else — an author, a date range — is still unexpressible |
 | One global `vectors_vec` table keyed `hash_seq` | Cannot hold two vector spaces |
 | `vec0` is brute-force with no ANN index | Every query scans the full float32 corpus |
 | Stores the document body twice internally (§4.2) | 2.2× the source text before a single posting is written |
@@ -173,12 +173,20 @@ The predicate resolves against `grid_rows` to a set of document
 identifiers, which are pushed **into** each retrieval backend's SQL —
 never applied to its output.
 
-Not a theoretical concern. QMD's own changelog documents the failure at
-collection granularity: searching globally and post-filtering meant a
-large unrelated collection filled the FTS/ANN top-k, so requested
-collections vanished entirely, producing false-empty results even though
-each collection matched on its own. Any selective filter applied after
-retrieval hits the same wall.
+Not a theoretical concern, and no longer a hypothetical one here either.
+QMD's own changelog documents the failure at collection granularity:
+searching globally and post-filtering meant a large unrelated collection
+filled the FTS/ANN top-k, so requested collections vanished entirely,
+producing false-empty results even though each collection matched on its
+own. Any selective filter applied after retrieval hits the same wall.
+
+Datalib had exactly that bug until per-source collections landed: one
+`mirror` collection held every source, so `source_name:x <text>` asked
+qmd for a global top-N and *then* filtered it in SQL. The fix — one
+collection per group, pushed down as qmd's `collections` argument — is
+the coarse-shard version of this section, and it is only that. A
+collection can express "this source" and nothing else, so `author:x AND
+after:2026` is still a post-filter, and everything below still stands.
 
 ### 3.4 Vector search: two stages, and what each stage is *for*
 

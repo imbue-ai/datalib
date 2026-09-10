@@ -7,8 +7,8 @@ pub mod runner;
 
 pub use daemon::{QmdDaemon, QmdDaemonConfig};
 pub use index_state::{DocIndexState, QmdIndexReader, QmdIndexSummary};
-pub use mapping::{GridIndex, GridRowRef, QmdHit, QueryMode};
-pub use runner::{QmdRunner, QmdRunnerConfig, DEFAULT_COLLECTION};
+pub use mapping::{CollectionScope, GridIndex, GridRowRef, QmdHit, QueryMode};
+pub use runner::{QmdRunner, QmdRunnerConfig};
 
 /// The qmd version pin and the `Command` builder that spawns it moved
 /// down into `datalib_runtime` — a crate with no dependencies — so that

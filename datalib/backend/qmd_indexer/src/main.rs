@@ -12,14 +12,13 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 
-use datalib_qmd_indexer::{run_index, IndexOptions};
+use datalib_qmd_indexer::{discover_groups, run_index, IndexOptions, LEGACY_COLLECTION_NAME};
 
 fn parse_args() -> Result<IndexOptions> {
     let mut root: Option<PathBuf> = None;
     let mut embed: Option<bool> = None;
     let mut qmd_version: Option<String> = None;
-    let mut collection_name: Option<String> = None;
-    let mut mask: Option<String> = None;
+    let mut groups: Vec<String> = Vec::new();
     let mut models_dir: Option<PathBuf> = None;
     let mut pull: Option<bool> = None;
 
@@ -31,10 +30,7 @@ fn parse_args() -> Result<IndexOptions> {
             "--no-embed" => embed = Some(false),
             "--embed" => embed = Some(true),
             "--qmd-version" => qmd_version = Some(next_value(&mut it, "--qmd-version")?),
-            "--collection-name" => {
-                collection_name = Some(next_value(&mut it, "--collection-name")?)
-            }
-            "--mask" => mask = Some(next_value(&mut it, "--mask")?),
+            "--group" => groups.push(next_value(&mut it, "--group")?),
             "--models-dir" => {
                 models_dir = Some(PathBuf::from(next_value(&mut it, "--models-dir")?))
             }
@@ -57,12 +53,15 @@ fn parse_args() -> Result<IndexOptions> {
     if let Some(v) = qmd_version {
         o.qmd_version = v;
     }
-    if let Some(v) = collection_name {
-        o.collection_name = v;
-    }
-    if let Some(v) = mask {
-        o.mask = v;
-    }
+    // A caller that named no groups gets every group that has a rendered
+    // tree — the standalone CLI has no config to read. `datalib-step`
+    // passes the graph's list instead.
+    o.groups = if groups.is_empty() {
+        discover_groups(&o.root)?
+    } else {
+        groups
+    };
+    o.retire_collections = vec![LEGACY_COLLECTION_NAME.to_string()];
     if let Some(v) = models_dir {
         o.models_dir = v;
     }
@@ -82,7 +81,7 @@ fn next_value<I: Iterator<Item = OsString>>(it: &mut I, flag: &str) -> Result<St
 fn print_help() {
     eprintln!(
         "datalib-qmd-indexer --root <DIR> [--no-embed] \
-         [--qmd-version <V>] [--collection-name <N>] [--mask <GLOB>] \
+         [--qmd-version <V>] [--group <GROUP>]... \
          [--models-dir <DIR>] [--no-pull]"
     );
 }
