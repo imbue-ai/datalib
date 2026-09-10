@@ -110,9 +110,7 @@ async fn get_json(url: &str, latchkey: &LatchkeySettings) -> Result<Value> {
 /// ones it can only report.
 fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
     if resp.status == 404 {
-        // The one status with load-bearing meaning here: a `startHistoryId`
-        // outside the retained window. The caller falls back to a full sync.
-        return anyhow::Error::new(GmailApiError::HistoryTooOld);
+        return anyhow::Error::new(GmailApiError::NotFound);
     }
     if resp.status == 401 || resp.status == 403 {
         let body = resp.body_str();
@@ -136,11 +134,13 @@ fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
 
 #[derive(Debug, thiserror::Error)]
 pub enum GmailApiError {
-    /// `history.list` returned 404: the stored `historyId` is older than
-    /// Google's retention window (documented as "typically at least one
-    /// week"), so partial sync is impossible and a full sync is required.
-    #[error("the stored Gmail historyId is outside the retained window; a full sync is required")]
-    HistoryTooOld,
+    /// Google answered 404. What that means is the caller's to decide,
+    /// and the two callers read it differently: from `history.list` it
+    /// says the stored `historyId` has aged out of Google's retention
+    /// window, so a full sync is required; from `messages.get` it says
+    /// the message was deleted between the list and the get.
+    #[error("Gmail API returned HTTP 404")]
+    NotFound,
 }
 
 pub async fn get_profile(user_id: &str, latchkey: &LatchkeySettings) -> Result<Profile> {

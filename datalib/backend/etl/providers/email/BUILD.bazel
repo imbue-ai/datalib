@@ -124,6 +124,23 @@ rust_test(
 
 # Hermetic Gmail download test: synthesized fixtures replayed through
 # DATALIB_HTTP_PLAYBACK, so it needs no credential and no network.
+# A `messages.get` that fails is work the run did not do, so it must not
+# advance the cursor. Hermetic: fixtures replayed through playback.
+rust_test(
+    name = "gmail_failed_fetch_holds_cursor",
+    srcs = ["tests/gmail_failed_fetch_holds_cursor.rs"],
+    crate_root = "tests/gmail_failed_fetch_holds_cursor.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_email",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 rust_test(
     name = "gmail_label_union",
     srcs = ["tests/gmail_label_union.rs"],
