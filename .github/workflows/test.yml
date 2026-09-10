@@ -380,3 +380,32 @@ jobs:
               fi
               echo "fully static: OK"
           done
+
+      # Make the static build downloadable: the same binaries under
+      # their public names (`//datalib/backend:bin` does the rename),
+      # in a tarball laid out like the release's. It is how to get a
+      # current Linux build of a PR without cutting a tag — e.g. to
+      # build the docker image locally against binaries newer than the
+      # last release (docs/dev/docker.md). Three days covers a review.
+      - name: Stage the static build as a tarball
+        run: |
+          set -euo pipefail
+          libdir="${{ steps.env.outputs.libclang-path }}"
+          flags=(-c opt --config=release --config=musl-x86_64 --nostamp \
+                 --action_env=LIBCLANG_PATH="${libdir}" \
+                 --host_action_env=LIBCLANG_PATH="${libdir}")
+          bazel build "${flags[@]}" --jobs=16 --build_metadata=ROLE=CI //datalib/backend:bin
+          bindir="$(bazel info bazel-bin "${flags[@]}")/datalib/backend/bin"
+          version="$(sed -n -E 's/^version = "([^"]+)"$/\1/p' datalib/backend/Cargo.toml)"
+          stage="datalib-${version}-x86_64-unknown-linux-musl"
+          mkdir -p "artifact/${stage}"
+          cp -L "${bindir}"/* "artifact/${stage}/"
+          chmod +x "artifact/${stage}"/*
+          tar -C artifact -czf "artifact/datalib-x86_64-unknown-linux-musl.tar.gz" "${stage}"
+          ls -la artifact
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: datalib-x86_64-unknown-linux-musl
+          path: artifact/datalib-x86_64-unknown-linux-musl.tar.gz
+          retention-days: 3
