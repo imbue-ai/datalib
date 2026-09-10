@@ -539,6 +539,36 @@ class IngestedTngPipelineTest(unittest.TestCase):
             out[source] = self._count(store, "grid_rows")
         return out
 
+    def _whatsapp_attachments(self) -> tuple[list[str], list[str], list[str]]:
+        """WhatsApp's rendered attachments, as (linked, missing, placeholders).
+
+        `linked` is every `blobs/…` target the markdown points at,
+        `missing` the subset with no file behind it, and `placeholders`
+        every attachment that rendered as "(not yet fetched)" instead of
+        a link.
+
+        WhatsApp is the source where a broken attachment is invisible
+        from the outside: ingest registers the bytes in the CAS whether
+        or not anything can reach them, so a registry keyed on a path
+        msgstore never uses leaves every attachment a placeholder while
+        the store still looks full and the pipeline still exits 0. The
+        fixture carries three reachable files and one the phone deleted,
+        which is what makes both halves of this assertable.
+        """
+        linked: list[str] = []
+        missing: list[str] = []
+        placeholders: list[str] = []
+        for md in sorted(self.workspace.glob("whatsapp/render_markdown/**/*.md")):
+            body = md.read_text(encoding="utf-8")
+            placeholders += [
+                line.strip() for line in body.splitlines() if "not yet fetched" in line
+            ]
+            for target in re.findall(r"\(blobs/([^)]+)\)", body):
+                linked.append(target)
+                if not (md.parent / "blobs" / target).is_file():
+                    missing.append(f"{md.name} -> blobs/{target}")
+        return linked, missing, placeholders
+
     def _render_problems(self) -> dict[str, list[str]]:
         """Per-source `render_problems` rows, as `source -> [summary…]`.
 
@@ -775,6 +805,33 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._count(self._index_db, "grid_rows"),
             "the stores and the index must hold the same number of rows — "
             f"per-source: {stores}",
+        )
+
+        # ── WhatsApp attachments reach the CAS ──────────────────
+        # The fixture's three on-disk media files each live in the
+        # subtree WhatsApp really puts them in (`Media/WhatsApp Images`,
+        # `Media/WhatsApp Video/Private`, `Media/WhatsApp Voice
+        # Notes/<id>`) and msgstore names them with the `Media/` prefix
+        # it really uses, because the whole join is those two strings
+        # agreeing. Register them relative to `Media/` instead and every
+        # attachment becomes a placeholder, with no failure anywhere
+        # else in this test.
+        linked, missing, placeholders = self._whatsapp_attachments()
+        self.assertEqual(
+            len(linked),
+            3,
+            "each WhatsApp media file whose bytes are on disk must render "
+            f"as a link into blobs/; got {linked}",
+        )
+        self.assertEqual(missing, [], "a rendered attachment link points at no file")
+        # The fourth media message names a file the phone deleted. It
+        # must stay a placeholder — otherwise the assertion above could
+        # be satisfied by a renderer that links everything blindly.
+        self.assertEqual(
+            len(placeholders),
+            1,
+            "the one media message with no file behind it must render as "
+            f"a placeholder; got {placeholders}",
         )
 
         # Nothing in the TNG fixture may land in the problem sink.

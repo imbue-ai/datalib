@@ -572,11 +572,11 @@ expression: snapshot
       "provider": "whatsapp",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.4",
-      "row_set_hash": "8cc309ccd3d9ebd20581b3db45bd5dc25ee105769dcbdc0e203358d104b6c078",
-      "source_fingerprint": "7c73045b9987cb367f5e26620a9f77128928100f9a07734d47febb9d121decdb",
+      "row_set_hash": "f664586ccea42780c6e75c435ddc4f8bcb044e84defdddd7d514f45daf0a8ed1",
+      "source_fingerprint": "f4941c7f44416f4e00a761df2fa40224acc9986b213ce2b71f2c601ba2e407a1",
       "source_name": "whatsapp",
       "title": "Bridge Crew",
-      "updated_at": "2364-04-11T00:08:20+00:00"
+      "updated_at": "2364-04-11T00:11:00+00:00"
     },
     {
       "created_at": "2369-04-15T13:30:00Z",
@@ -614,8 +614,8 @@ expression: snapshot
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "8a27892659cbdaae862db5e0b6921518d7111593d5640d3d0e00d192b2147d7b",
-      "source_fingerprint": "e582a62040d3c44b3c8740fcf500340ab83c8e416cf4d724575a233949d301fb",
+      "row_set_hash": "c0dcaa8a821b9f1dbea845fee9ad5f69b08266ae6ecdcc5052049b4ed1cda143",
+      "source_fingerprint": "d160946526a2dedcb626186cccf8921010937b9432616cad0669bfaff7ddf603",
       "source_name": "whatsapp",
       "title": "whatsapp storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -670,11 +670,11 @@ expression: snapshot
       "provider": "whatsapp",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.4",
-      "row_set_hash": "40b7c5e7307fdcf1062c6ab8639321e268e2a840e5b1af419ef38f3c591f584f",
-      "source_fingerprint": "f3a9bb9c2e15bc9d1b1aa459a48d1ff18b2ffaa04b86505264ff7bd23e4a7603",
+      "row_set_hash": "e0901b531716dd049bdbe1656890a8680e29901ccdcc7088cebeaeef6fcf60e2",
+      "source_fingerprint": "30e924da42c09182dd15cd6f0bd2fe877a55be172ac5e8b163f21263198c4abe",
       "source_name": "whatsapp",
       "title": "+17015550102",
-      "updated_at": "2364-04-11T00:09:00+00:00"
+      "updated_at": "2364-04-11T00:12:00+00:00"
     },
     {
       "created_at": "2369-05-28T15:21:43+00:00",
@@ -1074,7 +1074,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=76 markdowns_read=76 markdowns_removed=0 markdowns_skipped=0 rows_inserted=345"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=76 markdowns_read=76 markdowns_removed=0 markdowns_skipped=0 rows_inserted=348"
     }
   ],
   "grid_rows": [
@@ -1309,6 +1309,35 @@ expression: snapshot
       "upstream_scope": null,
       "uuid": "0bdf2176-0b10-5cc3-b955-0a31599f6495",
       "when_ts": "2369-04-15T08:30:45+00:00"
+    },
+    {
+      "account": null,
+      "author": "+17015550105",
+      "channel": "Bridge Crew",
+      "conversation_name": "Bridge Crew",
+      "conversation_uuid": "931592e5-9b50-5d07-8dc3-471750613c6e",
+      "entire_chat": "/chat/834e1043-9903-53d5-815c-d0863739ca47",
+      "git_sha": null,
+      "kind": "WhatsApp Message",
+      "markdown_uuid": "834e1043-9903-53d5-815c-d0863739ca47",
+      "message_index": 9,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "whatsapp",
+      "qmd_path": "whatsapp/render_markdown/931592e5-9b50-5d07-8dc3-471750613c6e/2364-04.md",
+      "slack_link": null,
+      "source_label": "WhatsApp",
+      "source_url": "Media/WhatsApp Voice Notes/2364/tactical-briefing.opus",
+      "text_len": 22,
+      "text_sha": "sha256:8f08856dbb67d26ec471c60f1ed604f8ccafca9166e6778ace0756708a090b5f",
+      "upstream_entity_kind": null,
+      "upstream_id": null,
+      "upstream_scope": null,
+      "uuid": "0c594c52-dd22-5a5e-be36-00dd04526d1d",
+      "when_ts": "2364-04-11T00:11:00+00:00"
     },
     {
       "account": null,
@@ -1744,6 +1773,35 @@ expression: snapshot
       "upstream_scope": null,
       "uuid": "1544ef1c-ce85-59cd-a01f-235133651a2c",
       "when_ts": "2370-09-04T00:00:00Z"
+    },
+    {
+      "account": null,
+      "author": "+17015550104",
+      "channel": "Bridge Crew",
+      "conversation_name": "Bridge Crew",
+      "conversation_uuid": "931592e5-9b50-5d07-8dc3-471750613c6e",
+      "entire_chat": "/chat/834e1043-9903-53d5-815c-d0863739ca47",
+      "git_sha": null,
+      "kind": "WhatsApp Message",
+      "markdown_uuid": "834e1043-9903-53d5-815c-d0863739ca47",
+      "message_index": 8,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "whatsapp",
+      "qmd_path": "whatsapp/render_markdown/931592e5-9b50-5d07-8dc3-471750613c6e/2364-04.md",
+      "slack_link": null,
+      "source_label": "WhatsApp",
+      "source_url": "Media/WhatsApp Video/Private/warp-core-diagnostic.mp4",
+      "text_len": 24,
+      "text_sha": "sha256:74a671d7d0ceed4bffdbfd9505af78e5210db63e7cde6f1acc860ccd1123de22",
+      "upstream_entity_kind": null,
+      "upstream_id": null,
+      "upstream_scope": null,
+      "uuid": "15900809-cb1b-5c4b-8031-9ffed169ebc3",
+      "when_ts": "2364-04-11T00:10:00+00:00"
     },
     {
       "account": null,
@@ -2896,7 +2954,7 @@ expression: snapshot
       "qmd_path": "whatsapp/render_markdown/931592e5-9b50-5d07-8dc3-471750613c6e/2364-04.md",
       "slack_link": null,
       "source_label": "WhatsApp",
-      "source_url": "WhatsApp Images/bridge-viewscreen.jpg",
+      "source_url": "Media/WhatsApp Images/bridge-viewscreen.jpg",
       "text_len": 21,
       "text_sha": "sha256:2ac45e3de673f725a9d786ac64af7370eeabb71be86a64a43638ea1a42335ac7",
       "upstream_entity_kind": null,
@@ -6589,6 +6647,35 @@ expression: snapshot
       "when_ts": "2369-05-28T15:21:42+00:00"
     },
     {
+      "account": null,
+      "author": "+17015550102",
+      "channel": "+17015550102",
+      "conversation_name": "+17015550102",
+      "conversation_uuid": "95e94192-e06f-5008-bf5b-f7879184d2e1",
+      "entire_chat": "/chat/aafa0ad5-4dc4-59cd-b75e-572a0329836e",
+      "git_sha": null,
+      "kind": "WhatsApp Message",
+      "markdown_uuid": "aafa0ad5-4dc4-59cd-b75e-572a0329836e",
+      "message_index": 2,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "whatsapp",
+      "qmd_path": "whatsapp/render_markdown/95e94192-e06f-5008-bf5b-f7879184d2e1/2364-04.md",
+      "slack_link": null,
+      "source_label": "WhatsApp",
+      "source_url": "Media/WhatsApp Images/holodeck-poker-night.jpg",
+      "text_len": 24,
+      "text_sha": "sha256:b83545fe668ca1b2624e3ce2235e66392121249c4110e5e7631bafcfed94a374",
+      "upstream_entity_kind": null,
+      "upstream_id": null,
+      "upstream_scope": null,
+      "uuid": "eefda64e-972f-59a8-9082-5850ace455e2",
+      "when_ts": "2364-04-11T00:12:00+00:00"
+    },
+    {
       "account": "T_NCC1701D",
       "author": null,
       "channel": "#bridge",
@@ -7117,7 +7204,7 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:19e684d5f0d7e5ffdbed126f80c4b6944efa9b72924eae6c34cf191a6d6f414e",
+      "members_sha": "sha256:1991fd34455fb9bfc21154eb3fd861b69a2b6bb0c3cfabcd42c14b7a74a21365",
       "rows": 9,
       "source": "whatsapp"
     },
@@ -7143,7 +7230,7 @@ expression: snapshot
   "summary": {
     "documents_count": 76,
     "dolt_log_count": 2,
-    "grid_rows_count": 199,
+    "grid_rows_count": 202,
     "storage_rows_count": 146
   }
 }

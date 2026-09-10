@@ -129,6 +129,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
     .context("select wa_message_media")?;
     let mut media_by_msg: HashMap<(String, String, i64), Vec<NormalizedAttachment>> =
         HashMap::new();
+    let mut unresolved: Vec<String> = Vec::new();
     for r in &media_rows {
         let key = (
             r.get::<String, _>("chat_jid"),
@@ -140,9 +141,20 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
         let mime_type: Option<String> = r.get("mime_type");
         let file_size: Option<i64> = r.get("file_size");
         let media_caption: Option<String> = r.get("media_caption");
+        let ref_id: Option<String> = r.get("blake3");
         // `None` means either the file went missing between scan and put, or
         // the message's `file_path` didn't resolve to a `wa_media_files` row.
-        // Either way the renderer's "(not yet fetched)" placeholder fires.
+        // Either way the renderer's "(not yet fetched)" placeholder fires —
+        // which is indistinguishable, in the rendered markdown, from a backup
+        // whose `Media/` tree was never copied. The warning below is what tells
+        // the two apart, so don't drop it: a join that silently matched nothing
+        // is exactly how every attachment once rendered as a placeholder while
+        // its bytes sat in the CAS.
+        if ref_id.is_none() {
+            if let Some(p) = file_path.as_deref() {
+                unresolved.push(p.to_string());
+            }
+        }
         media_by_msg
             .entry(key)
             .or_default()
@@ -157,8 +169,20 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
                 mime_type,
                 byte_len: file_size,
                 source_url: file_path.clone().or_else(|| media_caption.clone()),
-                ref_id: r.get("blake3"),
+                ref_id,
             });
+    }
+    if !unresolved.is_empty() {
+        unresolved.sort();
+        unresolved.dedup();
+        tracing::warn!(
+            event = "wa_media_unresolved",
+            count = unresolved.len(),
+            total_media = media_rows.len(),
+            examples = ?unresolved.iter().take(3).collect::<Vec<_>>(),
+            "wa_message_media.file_path matched no wa_media_files row; \
+             those attachments render as placeholders",
+        );
     }
 
     // 4) Reactions: addon row + its reaction emoji.
