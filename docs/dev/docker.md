@@ -89,10 +89,9 @@ scripts/build_docker.sh
 scripts/build_docker.sh --load
 
 # Against tarballs you built yourself, named like the release's. The
-# easiest source of a current Linux build is a PR's CI: the "bazel
-# build :dist (musl static)" check uploads one as an artifact for three
-# days. The static musl binaries run fine in the image; rename the
-# tarball to the `-linux-gnu` name the Dockerfile globs for.
+# easiest source of a current Linux build is a PR's CI: the "bazel test
+# //..." check uploads the x86_64 glibc tarball as an artifact for
+# three days, built in the same mode the release uses.
 scripts/build_docker.sh --tarball-dir /path/to/tarballs --load
 
 # Push to your own registry.
