@@ -670,11 +670,22 @@ Each slice is a PR; each leaves the tree green.
    review noise, not build time. After 3b rather than before it, so
    the `git mv` does not land on files 3b is rewriting.
 
-With 1, 2, 3a, 4a and 4b in the tree, what is left runs as: the
-wizard's latchkey gating (above), then **3b**, then **5**. 3b is the
-last config-shape change, so the migrator's rewrite is settled once it
-lands. When 3b renames the tables, the `IngestMethods` lists are where
-the new names go, and the mirror is regenerated rather than edited.
+With 1, 2, 3a, 4a and 4b in the tree, the thing the UI review asked
+for is done: one row per source, edited as one thing, with the steps
+under it. What is left, in order and with its size:
+
+- **The wizard's credentials section gated on `Origin`** (above): a
+  small UI edit, `ingestReach` with the params the form would write.
+- **3b**: the last config-shape change, across every provider config
+  crate, with the migrator's rewrite behind it. Once it lands the
+  migrator's one rewrite is settled, and the `IngestMethods` lists are
+  where the renamed tables go — the UI mirror is regenerated, never
+  edited.
+- **5**: the mechanical crate rename, after 3b.
+
+None of the three changes what the app does. If the config shape is
+to stop moving instead, 3b and 5 move to Deferred with their reasoning
+kept, and the plan is complete at this line.
 
 ## Deferred
 
