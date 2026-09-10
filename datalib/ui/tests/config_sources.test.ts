@@ -47,9 +47,24 @@ describe("listSources", () => {
     expect(custom).toContain("my-exporter --flag");
   });
 
+  /// The shape the wizard and the chips write: the step's id is composed
+  /// from `group` + `function`, and the `[[groups]]` table before it is
+  /// not part of the row's range.
+  it("lists a grouped step under its composed id", () => {
+    const text =
+      '[[groups]]\nid = "perseus"\ntype = "perseus"\n\n' +
+      '[[steps]]\ngroup = "perseus"\nfunction = "raw"\ncommand = "c"\n\n' +
+      '[[steps]]\ngroup = "perseus"\nfunction = "rendered_md"\ncommand = "c"\ninputs = ["perseus/raw"]\n';
+    const rows = listSources(text);
+    expect(rows.map((r) => r.id)).toEqual(["perseus/raw"]);
+    const range = text.slice(rows[0].start, rows[0].end);
+    expect(range.startsWith("[[steps]]")).toBe(true);
+    expect(range).not.toContain("[[groups]]");
+  });
+
   it("treats an empty inputs list as input-less", () => {
     const rows = listSources(
-      '[[steps]]\nid = "x/raw"\ncommand = "fetch-x"\ninputs = []\noutputs = ["x/raw"]\n',
+      '[[steps]]\nid = "x/raw"\ncommand = "fetch-x"\ninputs = []\n',
     );
     expect(rows.map((r) => r.id)).toEqual(["x/raw"]);
   });
@@ -64,7 +79,7 @@ describe("listSources", () => {
     // An inline step has no table of its own, so it lists with a zero
     // range ("not locatable") rather than pointing at something else.
     const rows = listSources(
-      'steps = [{id = "i/raw", command = "c", outputs = ["i/raw"]}]\n',
+      'steps = [{id = "i/raw", command = "c"}]\n',
     );
     expect(rows.map((r) => r.id)).toEqual(["i/raw"]);
     expect(rows[0]).toMatchObject({ start: 0, end: 0 });
@@ -74,9 +89,8 @@ describe("listSources", () => {
     expect(() => listSources("a = [unclosed")).toThrow();
   });
 
-  // TOML is the only format the app reads; a legacy config is a parse
-  // error here, never a silently empty source list. Converting one is
-  // `datalib-migrate-config`'s job, out of band.
+  // TOML is the only format the app reads; a pre-TOML config is a parse
+  // error here, never a silently empty source list.
   it("rejects a legacy YAML config rather than reading it as empty", () => {
     expect(() => listSources("steps:\n  - id: x\n    command: c\n")).toThrow();
     expect(() => listSources("sources:\n  - name: x\n")).toThrow();

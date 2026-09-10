@@ -1,10 +1,11 @@
-// The two halves of an entry's identity: `id` and `name`.
+// The two halves of a source's identity: the group's `id` and `name`.
 import { describe, expect, it } from "vitest";
 import {
   appendSource,
+  buildGroup,
   buildStep,
   listSteps,
-  removeSteps,
+  renameGroup,
   slugify,
   suggestId,
 } from "../src/config/sourceSteps";
@@ -14,78 +15,90 @@ const SLACK = catalogFor("slack_api") as CatalogEntry;
 
 const UNNAMED = `data_root = "/tmp/data"
 
+[[groups]]
+id = "slack"
+type = "slack_api"
+
 [[steps]]
-id = "slack/raw"
+group = "slack"
+function = "raw"
 command = "datalib-step download slack_api"
 [steps.params]
 sync = {}
 
 [[steps]]
-id = "slack/rendered_md"
+group = "slack"
+function = "rendered_md"
 command = "datalib-step render slack_api"
 inputs = ["slack/raw"]
 `;
 
-/// The fetch step in a config, which is where a source's name lands.
+/// The fetch step in a config, which is where a source's name shows.
 const fetchStep = (text: string) => {
   const step = listSteps(text).find((e) => e.id === "slack/raw");
   expect(step, `no slack/raw in:\n${text}`).toBeTruthy();
   return step!;
 };
 
-const withName = (text: string, step: string, name: string) =>
-  text.replace(`id = "${step}"`, `id = "${step}"\nname = "${name}"`);
-
 describe("reading a name", () => {
-  it("falls back to the id when the step declares none", () => {
+  it("falls back to the id when the group declares none", () => {
     const step = fetchStep(UNNAMED);
     expect(step.id).toBe("slack/raw");
     expect(step.name).toBe("slack/raw");
   });
 
-  it("takes the name the step carries", () => {
-    const step = fetchStep(withName(UNNAMED, "slack/raw", "Work Slack"));
-    expect(step.id).toBe("slack/raw");
-    expect(step.name).toBe("Work Slack");
+  it("takes the group's name", () => {
+    const named = renameGroup(UNNAMED, "slack", "Work Slack");
+    expect(fetchStep(named).id).toBe("slack/raw");
+    expect(fetchStep(named).name).toBe("Work Slack");
+    // The render step is the same source, said again.
+    expect(listSteps(named).find((e) => e.id === "slack/rendered_md")!.name).toBe(
+      "Work Slack (render markdown)",
+    );
   });
 
-  /// Each step is named independently now — there is no source to
-  /// inherit from, and two siblings can drift apart on purpose.
-  it("names each step separately", () => {
-    const both = withName(
-      withName(UNNAMED, "slack/raw", "Work Slack"),
-      "slack/rendered_md",
-      "Work Slack markdown",
+  /// A `name` written on a step is still honored — a hand-editor may
+  /// put one there — and the loader tells them it is not shown.
+  it("lets a step's own name beat the group's", () => {
+    const text = renameGroup(UNNAMED, "slack", "Work Slack").replace(
+      'function = "rendered_md"',
+      'function = "rendered_md"\nname = "The markdown"',
     );
-    const by = new Map(listSteps(both).map((e) => [e.id, e.name]));
+    const by = new Map(listSteps(text).map((e) => [e.id, e.name]));
     expect(by.get("slack/raw")).toBe("Work Slack");
-    expect(by.get("slack/rendered_md")).toBe("Work Slack markdown");
+    expect(by.get("slack/rendered_md")).toBe("The markdown");
   });
 
   it("ignores a blank name rather than showing an empty cell", () => {
-    expect(fetchStep(withName(UNNAMED, "slack/raw", "   ")).name).toBe("slack/raw");
+    const blank = UNNAMED.replace('id = "slack"', 'id = "slack"\nname = "   "');
+    expect(fetchStep(blank).name).toBe("slack/raw");
   });
 });
 
 describe("names on the other kinds of entry", () => {
   // The Pipeline table lists sources, the shared index steps, and
-  // applets. A name is a property of a *step*, so the fan-ins carry one
-  // too; applets cannot — `AppletEntry` is deny_unknown_fields with no
-  // `name` key.
+  // applets. The index group can be named like any other; applets
+  // cannot — `AppletEntry` is deny_unknown_fields with no `name` key.
   const OTHER = `data_root = "/tmp/data"
 
+[[groups]]
+id = "unified_index"
+
 [[steps]]
-id = "unified_index/grid"
+group = "unified_index"
+function = "grid"
 name = "Search index"
 command = "datalib-step grid_index"
 inputs = ["slack/rendered_md"]
 
 [[steps]]
-id = "unified_index/qmd"
+group = "unified_index"
+function = "qmd"
 command = "datalib-step qmd_index"
 inputs = ["slack/rendered_md"]
 
 [[applets]]
+group = "unified_index"
 id = "unified_index"
 command = "datalib-applet unified_index"
 `;
@@ -108,8 +121,13 @@ command = "datalib-applet unified_index"
   });
 
   it("still shows an entry the defaults don't know by its id", () => {
-    const custom = `[[steps]]
-id = "notes/raw"
+    const custom = `[[groups]]
+id = "notes"
+type = "fsindex"
+
+[[steps]]
+group = "notes"
+function = "raw"
 command = "datalib-step download fsindex"
 
 [[applets]]
@@ -125,17 +143,7 @@ command = "datalib-applet slack"
 describe("writing a name", () => {
   /// Round-trip through the same splice the Edit button performs, so
   /// what's asserted is what the config file would actually hold.
-  const save = (text: string, name: string) => {
-    const existing = listSteps(text).find((s) => s.id === "slack/raw");
-    const body = buildStep({
-      entry: SLACK,
-      id: "slack/raw",
-      name,
-      phase: "download",
-      values: { "sync.media": true },
-    });
-    return existing ? appendSource(removeSteps(text, [existing]), body) : appendSource(text, body);
-  };
+  const save = (text: string, name: string) => renameGroup(text, "slack", name);
 
   it("round-trips through the config text", () => {
     const next = save(UNNAMED, "Work Slack");
@@ -148,8 +156,8 @@ describe("writing a name", () => {
   it("writes no key at all when there is nothing to say", () => {
     expect(save(UNNAMED, "")).not.toContain("name =");
     // A name that only respells the id is not a name.
-    expect(save(UNNAMED, "slack/raw")).not.toContain("name =");
-    expect(save(UNNAMED, "  slack/raw  ")).not.toContain("name =");
+    expect(save(UNNAMED, "slack")).not.toContain("name =");
+    expect(save(UNNAMED, "  slack  ")).not.toContain("name =");
   });
 
   it("clearing a name removes the key", () => {
@@ -166,9 +174,15 @@ describe("writing a name", () => {
     expect(fetchStep(save(UNNAMED, nasty)).name).toBe(nasty);
   });
 
-  it("lands before the step's params tables", () => {
-    const next = save(UNNAMED, "Work Slack");
-    expect(next.indexOf("name =")).toBeLessThan(next.indexOf("[steps.params"));
+  /// A new source is written the way the wizard writes it: the group
+  /// carries the name, the steps carry none.
+  it("lands on the group when a source is created", () => {
+    const body = `${buildGroup({ id: "slack-2", name: "Second Slack", type: "slack_api" })}\n\n${buildStep(
+      { entry: SLACK, group: "slack-2", phase: "download", values: { "sync.media": true } },
+    )}`;
+    const next = appendSource(UNNAMED, body);
+    expect(next.indexOf('name = "Second Slack"')).toBeLessThan(next.indexOf('group = "slack-2"'));
+    expect(listSteps(next).find((s) => s.id === "slack-2/raw")!.name).toBe("Second Slack");
   });
 });
 

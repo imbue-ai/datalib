@@ -80,10 +80,8 @@ serde_json = "1.0"
 # The config file format, everywhere: the DAG config and every step's
 # `params` subtree.
 toml = "1"
-# YAML survives in exactly two places, neither of them the config the
-# pipeline reads: fsindex's per-directory `.fsindex.yaml` breadcrumbs,
-# and `datalib-migrate-config`, which parses the retired config formats
-# so the shipping programs don't have to.
+# YAML survives in exactly one place, and it is not the config the
+# pipeline reads: fsindex's per-directory `.fsindex.yaml` breadcrumbs.
 serde_yaml = "0.9"
 anyhow = "1.0"
 thiserror = "2.0"

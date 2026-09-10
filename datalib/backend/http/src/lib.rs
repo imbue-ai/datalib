@@ -10,9 +10,9 @@
 //! never parse a QMD back into structured data — structured fields come from
 //! `grid_rows`.
 //!
-//! TOML is the only config format this side handles; a data root predating
-//! the switch is converted out of band by `datalib-migrate-config`, and all
-//! this does is notice the stray `config.yaml` and say so.
+//! `config.toml` is the only config this side reads, in the shape the
+//! loader in `datalib_dag::config` accepts today; a root written in an
+//! earlier shape is rewritten out of band by `datalib-migrate-config`.
 
 use app_schema::feedback::FeedbackRow;
 use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow};
@@ -727,53 +727,10 @@ pub struct ConfigResponse {
     /// else `npx -y latchkey@<pin>`. The Setup UI splices it into its
     /// copy-pasteable snippets.
     pub latchkey_cli: String,
-    /// Absolute path of a pre-TOML `<root>/config.yaml`, when one is there and
-    /// `config.toml` is not. Purely a signpost, and an `fs::exists` check —
-    /// the legacy schemas live in the migration tool alone.
-    pub legacy_yaml_path: Option<String>,
-    /// The exact command that converts it, set whenever `legacy_yaml_path`
-    /// is. Resolved rather than hard-coded: the packaged app installs
-    /// `datalib-migrate-config` inside the bundle, off the user's `$PATH`.
-    pub legacy_migrate_cmd: Option<String>,
-}
-
-/// A stray pre-TOML config in this root, if any, plus the command to
-/// convert it. `None` once `config.toml` exists, so the hint retires
-/// itself after a migration without the user having to delete the old
-/// file.
-fn legacy_yaml_hint(root: &std::path::Path) -> Option<(String, String)> {
-    if datalib_dag::config::root_config_path(root).exists() {
-        return None;
-    }
-    let yaml = root.join("config.yaml");
-    if !yaml.exists() {
-        return None;
-    }
-    Some((yaml.display().to_string(), migrate_cmd(root)))
-}
-
-/// `datalib-migrate-config <root>`, with the tool's absolute path when
-/// it sits next to this binary — which is how every distribution lays
-/// it out (release tarball, Docker image, and the app bundle's
-/// `Resources/binaries`, the one case where `$PATH` won't find it).
-fn migrate_cmd(root: &std::path::Path) -> String {
-    use datalib_core::node_runtime::shell_quote;
-    const NAMES: [&str; 2] = ["datalib-migrate-config", "datalib_migrate_config_bin"];
-    let sibling = std::env::current_exe().ok().and_then(|exe| {
-        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-        let dir = exe.parent()?.to_path_buf();
-        NAMES.into_iter().map(|n| dir.join(n)).find(|p| p.is_file())
-    });
-    let prog = match sibling {
-        Some(p) => shell_quote(&p.to_string_lossy()),
-        None => NAMES[0].to_string(),
-    };
-    format!("{prog} {}", shell_quote(&root.to_string_lossy()))
 }
 
 async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path();
-    let legacy = legacy_yaml_hint(&s.root);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     // An unreadable file is the only thing that leaves us with nothing
     // to say; a *bad* one has diagnostics, which is the interesting
@@ -802,8 +759,6 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         app_ready,
         source_count,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
-        legacy_yaml_path: legacy.clone().map(|(p, _)| p),
-        legacy_migrate_cmd: legacy.map(|(_, c)| c),
     })
 }
 
@@ -818,8 +773,10 @@ pub struct PutConfigRequest {
 #[derive(Debug, Serialize)]
 pub struct ConfigCheckResponse {
     /// Whether this text is acceptable — and, for the PUT, whether it
-    /// was written. True only for a config with *no* problems at all;
-    /// see `put_config` for why this door is stricter than the loader.
+    /// was written. True only when every entry loads; a warning (advice
+    /// about a config that runs exactly as written) does not make it
+    /// false. See `put_config` for why this door is stricter than the
+    /// loader.
     pub ok: bool,
     /// The first diagnostic, for a caller that wants one line.
     pub error: Option<String>,
@@ -836,7 +793,7 @@ async fn check_config(Json(req): Json<PutConfigRequest>) -> Json<ConfigCheckResp
 fn config_verdict(text: &str) -> ConfigCheckResponse {
     let checked = datalib_dag::config::check_text(text);
     ConfigCheckResponse {
-        ok: checked.is_clean(),
+        ok: checked.nothing_dropped(),
         error: checked.diagnostics.first().map(|d| d.describe()),
         source_count: configured_source_count(&source_ids(&checked)),
         diagnostics: checked.diagnostics,
@@ -849,7 +806,10 @@ fn config_verdict(text: &str) -> ConfigCheckResponse {
 /// tolerates a config with a broken entry because it has to: the file is
 /// already on disk and refusing to load it would cost the user their whole
 /// app. A PUT is a different situation — the caller is holding the text and
-/// can fix it now — so nothing with a diagnostic is written.
+/// can fix it now — so nothing that drops an entry is written. A warning is
+/// returned and the file is written anyway: it changes nothing about what
+/// runs, and refusing it would make the editor unable to save a config the
+/// app is happily running on.
 ///
 /// Every diagnostic comes back, not just the first, so a caller fixing a
 /// config needs one round-trip rather than one per mistake. Writes via a
@@ -900,8 +860,8 @@ pub struct InitConfigResponse {
     /// file that was already there, or empty when `error` is set.
     pub text: String,
     /// Why nothing was written, when that is a decision rather than an
-    /// I/O failure (an I/O failure is a 5xx). Today the one case is a
-    /// pre-TOML `config.yaml` waiting to be migrated.
+    /// I/O failure (an I/O failure is a 5xx). Nothing sets it today; it
+    /// stays so a refusal has somewhere to go without a new shape.
     pub error: Option<String>,
 }
 
@@ -910,22 +870,9 @@ pub struct InitConfigResponse {
 ///
 /// Its own endpoint rather than the UI PUT-ing a scaffold back, because "only
 /// if it isn't there yet" has to be decided where the file is: `create_new`
-/// makes the check and the write one operation. A root holding a pre-TOML
-/// `config.yaml` is refused — writing a `config.toml` beside it would retire
-/// the migration hint and leave the user with an empty library.
+/// makes the check and the write one operation.
 async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigResponse>, StatusCode> {
     let path = s.config_path();
-    if let Some((yaml, cmd)) = legacy_yaml_hint(&s.root) {
-        return Ok(Json(InitConfigResponse {
-            created: false,
-            path: path.display().to_string(),
-            text: String::new(),
-            error: Some(format!(
-                "this data root has a pre-TOML config at {yaml}. Convert it \
-                 instead of starting empty: {cmd}"
-            )),
-        }));
-    }
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
@@ -971,7 +918,6 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
 
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path();
-    let legacy = legacy_yaml_hint(&s.root);
     Json(ConfigResponse {
         exists: path.exists(),
         path: path.display().to_string(),
@@ -986,8 +932,6 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         app_ready: true,
         source_count: 0,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
-        legacy_yaml_path: legacy.clone().map(|(p, _)| p),
-        legacy_migrate_cmd: legacy.map(|(_, c)| c),
     })
 }
 
@@ -1184,35 +1128,43 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 /// file's own directory, keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
-# ── shared fan-in steps ────────────────────────────────────────────────
-# Every source's rendered markdown feeds these. A step's id is the tree
-# it writes; `inputs` names the steps it reads, by id.
+# ── the unified index ──────────────────────────────────────────────────
+# A group is one thing on the Manage screen; its steps are what run.
+# Every source's rendered markdown feeds these two: a step's id is
+# `<group>/<function>`, the tree it writes, and `inputs` names the
+# steps it reads by that id.
+
+[[groups]]
+id = \"unified_index\"
+name = \"Unified Index\"
 
 [[steps]]
-id = \"unified_index/grid\"
+group = \"unified_index\"
+function = \"grid\"
 command = \"datalib-step grid_index\"
 inputs = []
 
 [[steps]]
-id = \"unified_index/qmd\"
+group = \"unified_index\"
+function = \"qmd\"
 command = \"datalib-step qmd_index\"
 inputs = []
 
-# ── the app's own surface ──────────────────────────────────────────────
-# `unified_index` serves the grid: the app has no search, no document
+# The applet that serves the grid: the app has no search, no document
 # view and no document picker without it. It is an applet like any
 # other — a server the gateway spawns and proxies at
 # `/applet/unified_index/` — which is why it is written here rather
 # than compiled into the backend.
 
 [[applets]]
+group = \"unified_index\"
 id = \"unified_index\"
 command = \"datalib-applet unified_index\"
 
-# Source steps go below. Anything you add above the first [[steps]]
-# is a top-level key (data_root, binary_dir), not part of a step.
-# `[[applets]]` is the other top-level array — servers that contribute
-# UI + endpoints rather than artifacts; see <origin>/agent/config.md.
+# Sources go below: a [[groups]] entry with a `type`, then its steps.
+# Anything you add above the first [[…]] header is a top-level key
+# (data_root, binary_dir), not part of an entry. See
+# <origin>/agent/config.md.
 # ───────────────────────────────────────────────────────────────────────
 "
     .to_string()
@@ -1550,27 +1502,5 @@ mod tests {
         assert!(!v.ok);
         assert_eq!(v.diagnostics.len(), 1);
         assert!(v.error.unwrap().contains("title"));
-    }
-
-    /// The migrator hint is a signpost, not a fallback: it appears only
-    /// while a stray config.yaml is the *only* config, and retires
-    /// itself once config.toml exists — the user never has to delete
-    /// the old file to clear it.
-    #[test]
-    fn legacy_yaml_hint_retires_itself() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        assert_eq!(legacy_yaml_hint(root), None, "empty root");
-
-        std::fs::write(root.join("config.yaml"), "steps: []\n").unwrap();
-        let (path, cmd) = legacy_yaml_hint(root).expect("stray config.yaml");
-        assert_eq!(path, root.join("config.yaml").display().to_string());
-        // The command names the tool and the data root, so it's
-        // copy-pasteable as shown.
-        assert!(cmd.contains("datalib-migrate-config"), "{cmd}");
-        assert!(cmd.contains(&root.display().to_string()), "{cmd}");
-
-        std::fs::write(root.join("config.toml"), "steps = []\n").unwrap();
-        assert_eq!(legacy_yaml_hint(root), None, "config.toml wins");
     }
 }

@@ -81,8 +81,9 @@ test("Locate config selects the source's stanza in the editor", async ({ page })
     const t = el as HTMLTextAreaElement;
     return t.value.slice(t.selectionStart, t.selectionEnd);
   });
-  expect(selected).toContain('id = "perseus/raw"');
-  expect(selected).not.toContain('id = "perseus/rendered_md"');
+  expect(selected).toContain('group = "perseus"\nfunction = "raw"');
+  expect(selected).not.toContain('function = "rendered_md"');
+  expect(selected).not.toContain("[[groups]]");
   expect(selected).not.toContain("chatgpt");
 
   // Unsaved edits never reached the server; a reload restores the file.
@@ -117,10 +118,10 @@ test("invalid config is rejected by Save and not persisted", async ({ page }) =>
   const original = await editor.inputValue();
 
   // Parses as TOML but fails the config loader: two steps claiming the
-  // same output is an ownership conflict the graph build rejects.
+  // same tree is an ownership conflict the loader rejects.
   await editor.fill(
-    '[[steps]]\nid = "a"\ncommand = "c"\noutputs = ["x/raw"]\n\n' +
-      '[[steps]]\nid = "x/raw"\ncommand = "c"\noutputs = ["x/raw"]\n',
+    '[[steps]]\nid = "x/raw"\ncommand = "c"\n\n' +
+      '[[steps]]\nid = "x/raw"\ncommand = "d"\n',
   );
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText(/✗ Not saved:/)).toBeVisible();

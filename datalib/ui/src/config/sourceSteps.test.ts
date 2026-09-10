@@ -19,6 +19,8 @@ function step(params: Record<string, unknown>): ConfiguredStep {
   return {
     id: "slack/raw",
     kind: "step",
+    group: "slack",
+    function: "raw",
     name: "slack/raw",
     phase: "fetch",
     type: "slack_api",
@@ -30,7 +32,7 @@ function step(params: Record<string, unknown>): ConfiguredStep {
 }
 
 function toml(values: FieldValues, entry: CatalogEntry = SLACK): string {
-  return buildStep({ entry, id: "slack/raw", name: "slack", phase: "download", values });
+  return buildStep({ entry, group: "slack", phase: "download", values });
 }
 
 describe("the Slack attachment cap", () => {

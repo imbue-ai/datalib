@@ -46,8 +46,7 @@ describe("writing a step", () => {
   it("writes the table that selects Gmail's download mode", () => {
     const toml = buildStep({
       entry: GMAIL,
-      id: "gmail/raw",
-      name: "Work mail",
+      group: "gmail",
       phase: "download",
       values: seedFieldValues(GMAIL),
     });
@@ -62,8 +61,7 @@ describe("writing a step", () => {
   it("writes Fastmail's JMAP hostname without asking for it", () => {
     const toml = buildStep({
       entry: FASTMAIL,
-      id: "fastmail/raw",
-      name: "",
+      group: "fastmail",
       phase: "download",
       values: seedFieldValues(FASTMAIL),
     });
@@ -79,8 +77,7 @@ describe("writing a step", () => {
     values["gmail_api.message_budget"] = "5000";
     const toml = buildStep({
       entry: GMAIL,
-      id: "gmail/raw",
-      name: "",
+      group: "gmail",
       phase: "download",
       values,
     });
@@ -96,8 +93,7 @@ describe("writing a step", () => {
     ] as const) {
       const toml = buildStep({
         entry,
-        id: "mail/rendered_md",
-        name: "",
+        group: "mail",
         phase: "render",
         inputs: ["mail/raw"],
         values: seedFieldValues(entry),
@@ -117,8 +113,7 @@ describe("writing a step", () => {
   it("produces params the TOML parser reads back as the mode", () => {
     const toml = `data_root = "~/x"\n\n${buildStep({
       entry: FASTMAIL,
-      id: "fastmail/raw",
-      name: "",
+      group: "fastmail",
       phase: "download",
       values: seedFieldValues(FASTMAIL),
     })}\n`;
@@ -130,34 +125,51 @@ describe("writing a step", () => {
 describe("reading a step back", () => {
   const CONFIG = `data_root = "~/datalib"
 
+[[groups]]
+id = "gmail"
+type = "email"
+
 [[steps]]
-id = "gmail/raw"
+group = "gmail"
+function = "raw"
 command = "datalib-step download email"
 [steps.params.gmail_api]
 user_id = "me"
 
 [[steps]]
-id = "gmail/rendered_md"
+group = "gmail"
+function = "rendered_md"
 command = "datalib-step render email"
 inputs = ["gmail/raw"]
 [steps.params]
 outlink_format = "gmail"
 
+[[groups]]
+id = "fastmail"
+type = "email"
+
 [[steps]]
-id = "fastmail/raw"
+group = "fastmail"
+function = "raw"
 command = "datalib-step download email"
 [steps.params.sync]
 hostname = "api.fastmail.com"
 
 [[steps]]
-id = "fastmail/rendered_md"
+group = "fastmail"
+function = "rendered_md"
 command = "datalib-step render email"
 inputs = ["fastmail/raw"]
 [steps.params]
 outlink_format = "fastmail"
 
+[[groups]]
+id = "archive"
+type = "email"
+
 [[steps]]
-id = "archive/raw"
+group = "archive"
+function = "raw"
 command = "datalib-step download email"
 [steps.params.common]
 input_path = "~/takeout/mail.mbox"
@@ -204,7 +216,8 @@ input_path = "~/takeout/mail.mbox"
   /// models blocks Edit rather than being silently dropped on save.
   it("still refuses a step carrying something no field models", () => {
     const [step] = listSteps(`[[steps]]
-id = "gmail/raw"
+group = "gmail"
+function = "raw"
 command = "datalib-step download email"
 [steps.params.gmail_api]
 user_id = "me"

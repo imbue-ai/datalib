@@ -1,5 +1,5 @@
 # `dag_example.toml` is exported so
-# //datalib/backend/migrate_config:config_examples_test can hold it to
+# //datalib/backend/datalib_step:datalib_step_unittests can hold it to
 # the same bar as the examples under docs/user/config_examples/: it must
 # load and graph-build like the runner would, and its params must match
 # the provider schemas. It is the file AGENTS.md points at for "a

@@ -868,6 +868,9 @@ impl Runner {
         Decision::Run {
             ctx: StepCtx {
                 step_id: spec.id.clone(),
+                group: spec.group.clone(),
+                group_type: spec.group_type.clone(),
+                function: spec.function.clone(),
                 data_root: self.data_root.clone(),
                 inputs: graph.resolved_inputs[i].clone(),
                 // "What moved" only means something when the step is

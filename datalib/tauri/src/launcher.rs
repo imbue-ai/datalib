@@ -50,10 +50,7 @@ fn parse_recents(text: &str) -> Vec<PathBuf> {
 }
 
 pub fn is_data_root(dir: &Path) -> bool {
-    dir.is_dir()
-        && (dir.join("config.toml").is_file()
-            || dir.join("config.yaml").is_file()
-            || dir.join("system").is_dir())
+    dir.is_dir() && (dir.join("config.toml").is_file() || dir.join("system").is_dir())
 }
 
 /// Where "create a new data library" should put one, inside
@@ -193,17 +190,6 @@ mod tests {
 
         make_root(&tmp.path().join("with_toml"));
         assert!(is_data_root(&tmp.path().join("with_toml")));
-    }
-
-    /// A pre-TOML root is still a root: the app has a migration screen
-    /// for it, which it can only show if the folder can be opened.
-    #[test]
-    fn a_pre_toml_root_still_counts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("legacy");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("config.yaml"), "sources: []\n").unwrap();
-        assert!(is_data_root(&dir));
     }
 
     /// A root whose config was deleted still holds feedback and job

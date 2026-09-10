@@ -155,8 +155,9 @@ Data root resolution (the rendered Markdown feeds the search index, but
 
 The root is the *directory*, not the config file: `datalib-http` takes
 it as a required positional and reads `<root>/config.toml` from inside
-it. That is the only config format it reads — a root still holding a
-pre-TOML `config.yaml` needs `datalib-migrate-config <root>` first.
+it. That is the only config it reads, in the shape `datalib_dag::config`
+accepts today — a `config.toml` from before `[[groups]]` is rewritten
+once with `datalib-migrate-config <root> --force`.
 
 The backend starts even if the root is missing — `/api/health` reports
 `root_exists: false` and the search grid shows zero rows. (`/api/health`
@@ -205,7 +206,7 @@ readable without a token — they're what tells an agent how to get one.
 
 Ingestion is a DAG of subprocess steps orchestrated by
 `//datalib/backend/dag:datalib_dag_bin`, which reads the data root's
-`config.toml` (the `[[steps]]` format) and runs each step's `command`
+`config.toml` (the `[[groups]]` + `[[steps]]` format) and runs each step's `command`
 as a subprocess. The built-in steps live in the `datalib-step` binary
 (`//datalib/backend/datalib_step:datalib_step`): `download
 <source_type>` fetches a provider's raw dir (each provider crate under

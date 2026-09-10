@@ -1,30 +1,42 @@
-# Minimal config in the steps format `datalib-dag` runs: one source
-# (claude.ai conversations) plus the two shared index steps. See
-# configs/dag_example.toml for a walkthrough of the format.
+# Minimal config in the format `datalib-dag` runs: one source (claude.ai
+# conversations) — a group and its two steps — plus the unified index
+# group with its two shared index steps. See configs/dag_example.toml
+# for a walkthrough of the format.
 
 # Where the downloaded data gets written. Top-level keys have to come
-# before the first [[steps]] — everything after a table header belongs
-# to that table.
+# before the first [[…]] header — everything after a table header
+# belongs to that table.
 data_root = "~/claude_data_liberated"
 
+[[groups]]
+id = "claude_chats"
+type = "claude_api"
+
 [[steps]]
-id = "claude_chats/raw"
+group = "claude_chats"
+function = "raw"
 command = "datalib-step download claude_api"
 [steps.params]
 sync = {}
 
 [[steps]]
-id = "claude_chats/rendered_md"
+group = "claude_chats"
+function = "rendered_md"
 command = "datalib-step render claude_api"
 inputs = ["claude_chats/raw"]
 
+[[groups]]
+id = "unified_index"
+
 [[steps]]
-id = "unified_index/grid"
+group = "unified_index"
+function = "grid"
 command = "datalib-step grid_index"
 inputs = ["claude_chats/rendered_md"]
 
 [[steps]]
-id = "unified_index/qmd"
+group = "unified_index"
+function = "qmd"
 command = "datalib-step qmd_index"
 inputs = ["claude_chats/rendered_md"]
 
@@ -33,5 +45,6 @@ inputs = ["claude_chats/rendered_md"]
 # an applet rather than a built-in so the backend does not have to know
 # what a grid row is.
 [[applets]]
+group = "unified_index"
 id = "unified_index"
 command = "datalib-applet unified_index"

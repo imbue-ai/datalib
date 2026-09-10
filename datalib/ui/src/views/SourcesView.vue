@@ -44,12 +44,6 @@ const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | nu
 const saving = ref(false);
 const dirty = ref(false);
 const latchkeyCli = ref("npx -y latchkey");
-// Set when this root still has a pre-TOML config.yaml and no
-// config.toml: the path of that file, and the exact command that
-// converts it (backend-resolved — in the packaged app the migrator
-// isn't on $PATH). Nothing here parses the file.
-const legacyYamlPath = ref<string | null>(null);
-const legacyMigrateCmd = ref<string | null>(null);
 
 // Table view of the text: re-derived on every edit. While the text
 // doesn't parse the last good rows stay up (grayed) with the parse
@@ -103,8 +97,6 @@ async function loadConfig() {
     }
     configPath.value = cfg.path;
     if (cfg.latchkey_cli) latchkeyCli.value = cfg.latchkey_cli;
-    legacyYamlPath.value = cfg.legacy_yaml_path;
-    legacyMigrateCmd.value = cfg.legacy_migrate_cmd;
     configText.value = cfg.text;
     reparse();
   } catch (e) {
@@ -195,11 +187,10 @@ async function onSave() {
       // text.
       serverText.value = configText.value;
       diskChanged.value = false;
-      // Re-read what we just wrote, so the legacy-config banner
-       // retires itself the moment config.toml exists. The
-       // `config_changed` our own write is about to produce can't do
-       // it: `reloadIfDiskMoved` compares text, which now matches by
-       // construction.
+      // Re-read what we just wrote, so `existed` and the path reflect
+      // the file now on disk. The `config_changed` our own write is
+      // about to produce can't do it: `reloadIfDiskMoved` compares
+      // text, which now matches by construction.
       await loadConfig();
       await loadSources();
     }
@@ -446,15 +437,6 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div v-if="legacyYamlPath" class="migrate-banner">
-      <span>
-        This data root still has a pre-TOML config at
-        <code>{{ legacyYamlPath }}</code>, which datalib no longer reads.
-        Convert it with the migration tool, then reload:
-        <code>{{ legacyMigrateCmd }}</code>
-      </span>
-    </div>
-
     <!-- Raw config (left) and table side by side — two views of the
          same text. The table keeps a relatively narrow width; the
          editor takes the remainder. The columns wrap into a vertical
@@ -485,6 +467,7 @@ onUnmounted(() => {
               </span>
               <span v-if="saveStatus && saveStatus.ok" class="status ok">
                 ✓ Saved — {{ saveStatus.count }} source(s) configured.
+                <template v-if="saveStatus.error"> Warning: {{ saveStatus.error }}</template>
               </span>
               <span v-else-if="dirty" class="status muted">unsaved changes</span>
             </template>

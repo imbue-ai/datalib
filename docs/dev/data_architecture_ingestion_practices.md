@@ -112,12 +112,10 @@ Reach for the simplest existing provider that's shaped like yours,
 6. Wire the provider's `processor.rs` (`plan_download` / `plan_render`)
    into the per-type dispatch in
    [`datalib_step/src/dispatch.rs`](../../datalib/backend/datalib_step/src/dispatch.rs),
-   which is what the running pipeline reads. Optionally also add the
-   type to the `SourceConfig` variants in
-   [`backend/migrate_config/src/legacy_stanza.rs`](../../datalib/backend/migrate_config/src/legacy_stanza.rs):
-   that union is retired as a config format, but it still backs the
-   `config_examples_test` schema check, so a new source is only covered
-   by that test if it appears there too.
+   which is what the running pipeline reads — and what
+   `config_examples_test.rs` beside it plans every documented example
+   through, so a source added to `all_sources.toml` is checked against
+   its real schema with no further registration.
 
 7. Write `providers/<name>/DOWNLOAD.md`, and
    `providers/<name>_render/TRANSLATE.md` too if the provider has a

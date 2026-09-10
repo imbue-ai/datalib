@@ -1,19 +1,21 @@
 // `listSteps` and the splice-based writers behind the Pipeline table.
 //
-// The table is one row per config entry — no grouping. A fetch step and
-// the render step that reads it are two rows, two forms and two things
-// to run; what relates them is a shared id stem, which is a display
-// fact and the seed for proposing a sibling's id, never how anything is
-// resolved.
+// The table is one row per step — no grouping yet. A fetch step and the
+// render step that reads it are two rows, two forms and two things to
+// run; what relates them is the `[[groups]]` entry they are both filed
+// under, which is where the source's name and type live.
 import { describe, expect, it } from "vitest";
 import {
   appendSource,
+  buildGroup,
   buildStep,
   fieldIsActive,
+  listGroups,
   listSteps,
   paramsAreRepresentable,
   phaseOf,
   removeSteps,
+  renameGroup,
   renderIdFor,
   replaceStep,
   stemOf,
@@ -26,35 +28,46 @@ const SLACK = catalogFor("slack_api")!;
 const LIGHTROOM = catalogFor("lightroom")!;
 const SIGNAL = catalogFor("signal_backup")!;
 
-/** One source's two steps plus both shared index steps. */
+/** One source's group and two steps plus the index group and its steps. */
 const PAIR = `data_root = "~/datalib"
 
+[[groups]]
+id = "unified_index"
+
 [[steps]]
-id = "unified_index/grid"
+group = "unified_index"
+function = "grid"
 command = "datalib-step grid_index"
 inputs = ["slack/rendered_md"]
 
 [[steps]]
-id = "unified_index/qmd"
+group = "unified_index"
+function = "qmd"
 command = "datalib-step qmd_index"
 inputs = ["slack/rendered_md"]
 
 # ── slack ─────────────────────────────────────────────────────────────
-[[steps]]
-id = "slack/raw"
+[[groups]]
+id = "slack"
 name = "Work Slack"
+type = "slack_api"
+
+[[steps]]
+group = "slack"
+function = "raw"
 command = "datalib-step download slack_api"
 [steps.params.sync]
 channels = ["general"]
 
 [[steps]]
-id = "slack/rendered_md"
+group = "slack"
+function = "rendered_md"
 command = "datalib-step render slack_api"
 inputs = ["slack/raw"]
 `;
 
 describe("listSteps", () => {
-  it("gives every entry its own row, in file order", () => {
+  it("gives every step its own row, in file order, under its composed id", () => {
     expect(listSteps(PAIR).map((s) => s.id)).toEqual([
       "unified_index/grid",
       "unified_index/qmd",
@@ -75,25 +88,39 @@ describe("listSteps", () => {
     expect(phaseOf("solo")).toBe("other");
   });
 
-  it("reads name, type and inputs off each step", () => {
+  it("reads group, function, type and inputs off each step", () => {
+    const by = new Map(listSteps(PAIR).map((s) => [s.id, s]));
+    const fetch = by.get("slack/raw")!;
+    expect(fetch.group).toBe("slack");
+    expect(fetch.function).toBe("raw");
+    // The type comes from the group, not from the command.
+    expect(fetch.type).toBe("slack_api");
+    expect(fetch.inputs).toEqual([]);
+    expect(by.get("slack/rendered_md")!.inputs).toEqual(["slack/raw"]);
+    expect(by.get("unified_index/grid")!.type).toBeNull();
+  });
+
+  /// The group's name labels its fetch step; its render step is the same
+  /// name said again, so the two rows still read as one source.
+  it("labels grouped steps from the group's name", () => {
     const by = new Map(listSteps(PAIR).map((s) => [s.id, s]));
     expect(by.get("slack/raw")!.name).toBe("Work Slack");
-    expect(by.get("slack/raw")!.type).toBe("slack_api");
-    expect(by.get("slack/raw")!.inputs).toEqual([]);
-    // An unnamed step is shown by its id.
-    expect(by.get("slack/rendered_md")!.name).toBe("slack/rendered_md");
-    expect(by.get("slack/rendered_md")!.inputs).toEqual(["slack/raw"]);
+    expect(by.get("slack/rendered_md")!.name).toBe("Work Slack (render markdown)");
+    // The index group has no name, so its steps take the shared defaults.
+    expect(by.get("unified_index/grid")!.name).toBe("Unified Index (table)");
   });
 
   it("lists applets, after the steps, with no inputs", () => {
     const withApplet = `${PAIR}
 [[applets]]
+group = "unified_index"
 id = "unified_index"
 command = "datalib-applet unified_index"
 `;
     const entries = listSteps(withApplet);
     expect(entries.at(-1)!.kind).toBe("applet");
     expect(entries.at(-1)!.id).toBe("unified_index");
+    expect(entries.at(-1)!.group).toBe("unified_index");
     expect(entries.at(-1)!.type).toBe("unified_index");
     expect(entries.at(-1)!.inputs).toEqual([]);
   });
@@ -107,12 +134,25 @@ command = "datalib-applet unified_index"
   });
 
   // Any executable may be a step, so a command the catalog doesn't know
-  // has to produce a row rather than a crash.
+  // has to produce a row rather than a crash — and a step outside any
+  // group keeps the id it wrote.
   it("reports a null type for a custom executable", () => {
     const [step] = listSteps('[[steps]]\nid = "custom/out"\ncommand = "my-exporter --flag"\n');
     expect(step.id).toBe("custom/out");
+    expect(step.group).toBeNull();
     expect(step.phase).toBe("other");
     expect(step.type).toBeNull();
+    expect(step.name).toBe("custom/out");
+  });
+});
+
+describe("listGroups", () => {
+  it("lists every group with its name, type and range", () => {
+    const groups = listGroups(PAIR);
+    expect(groups.map((g) => g.id)).toEqual(["unified_index", "slack"]);
+    expect(groups[0]).toMatchObject({ name: null, type: null });
+    expect(groups[1]).toMatchObject({ name: "Work Slack", type: "slack_api" });
+    expect(PAIR.slice(groups[1].start, groups[1].end)).toContain('type = "slack_api"');
   });
 });
 
@@ -127,23 +167,42 @@ describe("stems and siblings", () => {
   // chained "also render this?" and the standalone row action come
   // through here, because two code paths minting one string is how they
   // drift apart.
-  it("renderIdFor names the sibling under the same stem", () => {
+  it("renderIdFor names the sibling under the same group", () => {
     expect(renderIdFor("work-slack/raw")).toBe("work-slack/rendered_md");
     expect(renderIdFor("slack-2/raw")).toBe("slack-2/rendered_md");
   });
 });
 
+describe("buildGroup", () => {
+  it("writes the id, the name and the type", () => {
+    const body = buildGroup({ id: "slack", name: "Work Slack", type: "slack_api" });
+    expect(body).toContain("[[groups]]");
+    expect(body).toContain('id = "slack"');
+    expect(body).toContain('name = "Work Slack"');
+    expect(body).toContain('type = "slack_api"');
+  });
+
+  it("writes no name when there is nothing to say", () => {
+    expect(buildGroup({ id: "slack", name: "", type: "slack_api" })).not.toContain("name =");
+    // A name that only respells the id is not a name.
+    expect(buildGroup({ id: "slack", name: " slack ", type: "slack_api" })).not.toContain("name =");
+  });
+});
+
 describe("buildStep", () => {
   const fetch = (values = {}) =>
-    buildStep({ entry: SLACK, id: "slack/raw", name: "Work Slack", phase: "download", values });
+    buildStep({ entry: SLACK, group: "slack", phase: "download", values });
 
-  it("writes a fetch step with its params and no inputs", () => {
+  it("writes a fetch step as group + function, with its params and no inputs", () => {
     const body = fetch({ "sync.channels": ["general", "random"], "sync.since": "" });
-    expect(body).toContain('id = "slack/raw"');
-    expect(body).toContain('name = "Work Slack"');
+    expect(body).toContain('group = "slack"');
+    expect(body).toContain('function = "raw"');
     expect(body).toContain("command = \"datalib-step download slack_api\"");
     expect(body).toContain('channels = ["general", "random"]');
     expect(body).not.toContain("inputs =");
+    expect(body).not.toContain("id =");
+    // A step carries no name: the label comes from the group.
+    expect(body).not.toContain("name =");
     // An empty optional stays out of the file rather than landing as "".
     expect(body).not.toContain("since");
   });
@@ -151,17 +210,15 @@ describe("buildStep", () => {
   it("writes a render step that names what it reads", () => {
     const body = buildStep({
       entry: SLACK,
-      id: "slack/rendered_md",
-      name: "",
+      group: "slack",
       phase: "render",
       inputs: ["slack/raw"],
       values: {},
     });
-    expect(body).toContain('id = "slack/rendered_md"');
+    expect(body).toContain('group = "slack"');
+    expect(body).toContain('function = "rendered_md"');
     expect(body).toContain('command = "datalib-step render slack_api"');
     expect(body).toContain('inputs = ["slack/raw"]');
-    // No name given → no key, so the row falls back to the id.
-    expect(body).not.toContain("name =");
   });
 
   // Only download-phase params land on a download step, and vice versa.
@@ -172,8 +229,7 @@ describe("buildStep", () => {
     expect(fetch(values)).toContain("channels");
     const render = buildStep({
       entry: SLACK,
-      id: "slack/rendered_md",
-      name: "",
+      group: "slack",
       phase: "render",
       values,
     });
@@ -183,8 +239,7 @@ describe("buildStep", () => {
   it("emits a parent table before its children", () => {
     const body = buildStep({
       entry: LIGHTROOM,
-      id: "lightroom/raw",
-      name: "",
+      group: "lightroom",
       phase: "download",
       values: { "common.input_path": "~/Pictures/cat.lrcat", skip_xmp: true },
     });
@@ -219,8 +274,7 @@ describe("buildStep", () => {
   it("writes a select's value", () => {
     const body = buildStep({
       entry: SIGNAL,
-      id: "signal/rendered_md",
-      name: "",
+      group: "signal",
       phase: "render",
       values: { period: "year" },
     });
@@ -233,8 +287,7 @@ describe("buildStep", () => {
   it("carries a select value the dropdown doesn't know", () => {
     const body = buildStep({
       entry: SIGNAL,
-      id: "signal/rendered_md",
-      name: "",
+      group: "signal",
       phase: "render",
       values: { period: "fortnight" },
     });
@@ -280,7 +333,8 @@ describe("paramsAreRepresentable", () => {
   // so the grid disables Edit instead of losing it silently.
   it("names the params it cannot model", () => {
     const [step] = listSteps(`[[steps]]
-id = "slack/raw"
+group = "slack"
+function = "raw"
 command = "datalib-step download slack_api"
 [steps.params.common]
 download_params = { maximum_sequential_failed_requests = 3 }
@@ -294,44 +348,47 @@ download_params = { maximum_sequential_failed_requests = 3 }
 });
 
 describe("removeSteps / replaceStep", () => {
-  it("takes the divider comment with the step", () => {
+  it("removes one step and leaves its group, its sibling and the rest", () => {
     const fetch = listSteps(PAIR).find((s) => s.id === "slack/raw")!;
     const after = removeSteps(PAIR, [fetch]);
-    expect(after).not.toContain("── slack");
-    expect(after).not.toContain('id = "slack/raw"');
-    // Its render step and the index steps are untouched.
-    expect(after).toContain('id = "slack/rendered_md"');
-    expect(after).toContain('id = "unified_index/grid"');
+    expect(after).not.toContain('function = "raw"');
+    expect(after).toContain('function = "rendered_md"');
+    expect(after).toContain("── slack");
+    expect(after).toContain('name = "Work Slack"');
+    expect(after).toContain('function = "grid"');
     expect(after).toContain('data_root = "~/datalib"');
   });
 
   /// Deleting a fetch step alone leaves its render step naming an input
   /// that no longer exists, which the loader refuses outright — a whole
-  /// config broken by a partial delete. Manager2 deletes the pair.
-  it("removes a pair together, leaving a config that still parses", () => {
-    const both = listSteps(PAIR).filter((s) => s.id.startsWith("slack/"));
+  /// config broken by a partial delete. Manager2 deletes the pair, and
+  /// the group with them, taking its divider comment along.
+  it("removes a pair and its group together, leaving a config that still parses", () => {
+    const both = listSteps(PAIR).filter((s) => s.group === "slack");
     expect(both).toHaveLength(2);
-    const after = unwireFromFanIns(removeSteps(PAIR, both), "slack/rendered_md");
+    const group = listGroups(PAIR).find((g) => g.id === "slack")!;
+    const after = unwireFromFanIns(removeSteps(PAIR, [...both, group]), "slack/rendered_md");
     expect(after).not.toContain("slack");
     expect(listSteps(after).map((s) => s.id)).toEqual([
       "unified_index/grid",
       "unified_index/qmd",
     ]);
+    expect(listGroups(after).map((g) => g.id)).toEqual(["unified_index"]);
   });
 
-  it("replaces one step without touching its sibling", () => {
+  it("replaces one step without touching its sibling or its group", () => {
     const fetch = listSteps(PAIR).find((s) => s.id === "slack/raw")!;
     const body = buildStep({
       entry: SLACK,
-      id: "slack/raw",
-      name: "Work Slack",
+      group: "slack",
       phase: "download",
       values: { "sync.channels": ["random"] },
     });
     const after = replaceStep(PAIR, fetch, body);
     expect(after).toContain('channels = ["random"]');
     expect(after).not.toContain('channels = ["general"]');
-    // Still exactly four entries, and the render step is as it was.
+    expect(after).toContain('name = "Work Slack"');
+    // Still exactly four steps, and the render step is as it was.
     expect(listSteps(after).map((s) => s.id).sort()).toEqual([
       "slack/raw",
       "slack/rendered_md",
@@ -340,15 +397,57 @@ describe("removeSteps / replaceStep", () => {
     ]);
   });
 
-  it("appends where a new step can safely go", () => {
-    const body = buildStep({
+  it("appends where a new source can safely go", () => {
+    const body = `${buildGroup({ id: "extra", name: "", type: "slack_api" })}\n\n${buildStep({
       entry: SLACK,
-      id: "extra/raw",
-      name: "",
+      group: "extra",
       phase: "download",
       values: {},
-    });
-    expect(listSteps(appendSource(PAIR, body)).map((s) => s.id)).toContain("extra/raw");
+    })}`;
+    const after = appendSource(PAIR, body);
+    expect(listSteps(after).map((s) => s.id)).toContain("extra/raw");
+    expect(listGroups(after).map((g) => g.id)).toContain("extra");
+  });
+});
+
+describe("renameGroup", () => {
+  it("replaces an existing name in place", () => {
+    const after = renameGroup(PAIR, "slack", "Sabbatical Slack");
+    expect(after).toContain('name = "Sabbatical Slack"');
+    expect(after).not.toContain("Work Slack");
+    expect(listSteps(after).find((s) => s.id === "slack/raw")!.name).toBe("Sabbatical Slack");
+  });
+
+  it("adds a name to a group that had none, right after its id", () => {
+    const after = renameGroup(PAIR, "unified_index", "Everything");
+    expect(after).toContain('id = "unified_index"\nname = "Everything"');
+  });
+
+  it("removes the key when the name is cleared or only respells the id", () => {
+    for (const cleared of ["", "  ", "slack"]) {
+      const after = renameGroup(PAIR, "slack", cleared);
+      expect(after).not.toContain("name =");
+      expect(listSteps(after).find((s) => s.id === "slack/raw")!.name).toBe("slack/raw");
+      // The rest of the entry is intact.
+      expect(after).toContain('id = "slack"\ntype = "slack_api"');
+    }
+  });
+
+  it("leaves the text alone for a group it cannot find", () => {
+    expect(renameGroup(PAIR, "nope", "X")).toBe(PAIR);
+  });
+
+  // A name is user text; `$1`, `$&` and `$$` in it must land verbatim,
+  // not be read as replacement patterns.
+  it("writes a name containing dollar signs verbatim", () => {
+    const name = "Top $1 & $& costs $$";
+    // Replacing an existing name, and inserting one after the id.
+    for (const groupId of ["slack", "unified_index"]) {
+      expect(renameGroup(PAIR, groupId, name)).toContain(`name = "${name}"`);
+    }
+    expect(listSteps(renameGroup(PAIR, "slack", name)).find((s) => s.id === "slack/raw")!.name).toBe(
+      name,
+    );
   });
 });
 
@@ -371,7 +470,30 @@ describe("fan-in wiring", () => {
     // ...but the render step itself is untouched. Unwiring is about
     // edges; removing the step is `removeSteps`, and the two are
     // separate because deleting a source needs both.
-    expect(bare).toContain('id = "slack/rendered_md"');
-    expect(bare).toContain('id = "unified_index/grid"');
+    expect(bare).toContain('function = "rendered_md"');
+    expect(bare).toContain('function = "grid"');
+  });
+
+  /// The scaffold's index steps start with `inputs = []`, and the applet
+  /// beside them is filed under the same group: the wiring must find the
+  /// steps and not stumble on the applet.
+  it("wires into a scaffold whose fan-ins are empty", () => {
+    const scaffold = `[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid"
+command = "datalib-step grid_index"
+inputs = []
+
+[[applets]]
+group = "unified_index"
+id = "unified_index"
+command = "datalib-applet unified_index"
+`;
+    const wired = wireIntoFanIns(scaffold, "pdfs/rendered_md");
+    expect(wired).toContain('inputs = ["pdfs/rendered_md"]');
+    expect(listSteps(wired).find((s) => s.kind === "applet")!.inputs).toEqual([]);
   });
 });

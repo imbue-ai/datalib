@@ -252,23 +252,31 @@ pick different `target_doltlite_branch` values:
 
 ```toml
 # NOT CURRENTLY SUPPORTED — see the note above.
+[[groups]]
+id = "laptop_home"
+type = "fsindex"
+
 [[steps]]
-id = "laptop_home.download"
+group = "laptop_home"
+function = "raw"
 command = "datalib-step download fsindex"
-outputs = ["laptop_home/raw"]
 [steps.params.common]
 input_path = "/Users/thad"
 
+[[groups]]
+id = "nas_backup"
+type = "fsindex"
+
 [[steps]]
-id = "nas_backup.download"
+group = "nas_backup"
+function = "raw"
 command = "datalib-step download fsindex"
-outputs = ["nas_backup/raw"]
 [steps.params.common]
 input_path = "/Volumes/nas/thad"
 ```
 
 Today each of those two steps gets its own raw store under
-`<name>/raw/` instead, which is the supported way to scan two roots.
+`<group>/raw/` instead, which is the supported way to scan two roots.
 
 The §"Single writer per doltlite file" rule still applies — the
 runner serializes per-source, so two roots sharing a file would scan

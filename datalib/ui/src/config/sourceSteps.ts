@@ -5,16 +5,16 @@
 // writer, so until then `paramsAreRepresentable` gates the Edit button and the
 // wizard never silently drops something it can't model.
 //
-// A step's `id` is its identity — path-safe, unique, and what the directory
-// structure is formed from — while `name` is free text meaning nothing to any
-// program, derived from the id when a step declares none.
+// A `[[groups]]` entry is the config's own notion of a source: an `id` that
+// is the directory its steps write into, a `name` that is free text, and a
+// `type`. A step under it is `group` + `function`, and its id is composed as
+// `<group>/<function>` — never written, but what every row here is keyed on.
+// A step outside any group carries a verbatim `id`.
 //
-// **There is no "data source" here, deliberately.** A source used to be one
-// row fusing a fetch step and a render step. It was never a config entity —
-// the grouping was invented here and reconstructed by splitting paths — and
-// the two halves have separate options, outputs, disk footprints and reasons
-// to re-run. The grid is a picture of the pipeline, so every row is one thing
-// the config declares: one `[[steps]]` or one `[[applets]]` entry.
+// The grid still shows one row per step: the group's name labels its fetch
+// step, and the group's type is what the row's catalog entry comes from.
+// Folding a group into one row with its steps under it is the Manage-screen
+// work in docs/dev/plans/groups_and_functions.md.
 //
 // An applet is never scheduled and owns no artifacts, so most row actions
 // don't apply to it — but it is configured, it can fail to start, and that
@@ -32,20 +32,28 @@ export type StepPhase = "fetch" | "render" | "index" | "other";
 export type EntryKind = "step" | "applet";
 
 export type ConfiguredStep = {
-  /// Identity, and the tree this step writes. Path-safe, unique, and
-  /// what the directory structure is formed from — so changing it moves
-  /// data on disk and strands the paths the index recorded, which is
-  /// why the wizard holds it fixed after creation.
+  /// Identity, and the tree this step writes: `<group>/<function>` for
+  /// a grouped step, the written `id` for one outside any group.
+  /// Path-safe, unique, and what the directory structure is formed
+  /// from — so changing it moves data on disk and strands the paths the
+  /// index recorded, which is why the wizard holds it fixed after
+  /// creation.
   id: string;
   kind: EntryKind;
-  /// What to show: the step's `name =`, falling back to `id`. A step
-  /// that never set one is displayed exactly as it always was.
+  /// The `[[groups]]` entry this step is filed under, and what it does
+  /// there. Both null for a custom step with a verbatim id, and for an
+  /// applet.
+  group: string | null;
+  function: string | null;
+  /// What to show: the step's own `name =`; else, for a grouped step,
+  /// the group's name (suffixed for its render step); else `id`.
   name: string;
   phase: StepPhase;
-  /// The `datalib-step download|render <type>` word, when the command
-  /// is a `datalib-step` invocation; the word after `datalib-applet`
-  /// for an applet; null for anything else, which is a legitimate
-  /// config with no catalog entry.
+  /// The group's `type` for a grouped step; the `datalib-step
+  /// download|render <type>` word when the command is a `datalib-step`
+  /// invocation; the word after `datalib-applet` for an applet; null
+  /// for anything else, which is a legitimate config with no catalog
+  /// entry.
   type: string | null;
   /// The ids this step declares as inputs.
   inputs: string[];
@@ -56,13 +64,30 @@ export type ConfiguredStep = {
   end: number;
 };
 
+/// One `[[groups]]` entry as written.
+export type ConfiguredGroup = {
+  id: string;
+  name: string | null;
+  type: string | null;
+  /// [start, end) character offsets covering the `[[groups]]` table.
+  start: number;
+  end: number;
+};
+
 /// The id stem two sibling steps share (`work-slack/raw` →
-/// `work-slack`). A display convenience and the seed for proposing a
-/// sibling's id — never how anything is resolved. Mirrors
-/// `ArtifactPath::stem` on the Rust side.
+/// `work-slack`). For a grouped step this is the group id; for a custom
+/// step it is a display convenience and nothing more.
 export function stemOf(id: string): string {
   const at = id.indexOf("/");
   return at < 0 ? id : id.slice(0, at);
+}
+
+/// The label for a grouped step that wrote no `name` of its own.
+function groupedName(group: ConfiguredGroup, id: string, phase: StepPhase): string {
+  if (!group.name) return defaultName(id);
+  if (phase === "fetch") return group.name;
+  if (phase === "render") return `${group.name} (render markdown)`;
+  return defaultName(id);
 }
 
 const PHASE_BY_LEAF: Record<string, StepPhase> = {
@@ -93,69 +118,123 @@ export function phaseOf(id: string): StepPhase {
   return "other";
 }
 
-/// Parse the config text and list every entry it declares, one row per
-/// entry. Throws with the parser's message (and line, when it has one)
-/// on malformed TOML.
-export function listSteps(text: string): ConfiguredStep[] {
-  let ast;
+type ParsedConfig = {
+  ast: ReturnType<typeof parseTOML>;
+  root: { groups?: unknown; steps?: unknown; applets?: unknown };
+};
+
+/// Parse the config text, throwing with the parser's message (and line,
+/// when it has one) on malformed TOML.
+function parseConfig(text: string): ParsedConfig {
   try {
-    ast = parseTOML(text);
+    const ast = parseTOML(text);
+    return { ast, root: getStaticTOMLValue(ast) as ParsedConfig["root"] };
   } catch (e) {
     const err = e as { message?: string; lineNumber?: number };
     const at = err.lineNumber !== undefined ? ` (line ${err.lineNumber})` : "";
     throw new Error(`${err.message ?? String(e)}${at}`);
   }
-  const root = getStaticTOMLValue(ast) as { steps?: unknown; applets?: unknown };
+}
 
-  // Every entry's character range, per array. `[steps.params]` is a
-  // sibling node in the AST rather than a child of the step's own
-  // table, so the span has to be widened to cover it — same derivation
-  // as configSources.ts.
-  const ranges = (key: string) => {
-    const out = new Map<number, [number, number]>();
-    for (const node of ast.body[0].body) {
-      if (node.type !== "TOMLTable") continue;
-      const [k, index] = node.resolvedKey;
-      if (k !== key || typeof index !== "number") continue;
-      const prev = out.get(index);
-      out.set(
-        index,
-        prev
-          ? [Math.min(prev[0], node.range[0]), Math.max(prev[1], node.range[1])]
-          : [node.range[0], node.range[1]],
-      );
-    }
-    return out;
-  };
+/// Every entry's character range in one `[[…]]` array. `[steps.params]`
+/// is a sibling node in the AST rather than a child of the step's own
+/// table, so the span has to be widened to cover it — same derivation
+/// as configSources.ts.
+function ranges(ast: ParsedConfig["ast"], key: string): Map<number, [number, number]> {
+  const out = new Map<number, [number, number]>();
+  for (const node of ast.body[0].body) {
+    if (node.type !== "TOMLTable") continue;
+    const [k, index] = node.resolvedKey;
+    if (k !== key || typeof index !== "number") continue;
+    const prev = out.get(index);
+    out.set(
+      index,
+      prev
+        ? [Math.min(prev[0], node.range[0]), Math.max(prev[1], node.range[1])]
+        : [node.range[0], node.range[1]],
+    );
+  }
+  return out;
+}
+
+function groupsOf({ ast, root }: ParsedConfig): ConfiguredGroup[] {
+  if (!Array.isArray(root.groups)) return [];
+  const groupRanges = ranges(ast, "groups");
+  return root.groups.map((raw, i) => {
+    const g = raw as { id?: unknown; name?: unknown; type?: unknown } | null;
+    const [start, end] = groupRanges.get(i) ?? [0, 0];
+    return {
+      id: typeof g?.id === "string" ? g.id : "",
+      name: typeof g?.name === "string" && g.name.trim() !== "" ? g.name.trim() : null,
+      type: typeof g?.type === "string" ? g.type : null,
+      start,
+      end,
+    };
+  });
+}
+
+/// The `[[groups]]` entries a config declares, in file order.
+export function listGroups(text: string): ConfiguredGroup[] {
+  return groupsOf(parseConfig(text));
+}
+
+/// Parse the config text and list every step and applet it declares,
+/// one row per entry. Throws with the parser's message (and line, when
+/// it has one) on malformed TOML.
+export function listSteps(text: string): ConfiguredStep[] {
+  const parsed = parseConfig(text);
+  const { ast, root } = parsed;
+  const groupsById = new Map(groupsOf(parsed).map((g) => [g.id, g]));
 
   const steps: ConfiguredStep[] = [];
 
   if (Array.isArray(root.steps)) {
-    const stepRanges = ranges("steps");
+    const stepRanges = ranges(ast, "steps");
     root.steps.forEach((raw, i) => {
       const step = raw as {
         id?: unknown;
+        group?: unknown;
+        function?: unknown;
         name?: unknown;
         command?: unknown;
         inputs?: unknown;
         params?: unknown;
       } | null;
-      const id = typeof step?.id === "string" ? step.id : "";
-      // Blank is the same as absent: the row falls back to the id in
-      // both cases, so a whitespace name never blanks a row.
+      const group = typeof step?.group === "string" ? step.group : null;
+      const fn = typeof step?.function === "string" ? step.function : null;
+      // The id the loader composes — `<group>/<function>` — or the one
+      // written. A half-declared step is malformed and the loader will
+      // say so; it just needs to be addressable here.
+      const id =
+        group !== null && fn !== null
+          ? `${group}/${fn}`
+          : typeof step?.id === "string"
+            ? step.id
+            : "";
+      const groupEntry = group !== null ? groupsById.get(group) : undefined;
+      const phase = phaseOf(id);
+      // Blank is the same as absent: the row falls back to the derived
+      // label in both cases, so a whitespace name never blanks a row.
       const name =
         typeof step?.name === "string" && step.name.trim() !== ""
           ? step.name.trim()
           : null;
+      const command = typeof step?.command === "string" ? step.command : "";
       const [start, end] = stepRanges.get(i) ?? [0, 0];
       steps.push({
-        // An entry with no `id` is malformed and the loader will say so;
-        // give it something addressable rather than an empty row.
         id: id || `step ${i + 1}`,
         kind: "step",
-        name: name ?? (id ? defaultName(id) : `step ${i + 1}`),
-        phase: phaseOf(id),
-        type: stepType(typeof step?.command === "string" ? step.command : ""),
+        group,
+        function: fn,
+        name:
+          name ??
+          (groupEntry
+            ? groupedName(groupEntry, id, phase)
+            : id
+              ? defaultName(id)
+              : `step ${i + 1}`),
+        phase,
+        type: groupEntry?.type ?? stepType(command),
         inputs: (Array.isArray(step?.inputs) ? (step!.inputs as unknown[]) : []).filter(
           (v): v is string => typeof v === "string",
         ),
@@ -171,14 +250,20 @@ export function listSteps(text: string): ConfiguredStep[] {
 
   const applets: ConfiguredStep[] = [];
   if (Array.isArray(root.applets)) {
-    const appletRanges = ranges("applets");
+    const appletRanges = ranges(ast, "applets");
     root.applets.forEach((raw, i) => {
-      const applet = raw as { id?: unknown; name?: unknown; command?: unknown } | null;
+      const applet = raw as {
+        id?: unknown;
+        group?: unknown;
+        command?: unknown;
+      } | null;
       const id = typeof applet?.id === "string" ? applet.id : `applet ${i + 1}`;
       const [start, end] = appletRanges.get(i) ?? [0, 0];
       applets.push({
         id,
         kind: "applet",
+        group: typeof applet?.group === "string" ? applet.group : null,
+        function: null,
         // `AppletEntry` has no `name` key — an applet takes its display
         // label through its own `params` — so it is shown by its id,
         // or by the default label when it is one of the shared entries
@@ -511,35 +596,71 @@ function quote(s: string): string {
   return `"${escaped}"`;
 }
 
-/// One step, as a `[[steps]]` block with a divider above it.
+/// The function a step of this phase performs within its group, which
+/// is also the directory it writes under the group's.
+export function functionOf(phase: FieldPhase): string {
+  return phase === "render" ? "rendered_md" : "raw";
+}
+
+/// One source's `[[groups]]` block, with a divider above it. The name
+/// is written only when there is one and it says more than the id.
+export function buildGroup(opts: { id: string; name: string; type: string }): string {
+  const { id, type } = opts;
+  const name = opts.name.trim();
+  const divider = `# ── ${id} ${"─".repeat(Math.max(4, 66 - id.length))}`;
+  const nameLine = name && name !== id ? `\nname = ${quote(name)}` : "";
+  return `${divider}\n[[groups]]\nid = ${quote(id)}${nameLine}\ntype = ${quote(type)}`;
+}
+
+/// One step, as a `[[steps]]` block. No name: a grouped step's label
+/// comes from its group and its function.
 export function buildStep(opts: {
   entry: CatalogEntry;
-  id: string;
-  name: string;
+  group: string;
   phase: FieldPhase;
   inputs?: string[];
   values: FieldValues;
 }): string {
-  const { entry, id, name, phase, values } = opts;
+  const { entry, group, phase, values } = opts;
   const inputs = opts.inputs ?? [];
-  const divider = `# ── ${id} ${"─".repeat(Math.max(4, 66 - id.length))}`;
-  const nameLine =
-    name.trim() && name.trim() !== id ? `\nname = ${quote(name.trim())}` : "";
   const inputsLine = inputs.length
     ? `\ninputs = [${inputs.map(quote).join(", ")}]`
     : "";
   const subcommand = phase === "render" ? "render" : "download";
   const params = paramsToml(entry, values, phase);
   const block = `[[steps]]
-id = ${quote(id)}${nameLine}
+group = ${quote(group)}
+function = ${quote(functionOf(phase))}
 command = "datalib-step ${subcommand} ${entry.type}"${inputsLine}${params ? `\n${params}` : ""}`;
-  return `${divider}\n${block.trimEnd()}`;
+  return block.trimEnd();
 }
 
 /// The id of the render step that would read `fetchId`: its sibling
-/// under the same stem.
+/// under the same group.
 export function renderIdFor(fetchId: string): string {
   return `${stemOf(fetchId)}/rendered_md`;
+}
+
+/// Set, replace or (with an empty name) remove the `name` of one
+/// `[[groups]]` entry, leaving everything else in the text alone.
+export function renameGroup(text: string, groupId: string, name: string): string {
+  const group = listGroups(text).find((g) => g.id === groupId);
+  if (!group || group.end === 0) return text;
+  const body = text.slice(group.start, group.end);
+  const next = name.trim();
+  const line = next && next !== groupId ? `name = ${quote(next)}` : null;
+  const nameRe = /^[ \t]*name[ \t]*=.*$/m;
+  let edited: string;
+  // Function replacers: a name is user text, and as a replacement
+  // *string* `$1`, `$&` and `$$` in it would be expanded.
+  if (nameRe.test(body)) {
+    edited = body.replace(nameRe, () => line ?? "").replace(/\n\n(?=\S)/, "\n");
+  } else if (line) {
+    edited = body.replace(/^([ \t]*id[ \t]*=.*)$/m, (_m, idLine: string) => `${idLine}\n${line}`);
+  } else {
+    edited = body;
+  }
+  return text.slice(0, group.start) + edited + text.slice(group.end);
 }
 
 /// Wire a render step into every fan-in that consumes rendered markdown.
@@ -547,11 +668,15 @@ export function renderIdFor(fetchId: string): string {
 /// The fan-ins name their inputs by id, so a source added without this renders
 /// happily and is never indexed — invisible in search, with nothing on screen
 /// to say why.
+/// A fan-in step's `inputs = [...]`, keyed on the step being filed
+/// under the `unified_index` group (or, for a custom step, writing an
+/// `unified_index/…` id), within its own table.
+const FAN_IN_INPUTS =
+  /((?:group\s*=\s*"unified_index"|id\s*=\s*"unified_index\/[^"]*")[^\[]*?inputs\s*=\s*\[)([^\]]*)(\])/g;
+
 export function wireIntoFanIns(text: string, renderStepId: string): string {
   return text.replace(
-    // `id = "unified_index/…"` followed, within its own table, by an
-    // `inputs = [...]` line.
-    /(id\s*=\s*"unified_index\/[^"]*"[^\[]*?inputs\s*=\s*\[)([^\]]*)(\])/g,
+    FAN_IN_INPUTS,
     (whole, head: string, body: string, tail: string) => {
       const ids = body
         .split(",")
@@ -570,7 +695,7 @@ export function wireIntoFanIns(text: string, renderStepId: string): string {
 /// take its edges with it.
 export function unwireFromFanIns(text: string, renderStepId: string): string {
   return text.replace(
-    /(id\s*=\s*"unified_index\/[^"]*"[^\[]*?inputs\s*=\s*\[)([^\]]*)(\])/g,
+    FAN_IN_INPUTS,
     (_whole, head: string, body: string, tail: string) => {
       const ids = body
         .split(",")
@@ -582,17 +707,20 @@ export function unwireFromFanIns(text: string, renderStepId: string): string {
   );
 }
 
-/// Append a step pair to the config text. Always at the end: the DAG
-/// derives execution order from artifact paths rather than file order,
+/// Append entries to the config text. Always at the end: the DAG
+/// derives execution order from declared inputs rather than file order,
 /// and in TOML the end is the only safe insertion point — every key
-/// after a `[[steps]]` header belongs to that table, so a mid-file
-/// splice would reparent whatever followed.
+/// after a `[[…]]` header belongs to that table, so a mid-file splice
+/// would reparent whatever followed.
 export function appendSource(text: string, body: string): string {
   return `${text.replace(/\s*$/, "")}\n\n${body}\n`;
 }
 
-/// Remove entries from the config text.
-export function removeSteps(text: string, steps: ConfiguredStep[]): string {
+/// Remove entries — steps, applets or groups — from the config text.
+export function removeSteps(
+  text: string,
+  steps: Pick<ConfiguredStep, "start" | "end">[],
+): string {
   const cuts = steps
     .filter((s) => s.end > 0)
     .map((s) => [extendOverComments(text, s.start), s.end] as const)

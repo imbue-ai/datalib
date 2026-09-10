@@ -12,6 +12,13 @@ use crate::events::{Event, EventSink, LogLevel};
 use crate::step::{ArtifactState, FailureKind, StepCtx, StepError, StepOutcome};
 
 pub const ENV_STEP: &str = "DATALIB_DAG_STEP";
+/// The step's group id, its group's `type`, and its function — the two
+/// halves the step id is composed from, plus the type. Only set for a
+/// step declared under a `[[groups]]` entry; `ENV_GROUP_TYPE` only when
+/// the group declares a type.
+pub const ENV_GROUP: &str = "DATALIB_DAG_GROUP";
+pub const ENV_GROUP_TYPE: &str = "DATALIB_DAG_GROUP_TYPE";
+pub const ENV_FUNCTION: &str = "DATALIB_DAG_FUNCTION";
 pub const ENV_DATA_ROOT: &str = "DATALIB_DAG_DATA_ROOT";
 pub const ENV_INPUTS: &str = "DATALIB_DAG_INPUTS";
 pub const ENV_CHANGED_INPUTS: &str = "DATALIB_DAG_CHANGED_INPUTS";
@@ -84,6 +91,18 @@ pub(crate) async fn run_subprocess(
     let inputs: Vec<&str> = ctx.inputs.iter().map(|a| a.as_str()).collect();
     let changed: Vec<&str> = ctx.changed_inputs.iter().map(|a| a.as_str()).collect();
     let mut cmd = tokio::process::Command::new(prog);
+    for (key, value) in [
+        (ENV_GROUP, &ctx.group),
+        (ENV_GROUP_TYPE, &ctx.group_type),
+        (ENV_FUNCTION, &ctx.function),
+    ] {
+        match value {
+            Some(v) => cmd.env(key, v),
+            // Unset for a step outside any group, even if the runner's own
+            // environment carries one.
+            None => cmd.env_remove(key),
+        };
+    }
     cmd.args(args)
         .env(ENV_STEP, &ctx.step_id)
         .env(ENV_DATA_ROOT, &ctx.data_root)

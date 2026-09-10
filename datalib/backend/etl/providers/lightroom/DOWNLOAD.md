@@ -389,10 +389,14 @@ As a DAG step — see the `lightroom` stanza in
 [`docs/user/config_examples/all_sources.toml`](/docs/user/config_examples/all_sources.toml):
 
 ```toml
+[[groups]]
+id = "lightroom"
+type = "lightroom"
+
 [[steps]]
-id = "lightroom.download"
+group = "lightroom"
+function = "raw"
 command = "datalib-step download lightroom"
-outputs = ["lightroom/raw"]
 [steps.params.common]
 input_path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 ```

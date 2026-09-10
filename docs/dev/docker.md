@@ -42,12 +42,12 @@ LATCHKEY_DIR="$HOME/.datalib-docker/latchkey"
 DATA_ROOT="$HOME/datalib"
 mkdir -p "$LATCHKEY_DIR" "$DATA_ROOT"
 
-# Drop a config.toml into the data root. config.toml is the DAG
+# Drop a config.toml into the data root — the `[[groups]]` +
 # `[[steps]]` format (see docs/dev/step_protocol.md); the datalib-http
-# Setup tab scaffolds and validates it. Upgrading a root that still has
-# a pre-TOML config.yaml? Convert it first:
+# Setup tab scaffolds and validates it. Upgrading a root whose
+# config.toml predates `[[groups]]`? Rewrite it first:
 #   docker run --rm -v "$DATA_ROOT:/data" "$IMG" \
-#       datalib-migrate-config /data
+#       datalib-migrate-config /data --force
 
 # 1. Register a self-hosted service entry.
 docker run --rm -it -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \

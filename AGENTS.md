@@ -45,19 +45,22 @@ reference doc it relates to.
   entirely. Read it for why; it was written as the design and kept as
   the explanation.
 - [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md)
-  — *agreed design (2026-09-09), nothing built*: one row per source in
-  the Manage screen, done by making the grouping a config entity. A
-  `[[groups]]` table with `id`/`name`/`type`; a step is `(group,
-  function)` with its id composed and never written; the tree is named
-  after the function (`ingest`, `render_markdown`); `type` is the
-  data type and the fetch method is a params table, each declared
+  — *agreed design (2026-09-09); slice 1 built 2026-09-09, the rest
+  not*: one row per source in the Manage screen, done by making the
+  grouping a config entity. A `[[groups]]` table with
+  `id`/`name`/`type`; a step is `(group, function)` with its id
+  composed and never written — **that much is in the tree** (the
+  loader, the runner's environment, the fingerprint rule, every config
+  and fixture). Still to come: the tree named after the function
+  (`ingest`, `render_markdown` — today the functions are `raw` and
+  `rendered_md` because `datalib-step` still writes those); `type` as
+  the data type with the fetch method as a params table, each declared
   `Origin` or `Local`, which is what makes a row read "Download" or
-  "Import". The crates still say "download" until the mechanical
-  rename in its slice 5. Read it before
-  touching step ids, the wizard, or `datalib-step`'s dispatch. It
-  reverses the "ungrouping" section of `step_identity.md` and fixes a
-  real bug: `datalib-step` ignores the declared tree and writes a
-  hardcoded `<name>/raw`.
+  "Import"; the Manage screen and wizard; the mechanical crate rename.
+  Read it before touching step ids, the wizard, or `datalib-step`'s
+  dispatch. It reverses the "ungrouping" section of `step_identity.md`
+  and fixes a real bug: `datalib-step` ignores the declared tree and
+  writes a hardcoded `<name>/raw`.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
   *proposal*, nothing built: letting a consumer step start before its
   producer finishes. Splits the two meanings an edge carries today
@@ -251,8 +254,8 @@ reference doc it relates to.
 - [`docs/user/first_time_user.md`](docs/user/first_time_user.md),
   [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md),
   and [`docs/user/config_examples/`](docs/user/config_examples/) (one
-  commented `<name>.download` + `<name>.render` step pair per source,
-  in the steps format).
+  commented group with its `raw` + `rendered_md` step pair per
+  source).
 
 ## Prose can be stale — verify claims against the tree
 
@@ -376,10 +379,13 @@ datalib/
                    fsindex, media and lightroom have no <p>_render.
     table/         `datalib_table`: the `BulkUpsertable` row-write
                    contract, alone, with `sqlx` as its only dependency.
-    migrate_config/ `datalib-migrate-config`: one-shot conversion of a
-                   pre-TOML `config.yaml`. Holds every retired config
-                   schema and the tree's last YAML parser, so the
-                   shipping programs accept only `config.toml`.
+    migrate_config/ `datalib-migrate-config`: rewrites a `config.toml`
+                   from a shape nothing writes any more into the one the
+                   wizard writes. One rewrite at a time (today: ungrouped
+                   steps → `[[groups]]`). The runner still *loads* the
+                   old shape, with a warning naming this tool; the editor
+                   cannot change it. Nothing pre-TOML is convertible any
+                   more.
     runtime/       the data-root layout, the bundled-Node/npx resolver,
                    and the qmd version pin + spawn helper. Has NO
                    dependencies, deliberately: `qmd_indexer_bin` is a
@@ -440,13 +446,19 @@ free one.
 
 ## The sync pipeline in one paragraph
 
-`datalib-dag <config.toml>` runs a DAG of subprocess steps declared as
-the config's `[[steps]]` tables; edges are derived from output/input path
-overlap, never written by hand. Each source is a `<name>.download` +
-`<name>.render` step pair (`datalib-step download|render <type>`), and
-two shared fan-in steps index every source's `rendered_md` tree:
-`grid_index` (SQL index at `unified_index/grid/db.doltlite_db`) and
-`qmd_index` (semantic search at `unified_index/qmd/`). Both are read by
+`datalib-dag <config.toml>` runs a DAG of subprocess steps. The config
+has three kinds of entry: a `[[groups]]` entry is one thing on the
+Manage screen (a source is a group with a `type`; the unified index is
+a group without one); a `[[steps]]` entry is `group` + `function`, with
+its id composed as `<group>/<function>` — the tree it writes — and
+never written; an `[[applets]]` entry is a server the gateway spawns.
+Edges are the declared `inputs`, which name steps by that composed id.
+Each source is a group with a `raw` step (`datalib-step download
+<type>`) and a `rendered_md` step (`datalib-step render <type>`), and
+two shared fan-in steps under the `unified_index` group index every
+source's `rendered_md` tree: `grid` (`datalib-step grid_index`, the SQL
+index at `unified_index/grid/db.doltlite_db`) and `qmd` (`datalib-step
+qmd_index`, semantic search at `unified_index/qmd/`). Both are read by
 the `unified_index` applet, which serves the grid — `datalib-http` does
 not open them. Scheduler state lives at `system/dag_state.json`. A config entry the
 loader cannot use costs that entry and nothing else — it is dropped,
@@ -465,10 +477,10 @@ and "create an empty one", and the app's own first-run screen
 will write before writing it. Without that config there is no
 `unified_index` applet, so the grid answers `no applet "unified_index"`
 — which is what the two screens exist to prevent.
-Pre-TOML `config.yaml` files (both the YAML steps shape and the retired
-`sources:` one) are converted out of band by `datalib-migrate-config`,
-the only place their schemas — and the tree's last YAML parser — still
-live. Any executable
+A `config.toml` written before `[[groups]]` existed is rewritten out of
+band by `datalib-migrate-config`, the only place that shape is still
+understood; a pre-TOML `config.yaml` root is set up again from the
+app. Any executable
 speaking the step protocol can be a step — see
 `docs/dev/step_protocol.md`. The same config file also holds
 `[[applets]]`: servers the http gateway spawns on demand to serve the

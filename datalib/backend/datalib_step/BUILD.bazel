@@ -98,10 +98,20 @@ rust_test(
     name = "datalib_step_unittests",
     size = "small",
     crate = ":datalib_step",
+    # The checked-in example configs, which `config_examples_test.rs`
+    # loads and plans through the real dispatcher so the docs can't drift
+    # from the provider schemas.
+    data = [
+        "//configs:dag_example.toml",
+        "//docs/user/config_examples:all_sources.toml",
+        "//docs/user/config_examples:claude_only.toml",
+        "//docs/user/config_examples:sample_config.toml",
+    ],
     edition = "2021",
     # Stub `DataProcessor`s for the render-version staleness tests.
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
+        "@datalib_crates//:runfiles",
         "@datalib_crates//:tempfile",
     ],
 )

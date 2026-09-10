@@ -93,9 +93,9 @@ pub struct SyncJobRow {
     /// and in `dolt log` commit messages.
     #[col(sql = "VARCHAR(36)")]
     pub id: String,
-    /// Comma-separated `sources[].name` subset this run syncs (the UI's
-    /// "Sync selected" checkboxes → `--sync <name>.download` per name).
-    /// NULL/empty = the whole config.
+    /// Comma-separated source-step ids this run syncs (the UI's "Sync
+    /// now" → `--sync <group>/raw` per source). NULL/empty = the whole
+    /// config.
     #[col(sql = "VARCHAR(64)")]
     pub source_name: Option<String>,
     /// A [`JobKind`], as its `as_str`.

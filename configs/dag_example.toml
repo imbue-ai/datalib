@@ -11,24 +11,29 @@
 #         type: claude_api
 #         sync: {conv_uuids: ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]}
 #
-# The user declares steps directly; edges are derived from the artifact
-# paths (never written by hand). Each step is an arbitrary `command`
-# (see docs/dev/step_protocol.md); the runner appends the declared
-# `params`/`inputs`/`outputs` as `--params`/`--inputs`/`--outputs`
-# JSON flags. For the built-in `datalib-step` commands, download and
-# render take the provider as a nested subcommand; `params` is
-# per-phase — the download step carries the provider's download
-# config (no `type` tag — the command carries it; no `name` — the
-# step derives the `<name>/…` prefix from its first output), and the
-# render step carries only render knobs (none for most providers;
-# e.g. beeper's `period`, perseus's `alignment_pairs`). The
-# `grid_index` and `qmd_index` steps are source-independent fan-ins
-# over every rendered_md tree.
+# Three kinds of entry. A `[[groups]]` entry is one thing on the
+# Manage screen — a source is a group with a `type`, and the unified
+# index is a group without one. A `[[steps]]` entry is `group` +
+# `function`: what it does within its group. Its id is composed as
+# `<group>/<function>` and never written; that id is the directory the
+# step writes, and what another step's `inputs` name. An `[[applets]]`
+# entry is a server the app spawns, filed under a group for display.
 #
-# TOML shape: one `[[steps]]` table per step, with `params` as
+# Each step is an arbitrary `command` (see docs/dev/step_protocol.md);
+# the runner appends `params` and `inputs` as `--params` / `--inputs`
+# JSON flags and passes the composed id, the group, its type and the
+# function in the environment. For the built-in `datalib-step`
+# commands, download and render take the provider as a nested
+# subcommand, and `params` is per-phase — the download step carries
+# the provider's download config, the render step only render knobs
+# (none for most providers; e.g. beeper's `period`, perseus's
+# `alignment_pairs`). The `grid_index` and `qmd_index` steps are
+# source-independent fan-ins over every rendered_md tree.
+#
+# TOML shape: one `[[…]]` table per entry, with a step's `params` as
 # `[steps.params.…]` sub-tables. A table header ends the table it sits
 # in, so a step's plain keys come first and its params headers last;
-# likewise `data_root` below has to precede the first `[[steps]]`.
+# likewise `data_root` below has to precede the first `[[…]]` header.
 #
 # Editing a step re-runs it. The runner fingerprints each step over its
 # command, `params`, `env` and declared paths, so changing any of them
@@ -51,16 +56,23 @@
 data_root = "~/tmp/dr-dag"
 
 # ── slack ──────────────────────────────────────────────────────────
-# Every step has two names. Its `id` is the identity: unique, path-safe,
-# and the string the directory structure is formed from — so changing it
+# A group has two names. Its `id` is the identity: unique, path-safe,
+# and the directory every step under it writes into — so changing it
 # moves data on disk and strands the paths the index recorded, which is
 # a migration rather than an edit. Its `name` is what a person types and
 # what every screen shows; optional, read only by the UI, and free to
-# change at any moment because nothing depends on it. An unnamed step is
-# displayed by its id.
-[[steps]]
-id = "slack/raw"
+# change at any moment because nothing depends on it. The `type` says
+# what kind of data the group mirrors; the steps under it are named for
+# what they do (`raw` fetches, `rendered_md` renders), and their ids are
+# composed from the two.
+[[groups]]
+id = "slack"
 name = "Work Slack"
+type = "slack_api"
+
+[[steps]]
+group = "slack"
+function = "raw"
 command = "datalib-step download slack_api"
 [steps.params.sync]
 media = true
@@ -68,7 +80,8 @@ channels = ["chat-qi"]
 since = "2026-06-15"
 
 [[steps]]
-id = "slack/rendered_md"
+group = "slack"
+function = "rendered_md"
 command = "datalib-step render slack_api"
 inputs = ["slack/raw"]
 
@@ -78,42 +91,56 @@ inputs = ["slack/raw"]
 #   npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
 #   npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
 # See docs/user/getting_your_data.md for the full walkthrough.
+[[groups]]
+id = "claude"
+type = "claude_api"
+
 [[steps]]
-id = "claude/raw"
+group = "claude"
+function = "raw"
 command = "datalib-step download claude_api"
 [steps.params.sync]
 conv_uuids = ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
 
 [[steps]]
-id = "claude/rendered_md"
+group = "claude"
+function = "rendered_md"
 command = "datalib-step render claude_api"
 inputs = ["claude/raw"]
 
 # ── shared fan-in steps ────────────────────────────────────────────
-# `inputs` names the steps these read, by id. Adding a source above
-# means adding its render step's id here too — the wizard does that for
-# you; a hand-edit has to remember, and the Pipeline table flags a
-# render step nothing consumes.
+# `inputs` names the steps these read, by composed id. Adding a source
+# above means adding its render step's id here too — the wizard does
+# that for you; a hand-edit has to remember, and the Pipeline table
+# flags a render step nothing consumes. The group has no `type`: it
+# mirrors nothing, it indexes what the others mirrored.
+[[groups]]
+id = "unified_index"
+
 [[steps]]
-id = "unified_index/grid"
+group = "unified_index"
+function = "grid"
 command = "datalib-step grid_index"
 inputs = ["slack/rendered_md", "claude/rendered_md"]
 
 [[steps]]
-id = "unified_index/qmd"
+group = "unified_index"
+function = "qmd"
 command = "datalib-step qmd_index"
 inputs = ["slack/rendered_md", "claude/rendered_md"]
 
 # ── applets ────────────────────────────────────────────────────────
-# An applet is the other kind of config entry: a long-lived server the
+# An applet is the third kind of config entry: a long-lived server the
 # http gateway spawns on demand, contributing both card components and
-# the endpoints behind them. It declares no inputs/outputs because it
-# is never scheduled — it reads what the steps above already wrote.
+# the endpoints behind them. It declares no inputs because it is never
+# scheduled — it reads what the steps above already wrote.
 #
 # `id` is the mount prefix (`/applet/<id>/`) *and* the name card source
-# calls, so it must be a JavaScript identifier. There is no `title`
-# key: the label the component gallery shows is written by the applet
-# itself, from its own `params` — `workspace` below, for this one.
+# calls, so it must be a JavaScript identifier, and it is not composed
+# from the group. `group` only says which row the Manage screen shows
+# it under. There is no `title` key: the label the component gallery
+# shows is written by the applet itself, from its own `params` —
+# `workspace` below, for this one.
 #
 # The entry below serves the `slack` source rendered above. Starting
 # this applet wipes `system/frontend/slack_view/` and asks the command
@@ -131,6 +158,7 @@ inputs = ["slack/rendered_md", "claude/rendered_md"]
 # that `user` is not available as an id: it names the namespace for
 # hand-written components, which a refresh never touches.
 [[applets]]
+group = "slack"
 id = "slack_view"
 command = "datalib-applet slack"
 [applets.params]
@@ -142,5 +170,6 @@ workspace = "Slack"
 # an applet rather than a built-in so the backend does not have to know
 # what a grid row is.
 [[applets]]
+group = "unified_index"
 id = "unified_index"
 command = "datalib-applet unified_index"
