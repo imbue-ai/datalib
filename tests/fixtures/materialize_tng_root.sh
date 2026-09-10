@@ -77,10 +77,33 @@ chmod u+w "$OUT_ROOT/unified_index/grid_index/db.doltlite_db"
 # with "Permission denied". `bazel test` happens to stage runfiles under
 # a space-free cache dir, so this only bites the `bazelisk run
 # //datalib:dev_tng` path, which resolves through the source tree.
+#
+# The `unified_index` group is declared for the same reason a real root
+# declares it (see `scaffold_toml` in datalib-http): a group is one row
+# on the Manage screen, and the storage endpoint measures one tree per
+# *declared* group and step. Without the group the index is invisible
+# there — no row, and no way to see that it is the second-largest thing
+# in the root. The two steps are declared but not run here; the index
+# itself arrives pre-built in the tars above.
 cat > "$OUT_ROOT/config.toml" <<EOF
 data_root = "$OUT_ROOT"
 
+[[groups]]
+id = "unified_index"
+name = "Unified Index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = []
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = []
+
 [[applets]]
+group = "unified_index"
 id = "unified_index"
 command = "'$APPLET_BIN' unified_index"
 EOF

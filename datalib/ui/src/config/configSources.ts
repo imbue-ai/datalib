@@ -13,6 +13,11 @@
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 
+/// The group the two shared index steps are filed under, and the one
+/// prefix that marks a step as not-a-source. Mirrors
+/// `datalib_core::layout::UNIFIED_INDEX_DIR`.
+const UNIFIED_INDEX_DIR = "unified_index";
+
 export type SourceRow = {
   /// The step's id ("" for malformed entries).
   id: string;
@@ -60,11 +65,18 @@ export function listSources(text: string): SourceRow[] {
     // step from being a source.
     const inputs = (step as { inputs?: unknown } | null)?.inputs;
     if (Array.isArray(inputs) && inputs.length > 0) return;
+    const id = stepId(step);
+    // …and neither does having no inputs make one. The two index steps
+    // declare `inputs = []` — they are fan-ins the loader wires up, not
+    // things a person configured — so by the fringe rule alone every
+    // root ever created would list two sources it does not have. Same
+    // test the backend's `configured_source_count` makes.
+    if (id.startsWith(`${UNIFIED_INDEX_DIR}/`)) return;
     // A step written inline (`steps = [{…}]`) has no table node of its
     // own; it gets a zero range, which the UI reads as "not locatable"
     // rather than selecting some unrelated span.
     const [start, end] = ranges.get(i) ?? [0, 0];
-    rows.push({ id: stepId(step), start, end });
+    rows.push({ id, start, end });
   });
   return rows;
 }
