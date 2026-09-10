@@ -214,9 +214,25 @@ export async function searchAndSettle(
 
 // ── The Pipeline table's rows ────────────────────────────────────────
 
-/// A Pipeline row, by the step id `getRowId` keys on.
+/// A Pipeline row, by the step id `getRowId` keys on. A step under a
+/// group has a row only while the group is open — see `expandGroup`.
 export const pipelineRow = (page: Page, id: string) =>
   page.locator(`.ag-row[row-id="${id}"]`);
+
+/// A group's row. Keyed `group:<id>` because an applet may share the
+/// group's id (`unified_index` does) and both are rows.
+export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${id}`);
+
+/// Open a group so the steps under it have rows. Idempotent, and the
+/// grid remembers what was opened across a remount — which `settle`
+/// does — so one call per group per test is enough.
+export async function expandGroup(page: Page, id: string): Promise<void> {
+  const row = groupRow(page, id);
+  await expect(row, `group ${id} should have a row`).toBeVisible();
+  const closed = row.locator(".ag-group-contracted:not(.ag-hidden)");
+  if ((await closed.count()) > 0) await closed.click();
+  await expect(row.locator(".ag-group-expanded:not(.ag-hidden)")).toBeVisible();
+}
 
 /// A row's status. The column paints an icon, so the state is the
 /// icon's accessible name — the same word a person gets by hovering.

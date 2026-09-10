@@ -98,7 +98,8 @@ pub struct PipelineStorage {
     /// The data root as a whole — every byte under it, including trees
     /// no step declares (`system/`, the stores, a stray download).
     pub root: OutputStorage,
-    /// One entry per declared step, in config order.
+    /// One entry per declared tree — every group's directory and every
+    /// step's — in config order.
     pub outputs: Vec<OutputStorage>,
     /// The span `history` covers, in seconds. The UI scales its
     /// sparklines against this rather than against a constant of its
@@ -342,11 +343,11 @@ impl UsageMonitor {
         }
     }
 
-    /// Build the API's answer for a config's declared steps, in the
-    /// order the config declares them.
-    pub async fn snapshot(&self, root: &Path, step_ids: &[String]) -> PipelineStorage {
+    /// Build the API's answer for a config's declared trees — see
+    /// [`declared_trees`] — in the order given.
+    pub async fn snapshot(&self, root: &Path, tree_ids: &[String]) -> PipelineStorage {
         let st = self.state.read().await;
-        let outputs = step_ids
+        let outputs = tree_ids
             .iter()
             .map(|id| st.output(id, root.join(id)))
             .collect();
@@ -418,14 +419,20 @@ fn prune(history: &mut VecDeque<UsageSample>) {
     }
 }
 
+/// Every tree the config declares, in config order: each group's
+/// directory, then each step's. A group's directory holds its steps'
+/// trees, and the walk records a subtotal at both levels, so the Manage
+/// screen's group row has a measured series of its own rather than a sum
+/// of two step functions sampled at different instants.
 pub fn declared_trees(config_path: &Path) -> Vec<String> {
     match datalib_dag::config::load(config_path) {
         Ok((cfg, _root)) => {
             let mut seen = BTreeSet::new();
-            cfg.steps
+            cfg.groups
                 .iter()
-                .filter(|s| seen.insert(s.id.clone()))
-                .map(|s| s.id.clone())
+                .map(|g| g.id.clone())
+                .chain(cfg.steps.iter().map(|s| s.id.clone()))
+                .filter(|id| seen.insert(id.clone()))
                 .collect()
         }
         Err(_) => Vec::new(),
@@ -541,28 +548,83 @@ mod tests {
     fn one_walk_totals_the_root_and_each_declared_tree() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
-        std::fs::create_dir_all(root.join("slack/raw")).unwrap();
-        std::fs::create_dir_all(root.join("slack/rendered_md")).unwrap();
+        std::fs::create_dir_all(root.join("slack/ingest")).unwrap();
+        std::fs::create_dir_all(root.join("slack/render_markdown")).unwrap();
         std::fs::create_dir_all(root.join("system")).unwrap();
-        std::fs::write(root.join("slack/raw").join(BLOBS_FILE), vec![7u8; 300]).unwrap();
-        std::fs::write(root.join("slack/raw/entities.doltlite_db"), vec![7u8; 100]).unwrap();
-        std::fs::write(root.join("slack/rendered_md/a.md"), vec![7u8; 50]).unwrap();
+        std::fs::write(root.join("slack/ingest").join(BLOBS_FILE), vec![7u8; 300]).unwrap();
+        std::fs::write(
+            root.join("slack/ingest/entities.doltlite_db"),
+            vec![7u8; 100],
+        )
+        .unwrap();
+        std::fs::write(root.join("slack/render_markdown/a.md"), vec![7u8; 50]).unwrap();
         std::fs::write(root.join("system/lock"), vec![7u8; 5]).unwrap();
 
-        let want: BTreeSet<String> = ["slack/raw", "slack/rendered_md", "pdfs/raw"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let want: BTreeSet<String> = [
+            "slack",
+            "slack/ingest",
+            "slack/render_markdown",
+            "pdfs/ingest",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let m = measure(root, &want);
 
         assert_eq!(m.root_bytes, 455);
-        assert_eq!(m.trees["slack/raw"].bytes, 400);
-        assert_eq!(m.trees["slack/raw"].blob_bytes, 300);
-        assert_eq!(m.trees["slack/rendered_md"].bytes, 50);
+        assert_eq!(m.trees["slack/ingest"].bytes, 400);
+        assert_eq!(m.trees["slack/ingest"].blob_bytes, 300);
+        assert_eq!(m.trees["slack/render_markdown"].bytes, 50);
+        // The group's directory is wanted too, and it nests: its total
+        // is both steps' trees, measured on the same walk, with no
+        // blobs split of its own — that belongs to the raw store.
+        assert_eq!(m.trees["slack"].bytes, 450);
+        assert_eq!(m.trees["slack"].blob_bytes, 0);
         // Declared but never written: zero *and* absent, which is what
         // lets the UI draw "—" rather than "0 B".
-        assert!(!m.trees["pdfs/raw"].present);
-        assert_eq!(m.trees["pdfs/raw"].bytes, 0);
+        assert!(!m.trees["pdfs/ingest"].present);
+        assert_eq!(m.trees["pdfs/ingest"].bytes, 0);
+    }
+
+    /// The wanted set is every group's directory and every step's tree,
+    /// so the Manage screen's group row measures the folder it names.
+    #[test]
+    fn declared_trees_names_each_group_directory_and_each_step() {
+        let td = tempfile::tempdir().unwrap();
+        let config = td.path().join("config.toml");
+        std::fs::write(
+            &config,
+            r#"
+[[groups]]
+id = "slack"
+type = "slack_api"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]
+
+[[steps]]
+id = "custom/out"
+command = "my-step"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            declared_trees(&config),
+            [
+                "slack",
+                "slack/ingest",
+                "slack/render_markdown",
+                "custom/out"
+            ]
+            .map(String::from)
+            .to_vec()
+        );
     }
 
     /// A symlink is its own entry, never the tree it points at —

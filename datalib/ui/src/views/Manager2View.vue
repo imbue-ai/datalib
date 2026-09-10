@@ -15,8 +15,14 @@ import {
   type GridApi,
   type GridReadyEvent,
   type ICellRendererParams,
+  type IsGroupOpenByDefaultParams,
+  type RowGroupOpenedEvent,
   type ValueGetterParams,
 } from "ag-grid-community";
+// Tree data — one row per group with its steps under a chevron — is an
+// enterprise module. GridCard already links the whole enterprise bundle,
+// so this costs nothing new; only the one module is registered here.
+import { TreeDataModule } from "ag-grid-enterprise";
 import {
   fetchConfig,
   fetchConfigScaffold,
@@ -61,7 +67,14 @@ import {
   type StepPhase,
 } from "@/config/sourceSteps";
 import { calibrationMax, sparkline, type UsageSample } from "@/config/sparkline";
-import { type CatalogEntry } from "@/config/catalog";
+import { catalogForStep, type CatalogEntry } from "@/config/catalog";
+import {
+  groupLastSynced,
+  groupRowKey,
+  groupSeeds,
+  groupStatus,
+  pipelineOrder,
+} from "@/config/groupRows";
 import { iconUrl } from "@/config/icons";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { stepLogLines, type StepLogLine } from "@/config/stepLog";
@@ -76,6 +89,7 @@ import {
   withOverlay,
   effectiveRun,
   statusFloor,
+  STATUS_LABEL,
   type Overlay,
   type StatusView,
 } from "@/config/pipelineStatus";
@@ -83,7 +97,7 @@ import { subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 
-ModuleRegistry.registerModules([AllCommunityModule]);
+ModuleRegistry.registerModules([AllCommunityModule, TreeDataModule]);
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const configText = ref("");
@@ -98,10 +112,13 @@ const configError = ref<string | null>(null);
 const configDiagnostics = ref<Diagnostic[]>([]);
 
 /// The reason this entry is not in the pipeline, or null if it is.
-function droppedReason(id: string): Diagnostic | null {
+/// Keyed on the kind as well as the id: a group and an applet may share
+/// an id (`unified_index` does), and a problem with one is not a
+/// problem with the other.
+function droppedReason(id: string, kind: "group" | EntryKind): Diagnostic | null {
   return (
     configDiagnostics.value.find(
-      (d) => d.entry?.id === id && d.severity !== "warning",
+      (d) => d.entry?.id === id && d.entry.kind === kind && d.severity !== "warning",
     ) ?? null
   );
 }
@@ -233,11 +250,27 @@ function renderSiblingOf(fetchId: string): ConfiguredStep | undefined {
   );
 }
 
+/// What a row stands for: a `[[groups]]` entry, or one of the two
+/// kinds of entry filed under it.
+type RowKind = "group" | EntryKind;
+
 type Row = {
-  /// Identity: the tree this entry writes, and what every action here
-  /// is keyed on.
+  /// Identity: the tree this entry writes — for a group, the directory
+  /// its steps write into — and what every action here is keyed on.
   id: string;
-  kind: EntryKind;
+  /// The grid's row id. The entry id for a step or an applet; for a
+  /// group, `group:<id>`, because the `unified_index` applet shares its
+  /// group's id and both are rows.
+  key: string;
+  /// Where the row sits in the tree: `[key]` at the top level, or
+  /// `[<group key>, key]` under its group.
+  path: string[];
+  kind: RowKind;
+  /// The group this entry is filed under, when it is and the config
+  /// declares it. An entry naming a group the config lacks is shown at
+  /// the top level, where its dropped status says what is wrong.
+  group: string | null;
+  inputs: string[];
   phase: StepPhase;
   /// The word behind the step-role glyph that follows the name —
   /// its `title`, and its accessible name. The only place the word
@@ -262,13 +295,29 @@ type Row = {
   editBlocked: string | null;
   renderBlocked: string | null;
   revealBlocked: string | null;
+  /// What a sync of this row starts at: the step itself, or for a group
+  /// its steps with no inputs. Empty exactly when `runBlocked` says why.
+  seeds: string[];
+  /// The step whose form Edit and "Render to markdown" open. A step's
+  /// own id; for a group, its fetch step's, or null when it has none.
+  fetchId: string | null;
   lastSynced: string | null;
   status: StatusView;
+  /// For a group row, the child whose status it shows — the row a
+  /// double-click on Status opens the log of.
+  statusFrom: string | null;
+  /// For a group row with a run in flight: its steps in pipeline order,
+  /// one segment each, drawn as the bar under the status. Null when the
+  /// group is idle or is not a group.
+  segments: { id: string; key: string; label: string }[] | null;
   /// The active job that has claimed this step, when one has. Non-null
   /// is exactly the condition that turns Run into Stop: work is already
   /// queued or in flight for this row, so the useful button is the one
   /// that calls it off.
   stopJobId: string | null;
+  /// The step to call the job off through — this step, or for a group
+  /// the child that holds the claim.
+  stopTarget: string | null;
   /// Live position in the run currently in flight, from the progress
   /// bus. Null when the step isn't running or hasn't reported anything.
   progress: DagStepProgress | null;
@@ -302,6 +351,35 @@ const PHASE_LABEL: Record<StepPhase, string> = {
   index: "Index",
   other: "Step",
 };
+
+/// What a step under a group is called in the Name column. Derived from
+/// the phase, never written: the group owns the name, and a step's
+/// label says what it does with that group's data. The composed id
+/// shows muted beside it.
+const CHILD_LABEL: Record<StepPhase, string> = {
+  ingest: "Ingest",
+  render: "Render markdown",
+  index: "Index",
+  other: "Step",
+};
+
+/// The index steps, by function.
+const INDEX_LABEL: Record<string, string> = {
+  grid: "Grid index",
+  qmd: "QMD index",
+};
+
+function childLabel(s: ConfiguredStep): string {
+  if (s.kind === "applet") return s.name;
+  if (s.phase === "index") return INDEX_LABEL[s.function ?? ""] ?? CHILD_LABEL.index;
+  if (s.phase === "other") return s.function ?? s.name;
+  return CHILD_LABEL[s.phase];
+}
+
+/// The sentence the Status cell carries for an entry the loader dropped.
+function notInPipeline(d: Diagnostic): string {
+  return `Not in the pipeline: ${d.message}${d.help ? ` — ${d.help}` : ""}`;
+}
 
 /// The DAG edges and the claimed-step map, recomputed whenever the
 /// config or the queue moves. The logic itself is in
@@ -353,140 +431,257 @@ function stepStatus(id: string, dropped: Diagnostic | null): StatusView {
   return holdRank(id, claim?.id ?? run?.run_id ?? "", view);
 }
 
-const rows = computed<Row[]>(() =>
-  sources.value.map((s) => {
-    // Not `catalogFor(s.type)`: one step type can have several
-    // descriptors (Gmail and Fastmail are both `email`), and which one
-    // a step is comes from its params — or, for a render step, from
-    // the params of the step it reads.
-    const entry = entryForStep(s, sources.value);
-    const dropped = droppedReason(s.id);
-    const run = s.kind === "applet" ? null : stepStatus(s.id, dropped);
-    // A step writes exactly one tree, and it is the step's id.
-    const trees =
-      s.kind === "applet"
-        ? []
-        : [outputs.value.find((x) => x.path === s.id)].filter(
-            (x): x is OutputStorage => !!x,
-          );
-    const onDisk = trees.filter((o) => o.present);
+/// The tree the grid shows: one row per `[[groups]]` entry with its
+/// steps and applets under it, and a top-level row for every entry
+/// filed under no group. The rules a group row aggregates by are in
+/// `config/groupRows.ts`, where they are tested without a grid.
+const rows = computed<Row[]>(() => {
+  const declared = new Set(configGroups.value.map((g) => g.id));
+  const entries = sources.value.map((s) => entryRow(s, declared));
+  const groups = configGroups.value.map((g) =>
+    groupRow(
+      g,
+      entries.filter((r) => r.group === g.id),
+    ),
+  );
+  return [...groups, ...entries];
+});
 
-      // A sync starts at a *source* step — one with no declared inputs — and
-      // everything downstream follows change propagation. `datalib-dag` rejects
-      // a `--sync` naming anything else, so offering the button on a render row
-      // would only queue a job that fails on startup.
-    const seeds = s.kind === "step" ? sourcesFeedingIn(sources.value, s.id) : [];
-      // A dropped entry outranks every other reason a step action is
-      // unavailable, because it is the reason: the step is not in the graph.
-      // Not for an applet's Run, though — an applet is never scheduled
-      // whatever the config says.
-    const droppedWhy = dropped
-      ? `Not in the pipeline: ${dropped.message}${dropped.help ? ` — ${dropped.help}` : ""}`
-      : null;
-    const runBlocked =
-      s.kind === "applet"
-        ? "Applets aren't scheduled — the server starts one when something asks for it."
-        : (droppedWhy ??
-          (s.inputs.length === 0
-            ? null
-            : seeds.length === 1
-              ? `A sync starts at a source step. Run ${seeds[0]} — this runs with it.`
-              : `A sync starts at a source step. This one runs whenever any of its ` +
-                `sources does: ${seeds.join(", ") || "none it can reach"}.`));
+function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
+  // Not `catalogFor(s.type)`: one step type can have several
+  // descriptors (Gmail and Fastmail are both `email`), and which one
+  // a step is comes from its params — or, for a render step, from
+  // the params of the step it reads.
+  const entry = entryForStep(s, sources.value);
+  const dropped = droppedReason(s.id, s.kind);
+  const run = s.kind === "applet" ? null : stepStatus(s.id, dropped);
+  // A step writes exactly one tree, and it is the step's id.
+  const trees =
+    s.kind === "applet"
+      ? []
+      : [outputs.value.find((x) => x.path === s.id)].filter(
+          (x): x is OutputStorage => !!x,
+        );
+  const onDisk = trees.filter((o) => o.present);
+  const group = s.group !== null && declaredGroups.has(s.group) ? s.group : null;
 
-    // Edit: the wizard's forms describe provider steps. Everything else
-    // is hand-written config, and the honest answer is to say so.
-    let editBlocked: string | null = null;
-    if (s.kind === "applet") {
-      editBlocked = "No form for applets — edit this one in Advanced below.";
-    } else if (s.phase === "index") {
-      editBlocked = "A shared index step has no options — its inputs are its whole config.";
-    } else if (!entry) {
-      editBlocked = "This step's group has no type the catalog knows.";
-    } else if (!entry.wizard) {
-      editBlocked = `No guided form for ${entry.label} yet — edit it in Advanced below.`;
-    } else if (!s.group) {
-      editBlocked = PREDATES_GROUPS;
-    } else {
-      const rep = paramsAreRepresentable(s, entry);
-      if (!rep.ok) {
-        editBlocked =
-          `The form doesn't model ${rep.unknown.join(", ")}, and saving would drop it. ` +
-          `Edit this one in Advanced below.`;
-      }
+    // A sync starts at a *source* step — one with no declared inputs — and
+    // everything downstream follows change propagation. `datalib-dag` rejects
+    // a `--sync` naming anything else, so offering the button on a render row
+    // would only queue a job that fails on startup.
+  const seeds = s.kind === "step" ? sourcesFeedingIn(sources.value, s.id) : [];
+    // A dropped entry outranks every other reason a step action is
+    // unavailable, because it is the reason: the step is not in the graph.
+    // Not for an applet's Run, though — an applet is never scheduled
+    // whatever the config says.
+  const droppedWhy = dropped ? notInPipeline(dropped) : null;
+  const runBlocked =
+    s.kind === "applet"
+      ? "Applets aren't scheduled — the server starts one when something asks for it."
+      : (droppedWhy ??
+        (s.inputs.length === 0
+          ? null
+          : seeds.length === 1
+            ? `A sync starts at a source step. Run ${seeds[0]} — this runs with it.`
+            : `A sync starts at a source step. This one runs whenever any of its ` +
+              `sources does: ${seeds.join(", ") || "none it can reach"}.`));
+
+  // Edit: the wizard's forms describe provider steps. Everything else
+  // is hand-written config, and the honest answer is to say so.
+  let editBlocked: string | null = null;
+  if (s.kind === "applet") {
+    editBlocked = "No form for applets — edit this one in Advanced below.";
+  } else if (s.phase === "index") {
+    editBlocked = "A shared index step has no options — its inputs are its whole config.";
+  } else if (!entry) {
+    editBlocked = "This step's group has no type the catalog knows.";
+  } else if (!entry.wizard) {
+    editBlocked = `No guided form for ${entry.label} yet — edit it in Advanced below.`;
+  } else if (!s.group) {
+    editBlocked = PREDATES_GROUPS;
+  } else {
+    const rep = paramsAreRepresentable(s, entry);
+    if (!rep.ok) {
+      editBlocked =
+        `The form doesn't model ${rep.unknown.join(", ")}, and saving would drop it. ` +
+        `Edit this one in Advanced below.`;
     }
+  }
 
-    // "Render to markdown": offered on a fetch step that has no render
-    // step reading it yet, for a provider that renders at all.
-    let renderBlocked: string | null = null;
-    if (s.kind !== "step" || s.phase !== "ingest") {
-      renderBlocked = "Only an ingest step can have a render step added to it.";
-    } else if (!entry?.wizard) {
-      renderBlocked = "No guided form for this type — add the render step in Advanced below.";
-    } else if (entry.renderStep === false) {
-      renderBlocked = `${entry.label} produces no markdown to render.`;
-    } else if (!s.group) {
-      renderBlocked = PREDATES_GROUPS;
-    } else if (renderSiblingOf(s.id)) {
-      renderBlocked = "This already has a render step.";
-    }
-    // Wiring a render step onto an entry that isn't in the pipeline
-    // would just add a second broken row. `editBlocked` deliberately
-    // gets no such override: editing is how the entry gets fixed.
-    renderBlocked = droppedWhy ?? renderBlocked;
+  // "Render to markdown": offered on a fetch step that has no render
+  // step reading it yet, for a provider that renders at all.
+  let renderBlocked: string | null = null;
+  if (s.kind !== "step" || s.phase !== "ingest") {
+    renderBlocked = "Only an ingest step can have a render step added to it.";
+  } else if (!entry?.wizard) {
+    renderBlocked = "No guided form for this type — add the render step in Advanced below.";
+  } else if (entry.renderStep === false) {
+    renderBlocked = `${entry.label} produces no markdown to render.`;
+  } else if (!s.group) {
+    renderBlocked = PREDATES_GROUPS;
+  } else if (renderSiblingOf(s.id)) {
+    renderBlocked = "This already has a render step.";
+  }
+  // Wiring a render step onto an entry that isn't in the pipeline
+  // would just add a second broken row. `editBlocked` deliberately
+  // gets no such override: editing is how the entry gets fixed.
+  renderBlocked = droppedWhy ?? renderBlocked;
 
-    const revealBlocked =
-      s.kind === "applet"
-        ? "An applet owns no files — it serves endpoints."
-        : onDisk.length === 0
-          ? "Nothing on disk yet — this hasn't produced anything."
-          : null;
+  const revealBlocked =
+    s.kind === "applet"
+      ? "An applet owns no files — it serves endpoints."
+      : onDisk.length === 0
+        ? "Nothing on disk yet — this hasn't produced anything."
+        : null;
 
-    // An applet's health is its own thing: it isn't scheduled, so the
-    // runner's record says nothing about it. `GET /api/frontend` does.
-    // It is up or it is not — there is no history to show, which is why
-    // the timestamp stays null on these rows rather than borrowing one.
-    const appletErr = appletErrors.value[s.id];
-    const status: StatusView =
-      s.kind === "applet"
-        ? dropped
-          ? {
-              key: "config_rejected",
-              label: "Not loaded",
-              at: null,
-              detail: droppedWhy,
-            }
-          : appletErr
-          ? { key: "failed", label: "Failed to start", at: null, detail: appletErr }
-          : { key: "succeeded", label: "Up", at: null, detail: "The gateway has this applet up." }
-        : run!;
+  // An applet's health is its own thing: it isn't scheduled, so the
+  // runner's record says nothing about it. `GET /api/frontend` does.
+  // It is up or it is not — there is no history to show, which is why
+  // the timestamp stays null on these rows rather than borrowing one.
+  const appletErr = appletErrors.value[s.id];
+  const status: StatusView =
+    s.kind === "applet"
+      ? dropped
+        ? {
+            key: "config_rejected",
+            label: "Not loaded",
+            at: null,
+            detail: droppedWhy,
+          }
+        : appletErr
+        ? { key: "failed", label: "Failed to start", at: null, detail: appletErr }
+        : { key: "succeeded", label: "Up", at: null, detail: "The gateway has this applet up." }
+      : run!;
 
-    return {
-      id: s.id,
-      kind: s.kind,
-      dropped,
-      phase: s.phase,
-      kindLabel: s.kind === "applet" ? "Applet" : PHASE_LABEL[s.phase],
-      type: s.type,
-      name: s.name,
-      typeLabel: entry?.label ?? s.type ?? "—",
-      icon: entry?.icon ?? null,
-      entry,
-      runBlocked,
-      editBlocked,
-      renderBlocked,
-      revealBlocked,
-      lastSynced: status.at,
-      status,
-      stopJobId: claimedBy.value.get(s.id)?.id ?? null,
-      progress: s.kind === "applet" ? null : (dagSteps.value[s.id]?.progress ?? null),
-      bytes: onDisk.length ? trees.reduce((n, o) => n + o.bytes, 0) : null,
-      history: trees[0]?.history ?? [],
-      outputs: trees,
-      revealPath: onDisk[0]?.abs ?? null,
-    };
-  }),
-);
+  const stopJobId = claimedBy.value.get(s.id)?.id ?? null;
+  return {
+    id: s.id,
+    key: s.id,
+    path: group ? [groupRowKey(group), s.id] : [s.id],
+    kind: s.kind,
+    group,
+    inputs: s.inputs,
+    dropped,
+    phase: s.phase,
+    kindLabel: s.kind === "applet" ? "Applet" : PHASE_LABEL[s.phase],
+    type: s.type,
+    // Under a group the name is the group's; the step's label says
+    // what it does there. At the top level the step is its own thing
+    // and keeps the name the config gave it.
+    name: group ? childLabel(s) : s.name,
+    typeLabel: entry?.label ?? s.type ?? "—",
+    icon: entry?.icon ?? null,
+    entry,
+    runBlocked,
+    editBlocked,
+    renderBlocked,
+    revealBlocked,
+    seeds: s.kind === "step" && s.inputs.length === 0 ? [s.id] : [],
+    fetchId: s.id,
+    lastSynced: status.at,
+    status,
+    statusFrom: null,
+    segments: null,
+    stopJobId,
+    stopTarget: stopJobId ? s.id : null,
+    progress: s.kind === "applet" ? null : (dagSteps.value[s.id]?.progress ?? null),
+    bytes: onDisk.length ? trees.reduce((n, o) => n + o.bytes, 0) : null,
+    history: trees[0]?.history ?? [],
+    outputs: trees,
+    revealPath: onDisk[0]?.abs ?? null,
+  };
+}
+
+/// The row for one `[[groups]]` entry, read off its children's rows.
+function groupRow(g: ConfiguredGroup, children: Row[]): Row {
+  const ordered = pipelineOrder(children.map((r) => ({ ...r, kind: r.kind as EntryKind })));
+  const steps = ordered.filter((r) => r.kind === "step");
+  const fetch = steps.find((r) => r.phase === "ingest");
+  const dropped = droppedReason(g.id, "group");
+  const droppedWhy = dropped ? notInPipeline(dropped) : null;
+
+  const agg = groupStatus(ordered.map((r) => ({ id: r.id, kind: r.kind, status: r.status })));
+  const status: StatusView = dropped
+    ? statusOf({ id: g.id, step: undefined, run: null, claim: undefined, dropped })
+    : (agg?.status ?? {
+        key: "never_run",
+        label: STATUS_LABEL.never_run,
+        at: null,
+        detail: "Nothing is filed under this group yet.",
+      });
+
+  // The group's own type decides the mark, but *which* descriptor —
+  // Gmail or Fastmail, both `email` — is read off the fetch step's
+  // params, the way the fetch row itself does it.
+  const entry = fetch?.entry ?? catalogForStep(g.type, {});
+
+  // The folder the group's steps write into, measured as a tree of its
+  // own by the usage walker — not the sum of two series sampled at
+  // different instants. It also counts anything else in the folder,
+  // which is the right answer for "what does this source weigh".
+  const tree = outputs.value.find((x) => x.path === g.id);
+  const onDisk = !!tree?.present;
+
+  const seeds = groupSeeds(steps, (r) => !!r.dropped);
+  const runBlocked =
+    droppedWhy ??
+    (seeds.length
+      ? null
+      : steps.length
+        ? `A sync starts at a source step, and none of this group's steps is one — ` +
+          `they run whenever the sources feeding them do.`
+        : "Nothing under this group runs.");
+
+  const claimed = ordered.find((r) => r.stopJobId);
+  const inFlight = status.key === "running" || status.key === "queued";
+
+  return {
+    id: g.id,
+    key: groupRowKey(g.id),
+    path: [groupRowKey(g.id)],
+    kind: "group",
+    group: null,
+    inputs: [],
+    dropped,
+    phase: "other",
+    kindLabel: "Group",
+    type: g.type,
+    name: g.name ?? g.id,
+    typeLabel: entry?.label ?? g.type ?? "—",
+    icon: entry?.icon ?? null,
+    entry,
+    runBlocked,
+    editBlocked: fetch
+      ? fetch.editBlocked
+      : "No guided form for this group — edit its entries in Advanced below.",
+    // Not `??`: a fetch step with nothing in the way has `null` here,
+    // and that null is the answer.
+    renderBlocked: fetch
+      ? fetch.renderBlocked
+      : "Only a fetch step can have a render step added to it.",
+    revealBlocked: onDisk ? null : "Nothing on disk yet — this group hasn't produced anything.",
+    seeds,
+    fetchId: fetch?.id ?? null,
+    lastSynced: dropped
+      ? null
+      : groupLastSynced(ordered.map((r) => ({ kind: r.kind, phase: r.phase, at: r.status.at }))),
+    status,
+    statusFrom: agg?.from ?? null,
+    segments:
+      inFlight && steps.length
+        ? steps.map((r) => ({ id: r.id, key: r.status.key, label: r.status.label }))
+        : null,
+    stopJobId: claimed?.stopJobId ?? null,
+    stopTarget: claimed?.id ?? null,
+    progress: ordered.find((r) => r.status.key === "running")?.progress ?? null,
+    bytes: onDisk ? tree!.bytes : null,
+    history: tree?.history ?? [],
+    // The children's trees, for the tooltip's breakdown; the total is
+    // the folder's own measurement.
+    outputs: children.flatMap((r) => r.outputs),
+    revealPath: onDisk ? tree!.abs : null,
+  };
+}
 
 /// Base-10 units, matching what a file manager shows — the question
 /// behind this column is "how much of my disk is this", not a precise
@@ -610,34 +805,44 @@ const columnDefs: ColDef<Row>[] = [
     // stops shrinking at a width a stanza name still fits in.
     flex: 1,
     minWidth: 200,
-    // The label leads and the directory name follows it, muted,
-    // whenever they differ. Showing only the label would hide which
-    // folder this is — the whole reason the name stays fixed is that
-    // the on-disk layout is meant to be legible, and a grid that
-    // stopped naming it would give that away for a prettier row.
-    cellRenderer: (p: ICellRendererParams<Row>) => {
-      const wrap = document.createElement("span");
-      wrap.className = "m2-cell-source";
-      const row = p.data;
-      const text = document.createElement("span");
-      text.textContent = row?.name ?? "";
-      wrap.appendChild(text);
-      if (row) {
-        const glyph = row.kind === "applet" ? STEP_GLYPHS.applet : STEP_GLYPHS[row.phase];
-        const mark = document.createElement("span");
-        mark.className = "m2-name-step";
-        mark.title = row.kindLabel;
-        mark.appendChild(glyphSvg(glyph, row.kindLabel, 14));
-        wrap.appendChild(mark);
-      }
-      if (row && row.name !== row.id) {
-        const dir = document.createElement("span");
-        dir.className = "m2-cell-dir";
-        dir.textContent = row.id;
-        dir.title = `Id — stored in ${row.id}/ under the data root`;
-        wrap.appendChild(dir);
-      }
-      return wrap;
+    // The column the tree hangs off: AG Grid's group renderer draws the
+    // chevron and the indent, and hands the cell's content to the
+    // renderer below. The label leads and the directory name follows
+    // it, muted, whenever they differ. Showing only the label would
+    // hide which folder this is — the whole reason the name stays fixed
+    // is that the on-disk layout is meant to be legible, and a grid
+    // that stopped naming it would give that away for a prettier row.
+    showRowGroup: true,
+    cellRenderer: "agGroupCellRenderer",
+    cellRendererParams: {
+      suppressCount: true,
+      innerRenderer: (p: ICellRendererParams<Row>) => {
+        const wrap = document.createElement("span");
+        wrap.className = "m2-cell-source";
+        const row = p.data;
+        const text = document.createElement("span");
+        if (row?.kind === "group") text.className = "m2-group-name";
+        text.textContent = row?.name ?? "";
+        wrap.appendChild(text);
+        // The step-role mark. A group row has none: the chevron before
+        // it already says what it is.
+        if (row && row.kind !== "group") {
+          const glyph = row.kind === "applet" ? STEP_GLYPHS.applet : STEP_GLYPHS[row.phase];
+          const mark = document.createElement("span");
+          mark.className = "m2-name-step";
+          mark.title = row.kindLabel;
+          mark.appendChild(glyphSvg(glyph, row.kindLabel, 14));
+          wrap.appendChild(mark);
+        }
+        if (row && row.name !== row.id) {
+          const dir = document.createElement("span");
+          dir.className = "m2-cell-dir";
+          dir.textContent = row.id;
+          dir.title = `Id — stored in ${row.id}/ under the data root`;
+          wrap.appendChild(dir);
+        }
+        return wrap;
+      },
     },
   },
   {
@@ -653,6 +858,9 @@ const columnDefs: ColDef<Row>[] = [
       const wrap = document.createElement("span");
       wrap.className = "m2-cell-type";
       if (!row) return wrap;
+      // A group that mirrors nothing — the unified index — has no type,
+      // and a blank cell is the honest mark for it.
+      if (row.kind === "group" && !row.type) return wrap;
       const url = iconUrl(row.icon);
       if (url) {
         const img = document.createElement("img");
@@ -695,6 +903,32 @@ const columnDefs: ColDef<Row>[] = [
       // is icons, so this is the only place either appears.
       const why = row.progress?.msg ?? row.status.detail;
       wrap.title = why ? `${label} — ${why}` : label;
+
+      // A group with a run in flight: one segment per step, in pipeline
+      // order, each in its own step's colour — the running one pulsing.
+      // No arithmetic across children; the bar *is* the children.
+      if (row.segments) {
+        if (key === "running") {
+          const spin = document.createElement("span");
+          spin.className = "m2-spinner";
+          spin.setAttribute("role", "img");
+          spin.setAttribute("aria-label", label);
+          wrap.appendChild(spin);
+        } else {
+          const glyph = STATUS_GLYPHS[key];
+          if (glyph) wrap.appendChild(glyphSvg(glyph, label));
+        }
+        const bar = document.createElement("span");
+        bar.className = "m2-segs";
+        for (const seg of row.segments) {
+          const cell = document.createElement("span");
+          cell.className = `m2-seg m2-seg-${seg.key.replace(/[\s_]+/g, "-")}`;
+          cell.title = `${seg.id}: ${seg.label}`;
+          bar.appendChild(cell);
+        }
+        wrap.appendChild(bar);
+        return wrap;
+      }
 
       if (key === "running") {
         // A still frame can't say "still going", so running is the one
@@ -780,8 +1014,15 @@ const columnDefs: ColDef<Row>[] = [
         )
         .join(" · ");
       const total = formatBytes(row.bytes ?? 0);
+      // A group's total is its folder, measured as one tree — which
+      // also counts anything in it no step wrote — and the breakdown
+      // under it is its steps' trees.
       const size =
-        present.length === 1 && !present[0].parts?.length ? total : `${total} — ${detail}`;
+        row.kind === "group"
+          ? `${total} in ${row.id}/ — ${detail}`
+          : present.length === 1 && !present[0].parts?.length
+            ? total
+            : `${total} — ${detail}`;
       return `${size} · the line is ${windowPhrase.value}, drawn against the largest row`;
     },
     // The recent history rather than a bar, on a linear scale against
@@ -831,11 +1072,14 @@ const columnDefs: ColDef<Row>[] = [
       const wrap = document.createElement("span");
       wrap.className = "m2-actions";
       const row = p.data!;
+      const isGroup = row.kind === "group";
       // One button, two faces. While a job has this row claimed the
       // only useful thing to do with it is call it off — starting a
       // second sync of work already queued is never what was meant.
-      if (row.stopJobId) {
-        const claim = claimedBy.value.get(row.id);
+      // A group is claimed when any step under it is.
+      if (row.stopJobId && row.stopTarget) {
+        const claim = claimedBy.value.get(row.stopTarget);
+        const target = row.stopTarget;
         wrap.appendChild(
           iconButton(
             "stop",
@@ -844,40 +1088,48 @@ const columnDefs: ColDef<Row>[] = [
               : "Stop the sync in progress",
             null,
             true,
-            () => stopSource(row.id),
+            () => stopSource(target),
           ),
         );
       } else {
         wrap.appendChild(
-          iconButton("run", "Sync now", row.runBlocked, false, () => runSource(row.id)),
+          iconButton("run", "Sync now", row.runBlocked, false, () => runRow(row)),
         );
       }
+      // A group's form is its fetch step's: that is where the name and
+      // the download settings live until the one-dialog wizard lands.
+      const formFor = row.fetchId;
       wrap.appendChild(
-        iconButton("edit", "Edit settings", row.editBlocked, false, () => openEdit(row.id)),
+        iconButton("edit", "Edit settings", row.editBlocked, false, () => {
+          if (formFor) openEdit(formFor);
+        }),
       );
       // Only shown where it applies: a fetch step with no render step
-      // reading it yet. Absent rather than disabled everywhere else,
-      // which would put a dead button on every index and applet row.
-      if (row.phase === "ingest") {
+      // reading it yet, or the group holding one. Absent rather than
+      // disabled everywhere else, which would put a dead button on
+      // every index and applet row.
+      if (row.phase === "ingest" || (isGroup && formFor)) {
         wrap.appendChild(
-          iconButton(
-            "render",
-            "Render to markdown",
-            row.renderBlocked,
-            false,
-            () => openRenderFor(row.id),
-          ),
+          iconButton("render", "Render to markdown", row.renderBlocked, false, () => {
+            if (formFor) openRenderFor(formFor);
+          }),
         );
       }
       // Absent rather than disabled in a plain browser — the same
       // "a missing menu item, not a broken one" rule desktop.ts states.
       if (canReveal) {
         wrap.appendChild(
-          iconButton("reveal", revealLabel, row.revealBlocked, false, () => reveal(row.id)),
+          iconButton("reveal", revealLabel, row.revealBlocked, false, () => reveal(row.key)),
         );
       }
       wrap.appendChild(
-        iconButton("trash", "Remove from config", null, true, () => deleteSource(row.id)),
+        iconButton(
+          "trash",
+          isGroup ? "Remove from config, with everything under it" : "Remove from config",
+          null,
+          true,
+          () => (isGroup ? deleteGroup(row.id) : deleteSource(row.id)),
+        ),
       );
       return wrap;
     },
@@ -1044,7 +1296,45 @@ const helpOpen = ref(false);
 /// overloading all of them would make the gesture unguessable.
 function onCellDoubleClicked(e: { column?: { getColId: () => string }; data?: Row }) {
   if (e.column?.getColId() !== "status" || !e.data) return;
-  void openStepLog(e.data);
+  // A group's status is one child's, and that child's log is the answer.
+  const row =
+    e.data.kind === "group"
+      ? rows.value.find((r) => r.kind !== "group" && r.id === e.data!.statusFrom)
+      : e.data;
+  if (row) void openStepLog(row);
+}
+
+// ── Which groups are open. Remembered per browser, so a reload — or
+// the remount a sync's end does — puts the table back the way it was.
+// A convenience, not state: nothing breaks when it is empty.
+const EXPANDED_STORE = "datalib.manage.expanded";
+
+function readExpanded(): Set<string> {
+  try {
+    const raw = localStorage.getItem(EXPANDED_STORE);
+    const list: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+const expandedGroups = readExpanded();
+
+function isGroupOpenByDefault(p: IsGroupOpenByDefaultParams<Row>): boolean {
+  return expandedGroups.has(p.rowNode.data?.key ?? "");
+}
+
+function onRowGroupOpened(e: RowGroupOpenedEvent<Row>) {
+  const key = e.data?.key;
+  if (!key) return;
+  if (e.expanded) expandedGroups.add(key);
+  else expandedGroups.delete(key);
+  try {
+    localStorage.setItem(EXPANDED_STORE, JSON.stringify([...expandedGroups]));
+  } catch {
+    // Storage refused — private mode, quota — and the chevron still
+    // works; only the memory across reloads is lost.
+  }
 }
 
 /// Escape closes whichever panel is open, which is what a modal owes
@@ -1389,8 +1679,35 @@ async function deleteSource(id: string) {
   await writeConfig(next, `Removed ${name}.`);
 }
 
-async function reveal(id: string) {
-  const path = rows.value.find((r) => r.id === id)?.revealPath;
+/// Remove a group with everything filed under it. Its render steps
+/// leave the fan-ins too, or the config would name inputs that no
+/// longer exist and the loader would refuse the whole file.
+async function deleteGroup(id: string) {
+  const group = configGroups.value.find((g) => g.id === id);
+  if (!group) return;
+  const name = group.name ?? group.id;
+  const members = sources.value.filter((s) => s.group === id);
+  const steps = members.filter((s) => s.kind === "step").length;
+  const applets = members.filter((s) => s.kind === "applet").length;
+  const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const under = [steps ? count(steps, "step") : "", applets ? count(applets, "applet") : ""]
+    .filter(Boolean)
+    .join(" and ");
+  const what =
+    `Remove "${name}" from the config${under ? `, with the ${under} under it` : ""}?\n\n` +
+    `The data stays on disk — these entries just stop running. Adding the source ` +
+    `back later resumes from what's already there.`;
+  if (!window.confirm(what)) return;
+
+  let next = removeSteps(configText.value, [...members, group]);
+  for (const m of members) {
+    if (m.phase === "render") next = unwireFromFanIns(next, m.id);
+  }
+  await writeConfig(next, `Removed ${name}.`);
+}
+
+async function reveal(key: string) {
+  const path = rows.value.find((r) => r.key === key)?.revealPath;
   if (!path) return;
   await revealPath(path);
 }
@@ -1420,17 +1737,19 @@ async function discardConfigEdits() {
   clearBanner();
 }
 
-async function runSource(id: string) {
-  const step = sources.value.find((s) => s.id === id);
-  // One row, one step, one id — the runner takes it verbatim. There is
-  // no longer a pair to choose between.
-  const target = id;
+/// Sync what a row stands for. A step is its own seed; a group's seeds
+/// are its source steps, and the worker takes them comma-joined, one
+/// `--sync` each, so the whole group runs as one job.
+async function runRow(row: Row) {
+  if (row.seeds.length === 0) return;
+  const step = sources.value.find((s) => s.id === row.id);
+  const shown = row.kind === "group" ? row.name : (step?.name ?? row.id);
   busy.value = true;
   clearBanner();
   try {
-    const job = await enqueueJob({ kind: "all", source_name: target });
+    const job = await enqueueJob({ kind: "all", source_name: row.seeds.join(",") });
     adoptJob(job);
-    say(true, `Queued a sync for ${step?.name ?? id}.`, job.id);
+    say(true, `Queued a sync for ${shown}.`, job.id);
     // Before returning: the queue is what puts this row and everything
     // downstream of it into "Queued" and flips the button to Stop, and
     // the whole complaint this answers is that pressing play looked
@@ -1698,15 +2017,24 @@ onUnmounted(() => {
     <p v-if="banner" class="m2-msg" :class="banner.ok ? 'good' : 'bad'">{{ banner.text }}</p>
 
     <div class="m2-grid">
+      <!-- Tree data: a group row with its steps and applets under it.
+           `treeDataDisplayType: custom` keeps the Name column as the
+           column the chevron lives in, rather than a generated one. -->
       <AgGridVue
         class="m2-ag"
         :theme="gridTheme"
         :columnDefs="columnDefs"
         :rowData="rows"
-        :getRowId="(p: { data: Row }) => p.data.id"
+        :getRowId="(p: { data: Row }) => p.data.key"
+        :treeData="true"
+        treeDataDisplayType="custom"
+        :getDataPath="(r: Row) => r.path"
+        :groupDefaultExpanded="0"
+        :isGroupOpenByDefault="isGroupOpenByDefault"
         :tooltipShowDelay="200"
         @grid-ready="onGridReady"
         @cell-double-clicked="onCellDoubleClicked"
+        @row-group-opened="onRowGroupOpened"
       />
     </div>
 
@@ -1797,22 +2125,31 @@ onUnmounted(() => {
         </header>
         <div class="m2-help-body">
           <p>
-            Every row is something <code>config.toml</code> declares: your <b>sources</b>, the
-            shared index <b>steps</b> that make them searchable, and the <b>applets</b> the app
-            spawns to serve them. Actions that don’t apply to a kind are disabled and say why.
-            Account and document-count columns aren’t here yet — each needs a backend endpoint
-            the design calls for.
+            Every top-level row is a <b>group</b> <code>config.toml</code> declares: a source
+            (Work Slack, Personal mail), or the unified index that makes them searchable. Open
+            its chevron for the <b>steps</b> that do the work — fetch, render, index — and the
+            <b>applets</b> the app spawns to serve it. Actions that don’t apply to a kind are
+            disabled and say why. Account and document-count columns aren’t here yet — each
+            needs a backend endpoint the design calls for.
           </p>
           <p>
-            <b>Type</b> and <b>Status</b> are icons, and the mark after a name says what that
-            step does — hover any of them for the word. <b>Double-click a Status</b> to read
-            just that step's log from the run it last took part in.
+            A group row reads off its steps: <b>Status</b> is running if any step is, failed if
+            any failed, and otherwise the last step’s in pipeline order; while a sync is in
+            flight it draws one segment per step. <b>Last synced</b> is the fetch step’s.
+            <b>Sync</b> runs the group’s source steps and everything downstream;
+            <b>Remove</b> takes the steps and applets with it.
           </p>
           <p>
-            <b>Bytes on disk</b> is a directory walk over each row’s tree, plotted over
-            {{ windowPhrase }} and drawn against the largest row — so a row’s height means its
-            size, and its shape means what that size has been doing. Hover for the total and
-            the breakdown.
+            <b>Type</b> and <b>Status</b> are icons, and the mark after a step’s name says what
+            it does — hover any of them for the word. <b>Double-click a Status</b> to read that
+            step's log from the run it last took part in; on a group row, the log of the step
+            its status came from.
+          </p>
+          <p>
+            <b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its
+            whole folder, measured on the same walk — plotted over {{ windowPhrase }} and drawn
+            against the largest row, so a row’s height means its size, and its shape means what
+            that size has been doing. Hover for the total and the breakdown.
           </p>
           <p>
             <b>Last synced</b> and <b>Status</b> are per step, read from the runner’s own
@@ -2167,6 +2504,9 @@ onUnmounted(() => {
 /* Cell renderers build plain DOM, so their classes can't be scoped. */
 .m2-cell-source { display: inline-flex; align-items: center; gap: 8px; }
 .m2-cell-dir { color: var(--datalib-muted); font-size: 12px; }
+/* The group row is the row: its name leads the tree, so it carries the
+   weight, and the steps under it read as its parts. */
+.m2-group-name { font-weight: 600; }
 /* The step-role mark, riding after the name. Muted and a size down
    from the Type mark beside it: the name is what the eye should land
    on, and this answers the follow-up question rather than competing
@@ -2245,6 +2585,40 @@ onUnmounted(() => {
 @media (prefers-reduced-motion: reduce) {
   .m2-spinner { animation: none; }
 }
+/* A group's run in flight: one segment per step in pipeline order, in
+   the step's own status colour, the running one pulsing. The same
+   grammar as StepProgress.vue's task cells — a still segment is a
+   finished step, a blank one a step not reached. */
+.m2-segs {
+  flex: 1 1 auto;
+  min-width: 20px;
+  display: flex;
+  gap: 1px;
+  height: 6px;
+}
+.m2-seg {
+  flex: 1;
+  background: color-mix(in srgb, var(--datalib-fg) 14%, transparent);
+}
+.m2-seg:first-child { border-radius: 3px 0 0 3px; }
+.m2-seg:last-child { border-radius: 0 3px 3px 0; }
+.m2-seg-succeeded,
+.m2-seg-skipped-up-to-date { background: var(--datalib-log-ok); }
+.m2-seg-failed { background: var(--datalib-log-error); }
+.m2-seg-interrupted { background: var(--datalib-log-warn); }
+.m2-seg-blocked { background: var(--datalib-muted); }
+.m2-seg-running {
+  background: var(--datalib-accent);
+  animation: m2-seg-pulse 1s ease-in-out infinite;
+}
+@keyframes m2-seg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .m2-seg-running { animation: none; }
+}
+
 /* Shown only when the step reported a total to be a fraction of. */
 .m2-progress {
   flex: 1 1 auto;

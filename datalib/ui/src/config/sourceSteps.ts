@@ -11,10 +11,11 @@
 // `<group>/<function>` — never written, but what every row here is keyed on.
 // A step outside any group carries a verbatim `id`.
 //
-// The grid still shows one row per step: the group's name labels its ingest
-// step, and the group's type is what the row's catalog entry comes from.
-// Folding a group into one row with its steps under it is the Manage-screen
-// work in docs/dev/plans/groups_and_functions.md.
+// This module is still one entry per step. The grid folds them into one
+// row per group with the steps under it (`views/Manager2View.vue`, rules in
+// `groupRows.ts`); the `name` derived here — the group's, suffixed for its
+// render step — is the prose form banners and confirms use, and what the
+// wizard seeds its Name box from.
 //
 // An applet is never scheduled and owns no artifacts, so most row actions
 // don't apply to it — but it is configured, it can fail to start, and that

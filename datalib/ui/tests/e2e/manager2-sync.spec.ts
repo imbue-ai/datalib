@@ -11,7 +11,7 @@
 //     like nothing had happened until it was over.
 //
 // `pdf` is the local-only provider that has *both* halves, which is why
-// it carries this spec: a `raw -> rendered_md` edge is what makes
+// it carries this spec: an `ingest -> render_markdown` edge is what makes
 // "everything downstream is queued too" a real assertion about the DAG
 // rather than a contrived one. `fsindex` (download-only) is the
 // unrelated second source — the one whose history must not move.

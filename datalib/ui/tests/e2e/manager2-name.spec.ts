@@ -1,5 +1,7 @@
-// Manager2: one row per step, and the two-step flow that creates them.
+// Manager2: one row per group with its steps under it, and the two-step
+// flow that creates them.
 import { test, expect, type Page } from "@playwright/test";
+import { expandGroup, groupRow, pipelineRow as row } from "./grid-helpers";
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
@@ -15,7 +17,6 @@ const field = (page: Page, caption: string) =>
 const nameField = (page: Page) => field(page, "Name");
 const idField = (page: Page) => field(page, "Id");
 const alsoRender = (page: Page) => wizard(page).locator(".wiz-check input");
-const row = (page: Page, id: string) => page.locator(`.ag-row[row-id="${id}"]`);
 /// The step-role mark. It rides after the name — there is no Step
 /// column any more — and `aria-label` is the only place the word
 /// survives, which is also what a person gets by hovering it.
@@ -46,7 +47,9 @@ test.afterEach(async ({ page }) => {
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });
 
-test("one dialog writes two steps, and they are two rows", async ({ page }) => {
+test("one dialog writes a group and two steps: one row, with two under it", async ({
+  page,
+}) => {
   const editor = page.locator(".m2-editor");
   await pickClaude(page);
 
@@ -84,15 +87,22 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText(/Added Personal Claude, with a step to render it\./)).toBeVisible();
 
-  // Two rows, not one. Addressed by row id (`getRowId` is the step id).
-  //
-  // The phase is a glyph suffixed onto the name, so it is asserted
-  // through the accessible name rather than cell text.
-  await expect(row(page, "personal-claude/ingest")).toContainText("Personal Claude");
+  // One row for the source: the group's name, with the id muted
+  // beside it. The steps are under it, and folded until asked for —
+  // which is the whole point of the row.
+  const group = groupRow(page, "personal-claude");
+  await expect(group).toContainText("Personal Claude");
+  await expect(group.locator(".m2-cell-dir")).toHaveText("personal-claude");
+  await expect(row(page, "personal-claude/ingest")).toHaveCount(0);
+
+  // Opened, the two steps are labelled by what they do; the group owns
+  // the name. The phase is a glyph suffixed onto the label, so it is
+  // asserted through the accessible name rather than cell text.
+  await expandGroup(page, "personal-claude");
+  await expect(row(page, "personal-claude/ingest")).toContainText("Ingest");
+  await expect(row(page, "personal-claude/ingest")).toContainText("personal-claude/ingest");
   await expect(stepMark(page, "personal-claude/ingest")).toHaveAttribute("aria-label", "Ingest");
-  await expect(row(page, "personal-claude/render_markdown")).toContainText(
-    "Personal Claude (render markdown)",
-  );
+  await expect(row(page, "personal-claude/render_markdown")).toContainText("Render markdown");
   await expect(stepMark(page, "personal-claude/render_markdown")).toHaveAttribute(
     "aria-label",
     "Render",
@@ -106,9 +116,10 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   const text = await editor.inputValue();
   expect(text.match(/group = "personal-claude"\nfunction = "render_markdown"/g)).toHaveLength(1);
 
-  // Edit the fetch step: name free, id fixed, and renaming leaves the
-  // id alone — the property that keeps the index's paths honest.
-  await row(page, "personal-claude/ingest").getByRole("button", { name: "Edit" }).click();
+  // Edit from the group's row: it opens the fetch step's form, where
+  // the name lives. Name free, id fixed, and renaming leaves the id
+  // alone — the property that keeps the index's paths honest.
+  await group.getByRole("button", { name: "Edit settings" }).click();
   await expect(nameField(page)).toHaveValue("Personal Claude");
   await expect(idField(page)).toHaveCount(0);
   await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/ingest");
@@ -117,16 +128,15 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Claude Archive.")).toBeVisible();
 
-  // The name belongs to the group, so renaming the source renames both
-  // rows: the render step's label is the same name said again.
-  await expect(row(page, "personal-claude/render_markdown")).toContainText(
-    "Claude Archive (render markdown)",
-  );
+  // The name belongs to the group, so the group row renames and the
+  // steps under it — labelled by what they do — do not.
+  await expect(groupRow(page, "personal-claude")).toContainText("Claude Archive");
+  await expect(row(page, "personal-claude/render_markdown")).toContainText("Render markdown");
   await expect(editor).toHaveValue(/name = "Claude Archive"/);
   await expect(editor).not.toHaveValue(/Personal Claude/);
 });
 
-test("declining the checkbox writes one step, and the row action adds the other", async ({
+test("declining the checkbox writes one step, and the group's action adds the other", async ({
   page,
 }) => {
   const editor = page.locator(".m2-editor");
@@ -136,13 +146,16 @@ test("declining the checkbox writes one step, and the row action adds the other"
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Fetch Only.")).toBeVisible();
 
+  await expandGroup(page, "fetch-only");
   await expect(row(page, "fetch-only/ingest")).toBeVisible();
   await expect(page.locator('.ag-row[row-id="fetch-only/render_markdown"]')).toHaveCount(0);
   await expect(editor).not.toHaveValue(/fetch-only\/render_markdown/);
 
-  // The row action adds it later, minting the sibling id through the
-  // same path the checkbox would have.
-  await row(page, "fetch-only/ingest").getByRole("button", { name: "Render to markdown" }).click();
+  // The group's row offers the fetch step's action, so the group need
+  // not be opened to add the render step. It mints the sibling id
+  // through the same path the checkbox would have.
+  const group = groupRow(page, "fetch-only");
+  await group.getByRole("button", { name: "Render to markdown" }).click();
   await expect(idField(page)).toHaveCount(0);
   await expect(wizard(page)).toContainText("fetch-only/render_markdown");
   // No name box: the render step's label comes from the group's name.
@@ -152,10 +165,13 @@ test("declining the checkbox writes one step, and the row action adds the other"
   await expect(row(page, "fetch-only/render_markdown")).toBeVisible();
   await expect(editor).toHaveValue(/inputs = \["fetch-only\/ingest"\]/);
 
-  // ...and now the action is spent: there is already a render step.
-  const again = row(page, "fetch-only/ingest").getByRole("button", { name: "Render to markdown" });
-  await expect(again).toBeDisabled();
-  await expect(again).toHaveAttribute("title", /already has a render step/);
+  // ...and now the action is spent, on the group row and the step's
+  // alike: there is already a render step.
+  for (const where of [group, row(page, "fetch-only/ingest")]) {
+    const again = where.getByRole("button", { name: "Render to markdown" });
+    await expect(again).toBeDisabled();
+    await expect(again).toHaveAttribute("title", /already has a render step/);
+  }
 });
 
 test("a provider whose render step has options writes the sibling id, not the stem", async ({
@@ -204,6 +220,7 @@ test("a provider whose render step has options writes the sibling id, not the st
   await expect(wizard(page)).toContainText("signal-work/render_markdown");
   await wizard(page).getByRole("button", { name: "Add render step" }).click();
 
+  await expandGroup(page, "signal-work");
   await expect(row(page, "signal-work/render_markdown")).toBeVisible();
   await expect(stepMark(page, "signal-work/render_markdown")).toHaveAttribute("aria-label", "Render");
 
@@ -220,6 +237,7 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   await pickClaude(page);
   await nameField(page).fill("Doomed");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expandGroup(page, "doomed");
   await expect(row(page, "doomed/render_markdown")).toBeVisible();
 
   // A render step whose input is gone is a config datalib refuses to
@@ -231,8 +249,36 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   await row(page, "doomed/ingest").getByRole("button", { name: "Remove from config" }).click();
   await expect(page.getByText("Removed Doomed.")).toBeVisible();
 
+  // The group went with its last step, so its row is gone too.
   await expect(page.locator('.ag-row[row-id="doomed/ingest"]')).toHaveCount(0);
   await expect(page.locator('.ag-row[row-id="doomed/render_markdown"]')).toHaveCount(0);
+  await expect(groupRow(page, "doomed")).toHaveCount(0);
   // Including the fan-in references, or the config would not load.
   await expect(editor).not.toHaveValue(/doomed/);
+});
+
+test("deleting the group takes every step under it", async ({ page }) => {
+  const editor = page.locator(".m2-editor");
+  await pickClaude(page);
+  await nameField(page).fill("Whole Group");
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(groupRow(page, "whole-group")).toBeVisible();
+  await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "render_markdown"/);
+
+  // The confirm says what goes: the group and the two steps under it.
+  page.once("dialog", (d) => {
+    expect(d.message()).toContain("Whole Group");
+    expect(d.message()).toContain("2 steps");
+    void d.accept();
+  });
+  await groupRow(page, "whole-group")
+    .getByRole("button", { name: "Remove from config, with everything under it" })
+    .click();
+  await expect(page.getByText("Removed Whole Group.")).toBeVisible();
+
+  await expect(groupRow(page, "whole-group")).toHaveCount(0);
+  await expect(page.locator('.ag-row[row-id^="whole-group/"]')).toHaveCount(0);
+  // The `[[groups]]` entry, both `[[steps]]`, and any fan-in reference:
+  // nothing of it is left in the file.
+  await expect(editor).not.toHaveValue(/whole-group/);
 });

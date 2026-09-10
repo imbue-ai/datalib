@@ -1,6 +1,7 @@
 // Gmail and Fastmail: two wizard forms over one step type, and the
 // Connection block that fills their label pickers from the live account.
 import { test, expect, type Page } from "@playwright/test";
+import { expandGroup } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 /// A field's own input. Descendant rather than direct child: a
@@ -222,6 +223,7 @@ test("the render step is offered folders, never flags", async ({ page }) => {
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Bridge mail.")).toBeVisible();
 
+  await expandGroup(page, "bridge-mail");
   await page
     .locator('.ag-row[row-id="bridge-mail/ingest"]')
     .getByRole("button", { name: "Render to markdown" })
@@ -296,6 +298,7 @@ test("an existing step reopens on the form that wrote it", async ({ page }) => {
   // Not "Email (mbox or other server)": the step's own params say which
   // variant it is, and a preset with no field must still count as
   // modeled or Edit would be disabled on the wizard's own output.
+  await expandGroup(page, "personal-mail");
   await page
     .locator('.ag-row[row-id="personal-mail/ingest"]')
     .getByRole("button", { name: "Edit" })

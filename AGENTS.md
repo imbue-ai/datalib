@@ -45,20 +45,24 @@ reference doc it relates to.
   entirely. Read it for why; it was written as the design and kept as
   the explanation.
 - [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md)
-  — *agreed design (2026-09-09); slices 1 and 2 built 2026-09-10, the
-  rest not*: one row per source in the Manage screen, done by making
-  the grouping a config entity. A `[[groups]]` table with
-  `id`/`name`/`type`; a step is `(group, function)` with its id
-  composed and never written; `datalib-step` dispatches on the
+  — *agreed design (2026-09-09); slices 1, 2 and 4a built (2026-09-09
+  and 2026-09-10), the rest not*: one row per source in the Manage
+  screen, done by making the grouping a config entity. A `[[groups]]`
+  table with `id`/`name`/`type`; a step is `(group, function)` with its
+  id composed and never written; `datalib-step` dispatches on the
   function and the group's type from the environment and writes the
   tree its id names, so a built-in step carries no `command`; the
   trees are named after the functions (`ingest`, `render_markdown`,
   `grid_index`, `qmd_index`) — **that much is in the tree** (the
   loader, the runner's environment, the fingerprint rule,
-  `datalib-step`, every config and fixture). Still to come: `type` as
-  the data type with the fetch method as a params table, each declared
-  `Origin` or `Local`, which is what makes a row read "Download" or
-  "Import"; the Manage screen and wizard; the mechanical crate rename.
+  `datalib-step`, every config and fixture), **and so is the row**: the
+  Manage screen is a tree, one row per group with its steps and applets
+  under a chevron, the group row reading status, last-synced and bytes
+  off its own folder and its children (`ui/src/config/groupRows.ts`
+  holds the rules). Still to come: `type` as the data type with the
+  fetch method as a params table, each declared `Origin` or `Local`,
+  which is what makes a row read "Download" or "Import"; the one-dialog
+  wizard; the mechanical crate rename.
   Read it before touching step ids, the wizard, or `datalib-step`'s
   dispatch. It reverses the "ungrouping" section of `step_identity.md`.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
