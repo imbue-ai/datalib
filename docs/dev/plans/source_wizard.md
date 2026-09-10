@@ -1124,7 +1124,10 @@ keys `content_vectors` by content hash, so a move costs no re-embedding.
 
 ### One row per step, and no "data source" at all
 
-*(Built, 2026-08-31.)*
+*(Built, 2026-08-31; reversed 2026-09-10 by
+[`groups_and_functions.md`](groups_and_functions.md), which makes the
+grouping a config entity and folds a group's steps under one row.
+Kept as the record of why the fused row was removed first.)*
 
 A source used to be a row: a `<name>/raw` + `<name>/rendered_md` pair
 fused into one entry, edited by one form, run as one unit. It was never

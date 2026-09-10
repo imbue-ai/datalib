@@ -1,12 +1,12 @@
 # Groups and functions: one row per source
 
-**Status: agreed design (2026-09-09); slice 1 built (2026-09-09),
-slices 2–5 not.** Written against `eee381c3`. Per
-[`AGENTS.md`](../../../AGENTS.md), don't cite this file as a
-description of the tree. Where it says "today", that was checked
+**Status: agreed design (2026-09-09); slices 1 and 4a built
+(2026-09-09, 2026-09-10), slices 2, 3, 4b and 5 not.** Written against
+`eee381c3`. Per [`AGENTS.md`](../../../AGENTS.md), don't cite this file
+as a description of the tree. Where it says "today", that was checked
 against that commit; where it says "will", check the slice list under
-"Order of work" — slice 1's items are in the tree, and the three
-places it departed from this text are recorded there.
+"Order of work" — slice 1's and 4a's items are in the tree, and the
+places each departed from this text are recorded there.
 
 **Reverses** the "Sources stop being a grouping" section of
 [`step_identity.md`](completed/step_identity.md) and the header of
@@ -469,12 +469,32 @@ Each slice is a PR; each leaves the tree green.
    tables, `common.input_path` becomes per-method `path`.
 4. **Manage screen and wizard**, in two halves, because the second
    rewrites the files slice 2 renames through:
-   - **4a. The tree grid** — one row per group, the aggregation table
-     above, the group directory in the usage walker's wanted set, the
-     segmented progress bar. Reads phase through one helper and writes
-     no config. Depends on slice 1 only and runs in parallel with 2;
-     the only file both touch is `Manager2View.vue`, where 2 changes a
-     handful of literals.
+   - **4a. The tree grid** — *built (2026-09-10)*: one row per group,
+     the aggregation table above, the group directory in the usage
+     walker's wanted set, the segmented progress bar. Reads phase
+     through one helper and writes no config. Depends on slice 1 only
+     and runs in parallel with 2; the only file both touch is
+     `Manager2View.vue`, where 2 changes a handful of literals. Three
+     things to know that the text above does not say:
+     - The tree is AG Grid's tree data (`TreeDataModule`, the one
+       enterprise module the Manage screen registers); a group row's
+       grid key is `group:<id>`, because the `unified_index` applet
+       shares its group's id and both are rows. Which groups are open
+       is remembered in the browser's `localStorage`, so the remount a
+       finished sync does puts the table back the way it was.
+     - A step under a group is labelled by its phase — "Fetch",
+       "Render markdown", "Grid index" — with the composed id muted
+       beside it; a step's own `name =` is not shown there, which is
+       what the loader's note on that key says. The "Download" /
+       "Import" word waits for slice 3's `Origin` / `Local`
+       declaration. A step outside any group keeps its own name.
+     - A group's Edit and "Render to markdown" open its *fetch step's*
+       form, since that is where the name and the download settings
+       live until 4b's one-dialog wizard; a group with no fetch step
+       has no form. The aggregation rules live in
+       `ui/src/config/groupRows.ts`, tested without a grid; a failed
+       applet counts as a failed child, since the group row is the
+       only place its health shows while the group is folded.
    - **4b. The one-dialog wizard** — group + both steps from one form,
      render fields under a "Rendering" heading, one name box; delete
      `stemOf`, `phaseOf`, `renderIdFor`, `PHASE_BY_LEAF` and the
@@ -493,7 +513,7 @@ Each slice is a PR; each leaves the tree green.
    review noise, not build time.
 
 Slices 2 and 3 are backend with a mechanical UI edge; 4a is the row the
-UI review asked for and depends on 1 only, so it starts now beside 2;
+UI review asked for and depends on 1 only, so it was built beside 2;
 4b waits for 2. Slice 3 is independent of 4a and 4b.
 
 ## Deferred

@@ -1,6 +1,7 @@
 // A field whose backend type is a closed enum is a dropdown, not a text
 // box — `kind: "select"` in `ui/src/config/catalog.ts`.
 import { test, expect, type Page } from "@playwright/test";
+import { expandGroup } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 // Structural, matching manager2-name.spec.ts: each field's <label>
@@ -46,6 +47,9 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Phone Signal.")).toBeVisible();
 
+  // The steps sit under the group's row; open it to reach the fetch
+  // step's own action.
+  await expandGroup(page, "phone-signal");
   await page
     .locator('.ag-row[row-id="phone-signal/raw"]')
     .getByRole("button", { name: "Render to markdown" })
