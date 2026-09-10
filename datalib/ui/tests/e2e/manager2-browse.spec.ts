@@ -61,6 +61,17 @@ group = "media"
 function = "ingest"
 `;
 
+/// The painted values of one column, retried until the grid has them.
+///
+/// `allInnerTexts()` is a single sample. Waiting for the first row only
+/// says the grid has started painting — AG Grid fills cells a frame or
+/// more later, so a read right after it can come back empty and the
+/// assertion fails on a grid that is about to be right. Poll the
+/// derived answer instead of the raw cells.
+function columnValues(page: Page, colId: string) {
+  return page.locator(`.ag-grid-scrolling-rows [col-id="${colId}"]`).allInnerTexts();
+}
+
 async function openManage(page: Page) {
   await page.goto("/sources2");
   await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
@@ -114,11 +125,13 @@ test("a source's row opens that source, with its type's columns", async ({ page 
   // Every row came from this source. The Source column is hidden here —
   // one value, so the adaptive rule drops it — which is why this reads
   // the Type column instead.
-  const kinds = await page
-    .locator('.ag-grid-scrolling-rows [col-id="kind"]')
-    .allInnerTexts();
-  expect(kinds.length).toBeGreaterThan(0);
-  for (const k of kinds) {
+  await expect
+    .poll(async () => {
+      const kinds = await columnValues(page, "kind");
+      return kinds.length > 0 && kinds.every((k) => k.trim().length > 0);
+    })
+    .toBe(true);
+  for (const k of await columnValues(page, "kind")) {
     expect(k.trim()).toMatch(/Slack|Source Size|Table/);
   }
 
@@ -151,11 +164,12 @@ test("the index group browses every source", async ({ page }) => {
   // No filter, and the column that separates sources is the one that
   // earns its place here — the opposite of a per-source browse.
   await expect(page.locator(SEARCH)).toHaveValue("");
-  const sources = await page
-    .locator('.ag-grid-scrolling-rows [col-id="source_name"]')
-    .allInnerTexts();
-  const distinct = new Set(sources.map((s) => s.trim()).filter(Boolean));
-  expect(distinct.size).toBeGreaterThan(1);
+  await expect
+    .poll(async () => {
+      const sources = await columnValues(page, "source_name");
+      return new Set(sources.map((s) => s.trim()).filter(Boolean)).size;
+    })
+    .toBeGreaterThan(1);
 });
 
 /// A source that renders nothing has no rows at all — not even the
