@@ -27,7 +27,7 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
   // row appears immediately (derived from the text), but stays
   // unsyncable — checkbox disabled — until the config is saved.
   await page.getByRole("button", { name: "Perseus (sample)" }).click();
-  await expect(editor).toHaveValue(/command = "datalib-step download perseus"/);
+  await expect(editor).toHaveValue(/group = "perseus"\nfunction = "ingest"/);
   const row = page.locator(".sources-table tbody tr", { hasText: "perseus" }).first();
   await expect(row).toContainText("perseus");
   await expect(page.getByText("unsaved changes")).toBeVisible();
@@ -81,8 +81,8 @@ test("Locate config selects the source's stanza in the editor", async ({ page })
     const t = el as HTMLTextAreaElement;
     return t.value.slice(t.selectionStart, t.selectionEnd);
   });
-  expect(selected).toContain('group = "perseus"\nfunction = "raw"');
-  expect(selected).not.toContain('function = "rendered_md"');
+  expect(selected).toContain('group = "perseus"\nfunction = "ingest"');
+  expect(selected).not.toContain('function = "render_markdown"');
   expect(selected).not.toContain("[[groups]]");
   expect(selected).not.toContain("chatgpt");
 
@@ -120,8 +120,8 @@ test("invalid config is rejected by Save and not persisted", async ({ page }) =>
   // Parses as TOML but fails the config loader: two steps claiming the
   // same tree is an ownership conflict the loader rejects.
   await editor.fill(
-    '[[steps]]\nid = "x/raw"\ncommand = "c"\n\n' +
-      '[[steps]]\nid = "x/raw"\ncommand = "d"\n',
+    '[[steps]]\nid = "x/ingest"\ncommand = "c"\n\n' +
+      '[[steps]]\nid = "x/ingest"\ncommand = "d"\n',
   );
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText(/✗ Not saved:/)).toBeVisible();

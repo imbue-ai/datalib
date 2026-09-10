@@ -2,7 +2,7 @@
 //
 // The spelling is on disk in three places — the column itself, the
 // `provider:` key in every rendered document's frontmatter, and the
-// `rendered_md/<provider>/…` path segment — so `as_str` is a storage
+// `render_markdown/<provider>/…` path segment — so `as_str` is a storage
 // contract, not a label. Changing one would need a re-render and a
 // re-index.
 

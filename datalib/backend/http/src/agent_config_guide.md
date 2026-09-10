@@ -29,9 +29,11 @@ The sync pipeline is driven by `<root>/config.toml`, which holds three
 kinds of entry. `[[groups]]` is what a person sees as one thing: an
 `id` (one directory name), a `name`, and for a source a `type`.
 `[[steps]]` is the pipeline: each step names its `group` and the
-`function` it performs there, a shell `command`, and the `inputs` it
-reads; its id is composed as `<group>/<function>` — the one tree it
-writes — and is never written. `[[applets]]` is the app surface —
+`function` it performs there and the `inputs` it reads; its id is
+composed as `<group>/<function>` — the one tree it writes — and is
+never written. A step with no `command` is a built-in one (the
+functions `ingest`, `render_markdown`, `grid_index` and `qmd_index`,
+run by `datalib-step`); a custom step names a shell `command`. `[[applets]]` is the app surface —
 long-lived servers that contribute card components and the endpoints
 behind them, filed under a group but declaring no inputs because they
 read what steps wrote. This guide is about groups and steps; for
@@ -42,10 +44,11 @@ source's rendered markdown feeds the two fan-in steps under the
 `unified_index` group:
 
 ```toml
-# One source = a group with a `type`, plus a download step and a
-# render step under it. The download step has no inputs (that makes it
-# a source step). `params` carries per-provider config; credentials
-# never live here (latchkey provides them at runtime).
+# One source = a group with a `type`, plus an ingest step and a
+# render step under it, neither with a `command`. The ingest step has
+# no inputs (that makes it a source step). `params` carries
+# per-provider config; credentials never live here (latchkey provides
+# them at runtime).
 [[groups]]
 id = "slack"
 name = "Work Slack"
@@ -53,8 +56,7 @@ type = "slack_api"
 
 [[steps]]
 group = "slack"
-function = "raw"
-command = "datalib-step download slack_api"
+function = "ingest"
 # A sub-table ends the table it sits in, so `params` goes after this
 # step's plain keys — and the next entry starts with its own [[…]].
 [steps.params]
@@ -62,9 +64,8 @@ sync = {}
 
 [[steps]]
 group = "slack"
-function = "rendered_md"
-command = "datalib-step render slack_api"
-inputs = ["slack/raw"]
+function = "render_markdown"
+inputs = ["slack/ingest"]
 
 # The shared fan-in steps every source's rendered markdown feeds. Add a
 # source's render step id to both `inputs` lists.
@@ -73,15 +74,13 @@ id = "unified_index"
 
 [[steps]]
 group = "unified_index"
-function = "grid"
-command = "datalib-step grid_index"
-inputs = ["slack/rendered_md"]
+function = "grid_index"
+inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd"
-command = "datalib-step qmd_index"
-inputs = ["slack/rendered_md"]
+function = "qmd_index"
+inputs = ["slack/render_markdown"]
 ```
 
 Any top-level keys (`data_root`, `binary_dir`) must be written *above*
@@ -139,17 +138,17 @@ app can serve anything at all: false when the file is not a config, or
 when it declares no `unified_index` applet. The UI blocks on it.
 
 The config is always TOML in the shape above — the server reads and
-writes no other. A `config.toml` written before `[[groups]]` existed
-(steps carrying `id = "slack/raw"` and no `group`) still loads, as
-custom steps, but `datalib-step` will stop accepting that shape; tell
-the user to rewrite it once with `datalib-migrate-config <data_root>
---force`. There is no API for it, and you should not try to translate
-the file yourself.
+writes no other. A `config.toml` written before `datalib-step` read its
+function from the environment (steps with a `datalib-step download …`
+or `datalib-step render …` command, grouped or not) is refused, and the
+diagnostic says so; tell the user to rewrite it once with
+`datalib-migrate-config <data_root> --force`. There is no API for it,
+and you should not try to translate the file yourself.
 
 ## Adding your own step commands
 
-A step's `command` is an ordinary command line — it is not limited to
-the built-in `datalib-step` subcommands. If the user's request needs a
+A step may name a `command`: an ordinary command line, for a step that
+is not one of the built-in functions. If the user's request needs a
 new program (a custom fetcher, a converter, …), write it and install
 it into **`~/.datalib/bin`** — either the binary itself or a symlink
 to wherever it lives:
@@ -168,7 +167,7 @@ with their output captured into the job log.
 Steps run with the data root as their working directory and write the
 one tree their id names, which is what downstream steps' `inputs` name
 — a new source should ultimately produce rendered markdown under
-`<group>/rendered_md`, and that id added to the index steps' `inputs`,
+`<group>/render_markdown`, and that id added to the index steps' `inputs`,
 so the shared index steps pick it up.
 
 ## Checking your work

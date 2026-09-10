@@ -226,7 +226,7 @@ hint, surfaced by these queries:
 
 The per-root metadata table (`scan_meta`) keys by the source name —
 the `<name>` prefix of the step's declared outputs in `config.toml`
-(`fsindex-home/raw` → `fsindex-home`) — *not* by the absolute path
+(`fsindex-home/ingest` → `fsindex-home`) — *not* by the absolute path
 of the scan root. That name is the same per-source stable
 identifier used everywhere else in the framework (`.doltlite_db`
 filenames, log lines, render cursor paths), it survives moves of
@@ -258,8 +258,7 @@ type = "fsindex"
 
 [[steps]]
 group = "laptop_home"
-function = "raw"
-command = "datalib-step download fsindex"
+function = "ingest"
 [steps.params.common]
 input_path = "/Users/thad"
 
@@ -269,14 +268,13 @@ type = "fsindex"
 
 [[steps]]
 group = "nas_backup"
-function = "raw"
-command = "datalib-step download fsindex"
+function = "ingest"
 [steps.params.common]
 input_path = "/Volumes/nas/thad"
 ```
 
 Today each of those two steps gets its own raw store under
-`<group>/raw/` instead, which is the supported way to scan two roots.
+`<group>/ingest/` instead, which is the supported way to scan two roots.
 
 The §"Single writer per doltlite file" rule still applies — the
 runner serializes per-source, so two roots sharing a file would scan

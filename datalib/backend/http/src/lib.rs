@@ -939,7 +939,8 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
 #[derive(Debug, Serialize)]
 pub struct DagStepInfo {
     pub id: String,
-    /// The step's `command:` as written in the config.
+    /// The command that runs: the step's `command` as written, or
+    /// `datalib-step` for a built-in step that wrote none.
     pub command: String,
     /// Declared input artifact patterns (may contain wildcards).
     pub inputs: Vec<String>,
@@ -1051,7 +1052,13 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         let commands: std::collections::HashMap<String, String> = cfg
             .steps
             .iter()
-            .map(|e| (e.id.clone(), e.command.clone()))
+            .map(|e| {
+                let command = e
+                    .command
+                    .clone()
+                    .unwrap_or_else(|| config::BUILTIN_STEP_PROGRAM.to_string());
+                (e.id.clone(), command)
+            })
             .collect();
         let specs = config::to_specs(&cfg)?;
         let graph = datalib_dag::Graph::build(specs)?;
@@ -1132,7 +1139,8 @@ fn scaffold_toml() -> String {
 # A group is one thing on the Manage screen; its steps are what run.
 # Every source's rendered markdown feeds these two: a step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
-# steps it reads by that id.
+# steps it reads by that id. A step with no `command` is one of
+# datalib's own.
 
 [[groups]]
 id = \"unified_index\"
@@ -1140,14 +1148,12 @@ name = \"Unified Index\"
 
 [[steps]]
 group = \"unified_index\"
-function = \"grid\"
-command = \"datalib-step grid_index\"
+function = \"grid_index\"
 inputs = []
 
 [[steps]]
 group = \"unified_index\"
-function = \"qmd\"
-command = \"datalib-step qmd_index\"
+function = \"qmd_index\"
 inputs = []
 
 # The applet that serves the grid: the app has no search, no document
@@ -1420,7 +1426,7 @@ mod tests {
         // nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),
-            ["unified_index/grid", "unified_index/qmd"]
+            ["unified_index/grid_index", "unified_index/qmd_index"]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on.
@@ -1438,7 +1444,10 @@ mod tests {
     #[test]
     fn a_scaffolded_root_reports_no_sources() {
         let fringe = fringe_of(&scaffold_toml());
-        assert_eq!(fringe, ["unified_index/grid", "unified_index/qmd"]);
+        assert_eq!(
+            fringe,
+            ["unified_index/grid_index", "unified_index/qmd_index"]
+        );
         assert_eq!(configured_source_count(&fringe), 0);
     }
 

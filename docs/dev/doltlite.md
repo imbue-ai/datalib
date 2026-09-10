@@ -8,7 +8,7 @@
 
 
 Our raw ETL captures (under `<data_root>/<name>/raw/`) and the per-mirror
-backend index (`<data_root>/unified_index/grid/db.doltlite_db`) are
+backend index (`<data_root>/unified_index/grid_index/db.doltlite_db`) are
 [doltlite](https://github.com/dolthub/doltlite) databases: SQLite with
 content-addressed prolly-tree storage and a `git`-shaped commit history
 exposed through SQL. The bazel build statically links doltlite into our
@@ -45,7 +45,7 @@ a fact about the on-disk format, not about lock-in — the shell above
 dumps any store to ordinary SQL, which stock SQLite loads:
 
 ```sh
-datalib-doltlite -readonly unified_index/grid/db.doltlite_db .dump \
+datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db .dump \
   | sqlite3 grid.sqlite
 ```
 
@@ -102,7 +102,7 @@ Two variants worth knowing:
 ### `git log` for the current branch
 
 ```sh
-doltlite -readonly slack/raw/entities.doltlite_db \
+doltlite -readonly slack/ingest/entities.doltlite_db \
   "SELECT commit_hash, committer, date, message
      FROM dolt_log()
     ORDER BY date DESC
@@ -118,14 +118,14 @@ ctrl-c'd run. `dolt_log()` walks back from `HEAD` on the active branch
 ### Which branch is checked out / what branches exist
 
 ```sh
-doltlite -readonly slack/raw/entities.doltlite_db "SELECT active_branch();"
-doltlite -readonly slack/raw/entities.doltlite_db "SELECT * FROM dolt_branches;"
+doltlite -readonly slack/ingest/entities.doltlite_db "SELECT active_branch();"
+doltlite -readonly slack/ingest/entities.doltlite_db "SELECT * FROM dolt_branches;"
 ```
 
 ### Uncommitted changes (`git status`)
 
 ```sh
-doltlite -readonly slack/raw/entities.doltlite_db "SELECT * FROM dolt_status;"
+doltlite -readonly slack/ingest/entities.doltlite_db "SELECT * FROM dolt_status;"
 ```
 
 Columns are `(table_name, staged, status)`. A non-empty result used to
@@ -144,7 +144,7 @@ sync.
 **Per-table summary** — which tables differ, and is it a data or schema change:
 
 ```sh
-doltlite -readonly slack/raw/entities.doltlite_db \
+doltlite -readonly slack/ingest/entities.doltlite_db \
   "SELECT from_table_name, to_table_name, diff_type, data_change, schema_change
      FROM dolt_diff_summary
     WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD';"
@@ -158,7 +158,7 @@ table-valued function (the `dolt_diff_stat` vtab form errors out — use
 this 3-arg call):
 
 ```sh
-doltlite -readonly slack/raw/entities.doltlite_db \
+doltlite -readonly slack/ingest/entities.doltlite_db \
   "SELECT * FROM dolt_diff_stat('HEAD^1', 'HEAD', 'messages');"
 ```
 
@@ -171,7 +171,7 @@ old_cell_count, new_cell_count)`.
 `added` / `removed` / `modified`:
 
 ```sh
-doltlite -readonly slack/raw/entities.doltlite_db \
+doltlite -readonly slack/ingest/entities.doltlite_db \
   "SELECT to_id, to_ts, diff_type
      FROM dolt_diff_messages
     WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
@@ -192,7 +192,7 @@ for the preconditions (chiefly: the downloader has to re-enumerate, or
 this diff is empty no matter what happened upstream).
 
 ```sh
-doltlite -readonly claude/raw/entities.doltlite_db \
+doltlite -readonly claude/ingest/entities.doltlite_db \
   "SELECT from_id, diff_type
      FROM dolt_diff_conversations
     WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
@@ -204,7 +204,7 @@ still existed — the table name goes *in* the vtab name and the ref is
 the argument, which is the opposite order from `dolt_diff_<table>`:
 
 ```sh
-doltlite -readonly claude/raw/entities.doltlite_db \
+doltlite -readonly claude/ingest/entities.doltlite_db \
   "SELECT * FROM dolt_at_conversations('HEAD^1') WHERE id = '<the id>';"
 ```
 
@@ -218,7 +218,7 @@ a hash from `dolt_log`) for a wider window.
 ### History of a single table
 
 ```sh
-doltlite -readonly slack/raw/entities.doltlite_db \
+doltlite -readonly slack/ingest/entities.doltlite_db \
   "SELECT commit_hash, commit_date, id, ts
      FROM dolt_history_messages
     ORDER BY commit_date DESC
@@ -231,7 +231,7 @@ specific row first appeared or last changed.
 ### `git blame` for a single row
 
 ```sh
-doltlite -readonly slack/raw/entities.doltlite_db \
+doltlite -readonly slack/ingest/entities.doltlite_db \
   "SELECT commit, committer, commit_date, message
      FROM dolt_blame_messages
     WHERE id = '<uuid>';"
@@ -246,7 +246,7 @@ created for each.)
 behavior. Handy for one-off queries on the terminal:
 
 ```sh
-doltlite -readonly -box slack/raw/entities.doltlite_db "SELECT * FROM dolt_log() LIMIT 5;"
+doltlite -readonly -box slack/ingest/entities.doltlite_db "SELECT * FROM dolt_log() LIMIT 5;"
 ```
 
 ## Inventory: what `dolt_*` symbols exist
@@ -285,7 +285,7 @@ The common-use subset:
 doltlite's open path walks the prolly chunk store's root pages and
 blake3-hashes each one before any query can run. On a multi-GB raw
 store that's a *lot* of tight inner-loop C code. We learned this the
-hard way: a 3.5GB `slack/raw/entities.doltlite_db` took **~60 seconds** to open
+hard way: a 3.5GB `slack/ingest/entities.doltlite_db` took **~60 seconds** to open
 from Rust (sqlx blew its 30s `acquire_timeout`, the render phase
 died, the UI grid silently went empty), while the upstream CLI on the
 same file opened it in 2.4 seconds.

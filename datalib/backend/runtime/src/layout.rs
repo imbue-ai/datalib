@@ -12,14 +12,16 @@ pub const SYSTEM_DIR: &str = "system";
 /// the `unified_index` applet and the two steps that write it; nothing
 /// in `datalib-http` or `datalib-dag` reads what is under here.
 pub const UNIFIED_INDEX_DIR: &str = "unified_index";
-/// Directory owned by the grid-index (grid_rows + markdowns + edges)
-/// processor, relative to [`UNIFIED_INDEX_DIR`].
-pub const GRID_DIR: &str = "grid";
+/// The `grid_index` step's tree (grid_rows + markdowns + edges), relative
+/// to [`UNIFIED_INDEX_DIR`]. Named after the step's function, like every
+/// tree a step writes.
+pub const GRID_DIR: &str = "grid_index";
 /// The doltlite database file inside [`GRID_DIR`].
 pub const GRID_DB: &str = "db.doltlite_db";
-/// Directory owned by the qmd search-index processor, relative to
-/// [`UNIFIED_INDEX_DIR`].
-pub const QMD_DIR: &str = "qmd";
+/// The `qmd_index` step's tree, relative to [`UNIFIED_INDEX_DIR`]. qmd
+/// itself lays out `qmd/index.sqlite` under it — see
+/// `crate::qmd::qmd_cache_home`.
+pub const QMD_DIR: &str = "qmd_index";
 
 /// Directory of server-served attachment bytes, relative to `system/`.
 pub const MEDIA_DIR: &str = "media";
@@ -64,7 +66,7 @@ pub fn grid_index_dir(data_root: &Path) -> PathBuf {
     unified_index_dir(data_root).join(GRID_DIR)
 }
 
-/// `data_root/unified_index/grid/db.doltlite_db` — the
+/// `data_root/unified_index/grid_index/db.doltlite_db` — the
 /// grid_rows/markdowns/edges index. Resolved from `data_root` alone by
 /// both the step that writes it and the applet that reads it, so this
 /// helper is the contract between them.
@@ -99,12 +101,12 @@ pub fn lock_file(data_root: &Path) -> PathBuf {
 /// Body of the `CACHEDIR.TAG` files we drop into derived directories. The
 /// first line is the spec-mandated magic that `restic`/`borg`/`tar
 /// --exclude-caches` (and others) recognize; see <https://bford.info/cachedir/>.
-/// The rest is a human hint. Only the per-stanza `raw/` stores are precious —
-/// everything tagged here is 100% derived and rebuilt from raw by
-/// re-running the pipeline (`datalib-dag`).
+/// The rest is a human hint. Only the per-group `ingest/` stores are
+/// precious — everything tagged here is 100% derived and rebuilt from them
+/// by re-running the pipeline (`datalib-dag`).
 pub const CACHEDIR_TAG_BODY: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
     # This directory holds derived, rebuildable data (not a backup source).\n\
-    # datalib regenerates it from the sibling/per-stanza raw/ stores by\n\
+    # datalib regenerates it from the sibling/per-group ingest/ stores by\n\
     # re-running the pipeline (datalib-dag). Safe for backups to skip.\n\
     # See https://bford.info/cachedir/\n";
 
@@ -136,7 +138,7 @@ mod tests {
     #[test]
     fn mark_derived_cache_writes_tag_once_and_skips_missing() {
         let td = tempfile::tempdir().unwrap();
-        let derived = td.path().join("rendered_md");
+        let derived = td.path().join("render_markdown");
 
         // Missing dir: no-op, no panic, nothing created.
         mark_derived_cache(&derived);

@@ -2,11 +2,11 @@
 
 The chatgpt translate step is an in-process library (called from
 `datalib-sync`, no standalone bin) that reads the doltlite db at
-`<out>/raw/<name>/entities.doltlite_db` (written by `chatgpt-download`) and
+`<out>/ingest/<name>/entities.doltlite_db` (written by `chatgpt-download`) and
 emits, per ChatGPT conversation, a `.md` at
-`<out>/rendered_md/chatgpt/<account>/llm_chats/<conv>__<slug>.md` plus
+`<out>/render_markdown/chatgpt/<account>/llm_chats/<conv>__<slug>.md` plus
 that document's rows in the source's render store
-(`<out>/rendered_md/indexed_markdown.doltlite_db`).
+(`<out>/render_markdown/indexed_markdown.doltlite_db`).
 
 The Load step is provider-agnostic and lives in
 `datalib_etl_render::grid_index`.

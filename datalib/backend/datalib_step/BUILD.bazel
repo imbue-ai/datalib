@@ -1,9 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
-# `datalib-step` — the step-type host binary for the DAG runner
-# (//datalib/backend/dag:datalib_dag_bin). One subcommand per step
-# type: download / render / grid_index / qmd_index, each honoring the DAG step
-# contract (NDJSON events on stdout, final outcome line).
+# `datalib-step` — the built-in step program for the DAG runner
+# (//datalib/backend/dag:datalib_dag_bin). Reads its function (ingest /
+# render_markdown / grid_index / qmd_index) and its group's type from the
+# environment the runner sets, and honors the DAG step contract (NDJSON
+# events on stdout, final outcome line).
 #
 # Bazel-only: it links the provider crates, which have no cargo
 # counterpart.

@@ -91,7 +91,9 @@ pub fn thread_filename(discussion_id: &str) -> String {
 }
 
 pub fn pages_subdir(stanza: &str) -> PathBuf {
-    PathBuf::from(stanza).join("rendered_md").join("pages")
+    PathBuf::from(stanza)
+        .join(datalib_etl::layout::RENDER_MARKDOWN_DIR)
+        .join("pages")
 }
 
 pub fn page_qmd_path_rel(stanza: &str, page_id: &str) -> String {
@@ -341,7 +343,7 @@ pub fn render_notion(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
-    let pages_root = datalib_etl::layout::rendered_md_root(root, stanza).join("pages");
+    let pages_root = datalib_etl::layout::render_markdown_root(root, stanza).join("pages");
     fs::create_dir_all(&pages_root)?;
     if parsed.pages.is_empty() && parsed.comments.is_empty() {
         return Ok(summary);

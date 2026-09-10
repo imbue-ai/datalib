@@ -231,22 +231,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
     @property
     def _index_db(self) -> Path:
         """The grid index the `grid_index` fan-in step writes."""
-        return self.workspace / "unified_index" / "grid" / "db.doltlite_db"
+        return self.workspace / "unified_index" / "grid_index" / "db.doltlite_db"
 
     @property
     def _signal_entities_db(self) -> Path:
         """Signal's raw entity store, which holds `ingested_backups`."""
-        return self.workspace / "signal" / "raw" / "entities.doltlite_db"
+        return self.workspace / "signal" / "ingest" / "entities.doltlite_db"
 
     @property
     def _claude_entities_db(self) -> Path:
         """Claude's raw entity store, where run 5 stages a deletion."""
-        return self.workspace / "claude-api" / "raw" / "entities.doltlite_db"
+        return self.workspace / "claude-api" / "ingest" / "entities.doltlite_db"
 
     @property
     def _github_entities_db(self) -> Path:
         """GitHub's raw entity store, where run 6 stages a deletion."""
-        return self.workspace / "github" / "raw" / "entities.doltlite_db"
+        return self.workspace / "github" / "ingest" / "entities.doltlite_db"
 
     def _query(self, db: Path, sql: str) -> list[str]:
         """Run one SQL statement, returning stripped non-empty lines."""
@@ -370,7 +370,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         just vanish from free-text search, because every hit in them
         resolves to zero grid rows and is dropped. `pdf` shipped that
         way — it wrote the out-dir-relative `docs/<blake3>.md` while
-        every other provider wrote `<stanza>/rendered_md/...`.
+        every other provider wrote `<stanza>/render_markdown/...`.
 
         Rows with no markdown row to join against are left to the
         NULL-`qmd_path` check above; this one is about disagreement.
@@ -524,7 +524,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Per-source render stores, as `source -> grid_rows count`.
 
         Each source's render step writes
-        `<source>/rendered_md/indexed_markdown.doltlite_db` holding the
+        `<source>/render_markdown/indexed_markdown.doltlite_db` holding the
         same rows that stack into the unified index — same derived DDL,
         same writer (`grid_index::apply_one`). Asserted from the outside
         with the doltlite CLI, so a store that exists but is empty, or
@@ -533,7 +533,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """
         out: dict[str, int] = {}
         for store in sorted(
-            self.workspace.glob("*/rendered_md/indexed_markdown.doltlite_db")
+            self.workspace.glob("*/render_markdown/indexed_markdown.doltlite_db")
         ):
             source = store.parent.parent.name
             out[source] = self._count(store, "grid_rows")
@@ -547,7 +547,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """
         out: dict[str, list[str]] = {}
         for store in sorted(
-            self.workspace.glob("*/rendered_md/indexed_markdown.doltlite_db")
+            self.workspace.glob("*/render_markdown/indexed_markdown.doltlite_db")
         ):
             rows = self._query(
                 store,
@@ -574,7 +574,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """`source_name -> HEAD` of each source's render store."""
         out: dict[str, str] = {}
         for store in sorted(
-            self.workspace.glob("*/rendered_md/indexed_markdown.doltlite_db")
+            self.workspace.glob("*/render_markdown/indexed_markdown.doltlite_db")
         ):
             out[store.parent.parent.name] = self._scalar(
                 store,
@@ -635,24 +635,36 @@ class IngestedTngPipelineTest(unittest.TestCase):
         result.check_returncode()
         return result
 
-    def _run_step(self, step_id: str, *argv: str) -> subprocess.CompletedProcess:
+    def _run_step(
+        self,
+        group: str,
+        function: str,
+        group_type: str | None = None,
+        inputs: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess:
         """Run one `datalib-step` invocation the way the runner would.
 
-        Steps take their identity from `$DATALIB_DAG_STEP` and their data
-        root from `$DATALIB_DAG_DATA_ROOT`, so a single step is drivable
-        without the runner. Used to re-render and re-index one source
-        without the download step in front of it — `datalib-dag --sync`
-        cannot express that, since it only accepts source steps (those with
-        no inputs) and pulls in everything downstream of them.
+        A step takes everything from the environment: its function, its
+        group and the group's type, the composed id (the tree it writes)
+        and the trees it reads. So a single step is drivable without the
+        runner. Used to re-render and re-index one source without the
+        ingest step in front of it — `datalib-dag --sync` cannot express
+        that, since it only accepts source steps (those with no inputs)
+        and pulls in everything downstream of them.
         """
         env = {
             **os.environ,
             "DATALIB_DAG_DATA_ROOT": str(self.workspace),
-            "DATALIB_DAG_STEP": step_id,
+            "DATALIB_DAG_STEP": f"{group}/{function}",
+            "DATALIB_DAG_GROUP": group,
+            "DATALIB_DAG_FUNCTION": function,
+            "DATALIB_DAG_INPUTS": "\n".join(inputs),
             "DATALIB_DAG_NOW": self.now,
         }
+        if group_type is not None:
+            env["DATALIB_DAG_GROUP_TYPE"] = group_type
         result = subprocess.run(
-            [str(Path(self.cwd) / self.step_bin), *argv],
+            [str(Path(self.cwd) / self.step_bin)],
             check=False,
             cwd=str(self.cwd),
             env=env,
@@ -745,7 +757,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
         # ── the per-source render stores ────────────────────────
         # Each source's render step writes its rows into
-        # `<source>/rendered_md/indexed_markdown.doltlite_db` — the same
+        # `<source>/render_markdown/indexed_markdown.doltlite_db` — the same
         # rows, same derived DDL and same writer as the unified index,
         # so "what stacks into the index" needs no second projection to
         # keep in step.
@@ -1090,8 +1102,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # playback tape and put the conversation straight back — correct
         # behavior for the download step, and it would make this assert
         # nothing.
-        self._run_step("claude-api/rendered_md", "render", "claude_api")
-        self._run_step("unified_index/grid", "grid_index")
+        self._run_step(
+            "claude-api", "render_markdown", "claude_api", inputs=("claude-api/ingest",)
+        )
+        self._run_step("unified_index", "grid_index")
 
         self.assertEqual(
             self._query(
@@ -1169,8 +1183,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             f"DELETE FROM pull_requests_bookkeeping WHERE id = '{victim_pr}'; "
             "SELECT dolt_commit('-Am', 'test: upstream dropped a pull request');",
         )
-        self._run_step("github/rendered_md", "render", "github_api")
-        self._run_step("unified_index/grid", "grid_index")
+        self._run_step(
+            "github", "render_markdown", "github_api", inputs=("github/ingest",)
+        )
+        self._run_step("unified_index", "grid_index")
 
         github_docs_after = set(
             self._query(

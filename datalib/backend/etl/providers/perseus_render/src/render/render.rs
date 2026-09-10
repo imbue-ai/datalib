@@ -1,5 +1,5 @@
 //! Render one `index.md` per book plus one `.md` per (chapter,
-//! edition) under `<out_dir>/<stanza>/rendered_md/thucydides/histories/`,
+//! edition) under `<out_dir>/<stanza>/render_markdown/thucydides/histories/`,
 //! each emitting into the render store all rows for
 //! that doc.
 
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
-use datalib_etl::layout::rendered_md_root;
+use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::edges::EdgeRow;
@@ -137,7 +137,7 @@ fn render_book(
 ) -> Result<()> {
     let m_uuid = book_uuid(&book.n);
     let fingerprint = compute_book_fingerprint(book);
-    let book_dir = rendered_md_root(out_dir, source_name).join(book_content_rel(&book.n));
+    let book_dir = render_markdown_root(out_dir, source_name).join(book_content_rel(&book.n));
     fs::create_dir_all(&book_dir).with_context(|| format!("mkdir -p {}", book_dir.display()))?;
     let md_path = book_dir.join("index.md");
 
@@ -269,10 +269,10 @@ fn render_chapter(
     Ok(())
 }
 
-/// Book directory path under `rendered_md/`, relative to the stanza's
-/// `rendered_md` root: `thucydides/histories/book_{NN}`. Content-only —
-/// the `<stanza>/rendered_md/` prefix is added by the callers (absolute
-/// via `layout::rendered_md_root`, rel-string via `book_dir_rel`).
+/// Book directory path under `render_markdown/`, relative to the stanza's
+/// `render_markdown` root: `thucydides/histories/book_{NN}`. Content-only —
+/// the `<stanza>/render_markdown/` prefix is added by the callers (absolute
+/// via `layout::render_markdown_root`, rel-string via `book_dir_rel`).
 fn book_content_rel(book_n: &str) -> PathBuf {
     let bn: u32 = book_n.parse().unwrap_or(0);
     PathBuf::from(format!("thucydides/histories/book_{bn:02}"))
@@ -280,7 +280,7 @@ fn book_content_rel(book_n: &str) -> PathBuf {
 
 fn book_dir_rel(stanza: &str, book_n: &str) -> PathBuf {
     PathBuf::from(stanza)
-        .join("rendered_md")
+        .join(datalib_etl::layout::RENDER_MARKDOWN_DIR)
         .join(book_content_rel(book_n))
 }
 

@@ -45,22 +45,22 @@ reference doc it relates to.
   entirely. Read it for why; it was written as the design and kept as
   the explanation.
 - [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md)
-  — *agreed design (2026-09-09); slice 1 built 2026-09-09, the rest
-  not*: one row per source in the Manage screen, done by making the
-  grouping a config entity. A `[[groups]]` table with
+  — *agreed design (2026-09-09); slices 1 and 2 built 2026-09-10, the
+  rest not*: one row per source in the Manage screen, done by making
+  the grouping a config entity. A `[[groups]]` table with
   `id`/`name`/`type`; a step is `(group, function)` with its id
-  composed and never written — **that much is in the tree** (the
-  loader, the runner's environment, the fingerprint rule, every config
-  and fixture). Still to come: the tree named after the function
-  (`ingest`, `render_markdown` — today the functions are `raw` and
-  `rendered_md` because `datalib-step` still writes those); `type` as
+  composed and never written; `datalib-step` dispatches on the
+  function and the group's type from the environment and writes the
+  tree its id names, so a built-in step carries no `command`; the
+  trees are named after the functions (`ingest`, `render_markdown`,
+  `grid_index`, `qmd_index`) — **that much is in the tree** (the
+  loader, the runner's environment, the fingerprint rule,
+  `datalib-step`, every config and fixture). Still to come: `type` as
   the data type with the fetch method as a params table, each declared
   `Origin` or `Local`, which is what makes a row read "Download" or
   "Import"; the Manage screen and wizard; the mechanical crate rename.
   Read it before touching step ids, the wizard, or `datalib-step`'s
-  dispatch. It reverses the "ungrouping" section of `step_identity.md`
-  and fixes a real bug: `datalib-step` ignores the declared tree and
-  writes a hardcoded `<name>/raw`.
+  dispatch. It reverses the "ungrouping" section of `step_identity.md`.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
   *proposal*, nothing built: letting a consumer step start before its
   producer finishes. Splits the two meanings an edge carries today
@@ -254,7 +254,7 @@ reference doc it relates to.
 - [`docs/user/first_time_user.md`](docs/user/first_time_user.md),
   [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md),
   and [`docs/user/config_examples/`](docs/user/config_examples/) (one
-  commented group with its `raw` + `rendered_md` step pair per
+  commented group with its `ingest` + `render_markdown` step pair per
   source).
 
 ## Prose can be stale — verify claims against the tree
@@ -361,8 +361,10 @@ datalib/
                    in one directory (`:dist`, laid out as installed) —
                    build that, not the individual targets, whenever you
                    need to actually run a pipeline.
-    datalib_step/  `datalib-step`: the built-in step commands —
-                   download/render <source_type>, grid_index, qmd_index.
+    datalib_step/  `datalib-step`: the built-in step program. A step
+                   with no `command` runs it; it reads its function
+                   (ingest, render_markdown, grid_index, qmd_index) and
+                   its group's type from the environment.
     etl/           shared ingest machinery (raw stores, blob CAS,
                    render cursors) — the download side, and the one
                    place a downloader's dependencies stop.
@@ -453,12 +455,15 @@ a group without one); a `[[steps]]` entry is `group` + `function`, with
 its id composed as `<group>/<function>` — the tree it writes — and
 never written; an `[[applets]]` entry is a server the gateway spawns.
 Edges are the declared `inputs`, which name steps by that composed id.
-Each source is a group with a `raw` step (`datalib-step download
-<type>`) and a `rendered_md` step (`datalib-step render <type>`), and
-two shared fan-in steps under the `unified_index` group index every
-source's `rendered_md` tree: `grid` (`datalib-step grid_index`, the SQL
-index at `unified_index/grid/db.doltlite_db`) and `qmd` (`datalib-step
-qmd_index`, semantic search at `unified_index/qmd/`). Both are read by
+A built-in step writes no `command`: it runs `datalib-step`, which
+reads its function and its group's `type` from the environment and
+writes the tree its id names. Each source is a group with an `ingest`
+step (bring the data in, from an origin or from files on disk) and a
+`render_markdown` step, and two shared fan-in steps under the
+`unified_index` group index every source's `render_markdown` tree:
+`grid_index` (the SQL index at `unified_index/grid_index/db.doltlite_db`)
+and `qmd_index` (semantic search at `unified_index/qmd_index/`). Both
+are read by
 the `unified_index` applet, which serves the grid — `datalib-http` does
 not open them. Scheduler state lives at `system/dag_state.json`. A config entry the
 loader cannot use costs that entry and nothing else — it is dropped,
@@ -543,6 +548,12 @@ subtree and document why.
 
 ## Download and render are separate crates
 
+The step is called `ingest` and the crates below are still called
+`download`; the crate, module and `DOWNLOAD.md` rename to "ingest" is
+its own mechanical PR (slice 5 of
+[`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md))
+and has not happened.
+
 A provider is three crates: `datalib_etl_<p>_config` holds the config
 schema (§"Why each provider has a `<p>_config` crate"),
 `datalib_etl_<p>` fetches, and `datalib_etl_<p>_render` turns what was
@@ -590,7 +601,7 @@ took a dependency it should not have; the arithmetic is in
 
 The Vue grid is backed by a single denormalized table, `grid_rows`,
 populated by the `grid_index` step, which stacks every source's render
-store (`<name>/rendered_md/indexed_markdown.doltlite_db`) into it —
+store (`<name>/render_markdown/indexed_markdown.doltlite_db`) into it —
 asking each store `dolt_diff` since the commit the index last consumed,
 so a steady-state run reads nothing. The Rust backend
 (`datalib/backend/core/src/db.rs`) issues *one* SELECT against
@@ -720,9 +731,10 @@ interactive REPL all work, plus the dolt SQL surface
 Where the stores live under a data root:
 
 ```
-<data_root>/<name>/raw/entities.doltlite_db      per-source entities + sync bookkeeping
-<data_root>/<name>/raw/blobs.doltlite_db        content-addressed blobs
-<data_root>/unified_index/grid/db.doltlite_db   grid_rows / markdowns / edges
+<data_root>/<group>/ingest/entities.doltlite_db  per-source entities + sync bookkeeping
+<data_root>/<group>/ingest/blobs.doltlite_db     content-addressed blobs
+<data_root>/<group>/render_markdown/…            the rendered tree + its render store
+<data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges
 <data_root>/system/feedback.doltlite_db         filed feedback
 <data_root>/system/jobs.doltlite_db             the sync job queue
 <data_root>/system/usage.doltlite_db            bytes-on-disk over time
@@ -1211,7 +1223,7 @@ provider crate.
 
 **They write the same raw store.** `claude_api` walks the API and
 `claude_export` reads the export's JSON off `common.input_path`, and
-both land rows in the same six tables of `<name>/raw`, so the render
+both land rows in the same six tables of `<name>/ingest`, so the render
 step has exactly one input shape. The API downloader gets there by
 normalizing every response into the bulk-export on-disk shape
 (`normalize_to_export_shape` in

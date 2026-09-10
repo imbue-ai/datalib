@@ -100,7 +100,7 @@ struct RetainSink<'a> {
 pub struct RenderCtx<'a> {
     /// Source name (`sources[].name`).
     pub name: &'a str,
-    /// Workspace root — the parent of the `rendered_md/` tree render
+    /// Workspace root — the parent of the `render_markdown/` tree render
     /// processors write into.
     pub root: &'a Path,
     /// Run timestamp, threaded through for deterministic stamping.

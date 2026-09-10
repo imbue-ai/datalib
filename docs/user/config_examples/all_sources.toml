@@ -12,19 +12,22 @@
 # configs/dag_example.toml for a walkthrough and
 # docs/dev/step_protocol.md for the step contract). Each source is a
 # `[[groups]]` entry with a `type`, plus two steps under it, each
-# declared as `group` + `function`: `raw` fetches into `<group>/raw`
-# (its `params` carry the provider's knobs — the shared `common`
-# envelope, the `sync` block, …), and `rendered_md` turns the raw store
-# into markdown under `<group>/rendered_md` (its `params` carry only
-# render-phase knobs; most providers have none). A step's id is
-# composed as `<group>/<function>` and never written; it is what
-# another step's `inputs` name. Two shared fan-in steps under the
-# `unified_index` group index every source's rendered markdown.
+# declared as `group` + `function`: `ingest` brings the data into
+# `<group>/ingest` (its `params` carry the provider's knobs — the shared
+# `common` envelope, the `sync` block, …), and `render_markdown` turns
+# that raw store into markdown under `<group>/render_markdown` (its
+# `params` carry only render-phase knobs; most providers have none).
+# Neither writes a `command`: a step without one is the built-in
+# `datalib-step`, which reads the function and the group's `type` from
+# the environment. A step's id is composed as `<group>/<function>` and
+# never written; it is what another step's `inputs` name. Two shared
+# fan-in steps under the `unified_index` group index every source's
+# rendered markdown.
 #
 # TOML shape: each entry is a `[[groups]]`, `[[steps]]` or `[[applets]]`
 # table, and a step's `params` are `[steps.params.…]` sub-tables. A
 # table header ends the table it sits in, so within a step the plain
-# keys (`group`, `function`, `command`, `inputs`) come first and the
+# keys (`group`, `function`, `inputs`) come first and the
 # params headers last — and `data_root` below has to precede the first
 # `[[…]]` header entirely.
 #
@@ -49,11 +52,11 @@
 
 data_root = "~/datalib"  # Base dir; everything is written under here. `~` is expanded.
 
-# Where each source's raw store lives. By default a source's raw data
-# (entities.doltlite_db + blobs.doltlite_db + the events/ tape) lands in
-# `<data_root>/<name>/raw/`. ANY source may override that directory with a
-# `params.common.raw_path` on its download step (see the commented example
-# on claude-api below) — it can point anywhere, e.g. a bigger disk. This is
+# Where each source's raw store lives: a source's raw data
+# (entities.doltlite_db + blobs.doltlite_db + the events/ tape) is the
+# ingest step's tree, `<data_root>/<group>/ingest/`, and nothing else —
+# the runner versions that tree and the render step reads it by that
+# name. To keep a store on a bigger disk, put a symlink there. This is
 # purely about where WE store our copy; it's independent of
 # `common.input_path`, which says where a file-backed source's data is
 # read FROM.
@@ -67,15 +70,13 @@ id = "unified_index"
 
 [[steps]]
 group = "unified_index"
-function = "grid"
-command = "datalib-step grid_index"
-inputs = ["claude-api/rendered_md", "claude-export/rendered_md", "chatgpt/rendered_md", "slack/rendered_md", "github/rendered_md", "gitlab/rendered_md", "notion/rendered_md", "fastmail/rendered_md", "gmail/rendered_md", "gmail-takeout/rendered_md", "icloud-contacts/rendered_md", "vcard-contacts/rendered_md", "beeper/rendered_md", "perseus/rendered_md", "yolink/rendered_md", "signal/rendered_md", "whatsapp/rendered_md", "linkedin/rendered_md", "google-takeout/rendered_md", "sms-backup-restore/rendered_md", "pdfs/rendered_md"]
+function = "grid_index"
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd"
-command = "datalib-step qmd_index"
-inputs = ["claude-api/rendered_md", "claude-export/rendered_md", "chatgpt/rendered_md", "slack/rendered_md", "github/rendered_md", "gitlab/rendered_md", "notion/rendered_md", "fastmail/rendered_md", "gmail/rendered_md", "gmail-takeout/rendered_md", "icloud-contacts/rendered_md", "vcard-contacts/rendered_md", "beeper/rendered_md", "perseus/rendered_md", "yolink/rendered_md", "signal/rendered_md", "whatsapp/rendered_md", "linkedin/rendered_md", "google-takeout/rendered_md", "sms-backup-restore/rendered_md", "pdfs/rendered_md"]
+function = "qmd_index"
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -88,11 +89,7 @@ type = "claude_api"
 
 [[steps]]
 group = "claude-api"
-function = "raw"
-command = "datalib-step download claude_api"
-
-# [steps.params.common]
-# raw_path = "/mnt/big/datalib-raw/claude-api"  # optional: store our raw copy elsewhere
+function = "ingest"
 
 [steps.params.sync]
 since = "2025-01-01"                  # only sync conversations updated at/after this
@@ -112,17 +109,15 @@ refresh_most_recent_n_chat_count = 3  # force-refetch top-N by updated_at
 
 [[steps]]
 group = "claude-api"
-function = "rendered_md"
-command = "datalib-step render claude_api"
-inputs = ["claude-api/raw"]
+function = "render_markdown"
+inputs = ["claude-api/ingest"]
 
 # An unpacked Claude data export already on disk. No network and no
 # credentials — the download step just reads the export's JSON and
 # writes it into the same raw store the `claude_api` download fills, so
 # one renderer serves both. Note the split every file-backed source
-# uses: `input_path` is where the export is read FROM, `raw_path`
-# (unset here, so the default `<data_root>/claude-export/raw`) is where
-# our copy lives.
+# uses: `input_path` is where the export is read FROM; our copy lives
+# in the ingest step's tree, `<data_root>/claude-export/ingest`.
 #
 # The export is a complete snapshot, so a re-exported tree that no
 # longer mentions a conversation drops it from the store — the one
@@ -133,16 +128,14 @@ type = "claude_export"
 
 [[steps]]
 group = "claude-export"
-function = "raw"
-command = "datalib-step download claude_export"
+function = "ingest"
 [steps.params.common]
 input_path = "~/backups/claude-export"
 
 [[steps]]
 group = "claude-export"
-function = "rendered_md"
-command = "datalib-step render claude_export"
-inputs = ["claude-export/raw"]
+function = "render_markdown"
+inputs = ["claude-export/ingest"]
 
 # --- ChatGPT ------------------------------------------------------------
 
@@ -153,8 +146,7 @@ type = "chatgpt_api"
 
 [[steps]]
 group = "chatgpt"
-function = "raw"
-command = "datalib-step download chatgpt_api"
+function = "ingest"
 [steps.params.sync]
 since = "2025-01-01"   # only sync conversations updated at/after this
                        # (RFC 3339 or YYYY-MM-DD; move it back to backfill)
@@ -165,9 +157,8 @@ sleep_between = 0.5    # seconds between requests (be polite)
 
 [[steps]]
 group = "chatgpt"
-function = "rendered_md"
-command = "datalib-step render chatgpt_api"
-inputs = ["chatgpt/raw"]
+function = "render_markdown"
+inputs = ["chatgpt/ingest"]
 
 # --- Slack --------------------------------------------------------------
 
@@ -179,8 +170,7 @@ type = "slack_api"
 
 [[steps]]
 group = "slack"
-function = "raw"
-command = "datalib-step download slack_api"
+function = "ingest"
 
 [steps.params.common]
 blob_size_limit_bytes = 1000000  # skip file/media uploads larger than 1 MB
@@ -236,9 +226,8 @@ dm_users = ["@riker", "Jean-Luc Picard"]
 
 [[steps]]
 group = "slack"
-function = "rendered_md"
-command = "datalib-step render slack_api"
-inputs = ["slack/raw"]
+function = "render_markdown"
+inputs = ["slack/ingest"]
 
 # --- GitHub -------------------------------------------------------------
 
@@ -251,8 +240,7 @@ type = "github_api"
 
 [[steps]]
 group = "github"
-function = "raw"
-command = "datalib-step download github_api"
+function = "ingest"
 [steps.params.sync]
 refresh_window_days = 30
 max_prs = 50
@@ -263,9 +251,8 @@ pull_requests = [
 
 [[steps]]
 group = "github"
-function = "rendered_md"
-command = "datalib-step render github_api"
-inputs = ["github/raw"]
+function = "render_markdown"
+inputs = ["github/ingest"]
 
 # --- GitLab -------------------------------------------------------------
 
@@ -277,8 +264,7 @@ type = "gitlab_api"
 
 [[steps]]
 group = "gitlab"
-function = "raw"
-command = "datalib-step download gitlab_api"
+function = "ingest"
 [steps.params.sync]
 refresh_window_days = 30
 max_mrs = 50
@@ -289,9 +275,8 @@ merge_requests = [
 
 [[steps]]
 group = "gitlab"
-function = "rendered_md"
-command = "datalib-step render gitlab_api"
-inputs = ["gitlab/raw"]
+function = "render_markdown"
+inputs = ["gitlab/ingest"]
 
 # --- Notion -------------------------------------------------------------
 
@@ -312,8 +297,7 @@ type = "notion_api"
 
 [[steps]]
 group = "notion"
-function = "raw"
-command = "datalib-step download notion_api"
+function = "ingest"
 
 [steps.params.sync]
 refresh_window_days = 7
@@ -336,9 +320,8 @@ roots = [
 
 [[steps]]
 group = "notion"
-function = "rendered_md"
-command = "datalib-step render notion_api"
-inputs = ["notion/raw"]
+function = "render_markdown"
+inputs = ["notion/ingest"]
 
 # --- Email: two input modes ---------------------------------------------
 
@@ -351,8 +334,7 @@ type = "email"
 
 [[steps]]
 group = "fastmail"
-function = "raw"
-command = "datalib-step download email"
+function = "ingest"
 
 [steps.params]
 # Mailbox label filter. Labels are POSIX-like paths into the folder
@@ -371,9 +353,8 @@ full_resync = false
 
 [[steps]]
 group = "fastmail"
-function = "rendered_md"
-command = "datalib-step render email"
-inputs = ["fastmail/raw"]
+function = "render_markdown"
+inputs = ["fastmail/ingest"]
 [steps.params]
 # Webmail each message's `↗` outlink points at: `fastmail` for a
 # Fastmail JMAP account, `gmail` for a Google Takeout mbox. Omit for
@@ -401,8 +382,7 @@ type = "email"
 
 [[steps]]
 group = "gmail"
-function = "raw"
-command = "datalib-step download email"
+function = "ingest"
 
 [steps.params]
 # Same exact-match, union-across-labels filter as every other mode.
@@ -443,9 +423,8 @@ only_extract_labels = []
 
 [[steps]]
 group = "gmail"
-function = "rendered_md"
-command = "datalib-step render email"
-inputs = ["gmail/raw"]
+function = "render_markdown"
+inputs = ["gmail/ingest"]
 [steps.params]
 outlink_format = "gmail"
 only_render_labels = []
@@ -459,8 +438,7 @@ type = "email"
 
 [[steps]]
 group = "gmail-takeout"
-function = "raw"
-command = "datalib-step download email"
+function = "ingest"
 
 [steps.params]
 # Same label filter as JMAP mode — here it matches the Gmail labels
@@ -485,9 +463,8 @@ is_personal = true
 
 [[steps]]
 group = "gmail-takeout"
-function = "rendered_md"
-command = "datalib-step render email"
-inputs = ["gmail-takeout/raw"]
+function = "render_markdown"
+inputs = ["gmail-takeout/ingest"]
 [steps.params]
 outlink_format = "gmail"   # render each message's `↗` outlink to Gmail
 only_render_labels = []    # render only threads touching these labels; empty = all
@@ -503,17 +480,15 @@ type = "carddav"
 
 [[steps]]
 group = "icloud-contacts"
-function = "raw"
-command = "datalib-step download carddav"
+function = "ingest"
 [steps.params.sync]
 server_url = "https://contacts.icloud.com/"
 addressbooks = ["Contacts"]
 
 [[steps]]
 group = "icloud-contacts"
-function = "rendered_md"
-command = "datalib-step render carddav"
-inputs = ["icloud-contacts/raw"]
+function = "render_markdown"
+inputs = ["icloud-contacts/ingest"]
 
 # Mode B — local vCard files. No `sync` block → reads `.vcf` files from
 # the directory at `common.input_path`.
@@ -523,8 +498,7 @@ type = "carddav"
 
 [[steps]]
 group = "vcard-contacts"
-function = "raw"
-command = "datalib-step download carddav"
+function = "ingest"
 [steps.params.common]
 input_path = "~/backups/contacts_vcf"
 # The directory is the whole address book, so a `.vcf` that is gone means
@@ -534,9 +508,8 @@ always_clear_before_ingest = true
 
 [[steps]]
 group = "vcard-contacts"
-function = "rendered_md"
-command = "datalib-step render carddav"
-inputs = ["vcard-contacts/raw"]
+function = "render_markdown"
+inputs = ["vcard-contacts/ingest"]
 
 # --- Beeper -------------------------------------------------------------
 
@@ -551,8 +524,7 @@ type = "beeper"
 
 [[steps]]
 group = "beeper"
-function = "raw"
-command = "datalib-step download beeper"
+function = "ingest"
 [steps.params.sync]
 sources = ["signal", "googlechat"]
 media = true
@@ -560,9 +532,8 @@ media = true
 
 [[steps]]
 group = "beeper"
-function = "rendered_md"
-command = "datalib-step render beeper"
-inputs = ["beeper/raw"]
+function = "render_markdown"
+inputs = ["beeper/ingest"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
 
@@ -578,8 +549,7 @@ type = "perseus"
 
 [[steps]]
 group = "perseus"
-function = "raw"
-command = "datalib-step download perseus"
+function = "ingest"
 [steps.params.common]
 input_path = "~/backups/perseus"
 [steps.params.sync]
@@ -587,9 +557,8 @@ files = []
 
 [[steps]]
 group = "perseus"
-function = "rendered_md"
-command = "datalib-step render perseus"
-inputs = ["perseus/raw"]
+function = "render_markdown"
+inputs = ["perseus/ingest"]
 [steps.params]
 # alignment_pairs = [   # edition pairs to sentence-align, e.g.
 #   ["perseus-grc2", "perseus-eng2"],
@@ -609,8 +578,7 @@ type = "yolink"
 
 [[steps]]
 group = "yolink"
-function = "raw"
-command = "datalib-step download yolink"
+function = "ingest"
 
 [steps.params.sync]
 window_days = 7
@@ -625,7 +593,7 @@ start = "2026-01-01"
 family_device_id = "0123456789abcdef0123456789abcdef"
 device_udid = "fedcba9876543210fedcba9876543210"
 
-# The whole store renders as ONE page — `yolink/rendered_md/index.md` —
+# The whole store renders as ONE page — `yolink/render_markdown/index.md` —
 # carrying a per-device summary plus one interactive scatter per physical
 # quantity (temperature, humidity, liquid volume), every device a series,
 # all values converted to SI. The plots are standalone HTML under
@@ -636,9 +604,8 @@ device_udid = "fedcba9876543210fedcba9876543210"
 # if the download step appended nothing, the render is a no-op. No knobs.
 [[steps]]
 group = "yolink"
-function = "rendered_md"
-command = "datalib-step render yolink"
-inputs = ["yolink/raw"]
+function = "render_markdown"
+inputs = ["yolink/ingest"]
 
 # --- Signal (Android backup) --------------------------------------------
 
@@ -651,8 +618,7 @@ type = "signal_backup"
 
 [[steps]]
 group = "signal"
-function = "raw"
-command = "datalib-step download signal_backup"
+function = "ingest"
 [steps.params.sync]
 snapshot_dir = "~/backups/SignalBackups"
 aep_env_var = "SIGNAL_BACKUP_PASSPHRASE"   # default if omitted
@@ -663,9 +629,8 @@ always_clear_before_ingest = true
 
 [[steps]]
 group = "signal"
-function = "rendered_md"
-command = "datalib-step render signal_backup"
-inputs = ["signal/raw"]
+function = "render_markdown"
+inputs = ["signal/ingest"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
 
@@ -680,17 +645,15 @@ type = "whatsapp_backup"
 
 [[steps]]
 group = "whatsapp"
-function = "raw"
-command = "datalib-step download whatsapp_backup"
+function = "ingest"
 [steps.params.sync]
 backup_dir = "~/backups/WhatsApp"
 key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"   # default if omitted
 
 [[steps]]
 group = "whatsapp"
-function = "rendered_md"
-command = "datalib-step render whatsapp_backup"
-inputs = ["whatsapp/raw"]
+function = "render_markdown"
+inputs = ["whatsapp/ingest"]
 
 # --- LinkedIn (data export) ---------------------------------------------
 
@@ -709,8 +672,7 @@ type = "linkedin"
 
 [[steps]]
 group = "linkedin"
-function = "raw"
-command = "datalib-step download linkedin"
+function = "ingest"
 
 [steps.params]
 fetch_photos = true
@@ -725,9 +687,8 @@ maximum_sequential_failed_requests = 20
 
 [[steps]]
 group = "linkedin"
-function = "rendered_md"
-command = "datalib-step render linkedin"
-inputs = ["linkedin/raw"]
+function = "render_markdown"
+inputs = ["linkedin/ingest"]
 
 # --- Google Takeout (data export) ---------------------------------------
 
@@ -749,8 +710,7 @@ type = "google_takeout"
 
 [[steps]]
 group = "google-takeout"
-function = "raw"
-command = "datalib-step download google_takeout"
+function = "ingest"
 
 [steps.params.common]
 input_path = "~/backups/Takeout"
@@ -772,9 +732,8 @@ gemini_apps = false               # raw store only
 
 [[steps]]
 group = "google-takeout"
-function = "rendered_md"
-command = "datalib-step render google_takeout"
-inputs = ["google-takeout/raw"]
+function = "render_markdown"
+inputs = ["google-takeout/ingest"]
 
 # --- SMS Backup & Restore (Android export) ------------------------------
 
@@ -789,8 +748,7 @@ type = "sms_backup_restore"
 
 [[steps]]
 group = "sms-backup-restore"
-function = "raw"
-command = "datalib-step download sms_backup_restore"
+function = "ingest"
 [steps.params.common]
 input_path = "~/backups/SMSBackupRestore"
 # The export directory is the whole archive, so a message no longer in it
@@ -799,9 +757,8 @@ always_clear_before_ingest = true
 
 [[steps]]
 group = "sms-backup-restore"
-function = "rendered_md"
-command = "datalib-step render sms_backup_restore"
-inputs = ["sms-backup-restore/raw"]
+function = "render_markdown"
+inputs = ["sms-backup-restore/ingest"]
 
 # --- fsindex (directory-tree scanner) -----------------------------------
 
@@ -822,8 +779,7 @@ type = "fsindex"
 
 [[steps]]
 group = "fsindex-home"
-function = "raw"
-command = "datalib-step download fsindex"
+function = "ingest"
 [steps.params]
 # stamp = false   # default; true → write UUID breadcrumbs into the tree
 [steps.params.common]
@@ -832,9 +788,8 @@ input_path = "~/Documents"
 # Renders no documents, only the storage report — see above.
 [[steps]]
 group = "fsindex-home"
-function = "rendered_md"
-command = "datalib-step render fsindex"
-inputs = ["fsindex-home/raw"]
+function = "render_markdown"
+inputs = ["fsindex-home/ingest"]
 
 # --- pdf (local PDF corpus → markdown) ----------------------------------
 
@@ -850,7 +805,7 @@ inputs = ["fsindex-home/raw"]
 # NO OCR YET. A scanned, image-only PDF is recorded with `needs_ocr = 1` in
 # the source's `pdf_documents` table and produces no markdown. Find them
 # with:
-#   doltlite <root>/pdfs/raw/entities.doltlite_db \
+#   doltlite <root>/pdfs/ingest/entities.doltlite_db \
 #     "SELECT COUNT(*) FROM pdf_documents WHERE needs_ocr = 1;"
 [[groups]]
 id = "pdfs"
@@ -858,8 +813,7 @@ type = "pdf"
 
 [[steps]]
 group = "pdfs"
-function = "raw"
-command = "datalib-step download pdf"
+function = "ingest"
 [steps.params]
 # Gitignore-shaped patterns, on top of any .gitignore files in the tree.
 # ignore = ["node_modules/**", "**/.Trash/**"]
@@ -873,9 +827,8 @@ input_path = "~/Documents"
 # tree the download step walked.
 [[steps]]
 group = "pdfs"
-function = "rendered_md"
-command = "datalib-step render pdf"
-inputs = ["pdfs/raw"]
+function = "render_markdown"
+inputs = ["pdfs/ingest"]
 
 # --- media (local music / photos / video / playlists) --------------------
 
@@ -893,7 +846,7 @@ inputs = ["pdfs/raw"]
 # strips — with tags, EXIF, ICC profiles and embedded previews excluded. So
 # retagging an MP3 or re-rendering a DNG preview in Lightroom moves the file
 # hash and leaves this one alone. "Every file that is the same recording" is:
-#   doltlite <root>/media/raw/entities.doltlite_db \
+#   doltlite <root>/media/ingest/entities.doltlite_db \
 #     "SELECT payload_blake3, COUNT(*) c FROM media_items
 #       WHERE payload_blake3 IS NOT NULL
 #       GROUP BY payload_blake3 HAVING c > 1;"
@@ -915,8 +868,7 @@ type = "media"
 
 [[steps]]
 group = "media"
-function = "raw"
-command = "datalib-step download media"
+function = "ingest"
 [steps.params]
 # Gitignore-shaped patterns, on top of any .gitignore files in the tree.
 # ignore = ["**/.Trash/**", "**/Thumbnails/**"]
@@ -935,9 +887,8 @@ input_path = "~/Music"
 # Renders no documents, only the storage report — see above.
 [[steps]]
 group = "media"
-function = "rendered_md"
-command = "datalib-step render media"
-inputs = ["media/raw"]
+function = "render_markdown"
+inputs = ["media/ingest"]
 
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 
@@ -962,8 +913,7 @@ type = "lightroom"
 
 [[steps]]
 group = "lightroom"
-function = "raw"
-command = "datalib-step download lightroom"
+function = "ingest"
 [steps.params]
 # Drop the per-image XMP packet and the flattened search indexes. They are
 # the bulkiest columns in a catalog and are wholly derived from columns

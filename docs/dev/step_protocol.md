@@ -26,18 +26,23 @@ name = "Weather at SFO"
 
 [[steps]]
 group = "weather"
-function = "raw"
+function = "ingest"
 command = "fetch-weather --station KSFO"   # split shell-style
 env = { WEATHER_DEBUG = "1" }              # extra child environment
 [steps.params]                             # arbitrary TOML, yours
 units = "metric"
 ```
 
-That step's id is `weather/raw`, so it writes `<data_root>/weather/raw/`
-and another step reads it with `inputs = ["weather/raw"]`. A step
-outside any group is also legal — `id = "weather/raw"` written
+That step's id is `weather/ingest`, so it writes `<data_root>/weather/ingest/`
+and another step reads it with `inputs = ["weather/ingest"]`. A step
+outside any group is also legal — `id = "weather/ingest"` written
 verbatim, no `group` or `function` — and is the shape for a one-off
 executable that belongs to no source.
+
+A step with no `command` at all is a built-in one: it runs
+`datalib-step`, which takes the function and the group's `type` from
+the environment below. That is the shape every source's own steps
+have, and it is only legal under a group.
 
 Sub-tables like `[steps.params]` must come after the step's plain keys:
 in TOML a table header ends the table it appears in, so everything
@@ -76,10 +81,10 @@ in the environment.
 
 | variable | meaning |
 | --- | --- |
-| `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/raw`) |
+| `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/ingest`) |
 | `DATALIB_DAG_GROUP` | the group it is filed under (`weather`); unset for a step outside any group |
 | `DATALIB_DAG_GROUP_TYPE` | the group's `type`, when it declares one |
-| `DATALIB_DAG_FUNCTION` | what this step does within its group (`raw`); unset for a step outside any group |
+| `DATALIB_DAG_FUNCTION` | what this step does within its group (`ingest`); unset for a step outside any group |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
 | `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty when there is no last success to compare against (never completed, or the step's own config changed) — do all your work |
@@ -132,7 +137,7 @@ version of each output you produced:
 
 ```json
 {"event":"outcome","outputs":[
-  {"path":"weather/raw","version":"2026-07-21T06:00Z-a1b2"}
+  {"path":"weather/ingest","version":"2026-07-21T06:00Z-a1b2"}
 ]}
 ```
 
@@ -182,7 +187,7 @@ kind* of failure this is, which drives retry policy:
 
 ```json
 {"event":"outcome","failure":"rate_limited","outputs":[
-  {"path":"weather/raw","version":"2026-07-21T05:00Z-9f3c"}
+  {"path":"weather/ingest","version":"2026-07-21T05:00Z-9f3c"}
 ]}
 ```
 
@@ -208,7 +213,7 @@ This is the normal state of every source in a freshly scaffolded
 config: the user adds ten sources, authenticates one, and syncs it.
 Failing there is wrong twice over. `data` means "a human must look at
 this", and it poisons the subtree — the shared `grid_index` / `qmd_index`
-fan-in depends on *every* source's `rendered_md`, so one un-downloaded
+fan-in depends on *every* source's `render_markdown`, so one un-downloaded
 source blocks the index for the sources that did sync.
 
 An empty render is safe for the index: `grid_index` deletes per
@@ -262,8 +267,8 @@ A shell step, no protocol at all (scheduler hashes the output tree):
 
 ```toml
 [[steps]]
-id = "notes/raw"
-command = "sh -c 'mkdir -p notes/raw && cp -R \"$HOME/notes/.\" notes/raw/'"
+id = "notes/ingest"
+command = "sh -c 'mkdir -p notes/ingest && cp -R \"$HOME/notes/.\" notes/ingest/'"
 ```
 
 A python step using inputs + progress + outcome:
@@ -302,21 +307,25 @@ emit({"event": "outcome",
 
 ## How `datalib-step` fits
 
-The built-in step types are just one binary implementing this
-protocol: `datalib-step download|render <provider>` (plus
-`grid_index` / `qmd_index`). It takes its source name from the first
-segment of `DATALIB_DAG_STEP` (`slack/raw` → `slack`), reads
-`--params` as the provider's **phase-specific** config — the download
+The built-in step types are one binary implementing this protocol,
+run with no arguments of its own. It reads `DATALIB_DAG_FUNCTION` to
+learn what to do — `ingest`, `render_markdown`, `grid_index` or
+`qmd_index`; anything else is refused with the list — and
+`DATALIB_DAG_GROUP_TYPE` to learn which provider to run, which the two
+per-source functions require and the two index functions ignore. It
+writes the tree `DATALIB_DAG_STEP` names, after checking that it is
+`<DATALIB_DAG_GROUP>/<DATALIB_DAG_FUNCTION>`; a render reads its raw
+store from the first entry of `DATALIB_DAG_INPUTS`. It reads
+`--params` as the provider's **function-specific** config — the ingest
 step carries the provider's download config (`common` envelope, `sync`
 block, …), the render step only the render knobs (nothing for most
 providers; beeper/signal `period`, perseus `alignment_pairs`, email
-`outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`
-and the reset env vars, checkpoints on SIGINT, and emits versions
-where it has them (the grid index claims its dolt commit hash). Use
-it as the reference implementation.
+`outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW` and
+the reset env vars, checkpoints on SIGINT, and emits versions where it
+has them (the grid index claims its dolt commit hash). Use it as the
+reference implementation.
 
-It does not yet read `DATALIB_DAG_GROUP_TYPE` or `DATALIB_DAG_FUNCTION`:
-the provider is still the word on its command line, and the tree it
-writes is still `<name>/raw` or `<name>/rendered_md` — which is why
-those are the function names a config uses today. See
-[`plans/groups_and_functions.md`](plans/groups_and_functions.md).
+The two index functions have one reader, the `unified_index` applet,
+which finds them from the data root alone; so their ids are fixed at
+`unified_index/grid_index` and `unified_index/qmd_index`, and
+`datalib-step` refuses to run them under any other.

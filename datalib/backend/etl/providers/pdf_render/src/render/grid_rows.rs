@@ -54,7 +54,7 @@ pub struct DocumentMeta<'a> {
     pub created_at: Option<&'a str>,
     pub modified_at: Option<&'a str>,
     /// Path to the rendered markdown, **relative to the data root**
-    /// (`<stanza>/rendered_md/docs/<blake3>.md`) — see
+    /// (`<stanza>/render_markdown/docs/<blake3>.md`) — see
     /// [`super::doc_qmd_path_rel`]. Anything shorter makes the document
     /// unfindable through qmd search.
     pub qmd_path: Option<&'a str>,
@@ -208,7 +208,7 @@ mod tests {
             copy_count: 1,
             created_at: Some("2024-01-15T10:30:00-08:00"),
             modified_at: None,
-            qmd_path: Some("papers/rendered_md/docs/abc123.md"),
+            qmd_path: Some("papers/render_markdown/docs/abc123.md"),
             source_name: "papers",
         }
     }

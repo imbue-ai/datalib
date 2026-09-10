@@ -3,9 +3,9 @@
 `claude-translate` reads a directory of conversations in
 export-shape JSON (written by `claude-download` or by an
 Anthropic bulk export) and emits, per conversation, a `.md` at
-`<out>/rendered_md/claude/<account>/llm_chats/<conv>__<slug>.md` plus
+`<out>/render_markdown/claude/<account>/llm_chats/<conv>__<slug>.md` plus
 that document's rows in the source's render store
-(`<out>/rendered_md/indexed_markdown.doltlite_db`).
+(`<out>/render_markdown/indexed_markdown.doltlite_db`).
 
 The Load step is provider-agnostic and lives in
 `datalib_etl_render::grid_index`.

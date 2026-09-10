@@ -16,8 +16,8 @@ confusion while this document was being written:
 - **render** — turn that representation into the artifacts:
   `<id>.md` for humans and `<id>.grid_rows.json` for the index.
 
-Together they are one pipeline stage, invoked as `datalib-step render
-<provider>`. When this doc needs a word for the whole transform it
+Together they are one pipeline stage, the `render_markdown` step of a
+source's group. When this doc needs a word for the whole transform it
 says **the projection**. What it never says is "the parse step": there
 isn't one, and a record that "fails to parse" is a record **render**
 could not deserialize — which matters because the fix is always a
@@ -76,7 +76,7 @@ render-store contract (§2), and the `GridRow` family taxonomy (§3).
 
 ## 2. The stage contract
 
-Render's input is `<data_root>/<name>/raw/` and **nothing else** — not
+Render's input is `<data_root>/<name>/ingest/` and **nothing else** — not
 the API, not a file-backed source's `input_path`. The full argument is
 [Layering of concerns](data_architecture_ingestion.md#layering-of-concerns-download-is-downstream-agnostic);
 the one-line version is that the raw store is the boundary between the
@@ -96,7 +96,7 @@ derive `grid_rows` for the UI.
 
 The cross-provider contract is the **render store**: one doltlite
 database per source, at
-`<data_root>/<name>/rendered_md/indexed_markdown.doltlite_db`, holding
+`<data_root>/<name>/render_markdown/indexed_markdown.doltlite_db`, holding
 four tables —
 
   - `markdowns` — one row per rendered document: its `markdown_uuid`
@@ -156,7 +156,7 @@ why they were separated — and that turned out to be the right split.
 
 **Step 1 — the sidecar becomes a table. Done.** Each source writes its
 projected rows into
-`<name>/rendered_md/indexed_markdown.doltlite_db`: `grid_rows`,
+`<name>/render_markdown/indexed_markdown.doltlite_db`: `grid_rows`,
 `markdowns`, `edges` and `render_problems`, already columnar and
 already in the shape the unified index stacks. There is no
 `<id>.grid_rows.json` anywhere in the tree any more, and
@@ -301,7 +301,7 @@ lives in a doltlite table rather than as a file on disk.
 
 This one is genuinely gated, and on something specific: **qmd consumes a
 markdown tree.** The semantic index shells out to `@tobilu/qmd` over
-`rendered_md/`, so the tree cannot simply stop existing — it would have
+`render_markdown/`, so the tree cannot simply stop existing — it would have
 to be materialized for the indexer, or qmd's role would have to be taken
 over by something that reads from the database (a direction
 [`multimodal_retrieval.md`](plans/multimodal_retrieval.md) already proposes for
@@ -690,7 +690,7 @@ pre-chew for the next one.
 
 ### R7 — Bound what grows, and say so where it shows
 
-Everything render appends to grows across runs: `rendered_md/`, the
+Everything render appends to grows across runs: `render_markdown/`, the
 render store, the problem log from R1. Give each a bound or an explicit
 "unbounded, because X" in its module doc — and enforce it **inside the
 run that writes, never as a separate cleanup chore someone must
@@ -713,7 +713,7 @@ condition to watch is the schema settling: once a derived store starts
 living a long time, this needs building. The raw store is a separate
 question and is *not* covered by that argument, because it is the copy
 we cannot re-fetch. Render's known instance is already
-recorded: nothing prunes `rendered_md/`, so a re-render under new
+recorded: nothing prunes `render_markdown/`, so a re-render under new
 params leaves documents that changed identity beside the new ones, and
 they stay in the grid index.
 
@@ -748,7 +748,7 @@ The cursor therefore records the render params too, and
 an on-disk store, so there's no rate limit to ration and the simpler
 rule is easier to trust.
 
-**Known gap:** nothing prunes `rendered_md/`. A re-render under new
+**Known gap:** nothing prunes `render_markdown/`. A re-render under new
 params writes the new documents but leaves any that changed identity
 (notably a different `period` bucketing) beside them as orphans, and
 they stay in the grid index. Fixing that needs a pruning pass that knows

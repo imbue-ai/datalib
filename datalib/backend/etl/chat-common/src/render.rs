@@ -44,7 +44,7 @@ use datalib_etl_render::html::escape_text;
 /// provider.
 #[derive(Debug, Clone)]
 pub struct RenderProfile {
-    /// On-disk subdir under `rendered_md/<provider>/<source_name>/…`
+    /// On-disk subdir under `render_markdown/<provider>/<source_name>/…`
     /// and the value of the markdown's `provider:` frontmatter key.
     pub provider: Provider,
     /// The `source_label` column on every grid_row this provider
@@ -270,7 +270,7 @@ fn materialize_attachment_bytes(
     out
 }
 
-/// `<out>/<stanza>/rendered_md/<chat_uuid>/<period>.md` plus the matching
+/// `<out>/<stanza>/render_markdown/<chat_uuid>/<period>.md` plus the matching
 /// markdown and its parent dir. The directory is the chat's stable UUID — never a
 /// title-derived slug — so an upstream rename (channel/title change)
 /// re-renders in place instead of orphaning the old file at a stale path. The
@@ -281,7 +281,7 @@ fn output_paths(
     chat: &NormalizedChat,
     period_key: &str,
 ) -> (PathBuf, PathBuf) {
-    let mut page_dir = datalib_etl::layout::rendered_md_root(out_dir, source_name);
+    let mut page_dir = datalib_etl::layout::render_markdown_root(out_dir, source_name);
     if let Some(prefix) = &chat.path_prefix {
         page_dir = page_dir.join(prefix);
     }

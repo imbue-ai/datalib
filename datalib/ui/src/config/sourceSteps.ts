@@ -11,7 +11,7 @@
 // `<group>/<function>` — never written, but what every row here is keyed on.
 // A step outside any group carries a verbatim `id`.
 //
-// The grid still shows one row per step: the group's name labels its fetch
+// The grid still shows one row per step: the group's name labels its ingest
 // step, and the group's type is what the row's catalog entry comes from.
 // Folding a group into one row with its steps under it is the Manage-screen
 // work in docs/dev/plans/groups_and_functions.md.
@@ -27,7 +27,7 @@ import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
 /// Which wave a step belongs to, for display and for picking the right
 /// half of a catalog entry's fields. Derived from the shape of the id,
 /// never from anything load-bearing.
-export type StepPhase = "fetch" | "render" | "index" | "other";
+export type StepPhase = "ingest" | "render" | "index" | "other";
 
 export type EntryKind = "step" | "applet";
 
@@ -49,11 +49,9 @@ export type ConfiguredStep = {
   /// the group's name (suffixed for its render step); else `id`.
   name: string;
   phase: StepPhase;
-  /// The group's `type` for a grouped step; the `datalib-step
-  /// download|render <type>` word when the command is a `datalib-step`
-  /// invocation; the word after `datalib-applet` for an applet; null
-  /// for anything else, which is a legitimate config with no catalog
-  /// entry.
+  /// The group's `type` for a grouped step; the word after
+  /// `datalib-applet` for an applet; null for anything else, which is a
+  /// legitimate config with no catalog entry.
   type: string | null;
   /// The ids this step declares as inputs.
   inputs: string[];
@@ -74,7 +72,7 @@ export type ConfiguredGroup = {
   end: number;
 };
 
-/// The id stem two sibling steps share (`work-slack/raw` →
+/// The id stem two sibling steps share (`work-slack/ingest` →
 /// `work-slack`). For a grouped step this is the group id; for a custom
 /// step it is a display convenience and nothing more.
 export function stemOf(id: string): string {
@@ -85,22 +83,24 @@ export function stemOf(id: string): string {
 /// The label for a grouped step that wrote no `name` of its own.
 function groupedName(group: ConfiguredGroup, id: string, phase: StepPhase): string {
   if (!group.name) return defaultName(id);
-  if (phase === "fetch") return group.name;
+  if (phase === "ingest") return group.name;
   if (phase === "render") return `${group.name} (render markdown)`;
   return defaultName(id);
 }
 
+/// The built-in functions, by the directory each writes. Mirrors
+/// `datalib_step::function::Function`; hand-kept in step with it.
 const PHASE_BY_LEAF: Record<string, StepPhase> = {
-  raw: "fetch",
-  rendered_md: "render",
+  ingest: "ingest",
+  render_markdown: "render",
 };
 
 /// What to call the shared entries when nobody has named them — a default
 /// that lives here rather than in anyone's config file. A `name =` someone did
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
-  "unified_index/grid": "Unified Index (table)",
-  "unified_index/qmd": "Unified Index (QMD)",
+  "unified_index/grid_index": "Unified Index (table)",
+  "unified_index/qmd_index": "Unified Index (QMD)",
   "unified_index": "Unified Index (Applet)",
 };
 
@@ -219,7 +219,6 @@ export function listSteps(text: string): ConfiguredStep[] {
         typeof step?.name === "string" && step.name.trim() !== ""
           ? step.name.trim()
           : null;
-      const command = typeof step?.command === "string" ? step.command : "";
       const [start, end] = stepRanges.get(i) ?? [0, 0];
       steps.push({
         id: id || `step ${i + 1}`,
@@ -234,7 +233,9 @@ export function listSteps(text: string): ConfiguredStep[] {
               ? defaultName(id)
               : `step ${i + 1}`),
         phase,
-        type: groupEntry?.type ?? stepType(command),
+        // The group's type is the only place a step's provider is
+        // written; a step outside any group has none.
+        type: groupEntry?.type ?? null,
         inputs: (Array.isArray(step?.inputs) ? (step!.inputs as unknown[]) : []).filter(
           (v): v is string => typeof v === "string",
         ),
@@ -296,18 +297,6 @@ function appletType(command: string): string | null {
   return words[1];
 }
 
-/// `datalib-step download slack_api` → `slack_api`. Null for anything
-/// that isn't a `datalib-step` download/render invocation, which is a
-/// legitimate config (any executable can be a step) but has no
-/// catalog entry.
-function stepType(command: string): string | null {
-  const words = command.trim().split(/\s+/);
-  const i = words.findIndex((w) => w === "download" || w === "render");
-  if (i < 0 || i + 1 >= words.length) return null;
-  if (!/(^|\/)datalib-step$/.test(words[0])) return null;
-  return words[i + 1];
-}
-
 /// Read a dotted path (`sync.channels`) out of a params tree.
 export function getParam(params: Record<string, unknown>, target: string): unknown {
   let cur: unknown = params;
@@ -365,7 +354,7 @@ export function producerOf(
     const hit = all.find((s) => s.id === id);
     if (hit) return hit;
   }
-  return all.find((s) => s.id === `${stemOf(step.id)}/raw`);
+  return all.find((s) => s.id === `${stemOf(step.id)}/${functionOf("download")}`);
 }
 
 /// The catalog entry describing a step, in the context of the config it
@@ -599,7 +588,7 @@ function quote(s: string): string {
 /// The function a step of this phase performs within its group, which
 /// is also the directory it writes under the group's.
 export function functionOf(phase: FieldPhase): string {
-  return phase === "render" ? "rendered_md" : "raw";
+  return phase === "render" ? "render_markdown" : "ingest";
 }
 
 /// One source's `[[groups]]` block, with a divider above it. The name
@@ -613,7 +602,9 @@ export function buildGroup(opts: { id: string; name: string; type: string }): st
 }
 
 /// One step, as a `[[steps]]` block. No name: a grouped step's label
-/// comes from its group and its function.
+/// comes from its group and its function. No command either: a built-in
+/// step is `datalib-step`, which reads the function and the group's type
+/// from the environment.
 export function buildStep(opts: {
   entry: CatalogEntry;
   group: string;
@@ -626,19 +617,17 @@ export function buildStep(opts: {
   const inputsLine = inputs.length
     ? `\ninputs = [${inputs.map(quote).join(", ")}]`
     : "";
-  const subcommand = phase === "render" ? "render" : "download";
   const params = paramsToml(entry, values, phase);
   const block = `[[steps]]
 group = ${quote(group)}
-function = ${quote(functionOf(phase))}
-command = "datalib-step ${subcommand} ${entry.type}"${inputsLine}${params ? `\n${params}` : ""}`;
+function = ${quote(functionOf(phase))}${inputsLine}${params ? `\n${params}` : ""}`;
   return block.trimEnd();
 }
 
 /// The id of the render step that would read `fetchId`: its sibling
 /// under the same group.
 export function renderIdFor(fetchId: string): string {
-  return `${stemOf(fetchId)}/rendered_md`;
+  return `${stemOf(fetchId)}/${functionOf("render")}`;
 }
 
 /// Set, replace or (with an empty name) remove the `name` of one

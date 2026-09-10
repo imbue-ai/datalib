@@ -62,7 +62,7 @@ fn an_archived_attachment_is_linked_locally() {
     };
     render(&parsed, d.path());
 
-    let dir = fs::read_dir(d.path().join("notion/rendered_md/pages"))
+    let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
         .unwrap()
         .next()
         .unwrap()
@@ -93,7 +93,7 @@ fn an_unarchived_attachment_keeps_its_upstream_url() {
         ..Default::default()
     };
     render(&parsed, d.path());
-    let dir = fs::read_dir(d.path().join("notion/rendered_md/pages"))
+    let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
         .unwrap()
         .next()
         .unwrap()
@@ -120,7 +120,7 @@ fn a_body_less_page_still_renders() {
         ..Default::default()
     };
     render(&parsed, d.path());
-    let dir = fs::read_dir(d.path().join("notion/rendered_md/pages"))
+    let dir = fs::read_dir(d.path().join("notion/render_markdown/pages"))
         .unwrap()
         .next()
         .unwrap()

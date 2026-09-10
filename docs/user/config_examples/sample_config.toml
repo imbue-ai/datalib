@@ -1,6 +1,7 @@
 # Sample config in the format `datalib-dag` runs: each source is a
-# `[[groups]]` entry with a `type` plus its two steps (`raw` and
-# `rendered_md`, each written as `group` + `function`), and the two
+# `[[groups]]` entry with a `type` plus its two steps (`ingest` and
+# `render_markdown`, each written as `group` + `function` and with no
+# `command`, since a built-in step is `datalib-step`), and the two
 # shared index steps under the `unified_index` group, which every
 # source's rendered markdown feeds. A step's id is `<group>/<function>`,
 # composed rather than written; `inputs` name steps by that id. See
@@ -19,15 +20,13 @@ id = "unified_index"
 
 [[steps]]
 group = "unified_index"
-function = "grid"
-command = "datalib-step grid_index"
-inputs = ["gmail-takeout/rendered_md", "slack/rendered_md", "claude-api/rendered_md"]
+function = "grid_index"
+inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd"
-command = "datalib-step qmd_index"
-inputs = ["gmail-takeout/rendered_md", "slack/rendered_md", "claude-api/rendered_md"]
+function = "qmd_index"
+inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
 
 # Google Takeout Gmail export. No JMAP `sync` block in the params —
 # that puts the email provider in file-backed mbox mode, reading the
@@ -39,16 +38,14 @@ type = "email"
 
 [[steps]]
 group = "gmail-takeout"
-function = "raw"
-command = "datalib-step download email"
+function = "ingest"
 [steps.params.common]
 input_path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
 
 [[steps]]
 group = "gmail-takeout"
-function = "rendered_md"
-command = "datalib-step render email"
-inputs = ["gmail-takeout/raw"]
+function = "render_markdown"
+inputs = ["gmail-takeout/ingest"]
 
 # Slack workspace mirror. Credentials come from `latchkey` at runtime
 # (see the "Register Slack with latchkey" section in the first-time
@@ -61,8 +58,7 @@ type = "slack_api"
 
 [[steps]]
 group = "slack"
-function = "raw"
-command = "datalib-step download slack_api"
+function = "ingest"
 
 [steps.params.common]
 blob_size_limit_bytes = 1000000  # 1 MB — skip larger file uploads
@@ -88,9 +84,8 @@ channels = ["project-data-liberation"]
 
 [[steps]]
 group = "slack"
-function = "rendered_md"
-command = "datalib-step render slack_api"
-inputs = ["slack/raw"]
+function = "render_markdown"
+inputs = ["slack/ingest"]
 
 # Anthropic / claude.ai conversation mirror. Credentials come from
 # `latchkey` at runtime (see the "Register Claude web with latchkey"
@@ -103,8 +98,7 @@ type = "claude_api"
 
 [[steps]]
 group = "claude-api"
-function = "raw"
-command = "datalib-step download claude_api"
+function = "ingest"
 [steps.params.sync]
 # refresh_most_recent_n_chat_count = 3   # force-refetch top-N by updated_at
 # since = "2025-01-01"      # only sync conversations updated at/after this
@@ -113,9 +107,8 @@ command = "datalib-step download claude_api"
 
 [[steps]]
 group = "claude-api"
-function = "rendered_md"
-command = "datalib-step render claude_api"
-inputs = ["claude-api/raw"]
+function = "render_markdown"
+inputs = ["claude-api/ingest"]
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

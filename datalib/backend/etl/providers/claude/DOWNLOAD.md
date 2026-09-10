@@ -155,7 +155,7 @@ unpacked Anthropic's data export into:
   projects/*.json       # one Claude Project per file, `docs` nested
 ```
 
-The download step (`datalib-step download claude_export`,
+The ingest step of a `claude_export` group (
 [`src/download/export.rs`](src/download/export.rs)) reads those files
 and writes the same rows the API walk writes: `users` from
 `users.json`, `conversations` from `conversations.json`, and each
@@ -328,7 +328,7 @@ conversations the export predates: re-running `download claude_export`
 over that store would delete exactly the rows the API just fetched.
 
 So today the bootstrap is a one-way door — ingest the export, then
-change the step's command to `datalib-step download claude_api` and
+change the group's `type` to `claude_api` and
 don't run the export ingest against that store again.
 
 Making it a supported configuration means teaching the prune whose rows

@@ -464,7 +464,7 @@ otherwise still show. Pinned by
 ```sh
 bazelisk build //third-party/doltlite:doltlite
 dl=bazel-bin/third-party/doltlite/doltlite
-db=<root>/media/raw/entities.doltlite_db
+db=<root>/media/ingest/entities.doltlite_db
 
 # What is in the library?
 $dl $db "SELECT media_class, container, COUNT(*) FROM media_items

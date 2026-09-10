@@ -50,14 +50,18 @@ async fn get_dag(root: &Path) -> serde_json::Value {
 }
 
 const CONFIG: &str = r#"
-[[steps]]
-id = "slack/raw"
-command = "datalib-step download slack_api"
+[[groups]]
+id = "slack"
+type = "slack_api"
 
 [[steps]]
-id = "slack/rendered_md"
-command = "datalib-step render slack_api"
-inputs = ["slack/raw"]
+group = "slack"
+function = "ingest"
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]
 "#;
 
 fn write_root(root: &Path, state_json: Option<&str>) {
@@ -97,7 +101,7 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
         Some(
             r#"{
               "steps": {
-                "slack/raw": {
+                "slack/ingest": {
                   "succeeded": true,
                   "last_run": {
                     "started_at": "2026-08-31T10:00:00+01:00",
@@ -106,7 +110,7 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
                     "attempts": 1
                   }
                 },
-                "slack/rendered_md": {
+                "slack/render_markdown": {
                   "succeeded": false,
                   "last_run": {
                     "started_at": "2026-08-31T10:00:09+01:00",
@@ -121,8 +125,8 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
                 "run_id": "2026-08-31T10:00:00+01:00",
                 "started_at": "2026-08-31T10:00:00+01:00",
                 "finished_at": "2026-08-31T10:00:12+01:00",
-                "plan": ["slack/raw", "slack/rendered_md"],
-                "states": {"slack/raw": "succeeded", "slack/rendered_md": "failed"}
+                "plan": ["slack/ingest", "slack/render_markdown"],
+                "states": {"slack/ingest": "succeeded", "slack/render_markdown": "failed"}
               }
             }"#,
         ),
@@ -143,7 +147,7 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
         .map(|s| (s["id"].as_str().unwrap(), s))
         .collect();
 
-    let fetch = by["slack/raw"];
+    let fetch = by["slack/ingest"];
     assert_eq!(fetch["last_run"]["status"], "succeeded");
     assert_eq!(
         fetch["last_run"]["finished_at"],
@@ -152,7 +156,7 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
     assert_eq!(fetch["current_state"], "succeeded");
 
     // The failure is legible without opening a log.
-    let render = by["slack/rendered_md"];
+    let render = by["slack/render_markdown"];
     assert_eq!(render["last_run"]["status"], "failed");
     assert_eq!(render["last_run"]["attempts"], 2);
     assert_eq!(render["last_run"]["error"], "bad json at line 3");
@@ -173,8 +177,8 @@ async fn an_open_record_with_no_lock_holder_is_not_live() {
               "current_run": {
                 "run_id": "2026-08-31T10:00:00+01:00",
                 "started_at": "2026-08-31T10:00:00+01:00",
-                "plan": ["slack/raw"],
-                "states": {"slack/raw": "running"}
+                "plan": ["slack/ingest"],
+                "states": {"slack/ingest": "running"}
               }
             }"#,
         ),
@@ -205,7 +209,7 @@ async fn an_open_record_is_live_while_a_runner_holds_the_root() {
               "steps": {},
               "current_run": {
                 "run_id": "r", "started_at": "2026-08-31T10:00:00+01:00",
-                "plan": ["slack/raw"], "states": {"slack/raw": "running"}
+                "plan": ["slack/ingest"], "states": {"slack/ingest": "running"}
               }
             }"#,
         ),

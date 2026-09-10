@@ -1,6 +1,7 @@
 //! The `synthesize` subcommand: build HTTP playback fixtures for one
 //! source, reading its `input_path` (interpreted as a checked-in raw
-//! fixture tree) and writing replay tapes into `--out`.
+//! fixture tree) and writing replay tapes into `--out`. A dev utility,
+//! not a step: it takes the group id from `--name`, not the environment.
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +21,7 @@ pub fn run(
 ) -> Result<Vec<OutputClaim>> {
     std::fs::create_dir_all(out).with_context(|| format!("create {}", out.display()))?;
     // input_path, resolved like SourceCommon::resolve_paths: explicit
-    // (tilde-expanded) else the canonical raw dir.
+    // (tilde-expanded) else the group's ingest tree.
     let input: PathBuf = match source
         .pointer("/common/input_path")
         .and_then(|v| v.as_str())
@@ -30,7 +31,7 @@ pub fn run(
             Err(_) => PathBuf::from(p),
         },
         Some(p) => PathBuf::from(p),
-        None => data_root.join(name).join("raw"),
+        None => datalib_etl::layout::ingest_root(data_root, name),
     };
     let log = |msg: String| {
         emitter.event(&Event::Log {

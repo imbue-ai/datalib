@@ -1,12 +1,12 @@
 # Groups and functions: one row per source
 
-**Status: agreed design (2026-09-09); slice 1 built (2026-09-09),
-slices 2–5 not.** Written against `eee381c3`. Per
-[`AGENTS.md`](../../../AGENTS.md), don't cite this file as a
-description of the tree. Where it says "today", that was checked
-against that commit; where it says "will", check the slice list under
-"Order of work" — slice 1's items are in the tree, and the three
-places it departed from this text are recorded there.
+**Status: agreed design (2026-09-09); slices 1 and 2 built
+(2026-09-09 and 2026-09-10), slices 3–5 not.** Written against
+`eee381c3`. Per [`AGENTS.md`](../../../AGENTS.md), don't cite this
+file as a description of the tree. Where it says "today", that was
+checked against that commit; where it says "will", check the slice
+list under "Order of work" — slices 1 and 2 are in the tree, and the
+places each departed from this text are recorded there.
 
 **Reverses** the "Sources stop being a grouping" section of
 [`step_identity.md`](completed/step_identity.md) and the header of
@@ -286,7 +286,7 @@ radius.
 | check | severity | effect |
 |---|---|---|
 | `group` names a declared group | error on the step | that step is dropped |
-| a step with no `command` has a group with a `type` | error on the step | dropped |
+| a step with no `command` has a group | error on the step | dropped |
 | `function` contains no `/` and is not empty | error on the step | dropped |
 | a group `id` contains no `/` and is not `system` | error on the group | group and every step under it dropped |
 | composed step ids are unique | error on the later one | dropped |
@@ -451,12 +451,13 @@ Each slice is a PR; each leaves the tree green.
    function names and no command*, decision 9 allowing one rewrite at
    a time). `PREDATES_GROUPS` in `Manager2View.vue` keys on
    `!step.group` and stays.
-2. **`datalib-step` honors the contract.** Dispatch on the environment,
-   write to the named tree, read inputs from `DATALIB_DAG_INPUTS`,
-   delete `source_name`. `command` becomes optional (decision 4) and
-   the provider word leaves it. Vocabulary rename lands here, with the
-   fixture re-bake, because this is the slice that changes what is on
-   disk. Existing roots are re-synced, not migrated (decision 9).
+2. **`datalib-step` honors the contract.** *Built.* Dispatch on the
+   environment, write to the named tree, read inputs from
+   `DATALIB_DAG_INPUTS`, delete `source_name`. `command` becomes
+   optional (decision 4) and the provider word leaves it. Vocabulary
+   rename lands here, with the fixture re-bake, because this is the
+   slice that changes what is on disk. Existing roots are re-synced,
+   not migrated (decision 9).
 
    This slice touches the UI, minimally: every writer of a function
    name or a command — `sourceSteps.ts` (`buildStep`, `PHASE_BY_LEAF`,
@@ -465,6 +466,41 @@ Each slice is a PR; each leaves the tree green.
    alone has 19) move to the new names and stop writing the provider
    word. It changes what those files *say*, not how the screen works;
    that is slice 4b's job, and the reason the two are ordered.
+
+   Where it departed from the text above:
+   - The loader's check is "a step with no `command` is under a
+     group", not "under a group with a `type`": the two index steps
+     have no type. `datalib-step` refuses `ingest` and
+     `render_markdown` without one, which is the check the table
+     wanted, made where the vocabulary is known. The `Function` enum
+     in `datalib_step/src/function.rs` is that vocabulary, with a test
+     that its spellings are the directory names the render side and
+     the index layout use.
+   - The retired shape is a **rejection**, not a warning: a
+     `datalib-step download|render|grid_index|qmd_index …` command,
+     grouped or not, cannot run, so `accept_steps` drops the step and
+     names `datalib-migrate-config`. The migrator parses that shape
+     itself (the loader no longer hands it over) and its one rewrite
+     is old shape → grouped, renamed, command-less, with `inputs` and
+     an applet's `tree` following the renamed ids.
+   - qmd fixes `qmd/index.sqlite` under whatever `XDG_CACHE_HOME` it is
+     given, so the `qmd_index` step's tree is `unified_index/qmd_index`
+     and the index sits at `unified_index/qmd_index/qmd/index.sqlite`.
+     The step gets its own tree at the cost of one extra directory.
+   - `common.raw_path` on an ingest step is refused when it names
+     anywhere but the step's tree; a store on another disk is a
+     symlink at `<group>/ingest`. A render reads its first input, and
+     falls back to `<group>/ingest` with a warning when it declares
+     none (the fixture's pre-seeded `yolink`).
+   - The two fan-ins still scan the root for `*/render_markdown` rather
+     than reading `DATALIB_DAG_INPUTS`; making them input-driven is a
+     behaviour change (a source removed from the config would stop
+     being swept) and was left for the streaming plan.
+   - `Wave::Download` and the `download::` crates keep their names
+     (slice 5); `Phase::Download` became `Phase::Ingest`,
+     `download_only!` became `ingest_only!`, and the UI's `fetch` phase
+     became `ingest`, labelled "Ingest" until slice 4 labels it
+     "Download" or "Import".
 3. **`type` as data type.** `SourceType` shrinks, Claude gains method
    tables, `common.input_path` becomes per-method `path`.
 4. **Manage screen and wizard**, in two halves, because the second

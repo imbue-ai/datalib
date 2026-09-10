@@ -1,4 +1,5 @@
-//! The download step driver: one source's download wave.
+//! The ingest step driver: one source's download wave, written to the
+//! tree the step id names.
 
 use std::path::Path;
 
@@ -10,7 +11,7 @@ use crate::events::{Emitter, OutputClaim};
 
 pub async fn run(
     planned: &PlannedSource,
-    data_root: &Path,
+    tree_rel: &str,
     now: &str,
     control: &datalib_etl::control::DownloadControl,
     emitter: &Emitter,
@@ -89,16 +90,15 @@ pub async fn run(
     )
     .await?;
 
-    let Some(rel) = planned.canonical_rel(data_root, "raw") else {
-        // raw_path overridden away from the canonical layout: no claim.
-        return Ok(vec![]);
-    };
     // Never fail the step here: the download itself has completed and
     // committed. A version we cannot read is a reason to fall back to
     // the runner's hash, not to throw away hours of successful work and
     // block every downstream step.
-    match raw_store_version(&data_root.join(&rel)).await {
-        Ok(Some(version)) => Ok(vec![OutputClaim { path: rel, version }]),
+    match raw_store_version(&planned.raw_path).await {
+        Ok(Some(version)) => Ok(vec![OutputClaim {
+            path: tree_rel.to_string(),
+            version,
+        }]),
         // Stock-sqlite dev build, or nothing materialized yet: no
         // version we can vouch for, so let the runner hash instead.
         Ok(None) => Ok(vec![]),

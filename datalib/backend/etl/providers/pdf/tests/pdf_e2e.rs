@@ -40,7 +40,7 @@ struct Harness {
     root: PathBuf,
     /// The *data* root — the prefix `grid_index::apply_one` strips off
     /// `md_path` to produce the stored path. The real layout is mirrored
-    /// here (`<data_root>/<stanza>/rendered_md/`) rather than flattened,
+    /// here (`<data_root>/<stanza>/render_markdown/`) rather than flattened,
     /// so a test can compare a stored `qmd_path` against it.
     data_root: PathBuf,
     out_dir: PathBuf,
@@ -51,7 +51,7 @@ impl Harness {
         let tmp = tempfile::tempdir().unwrap();
         let raw_dir = tmp.path().join("raw");
         let data_root = tmp.path().join("data");
-        let out_dir = datalib_etl::layout::rendered_md_root(&data_root, STANZA);
+        let out_dir = datalib_etl::layout::render_markdown_root(&data_root, STANZA);
         std::fs::create_dir_all(&raw_dir).unwrap();
         Self {
             root: fixture_dir(),
@@ -544,8 +544,8 @@ async fn every_qmd_path_equals_its_markdowns_md_path() -> Result<()> {
             .to_string_lossy()
             .to_string();
         assert!(
-            stored_md_path.starts_with(&format!("{STANZA}/rendered_md/")),
-            "md_path {stored_md_path} is not under the stanza's rendered_md tree"
+            stored_md_path.starts_with(&format!("{STANZA}/render_markdown/")),
+            "md_path {stored_md_path} is not under the stanza's render_markdown tree"
         );
         assert!(!m.rows.is_empty(), "a rendered doc must emit rows");
         for r in &m.rows {

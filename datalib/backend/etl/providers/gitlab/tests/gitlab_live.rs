@@ -106,7 +106,7 @@ async fn gitlab_live_single_mr_snapshot() {
         "state_known": mr.state.is_some(),
         "note_count": parsed.notes.len(),
         "sections_present": sections,
-        "rendered_md_exists": qmd_abs.exists(),
+        "render_markdown_exists": qmd_abs.exists(),
         "rows_emitted": docs.iter().any(|d| !d.rows.is_empty()),
     });
 

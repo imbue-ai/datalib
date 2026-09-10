@@ -297,7 +297,7 @@ const PREDATES_GROUPS =
 /// reader actually wants: which of these brings data in, which turns it
 /// into markdown, which is shared index plumbing.
 const PHASE_LABEL: Record<StepPhase, string> = {
-  fetch: "Fetch",
+  ingest: "Ingest",
   render: "Render",
   index: "Index",
   other: "Step",
@@ -402,7 +402,7 @@ const rows = computed<Row[]>(() =>
     } else if (s.phase === "index") {
       editBlocked = "A shared index step has no options — its inputs are its whole config.";
     } else if (!entry) {
-      editBlocked = "This step isn't a datalib-step command the catalog knows.";
+      editBlocked = "This step's group has no type the catalog knows.";
     } else if (!entry.wizard) {
       editBlocked = `No guided form for ${entry.label} yet — edit it in Advanced below.`;
     } else if (!s.group) {
@@ -419,8 +419,8 @@ const rows = computed<Row[]>(() =>
     // "Render to markdown": offered on a fetch step that has no render
     // step reading it yet, for a provider that renders at all.
     let renderBlocked: string | null = null;
-    if (s.kind !== "step" || s.phase !== "fetch") {
-      renderBlocked = "Only a fetch step can have a render step added to it.";
+    if (s.kind !== "step" || s.phase !== "ingest") {
+      renderBlocked = "Only an ingest step can have a render step added to it.";
     } else if (!entry?.wizard) {
       renderBlocked = "No guided form for this type — add the render step in Advanced below.";
     } else if (entry.renderStep === false) {
@@ -858,7 +858,7 @@ const columnDefs: ColDef<Row>[] = [
       // Only shown where it applies: a fetch step with no render step
       // reading it yet. Absent rather than disabled everywhere else,
       // which would put a dead button on every index and applet row.
-      if (row.phase === "fetch") {
+      if (row.phase === "ingest") {
         wrap.appendChild(
           iconButton(
             "render",
@@ -1296,7 +1296,7 @@ async function onWizardSubmit(payload: {
   // The name lives on the group. Editing a fetch step is how it gets
   // renamed; a render step's label is derived, so its dialog offers
   // no name and nothing to write here.
-  if (current?.step.group && current.step.phase === "fetch") {
+  if (current?.step.group && current.step.phase === "ingest") {
     next = renameGroup(next, current.step.group, payload.name);
   }
 
@@ -1349,7 +1349,7 @@ async function deleteSource(id: string) {
   // step behind would leave an input naming a step that no longer
   // exists, which the loader refuses outright — a whole config broken
   // by a partial delete.
-  const sibling = step.phase === "fetch" ? renderSiblingOf(step.id) : undefined;
+  const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
   const doomed = sibling ? [step, sibling] : [step];
 
   const what =

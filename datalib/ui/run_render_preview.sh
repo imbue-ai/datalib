@@ -50,7 +50,7 @@ trap 'rm -rf "$work"' EXIT
 md="$work/md"
 mkdir -p "$md"
 
-# The fixture tar holds `qmd/<source>/rendered_md/…`; strip the `qmd/`
+# The fixture tar holds `qmd/<source>/render_markdown/…`; strip the `qmd/`
 # so a document's label starts with the source that wrote it.
 tar -xf "$fixture_tar" -C "$md" --strip-components=1
 

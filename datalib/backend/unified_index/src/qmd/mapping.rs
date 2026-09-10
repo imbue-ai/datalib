@@ -362,12 +362,12 @@ mod tests {
         // A hit whose diff header lands in the *second* message resolves to
         // exactly that one row — no snippet anchor required.
         let tmp = tempfile::tempdir().unwrap();
-        let rel = "rendered_md/claude/acct/org/llm_chats/conv/index.md";
+        let rel = "render_markdown/claude/acct/org/llm_chats/conv/index.md";
         let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), rel));
 
         // `@@ -13,4 @@ (2 before, …)` → matched line 15, inside the 2nd message.
         let h = hit(
-            "rendered-md/claude/acct/org/llm-chats/conv/index.md",
+            "render-markdown/claude/acct/org/llm-chats/conv/index.md",
             "@@ -13,4 @@ (2 before, 3 after)\n## Assistant",
         );
         let got = idx.rows_for_hit(&h);
@@ -380,12 +380,12 @@ mod tests {
         // The motivating bug: a hit on the conversation *title* (above the
         // first message) must resolve to the first message, not fan out.
         let tmp = tempfile::tempdir().unwrap();
-        let rel = "rendered_md/claude/acct/org/llm_chats/conv/index.md";
+        let rel = "render_markdown/claude/acct/org/llm_chats/conv/index.md";
         let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), rel));
 
         // `@@ -4,4 @@ (1 before, …)` → matched line 5 (the <h1>), before any anchor.
         let h = hit(
-            "rendered-md/claude/acct/org/llm-chats/conv/index.md",
+            "render-markdown/claude/acct/org/llm-chats/conv/index.md",
             "@@ -4,4 @@ (1 before, 10 after)\n<h1>Reactive data pipeline composition in Rust</h1>",
         );
         let got = idx.rows_for_hit(&h);
@@ -552,10 +552,10 @@ mod tests {
     fn ranked_rows_one_per_doc_keeps_top_hit_per_document() {
         let tmp = tempfile::tempdir().unwrap();
         // A two-message chat (anchors at lines 7 and 13) ...
-        let chat = "rendered_md/claude/acct/llm_chats/conv/index.md";
+        let chat = "render_markdown/claude/acct/llm_chats/conv/index.md";
         let mut rows = write_two_message_doc(tmp.path(), chat);
         // ... plus a second, single-message document (anchor at line 5).
-        let other = "rendered_md/slack/team/chan/index.md";
+        let other = "render_markdown/slack/team/chan/index.md";
         let other_path = tmp.path().join(other);
         std::fs::create_dir_all(other_path.parent().unwrap()).unwrap();
         std::fs::write(

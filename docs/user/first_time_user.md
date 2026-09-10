@@ -201,8 +201,10 @@ c. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
 ## 3. Configuration
 
 The running config lives at `config.toml` in your data_root. Each
-source is a **group** with a `raw` + `rendered_md` step pair under it,
-plus two shared index steps that fan in over everything rendered. A
+source is a **group** with an `ingest` + `render_markdown` step pair
+under it, plus two shared index steps that fan in over everything
+rendered. None of them names a command: a step without one is
+datalib's own, and the group's `type` says which provider it runs. A
 one-source config looks like this:
 
 ```toml
@@ -215,31 +217,27 @@ type = "claude_api"
 
 [[steps]]
 group = "claude"
-function = "raw"
-command = "datalib-step download claude_api"
+function = "ingest"
 [steps.params]
 sync = {}
 
 [[steps]]
 group = "claude"
-function = "rendered_md"
-command = "datalib-step render claude_api"
-inputs = ["claude/raw"]
+function = "render_markdown"
+inputs = ["claude/ingest"]
 
 [[groups]]
 id = "unified_index"
 
 [[steps]]
 group = "unified_index"
-function = "grid"
-command = "datalib-step grid_index"
-inputs = ["claude/rendered_md"]
+function = "grid_index"
+inputs = ["claude/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd"
-command = "datalib-step qmd_index"
-inputs = ["claude/rendered_md"]
+function = "qmd_index"
+inputs = ["claude/render_markdown"]
 
 [[applets]]
 group = "unified_index"
@@ -249,7 +247,7 @@ command = "datalib-applet unified_index"
 
 A source is a `[[groups]]` entry with a `type`, plus its steps: each
 step says which group it belongs to and what it does there, and the
-pair names a directory — `claude/raw`, `claude/rendered_md` — that the
+pair names a directory — `claude/ingest`, `claude/render_markdown` — that the
 next step's `inputs` refer to. Two TOML rules worth knowing before you
 hand-edit: `data_root` has to come *above* the first `[[…]]` header,
 and within a step the `params` sub-table comes last — anything you
@@ -276,9 +274,10 @@ just one source's step pair) straight into `<data_root>/config.toml`:
   — every supported source type with realistic defaults (including
   both input modes for email and contacts).
 
-(Upgrading from an earlier datalib? A `config.toml` written before
-`[[groups]]` existed — steps carrying `id = "claude/raw"` and no
-`group` — is rewritten once:
+(Upgrading from an earlier datalib? A `config.toml` whose steps still
+name a `datalib-step download …` or `datalib-step render …` command —
+with or without `[[groups]]` — is refused by this version, and is
+rewritten once:
 
 ```sh
 datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml
@@ -342,7 +341,7 @@ and should be faster.
   a progress bar as each new / updated / overlap conversation is
   fetched from `claude.ai/api`. New conversations are fetched first.
 - A `render` step per source: each conversation rendered into intelligible Markdown (including image attachments).
-- The `grid_index` step: rows written into the doltlite SQL store at `<data_root>/unified_index/grid/db.doltlite_db`.
+- The `grid_index` step: rows written into the doltlite SQL store at `<data_root>/unified_index/grid_index/db.doltlite_db`.
 - The `qmd_index` step: builds the search index. **First run is slow** —
   embedding ~5–10 minutes per thousand chunks on CPU. It's resumable, so
   Ctrl-C and re-run is safe. Re-runs after the backlog drains take
@@ -353,22 +352,22 @@ and should be faster.
 ```
 ~/datalib/
 ├── claude_web/                     # one directory per source stanza …
-│   ├── raw/                        #   its captured raw stores …
+│   ├── ingest/                     #   its captured raw stores …
 │   │   ├── entities.doltlite_db
 │   │   └── blobs.doltlite_db
-│   └── rendered_md/                #   … and its rendered .md tree (UUID-keyed)
+│   └── render_markdown/            #   … and its rendered .md tree (UUID-keyed)
 │       └── …
 ├── slack/
-│   ├── raw/
+│   ├── ingest/
 │   │   ├── entities.doltlite_db
 │   │   └── blobs.doltlite_db
-│   └── rendered_md/
+│   └── render_markdown/
 ├── fastmail/                       # (mbox source lands here too)
 │   └── …
 ├── …
 ├── unified_index/                  # the shared indexes, rebuildable
-│   ├── grid/db.doltlite_db         #   grid rows + markdowns + edges
-│   └── qmd/index.sqlite            #   search index for hybrid / vector queries
+│   ├── grid_index/db.doltlite_db   #   grid rows + markdowns + edges
+│   └── qmd_index/qmd/index.sqlite  #   search index for hybrid / vector queries
 └── system/                         # everything that isn't a source
     ├── dag_state.json              # scheduler state (which steps are up to date)
     ├── api-token                   # the running server's bearer token
@@ -377,8 +376,8 @@ and should be faster.
     └── job-logs/                   # one log per sync job
 ```
 
-> **Backups:** the bulky **derived** artifacts — each `<name>/rendered_md/`
-> tree, the search DB (`unified_index/grid/`), the qmd index (`unified_index/qmd/`),
+> **Backups:** the bulky **derived** artifacts — each `<name>/render_markdown/`
+> tree, the search DB (`unified_index/grid_index/`), the qmd index (`unified_index/qmd_index/qmd/`),
 > and served attachments (`system/media/`) — are all rebuildable from your raw
 > stores, and each carries a `CACHEDIR.TAG`, so cache-aware backups skip them
 > automatically:
@@ -389,7 +388,7 @@ and should be faster.
 > ```
 >
 > What's left in the backup is exactly what you want to keep: the per-stanza
-> `<name>/raw/` stores (your precious captured data), `config.toml`, and
+> `<name>/ingest/` stores (your precious captured data), `config.toml`, and
 > `system/` (scheduler state + sync job logs — operational
 > history, not rebuildable).
 
@@ -441,7 +440,7 @@ pointing `qmd` at the sqlite file under your data root via the
 `INDEX_PATH` env var:
 
 ```sh
-INDEX_PATH=~/datalib/unified_index/qmd/index.sqlite \
+INDEX_PATH=~/datalib/unified_index/qmd_index/qmd/index.sqlite \
     npx -y @tobilu/qmd query "hello"
 ```
 
@@ -454,7 +453,7 @@ The point of mirroring your data locally is that it stays yours, so it
 is worth knowing the exit before you need it. Two of the three copies
 are already in open formats you can read with no datalib at all:
 
-- **The markdown.** `<name>/rendered_md/` is a tree of ordinary
+- **The markdown.** `<name>/render_markdown/` is a tree of ordinary
   UTF-8 `.md` files, one per conversation or document. Copy it
   anywhere; every text editor and search tool on your machine already
   reads it.
@@ -471,14 +470,14 @@ are already in open formats you can read with no datalib at all:
   your language's stdlib — opens directly:
 
   ```sh
-  datalib-doltlite -readonly ~/datalib/unified_index/grid/db.doltlite_db .dump \
+  datalib-doltlite -readonly ~/datalib/unified_index/grid_index/db.doltlite_db .dump \
     | sqlite3 ~/grid.sqlite
 
   sqlite3 ~/grid.sqlite "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
 
   The same command works on any `.doltlite_db` under your data root,
-  including the raw per-source stores under `<name>/raw/`, whose
+  including the raw per-source stores under `<name>/ingest/`, whose
   attachment bytes come across intact.
 
   What the export gives you is the current state of every table, with

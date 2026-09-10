@@ -29,7 +29,7 @@ pub struct RenderCursor {
 }
 
 pub fn cursor_path(data_root: &Path, stanza: &str) -> PathBuf {
-    crate::layout::rendered_md_root(data_root, stanza).join("_render_cursor.json")
+    crate::layout::render_markdown_root(data_root, stanza).join("_render_cursor.json")
 }
 
 pub fn read(path: &Path) -> Result<Option<RenderCursor>> {

@@ -108,7 +108,7 @@ Aim: at least one example of every shape we've seen in real backups.
 | Activity type `edited-block-value` (before/after) | `ac710001-...0002`             |
 | Notion `updated` stream (version bump) | `notion_block/updated/events.jsonl` (root page title changed v10→v11) |
 | Render-only source (no download step) | `yolink` — raw store seeded by `yolink-make-fixture` |
-| Timeseries render (one page of plots) | `yolink/rendered_md/index.md` + `plots/*.html` |
+| Timeseries render (one page of plots) | `yolink/render_markdown/index.md` + `plots/*.html` |
 | Non-SI unit converted at render | `sickbay_plasma_fridge` reports `temperature_f`; plots in °C |
 | Two metrics of one quantity on split axes | `deck_12_water_main` — per-sample litres left, totalizer right |
 | Relative `<iframe src>` in a rendered body | yolink plot embeds (rewritten to `/api/asset/…` by the UI) |
@@ -197,8 +197,8 @@ stable:
 * **`_render_cursor.json`**, for every stanza: it records
   `last_render_at` from the local clock and `last_rendered_hash` from
   the store, both of which move. It is pipeline state that happens to
-  live inside `rendered_md/`, so `tar_qmd.py` sweeps it into `qmd.tar`.
-* **`yolink/rendered_md/index.md`**, in its "Store" section only: the
+  live inside `render_markdown/`, so `tar_qmd.py` sweeps it into `qmd.tar`.
+* **`yolink/render_markdown/index.md`**, in its "Store" section only: the
   page reports the store's HEAD and commit log, which *is* the content —
   a page describing a store legitimately changes when the store's
   identity does. Its `source_fingerprint` is deliberately **not**

@@ -49,8 +49,8 @@ from the struct the `DDL`, `COLUMNS`, and `TABLES` module consts. The
 
 Each provider crate under `datalib/backend/etl/providers/<p>/`
 writes its `GridRow`s into that source's own render store,
-`<root>/<stanza>/rendered_md/indexed_markdown.doltlite_db`. The
-grid_index step (`datalib-step grid_index`; `build_grid_index` in
+`<root>/<stanza>/render_markdown/indexed_markdown.doltlite_db`. The
+grid_index step (the `grid_index` function of `datalib-step`; `build_grid_index` in
 `datalib/backend/etl/render/src/grid_index.rs`) stacks those stores into the
 unified index: it asks each one `dolt_diff` between the commit the
 index last consumed (`source_cursors`) and that store's HEAD, applies
@@ -124,7 +124,7 @@ generated from the DDL this build actually declares. Check the names
 below against it; that file cannot go stale, and this one can.
 
 Table names below are the **raw-store** tables, which are unprefixed:
-each provider writes its own `<name>/raw/entities.doltlite_db`, so there
+each provider writes its own `<name>/ingest/entities.doltlite_db`, so there
 is no `claude_`/`slack_` prefix to disambiguate. Only the CAS edge
 tables carry one (`claude_attachments`, `slack_attachments`), because
 they sit beside the shared blob store.
@@ -275,18 +275,18 @@ notion.thread) and the parent's for everything below them.
 
 ### `qmd_path`
 
-`<source_name>/rendered_md/<renderer-specific tail>`, where `<source_name>`
+`<source_name>/render_markdown/<renderer-specific tail>`, where `<source_name>`
 is the config step's name. Verified against the TNG fixture:
 
 ```text
-claude   claude-api/rendered_md/{conversation_uuid}/all.md
-chatgpt  chatgpt-api/rendered_md/{conversation_id}/all.md
-slack    slack/rendered_md/{thread_uuid}/all.md
-beeper   beeper/rendered_md/{network}/{chat_uuid}/{YYYY-MM}.md
-github   github/rendered_md/{owner}/{repo}/pr-{number}/index.md
-gitlab   gitlab/rendered_md/{group}/{project}/mr-{iid}/index.md
-notion   notion/rendered_md/pages/{page_uuid}/index.md
-pdf      tng_pdfs/rendered_md/docs/{blake3}.md
+claude   claude-api/render_markdown/{conversation_uuid}/all.md
+chatgpt  chatgpt-api/render_markdown/{conversation_id}/all.md
+slack    slack/render_markdown/{thread_uuid}/all.md
+beeper   beeper/render_markdown/{network}/{chat_uuid}/{YYYY-MM}.md
+github   github/render_markdown/{owner}/{repo}/pr-{number}/index.md
+gitlab   gitlab/render_markdown/{group}/{project}/mr-{iid}/index.md
+notion   notion/render_markdown/pages/{page_uuid}/index.md
+pdf      tng_pdfs/render_markdown/docs/{blake3}.md
 ```
 
 For a given `markdown_uuid`, `grid_rows.qmd_path` must be byte-equal to
@@ -301,7 +301,7 @@ Two nullable measurements, both NULL on most rows.
 
 | provider.kind | `byte_size` | `item_count` |
 |---|---|---|
-| datalib.Source Size | bytes under `<name>/raw` | files under it |
+| datalib.Source Size | bytes under `<name>/ingest` | files under it |
 | datalib.Store | the `.doltlite_db` file's size | — |
 | datalib.Table | — (see below) | rows in the table |
 | pdf.document | — | pages in the document |
@@ -326,7 +326,7 @@ emitting a handful of rows tagged `provider = "datalib"`, `source_label
 `media` — a place in the grid at all: they render no documents, so
 without this they appear nowhere. `source:Storage` is "show me what
 everything weighs"; `source_name:<name>` narrows to one source, since
-the rows live under that source's `rendered_md/`.
+the rows live under that source's `render_markdown/`.
 
 The code is `datalib/backend/datalib_step/src/introspect.rs`, and three
 of its decisions are worth knowing before changing it.
@@ -377,7 +377,7 @@ with one difference worth naming. For an unordered bag the rule is
 Here the bytes are signal too — a user wants to see how big a source
 is — so we neither sort nor drop them. We **report but don't hash**.
 
-**Scope is `<name>/raw`, not the whole tree.** `<name>/rendered_md` is
+**Scope is `<name>/ingest`, not the whole tree.** `<name>/render_markdown` is
 datalib's own output, `system/usage.doltlite_db` already tracks it per
 step, and measuring it from inside the thing that writes it is a
 ratchet: every run finds a bigger tree, writes a bigger number, and

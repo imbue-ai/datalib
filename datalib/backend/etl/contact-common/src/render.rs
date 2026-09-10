@@ -23,7 +23,7 @@ use crate::types::{ContactPhoto, NormalizedContact};
 /// chat-common's `RenderProfile`.
 #[derive(Debug, Clone)]
 pub struct ContactRenderProfile {
-    /// On-disk subdir under `rendered_md/<provider>/…`, the markdown's
+    /// On-disk subdir under `render_markdown/<provider>/…`, the markdown's
     /// `provider:` frontmatter key, and the grid-row `provider` column.
     pub provider: Provider,
     /// The `source_label` column on every grid row (e.g. `"LinkedIn"`,
@@ -176,7 +176,7 @@ fn output_paths(
     // The contact's `blobs/` (photo) live inside this dir. Display name and
     // group label still live in the frontmatter + grid row.
     let page_dir =
-        datalib_etl::layout::rendered_md_root(out_dir, source_name).join(&contact.contact_uuid);
+        datalib_etl::layout::render_markdown_root(out_dir, source_name).join(&contact.contact_uuid);
     let md_path = page_dir.join("index.md");
     (md_path, page_dir)
 }
@@ -436,7 +436,7 @@ mod tests {
             &mk_profile(),
             &mk_contact(),
             "linkedin",
-            "rendered_md/x.md",
+            "render_markdown/x.md",
             &mut problems,
         )
         .expect("valid contact grid row");

@@ -1,5 +1,5 @@
 // Per-rendered-markdown metadata + render bookkeeping. One row per
-// `.md` file in `<root>/rendered_md/`. Owns the file's identity (UUID +
+// `.md` file in `<root>/render_markdown/`. Owns the file's identity (UUID +
 // title + provenance) and the cache key (`row_set_hash` +
 // `renderer_version`) used by incremental ingest to decide whether to
 // re-emit the file. `grid_rows.markdown_uuid` is the FK pointing here;
@@ -12,7 +12,7 @@ use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
 /// One row in the `markdowns` table. Source of truth for
-/// `<root>/rendered_md/<...>.md` cache invalidation: ingest computes a
+/// `<root>/render_markdown/<...>.md` cache invalidation: ingest computes a
 /// fresh `row_set_hash` from the canonical grid_row tuples for this
 /// markdown file and compares it to the stored value; on mismatch the
 /// renderer re-emits the file and bumps `rendered_at`. A bump to
@@ -61,7 +61,7 @@ pub struct MarkdownRow {
     #[col(sql = "VARCHAR(40)")]
     pub updated_at: Option<String>,
     /// Path to the rendered markdown file, relative to the **data
-    /// root** — `<stanza>/rendered_md/...`, derived by
+    /// root** — `<stanza>/render_markdown/...`, derived by
     /// `grid_index::apply_one` stripping the data root off the absolute
     /// path the renderer wrote. NULL until the renderer has produced
     /// output. The backend's `/api/chat/{markdown_uuid}` endpoint

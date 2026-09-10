@@ -105,7 +105,7 @@ fn ensure_models(root: &std::path::Path) {
         );
         return;
     }
-    let qmd_dir = datalib_core::layout::qmd_dir(root);
+    let qmd_dir = datalib_unified_index::qmd::qmd_state_dir(root);
     let models_dir = datalib_qmd_indexer::default_models_dir();
     if let Err(e) = std::fs::create_dir_all(&models_dir)
         .map_err(anyhow::Error::from)

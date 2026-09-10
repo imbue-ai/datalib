@@ -60,8 +60,8 @@ test("a broken entry costs that entry, and nothing else", async ({
   // A step the loader must reject, appended to a config that is
   // otherwise entirely fine. `title` is the exact key from 00633dd5.
   writeConfig(
-    `${original}\n[[steps]]\nid = "broken/raw"\n` +
-      `command = "datalib-step download pdf"\ntitle = "nope"\n`,
+    `${original}\n[[steps]]\nid = "broken/ingest"\n` +
+      `command = "fetch-pdf"\ntitle = "nope"\n`,
   );
 
   // The server still reads a usable config: it is a config (`parsed_ok`),
@@ -72,7 +72,7 @@ test("a broken entry costs that entry, and nothing else", async ({
   expect(cfg.app_ready).toBe(true);
   expect(cfg.diagnostics).toHaveLength(1);
   expect(cfg.diagnostics[0].severity).toBe("rejected");
-  expect(cfg.diagnostics[0].entry.id).toBe("broken/raw");
+  expect(cfg.diagnostics[0].entry.id).toBe("broken/ingest");
   expect(cfg.diagnostics[0].message).toContain("title");
 
   // The applet the whole app runs on is untouched — the assertion that
@@ -87,7 +87,7 @@ test("a broken entry costs that entry, and nothing else", async ({
 
   // The dropped entry is on its own row, saying why — not missing, and
   // not wearing a status from some earlier run.
-  const row = page.locator('.ag-row[row-id="broken/raw"]');
+  const row = page.locator('.ag-row[row-id="broken/ingest"]');
   await expect(row).toBeVisible();
   await expect(row.locator('[col-id="status"] .m2-status')).toHaveAttribute(
     "title",

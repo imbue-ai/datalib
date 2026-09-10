@@ -19,16 +19,18 @@
 # step writes, and what another step's `inputs` name. An `[[applets]]`
 # entry is a server the app spawns, filed under a group for display.
 #
-# Each step is an arbitrary `command` (see docs/dev/step_protocol.md);
-# the runner appends `params` and `inputs` as `--params` / `--inputs`
-# JSON flags and passes the composed id, the group, its type and the
-# function in the environment. For the built-in `datalib-step`
-# commands, download and render take the provider as a nested
-# subcommand, and `params` is per-phase — the download step carries
-# the provider's download config, the render step only render knobs
-# (none for most providers; e.g. beeper's `period`, perseus's
-# `alignment_pairs`). The `grid_index` and `qmd_index` steps are
-# source-independent fan-ins over every rendered_md tree.
+# A step may name a `command` (see docs/dev/step_protocol.md); the
+# runner appends `params` and `inputs` as `--params` / `--inputs` JSON
+# flags and passes the composed id, the group, its type and the
+# function in the environment. A step with no `command` is a built-in
+# one: it runs `datalib-step`, which reads the function and the group's
+# `type` from that environment. The built-in functions are `ingest`
+# (bring the data in), `render_markdown` (turn the raw store into
+# markdown), and the two fan-ins `grid_index` and `qmd_index` over
+# every render_markdown tree. `params` is per-function — the ingest
+# step carries the provider's download config, the render step only
+# render knobs (none for most providers; e.g. beeper's `period`,
+# perseus's `alignment_pairs`).
 #
 # TOML shape: one `[[…]]` table per entry, with a step's `params` as
 # `[steps.params.…]` sub-tables. A table header ends the table it sits
@@ -36,7 +38,8 @@
 # likewise `data_root` below has to precede the first `[[…]]` header.
 #
 # Editing a step re-runs it. The runner fingerprints each step over its
-# command, `params`, `env` and declared paths, so changing any of them
+# command, `params`, `env`, declared paths and its group's `type`, so
+# changing any of them
 # makes the step stale even when nothing it reads has moved — widen a
 # `since`, flip a render knob, and the next run rebuilds that step's
 # output. An optional `code_version = "..."` covers the remaining case:
@@ -62,9 +65,10 @@ data_root = "~/tmp/dr-dag"
 # a migration rather than an edit. Its `name` is what a person types and
 # what every screen shows; optional, read only by the UI, and free to
 # change at any moment because nothing depends on it. The `type` says
-# what kind of data the group mirrors; the steps under it are named for
-# what they do (`raw` fetches, `rendered_md` renders), and their ids are
-# composed from the two.
+# what kind of data the group mirrors, and which provider the built-in
+# steps run; the steps under it are named for what they do (`ingest`
+# brings the data in, `render_markdown` renders it), and their ids —
+# the directories they write — are composed from the two.
 [[groups]]
 id = "slack"
 name = "Work Slack"
@@ -72,8 +76,7 @@ type = "slack_api"
 
 [[steps]]
 group = "slack"
-function = "raw"
-command = "datalib-step download slack_api"
+function = "ingest"
 [steps.params.sync]
 media = true
 channels = ["chat-qi"]
@@ -81,9 +84,8 @@ since = "2026-06-15"
 
 [[steps]]
 group = "slack"
-function = "rendered_md"
-command = "datalib-step render slack_api"
-inputs = ["slack/raw"]
+function = "render_markdown"
+inputs = ["slack/ingest"]
 
 # ── claude ─────────────────────────────────────────────────────────
 # Prerequisite (one-time): register claude.ai with latchkey and
@@ -97,16 +99,14 @@ type = "claude_api"
 
 [[steps]]
 group = "claude"
-function = "raw"
-command = "datalib-step download claude_api"
+function = "ingest"
 [steps.params.sync]
 conv_uuids = ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
 
 [[steps]]
 group = "claude"
-function = "rendered_md"
-command = "datalib-step render claude_api"
-inputs = ["claude/raw"]
+function = "render_markdown"
+inputs = ["claude/ingest"]
 
 # ── shared fan-in steps ────────────────────────────────────────────
 # `inputs` names the steps these read, by composed id. Adding a source
@@ -119,15 +119,13 @@ id = "unified_index"
 
 [[steps]]
 group = "unified_index"
-function = "grid"
-command = "datalib-step grid_index"
-inputs = ["slack/rendered_md", "claude/rendered_md"]
+function = "grid_index"
+inputs = ["slack/render_markdown", "claude/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd"
-command = "datalib-step qmd_index"
-inputs = ["slack/rendered_md", "claude/rendered_md"]
+function = "qmd_index"
+inputs = ["slack/render_markdown", "claude/render_markdown"]
 
 # ── applets ────────────────────────────────────────────────────────
 # An applet is the third kind of config entry: a long-lived server the
@@ -162,7 +160,7 @@ group = "slack"
 id = "slack_view"
 command = "datalib-applet slack"
 [applets.params]
-tree = "slack/rendered_md"
+tree = "slack/render_markdown"
 workspace = "Slack"
 
 # The app's own surface: `unified_index` serves the grid, the document

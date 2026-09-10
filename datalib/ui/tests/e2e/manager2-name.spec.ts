@@ -77,9 +77,9 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   await expect(preview).toContainText('id = "personal-claude"');
   await expect(preview).toContainText('name = "Personal Claude"');
   await expect(preview).toContainText('type = "claude_api"');
-  await expect(preview).toContainText('function = "raw"');
-  await expect(preview).toContainText('function = "rendered_md"');
-  await expect(preview).toContainText('inputs = ["personal-claude/raw"]');
+  await expect(preview).toContainText('function = "ingest"');
+  await expect(preview).toContainText('function = "render_markdown"');
+  await expect(preview).toContainText('inputs = ["personal-claude/ingest"]');
 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText(/Added Personal Claude, with a step to render it\./)).toBeVisible();
@@ -88,12 +88,12 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   //
   // The phase is a glyph suffixed onto the name, so it is asserted
   // through the accessible name rather than cell text.
-  await expect(row(page, "personal-claude/raw")).toContainText("Personal Claude");
-  await expect(stepMark(page, "personal-claude/raw")).toHaveAttribute("aria-label", "Fetch");
-  await expect(row(page, "personal-claude/rendered_md")).toContainText(
+  await expect(row(page, "personal-claude/ingest")).toContainText("Personal Claude");
+  await expect(stepMark(page, "personal-claude/ingest")).toHaveAttribute("aria-label", "Ingest");
+  await expect(row(page, "personal-claude/render_markdown")).toContainText(
     "Personal Claude (render markdown)",
   );
-  await expect(stepMark(page, "personal-claude/rendered_md")).toHaveAttribute(
+  await expect(stepMark(page, "personal-claude/render_markdown")).toHaveAttribute(
     "aria-label",
     "Render",
   );
@@ -104,22 +104,22 @@ test("one dialog writes two steps, and they are two rows", async ({ page }) => {
   // wiring is covered in source_steps.test.ts against a config that has
   // fan-ins.
   const text = await editor.inputValue();
-  expect(text.match(/group = "personal-claude"\nfunction = "rendered_md"/g)).toHaveLength(1);
+  expect(text.match(/group = "personal-claude"\nfunction = "render_markdown"/g)).toHaveLength(1);
 
   // Edit the fetch step: name free, id fixed, and renaming leaves the
   // id alone — the property that keeps the index's paths honest.
-  await row(page, "personal-claude/raw").getByRole("button", { name: "Edit" }).click();
+  await row(page, "personal-claude/ingest").getByRole("button", { name: "Edit" }).click();
   await expect(nameField(page)).toHaveValue("Personal Claude");
   await expect(idField(page)).toHaveCount(0);
-  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/raw");
+  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/ingest");
   await nameField(page).fill("Claude Archive");
-  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/raw");
+  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/ingest");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Claude Archive.")).toBeVisible();
 
   // The name belongs to the group, so renaming the source renames both
   // rows: the render step's label is the same name said again.
-  await expect(row(page, "personal-claude/rendered_md")).toContainText(
+  await expect(row(page, "personal-claude/render_markdown")).toContainText(
     "Claude Archive (render markdown)",
   );
   await expect(editor).toHaveValue(/name = "Claude Archive"/);
@@ -136,24 +136,24 @@ test("declining the checkbox writes one step, and the row action adds the other"
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Fetch Only.")).toBeVisible();
 
-  await expect(row(page, "fetch-only/raw")).toBeVisible();
-  await expect(page.locator('.ag-row[row-id="fetch-only/rendered_md"]')).toHaveCount(0);
-  await expect(editor).not.toHaveValue(/fetch-only\/rendered_md/);
+  await expect(row(page, "fetch-only/ingest")).toBeVisible();
+  await expect(page.locator('.ag-row[row-id="fetch-only/render_markdown"]')).toHaveCount(0);
+  await expect(editor).not.toHaveValue(/fetch-only\/render_markdown/);
 
   // The row action adds it later, minting the sibling id through the
   // same path the checkbox would have.
-  await row(page, "fetch-only/raw").getByRole("button", { name: "Render to markdown" }).click();
+  await row(page, "fetch-only/ingest").getByRole("button", { name: "Render to markdown" }).click();
   await expect(idField(page)).toHaveCount(0);
-  await expect(wizard(page)).toContainText("fetch-only/rendered_md");
+  await expect(wizard(page)).toContainText("fetch-only/render_markdown");
   // No name box: the render step's label comes from the group's name.
   await expect(nameField(page)).toHaveCount(0);
   await wizard(page).getByRole("button", { name: "Add render step" }).click();
 
-  await expect(row(page, "fetch-only/rendered_md")).toBeVisible();
-  await expect(editor).toHaveValue(/inputs = \["fetch-only\/raw"\]/);
+  await expect(row(page, "fetch-only/render_markdown")).toBeVisible();
+  await expect(editor).toHaveValue(/inputs = \["fetch-only\/ingest"\]/);
 
   // ...and now the action is spent: there is already a render step.
-  const again = row(page, "fetch-only/raw").getByRole("button", { name: "Render to markdown" });
+  const again = row(page, "fetch-only/ingest").getByRole("button", { name: "Render to markdown" });
   await expect(again).toBeDisabled();
   await expect(again).toHaveAttribute("title", /already has a render step/);
 });
@@ -178,7 +178,7 @@ test("a provider whose render step has options writes the sibling id, not the st
   // Every ref the wizard sets up in `setup()` therefore kept its
   // create-mode value, and the id is the one that mattered: the render
   // step was written as `signal-work` (the stem) instead of
-  // `signal-work/rendered_md`.
+  // `signal-work/render_markdown`.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "+ Add Data Source" }).click();
   await wizard(page)
@@ -201,15 +201,15 @@ test("a provider whose render step has options writes the sibling id, not the st
   // from the dialog that just closed. No name box — a render step's
   // label is derived from its group's name.
   await expect(nameField(page)).toHaveCount(0);
-  await expect(wizard(page)).toContainText("signal-work/rendered_md");
+  await expect(wizard(page)).toContainText("signal-work/render_markdown");
   await wizard(page).getByRole("button", { name: "Add render step" }).click();
 
-  await expect(row(page, "signal-work/rendered_md")).toBeVisible();
-  await expect(stepMark(page, "signal-work/rendered_md")).toHaveAttribute("aria-label", "Render");
+  await expect(row(page, "signal-work/render_markdown")).toBeVisible();
+  await expect(stepMark(page, "signal-work/render_markdown")).toHaveAttribute("aria-label", "Render");
 
   const text = await editor.inputValue();
-  expect(text).toContain('group = "signal-work"\nfunction = "rendered_md"');
-  expect(text).toContain('inputs = ["signal-work/raw"]');
+  expect(text).toContain('group = "signal-work"\nfunction = "render_markdown"');
+  expect(text).toContain('inputs = ["signal-work/ingest"]');
   // One group, written once, by the first dialog — the second wrote a
   // step under it and nothing else.
   expect(text.match(/id = "signal-work"/g)).toHaveLength(1);
@@ -220,7 +220,7 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   await pickClaude(page);
   await nameField(page).fill("Doomed");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(row(page, "doomed/rendered_md")).toBeVisible();
+  await expect(row(page, "doomed/render_markdown")).toBeVisible();
 
   // A render step whose input is gone is a config datalib refuses to
   // load, so delete offers both or neither.
@@ -228,11 +228,11 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
     expect(d.message()).toContain("Doomed (render markdown)");
     void d.accept();
   });
-  await row(page, "doomed/raw").getByRole("button", { name: "Remove from config" }).click();
+  await row(page, "doomed/ingest").getByRole("button", { name: "Remove from config" }).click();
   await expect(page.getByText("Removed Doomed.")).toBeVisible();
 
-  await expect(page.locator('.ag-row[row-id="doomed/raw"]')).toHaveCount(0);
-  await expect(page.locator('.ag-row[row-id="doomed/rendered_md"]')).toHaveCount(0);
+  await expect(page.locator('.ag-row[row-id="doomed/ingest"]')).toHaveCount(0);
+  await expect(page.locator('.ag-row[row-id="doomed/render_markdown"]')).toHaveCount(0);
   // Including the fan-in references, or the config would not load.
   await expect(editor).not.toHaveValue(/doomed/);
 });

@@ -14,31 +14,27 @@ type = "claude_api"
 
 [[steps]]
 group = "claude_chats"
-function = "raw"
-command = "datalib-step download claude_api"
+function = "ingest"
 [steps.params]
 sync = {}
 
 [[steps]]
 group = "claude_chats"
-function = "rendered_md"
-command = "datalib-step render claude_api"
-inputs = ["claude_chats/raw"]
+function = "render_markdown"
+inputs = ["claude_chats/ingest"]
 
 [[groups]]
 id = "unified_index"
 
 [[steps]]
 group = "unified_index"
-function = "grid"
-command = "datalib-step grid_index"
-inputs = ["claude_chats/rendered_md"]
+function = "grid_index"
+inputs = ["claude_chats/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd"
-command = "datalib-step qmd_index"
-inputs = ["claude_chats/rendered_md"]
+function = "qmd_index"
+inputs = ["claude_chats/render_markdown"]
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

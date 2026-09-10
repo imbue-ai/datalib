@@ -30,14 +30,12 @@ verbatim. That is the only place a step id is written.
 
 Every step under a group gets the two halves and the type in its
 environment — `DATALIB_DAG_GROUP`, `DATALIB_DAG_FUNCTION`,
-`DATALIB_DAG_GROUP_TYPE` — beside the composed `DATALIB_DAG_STEP`.
-Today the built-in `datalib-step` still dispatches on its argv and
-writes `<name>/raw` or `<name>/rendered_md` from the first segment of
-the step id; the functions are therefore named `raw` and `rendered_md`
-(and `grid`, `qmd`) so that the composed id and the tree the step writes
-agree. Dispatching on the environment and naming the tree after the
-function is the next slice of
-[`docs/dev/plans/groups_and_functions.md`](../../../docs/dev/plans/groups_and_functions.md).
+`DATALIB_DAG_GROUP_TYPE` — beside the composed `DATALIB_DAG_STEP`. A
+step with no `command` runs `datalib-step`, which dispatches on that
+environment and writes the tree its id names; that is why a built-in
+step's function is the directory it writes (`ingest`, `render_markdown`,
+`grid_index`, `qmd_index`), and why the loader requires such a step to
+be under a group. The runner never interprets the function itself.
 
 ## The graph is declared, not derived
 
@@ -171,10 +169,11 @@ A group whose id is bad costs the group *and* every step under it, and
 those steps are `Blocked`, not `Rejected`: nothing is wrong with them,
 and the fix is on the group's line. The warnings today: a group nothing
 is filed under; a `name` written on a grouped step, whose label comes
-from the group; an applet filed under a group that does not exist; and
-a `datalib-step` download or render step outside any group, the shape
-written before `[[groups]]` existed — it still runs, and the warning
-names `datalib-migrate-config`. A warning passes the strict door too
+from the group; and an applet filed under a group that does not exist.
+The retired shape — `datalib-step download|render|grid_index|qmd_index`
+on a command line, from before `datalib-step` read its function from
+the environment — is `Rejected`, because it no longer runs, and the
+diagnostic names `datalib-migrate-config`. A warning passes the strict door too
 (`config::parse`, and the `PUT /api/config` behind the editor): it
 changes nothing about what runs, and refusing it would make the editor
 unable to save a config the app is happily running on.

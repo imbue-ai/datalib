@@ -4,7 +4,7 @@
 //! no documents of their own — which is how `fsindex` and `media` get a
 //! place in the UI at all.
 //!
-//! **Scope is the raw store, not the whole tree.** `<name>/rendered_md`
+//! **Scope is the raw store, not the whole tree.** `<group>/render_markdown`
 //! is datalib's own output, `system/usage.doltlite_db` already tracks it
 //! per step, and measuring it from inside the thing that writes it is a
 //! ratchet: every run would find a bigger tree, write a bigger number,
@@ -45,7 +45,7 @@ use datalib_schema::providers::Provider;
 /// `source:` filters on. One label for every source's measurements, so
 /// `source:Storage` is "show me what everything weighs"; `source_name:`
 /// still narrows to one source, since these rows live under that
-/// source's `rendered_md/`.
+/// source's `render_markdown/`.
 pub const SOURCE_LABEL: &str = "Storage";
 
 /// Where the report lands inside the source's render output.
@@ -240,10 +240,12 @@ async fn row_count(pool: &SqlitePool, table: &str) -> Result<i64> {
     row.try_get::<i64, _>(0).context("read count")
 }
 
-/// Measure one source's raw store: the tree, each database file in it,
-/// and each table inside those files.
-pub async fn scan(data_root: &Path, source_name: &str) -> Result<Vec<Subject>> {
-    let raw_rel = format!("{source_name}/raw");
+/// Measure one source's raw store — the tree at `raw_rel`, each database
+/// file in it, and each table inside those files. `raw_rel` is the
+/// ingest step's tree, data-root-relative, which is what the render
+/// step's input names.
+pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
+    let raw_rel = raw_rel.to_string();
     let raw_dir = data_root.join(&raw_rel);
     if !raw_dir.is_dir() {
         return Ok(Vec::new());
@@ -407,7 +409,8 @@ fn report_body(source_name: &str, subjects: &[Subject], now: &str) -> String {
 
 /// Turn a scan into the document and samples to store. Writes nothing:
 /// see [`Measured::write_report`]. `None` when the source has nothing
-/// to measure.
+/// to measure. `rendered_rel` is the render step's own tree, where the
+/// report lands.
 ///
 /// `now` stamps the rows and samples this produces, so it is the time
 /// the numbers last *moved* rather than the last time anything looked —
@@ -416,6 +419,7 @@ fn report_body(source_name: &str, subjects: &[Subject], now: &str) -> String {
 pub fn plan(
     data_root: &Path,
     source_name: &str,
+    rendered_rel: &str,
     subjects: Vec<Subject>,
     now: &str,
 ) -> Result<Option<Measured>> {
@@ -431,11 +435,8 @@ pub fn plan(
         .unwrap_or(&subjects[0])
         .uuid(source_name);
 
-    let md_path = data_root
-        .join(source_name)
-        .join("rendered_md")
-        .join(REPORT_REL);
-    let qmd_rel = format!("{source_name}/rendered_md/{REPORT_REL}");
+    let md_path = data_root.join(rendered_rel).join(REPORT_REL);
+    let qmd_rel = format!("{rendered_rel}/{REPORT_REL}");
 
     let mut rows = Vec::with_capacity(subjects.len());
     let mut samples = Vec::with_capacity(subjects.len());
@@ -520,15 +521,15 @@ mod tests {
     /// deliberately keeps out of it.
     #[test]
     fn a_measurement_id_does_not_move_when_its_value_does() {
-        let a = subject("s/raw", MeasurementKind::Tree, Some(10), Some(1));
-        let b = subject("s/raw", MeasurementKind::Tree, Some(999), Some(42));
+        let a = subject("s/ingest", MeasurementKind::Tree, Some(10), Some(1));
+        let b = subject("s/ingest", MeasurementKind::Tree, Some(999), Some(42));
         assert_eq!(a.uuid("s"), b.uuid("s"));
     }
 
     /// Two sources measuring identically-named trees must not collide.
     #[test]
     fn two_sources_measuring_the_same_relative_path_get_different_ids() {
-        let s = subject("raw", MeasurementKind::Tree, Some(1), None);
+        let s = subject("ingest", MeasurementKind::Tree, Some(1), None);
         assert_ne!(s.uuid("slack"), s.uuid("notion"));
     }
 
@@ -536,8 +537,8 @@ mod tests {
     /// path stay distinct rows.
     #[test]
     fn the_kind_separates_two_measurements_of_one_path() {
-        let t = subject("s/raw", MeasurementKind::Tree, Some(1), None);
-        let st = subject("s/raw", MeasurementKind::Store, Some(1), None);
+        let t = subject("s/ingest", MeasurementKind::Tree, Some(1), None);
+        let st = subject("s/ingest", MeasurementKind::Store, Some(1), None);
         assert_ne!(t.uuid("s"), st.uuid("s"));
     }
 
@@ -546,10 +547,21 @@ mod tests {
     #[test]
     fn the_stored_backpointer_reproduces_the_uuid() {
         let td = tempdir().unwrap();
-        let subjects = vec![subject("s/raw", MeasurementKind::Tree, Some(64), Some(2))];
-        let m = plan(td.path(), "s", subjects, "2026-09-07T10:00:00-07:00")
-            .unwrap()
-            .expect("a measured source");
+        let subjects = vec![subject(
+            "s/ingest",
+            MeasurementKind::Tree,
+            Some(64),
+            Some(2),
+        )];
+        let m = plan(
+            td.path(),
+            "s",
+            "s/render_markdown",
+            subjects,
+            "2026-09-07T10:00:00-07:00",
+        )
+        .unwrap()
+        .expect("a measured source");
         let row = &m.doc.rows[0];
         // The stored `provider` tag is parsed back into the namespace
         // rather than assumed: that the two spell the same thing is
@@ -572,8 +584,18 @@ mod tests {
     /// again, so it has to move when the source's contents move.
     #[test]
     fn the_fingerprint_tracks_the_counts() {
-        let a = vec![subject("s/raw", MeasurementKind::Tree, Some(10), Some(1))];
-        let b = vec![subject("s/raw", MeasurementKind::Tree, Some(10), Some(2))];
+        let a = vec![subject(
+            "s/ingest",
+            MeasurementKind::Tree,
+            Some(10),
+            Some(1),
+        )];
+        let b = vec![subject(
+            "s/ingest",
+            MeasurementKind::Tree,
+            Some(10),
+            Some(2),
+        )];
         assert_ne!(fingerprint(&a), fingerprint(&b));
         assert_eq!(fingerprint(&a), fingerprint(&a.clone()));
     }
@@ -589,18 +611,18 @@ mod tests {
     #[test]
     fn a_store_that_only_grew_does_not_re_render_the_report() {
         let before = vec![
-            subject("s/raw", MeasurementKind::Tree, Some(1_000), Some(2)),
+            subject("s/ingest", MeasurementKind::Tree, Some(1_000), Some(2)),
             subject(
-                "s/raw/e.doltlite_db#t",
+                "s/ingest/e.doltlite_db#t",
                 MeasurementKind::Table,
                 None,
                 Some(7),
             ),
         ];
         let after = vec![
-            subject("s/raw", MeasurementKind::Tree, Some(1_400), Some(2)),
+            subject("s/ingest", MeasurementKind::Tree, Some(1_400), Some(2)),
             subject(
-                "s/raw/e.doltlite_db#t",
+                "s/ingest/e.doltlite_db#t",
                 MeasurementKind::Table,
                 None,
                 Some(7),
@@ -617,11 +639,16 @@ mod tests {
     /// is part of the fingerprint, not just the counts in it.
     #[test]
     fn a_new_subject_re_renders_even_with_nothing_in_it() {
-        let before = vec![subject("s/raw", MeasurementKind::Tree, Some(10), Some(1))];
+        let before = vec![subject(
+            "s/ingest",
+            MeasurementKind::Tree,
+            Some(10),
+            Some(1),
+        )];
         let after = vec![
-            subject("s/raw", MeasurementKind::Tree, Some(10), Some(1)),
+            subject("s/ingest", MeasurementKind::Tree, Some(10), Some(1)),
             subject(
-                "s/raw/e.doltlite_db#new",
+                "s/ingest/e.doltlite_db#new",
                 MeasurementKind::Table,
                 None,
                 Some(0),
@@ -635,10 +662,14 @@ mod tests {
     #[tokio::test]
     async fn a_source_with_no_raw_store_measures_nothing() {
         let td = tempdir().unwrap();
-        assert!(scan(td.path(), "never-ran").await.unwrap().is_empty());
+        assert!(scan(td.path(), "never-ran/ingest")
+            .await
+            .unwrap()
+            .is_empty());
         assert!(plan(
             td.path(),
             "never-ran",
+            "never-ran/render_markdown",
             Vec::new(),
             "2026-09-07T10:00:00-07:00"
         )
@@ -651,7 +682,7 @@ mod tests {
     #[tokio::test]
     async fn a_store_is_measured_by_file_and_by_table() {
         let td = tempdir().unwrap();
-        let raw = td.path().join("src/raw");
+        let raw = td.path().join("src/ingest");
         std::fs::create_dir_all(&raw).unwrap();
         let db = raw.join("entities.doltlite_db");
         let pool = datalib_core::store::open_pool(&db).await.unwrap();
@@ -672,13 +703,13 @@ mod tests {
         }
         pool.close().await;
 
-        let subjects = scan(td.path(), "src").await.unwrap();
+        let subjects = scan(td.path(), "src/ingest").await.unwrap();
 
         let tree = subjects
             .iter()
             .find(|s| s.kind == MeasurementKind::Tree)
             .expect("a tree row");
-        assert_eq!(tree.path, "src/raw");
+        assert_eq!(tree.path, "src/ingest");
         // Two, not one: doltlite leaves a zero-byte
         // `.<name>.doltlite_db-lock` sidecar beside every store, and the
         // tree total counts what is actually on disk rather than only
@@ -690,7 +721,7 @@ mod tests {
             .iter()
             .find(|s| s.kind == MeasurementKind::Store)
             .expect("a store row");
-        assert_eq!(store.path, "src/raw/entities.doltlite_db");
+        assert_eq!(store.path, "src/ingest/entities.doltlite_db");
         assert_eq!(
             store.bytes,
             Some(db.symlink_metadata().unwrap().len() as i64)
@@ -728,7 +759,7 @@ mod tests {
     #[tokio::test]
     async fn run_bookkeeping_is_not_reported_as_source_data() {
         let td = tempdir().unwrap();
-        let raw = td.path().join("src/raw");
+        let raw = td.path().join("src/ingest");
         let pool = datalib_etl::doltlite_raw::open(
             &raw.join("entities.doltlite_db"),
             &[
@@ -752,7 +783,7 @@ mod tests {
             .unwrap();
         pool.close().await;
 
-        let subjects = scan(td.path(), "src").await.unwrap();
+        let subjects = scan(td.path(), "src/ingest").await.unwrap();
         let tables: Vec<String> = subjects
             .iter()
             .filter(|s| s.kind == MeasurementKind::Table)
@@ -780,7 +811,7 @@ mod tests {
     #[tokio::test]
     async fn a_second_run_over_unchanged_data_fingerprints_identically() {
         let td = tempdir().unwrap();
-        let raw = td.path().join("src/raw");
+        let raw = td.path().join("src/ingest");
         let db = raw.join("entities.doltlite_db");
         let open = || {
             datalib_etl::doltlite_raw::open(
@@ -799,7 +830,7 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
-        let first = fingerprint(&scan(td.path(), "src").await.unwrap());
+        let first = fingerprint(&scan(td.path(), "src/ingest").await.unwrap());
 
         // A second run: another `sync_runs` row, no new content.
         let pool = open().await.expect("second run");
@@ -808,7 +839,7 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
-        let second = fingerprint(&scan(td.path(), "src").await.unwrap());
+        let second = fingerprint(&scan(td.path(), "src/ingest").await.unwrap());
 
         assert_eq!(
             first, second,
@@ -824,7 +855,7 @@ mod tests {
         pool.close().await;
         assert_ne!(
             first,
-            fingerprint(&scan(td.path(), "src").await.unwrap()),
+            fingerprint(&scan(td.path(), "src/ingest").await.unwrap()),
             "a real row must still re-render it"
         );
     }
@@ -892,17 +923,23 @@ mod tests {
     async fn the_report_is_written_where_the_document_says_it_is() {
         let td = tempdir().unwrap();
         let subjects = vec![
-            subject("s/raw", MeasurementKind::Tree, Some(2048), Some(2)),
+            subject("s/ingest", MeasurementKind::Tree, Some(2048), Some(2)),
             subject(
-                "s/raw/entities.doltlite_db#msgs",
+                "s/ingest/entities.doltlite_db#msgs",
                 MeasurementKind::Table,
                 None,
                 Some(7),
             ),
         ];
-        let m = plan(td.path(), "s", subjects, "2026-09-07T10:00:00-07:00")
-            .unwrap()
-            .unwrap();
+        let m = plan(
+            td.path(),
+            "s",
+            "s/render_markdown",
+            subjects,
+            "2026-09-07T10:00:00-07:00",
+        )
+        .unwrap()
+        .unwrap();
         assert!(
             !m.doc.md_path.exists(),
             "planning must not touch the disk; only write_report may"
@@ -929,12 +966,18 @@ mod tests {
     fn every_measurement_becomes_one_sample_at_the_runs_own_time() {
         let td = tempdir().unwrap();
         let subjects = vec![
-            subject("s/raw", MeasurementKind::Tree, Some(1), Some(1)),
-            subject("s/raw/x.doltlite_db", MeasurementKind::Store, Some(1), None),
+            subject("s/ingest", MeasurementKind::Tree, Some(1), Some(1)),
+            subject(
+                "s/ingest/x.doltlite_db",
+                MeasurementKind::Store,
+                Some(1),
+                None,
+            ),
         ];
         let m = plan(
             td.path(),
             "s",
+            "s/render_markdown",
             subjects.clone(),
             "2026-09-07T10:00:00-07:00",
         )
@@ -954,8 +997,8 @@ mod tests {
     /// CI and a developer's machine at once.
     #[test]
     fn the_hashed_text_carries_no_byte_figure() {
-        let s = subject("s/raw", MeasurementKind::Tree, Some(2048), Some(2));
-        assert_eq!(s.summary(), "s/raw — 2 files");
+        let s = subject("s/ingest", MeasurementKind::Tree, Some(2048), Some(2));
+        assert_eq!(s.summary(), "s/ingest — 2 files");
         assert!(
             !s.summary().contains("KiB") && !s.summary().contains("2048"),
             "the hashed text must not carry a size: {}",
@@ -967,9 +1010,15 @@ mod tests {
         assert!(body.contains("| 2.0 KiB |"), "{body}");
 
         let td = tempdir().unwrap();
-        let m = plan(td.path(), "s", vec![s], "2026-09-07T10:00:00-07:00")
-            .unwrap()
-            .unwrap();
+        let m = plan(
+            td.path(),
+            "s",
+            "s/render_markdown",
+            vec![s],
+            "2026-09-07T10:00:00-07:00",
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(m.doc.rows[0].byte_size, Some(2048));
     }
 
@@ -979,9 +1028,9 @@ mod tests {
     #[test]
     fn the_report_is_one_table_row_per_measurement() {
         let subjects = vec![
-            subject("s/raw", MeasurementKind::Tree, Some(2048), Some(2)),
+            subject("s/ingest", MeasurementKind::Tree, Some(2048), Some(2)),
             subject(
-                "s/raw/db.doltlite_db",
+                "s/ingest/db.doltlite_db",
                 MeasurementKind::Store,
                 Some(512),
                 None,

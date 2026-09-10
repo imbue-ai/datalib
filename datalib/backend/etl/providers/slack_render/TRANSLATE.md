@@ -2,9 +2,9 @@
 
 The slack translate step is an in-process library (called from
 `datalib-sync`, no standalone bin) that reads the doltlite db at
-`<out>/raw/<name>/entities.doltlite_db` (written by `slack-download`) and
+`<out>/ingest/<name>/entities.doltlite_db` (written by `slack-download`) and
 emits, per Slack thread, a `.md` under
-`<out>/rendered_md/slack/<team>/<channel>/threads/` plus that
+`<out>/render_markdown/slack/<team>/<channel>/threads/` plus that
 document's rows in the source's render store.
 
 ## What is a "document"?

@@ -22,7 +22,7 @@ scheduled and owns no artifacts: it reads what steps already wrote.
 id = "slack_work"
 command = "datalib-applet slack"
 [applets.params]
-tree = "slack/rendered_md"
+tree = "slack/render_markdown"
 ```
 
 There is no `title` key, and an unknown key is rejected by name rather

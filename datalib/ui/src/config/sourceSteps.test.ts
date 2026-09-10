@@ -17,12 +17,12 @@ const CAP = "common.blob_size_limit_bytes";
 /// A step as `listSteps` would return it, carrying `params`.
 function step(params: Record<string, unknown>): ConfiguredStep {
   return {
-    id: "slack/raw",
+    id: "slack/ingest",
     kind: "step",
     group: "slack",
-    function: "raw",
-    name: "slack/raw",
-    phase: "fetch",
+    function: "ingest",
+    name: "slack/ingest",
+    phase: "ingest",
     type: "slack_api",
     inputs: [],
     params,

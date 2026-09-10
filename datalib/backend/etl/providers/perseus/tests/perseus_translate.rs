@@ -71,13 +71,13 @@ fn renders_all_books_chapters_and_editions() {
 
     let book1 = out
         .path()
-        .join("perseus/rendered_md/thucydides/histories/book_01/index.md");
+        .join("perseus/render_markdown/thucydides/histories/book_01/index.md");
     assert!(book1.exists(), "missing {}", book1.display());
 
     // Book 1 chapter 1, Greek side has both sections. Unaligned
     // editions render section text verbatim (no per-sentence spans).
     let ch11_grc = out.path().join(format!(
-        "perseus/rendered_md/thucydides/histories/book_01/chapter_001_{GRC}.md"
+        "perseus/render_markdown/thucydides/histories/book_01/chapter_001_{GRC}.md"
     ));
     let body = std::fs::read_to_string(&ch11_grc).unwrap();
     assert!(body.contains("Θουκυδίδης Ἀθηναῖος ξυνέγραψε."));
@@ -87,7 +87,7 @@ fn renders_all_books_chapters_and_editions() {
 
     // English side: section 2 is the deliberate translation gap.
     let ch11_eng = out.path().join(format!(
-        "perseus/rendered_md/thucydides/histories/book_01/chapter_001_{ENG}.md"
+        "perseus/render_markdown/thucydides/histories/book_01/chapter_001_{ENG}.md"
     ));
     let body_eng = std::fs::read_to_string(&ch11_eng).unwrap();
     assert!(body_eng.contains("the Athenian wrote"));
@@ -96,7 +96,7 @@ fn renders_all_books_chapters_and_editions() {
 
     // Book 2 chapter 2: bare chapter text → section "1".
     let ch22_grc = out.path().join(format!(
-        "perseus/rendered_md/thucydides/histories/book_02/chapter_002_{GRC}.md"
+        "perseus/render_markdown/thucydides/histories/book_02/chapter_002_{GRC}.md"
     ));
     let body22 = std::fs::read_to_string(&ch22_grc).unwrap();
     assert!(body22.contains("### 2.2.1"));

@@ -11,22 +11,23 @@ codebase itself, see [`AGENTS.md`](../AGENTS.md).
 
 Everything lives under one **data root** directory. A sync is a DAG of
 steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
-`<group>/raw` step (fetch raw data) and a `<group>/rendered_md` step
-(raw → markdown + a per-source index database), then two shared fan-in
-steps under the `unified_index` group — `grid` (SQL index) and `qmd`
-(semantic search index):
+`<group>/ingest` step (bring the raw data in) and a
+`<group>/render_markdown` step (raw → markdown + a per-source index
+database), then two shared fan-in steps under the `unified_index`
+group — `grid_index` (SQL index) and `qmd_index` (semantic search
+index). A step's function is the directory it writes:
 
 ```
 <data_root>/
 ├── config.toml                     # the pipeline config (steps format)
-├── <name>/raw/                     # per-source raw stores
+├── <name>/ingest/                  # per-source raw stores
 │   ├── entities.doltlite_db        #   (doltlite = SQLite + git-shaped history)
 │   └── blobs.doltlite_db
-├── <name>/rendered_md/             # per-source markdown tree
+├── <name>/render_markdown/         # per-source markdown tree
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_index/                  # derived; carries a CACHEDIR.TAG
-│   ├── grid/db.doltlite_db         # the grid_rows SQL index — query this
-│   └── qmd/index.sqlite            # semantic search index
+│   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
+│   └── qmd_index/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
     ├── dag_state.json              # scheduler state (per-step versions)
     ├── api-token                   # this process's bearer token
@@ -70,10 +71,11 @@ header, and a step's `params` sub-tables come after its plain keys — a
   [`configs/dag_example.toml`](../configs/dag_example.toml).
 - **Per-source knobs and step pairs**:
   [`docs/user/config_examples/all_sources.toml`](user/config_examples/all_sources.toml)
-  — one commented group with its `raw` + `rendered_md` step pair per
-  supported source, ready to copy. (A `config.toml` written before
-  `[[groups]]` existed is rewritten once with `datalib-migrate-config
-  <data_root> --force`, the only program that still knows that shape.
+  — one commented group with its `ingest` + `render_markdown` step pair
+  per supported source, ready to copy. (A `config.toml` whose steps
+  still name a `datalib-step download …` command is rewritten once
+  with `datalib-migrate-config <data_root> --force`, the only program
+  that still knows that shape.
   Pre-TOML `config.yaml` roots are set up again from the app.)
 - **Credentials**: web-API sources authenticate through
   [`latchkey`](https://github.com/imbue-ai/latchkey). Per-source
@@ -164,10 +166,10 @@ Pick the surface that fits the question:
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).
   doltlite recipes (history, diffs, rescue):
   [`docs/dev/doltlite.md`](dev/doltlite.md).
-- **Markdown** — `<name>/rendered_md/` holds human-readable QMD
+- **Markdown** — `<name>/render_markdown/` holds human-readable QMD
   markdown per conversation/document. Read files directly, or serve
   them via `GET /applet/unified_index/chat/{markdown_uuid}`. The raw per-source
-  doltlite stores under `<name>/raw/` keep full wire fidelity when the
+  doltlite stores under `<name>/ingest/` keep full wire fidelity when the
   rendered form isn't enough.
 - **Semantic search** — the qmd index:
 

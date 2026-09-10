@@ -1,6 +1,6 @@
 //! Perseus Digital Library provider for [`datalib_etl`]: the download
 //! half — the TEI editions of classical works. Rendering them into the
-//! source's `rendered_md/` tree lives in
+//! source's `render_markdown/` tree lives in
 //! [`datalib_etl_perseus_render`].
 
 use std::sync::OnceLock;

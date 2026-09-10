@@ -58,8 +58,7 @@ type = "perseus"
 
 [[steps]]
 group = "perseus"
-function = "rendered_md"
-command = "datalib-step render perseus"
+function = "render_markdown"
 [steps.params.common]
 input_path = "$PERSEUS_FIXTURE_DIR"
 
@@ -68,15 +67,13 @@ id = "unified_index"
 
 [[steps]]
 group = "unified_index"
-function = "grid"
-command = "datalib-step grid_index"
-inputs = ["perseus/rendered_md"]
+function = "grid_index"
+inputs = ["perseus/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd"
-command = "datalib-step qmd_index"
-inputs = ["perseus/rendered_md"]
+function = "qmd_index"
+inputs = ["perseus/render_markdown"]
 
 # Serves the grid, the document view and the document picker.
 [[applets]]
