@@ -38,7 +38,6 @@ it:
 ```sh
 docker run -d --name datalib-demo \
   -p "127.0.0.1:$PORT:8731" \
-  -e DATALIB_BIND=0.0.0.0:8731 \
   -e DATALIB_TOKEN="$TOKEN" \
   "$IMG" datalib-http --no-open /opt/datalib/demo
 echo "http://127.0.0.1:$PORT/?token=$TOKEN"
@@ -162,7 +161,6 @@ in the app can re-read it:
 ```sh
 docker run -d --name datalib \
   -p "127.0.0.1:$PORT:8731" \
-  -e DATALIB_BIND=0.0.0.0:8731 \
   -e DATALIB_TOKEN="$TOKEN" \
   -v "$DATA_ROOT:/data" \
   -v "$(dirname "$MBOX"):/import:ro" \
