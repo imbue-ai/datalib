@@ -41,11 +41,15 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
 use datalib_schema::providers::Provider;
 
-/// The `grid_rows.source_label` — the grid's Source column, and what
+/// The `grid_rows.source_label` — the grid's Provider column, and what
 /// `source:` filters on. One label for every source's measurements, so
-/// `source:Storage` is "show me what everything weighs"; `source_name:`
-/// still narrows to one source, since these rows live under that
-/// source's `render_markdown/`.
+/// `source:Storage` is "show me what everything weighs".
+///
+/// The grid's *Source* column is not this. These rows live under the
+/// measured source's `render_markdown/`, which is where a source name
+/// is normally read from, but they are filed under `datalib` — the
+/// measurement never appears beside the data it measures. Which source
+/// each one describes is in `account` and `conversation_name`.
 pub const SOURCE_LABEL: &str = "Storage";
 
 /// Where the report lands inside the source's render output.

@@ -162,10 +162,18 @@ async function loadSourceNames() {
   }
 }
 
+/// Datalib's own rows — each source's storage report — are filed under
+/// datalib rather than under the source they measure, so their
+/// `source_name` names no configured group and the display name has to
+/// come from here.
+const DATALIB_SOURCE_ID = "datalib";
+const DATALIB_SOURCE_NAME = "Datalib";
+
 /// What the "Source" column shows: the configured name when there is
 /// one, else the id — the directory the row's document lives under.
 function sourceNameFor(row: SearchRow | null | undefined): string {
   if (!row?.source_name) return "";
+  if (row.source_name === DATALIB_SOURCE_ID) return DATALIB_SOURCE_NAME;
   return sourceNames.value.get(row.source_name) ?? row.source_name;
 }
 
@@ -864,12 +872,14 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     headerName: "Source",
     headerTooltip:
       "The configured source this row came from — its id is its directory under the " +
-      "data root; the cell shows the name config.toml gives it",
+      "data root; the cell shows the name config.toml gives it. Datalib's own rows, " +
+      "like a source's storage report, say Datalib rather than the source they describe",
     width: 130,
     valueGetter: (p) => sourceNameFor(p.data),
     tooltipValueGetter: (p) => {
       const id = p.data?.source_name ?? "";
       if (!id) return "";
+      if (id === DATALIB_SOURCE_ID) return "Datalib's own row, not a source's data";
       const name = sourceNames.value.get(id);
       return name ? `${name} — stored in ${id}/` : `Stored in ${id}/`;
     },

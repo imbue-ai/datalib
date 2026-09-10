@@ -325,8 +325,30 @@ emitting a handful of rows tagged `provider = "datalib"`, `source_label
 = "Storage"`. That is what gives a download-only source — `fsindex`,
 `media` — a place in the grid at all: they render no documents, so
 without this they appear nowhere. `source:Storage` is "show me what
-everything weighs"; `source_name:<name>` narrows to one source, since
-the rows live under that source's `render_markdown/`.
+everything weighs".
+
+**They are filed under `datalib`, not under the source they measure.**
+The report's markdown does sit in the measured source's
+`render_markdown/`, because that is the one tree the render step is
+allowed to write, and a source name is normally just the first segment
+of `qmd_path`. Reading it that way here would put "what claude weighs"
+in the same bucket as the Claude conversations — which is precisely
+what the `provider` tag already refuses to do. So the derivation asks
+`provider` first: a `datalib` row is datalib's, whatever directory it
+came out of. Two halves, and they have to agree:
+
+- `source_name_for` in `unified_index/src/dolt_repo.rs` decides what the
+  grid's Source column shows (`Datalib`, spelled out by the UI);
+- the `Field::SourceName` arm of `build_where` in
+  `unified_index/src/db.rs` decides what `source_name:` matches —
+  `source_name:datalib` selects on the provider tag, and every other
+  name excludes the datalib rows despite the path prefix.
+
+Which source a measurement describes is still on the row: `account` is
+the source name and `conversation_name` is `<name> storage`. One
+consequence worth knowing: a group configured with the literal id
+`datalib` would collide with this, and its own rows would become
+unfilterable by name.
 
 The code is `datalib/backend/datalib_step/src/introspect.rs`, and three
 of its decisions are worth knowing before changing it.

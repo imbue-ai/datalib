@@ -138,8 +138,11 @@ test("a source's row opens that source, with its type's columns", async ({ page 
       return kinds.length > 0 && kinds.every((k) => k.trim().length > 0);
     })
     .toBe(true);
+  // Slack's own kinds and nothing else. The storage rows sit in this
+  // source's directory but are filed under datalib, so a browse of the
+  // source is the source's data — see docs/dev/grid_rows.md.
   for (const k of await columnValues(page, "kind")) {
-    expect(k.trim()).toMatch(/Slack|Source Size|Table/);
+    expect(k.trim()).toMatch(/^Slack /);
   }
 
   // Slack's preset: a channel and an author, and no Project — Slack has
@@ -155,9 +158,12 @@ test("a different type gets a different column set", async ({ page }) => {
   await openManage(page);
   await browse(page, "github", "source_name:github");
 
-  // GitHub's `project` is the repository it belongs to, and it has no
-  // channel. The opposite pair to Slack's, from the same fixture.
-  await expect(page.locator('.ag-header-cell[col-id="project"]')).toBeVisible();
+  // GitHub's preset is an author and the repo the row belongs to, and
+  // no channel — the opposite pair to Slack's, from the same fixture.
+  // Only `author` is asserted on screen: this library holds one
+  // repository, so every row agrees on `project` and the adaptive rule
+  // trims it. A preset is a ceiling, not a fixed set.
+  await expect(page.locator('.ag-header-cell[col-id="author"]')).toBeVisible();
   await expect(page.locator('.ag-header-cell[col-id="channel"]')).toHaveCount(0);
 });
 
