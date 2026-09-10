@@ -21,8 +21,8 @@ export type Field =
       required?: boolean;
       /// Renders as the latchkey-account control rather than a bare
       /// text box: a dropdown of the accounts latchkey has stored for
-      /// the entry's `credentialService`, a "Connect via latchkey"
-      /// button, and — still — somewhere to type.
+      /// the entry's `credentialService`, a "Latchkey auth" button,
+      /// and — still — somewhere to type.
       ///
       /// Typing matters. latchkey may hold an account this server
       /// can't enumerate (no keyring access, latchkey not installed),
@@ -71,9 +71,11 @@ export type Field =
   | ({ kind: "int" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & {
       placeholder?: string;
-      /// Offer a checklist built from `POST /api/probe`, alongside the
-      /// comma-separated box. Names *which* of the probe's lists:
-      probe?: "labels" | "mailboxes";
+      /// Offer a picker built from `POST /api/probe`, alongside the
+      /// comma-separated box. Names *which* of the probe's items this
+      /// field takes: every label, only the ones a render filter can
+      /// match, or an account's conversations.
+      probe?: "labels" | "mailboxes" | "conversations";
     });
 
 export type CatalogEntry = {
@@ -109,6 +111,15 @@ export type CatalogEntry = {
   /// would write reach an origin (`ingestReach`): an import has nothing
   /// to log in to.
   credentialService?: string;
+  /// How to register `credentialService` with latchkey when latchkey
+  /// has never heard of it, so that a browser login exists at all. The
+  /// login flow belongs to the *service* and is fixed when it is
+  /// registered, so this is the only moment it can be chosen; a name
+  /// latchkey already holds is left exactly as its owner set it up.
+  credentialRegister?: import("@/api").ServiceRegistration;
+  /// Shown beside the Connect button, when connecting this way costs
+  /// something the person should decide about before clicking.
+  credentialConnectWarning?: string;
   /// Dotted params path whose presence identifies this entry among the
   /// several that share one `type`. Undefined on a type with only one
   /// entry, which is nearly all of them.
@@ -236,7 +247,30 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "claude",
     wizard: true,
     credentialService: "claude-ai",
+    // The whole claude.ai credential is the `sessionKey` cookie, so
+    // cookie-capture is the flow that fits.
+    credentialRegister: {
+      base_api_url: "https://claude.ai/",
+      login_url: "https://claude.ai/login",
+      login_flow: "cookie-capture",
+      login_flow_params: { cookieKeys: ["sessionKey"] },
+    },
+    credentialConnectWarning:
+      "This signs in a second time, and claude.ai appears to evict the older session when it " +
+      "does — observed 2026-08-31, the captured cookie and the browser you normally use kept " +
+      "logging each other out. Pasting the sessionKey avoids that.",
+    canProbe: true,
     fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Claude account",
+        placeholder: "you@example.com",
+        help:
+          "Which stored claude.ai login to mirror. Leave it empty if latchkey holds only " +
+          "one — naming the wrong one mirrors someone else's conversations.",
+      },
       {
         kind: "date",
         target: "api.since",
@@ -260,6 +294,7 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "string_list",
+        probe: "conversations",
         target: "api.conv_uuids",
         label: "Only these conversations",
         placeholder: "https://claude.ai/chat/…",

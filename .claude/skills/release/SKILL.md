@@ -79,6 +79,23 @@ published from a local machine — the tag is the trigger.
    is the one almost every build will produce. v0.31.0 shipped the `1`
    state; that is what this second line exists to prevent.
 
+   A lock left in the `1` state is worse than a dirty file: CI runs
+   `--lockfile_mode=error`, so it aborts during module resolution before
+   a single test, with *"environment variable CARGO_BAZEL_REPIN changed:
+   '1' -> <unset>"*. That reds `main` and every open PR with it, since a
+   PR is tested as its branch merged into `main`.
+
+   To repair one already pushed, run the plain build above — it rewrites
+   the one line. **Not** bazel's suggested
+   `bazel mod deps --lockfile_mode=update`: here that aborts on an
+   unrelated transitive module (*"crate_universe extension call `crates`
+   is in a non-root module but has no lockfile"*) after part-writing the
+   file. Confirm the way CI will:
+
+   ```sh
+   bazelisk build --lockfile_mode=error //datalib/backend/table:datalib_table
+   ```
+
    Don't be alarmed by its size: it is a **3-line** diff that prints as
    ~360 KB, because one of those lines is a 17 KB single-line generated
    blob. That is also why it falls straight through a targeted `git add`
@@ -94,10 +111,10 @@ published from a local machine — the tag is the trigger.
    `Cargo.lock`, the two `BUILD.bazel`, `.devcontainer/Dockerfile`, and
    `MODULE.bazel.lock` (per step 6 — expect it, don't treat it as a
    surprise), plus possibly `datalib/tauri/Cargo.lock`.
-   Sanity-check before pushing: re-run the step 6 Rust build and confirm
-   `git status --porcelain MODULE.bazel.lock` is now empty. If it still
-   isn't, the lock didn't converge and the next person to build inherits
-   the dirty file.
+   Sanity-check before pushing: re-run step 6's *second* (env-var-free)
+   build and confirm `git status --porcelain MODULE.bazel.lock` is now
+   empty. If it still isn't, the lock didn't converge and the next
+   person to build inherits the dirty file.
 8. Push the bump straight to main (release bumps land directly, not
    via PR): `git push origin release-vX.Y.Z:main`.
 9. Tag that commit and push the tag:
