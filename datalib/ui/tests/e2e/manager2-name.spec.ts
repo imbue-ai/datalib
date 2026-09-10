@@ -168,13 +168,21 @@ test("a step's Edit opens its source, and a hand-removed render step comes back 
   await expect(page.getByText("Added Fetch Only.")).toBeVisible();
 
   // Take the render step out by hand, the way a config edited in an
-  // editor might lack one.
+  // editor might lack one — including the reference to it that adding
+  // the source put on `grid_index`. Both halves, because a step id that
+  // names nothing is an invalid config and the save would be refused:
+  // the index fans in from every source's render step, so removing one
+  // means removing it from two places. That is the edit a person doing
+  // this by hand actually has to make.
   const text = await editor.inputValue();
-  const without = text.replace(
-    /\n\[\[steps\]\]\ngroup = "fetch-only"\nfunction = "render_markdown"\ninputs = \["fetch-only\/ingest"\]\n/,
-    "\n",
-  );
+  const without = text
+    .replace(
+      /\n\[\[steps\]\]\ngroup = "fetch-only"\nfunction = "render_markdown"\ninputs = \["fetch-only\/ingest"\]\n/,
+      "\n",
+    )
+    .replace(/"fetch-only\/render_markdown"(,\s*)?/g, "");
   expect(without).not.toBe(text);
+  expect(without).not.toContain("fetch-only/render_markdown");
   await page.getByText("Advanced — edit config.toml directly").click();
   await editor.fill(without);
   await page.getByRole("button", { name: "Save", exact: true }).click();
