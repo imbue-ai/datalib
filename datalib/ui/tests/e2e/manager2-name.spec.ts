@@ -49,7 +49,7 @@ const stepMark = (page: Page, id: string) =>
   row(page, id).locator('[col-id="name"] .m2-name-step [role="img"]');
 
 async function pickClaude(page: Page) {
-  await page.getByRole("button", { name: "+ Add Data Source" }).click();
+  await page.getByRole("button", { name: "+ Data Source" }).click();
   // By blurb: "Claude" alone also matches the "Claude export" tile.
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Mirror your claude.ai conversations" })
@@ -253,7 +253,7 @@ test("a provider with render options writes them on the render step, from the on
   // assertion on the composed id stays because that is the config bug
   // it would catch.
   const editor = page.locator(".m2-editor");
-  await page.getByRole("button", { name: "+ Add Data Source" }).click();
+  await page.getByRole("button", { name: "+ Data Source" }).click();
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
     .click();
@@ -289,7 +289,7 @@ test("a hand-written render step under a download-only type is called out, then 
   // it does for a missing step. (Unwiring it from the fan-ins is
   // covered by the unit tests; this root's config declares none.)
   const editor = page.locator(".m2-editor");
-  await page.getByRole("button", { name: "+ Add Data Source" }).click();
+  await page.getByRole("button", { name: "+ Data Source" }).click();
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Mirror a Lightroom Classic catalog" })
     .click();
