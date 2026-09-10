@@ -5,7 +5,7 @@
 
 //! Live GitHub single-PR download + render test.
 
-use datalib_etl_github::download::{self as github, parse_pr_ref, FetchOptions};
+use datalib_etl_github::ingest::{self as github, parse_pr_ref, FetchOptions};
 use datalib_etl_github_render::render::{parse_api_dir, render_github};
 use insta::assert_json_snapshot;
 use serde_json::json;

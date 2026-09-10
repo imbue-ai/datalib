@@ -16,7 +16,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
-        "//datalib/backend/etl/providers/carddav_config:datalib_etl_carddav_config",
+        "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",
         "//datalib/backend/etl/providers/contacts:datalib_etl_contacts",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",

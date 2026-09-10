@@ -430,7 +430,7 @@ async fn load_buckets(
             });
             docs.len() - 1
         });
-        let item_pk = datalib_etl_signal::download::schema_raw::chat_item_id_recipe(
+        let item_pk = datalib_etl_signal::ingest::schema_raw::chat_item_id_recipe(
             &chat_id, &author_id, date_sent,
         );
         let (text, outgoing, attachments) = decode_chat_item(&payload);

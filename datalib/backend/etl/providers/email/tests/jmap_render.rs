@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl_email::download::db::{EmailJoins, LoadedAttachment, LoadedEmail};
+use datalib_etl_email::ingest::db::{EmailJoins, LoadedAttachment, LoadedEmail};
 use datalib_etl_email_render::render::parse::{EmailThreadBucket, ParsedEmail, ScanResult};
 use datalib_etl_email_render::render::render::{render_all, thread_uuid, OutlinkFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;

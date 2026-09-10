@@ -11,19 +11,16 @@ use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_claude_config::{ClaudeApiSync, ClaudeConfig};
 
-use crate::download;
+use crate::ingest;
 
-/// Download wave: `api` walks claude.ai, `export` ingests an unpacked
+/// Ingest wave: `api` walks claude.ai, `export` ingests an unpacked
 /// bulk export from its `path`. `validate` has already refused both.
-pub fn plan_download(
-    ctx: PlanContext,
-    config: ClaudeConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+pub fn plan_ingest(ctx: PlanContext, config: ClaudeConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.api {
-        procs.push(Box::new(ClaudeDownload {
+        procs.push(Box::new(ClaudeIngest {
             id: format!("claude/{name}/download"),
             raw_path,
             sync,
@@ -39,7 +36,7 @@ pub fn plan_download(
     Ok(procs)
 }
 
-struct ClaudeDownload {
+struct ClaudeIngest {
     id: String,
     raw_path: PathBuf,
     sync: ClaudeApiSync,
@@ -49,7 +46,7 @@ struct ClaudeDownload {
 }
 
 #[async_trait]
-impl DataProcessor for ClaudeDownload {
+impl DataProcessor for ClaudeIngest {
     fn id(&self) -> &str {
         &self.id
     }
@@ -65,8 +62,8 @@ impl DataProcessor for ClaudeDownload {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = download::db_path_for(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
         // The CAS goes in too. claude stores attachment bytes in a sibling
         // file, so a checkpoint that sealed only the entities store would
         // publish a message naming blobs no reader can resolve yet.
@@ -77,7 +74,7 @@ impl DataProcessor for ClaudeDownload {
             ctx,
         )
         .await;
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             db,
             latchkey: self.latchkey.clone(),
             // users.json is expected alongside the raw store (playback seeds it).
@@ -135,10 +132,10 @@ impl DataProcessor for ClaudeExportIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = download::db_path_for(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = download::export::ingest(download::export::IngestOptions {
+        let s = ingest::export::ingest(ingest::export::IngestOptions {
             db,
             input_path: self.input_path.clone(),
             // The run-pinned `now`, so every bookkeeping stamp this

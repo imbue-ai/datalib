@@ -9,8 +9,8 @@ name = "datalib_etl_slack"
 path = "src/lib.rs"
 
 [[bin]]
-name = "slack-download"
-path = "src/bin/slack_download.rs"
+name = "slack-ingest"
+path = "src/bin/slack_ingest.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }

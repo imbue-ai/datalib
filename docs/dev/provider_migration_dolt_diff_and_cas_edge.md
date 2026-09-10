@@ -427,7 +427,7 @@ commit map roughly to:
 ### Phase 5: step integration
 
 There is no sync binary anymore; integration means the provider's
-`processor.rs` (`plan_download` / `plan_render`), dispatched per
+`processor.rs` (`plan_ingest` / `plan_render`), dispatched per
 source `type:` by `datalib_step/src/dispatch.rs`. In the provider's
 render path:
 

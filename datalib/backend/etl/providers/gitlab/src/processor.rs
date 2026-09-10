@@ -13,19 +13,16 @@ use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_gitlab_config::{GitlabApiSync, GitlabConfig};
 
-use crate::download;
+use crate::ingest;
 
-/// Download wave: present iff `api`.
-pub fn plan_download(
-    ctx: PlanContext,
-    config: GitlabConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+/// Ingest wave: present iff `api`.
+pub fn plan_ingest(ctx: PlanContext, config: GitlabConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let latchkey_settings = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.api {
-        procs.push(Box::new(GitlabDownload {
+        procs.push(Box::new(GitlabIngest {
             id: format!("gitlab/{name}/download"),
             raw_path,
             sync,
@@ -35,7 +32,7 @@ pub fn plan_download(
     Ok(procs)
 }
 
-struct GitlabDownload {
+struct GitlabIngest {
     id: String,
     raw_path: PathBuf,
     sync: GitlabApiSync,
@@ -45,23 +42,23 @@ struct GitlabDownload {
 }
 
 #[async_trait]
-impl DataProcessor for GitlabDownload {
+impl DataProcessor for GitlabIngest {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = download::db_path_for(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let targets = self
             .sync
             .merge_requests
             .iter()
-            .map(|s| download::parse_mr_ref(s))
+            .map(|s| ingest::parse_mr_ref(s))
             .collect::<Result<Vec<_>>>()
             .context("parse gitlab merge_requests refs")?;
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             latchkey: self.latchkey.clone(),
             // full_sync stays false (FetchOptions default) so the
             // gitlab provider honors saved `sync_scope_state` and
@@ -81,7 +78,7 @@ impl DataProcessor for GitlabDownload {
             sleep_between: Duration::ZERO,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
-            ..download::FetchOptions::new(db)
+            ..ingest::FetchOptions::new(db)
         })
         .await?;
         let summary = format!(

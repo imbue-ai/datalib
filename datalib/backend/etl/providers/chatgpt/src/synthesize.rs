@@ -8,7 +8,7 @@ use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
-/// Matches `download::PAGE_SIZE`. Hard-coded rather than imported so the
+/// Matches `ingest::PAGE_SIZE`. Hard-coded rather than imported so the
 /// synthesizer doesn't drag in download's tokio/tracing deps just for a
 /// constant; the test below pins them together.
 const PAGE_SIZE: usize = 100;
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn page_size_matches_extract() {
-        assert_eq!(PAGE_SIZE, crate::download::PAGE_SIZE);
+        assert_eq!(PAGE_SIZE, crate::ingest::PAGE_SIZE);
     }
 
     fn write(path: &Path, v: &Value) {

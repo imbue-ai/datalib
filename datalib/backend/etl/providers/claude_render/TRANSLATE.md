@@ -1,7 +1,7 @@
 # Claude Translate
 
 `claude-translate` reads a directory of conversations in
-export-shape JSON (written by `claude-download` or by an
+export-shape JSON (written by `claude-ingest` or by an
 Anthropic bulk export) and emits, per conversation, a `.md` at
 `<out>/render_markdown/claude/<account>/llm_chats/<conv>__<slug>.md` plus
 that document's rows in the source's render store

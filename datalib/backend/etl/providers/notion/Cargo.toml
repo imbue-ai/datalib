@@ -9,8 +9,8 @@ name = "datalib_etl_notion"
 path = "src/lib.rs"
 
 [[bin]]
-name = "notion-download"
-path = "src/bin/notion_download.rs"
+name = "notion-ingest"
+path = "src/bin/notion_ingest.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }

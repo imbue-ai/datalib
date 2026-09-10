@@ -43,8 +43,8 @@ rust_library(
 )
 
 rust_binary(
-    name = "chatgpt_download",
-    srcs = ["src/bin/chatgpt_download.rs"],
+    name = "chatgpt_ingest",
+    srcs = ["src/bin/chatgpt_ingest.rs"],
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [

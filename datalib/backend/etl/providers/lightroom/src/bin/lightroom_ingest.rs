@@ -8,7 +8,7 @@ use anyhow::Result;
 use clap::Parser;
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::{Progress, TracingSink};
-use datalib_etl_lightroom::download::{self, mirror, FetchOptions, MirrorOptions};
+use datalib_etl_lightroom::ingest::{self, mirror, FetchOptions, MirrorOptions};
 use datalib_etl_lightroom_config::XMP_COLUMN_PATTERNS;
 use datalib_obs::{init as init_obs, ObsArgs};
 use tracing::info;
@@ -47,7 +47,7 @@ struct Args {
     include_tables: Vec<String>,
 
     /// Mirror each table's declared primary key verbatim instead of
-    /// preferring a stable `id_global` UNIQUE column. See `DOWNLOAD.md`
+    /// preferring a stable `id_global` UNIQUE column. See `INGEST.md`
     /// §"When the primary key changes".
     #[arg(long)]
     declared_keys: bool,
@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
     };
 
     let pool = mirror::open_mirror(&args.db).await?;
-    let stats = download::fetch(FetchOptions {
+    let stats = ingest::fetch(FetchOptions {
         mirror_path: args.db.clone(),
         pool: Some(pool.clone()),
         options,

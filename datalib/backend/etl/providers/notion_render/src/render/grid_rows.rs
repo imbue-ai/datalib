@@ -253,7 +253,7 @@ fn canonicalize(v: &Value) -> Value {
 /// comments. The body is included directly rather than via its blocks,
 /// which is only sound because the stored markdown is stable for an
 /// unchanged page — signed attachment URLs are reduced to slots before
-/// storage (`download::slots`). Were they left signed, every page with
+/// storage (`ingest::slots`). Were they left signed, every page with
 /// an image would re-render on every run.
 fn fingerprint_for_page(page: &Value, markdown: &str, comments: &[&Value]) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();

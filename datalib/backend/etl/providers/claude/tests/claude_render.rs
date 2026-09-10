@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use datalib_etl_claude::download::export::{ingest, IngestOptions};
+use datalib_etl_claude::ingest::export::{ingest, IngestOptions};
 use datalib_etl_claude_render::render::parse::parse;
 use datalib_etl_claude_render::render::render::render_all;
 
@@ -40,11 +40,10 @@ fn collect_by_ext(root: &std::path::Path, ext: &str) -> BTreeMap<String, String>
 }
 
 async fn ingest_fixture(raw: &Path) {
-    let db = datalib_etl_claude::download::RawDb::open(
-        &datalib_etl_claude::download::db::db_path_for(raw),
-    )
-    .await
-    .expect("open raw store");
+    let db =
+        datalib_etl_claude::ingest::RawDb::open(&datalib_etl_claude::ingest::db::db_path_for(raw))
+            .await
+            .expect("open raw store");
     ingest(IngestOptions {
         db: db.clone(),
         input_path: fixture_dir(),

@@ -9,8 +9,8 @@ use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
-use crate::download::official::{BASE, PAGE_SIZE};
-use crate::download::{
+use crate::ingest::official::{BASE, PAGE_SIZE};
+use crate::ingest::{
     ENTITY_ANCHOR_BLOCK, ENTITY_COMMENT, ENTITY_MARKDOWN, ENTITY_PAGE, ENTITY_USER,
 };
 

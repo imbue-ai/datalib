@@ -47,7 +47,7 @@ fn org_uuid_of(conv: &Value) -> Option<String> {
 
 /// Display name for the org a conversation or project belongs to,
 /// read from the same `_source` block as the uuid.
-/// [`crate::download::normalize::normalize_to_export_shape`] stamps
+/// [`crate::ingest::normalize::normalize_to_export_shape`] stamps
 /// `org_name` alongside `org_uuid` on everything the API downloader
 /// writes, so a real captured snapshot carries it; a bulk export
 /// (which has no org scope at all) does not.

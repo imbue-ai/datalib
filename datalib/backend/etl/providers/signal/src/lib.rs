@@ -2,5 +2,5 @@
 //! decrypted Android backup into a doltlite raw store. Rendering lives
 //! in [`datalib_etl_signal_render`].
 
-pub mod download;
+pub mod ingest;
 pub mod processor;

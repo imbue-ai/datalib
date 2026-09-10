@@ -17,7 +17,7 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 use uuid::Uuid;
 
 use super::parse::ParsedEmail;
-use datalib_etl_email::download::db::{LoadedAttachment, LoadedEmail};
+use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.

@@ -320,7 +320,7 @@ rough dependency order:
   Both sides are strict: render configs are `deny_unknown_fields`,
   and the download planners reject the moved render knobs with a
   pointer to their new home. Provider crates expose per-wave entry
-  points (`plan_download(cfg)` / `plan_render(render_cfg)`).
+  points (`plan_ingest(cfg)` / `plan_render(render_cfg)`).
 * **Fringe steps always run.** A download step's real input is a remote
   service the scheduler can't version, so "run iff inputs changed"
   degenerates to "always invoke"; internal incrementality makes that

@@ -11,10 +11,10 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 
-// The UUIDv5 identity recipes live in `download::schema_raw` (identity
+// The UUIDv5 identity recipes live in `ingest::schema_raw` (identity
 // recipes belong next to the schema). Re-export so existing
 // `crate::render::beeper_*` callers keep resolving.
-pub use datalib_etl_beeper::download::schema_raw::{
+pub use datalib_etl_beeper::ingest::schema_raw::{
     beeper_event_uuid, beeper_markdown_uuid, beeper_room_uuid, beeper_user_uuid, BEEPER_UUID_NS,
 };
 

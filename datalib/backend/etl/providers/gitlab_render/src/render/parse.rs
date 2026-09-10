@@ -1,4 +1,4 @@
-//! Parse the GitLab doltlite database written by [`datalib_etl_gitlab::download`] into
+//! Parse the GitLab doltlite database written by [`datalib_etl_gitlab::ingest`] into
 //! in-memory rows for the renderer + grid_rows pass. Each discussion
 //! (a natively threaded conversation) gets unrolled into one `NoteRow`
 //! per note. Notes with `position.new_path` populate the inline section;
@@ -12,8 +12,8 @@ use once_cell::sync::Lazy;
 use serde_json::Value;
 use uuid::Uuid;
 
-use datalib_etl_gitlab::download::db::{db_path_for, LoadedRaw, RawDb};
-use datalib_etl_gitlab::download::schema_raw::mr_pk_recipe;
+use datalib_etl_gitlab::ingest::db::{db_path_for, LoadedRaw, RawDb};
+use datalib_etl_gitlab::ingest::schema_raw::mr_pk_recipe;
 
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_MR: &str = "merge_request";

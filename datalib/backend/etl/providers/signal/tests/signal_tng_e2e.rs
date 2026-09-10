@@ -1,6 +1,6 @@
 //! End-to-end test: write an encrypted TNG snapshot via the
 //! [`datalib_signal_backup::write`] writer, drive
-//! [`datalib_etl_signal::download::fetch`] over it, then drive the
+//! [`datalib_etl_signal::ingest::fetch`] over it, then drive the
 //! render path, and assert on both the doltlite row counts and the
 //! rendered markdown.
 
@@ -13,7 +13,7 @@ use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl::render_cursor;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_signal::download::{self, FetchOptions};
+use datalib_etl_signal::ingest::{self, FetchOptions};
 use datalib_etl_signal_render::render::{parse_raw_dir, render_all, render_params};
 use datalib_signal_backup::{
     backup, encrypt_attachment, local_media_name,
@@ -113,8 +113,8 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite")).await?;
     // One handle for the whole pass: a second live connection to the
     // same store makes one of the two `dolt_commit`s fail.
-    let db = download::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&raw_db_path)).await?;
-    let summary = download::fetch(FetchOptions {
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&raw_db_path)).await?;
+    let summary = ingest::fetch(FetchOptions {
         db: db.clone(),
         cache,
         snapshot_root: snapshot_root.clone(),
@@ -152,7 +152,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
 
     // Render runs against the doltlite-extended sqlite the
     // extractor wrote. parse_raw_dir wants the raw path (without the
-    // .doltlite_db extension) — download::fetch normalized it the
+    // .doltlite_db extension) — ingest::fetch normalized it the
     // same way internally. Default period (Month) is fine here; all
     // 4 messages share a single month (2364-04) so one bucket.
     let parsed = tokio::task::spawn_blocking({

@@ -3,7 +3,7 @@
 //! via `CARGO_MANIFEST_DIR` in the sandbox, so this lives as an
 //! integration test tagged `manual` and is run via `cargo test`.
 
-use datalib_etl_claude::download::export::{ingest, IngestOptions};
+use datalib_etl_claude::ingest::export::{ingest, IngestOptions};
 use datalib_etl_claude_render::render::parse::{parse, shred};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -22,9 +22,9 @@ async fn parses_tng_api_fixture() {
     let raw = tempfile::tempdir().expect("raw");
     // One handle for ingest and the commit that follows it: a second
     // live connection to the store makes one of the two commits fail.
-    let db = datalib_etl_claude::download::RawDb::open(
-        &datalib_etl_claude::download::db::db_path_for(raw.path()),
-    )
+    let db = datalib_etl_claude::ingest::RawDb::open(&datalib_etl_claude::ingest::db::db_path_for(
+        raw.path(),
+    ))
     .await
     .expect("open raw store");
     ingest(IngestOptions {

@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use datalib_etl_chatgpt::download::{self as chatgpt, db::block_on_load_all, db::db_path_for};
+use datalib_etl_chatgpt::ingest::{self as chatgpt, db::block_on_load_all, db::db_path_for};
 use insta::assert_json_snapshot;
 use serde_json::{json, Value};
 

@@ -10,7 +10,7 @@ use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::Value;
 
-use crate::download::api::build_url;
+use crate::ingest::api::build_url;
 
 pub struct SlackSynth {
     pub api_dir: PathBuf,

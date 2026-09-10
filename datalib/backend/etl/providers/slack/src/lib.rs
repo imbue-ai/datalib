@@ -1,9 +1,9 @@
 //! Slack provider for [`datalib_etl`]: the download half — raw API
 //! capture. Rendering lives in [`datalib_etl_slack_render`].
 
-pub mod download;
 /// Every entity id this provider mints. See `docs/dev/entity_ids.md`.
 pub mod ids;
+pub mod ingest;
 pub mod processor;
 pub mod synthesize;
 

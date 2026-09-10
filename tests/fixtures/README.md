@@ -140,7 +140,7 @@ YoLink's fixture names compartments rather than people:
 | `deck_12_water_main`    | `watermeter`           | gallons, per-sample + lifetime totalizer   |
 
 `sickbay_plasma_fridge` is the one fixture device that could not exist
-upstream today: `download/mod.rs` pins each device kind to a fixed CSV
+upstream today: `ingest/mod.rs` pins each device kind to a fixed CSV
 header and rejects a ℉ value under a ℃ header, so nothing writes a
 `temperature_f` row. The fixture writes it directly, deliberately, so
 the render side's ℉ → ℃ conversion has end-to-end coverage and the

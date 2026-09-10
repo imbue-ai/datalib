@@ -9,8 +9,8 @@ use datalib_etl::http::{HttpRequest, HttpService};
 use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::Value;
 
-use crate::download::schema_raw::{discussion_pk_recipe, mr_pk_recipe};
-use crate::download::{BASE, DEFAULT_SCOPES, ENTITY_DISCUSSION, ENTITY_MR, ENTITY_SELF, PER_PAGE};
+use crate::ingest::schema_raw::{discussion_pk_recipe, mr_pk_recipe};
+use crate::ingest::{BASE, DEFAULT_SCOPES, ENTITY_DISCUSSION, ENTITY_MR, ENTITY_SELF, PER_PAGE};
 
 pub struct GitlabSynth {
     pub api_dir: PathBuf,

@@ -7,7 +7,7 @@ use std::time::Duration;
 use datalib_etl::event_store::{diff_and_save, make_record};
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_gitlab::download::{
+use datalib_etl_gitlab::ingest::{
     block_on_load_all, db_path_for, fetch, FetchOptions, RawDb, ENTITY_DISCUSSION, ENTITY_MR,
     ENTITY_SELF,
 };

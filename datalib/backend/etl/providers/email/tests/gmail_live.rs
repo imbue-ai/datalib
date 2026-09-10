@@ -8,8 +8,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use datalib_etl_email::download::gmail_api::{self, FetchOptions, FetchSummary};
-use datalib_etl_email::download::{db_path_for, RawDb};
+use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
+use datalib_etl_email::ingest::{db_path_for, RawDb};
 
 fn test_label() -> String {
     std::env::var("DATALIB_GMAIL_TEST_LABEL").unwrap_or_else(|_| "datalib".to_string())

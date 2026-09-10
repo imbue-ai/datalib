@@ -56,8 +56,8 @@ rust_library(
 # Extract step — JMAP session, state-token-incremental sync of mailboxes,
 # emails, threads, attachments + .eml bytes into one .doltlite_db.
 rust_binary(
-    name = "jmap_download",
-    srcs = ["src/bin/jmap_download.rs"],
+    name = "jmap_ingest",
+    srcs = ["src/bin/jmap_ingest.rs"],
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [

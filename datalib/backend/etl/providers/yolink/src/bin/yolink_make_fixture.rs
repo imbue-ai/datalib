@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl_yolink::download::schema_raw::{YolinkDeviceRow, YolinkReadingRow};
-use datalib_etl_yolink::download::{db_path_for, RawDb};
+use datalib_etl_yolink::ingest::schema_raw::{YolinkDeviceRow, YolinkReadingRow};
+use datalib_etl_yolink::ingest::{db_path_for, RawDb};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

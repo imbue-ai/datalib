@@ -45,8 +45,8 @@ reference doc it relates to.
   entirely. Read it for why; it was written as the design and kept as
   the explanation.
 - [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md)
-  — *agreed design (2026-09-09); every slice but 5 built (2026-09-09
-  and 2026-09-10)*: one row per source in the
+  — *agreed design (2026-09-09); built in full (2026-09-09 and
+  2026-09-10)*: one row per source in the
   Manage screen, done by making the grouping a config entity. A
   `[[groups]]` table with `id`/`name`/`type`; a step is `(group,
   function)` with its id composed and never written; `datalib-step`
@@ -78,8 +78,7 @@ reference doc it relates to.
   `mbox`). A table that reads files carries its own `path`. There is
   no global list of these names: each type has its own two or three.
   That is the shape `datalib-migrate-config` rewrites any earlier one
-  into. Still to come, optional: the mechanical crate
-  rename (slice 5).
+  into. Every slice is built; the plan is complete.
   Read it before touching step ids, the wizard, or `datalib-step`'s
   dispatch. It reverses the "ungrouping" section of `step_identity.md`.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
@@ -162,7 +161,7 @@ reference doc it relates to.
   adding a renderer or changing a projection. There is no "parse
   step": a record that "fails to parse" is one **render** could not
   deserialize, and the fix is always a re-render, never a re-fetch.
-- [`datalib/backend/etl/providers/media/DOWNLOAD.md`](datalib/backend/etl/providers/media/DOWNLOAD.md)
+- [`datalib/backend/etl/providers/media/INGEST.md`](datalib/backend/etl/providers/media/INGEST.md)
   — the `media` source: local music/photos/video/playlists. Read it
   before touching anything about **`payload_blake3`**, the
   metadata-excluding second hash (per-container recipes, why an
@@ -393,7 +392,7 @@ datalib/
                    unified-index load, and `RenderCtx`. Everything in
                    the tree that knows `datalib_schema` sits here or
                    above; see "Download and render are separate crates".
-    etl/providers/ <p>/ (download) + <p>_render/ (render) per provider,
+    etl/providers/ <p>/ (ingest) + <p>_render/ (render) per provider,
                    plus a <p>_config/ crate for the config schema.
                    Three providers scan local trees and share
                    etl/src/fswalk.rs (blake3 + Unison's rescan cursor):
@@ -567,13 +566,7 @@ Do **not** edit files under `third-party/qmd/` — they will be overwritten
 on the next pull. If you need local patches, layer them outside the
 subtree and document why.
 
-## Download and render are separate crates
-
-The step is called `ingest` and the crates below are still called
-`download`; the crate, module and `DOWNLOAD.md` rename to "ingest" is
-its own mechanical PR (slice 5 of
-[`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md))
-and has not happened.
+## Ingest and render are separate crates
 
 A provider is three crates: `datalib_etl_<p>_config` holds the config
 schema (§"Why each provider has a `<p>_config` crate"),
@@ -583,21 +576,21 @@ way — `datalib_etl` below, `datalib_etl_render` above it.
 
 **The render schema stops at that line.** `datalib_schema` — `GridRow`,
 `edges`, `markdowns` — is reachable from the render crates and from
-nothing on the download side. That is what the split is for: moving a
+nothing on the ingest side. That is what the split is for: moving a
 `grid_rows` column used to rebuild and re-run every downloader in the
 tree, including `chatgpt_live`, `claude_reset_and_redownload` and every
 other test that cannot be affected by it.
 
 The direction is enforced by Rust itself: crate dependencies are
-acyclic, so a download crate *cannot* depend on its render crate even
+acyclic, so an ingest crate *cannot* depend on its render crate even
 by accident. Nothing else is needed to keep it that way, and no bazel
 visibility rule is doing this job.
 
 Two rules follow:
 
-- **Anything a downloader needs must live on the download side.** The
+- **Anything an ingest needs must live on the ingest side.** The
   uuid recipes are the usual case: they are minted during download and
-  read again during render, so they belong in `download/schema_raw.rs`
+  read again during render, so they belong in `ingest/schema_raw.rs`
   and the render crate names them through the download crate. Before
   the split, beeper's downloader reached three of them through a
   re-export in `render/mod.rs` — which read as a render dependency and
@@ -1252,13 +1245,13 @@ land rows in the same six tables of `<name>/ingest`, so the render step
 has exactly one input shape. The API downloader gets there by
 normalizing every response into the bulk-export on-disk shape
 (`normalize_to_export_shape` in
-`datalib/backend/etl/providers/claude/src/download/normalize.rs`,
+`datalib/backend/etl/providers/claude/src/ingest/normalize.rs`,
 stamping `_source: { via: "claude.ai/api", org_uuid }` provenance); the
 export ingest stores what the export already said, with the org columns
 NULL — which is how the renderer tells the two apart and knows not to
 normalize an already-normalized payload a second time.
 
-Until #207 the export had no download wave at all: the renderer read
+Until #207 the export had no ingest wave at all: the renderer read
 the export tree in place through a second parser, and the source had no
 raw store, no `sync_runs` row and no way to notice a deleted
 conversation. If you find prose calling the export "render-only", or
@@ -1269,8 +1262,8 @@ Because the two methods share a store, seeding one from an export and
 then keeping it fresh with the API nearly works today — and has one
 destructive edge (the export ingest prunes to its own snapshot, so
 re-running it over an API-extended store deletes what the API added).
-Read DOWNLOAD.md's "Bootstrapping from an export" section before trying
-it. See `datalib/backend/etl/providers/claude/DOWNLOAD.md`.
+Read INGEST.md's "Bootstrapping from an export" section before trying
+it. See `datalib/backend/etl/providers/claude/INGEST.md`.
 
 ### "Claude", not "Anthropic"
 
@@ -1509,7 +1502,7 @@ the longest offset-suffixed form including microseconds.
 
 ## Auth (web API)
 
-The Rust downloaders under `datalib/backend/etl/providers/*/src/download/`
+The Rust downloaders under `datalib/backend/etl/providers/*/src/ingest/`
 read the `sessionKey` cookie out of `latchkey curl -v` stderr and then
 issue the actual requests via the `latchkey-curl-impersonate` so Cloudflare's
 JA3 wall passes. If the cookie is missing or expired,

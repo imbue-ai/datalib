@@ -9,7 +9,7 @@ name = "datalib_etl"
 path = "src/lib.rs"
 
 # Curl-compatible CLI shim wrapping rquest's Chrome TLS impersonation.
-# Mirror of `src/download/latchkey_curl_impersonate.py` — point latchkey at it
+# Mirror of `src/ingest/latchkey_curl_impersonate.py` — point latchkey at it
 # via `LATCHKEY_CURL=<path-to-this-binary>` to clear Cloudflare without
 # a separate curl-impersonate install.
 [[bin]]

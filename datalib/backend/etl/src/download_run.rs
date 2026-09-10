@@ -1,4 +1,4 @@
-//! [`DownloadRun`] — bookkeeping wrapper for provider `download::fetch` calls.
+//! [`DownloadRun`] — bookkeeping wrapper for provider `ingest::fetch` calls.
 
 use std::collections::{BTreeMap, HashMap};
 

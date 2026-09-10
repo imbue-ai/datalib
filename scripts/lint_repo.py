@@ -374,7 +374,7 @@ _WRITABLE_OPEN = re.compile(
 def _check_render_opens_read_only(root: Path) -> int:
     bad: list[str] = []
     for rel in _render_sources(root):
-        # A `download/db.rs` is a download file that render calls into. Its
+        # A `ingest/db.rs` is a download file that render calls into. Its
         # opens are the download step's, and the download step owns the store
         # it is writing -- only check 4 has anything to say about these.
         if rel in _RENDER_REACHABLE_LOADERS:
@@ -465,7 +465,7 @@ _TABLE_READ = re.compile(r"\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*)")
 _OWN_READ = re.compile(r"Reads::Own\b")
 
 
-# Loaders that live in `download/db.rs` but are called from render. Their SQL
+# Loaders that live in `ingest/db.rs` but are called from render. Their SQL
 # is bespoke rather than going through a `Reads`-taking helper, so neither the
 # regex nor the compiler sees them -- which is how this check printed "every
 # render read is pinned" twice while five providers read their whole content
@@ -475,35 +475,35 @@ _OWN_READ = re.compile(r"Reads::Own\b")
 # things it replaced: a file glob that could not reach them, and a claim that
 # they did not exist. An entry leaves when its loader takes a pin.
 _RENDER_REACHABLE_LOADERS: dict[str, tuple[str, ...]] = {
-    "datalib/backend/etl/providers/notion/src/download/db.rs": (
+    "datalib/backend/etl/providers/notion/src/ingest/db.rs": (
         "load_comment_anchors",
         "load_page_markdown",
         "load_comments",
         "load_user_names",
         "load_blobs_by_page",
     ),
-    "datalib/backend/etl/providers/linkedin/src/download/photos.rs": (
+    "datalib/backend/etl/providers/linkedin/src/ingest/photos.rs": (
         "load_photo_blobs",
     ),
-    "datalib/backend/etl/providers/pdf/src/download/db.rs": (
+    "datalib/backend/etl/providers/pdf/src/ingest/db.rs": (
         "scan_root",
         "convertible_documents",
     ),
-    "datalib/backend/etl/providers/claude/src/download/db.rs": (
+    "datalib/backend/etl/providers/claude/src/ingest/db.rs": (
         "load_conversations_from",
         "first_user_uuid_from",
     ),
-    "datalib/backend/etl/providers/github/src/download/db.rs": (
+    "datalib/backend/etl/providers/github/src/ingest/db.rs": (
         "load_self_identity",
         "load_pull_requests",
         "load_children",
     ),
-    "datalib/backend/etl/providers/gitlab/src/download/db.rs": (
+    "datalib/backend/etl/providers/gitlab/src/ingest/db.rs": (
         "load_self_identity",
         "load_merge_requests",
         "load_discussions",
     ),
-    "datalib/backend/etl/providers/contacts/src/download/db.rs": (
+    "datalib/backend/etl/providers/contacts/src/ingest/db.rs": (
         "load_all_for_render_and_index_md",
     ),
 }
@@ -526,7 +526,7 @@ def _render_sources(root: Path) -> list[str]:
 
 def _unpinned_reads(root: Path, rel: str) -> list[tuple[int, str]]:
     text = (root / rel).read_text(encoding="utf-8", errors="replace")
-    # For a `download/db.rs` only the render-reachable loaders count: the rest
+    # For a `ingest/db.rs` only the render-reachable loaders count: the rest
     # of that file is the download step reading the store it is writing, which
     # must stay unpinned.
     if rel in _RENDER_REACHABLE_LOADERS:

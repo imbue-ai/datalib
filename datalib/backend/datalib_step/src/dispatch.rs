@@ -26,9 +26,9 @@ pub struct PlannedSource {
     /// Whether the method the ingest step's params hold reaches a live
     /// origin or reads files on disk. `None` for a render.
     pub reach: Option<Reach>,
-    /// Resolved rate-limit give-up bounds for the download wave.
+    /// Resolved rate-limit give-up bounds for the ingest wave.
     pub download_params: DownloadParams,
-    /// `common.always_clear_before_ingest`, resolved. Download wave only —
+    /// `common.always_clear_before_ingest`, resolved. Ingest wave only —
     /// render rewrites its own tree already.
     pub always_clear_before_ingest: bool,
     pub processors: Wave,
@@ -38,14 +38,14 @@ pub struct PlannedSource {
 /// phase: download and render no longer share a trait, because they no
 /// longer share a run context.
 pub enum Wave {
-    Download(Vec<Box<dyn DataProcessor>>),
+    Ingest(Vec<Box<dyn DataProcessor>>),
     Render(Vec<Box<dyn RenderProcessor>>),
 }
 
 impl Wave {
     pub fn len(&self) -> usize {
         match self {
-            Wave::Download(p) => p.len(),
+            Wave::Ingest(p) => p.len(),
             Wave::Render(p) => p.len(),
         }
     }
@@ -96,7 +96,7 @@ pub fn plan(
 
     // Each arm names two crates, because a provider is two crates: the
     // download half and the `_render` half that links `datalib_schema`.
-    // A provider's two waves are its `plan_download` / `plan_render`
+    // A provider's two waves are its `plan_ingest` / `plan_render`
     // pair; which *method* runs is the provider's own reading of its
     // params.
     macro_rules! arm {
@@ -130,7 +130,7 @@ pub fn plan(
                         reach: Some(reach),
                         download_params,
                         always_clear_before_ingest,
-                        processors: Wave::Download($dlp::processor::plan_download(ctx, cfg)?),
+                        processors: Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?),
                     }
                 }
                 Phase::Render => {
@@ -183,7 +183,7 @@ pub fn plan(
                         reach: Some(crate::methods::reach_or_refuse(source_type, &held)?),
                         download_params: cfg.common.download_params.clone(),
                         always_clear_before_ingest: cfg.common.always_clear_before_ingest,
-                        processors: Wave::Download($dlp::processor::plan_download(ctx, cfg)?),
+                        processors: Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?),
                     }
                 }
                 Phase::Render => {
@@ -257,8 +257,8 @@ pub fn plan(
             datalib_etl_beeper_render
         ),
         SourceType::Contacts => arm!(
-            datalib_etl_carddav_config::CarddavConfig,
-            datalib_etl_carddav_config::CarddavRenderConfig,
+            datalib_etl_contacts_config::ContactsConfig,
+            datalib_etl_contacts_config::ContactsRenderConfig,
             datalib_etl_contacts,
             datalib_etl_contacts_render
         ),
@@ -494,7 +494,7 @@ mod tests {
 
     /// An `ingest` step whose params hold none of its provider's methods
     /// is refused at plan time, where `datalib-dag --check` sees it. A
-    /// step with no method used to plan an empty download wave and
+    /// step with no method used to plan an empty ingest wave and
     /// succeed, which read exactly like a working sync that found nothing.
     #[test]
     fn an_ingest_step_with_no_method_is_refused() {
@@ -606,7 +606,7 @@ mod tests {
 
     /// One `claude` type, two methods: `export` is file-backed, not
     /// render-only. It ingests the export at its `path` into the same
-    /// raw store `api` writes, so it plans a download wave like every
+    /// raw store `api` writes, so it plans a ingest wave like every
     /// other file-backed source (issue #207).
     #[test]
     fn claude_export_plans_an_ingest_from_its_path() {

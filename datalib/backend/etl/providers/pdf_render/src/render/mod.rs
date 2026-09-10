@@ -15,7 +15,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::section::{msg_div_open, MSG_DIV_CLOSE};
 
 pub use convert::RENDER_VERSION;
-use datalib_etl_pdf::download::{RawDb, RenderTarget};
+use datalib_etl_pdf::ingest::{RawDb, RenderTarget};
 
 fn md_path_for(out_dir: &Path, blake3: &str) -> PathBuf {
     out_dir.join("docs").join(format!("{blake3}.md"))
@@ -47,7 +47,7 @@ pub struct RenderSummary {
 /// test behind its deletions, so an empty vec here would remove every
 /// document the diff named.
 pub async fn load_targets(raw_dir: &Path) -> Result<Option<Vec<RenderTarget>>> {
-    let db_path = datalib_etl_pdf::download::db_path_for(raw_dir);
+    let db_path = datalib_etl_pdf::ingest::db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(None);
     }
@@ -316,7 +316,7 @@ pub struct PdfScan {
 /// file appearing at a new path is how a document enters the corpus, even
 /// when its bytes were already known.
 pub async fn scan_changed(raw_dir: &Path, last_render_hash: Option<&str>) -> Result<PdfScan> {
-    let db_path = datalib_etl_pdf::download::db_path_for(raw_dir);
+    let db_path = datalib_etl_pdf::ingest::db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(PdfScan::default());
     }

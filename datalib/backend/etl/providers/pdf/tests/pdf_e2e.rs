@@ -7,7 +7,7 @@ use anyhow::Result;
 use sqlx::Row;
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl_pdf::download::{self, RawDb};
+use datalib_etl_pdf::ingest::{self, RawDb};
 use datalib_etl_pdf_render::render;
 
 const NOW: &str = "2364-04-13T08:45:00-07:00";
@@ -62,12 +62,12 @@ impl Harness {
         }
     }
 
-    async fn scan(&self) -> Result<download::FetchSummary> {
-        let db = RawDb::open(&download::db_path_for(&self.raw_dir)).await?;
+    async fn scan(&self) -> Result<ingest::FetchSummary> {
+        let db = RawDb::open(&ingest::db_path_for(&self.raw_dir)).await?;
         // A temp cache per harness: tests must never read or write this
         // host's real one.
         let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
-        let summary = download::fetch(download::FetchOptions {
+        let summary = ingest::fetch(ingest::FetchOptions {
             db: db.clone(),
             source_name: STANZA.to_string(),
             root: self.root.clone(),
@@ -116,7 +116,7 @@ impl Harness {
     /// A handle for the assertions. Close it before any further `scan`
     /// or `render` — see [`Self::scan`].
     async fn db(&self) -> RawDb {
-        RawDb::open(&download::db_path_for(&self.raw_dir))
+        RawDb::open(&ingest::db_path_for(&self.raw_dir))
             .await
             .unwrap()
     }
@@ -245,7 +245,7 @@ async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
     Ok(())
 }
 
-/// The payoff of `download::content_hash`, asserted against the store
+/// The payoff of `ingest::content_hash`, asserted against the store
 /// rather than against the pure function: two files that differ only in
 /// their metadata land as two rows sharing one content identity.
 #[tokio::test(flavor = "multi_thread")]

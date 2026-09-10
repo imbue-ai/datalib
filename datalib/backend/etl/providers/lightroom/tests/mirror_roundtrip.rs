@@ -9,7 +9,7 @@ use sqlx::Row;
 
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
-use datalib_etl_lightroom::download::{self, mirror, FetchOptions, MirrorOptions, MirrorStats};
+use datalib_etl_lightroom::ingest::{self, mirror, FetchOptions, MirrorOptions, MirrorStats};
 use datalib_etl_lightroom_config::XMP_COLUMN_PATTERNS;
 
 // Harness
@@ -59,7 +59,7 @@ impl Fixture {
 
     async fn ingest_with(&self, opts: MirrorOptions) -> Result<(MirrorStats, Option<String>)> {
         let pool = mirror::open_mirror(&self.mirror).await?;
-        let stats = download::fetch(FetchOptions {
+        let stats = ingest::fetch(FetchOptions {
             mirror_path: self.mirror.clone(),
             pool: Some(pool.clone()),
             options: opts,

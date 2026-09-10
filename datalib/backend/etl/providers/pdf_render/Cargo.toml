@@ -28,7 +28,7 @@ hex = "0.4"
 # (non-`ocr`) feature set: column detection, reading order, tables, and
 # TextBased/Scanned classification all run in-process. The `ocr` feature
 # is deliberately NOT enabled — it pulls PDFium + ONNX Runtime as
-# external shared libraries. See DOWNLOAD.md §"Why no OCR yet".
+# external shared libraries. See INGEST.md §"Why no OCR yet".
 pdf-inspector = { workspace = true }
 # Trailer `/ID` and the XMP metadata stream, for the document-lineage
 # columns. pdf-inspector does not surface either.

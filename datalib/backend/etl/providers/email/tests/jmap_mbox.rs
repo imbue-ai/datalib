@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use datalib_etl::progress::Progress;
-use datalib_etl_email::download::db::{db_path_for, RawDb};
-use datalib_etl_email::download::mbox;
+use datalib_etl_email::ingest::db::{db_path_for, RawDb};
+use datalib_etl_email::ingest::mbox;
 use datalib_etl_email_render::render::parse::parse;
 use datalib_etl_email_render::render::render::{render_all, thread_uuid, OutlinkFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;

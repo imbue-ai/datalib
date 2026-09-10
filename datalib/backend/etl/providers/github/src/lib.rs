@@ -2,6 +2,6 @@
 //! capture from `api.github.com`. Rendering lives in
 //! [`datalib_etl_github_render`].
 
-pub mod download;
+pub mod ingest;
 pub mod processor;
 pub mod synthesize;

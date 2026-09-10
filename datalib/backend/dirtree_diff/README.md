@@ -150,7 +150,7 @@ are reading older notes. `RawDb::checkout_branch` issued MySQL's
 so the flag failed outright instead of degrading. doltlite exposes the
 dolt procedures as **functions** — `SELECT dolt_checkout(…)` — the same
 distinction `app_store.rs` documents for `dolt_commit`. Fixed in
-`download/db.rs`, with `tests/branch_scan.rs` covering it: every other
+`ingest/db.rs`, with `tests/branch_scan.rs` covering it: every other
 caller in the tree passes `target_doltlite_branch: None`, which is how
 it stayed broken with a green suite.
 

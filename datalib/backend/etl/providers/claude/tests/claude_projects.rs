@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_claude::download::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
+use datalib_etl_claude::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_claude::synthesize::ClaudeSynth;
 use datalib_etl_claude_render::render::parse::parse;
 use serde_json::{json, Value};
@@ -188,7 +188,7 @@ async fn conv_uuids_scopes_conversations_not_projects() {
 /// the bug the pinning work exists to remove.
 async fn seal(raw: &std::path::Path) {
     let db =
-        datalib_etl::doltlite_raw::open(&datalib_etl_claude::download::db::db_path_for(raw), &[])
+        datalib_etl::doltlite_raw::open(&datalib_etl_claude::ingest::db::db_path_for(raw), &[])
             .await
             .expect("open to commit");
     datalib_etl::doltlite_raw::commit_run(&db, "test: claude fetch")

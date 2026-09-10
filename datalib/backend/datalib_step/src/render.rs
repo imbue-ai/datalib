@@ -35,7 +35,7 @@ pub async fn run(
         name, processors, ..
     } = planned;
     let Wave::Render(processors) = processors else {
-        anyhow::bail!("the render driver was handed source {name:?}'s download wave");
+        anyhow::bail!("the render driver was handed source {name:?}'s ingest wave");
     };
     let progress = emitter.progress();
     // The providers write under `render_markdown_root(data_root, name)`;

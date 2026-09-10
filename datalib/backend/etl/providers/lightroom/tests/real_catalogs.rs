@@ -9,7 +9,7 @@ use sqlx::Row;
 
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
-use datalib_etl_lightroom::download::{self, mirror, FetchOptions, MirrorOptions, MirrorStats};
+use datalib_etl_lightroom::ingest::{self, mirror, FetchOptions, MirrorOptions, MirrorStats};
 
 /// Every table in these catalogs. Two of the 115 `sqlite_master` rows are
 /// SQLite's own `sqlite_stat1` / `sqlite_stat4` query-planner statistics,
@@ -46,7 +46,7 @@ impl Store {
 
     async fn ingest(&self, catalog: &Path) -> Result<(MirrorStats, Option<String>)> {
         let pool = mirror::open_mirror(&self.path).await?;
-        let stats = download::fetch(FetchOptions {
+        let stats = ingest::fetch(FetchOptions {
             mirror_path: self.path.clone(),
             pool: Some(pool.clone()),
             options: MirrorOptions {

@@ -608,8 +608,8 @@ truncate is what makes upstream deletions fall out.
 | provider | where |
 |---|---|
 | whatsapp | `download.rs`, `truncate_wa_tables` before the mirror |
-| pdf | `download/mod.rs`, `reset_paths` before the walk |
-| fsindex | `download/mod.rs`, `db.reset()` before the index |
+| pdf | `ingest/mod.rs`, `reset_paths` before the walk |
+| fsindex | `ingest/mod.rs`, `db.reset()` before the index |
 
 For these, "a write burst went quiet" is not a consistent point — it is
 most likely to be reached while the table is empty. Their only
@@ -769,7 +769,7 @@ Each of these is a reviewable PR that leaves the tree green.
    notion 3, claude 3, gitlab 3, github 2, contacts 2
    ```
 
-   Each is a bespoke query in a `download/db.rs` that render calls into,
+   Each is a bespoke query in a `ingest/db.rs` that render calls into,
    so neither the compiler nor a regex over `src/render*` sees it — which
    is how this check printed "every render read is pinned" for two
    commits running. Until they are pinned, `download -> render` (step 7)
