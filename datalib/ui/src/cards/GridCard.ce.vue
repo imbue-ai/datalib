@@ -707,24 +707,44 @@ function applyDefaultSort() {
 // with varying values get shown. "Adaptive rule wins" — manual
 // column-visibility toggles get overwritten on the next query.
 //
-// A card opened with a `columns` preset narrows this to that set, so
-// the rule can only ever *hide* within what the preset allows and never
-// reveal a column the preset deliberately left out. That split is what
-// lets a preset be generous: it names what would be meaningful for the
-// source, and this decides what is actually there.
+// This list is what the rule may *reveal*, so it is deliberately not
+// "every optional column": a column named here appears in the default
+// grid whenever its values vary, which is exactly what `hide: true` on
+// a colDef is there to prevent. It stays the set it has always been.
 const ADAPTIVE_FIELDS: (keyof SearchRow)[] = [
   "score",
   "source",
-  "source_name",
   "kind",
   "channel",
   "when",
   "author",
   "account",
-  "project",
-  "conversation_name",
-  "org_name",
 ];
+
+/// The preset's columns, or null when this card has none — or when the
+/// user's own persisted column state has superseded it, which is the
+/// same rule `q` follows: once someone has moved a column, this card is
+/// theirs. A function, not a computed: `colsEncoded` is a plain `let`,
+/// so a computed would cache its first answer forever.
+function presetColumns(): Set<string> | null {
+  return !colsEncoded && props.columns?.length ? new Set(props.columns) : null;
+}
+
+// A card opened with a `columns` preset runs the rule over the preset's
+// own columns instead. Those are already on screen, so there the rule
+// can only *trim* — hiding whichever the source leaves empty, never
+// revealing one the preset left out. That split is what lets a preset
+// be generous: it names what would be meaningful for the source, and
+// this decides what is actually there.
+//
+// `snippet` is excluded because it is the content, not a facet: a
+// corpus where every row's text matched would otherwise hide the one
+// column worth reading.
+function adaptiveFields(): (keyof SearchRow)[] {
+  const allowed = presetColumns();
+  if (!allowed) return ADAPTIVE_FIELDS;
+  return [...allowed].filter((c) => c !== "snippet") as (keyof SearchRow)[];
+}
 
 function stringifyForCompare(v: unknown): string {
   if (v == null) return "";
@@ -733,11 +753,7 @@ function stringifyForCompare(v: unknown): string {
 
 function applyAdaptiveVisibility() {
   if (!gridApi || rows.value.length === 0) return;
-  const allowed = preset.value;
-  const fields = allowed
-    ? ADAPTIVE_FIELDS.filter((f) => allowed.has(f as string))
-    : ADAPTIVE_FIELDS;
-  const state = fields.map((field) => {
+  const state = adaptiveFields().map((field) => {
     const first = stringifyForCompare(rows.value[0][field]);
     const allSame = rows.value.every(
       (r) => stringifyForCompare(r[field]) === first,
@@ -748,12 +764,6 @@ function applyAdaptiveVisibility() {
   gridApi.applyColumnState({ state });
   restoring = false;
 }
-
-// The preset's columns as a set, or null when this card has none (or
-// the user's own persisted column state has superseded it).
-const preset = computed<Set<string> | null>(() =>
-  !colsEncoded && props.columns?.length ? new Set(props.columns) : null,
-);
 
 /// Show exactly the preset's columns, in its order, and hide every
 /// other optional one. Runs once, before any results land, so the first
