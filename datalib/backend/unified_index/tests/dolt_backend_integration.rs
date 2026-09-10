@@ -159,3 +159,74 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
 }
+
+/// A source's storage report is written into that source's own
+/// `render_markdown/` tree, so the first segment of its `qmd_path` is
+/// the measured source. It must not be filed there: `source_name:` has
+/// to answer `datalib` for it, and the measured source's own name has to
+/// leave it out. Both halves — the column's value and the SQL filter —
+/// are checked here against a real store, because the two are derived
+/// separately and can disagree.
+#[tokio::test]
+async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.expect("open doltlite");
+
+    for (_t, ddl) in GRID_DDL {
+        sqlx::query(*ddl)
+            .execute(repo.index_pool())
+            .await
+            .expect("create grid_rows");
+    }
+    // Both rows sit under `claude-work/render_markdown/`: the chat is
+    // that source's data, the measurement is datalib describing it.
+    sqlx::query(
+        "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, when_ts_utc, \
+         when_offset, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid) \
+         VALUES ('c-1','claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
+                 '2026-04-01T10:00:00.000000Z','+00:00','c-1','/chat/c-1','summary', \
+                 'claude-work/render_markdown/chats/c-1.md','c-1')",
+    )
+    .execute(repo.index_pool())
+    .await
+    .expect("insert chat row");
+    sqlx::query(
+        "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, when_ts_utc, \
+         when_offset, account, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid) \
+         VALUES ('s-1','datalib','Store','Storage','2026-04-01T10:00:00+00:00', \
+                 '2026-04-01T10:00:00.000000Z','+00:00','claude-work','s-1','/chat/s-1', \
+                 'claude-work/ingest/entities.doltlite_db', \
+                 'claude-work/render_markdown/_datalib/storage.md','s-1')",
+    )
+    .execute(repo.index_pool())
+    .await
+    .expect("insert storage row");
+
+    let all = repo.search(&parse_query("type:all"), 100).await.unwrap();
+    assert_eq!(all.len(), 2, "{all:?}");
+    let storage = all.iter().find(|r| r.uuid == "s-1").expect("storage row");
+    assert_eq!(storage.source_name, "datalib");
+
+    let measured = repo
+        .search(&parse_query("source_name:claude-work type:all"), 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        measured.iter().map(|r| &r.uuid).collect::<Vec<_>>(),
+        vec!["c-1"],
+        "the measured source's name must not pull in what measures it"
+    );
+
+    let datalibs = repo
+        .search(&parse_query("source_name:datalib type:all"), 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        datalibs.iter().map(|r| &r.uuid).collect::<Vec<_>>(),
+        vec!["s-1"]
+    );
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}
