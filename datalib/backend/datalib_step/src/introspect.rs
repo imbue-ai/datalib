@@ -134,30 +134,6 @@ fn human_bytes(n: i64) -> String {
     }
 }
 
-/// Total bytes and file count under `dir`, following no symlinks — a
-/// cycle would never return and a shared target would be counted twice.
-fn walk(dir: &Path) -> (i64, i64) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return (0, 0);
-    };
-    let mut bytes = 0i64;
-    let mut files = 0i64;
-    for entry in entries.flatten() {
-        let Ok(meta) = entry.path().symlink_metadata() else {
-            continue;
-        };
-        if meta.is_dir() {
-            let (b, f) = walk(&entry.path());
-            bytes += b;
-            files += f;
-        } else {
-            bytes += meta.len() as i64;
-            files += 1;
-        }
-    }
-    (bytes, files)
-}
-
 /// Open a store without claiming it. Read-only matters: doltlite's
 /// working set is per *file* and shared across processes, so a
 /// read-write handle here could sweep another writer's in-flight rows
@@ -251,12 +227,12 @@ pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
         return Ok(Vec::new());
     }
 
-    let (bytes, files) = walk(&raw_dir);
+    let tree = datalib_core::disk::measure(&raw_dir);
     let mut subjects = vec![Subject {
         path: raw_rel.clone(),
         kind: MeasurementKind::Tree,
-        bytes: Some(bytes),
-        items: Some(files),
+        bytes: Some(tree.bytes as i64),
+        items: Some(tree.files as i64),
     }];
 
     let mut stores: Vec<(String, PathBuf)> = Vec::new();
