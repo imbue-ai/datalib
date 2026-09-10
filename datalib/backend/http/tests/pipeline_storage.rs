@@ -22,6 +22,25 @@ command = "datalib-step render pdf"
 inputs = ["pdfs/raw"]
 "#;
 
+/// The same two steps filed under a `[[groups]]` entry.
+const GROUPED_CONFIG: &str = r#"
+[[groups]]
+id = "pdfs"
+name = "Scanned PDFs"
+type = "pdf"
+
+[[steps]]
+group = "pdfs"
+function = "raw"
+command = "datalib-step download pdf"
+
+[[steps]]
+group = "pdfs"
+function = "rendered_md"
+command = "datalib-step render pdf"
+inputs = ["pdfs/raw"]
+"#;
+
 async fn state(root: &Path) -> AppState {
     let root = Arc::new(root.to_path_buf());
     let app = AppStore::open(root.as_path())
@@ -170,4 +189,40 @@ async fn the_response_carries_a_history_and_names_its_window() {
     // one sample.
     assert_eq!(v["root"]["history"].as_array().unwrap().len(), 1);
     assert_eq!(v["root"]["path"], ".");
+}
+
+/// A group's directory is measured as a tree of its own, on the same
+/// walk as its steps. The Manage screen's group row reads that series
+/// rather than adding two step series sampled at different instants.
+#[tokio::test]
+async fn a_group_directory_is_a_measured_tree_of_its_own() {
+    let td = tempfile::tempdir().unwrap();
+    std::fs::write(td.path().join("config.toml"), GROUPED_CONFIG).unwrap();
+    let app = router(state(td.path()).await);
+
+    // Declared, nothing written: the group has a row and it is absent,
+    // like a step's.
+    let before = storage(&app, "?refresh=1").await;
+    assert_eq!(tree(&before, "pdfs")["present"], false);
+
+    std::fs::create_dir_all(td.path().join("pdfs/raw")).unwrap();
+    std::fs::create_dir_all(td.path().join("pdfs/rendered_md")).unwrap();
+    std::fs::write(
+        td.path().join("pdfs/raw/blobs.doltlite_db"),
+        vec![7u8; 1024],
+    )
+    .unwrap();
+    std::fs::write(td.path().join("pdfs/rendered_md/a.md"), vec![7u8; 100]).unwrap();
+
+    let after = storage(&app, "?refresh=1").await;
+    let group = tree(&after, "pdfs");
+    assert_eq!(group["present"], true);
+    assert_eq!(group["bytes"], 1124, "both steps' trees, under the group");
+    assert!(
+        group.get("parts").is_none(),
+        "the entities/attachments split belongs to the raw store, not the folder above it"
+    );
+    assert_eq!(tree(&after, "pdfs/raw")["bytes"], 1024);
+    assert_eq!(tree(&after, "pdfs/rendered_md")["bytes"], 100);
+    assert!(group["abs"].as_str().unwrap().ends_with("/pdfs"));
 }

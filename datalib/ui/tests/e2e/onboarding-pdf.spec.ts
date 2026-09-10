@@ -6,7 +6,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { copyFileSync } from "node:fs";
 import {
+  expandGroup,
   expectGridPainted,
+  groupRow,
   pipelineRow as row,
   searchAndSettle,
   settle,
@@ -135,7 +137,11 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // ── 3. landing in Manager2 ───────────────────────────────────────
     await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/sources2");
-    // The scaffold's three entries are the table's whole content.
+    // The scaffold's one group is the table's whole content, and its
+    // three entries are under it.
+    await expect(groupRow(page, "unified_index")).toContainText("Unified Index");
+    await expect(page.locator(".ag-row")).toHaveCount(1);
+    await expandGroup(page, "unified_index");
     for (const id of ["unified_index/grid", "unified_index/qmd", "unified_index"]) {
       await expect(row(page, id)).toHaveCount(1);
     }
@@ -177,8 +183,14 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await wizard.getByRole("button", { name: "Add source" }).click();
     await expect(wizard).toHaveCount(0);
 
-    // Two rows, and neither has ever run: no status history, nothing on
-    // disk. This is the state the sync below has to move.
+    // One group row, with two steps under it, and none of them has ever
+    // run: no status history, nothing on disk. This is the state the
+    // sync below has to move. The group reads off its steps, so it
+    // says the same.
+    await expect(groupRow(page, "pdfs")).toContainText("PDFs");
+    expect(await statusOf(page, "group:pdfs")).toBe("Never run");
+    expect(await bytesOf(page, "group:pdfs")).toBeNull();
+    await expandGroup(page, "pdfs");
     await expect(row(page, "pdfs/raw")).toHaveCount(1);
     await expect(row(page, "pdfs/rendered_md")).toHaveCount(1);
     expect(await statusOf(page, "pdfs/raw")).toBe("Never run");
@@ -296,6 +308,8 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     await page.goto(`${BASE}/sources2`);
     await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+    // A fresh browser context: the groups are folded again.
+    await expandGroup(page, "pdfs");
 
     // ── 1. add Signal through the wizard ─────────────────────────────
     const wizard = page.getByRole("dialog");
@@ -318,6 +332,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(wizard).toHaveCount(0);
 
     // ── 2. two sources in the table ──────────────────────────────────
+    await expandGroup(page, "signal");
     for (const id of ["pdfs/raw", "pdfs/rendered_md", "signal/raw", "signal/rendered_md"]) {
       await expect(row(page, id), `${id} should be a row`).toHaveCount(1);
     }

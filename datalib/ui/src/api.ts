@@ -551,11 +551,12 @@ export type SyncJob = {
 
 export type StoragePart = { label: string; bytes: number };
 
-/// Bytes for one declared output path. Keyed on the path rather than on
-/// a source, because the grid groups steps into rows and that grouping
-/// rule lives in `config/sourceSteps.ts` alone.
+/// Bytes for one declared tree. Keyed on the path: a step's id, or a
+/// group's directory — the folder its steps write into, measured as a
+/// tree of its own so the group row has a series rather than a sum.
 export type OutputStorage = {
-  /// The tree, data-root-relative: a step id, or "." for the root.
+  /// The tree, data-root-relative: a step id, a group id, or "." for
+  /// the root.
   path: string;
   /// Absolute, for the desktop app's reveal-in-file-manager IPC.
   abs: string;
@@ -583,7 +584,8 @@ export type PipelineStorage = {
   /// The data root as a whole — including trees no step declares
   /// (`system/`, the stores). Its `path` is ".".
   root: OutputStorage;
-  /// One per declared step, in config order.
+  /// One per declared tree — every group's directory and every step's
+  /// — in config order.
   outputs: OutputStorage[];
   /// The span each `history` covers, in seconds. Read rather than
   /// assumed, so the plot and the data can't disagree about what
