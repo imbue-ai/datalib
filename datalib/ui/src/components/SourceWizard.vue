@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The "Add Data Source" / "Edit" dialog: pick a type, fill one form,
+// The "+ Data Source" / "Edit" dialog: pick a type, fill one form,
 // review the TOML that will be written. One form writes one source —
 // the `[[groups]]` entry, its `ingest` step and its `render_markdown`
 // step — and editing a source reopens the same form over all three.
@@ -15,9 +15,9 @@
 // the `[[groups]]` entry; the steps written under it carry neither.
 
 // A descriptor with a `credentialService` also gets a **Connection**
-// block: which latchkey account to use, a button that runs latchkey's
-// browser login, and "Test connection", which calls the provider's own
-// probe (`datalib-step probe <type>`). What comes back is not just a
+// block: which latchkey account to use, "Latchkey auth", which runs
+// latchkey's browser login, and "Test connection", which calls the
+// provider's own probe (`datalib-step probe <type>`). What comes back is not just a
 // green tick — it names the account actually reached, and it fills
 // every `probe:` field's checklist, the render step's included. A
 // label picker built from the live account is the difference between a
@@ -49,12 +49,14 @@ import {
   probeSource,
   startLatchkeyConnect,
   latchkeyConnectStatus,
+  type ProbeItem,
   type ProbeReport,
   type StoredAccount,
 } from "@/api";
 import { iconUrl } from "@/config/icons";
 import { ingestReach } from "@/config/ingestMethods";
 import { isDesktopApp, pickPath } from "@/desktop";
+import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
 
 const props = defineProps<{
   /// Group ids already in the config, plus the id of every step outside
@@ -116,9 +118,20 @@ const values = ref<FieldValues>({});
 /// choice the user made.
 const idTouched = ref(false);
 
-/// Does this provider write a render step at all? A download-only
-/// provider (a photo catalog, a media tree) has no text to render.
-const renders = computed(() => !!chosen.value && chosen.value.renderStep !== false);
+/// Can this provider render at all? A download-only provider (a photo
+/// catalog, a media tree) has no text to render, and no choice to
+/// offer.
+const providerRenders = computed(() => !!chosen.value && chosen.value.renderStep !== false);
+
+/// Whether this source wants its render step. On by default: mirrored
+/// data that is never rendered reaches neither the grid nor search, so
+/// off is the deliberate answer. Editing seeds it from what the config
+/// already has.
+const renderWanted = ref(props.editing ? !!props.editing.steps.render : true);
+
+/// Does this source write a render step — the provider can, and this
+/// source asked for it.
+const renders = computed(() => providerRenders.value && renderWanted.value);
 
 /// The fields the form shows for one phase: the descriptor's, less any
 /// whose gate is shut.
@@ -146,6 +159,11 @@ const sections = computed(() => [
   { key: "ingest", heading: null as string | null, fields: formFields.value },
   { key: "render", heading: "Rendering", fields: renderFields.value },
 ]);
+
+/// Kinds whose control is small enough to sit beside its label rather
+/// than under it. A tickbox and a spinner are each narrower than the
+/// words naming them, so a row apiece is mostly empty space.
+const INLINE_KINDS = new Set<Field["kind"]>(["bool", "int"]);
 
 /// Steps this source is missing, which saving writes. Only while
 /// editing — a hand-edited group can have one step and not the other —
@@ -269,6 +287,7 @@ const source = computed(() =>
         name: name.value,
         values: values.value,
         withGroup: mode.value === "create",
+        renders: renders.value,
       })
     : null,
 );
@@ -351,6 +370,13 @@ const accountField = computed(
 
 const accounts = ref<StoredAccount[] | null>(null);
 const authOptions = ref<string[]>([]);
+/// Whether latchkey holds this service already. Starts true so nothing
+/// offers to register one before the answer is in.
+const serviceRegistered = ref(true);
+/// How to invoke latchkey on the machine running the backend. `npx`
+/// until the server says otherwise, so a command is never shown naming
+/// a binary that isn't there.
+const latchkeyCli = ref("npx -y latchkey");
 /// Why the account list is empty, when latchkey could not be asked.
 /// Shown as a note, not an error — the field is still typable.
 const accountsError = ref<string | null>(null);
@@ -364,6 +390,8 @@ async function loadAccounts() {
     const info = await latchkeyService(name);
     accounts.value = info.accounts;
     authOptions.value = info.auth_options;
+    serviceRegistered.value = info.registered;
+    latchkeyCli.value = info.cli;
     accountsError.value = info.error;
   } catch (e) {
     accounts.value = [];
@@ -371,10 +399,60 @@ async function loadAccounts() {
   }
 }
 
-/// Only offer the button when latchkey says this service can do a
-/// browser login. Offering it for a service that can't would produce a
-/// failure that reads like a bug in datalib.
-const canConnect = computed(() => authOptions.value.includes("browser"));
+/// The registration this dialog would send, and only while it would
+/// actually be used: a service latchkey already holds keeps whatever
+/// login its owner gave it, and re-registering is refused anyway.
+const wouldRegister = computed(() =>
+  !serviceRegistered.value ? chosen.value?.credentialRegister : undefined,
+);
+
+/// Offer the button when latchkey says this service can do a browser
+/// login, or when the service is ours to register with one. Offering it
+/// for a service that can do neither would produce a failure that reads
+/// like a bug in datalib.
+const canConnect = computed(
+  () => authOptions.value.includes("browser") || !!chosen.value?.credentialRegister,
+);
+
+/// A service latchkey holds that cannot do a browser login. Its owner
+/// set it up by hand, so the dialog says how to add a credential the
+/// same way rather than offering to change it.
+const setOnlyService = computed(
+  () => serviceRegistered.value && !authOptions.value.includes("browser"),
+);
+
+/// Set by the button on a service latchkey holds without a browser
+/// login: converting one means taking it apart and putting it back,
+/// which destroys the credentials stored under it. The commands are
+/// shown; running them is the owner's call, not this dialog's.
+const showConversion = ref(false);
+
+/// What converting `service` to a browser login actually takes, in the
+/// order it has to happen and naming this machine's latchkey.
+const conversionCommands = computed(() => {
+  const reg = chosen.value?.credentialRegister;
+  const name = service.value;
+  if (!reg || !name) return "";
+  const lk = latchkeyCli.value;
+  const params = JSON.stringify(reg.login_flow_params);
+  return [
+    `${lk} auth clear ${name} --all`,
+    `${lk} services deregister ${name}`,
+    `${lk} services register ${name} \\`,
+    `  --base-api-url="${reg.base_api_url}" \\`,
+    `  --login-url="${reg.login_url}" \\`,
+    `  --login-flow=${reg.login_flow} \\`,
+    `  --login-flow-params='${params}'`,
+  ].join("\n");
+});
+
+/// Pasting a credential works on every service latchkey holds, browser
+/// login or not: a cookie-capture service reports `["browser", "set"]`
+/// and takes `auth set` per account just the same. Said out loud
+/// wherever a Connect button would otherwise read as the only way in.
+const canPasteCredential = computed(
+  () => authOptions.value.includes("set") || !!wouldRegister.value,
+);
 
 const connect = ref<{ state: "idle" | "running" | "ok" | "failed"; message: string }>({
   state: "idle",
@@ -391,9 +469,13 @@ onUnmounted(() => {
 async function connectViaLatchkey() {
   const name = service.value;
   if (!name || connect.value.state === "running") return;
+  if (setOnlyService.value) {
+    showConversion.value = true;
+    return;
+  }
   connect.value = { state: "running", message: "A browser window should open. Finish the login there." };
   try {
-    const started = await startLatchkeyConnect(name, accountValue.value);
+    const started = await startLatchkeyConnect(name, accountValue.value, wouldRegister.value);
     for (;;) {
       await new Promise((r) => setTimeout(r, 1500));
       if (closed) return;
@@ -421,6 +503,21 @@ const accountValue = computed(() =>
   accountField.value ? String(values.value[accountField.value.target] ?? "").trim() : "",
 );
 
+/// A name in the account box that latchkey does not hold.
+///
+/// `--account` *selects* a credential to refresh; latchkey refuses a
+/// name it has never seen ("No credentials stored for account 'x' of
+/// service 'y'"), so a browser login cannot create one. Dropping the
+/// flag would sign in successfully and store the credential under
+/// latchkey's default account — while the config being written says
+/// `account = "<name>"`, which then resolves to nothing at sync time.
+/// Succeeding wrongly is the worse outcome, so this blocks the button
+/// and says what to run.
+const accountIsNew = computed(
+  () =>
+    !!accountValue.value && !accounts.value?.some((a) => a.account === accountValue.value),
+);
+
 // The probe
 
 const probe = ref<{
@@ -446,50 +543,77 @@ async function testConnection() {
       report,
     };
   } catch (e) {
-    probe.value = { state: "failed", message: String(e), report: null };
+    probe.value = { state: "failed", message: probeFailure(e), report: null };
   }
 }
 
+/// A probe failure as something to read. What arrives is the step's own
+/// stderr — one `error: ` line per link in its cause chain, and for a
+/// credential problem a numbered setup recipe after them — wrapped in a
+/// JS `Error`. Strip the two layers of prefix that add nothing; the
+/// lines themselves are the message, and the template keeps them.
+function probeFailure(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  return raw
+    .split("\n")
+    .map((line) => line.replace(/^\s*error:\s*/, ""))
+    .join("\n")
+    .trim();
+}
+
+/// The failure in one line, which is the part that says what went
+/// wrong. Everything after it is how to fix it.
+const probeHeadline = computed(() => probe.value.message.split("\n")[0] ?? "");
+/// The rest, kept as written: it is a numbered recipe with commands in
+/// it, and reflowing it into a paragraph is what made it unreadable.
+const probeDetail = computed(() => probe.value.message.split("\n").slice(1).join("\n").trim());
+
 /// What a `probe:` field should offer, given what came back.
-function probeOptions(field: Field): ProbeReport["labels"] {
+function probeOptions(field: Field): ProbeItem[] {
   const report = probe.value.report;
   if (!report || field.kind !== "string_list" || !field.probe) return [];
-  return field.probe === "mailboxes"
-    ? report.labels.filter((l) => l.kind === "mailbox")
-    : report.labels;
+  switch (field.probe) {
+    // A render filter matches only what emails are filed in, never a
+    // Gmail flag.
+    case "mailboxes":
+      return report.items.filter((i) => i.kind === "mailbox");
+    case "conversations":
+      return report.items.filter((i) => i.kind === "conversation");
+    default:
+      return report.items.filter((i) => i.kind !== "conversation");
+  }
 }
 
-function isChosenLabel(field: Field, path: string): boolean {
+/// What the field holds today, as the array the picker binds to.
+function chosenValues(field: Field): string[] {
   const v = values.value[field.target];
-  return Array.isArray(v) && (v as string[]).includes(path);
+  return Array.isArray(v) ? (v as string[]) : [];
 }
 
-function toggleLabel(field: Field, path: string) {
-  const current = Array.isArray(values.value[field.target])
-    ? [...(values.value[field.target] as string[])]
-    : [];
-  const at = current.indexOf(path);
-  if (at < 0) current.push(path);
-  else current.splice(at, 1);
-  values.value[field.target] = current;
-}
-
-/// Chosen labels the probed account does not have.
-function unknownLabels(field: Field): string[] {
+/// Chosen values the probed account does not have.
+function unknownValues(field: Field): string[] {
   const options = probeOptions(field);
   if (options.length === 0) return [];
-  const known = new Set(options.map((l) => l.path));
-  const v = values.value[field.target];
-  return Array.isArray(v) ? (v as string[]).filter((p) => !known.has(p)) : [];
+  const known = new Set(options.map((i) => i.path));
+  return chosenValues(field).filter((p) => !known.has(p));
 }
 
-/// A count is only shown when the provider reported one — Gmail
-/// charges a request per label for its counts, so it reports none.
-function labelCount(label: ProbeReport["labels"][number]): string {
-  return label.messages === null || label.messages === undefined
-    ? ""
-    : `${label.messages.toLocaleString()}`;
-}
+/// What a field's picker is a picker *of*, for the sentences around it.
+/// An email account has folders and labels, a Claude account has
+/// conversations, and calling any of them "labels" reads as a bug.
+const PROBE_NOUNS = {
+  labels: "labels",
+  mailboxes: "folders",
+  conversations: "conversations",
+} as const;
+
+/// The same word for what the probe actually came back with.
+const probedNoun = computed(() => {
+  const items = probe.value.report?.items ?? [];
+  return items.some((i) => i.kind === "conversation")
+    ? PROBE_NOUNS.conversations
+    : PROBE_NOUNS.labels;
+});
 
 // Load the account list as soon as there is a service to load it for:
 // on open in edit mode, and on picking a tile in create mode.
@@ -515,7 +639,10 @@ function submit() {
 </script>
 
 <template>
-  <div class="wiz-backdrop" @click.self="emit('close')">
+  <!-- The backdrop deliberately does not close this dialog: a stray
+       click beside a half-filled form would discard every field in it
+       with nothing to undo it. The × and Cancel are the ways out. -->
+  <div class="wiz-backdrop">
     <div class="wiz" role="dialog" aria-modal="true" :aria-label="isEdit ? 'Edit source' : 'Add data source'">
       <header class="wiz-head">
         <h2>{{ isEdit ? `Edit ${name || id}` : "Add a data source" }}</h2>
@@ -620,10 +747,15 @@ function submit() {
               v-if="canConnect"
               type="button"
               class="btn ghost"
-              :disabled="connect.state === 'running'"
+              :disabled="connect.state === 'running' || accountIsNew"
+              :title="
+                accountIsNew
+                  ? `latchkey has no ${accountValue} yet, and a browser login can only refresh an account that exists`
+                  : ''
+              "
               @click="connectViaLatchkey"
             >
-              {{ connect.state === "running" ? "Waiting for the browser…" : "Connect via latchkey" }}
+              {{ connect.state === "running" ? "Waiting for the browser…" : "Latchkey auth" }}
             </button>
             <button
               v-if="canProbe"
@@ -636,13 +768,69 @@ function submit() {
             </button>
           </div>
 
+          <p
+            v-if="canConnect && chosen.credentialConnectWarning"
+            class="wiz-help wiz-conn-note"
+          >
+            {{ chosen.credentialConnectWarning }}
+          </p>
+          <!-- Where a browser login actually puts the credential, said
+               before the button is pressed rather than after. -->
+          <p v-if="canConnect && accountIsNew" class="wiz-help wiz-conn-note wiz-newaccount">
+            latchkey has no <code>{{ accountValue }}</code> yet, and a browser login only ever
+            refreshes an account that already exists. Create it once — any value will do, the
+            login replaces it — and the button above comes back:
+            <code
+              >{{ latchkeyCli }} --account {{ accountValue }} auth set {{ service }} -H "…"</code
+            >. Or clear the box to sign in as latchkey’s unnamed default account.
+          </p>
+          <!-- What the button says on a service that has no browser
+               login. Shown rather than done: latchkey refuses to
+               re-register a name it holds, so the only way to add one
+               destroys the credentials already stored under it. -->
+          <div v-if="showConversion" class="wiz-conn-note wiz-convert">
+            <p class="wiz-help wiz-convert-head">
+              latchkey holds <code>{{ service }}</code> without a browser login, and won’t add one
+              to a name it already has. Adding one means taking the service apart and
+              registering it again — which <b>deletes every credential stored under
+              <code>{{ service }}</code></b>, so it is yours to run, not this dialog’s:
+            </p>
+            <pre class="wiz-probe-detail">{{ conversionCommands }}</pre>
+            <p class="wiz-help">
+              Then come back and press <b>Latchkey auth</b>. Or skip all of it and paste a
+              credential, below — that needs no conversion and is what this service does today.
+            </p>
+          </div>
+
+          <!-- A service somebody registered by hand is theirs: latchkey
+               refuses to re-register a name, and nothing here should
+               want to. Either way, pasting a credential stays available
+               and this dialog never takes it away. -->
+          <p v-if="canPasteCredential" class="wiz-help wiz-conn-note">
+            <template v-if="setOnlyService">
+              latchkey holds <code>{{ service }}</code> with no browser login, so a credential is
+              stored by hand — which keeps working, and nothing here changes it:
+            </template>
+            <template v-else>
+              A credential can always be pasted instead, one per account, alongside the browser
+              login above:
+            </template>
+            <code>latchkey auth set {{ service }} -H "…"</code>
+          </p>
           <p v-if="connect.state !== 'idle'" class="wiz-help wiz-conn-note">
             {{ connect.message }}
           </p>
-          <p v-if="probe.state === 'failed'" class="wiz-error wiz-conn-note">
-            {{ probe.message }}
-          </p>
-          <p v-else-if="probe.state === 'ok' && probe.report" class="wiz-help wiz-conn-note">
+          <div v-if="probe.state === 'failed'" class="wiz-conn-note wiz-probe-note">
+            <p class="wiz-error wiz-probe-headline">{{ probeHeadline }}</p>
+            <details v-if="probeDetail">
+              <summary class="wiz-help">How to fix it</summary>
+              <pre class="wiz-probe-detail">{{ probeDetail }}</pre>
+            </details>
+          </div>
+          <p
+            v-else-if="probe.state === 'ok' && probe.report"
+            class="wiz-help wiz-conn-note wiz-probe-note"
+          >
             Reached
             <b>{{ probe.report.account.address || probe.report.account.id }}</b
             ><!-- A message estimate is only shown when the provider gave
@@ -651,8 +839,10 @@ function submit() {
               v-if="probe.report.account.message_estimate"
             >
               — about {{ probe.report.account.message_estimate.toLocaleString() }} messages,
-              {{ probe.report.labels.length }} labels.</template
-            ><template v-else> — {{ probe.report.labels.length }} labels.</template>
+              {{ probe.report.items.length }} {{ probedNoun }}.</template
+            ><template v-else>
+              — {{ probe.report.items.length }} {{ probedNoun }}.</template
+            >
             The pickers below are filled in from it.
           </p>
         </section>
@@ -679,7 +869,8 @@ function submit() {
           <span class="wiz-label">Id</span>
           <input v-model="id" class="wiz-input" spellcheck="false" @input="idTouched = true" />
           <small class="wiz-help">
-            Suggested from the name, and yours to override. Creates
+            Permanent, and suggested from the name — this is your last chance to change it.
+            Creates
             <code>{{ stepIdFor(groupId || "…", "download") }}</code>
             <template v-if="renders">
               and <code>{{ stepIdFor(groupId || "…", "render") }}</code>
@@ -705,9 +896,16 @@ function submit() {
           >. Saving writes {{ missingSteps.length === 1 ? "it" : "them" }}.
         </p>
         <p v-if="orphanRender" class="wiz-cred">
-          This source has a render step, <code>{{ orphanRender }}</code>, but
-          {{ chosen.label }} renders nothing. Saving removes it, and takes it out of the index
-          steps’ inputs.
+          <template v-if="providerRenders">
+            Rendering is off below, and this source has a render step,
+            <code>{{ orphanRender }}</code
+            >.
+          </template>
+          <template v-else>
+            This source has a render step, <code>{{ orphanRender }}</code
+            >, but {{ chosen.label }} renders nothing.
+          </template>
+          Saving removes it, and takes it out of the index steps’ inputs.
         </p>
 
         <p
@@ -719,18 +917,30 @@ function submit() {
         </p>
 
         <template v-for="section in sections" :key="section.key">
-          <section v-if="section.heading && renders" class="wiz-section">
+          <section v-if="section.heading && providerRenders" class="wiz-section">
             <h3 class="wiz-section-head">{{ section.heading }}</h3>
-            <p class="wiz-help wiz-section-intro">
-              A second step, <code>{{ stepIdFor(groupId || "…", "render") }}</code>, turns what
-              this brings in into markdown and makes it searchable. It runs on its own and can be
-              re-run without fetching anything again.<template v-if="section.fields.length === 0">
-                It has no settings of its own.</template
-              >
-            </p>
+            <label class="wiz-field wiz-inline">
+              <span class="wiz-label">Render this source into markdown</span>
+              <input v-model="renderWanted" type="checkbox" class="wiz-bool" />
+              <small class="wiz-help">
+                A second step, <code>{{ stepIdFor(groupId || "…", "render") }}</code>, turns
+                what this brings in into markdown and makes it searchable. It runs on its own and
+                can be re-run without fetching anything again. Turn it off and the data is still
+                mirrored, but nothing about it reaches the grid or the search index.<template
+                  v-if="renderWanted && section.fields.length === 0"
+                >
+                  It has no settings of its own.</template
+                >
+              </small>
+            </label>
           </section>
 
-          <label v-for="f in section.fields" :key="f.target" class="wiz-field">
+          <label
+            v-for="f in section.fields"
+            :key="f.target"
+            class="wiz-field"
+            :class="{ 'wiz-inline': INLINE_KINDS.has(f.kind) }"
+          >
             <span class="wiz-label">
               {{ f.label }}
               <em v-if="'required' in f && f.required" class="wiz-req">required</em>
@@ -763,7 +973,7 @@ function submit() {
             <input
               v-else-if="f.kind === 'int'"
               type="number"
-              class="wiz-input"
+              class="wiz-input wiz-num"
               :value="values[f.target] as string"
               @input="values[f.target] = ($event.target as HTMLInputElement).value"
             />
@@ -795,32 +1005,24 @@ function submit() {
                 spellcheck="false"
                 @input="setListText(f, ($event.target as HTMLInputElement).value)"
               />
-              <!-- The checklist is an *addition* to the box above, never
+              <!-- The picker is an *addition* to the box above, never
                    a replacement: a probe needs credentials that may not
                    exist yet, and this form has to stay usable before one
                    has ever succeeded. Both edit the same array. -->
-              <span v-if="f.probe && probeOptions(f).length" class="wiz-labels">
-                <button
-                  v-for="l in probeOptions(f)"
-                  :key="l.path"
-                  type="button"
-                  class="wiz-labelchip"
-                  :class="{ on: isChosenLabel(f, l.path) }"
-                  @click="toggleLabel(f, l.path)"
-                >
-                  <span class="wiz-labeltick">{{ isChosenLabel(f, l.path) ? "✓" : "" }}</span>
-                  <span class="wiz-labelname">{{ l.path }}</span>
-                  <span v-if="labelCount(l)" class="wiz-labelcount">{{ labelCount(l) }}</span>
-                </button>
-              </span>
-              <small v-if="f.probe && unknownLabels(f).length" class="wiz-error">
-                Not on this account: {{ unknownLabels(f).join(", ") }}. A download filter naming a
+              <ProbeItemPicker
+                v-if="f.probe && probeOptions(f).length"
+                :items="probeOptions(f)"
+                :model-value="chosenValues(f)"
+                @update:model-value="values[f.target] = $event"
+              />
+              <small v-if="f.probe && unknownValues(f).length" class="wiz-error">
+                Not on this account: {{ unknownValues(f).join(", ") }}. A download filter naming a
                 label the account doesn’t have fails the run; a render filter naming one renders
                 nothing.
               </small>
               <small v-else-if="f.probe && !probe.report" class="wiz-help">
                 Run “Test connection” to pick from this account’s real
-                {{ f.probe === "mailboxes" ? "folders" : "labels" }} instead of typing them.
+                {{ PROBE_NOUNS[f.probe] }} instead of typing them.
               </small>
             </span>
             <input
@@ -920,6 +1122,9 @@ function submit() {
 /* A bool field's own checkbox, sized as a box rather than stretched to
    the field's width like a text input. */
 .wiz-bool { width: 16px; height: 16px; }
+/* Wide enough for the counts anyone types here, instead of stretching
+   across the dialog the way a text field does. */
+.wiz-num { width: 7em; }
 /* Shares `.wiz-input`'s box; keeps the platform disclosure arrow so it
    doesn't read as a text field you can type into. */
 .wiz-select { cursor: pointer; }
@@ -984,6 +1189,13 @@ function submit() {
 }
 
 .wiz-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
+/* Label and control on one line, with the help text wrapping to its own
+   full-width row beneath them. */
+.wiz-field.wiz-inline { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.wiz-field.wiz-inline .wiz-help,
+.wiz-field.wiz-inline .wiz-error { flex: 1 0 100%; }
+/* A tickbox reads as "[x] thing", not "thing [x]". */
+.wiz-field.wiz-inline .wiz-bool { order: -1; }
 .wiz-label { font-size: 12.5px; font-weight: 600; }
 .wiz-nofields { margin: 0 0 16px; }
 /* The id where it is a fact rather than a field, and the id error that
@@ -991,6 +1203,28 @@ function submit() {
 .wiz-fixed-id { margin: 0 0 16px; }
 .wiz-help { color: var(--datalib-muted); font-size: 11.5px; line-height: 1.45; }
 .wiz-error { color: #b8481a; font-size: 11.5px; }
+.wiz-probe-headline { margin: 0 0 4px; }
+/* The step's recipe, in the shape it was written: numbered steps and
+   shell commands, which reflowed into a paragraph are unreadable. */
+.wiz-probe-detail {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--datalib-code-bg);
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.wiz-probe-note details > summary { cursor: pointer; }
+.wiz-convert {
+  border-left: 3px solid var(--datalib-border);
+  padding-left: 10px;
+}
+.wiz-convert-head { margin: 0; }
+.wiz-newaccount code { overflow-wrap: anywhere; }
 .wiz-req {
   font-style: normal;
   font-weight: 400;
@@ -1023,7 +1257,8 @@ function submit() {
   text-transform: uppercase;
   color: var(--datalib-muted);
 }
-.wiz-section-intro { margin: 0; }
+/* The section's own toggle sits flush under its heading. */
+.wiz-section > .wiz-field { margin-bottom: 0; }
 
 /* The Connection block: latchkey account + the two buttons. Boxed
    because it is about the *account*, not about one setting — the
@@ -1044,40 +1279,6 @@ function submit() {
 .wiz-accountpick { max-width: 100%; }
 
 .wiz-listfield { display: flex; flex-direction: column; gap: 6px; }
-/* Capped and scrollable: a real Gmail account has dozens of labels,
-   and the picker must not push the buttons off the dialog. */
-.wiz-labels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-height: 168px;
-  overflow-y: auto;
-  padding: 6px;
-  border: 1px solid var(--datalib-border);
-  border-radius: 5px;
-  background: var(--datalib-card-bg);
-}
-.wiz-labelchip {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
-  padding: 3px 8px;
-  border: 1px solid var(--datalib-border);
-  border-radius: 999px;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  max-width: 100%;
-}
-.wiz-labelchip:hover { background: var(--datalib-hover); }
-.wiz-labelchip.on { border-color: var(--datalib-accent); background: var(--datalib-hover); }
-/* Reserved even when empty, so ticking a chip doesn't reflow the row. */
-.wiz-labeltick { width: 8px; color: var(--datalib-accent); font-size: 11px; }
-.wiz-labelname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wiz-labelcount { color: var(--datalib-muted); font-size: 10.5px; }
-
 .wiz-review { margin-top: 8px; }
 .wiz-review summary { cursor: pointer; font-size: 12.5px; color: var(--datalib-muted); }
 .wiz-review pre {

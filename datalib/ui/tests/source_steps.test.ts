@@ -15,6 +15,7 @@ import {
   listGroups,
   listSteps,
   paramsAreRepresentable,
+  paramsObject,
   producerOf,
   removeSteps,
   renameGroup,
@@ -27,6 +28,7 @@ import {
 import { catalogFor } from "../src/config/catalog";
 
 const SLACK = catalogFor("slack")!;
+const CLAUDE = catalogFor("claude")!;
 const LIGHTROOM = catalogFor("lightroom")!;
 const SIGNAL = catalogFor("signal")!;
 
@@ -644,5 +646,32 @@ command = "datalib-applet unified_index"
     const wired = wireIntoFanIns(scaffold, "pdfs/render_markdown");
     expect(wired).toContain('inputs = ["pdfs/render_markdown"]');
     expect(listSteps(wired).find((s) => s.kind === "applet")!.inputs).toEqual([]);
+  });
+});
+
+describe("what Test connection authenticates as", () => {
+  /// The probe runs as `latchkey --account <acct> curl`, so an account
+  /// left out of its params tests a different identity from the one
+  /// picked — and comes back looking perfectly healthy while describing
+  /// somebody else's conversations.
+  it("carries the chosen latchkey account", () => {
+    const params = paramsObject(
+      CLAUDE,
+      { "latchkey_settings.account": "picard@enterprise.gov" },
+      "download",
+    );
+    expect(params).toMatchObject({
+      latchkey_settings: { account: "picard@enterprise.gov" },
+    });
+  });
+
+  /// Empty is latchkey's own name for its one unnamed account, and it
+  /// is addressed by writing no `account` at all — not by sending "".
+  it("writes no account for latchkey's default", () => {
+    const params = paramsObject(CLAUDE, { "latchkey_settings.account": "" }, "download");
+    expect(params).not.toHaveProperty("latchkey_settings");
+    // The method table still has to be there: it is what says this
+    // source is the live API rather than an unpacked export.
+    expect(params).toHaveProperty("api");
   });
 });

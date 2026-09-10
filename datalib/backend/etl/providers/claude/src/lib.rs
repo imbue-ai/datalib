@@ -3,5 +3,6 @@
 //! the same store. Rendering lives in [`datalib_etl_claude_render`].
 
 pub mod ingest;
+pub mod probe;
 pub mod processor;
 pub mod synthesize;

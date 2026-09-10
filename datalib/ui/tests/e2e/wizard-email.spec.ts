@@ -13,8 +13,19 @@ const field = (page: Page, caption: string) =>
   wizard(page)
     .locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-input`)
     .first();
-const chips = (page: Page, caption: string) =>
-  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-labelchip`);
+/// The probe-filled picker for one field: an AG Grid, one row per
+/// thing the account has, `row-id` being the exact string the filter
+/// writes.
+const picker = (page: Page, caption: string) =>
+  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .pick-grid`);
+const rows = (page: Page, caption: string) => picker(page, caption).locator(".ag-row");
+/// Tick one row's checkbox. Scoped to the selection column's own cell
+/// so it cannot land on a cell that merely contains the text.
+const tick = (page: Page, caption: string, id: string) =>
+  picker(page, caption)
+    .locator(`.ag-row[row-id="${id}"] .ag-selection-checkbox input`)
+    .first()
+    .click();
 
 /// `latchkey services info google-gmail`, reshaped by the server.
 const GMAIL_SERVICE = {
@@ -38,13 +49,13 @@ const GMAIL_PROBE = {
     display_name: null,
     message_estimate: 26328,
   },
-  labels: [
-    { path: "Inbox", kind: "mailbox", role: "inbox", messages: null },
-    { path: "Sent", kind: "mailbox", role: "sent", messages: null },
-    { path: "Bridge/Logs", kind: "mailbox", role: null, messages: null },
-    { path: "Important", kind: "keyword", role: null, messages: null },
-    { path: "Starred", kind: "keyword", role: null, messages: null },
-    { path: "Unread", kind: "keyword", role: null, messages: null },
+  items: [
+    { path: "Inbox", kind: "mailbox", title: null, role: "inbox", messages: null, updated_at: null },
+    { path: "Sent", kind: "mailbox", title: null, role: "sent", messages: null, updated_at: null },
+    { path: "Bridge/Logs", kind: "mailbox", title: null, role: null, messages: null, updated_at: null },
+    { path: "Important", kind: "keyword", title: null, role: null, messages: null, updated_at: null },
+    { path: "Starred", kind: "keyword", title: null, role: null, messages: null, updated_at: null },
+    { path: "Unread", kind: "keyword", title: null, role: null, messages: null, updated_at: null },
   ],
   notes: [],
 };
@@ -69,11 +80,11 @@ const FASTMAIL_PROBE = {
     display_name: "troi@betazed.example",
     message_estimate: null,
   },
-  labels: [
-    { path: "Inbox", kind: "mailbox", role: "inbox", messages: 18 },
-    { path: "Sent", kind: "mailbox", role: "sent", messages: 5 },
-    { path: "travel", kind: "mailbox", role: null, messages: 5 },
-    { path: "travel/portugal", kind: "mailbox", role: null, messages: 5 },
+  items: [
+    { path: "Inbox", kind: "mailbox", title: null, role: "inbox", messages: 18, updated_at: null },
+    { path: "Sent", kind: "mailbox", title: null, role: "sent", messages: 5, updated_at: null },
+    { path: "travel", kind: "mailbox", title: null, role: null, messages: 5, updated_at: null },
+    { path: "travel/portugal", kind: "mailbox", title: null, role: null, messages: 5, updated_at: null },
   ],
   notes: [],
 };
@@ -103,7 +114,7 @@ async function openManager(page: Page) {
 }
 
 async function pickTile(page: Page, query: string, blurb: string) {
-  await page.getByRole("button", { name: "+ Add Data Source" }).click();
+  await page.getByRole("button", { name: "+ Data Source" }).click();
   await page.getByRole("searchbox").fill(query);
   await wizard(page).locator(".wiz-tile", { hasText: blurb }).click();
 }
@@ -127,7 +138,7 @@ test.afterEach(async ({ page }) => {
 });
 
 test("Gmail and Fastmail are separate tiles over one step type", async ({ page }) => {
-  await page.getByRole("button", { name: "+ Add Data Source" }).click();
+  await page.getByRole("button", { name: "+ Data Source" }).click();
   await page.getByRole("searchbox").fill("mail");
   // Matched on the blurb, not the label: the catch-all's blurb names
   // Fastmail too ("a JMAP server other than Fastmail"), so filtering on
@@ -144,7 +155,7 @@ test("Gmail and Fastmail are separate tiles over one step type", async ({ page }
   ).toBeDisabled();
 });
 
-test("a probe fills the label picker, and ticking a chip writes the filter", async ({
+test("a probe fills the label picker, and ticking a row writes the filter", async ({
   page,
 }) => {
   await pickTile(page, "gmail", "Mirror a Gmail account through Google's API.");
@@ -161,10 +172,10 @@ test("a probe fills the label picker, and ticking a chip writes the filter", asy
 
   // Before the probe there is nothing to pick from, and the form says
   // so rather than showing an empty box.
-  await expect(chips(page, "Download only these labels")).toHaveCount(0);
+  await expect(picker(page, "Download only these labels")).toHaveCount(0);
 
   await wizard(page).getByRole("button", { name: "Test connection" }).click();
-  await expect(wizard(page).locator(".wiz-conn-note")).toContainText(
+  await expect(wizard(page).locator(".wiz-probe-note")).toContainText(
     "Reached picard@enterprise.gov",
   );
 
@@ -178,7 +189,7 @@ test("a probe fills the label picker, and ticking a chip writes the filter", asy
 
   // The download filter may name anything the account has, flags
   // included — Gmail resolves those server-side.
-  await expect(chips(page, "Download only these labels")).toHaveText([
+  await expect(rows(page, "Download only these labels")).toHaveText([
     /Inbox/,
     /Sent/,
     /Bridge\/Logs/,
@@ -187,8 +198,8 @@ test("a probe fills the label picker, and ticking a chip writes the filter", asy
     /Unread/,
   ]);
 
-  await chips(page, "Download only these labels").filter({ hasText: "Bridge/Logs" }).click();
-  await chips(page, "Download only these labels").filter({ hasText: "Inbox" }).click();
+  await tick(page, "Download only these labels", "Bridge/Logs");
+  await tick(page, "Download only these labels", "Inbox");
 
   await wizard(page).getByText("Review the TOML this writes").click();
   const toml = wizard(page).locator(".wiz-review pre");
@@ -230,13 +241,13 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
   // `Important`, `Starred` and `Unread` are labels on the wire and
   // flags in the schema, so they never become a mailbox row. Offering
   // them here would offer a filter that silently renders nothing.
-  await expect(chips(page, "Render only these labels")).toHaveText([
+  await expect(rows(page, "Render only these labels")).toHaveText([
     /Inbox/,
     /Sent/,
     /Bridge\/Logs/,
   ]);
 
-  await chips(page, "Render only these labels").filter({ hasText: "Inbox" }).click();
+  await tick(page, "Render only these labels", "Inbox");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Bridge mail.")).toBeVisible();
   await expandGroup(page, "bridge-mail");
@@ -266,16 +277,14 @@ test("Fastmail writes its JMAP host without asking, and shows folder counts", as
 
   // JMAP reports counts for free. Nested folders keep their full path,
   // which is the string the filter matches.
-  await expect(chips(page, "Download only these folders")).toHaveText([
-    /Inbox\s*18/,
-    /Sent\s*5/,
-    /travel\s*5/,
-    /travel\/portugal\s*5/,
+  await expect(rows(page, "Download only these folders")).toHaveText([
+    /Inbox.*18/,
+    /Sent.*5/,
+    /travel.*5/,
+    /travel\/portugal.*5/,
   ]);
 
-  await chips(page, "Download only these folders")
-    .filter({ hasText: "travel/portugal" })
-    .click();
+  await tick(page, "Download only these folders", "travel/portugal");
   await wizard(page).getByText("Review the TOML this writes").click();
   const toml = wizard(page).locator(".wiz-review pre");
   await expect(toml).toContainText('hostname = "api.fastmail.com"');

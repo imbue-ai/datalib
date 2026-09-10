@@ -1,71 +1,18 @@
 //! Read-only account probe: "can these credentials reach this
-//! mailbox, and what labels does it have?"
+//! mailbox, and what labels does it have?" The report's shape is
+//! shared with every other probeable provider — see
+//! `datalib_source_common::probe`.
 
 use anyhow::{anyhow, Context, Result};
-use serde::Serialize;
 use serde_json::{json, Value};
 
 use datalib_etl_email_config::{EmailConfig, EmailLiveMode};
+use datalib_source_common::probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
 
 use crate::ingest::gmail_api::api as gmail;
 use crate::ingest::labels::{self, LabelMap};
 use crate::ingest::{api, session::Session};
 use crate::mailbox_labels::{self, MailboxNode};
-
-/// What a successful probe found. Serialized straight to stdout by
-/// `datalib-step probe email` and passed through by the HTTP server, so
-/// the field names here are the wire format the UI reads.
-#[derive(Debug, Serialize)]
-pub struct ProbeReport {
-    /// Which download mode was probed — the same word the config uses
-    /// to select it (`gmail`, `jmap`).
-    pub mode: &'static str,
-    pub account: ProbeAccount,
-    /// Every label/mailbox this account has, in display order (roles
-    /// first, then alphabetical).
-    pub labels: Vec<ProbeLabel>,
-    /// Things worth telling the person who clicked the button that
-    /// aren't failures.
-    pub notes: Vec<String>,
-}
-
-/// The account the credentials actually reached. Shown back so "Test
-/// connection" answers *which* mailbox as well as *whether* — a
-/// latchkey store with two Google accounts in it will happily connect
-/// to the wrong one.
-#[derive(Debug, Serialize)]
-pub struct ProbeAccount {
-    /// The provider's own id for it: a JMAP account id, or the Gmail
-    /// address `users.getProfile` reported.
-    pub id: String,
-    /// Canonical email address, when the provider tells us one.
-    pub address: Option<String>,
-    pub display_name: Option<String>,
-    /// Total messages, when the provider reports it cheaply. Gmail
-    /// does (`messagesTotal`); JMAP does not without a query.
-    pub message_estimate: Option<u64>,
-}
-
-/// One entry in a label picker.
-#[derive(Debug, Serialize)]
-pub struct ProbeLabel {
-    /// The exact string to write into `only_extract_labels` /
-    /// `only_render_labels`.
-    pub path: String,
-    /// `mailbox` — a folder emails are filed in, which both the
-    /// download filter and the render filter can match.
-    pub kind: &'static str,
-    /// JMAP role (`inbox`, `sent`, `archive`, …) when the mailbox has
-    /// one. Used only for ordering and for a hint in the picker.
-    pub role: Option<String>,
-    /// Messages filed here, when the provider reports it for free.
-    /// JMAP's `Mailbox/get` does; Gmail's `labels.list` does not.
-    pub messages: Option<u64>,
-}
-
-/// Kinds, spelled once.
-const KIND_MAILBOX: &str = "mailbox";
-const KIND_KEYWORD: &str = "keyword";
 
 pub async fn probe(config: &EmailConfig) -> Result<ProbeReport> {
     config.validate()?;
@@ -95,7 +42,7 @@ async fn probe_gmail(
         .await
         .context("Gmail users.labels.list")?;
 
-    let mut labels: Vec<ProbeLabel> = Vec::with_capacity(raw.len());
+    let mut items: Vec<ProbeItem> = Vec::with_capacity(raw.len());
     for label in &raw {
         // Exactly the mapping `LabelIndex` applies at download time: a
         // system label is canonicalized, a *user* label keeps its own
@@ -109,30 +56,28 @@ async fn probe_gmail(
             (label.name.clone(), LabelMap::Mailbox { role: None })
         };
         let (kind, role) = match mapping {
-            LabelMap::Mailbox { role } => (KIND_MAILBOX, role.map(str::to_string)),
-            LabelMap::Keyword(_) | LabelMap::Unread => (KIND_KEYWORD, None),
+            LabelMap::Mailbox { role } => (ProbeItemKind::Mailbox, role.map(str::to_string)),
+            LabelMap::Keyword(_) | LabelMap::Unread => (ProbeItemKind::Keyword, None),
             // `Archived` and `Muted` carry nothing we store, so
             // filtering on them could only ever mean "nothing".
             LabelMap::Drop => continue,
         };
-        labels.push(ProbeLabel {
-            path,
-            kind,
+        items.push(ProbeItem {
             role,
-            messages: None,
+            ..ProbeItem::new(path, kind)
         });
     }
-    dedupe_and_sort(&mut labels);
+    dedupe_and_sort(&mut items);
 
     Ok(ProbeReport {
-        mode: "gmail",
+        mode: "gmail".to_string(),
         account: ProbeAccount {
             id: profile.email_address.clone(),
             address: Some(profile.email_address),
             display_name: None,
             message_estimate: profile.messages_total,
         },
-        labels,
+        items,
         notes: vec![
             "Gmail reports no per-label message counts without a request per label, so the \
              counts are left blank."
@@ -179,22 +124,21 @@ async fn probe_jmap(
     // picker offers is what `resolve` will match.
     let nodes: Vec<MailboxNode> = list.iter().filter_map(MailboxNode::from_payload).collect();
     let paths = mailbox_labels::paths_by_id(&nodes);
-    let mut labels: Vec<ProbeLabel> = list
+    let mut items: Vec<ProbeItem> = list
         .iter()
         .filter_map(|mailbox| {
             let id = mailbox.get("id")?.as_str()?;
-            Some(ProbeLabel {
-                path: paths.get(id)?.clone(),
-                kind: KIND_MAILBOX,
+            Some(ProbeItem {
                 role: mailbox
                     .get("role")
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 messages: mailbox.get("totalEmails").and_then(Value::as_u64),
+                ..ProbeItem::new(paths.get(id)?.clone(), ProbeItemKind::Mailbox)
             })
         })
         .collect();
-    dedupe_and_sort(&mut labels);
+    dedupe_and_sort(&mut items);
 
     let account = session
         .accounts
@@ -209,7 +153,7 @@ async fn probe_jmap(
         .map(str::to_string);
 
     Ok(ProbeReport {
-        mode: "jmap",
+        mode: "jmap".to_string(),
         account: ProbeAccount {
             id: account_id,
             // JMAP's account `name` is a display name that on Fastmail
@@ -219,45 +163,43 @@ async fn probe_jmap(
             display_name: name,
             message_estimate: None,
         },
-        labels,
+        items,
         notes: Vec::new(),
     })
 }
 
-fn dedupe_and_sort(labels: &mut Vec<ProbeLabel>) {
-    labels.sort_by(|a, b| {
+fn dedupe_and_sort(items: &mut Vec<ProbeItem>) {
+    items.sort_by(|a, b| {
         b.role
             .is_some()
             .cmp(&a.role.is_some())
             .then_with(|| a.path.cmp(&b.path))
     });
     let mut seen = std::collections::HashSet::new();
-    labels.retain(|l| seen.insert(l.path.clone()));
+    items.retain(|i| seen.insert(i.path.clone()));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn label(path: &str, kind: &'static str, role: Option<&str>) -> ProbeLabel {
-        ProbeLabel {
-            path: path.to_string(),
-            kind,
+    fn label(path: &str, kind: ProbeItemKind, role: Option<&str>) -> ProbeItem {
+        ProbeItem {
             role: role.map(str::to_string),
-            messages: None,
+            ..ProbeItem::new(path, kind)
         }
     }
 
     #[test]
     fn roles_sort_first_then_alphabetical() {
-        let mut labels = vec![
-            label("zebra", KIND_MAILBOX, None),
-            label("Sent", KIND_MAILBOX, Some("sent")),
-            label("apple", KIND_MAILBOX, None),
-            label("Inbox", KIND_MAILBOX, Some("inbox")),
+        let mut items = vec![
+            label("zebra", ProbeItemKind::Mailbox, None),
+            label("Sent", ProbeItemKind::Mailbox, Some("sent")),
+            label("apple", ProbeItemKind::Mailbox, None),
+            label("Inbox", ProbeItemKind::Mailbox, Some("inbox")),
         ];
-        dedupe_and_sort(&mut labels);
-        let paths: Vec<&str> = labels.iter().map(|l| l.path.as_str()).collect();
+        dedupe_and_sort(&mut items);
+        let paths: Vec<&str> = items.iter().map(|i| i.path.as_str()).collect();
         assert_eq!(paths, vec!["Inbox", "Sent", "apple", "zebra"]);
     }
 
@@ -266,12 +208,12 @@ mod tests {
     /// string, and the string is the same string.
     #[test]
     fn collapses_duplicate_paths() {
-        let mut labels = vec![
-            label("Work", KIND_MAILBOX, None),
-            label("Work", KIND_MAILBOX, None),
+        let mut items = vec![
+            label("Work", ProbeItemKind::Mailbox, None),
+            label("Work", ProbeItemKind::Mailbox, None),
         ];
-        dedupe_and_sort(&mut labels);
-        assert_eq!(labels.len(), 1);
+        dedupe_and_sort(&mut items);
+        assert_eq!(items.len(), 1);
     }
 
     /// An mbox source has no credentials and no server, so "test

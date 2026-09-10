@@ -53,7 +53,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({
   // a library with no sources is not finished, so there is no
   // congratulations screen in between.
   await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "+ Add Data Source" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "+ Data Source" })).toBeVisible();
   expect(new URL(page.url()).pathname).toBe("/sources2");
 
   // The file is on disk and valid, and it carries the applet whose

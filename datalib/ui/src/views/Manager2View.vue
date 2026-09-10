@@ -2021,7 +2021,7 @@ onUnmounted(() => {
           Sync everything
         </button>
         <button class="m2-add" :disabled="busy || !!parseError || !!configError" @click="openAdd">
-          + Add Data Source
+          + Data Source
         </button>
       </div>
     </header>
@@ -2092,7 +2092,7 @@ onUnmounted(() => {
       <button class="m2-btn" @click="configOpen = true">Show the config</button>
     </div>
     <p v-else-if="rows.length === 0 && !parseError" class="m2-empty">
-      Nothing configured yet. <b>Add Data Source</b> walks you through one.
+      Nothing configured yet. The <b>+ Data Source</b> button walks you through one.
     </p>
 
     <div class="m2-advanced">
@@ -2280,7 +2280,7 @@ onUnmounted(() => {
 .m2-head { display: flex; align-items: flex-start; gap: 16px; flex: 0 0 auto; }
 /* The two header actions travel together, pinned right. */
 .m2-head-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-/* Sized to sit level with "Add Data Source", but outlined rather than
+/* Sized to sit level with "+ Data Source", but outlined rather than
    filled: running what is already configured is the routine act, adding
    a source the deliberate one, and only one of them should read as the
    primary thing to do on this screen. */
