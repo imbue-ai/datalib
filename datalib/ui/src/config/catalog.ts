@@ -101,6 +101,13 @@ export type CatalogEntry = {
   icon: string | null;
   /// Seeds the source name, and thus the step ids and artifact paths.
   defaultName: string;
+  /// The greyed-out example in the wizard's Name box. Write what a
+  /// person would actually call this source — "Work WhatsApp", not
+  /// "whatsapp" — since the name is display text and telling someone
+  /// their choices are wider than the id is the whole job of the hint.
+  /// Nothing is pre-filled from it: a blank name still falls back to
+  /// the id.
+  nameHint: string;
   /// False → in the picker for completeness, but no form exists yet.
   wizard: boolean;
   /// False for a provider that declares no render step at all.
@@ -161,6 +168,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "api",
     icon: "slack",
     defaultName: "slack",
+    nameHint: "Work Slack",
     wizard: true,
     credentialService: "slack",
     fields: [
@@ -248,6 +256,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "api",
     icon: "claude",
     defaultName: "claude",
+    nameHint: "My Claude",
     wizard: true,
     credentialService: "claude-ai",
     // The whole claude.ai credential is the `sessionKey` cookie, so
@@ -309,10 +318,10 @@ export const CATALOG: CatalogEntry[] = [
   },
 
   // Listed for completeness; no form yet.
-  { type: "chatgpt", method: "api", label: "ChatGPT", blurb: "Mirror your ChatGPT conversations.", keywords: ["chatgpt", "openai", "gpt"], kind: "api", icon: "chatgpt", defaultName: "chatgpt", wizard: false, credentialService: "chatgpt" },
-  { type: "github", method: "api", label: "GitHub", blurb: "Mirror pull requests and their review threads.", keywords: ["github", "pr", "code", "review"], kind: "api", icon: "github", defaultName: "github", wizard: false, credentialService: "github" },
-  { type: "gitlab", method: "api", label: "GitLab", blurb: "Mirror merge requests and their discussions.", keywords: ["gitlab", "mr", "code"], kind: "api", icon: "gitlab", defaultName: "gitlab", wizard: false, credentialService: "gitlab" },
-  { type: "notion", method: "api", label: "Notion", blurb: "Mirror pages and comment threads.", keywords: ["notion", "wiki", "docs", "pages"], kind: "api", icon: "notion", defaultName: "notion", wizard: false, credentialService: "notion" },
+  { type: "chatgpt", method: "api", label: "ChatGPT", blurb: "Mirror your ChatGPT conversations.", keywords: ["chatgpt", "openai", "gpt"], kind: "api", icon: "chatgpt", defaultName: "chatgpt", nameHint: "My ChatGPT", wizard: false, credentialService: "chatgpt" },
+  { type: "github", method: "api", label: "GitHub", blurb: "Mirror pull requests and their review threads.", keywords: ["github", "pr", "code", "review"], kind: "api", icon: "github", defaultName: "github", nameHint: "Work GitHub", wizard: false, credentialService: "github" },
+  { type: "gitlab", method: "api", label: "GitLab", blurb: "Mirror merge requests and their discussions.", keywords: ["gitlab", "mr", "code"], kind: "api", icon: "gitlab", defaultName: "gitlab", nameHint: "Work GitLab", wizard: false, credentialService: "gitlab" },
+  { type: "notion", method: "api", label: "Notion", blurb: "Mirror pages and comment threads.", keywords: ["notion", "wiki", "docs", "pages"], kind: "api", icon: "notion", defaultName: "notion", nameHint: "Team Notion", wizard: false, credentialService: "notion" },
 
   // ── the two `email` variants ──────────────────────────────────────
   //
@@ -328,6 +337,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "api",
     icon: "email",
     defaultName: "gmail",
+    nameHint: "Work Gmail",
     wizard: true,
     canProbe: true,
     credentialService: "google-gmail",
@@ -405,6 +415,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "api",
     icon: "email",
     defaultName: "fastmail",
+    nameHint: "Personal Fastmail",
     wizard: true,
     canProbe: true,
     credentialService: "fastmail",
@@ -473,9 +484,9 @@ export const CATALOG: CatalogEntry[] = [
   // the two above does — an mbox source, or a JMAP server that is not
   // Fastmail. No form, because the thing it stands for is "some other
   // way of getting mail", which is not one form.
-  { type: "email", label: "Email (mbox or other server)", blurb: "A Google Takeout .mbox, or a JMAP server other than Fastmail.", keywords: ["email", "mail", "jmap", "imap", "mbox", "takeout"], kind: "api", icon: "email", defaultName: "email", wizard: false },
-  { type: "contacts", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: null, defaultName: "contacts", wizard: false },
-  { type: "yolink", method: "api", label: "YoLink", blurb: "Per-device temperature, humidity and water history.", keywords: ["yolink", "sensor", "temperature", "iot", "yosmart"], kind: "api", icon: "yolink", defaultName: "yolink", wizard: false },
+  { type: "email", label: "Email (mbox or other server)", blurb: "A Google Takeout .mbox, or a JMAP server other than Fastmail.", keywords: ["email", "mail", "jmap", "imap", "mbox", "takeout"], kind: "api", icon: "email", defaultName: "email", nameHint: "Old mail archive", wizard: false },
+  { type: "contacts", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: null, defaultName: "contacts", nameHint: "Phone contacts", wizard: false },
+  { type: "yolink", method: "api", label: "YoLink", blurb: "Per-device temperature, humidity and water history.", keywords: ["yolink", "sensor", "temperature", "iot", "yosmart"], kind: "api", icon: "yolink", defaultName: "yolink", nameHint: "House sensors", wizard: false },
 
   {
     type: "claude",
@@ -486,6 +497,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "export",
     icon: "claude",
     defaultName: "claude-export",
+    nameHint: "Claude, before the API",
     wizard: true,
     fields: [
       {
@@ -503,8 +515,8 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: null, defaultName: "google-takeout", wizard: false },
-  { type: "linkedin", label: "LinkedIn", blurb: "Messages and connections from a data export.", keywords: ["linkedin", "export", "connections"], kind: "export", icon: "linkedin", defaultName: "linkedin", wizard: false },
+  { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: null, defaultName: "google-takeout", nameHint: "My Google Takeout", wizard: false },
+  { type: "linkedin", label: "LinkedIn", blurb: "Messages and connections from a data export.", keywords: ["linkedin", "export", "connections"], kind: "export", icon: "linkedin", defaultName: "linkedin", nameHint: "My LinkedIn", wizard: false },
   {
     type: "signal",
     label: "Signal",
@@ -513,6 +525,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "export",
     icon: "signal",
     defaultName: "signal",
+    nameHint: "Signal on my phone",
     wizard: true,
     fields: [
       {
@@ -560,6 +573,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "export",
     icon: "whatsapp",
     defaultName: "whatsapp",
+    nameHint: "Work WhatsApp",
     wizard: true,
     fields: [
       {
@@ -585,8 +599,8 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "sms_backup_restore", label: "SMS & calls", blurb: "Android SMS Backup & Restore XML exports.", keywords: ["sms", "mms", "calls", "android", "texts"], kind: "export", icon: "sms", defaultName: "sms", wizard: false },
-  { type: "beeper", label: "Beeper", blurb: "Read Beeper Texts' local store across its networks. Poorly supported — expect rough edges.", keywords: ["beeper", "matrix", "chat", "imessage"], kind: "export", icon: null, defaultName: "beeper", wizard: false },
+  { type: "sms_backup_restore", label: "SMS & calls", blurb: "Android SMS Backup & Restore XML exports.", keywords: ["sms", "mms", "calls", "android", "texts"], kind: "export", icon: "sms", defaultName: "sms", nameHint: "Texts and calls", wizard: false },
+  { type: "beeper", label: "Beeper", blurb: "Read Beeper Texts' local store across its networks. Poorly supported — expect rough edges.", keywords: ["beeper", "matrix", "chat", "imessage"], kind: "export", icon: null, defaultName: "beeper", nameHint: "Beeper on this Mac", wizard: false },
 
   {
     type: "pdf",
@@ -596,6 +610,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "local",
     icon: null,
     defaultName: "pdfs",
+    nameHint: "Papers and manuals",
     wizard: true,
     fields: [
       {
@@ -638,6 +653,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "local",
     icon: null,
     defaultName: "fsindex",
+    nameHint: "My home folder",
     wizard: true,
     fields: [
       {
@@ -675,6 +691,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "local",
     icon: null,
     defaultName: "media",
+    nameHint: "Photos and music",
     wizard: true,
     // Download-only: media has no text to convert, so nothing is
     // rendered and no render step is declared.
@@ -724,6 +741,7 @@ export const CATALOG: CatalogEntry[] = [
     kind: "local",
     icon: null,
     defaultName: "lightroom",
+    nameHint: "Lightroom catalog",
     wizard: true,
     // Download-only: a photo catalog isn't chat-shaped, so nothing is
     // rendered and no render step is declared.
@@ -771,7 +789,7 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "perseus", method: "github", label: "Perseus library", blurb: "Classical texts from the Perseus Digital Library.", keywords: ["perseus", "greek", "latin", "classics", "sample"], kind: "local", icon: null, defaultName: "perseus", wizard: false },
+  { type: "perseus", method: "github", label: "Perseus library", blurb: "Classical texts from the Perseus Digital Library.", keywords: ["perseus", "greek", "latin", "classics", "sample"], kind: "local", icon: null, defaultName: "perseus", nameHint: "Greek and Latin texts", wizard: false },
 ];
 
 export const KIND_LABELS: Record<CatalogEntry["kind"], string> = {
