@@ -929,11 +929,16 @@ export function startLatchkeyConnect(
   service: string,
   account?: string,
   register?: ServiceRegistration,
+  ephemeralBrowser = false,
 ): Promise<ConnectAttempt> {
   return quietJson<ConnectAttempt>(`/api/latchkey/${encodeURIComponent(service)}/connect`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ account: account ?? "", register: register ?? null }),
+    body: JSON.stringify({
+      account: account ?? "",
+      register: register ?? null,
+      ephemeral_browser: ephemeralBrowser,
+    }),
   });
 }
 

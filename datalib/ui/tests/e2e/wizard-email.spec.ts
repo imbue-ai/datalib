@@ -302,9 +302,11 @@ test("the account follows the login, not the box", async ({ page }) => {
   await pickTile(page, "fastmail", "Mirror a Fastmail mailbox over JMAP.");
   await wizard(page).locator("select.wiz-accountpick").selectOption("troi@betazed.example");
 
-  await page.route("**/api/latchkey/fastmail/connect", (route) =>
-    route.fulfill({ json: { id: "c1", status: "running", account: null, output: "" } }),
-  );
+  let connectBody: { ephemeral_browser?: boolean } | null = null;
+  await page.route("**/api/latchkey/fastmail/connect", (route) => {
+    connectBody = route.request().postDataJSON();
+    return route.fulfill({ json: { id: "c1", status: "running", account: null, output: "" } });
+  });
   // What `auth browser` reports for an OAuth service: a different
   // address from the one selected above, because that is who signed in.
   await page.route("**/api/latchkey/connect/c1/status", (route) =>
@@ -317,6 +319,10 @@ test("the account follows the login, not the box", async ({ page }) => {
   await expect(wizard(page).locator(".wiz-conn-note")).toContainText(
     "Connected as crusher@enterprise.gov",
   );
+  // An OAuth login keeps latchkey's saved browser session — arriving
+  // already signed in is one less password, and the identity is
+  // re-derived either way. Only a cookie capture needs it discarded.
+  await expect.poll(() => connectBody?.ephemeral_browser).toBe(false);
   // The text box, not the dropdown beside it: both carry `.wiz-input`,
   // and the dropdown reads `__other` because a just-created account is
   // not in the list this stub keeps returning.

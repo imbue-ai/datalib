@@ -98,7 +98,7 @@ test("no account picker, and the login runs as latchkey's default", async ({ pag
   ).toHaveCount(0);
   await expect(wizard(page).locator("select.wiz-accountpick")).toHaveCount(0);
 
-  let connectBody: { account?: string } | null = null;
+  let connectBody: { account?: string; ephemeral_browser?: boolean } | null = null;
   await page.route("**/api/latchkey/claude-ai/connect", (route) => {
     connectBody = route.request().postDataJSON();
     return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
@@ -108,6 +108,12 @@ test("no account picker, and the login runs as latchkey's default", async ({ pag
   // Empty means "latchkey's own default", which is addressed by sending
   // no `--account` at all.
   await expect.poll(() => connectBody?.account).toBe("");
+
+  // And the login must not reuse latchkey's saved session: a cookie
+  // capture reads the `Set-Cookie` of a sign-in that then never
+  // happens, and waits for it until the 15-minute timeout with an
+  // innocent-looking browser window open (imbue-ai/latchkey#150).
+  await expect.poll(() => connectBody?.ephemeral_browser).toBe(true);
 });
 
 /// The other half of "always the default": with nothing to type an
