@@ -77,7 +77,7 @@ rather than guessing.";
 
 const GENERIC_AUTH_HINT: &str = "Provider returned an auth-failure status. \
 This usually means latchkey credentials are missing or expired. \
-See <provider>/DOWNLOAD.md for setup. Confirm the in-tree curl shim is \
+See <provider>/INGEST.md for setup. Confirm the in-tree curl shim is \
 built (`cargo build -p datalib-etl --bin latchkey-curl-impersonate`), or \
 set $DATALIB_CURL_DISPATCH / $LATCHKEY_CURL explicitly, and that \
 `{LK} auth list` shows entries.";
@@ -120,7 +120,7 @@ chatgpt access token expired or missing.
      → Cookies → chatgpt.com and add a second `-H \"Cookie: cf_clearance=$(pbpaste)\"`
      to the `latchkey auth set chatgpt` call.
 
-See datalib/backend/etl/providers/chatgpt/DOWNLOAD.md for details."
+See datalib/backend/etl/providers/chatgpt/INGEST.md for details."
         }
         SourceType::Claude => {
             "\
@@ -136,7 +136,7 @@ Claude sessionKey expired or missing.
   4. Smoke-test:
        {LK} curl -s https://claude.ai/api/organizations | head -c 200
 
-See datalib/backend/etl/providers/claude/DOWNLOAD.md for details."
+See datalib/backend/etl/providers/claude/INGEST.md for details."
         }
         SourceType::Slack => {
             "\
@@ -149,7 +149,7 @@ slack token expired or missing.
   3. Smoke-test:
        {LK} curl -s https://slack.com/api/auth.test | head -c 200
 
-See datalib/backend/etl/providers/slack/DOWNLOAD.md for details."
+See datalib/backend/etl/providers/slack/INGEST.md for details."
         }
         SourceType::Github => {
             "\
@@ -162,7 +162,7 @@ github PAT expired or missing.
   3. Smoke-test:
        {LK} curl -s https://api.github.com/user | head -c 200
 
-See datalib/backend/etl/providers/github/DOWNLOAD.md for details."
+See datalib/backend/etl/providers/github/INGEST.md for details."
         }
         SourceType::Gitlab => {
             "\
@@ -175,7 +175,7 @@ gitlab token expired or missing.
   3. Smoke-test:
        {LK} curl -s https://gitlab.com/api/v4/user | head -c 200
 
-See datalib/backend/etl/providers/gitlab/DOWNLOAD.md for details."
+See datalib/backend/etl/providers/gitlab/INGEST.md for details."
         }
         SourceType::Notion => {
             "\
@@ -190,7 +190,7 @@ notion integration token expired or missing.
          -H 'Notion-Version: 2022-06-28' -H 'Content-Type: application/json' \\
          -d '{}' | head -c 200
 
-See datalib/backend/etl/providers/notion/DOWNLOAD.md for details."
+See datalib/backend/etl/providers/notion/INGEST.md for details."
         }
         SourceType::Email => {
             "\
@@ -231,7 +231,7 @@ service and routes to it by URL host:
   consent time — run `{LK} auth browser google-gmail` again and approve
   all of them.
 
-See datalib/backend/etl/providers/email/DOWNLOAD.md for details."
+See datalib/backend/etl/providers/email/INGEST.md for details."
         }
         SourceType::Beeper => {
             "\
@@ -247,7 +247,7 @@ beeper download reads Beeper Texts' on-disk SQLite. No auth dance.
        sqlite3 ~/Library/Application\\ Support/BeeperTexts/index.db \\
            \"SELECT COUNT(*) FROM threads;\"
 
-See datalib/backend/etl/providers/beeper/DOWNLOAD.md for details."
+See datalib/backend/etl/providers/beeper/INGEST.md for details."
         }
         _ => GENERIC_AUTH_HINT,
     };

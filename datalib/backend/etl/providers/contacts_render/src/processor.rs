@@ -4,19 +4,19 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
-use datalib_etl_carddav_config::CarddavRenderConfig;
-use datalib_etl_contacts::download;
+use datalib_etl_contacts::ingest;
+use datalib_etl_contacts_config::ContactsRenderConfig;
 use datalib_etl_render::processor::{RenderCtx, RenderPass, RenderProcessor};
 use std::path::PathBuf;
 
 /// Render wave: always present (renders whatever is in the raw store).
 pub fn plan_render(
     ctx: PlanContext,
-    config: CarddavRenderConfig,
+    config: ContactsRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    Ok(vec![Box::new(CarddavRender {
+    Ok(vec![Box::new(ContactsRender {
         id: format!("carddav/{name}/render"),
         raw_path,
         name,
@@ -25,14 +25,14 @@ pub fn plan_render(
 
 /// Carddav's render processor — reads the raw store and emits one
 /// rendered markdown per contact through the fused-Load callback.
-pub struct CarddavRender {
+pub struct ContactsRender {
     id: String,
     raw_path: PathBuf,
     name: String,
 }
 
 #[async_trait]
-impl RenderProcessor for CarddavRender {
+impl RenderProcessor for ContactsRender {
     fn id(&self) -> &str {
         &self.id
     }
@@ -44,7 +44,7 @@ impl RenderProcessor for CarddavRender {
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse, render};
 
-        let db_path = download::db_path_for(&self.raw_path);
+        let db_path = ingest::db_path_for(&self.raw_path);
         let parsed = parse::parse(&db_path)
             .with_context(|| format!("carddav parse {}", db_path.display()))?;
         let Some(parsed) = parsed else {

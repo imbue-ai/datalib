@@ -18,8 +18,8 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use serde_json::Value;
 
-use datalib_etl_linkedin::download::schema_raw::ns_id as uuid5;
-use datalib_etl_linkedin::download::{db_path_for, RawDb};
+use datalib_etl_linkedin::ingest::schema_raw::ns_id as uuid5;
+use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::render::{parse_date_ms, RENDER_VERSION};
 use datalib_schema::providers::Provider;

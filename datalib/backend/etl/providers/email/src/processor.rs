@@ -11,11 +11,11 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_email_config::{EmailConfig, EmailGmailApi, EmailLiveMode, EmailSync, MboxSync};
 use std::path::PathBuf;
 
-use crate::download;
+use crate::ingest;
 
-/// Download wave: a live table (`jmap`, `gmail`) selects a server
+/// Ingest wave: a live table (`jmap`, `gmail`) selects a server
 /// mode; `mbox` reads the `.mbox` at its `path`.
-pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     if config.outlink_format.is_some() || !config.only_render_labels.is_empty() {
         anyhow::bail!(
@@ -43,7 +43,7 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
 
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(mode) = mode {
-        procs.push(Box::new(EmailDownload {
+        procs.push(Box::new(EmailIngest {
             id: format!("email/{name}/download"),
             raw_path,
             mode,
@@ -69,7 +69,7 @@ enum ExtractMode {
 }
 
 /// Email's download processor. Owns its raw doltlite store end to end.
-pub struct EmailDownload {
+pub struct EmailIngest {
     id: String,
     raw_path: PathBuf,
     mode: ExtractMode,
@@ -85,7 +85,7 @@ pub struct EmailDownload {
 }
 
 #[async_trait]
-impl DataProcessor for EmailDownload {
+impl DataProcessor for EmailIngest {
     fn id(&self) -> &str {
         &self.id
     }
@@ -110,13 +110,13 @@ impl DataProcessor for EmailDownload {
         // The source owns the store: open it, hand the orchestrator only an
         // opaque interrupt-commit hook, do the work, commit, close. No pool or
         // `dolt_commit` ever crosses back to the orchestrator.
-        let entity_db = download::db_path_for(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
 
         let summary = match &self.mode {
             ExtractMode::Jmap(sync) => {
-                let s = download::fetch(download::FetchOptions {
+                let s = ingest::fetch(ingest::FetchOptions {
                     db,
                     sealer: Some(session.sealer()),
                     hostname: sync.hostname.clone(),
@@ -142,7 +142,7 @@ impl DataProcessor for EmailDownload {
                 )
             }
             ExtractMode::GmailApi(gmail) => {
-                let s = download::gmail_api::fetch(download::gmail_api::FetchOptions {
+                let s = ingest::gmail_api::fetch(ingest::gmail_api::FetchOptions {
                     db,
                     sealer: Some(session.sealer()),
                     config: gmail.clone(),
@@ -180,13 +180,13 @@ impl DataProcessor for EmailDownload {
                         input_path.display()
                     ));
                 }
-                let s = download::mbox::fetch(download::mbox::FetchOptions {
+                let s = ingest::mbox::fetch(ingest::mbox::FetchOptions {
                     cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
                         .await?,
                     db,
                     input_path: input_path.clone(),
                     account_id_override: account_config.account_id.clone(),
-                    account_config: download::mbox::MboxAccountConfig {
+                    account_config: ingest::mbox::MboxAccountConfig {
                         account_id: account_config.account_id.clone(),
                         display_name: account_config.display_name.clone(),
                         email_address: account_config.email_address.clone(),

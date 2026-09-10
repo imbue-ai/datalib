@@ -11,10 +11,10 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 
-// The UUIDv5 identity recipes live in `download::schema_raw` (identity
+// The UUIDv5 identity recipes live in `ingest::schema_raw` (identity
 // recipes belong next to the schema). Re-export so existing
 // `crate::render::signal_*` callers keep resolving.
-pub use datalib_etl_signal::download::schema_raw::{
+pub use datalib_etl_signal::ingest::schema_raw::{
     signal_chat_uuid, signal_markdown_uuid, signal_message_uuid, signal_recipient_uuid,
     SIGNAL_UUID_NS,
 };

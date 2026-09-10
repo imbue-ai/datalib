@@ -1,7 +1,7 @@
 //! The `dolt_diff` scan that narrows notion's render, and the deletions
 //! it has to notice now that render no longer walks everything.
 
-use datalib_etl_notion::download::db::{CommentUpsert, PageMarkdownUpsert, PageUpsert, RawDb};
+use datalib_etl_notion::ingest::db::{CommentUpsert, PageMarkdownUpsert, PageUpsert, RawDb};
 use datalib_etl_notion_render::render::parse_api_dir;
 use serde_json::json;
 use tempfile::tempdir;

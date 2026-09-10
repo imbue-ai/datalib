@@ -1,5 +1,5 @@
 //! Render stage: read the event-store JSONL written by
-//! [`datalib_etl_gitlab::download`] and emit one markdown document per MR plus a
+//! [`datalib_etl_gitlab::ingest`] and emit one markdown document per MR plus a
 //! rows in the source's render store.
 
 pub mod grid_rows;

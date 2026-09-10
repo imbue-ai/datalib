@@ -5,7 +5,7 @@
 
 //! Live GitLab single-MR download + render test.
 
-use datalib_etl_gitlab::download::{self as gitlab, parse_mr_ref, FetchOptions};
+use datalib_etl_gitlab::ingest::{self as gitlab, parse_mr_ref, FetchOptions};
 use datalib_etl_gitlab_render::render::{parse_api_dir, render_gitlab};
 use insta::assert_json_snapshot;
 use serde_json::json;

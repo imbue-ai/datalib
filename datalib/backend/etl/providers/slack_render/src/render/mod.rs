@@ -15,10 +15,10 @@ use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 
 // UUIDv5 recipes for Slack message and thread ids live in
-// `download::schema_raw`. Re-export here so existing
+// `ingest::schema_raw`. Re-export here so existing
 // `crate::render::slack_message_uuid` callers outside this crate
 // keep resolving.
-pub use datalib_etl_slack::download::schema_raw::{slack_message_uuid, slack_thread_uuid};
+pub use datalib_etl_slack::ingest::schema_raw::{slack_message_uuid, slack_thread_uuid};
 pub use parse::{parse, ParsedSlack, ScanResult, SlackThreadBucket};
 
 /// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
@@ -82,7 +82,7 @@ pub struct Channel {
     pub is_dm: bool,
     /// Who is in this DM, as Slack listed them — self included for a
     /// group DM. Empty for a channel. See
-    /// [`datalib_etl_slack::download::schema_raw::ChannelRow::dm_user_ids`].
+    /// [`datalib_etl_slack::ingest::schema_raw::ChannelRow::dm_user_ids`].
     pub dm_user_ids: Vec<String>,
 }
 
@@ -98,11 +98,9 @@ impl Channel {
                 self.name.clone().unwrap_or_else(|| self.channel_id.clone())
             );
         }
-        let counterparts = datalib_etl_slack::download::schema_raw::dm_counterparts(
-            &self.dm_user_ids,
-            self_user_id,
-        );
-        datalib_etl_slack::download::schema_raw::dm_display_name(
+        let counterparts =
+            datalib_etl_slack::ingest::schema_raw::dm_counterparts(&self.dm_user_ids, self_user_id);
+        datalib_etl_slack::ingest::schema_raw::dm_display_name(
             &counterparts,
             self.name.as_deref(),
             &self.channel_id,

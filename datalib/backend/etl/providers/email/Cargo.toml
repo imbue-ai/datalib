@@ -15,8 +15,8 @@ path = "src/lib.rs"
 # `docs/dev/email_download_modes.md`. Only JMAP has a standalone
 # `*-download` bin; the others are reached through `datalib-step`.
 [[bin]]
-name = "jmap-download"
-path = "src/bin/jmap_download.rs"
+name = "jmap-ingest"
+path = "src/bin/jmap_ingest.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }

@@ -19,7 +19,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use serde_json::Value;
 use uuid::Uuid;
 
-use datalib_etl_sms_backup_restore::download::{db_path_for, RawDb};
+use datalib_etl_sms_backup_restore::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
 
 /// v2: a row whose `date` field is missing or non-numeric gets a null

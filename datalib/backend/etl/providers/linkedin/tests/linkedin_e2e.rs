@@ -8,9 +8,9 @@ use anyhow::{Context, Result};
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_linkedin::download::photos::load_photo_blobs;
-use datalib_etl_linkedin::download::schema_raw::connection_uuid;
-use datalib_etl_linkedin::download::{self, db_path_for, FetchOptions, RawDb};
+use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
+use datalib_etl_linkedin::ingest::schema_raw::connection_uuid;
+use datalib_etl_linkedin::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_linkedin::synthesize::LinkedinSynth;
 use datalib_etl_linkedin_render::connections;
 use datalib_etl_linkedin_render::posts;
@@ -113,7 +113,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // the assertions both, because two is what breaks a doltlite
         // file.
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
-        let summary = download::fetch(FetchOptions {
+        let summary = ingest::fetch(FetchOptions {
             db: db.clone(),
             input_path: export.clone(),
             fetch_photos: false,
@@ -347,7 +347,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         Synthesizer::synthesize(&LinkedinSynth::new(export.clone()), &playback)?;
         std::env::set_var(PLAYBACK_ENV, &playback);
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
-        download::fetch(FetchOptions {
+        ingest::fetch(FetchOptions {
             db: db.clone(),
             input_path: export.clone(),
             fetch_photos: true,
@@ -407,7 +407,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let raw2 = tmp.path().join("raw2");
         fs::create_dir_all(&raw2)?;
         let db2 = RawDb::open(&db_path_for(&raw2)).await?;
-        download::fetch(FetchOptions {
+        ingest::fetch(FetchOptions {
             db: db2.clone(),
             input_path: export.clone(),
             fetch_photos: false,
@@ -423,7 +423,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let empty_pb = tmp.path().join("empty_pb");
         fs::create_dir_all(&empty_pb)?;
         std::env::set_var(PLAYBACK_ENV, &empty_pb);
-        let s1 = download::photos::fetch_connection_photos(
+        let s1 = ingest::photos::fetch_connection_photos(
             &db2,
             db2.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
@@ -442,7 +442,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
 
         // Retry with the real fixtures — now it succeeds.
         std::env::set_var(PLAYBACK_ENV, &playback);
-        let s2 = download::photos::fetch_connection_photos(
+        let s2 = ingest::photos::fetch_connection_photos(
             &db2,
             db2.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
@@ -468,7 +468,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let raw3 = tmp.path().join("raw3");
         fs::create_dir_all(&raw3)?;
         let db3 = RawDb::open(&db_path_for(&raw3)).await?;
-        download::fetch(FetchOptions {
+        ingest::fetch(FetchOptions {
             db: db3.clone(),
             input_path: export.clone(),
             fetch_photos: false,
@@ -481,7 +481,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // committed state only.
         datalib_etl::doltlite_raw::commit_run(db3.pool(), "test: linkedin fetch").await?;
         std::env::set_var(PLAYBACK_ENV, &empty_pb);
-        let g = download::photos::fetch_connection_photos(
+        let g = ingest::photos::fetch_connection_photos(
             &db3,
             db3.cas().expect("the download handle has a CAS"),
             &Progress::noop(),

@@ -175,7 +175,7 @@ revisiting.
   server and no Playwright browsers baked in. Use the header-paste
   flows (`latchkey auth set <service> -H "…"`) instead. The header
   values you need are documented in the `datalib-dag` error output
-  when a service is missing credentials, in each provider's `DOWNLOAD.md`
+  when a service is missing credentials, in each provider's `INGEST.md`
   under `datalib/backend/etl/providers/<name>/`, and in
   [docs/user/first_time_user.md](/docs/user/first_time_user.md).
 - **Tauri desktop UI / Vite dev server.** This image is the backend

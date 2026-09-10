@@ -10,18 +10,15 @@ use async_trait::async_trait;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_yolink_config::{YolinkConfig, YolinkSync};
 
-use crate::download;
+use crate::ingest;
 
-/// Download wave: present iff `api`.
-pub fn plan_download(
-    ctx: PlanContext,
-    config: YolinkConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
+/// Ingest wave: present iff `api`.
+pub fn plan_ingest(ctx: PlanContext, config: YolinkConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.api {
-        procs.push(Box::new(YolinkDownload {
+        procs.push(Box::new(YolinkIngest {
             id: format!("yolink/{name}/download"),
             raw_path,
             sync,
@@ -30,23 +27,23 @@ pub fn plan_download(
     Ok(procs)
 }
 
-struct YolinkDownload {
+struct YolinkIngest {
     id: String,
     raw_path: PathBuf,
     sync: YolinkSync,
 }
 
 #[async_trait]
-impl DataProcessor for YolinkDownload {
+impl DataProcessor for YolinkIngest {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = download::db_path_for(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             db,
             sync: self.sync.clone(),
             progress: ctx.progress.clone(),

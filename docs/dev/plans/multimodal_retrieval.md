@@ -783,7 +783,7 @@ And one found here rather than in the changelog:
 
 **Verified against this tree** (2026-09-01): `schema/src/grid_rows.rs`,
 `schema/src/markdowns.rs`, `runtime/src/layout.rs`,
-`etl/src/blob_cas.rs`, `etl/providers/email/src/download/schema_raw.rs`,
+`etl/src/blob_cas.rs`, `etl/providers/email/src/ingest/schema_raw.rs`,
 `etl/providers/email_render/src/render/`, `unified_index/src/db.rs`,
 `unified_index/src/dolt_repo.rs`, `unified_index/src/qmd/*`,
 `applets/src/unified_index/mod.rs`, `third-party/qmd/src/store.ts`

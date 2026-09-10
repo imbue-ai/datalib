@@ -39,7 +39,7 @@ impl ClaudeConfig {
         if self.api.is_some() && self.export.is_some() {
             anyhow::bail!(
                 "claude sets both `api` and `export` — pick one. To seed a store from an \
-                 export and then keep it fresh from the API, see the provider's DOWNLOAD.md."
+                 export and then keep it fresh from the API, see the provider's INGEST.md."
             );
         }
         Ok(())

@@ -7,7 +7,7 @@ use anyhow::Result;
 use sqlx::Row;
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl_media::download::{self, RawDb};
+use datalib_etl_media::ingest::{self, RawDb};
 
 const NOW: &str = "2364-04-13T08:45:00-07:00";
 const STANZA: &str = "tng_media";
@@ -60,7 +60,7 @@ impl Harness {
     async fn at(tmp: tempfile::TempDir, root: PathBuf) -> Result<Self> {
         let raw_dir = tmp.path().join("raw");
         std::fs::create_dir_all(&raw_dir)?;
-        let db = RawDb::open(&download::db_path_for(&raw_dir)).await?;
+        let db = RawDb::open(&ingest::db_path_for(&raw_dir)).await?;
         Ok(Self {
             root,
             raw_dir,
@@ -69,19 +69,19 @@ impl Harness {
         })
     }
 
-    async fn scan(&self) -> Result<download::FetchSummary> {
+    async fn scan(&self) -> Result<ingest::FetchSummary> {
         self.scan_with(|o| o).await
     }
 
-    async fn scan_with<F>(&self, tweak: F) -> Result<download::FetchSummary>
+    async fn scan_with<F>(&self, tweak: F) -> Result<ingest::FetchSummary>
     where
-        F: FnOnce(download::FetchOptions) -> download::FetchOptions,
+        F: FnOnce(ingest::FetchOptions) -> ingest::FetchOptions,
     {
         let db = self.db.clone();
         // A temp cache per harness: tests must never touch this host's
         // real one.
         let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
-        download::fetch(tweak(download::FetchOptions {
+        ingest::fetch(tweak(ingest::FetchOptions {
             db,
             source_name: STANZA.to_string(),
             root: self.root.clone(),
@@ -352,7 +352,7 @@ async fn the_payload_ceiling_leaves_null_and_is_counted() -> Result<()> {
     let h = Harness::new().await?;
     // Below every fixture's size, so nothing gets a payload hash.
     let s = h
-        .scan_with(|o| download::FetchOptions {
+        .scan_with(|o| ingest::FetchOptions {
             payload_max_bytes: Some(16),
             ..o
         })
@@ -836,7 +836,7 @@ async fn a_failed_scan_leaves_the_rescan_cursors_intact() -> Result<()> {
     assert!(!before.is_empty());
 
     let err = h
-        .scan_with(|o| download::FetchOptions {
+        .scan_with(|o| ingest::FetchOptions {
             // An unclosed character class: rejected when the override
             // set is built, which is inside the walk.
             ignore: vec!["[".to_string()],
@@ -924,7 +924,7 @@ async fn force_rehash_re_reads_everything_without_changing_a_row() -> Result<()>
     let before = files(db).await?;
 
     let forced = h
-        .scan_with(|o| download::FetchOptions {
+        .scan_with(|o| ingest::FetchOptions {
             force_rehash: true,
             ..o
         })
@@ -959,7 +959,7 @@ async fn a_deleted_file_disappears_from_the_path_table_but_the_item_remains() ->
     // "no longer present", and keeping it preserves `first_seen_at`.
     assert!(
         items(db).await?.contains_key(&hash),
-        "the item row should remain (see DOWNLOAD.md §Orphaned items)"
+        "the item row should remain (see INGEST.md §Orphaned items)"
     );
     Ok(())
 }
@@ -1095,7 +1095,7 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     assert!(!files_after.contains_key("music/corrupt.mp3"));
     assert!(
         items_after.contains_key(&files_before["music/corrupt.mp3"]),
-        "content-keyed rows survive their last path (see DOWNLOAD.md)"
+        "content-keyed rows survive their last path (see INGEST.md)"
     );
 
     // Items only ever grow: two added, none removed — including the

@@ -90,60 +90,60 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
     vec![
         (
             "beeper/raw",
-            datalib_etl_beeper::download::schema_raw::full_ddl(),
+            datalib_etl_beeper::ingest::schema_raw::full_ddl(),
         ),
         (
             "chatgpt/raw",
-            datalib_etl_chatgpt::download::schema_raw::full_ddl(),
+            datalib_etl_chatgpt::ingest::schema_raw::full_ddl(),
         ),
         (
             "claude/raw",
-            datalib_etl_claude::download::schema_raw::full_ddl(),
+            datalib_etl_claude::ingest::schema_raw::full_ddl(),
         ),
         (
             "contacts/raw",
-            datalib_etl_contacts::download::schema_raw::full_ddl(),
+            datalib_etl_contacts::ingest::schema_raw::full_ddl(),
         ),
         (
             "email/raw",
-            datalib_etl_email::download::schema_raw::full_ddl(),
+            datalib_etl_email::ingest::schema_raw::full_ddl(),
         ),
         (
             "fsindex/raw",
-            datalib_etl_fsindex::download::schema_raw::full_ddl(),
+            datalib_etl_fsindex::ingest::schema_raw::full_ddl(),
         ),
         (
             "github/raw",
-            datalib_etl_github::download::schema_raw::full_ddl(),
+            datalib_etl_github::ingest::schema_raw::full_ddl(),
         ),
         (
             "gitlab/raw",
-            datalib_etl_gitlab::download::schema_raw::full_ddl(),
+            datalib_etl_gitlab::ingest::schema_raw::full_ddl(),
         ),
         (
             "google_takeout/raw",
-            datalib_etl_google_takeout::download::schema_raw::full_ddl(),
+            datalib_etl_google_takeout::ingest::schema_raw::full_ddl(),
         ),
         (
             "media/raw",
-            datalib_etl_media::download::schema_raw::full_ddl(),
+            datalib_etl_media::ingest::schema_raw::full_ddl(),
         ),
         (
             "notion/raw",
-            datalib_etl_notion::download::schema_raw::full_ddl(),
+            datalib_etl_notion::ingest::schema_raw::full_ddl(),
         ),
-        ("pdf/raw", datalib_etl_pdf::download::schema_raw::full_ddl()),
+        ("pdf/raw", datalib_etl_pdf::ingest::schema_raw::full_ddl()),
         (
             "signal/raw",
-            datalib_etl_signal::download::schema_raw::full_ddl(),
+            datalib_etl_signal::ingest::schema_raw::full_ddl(),
         ),
         (
             "slack/raw",
-            datalib_etl_slack::download::schema_raw::full_ddl(),
+            datalib_etl_slack::ingest::schema_raw::full_ddl(),
         ),
         (
             "sms_backup_restore/raw",
-            datalib_etl_sms_backup_restore::download::schema_raw::full_ddl(),
+            datalib_etl_sms_backup_restore::ingest::schema_raw::full_ddl(),
         ),
         (
             "whatsapp/raw",
@@ -151,7 +151,7 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
         ),
         (
             "yolink/raw",
-            datalib_etl_yolink::download::schema_raw::full_ddl(),
+            datalib_etl_yolink::ingest::schema_raw::full_ddl(),
         ),
         // The shared render/index and app stores, from `PortableTable`.
         (

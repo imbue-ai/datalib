@@ -6,7 +6,7 @@
 
 //! `latchkey-curl-impersonate` — minimal curl-CLI-compatible front-end backed
 //! by `wreq`'s Chrome TLS impersonation. Mirror of
-//! `src/download/latchkey_curl_impersonate.py`.
+//! `src/ingest/latchkey_curl_impersonate.py`.
 
 use std::collections::HashSet;
 use std::fs::File;

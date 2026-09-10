@@ -9,9 +9,9 @@ use async_trait::async_trait;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_sms_backup_restore_config::SmsBackupRestoreConfig;
 
-use crate::download;
+use crate::ingest;
 
-pub fn plan_download(
+pub fn plan_ingest(
     ctx: PlanContext,
     config: SmsBackupRestoreConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
@@ -21,7 +21,7 @@ pub fn plan_download(
         .backup
         .ok_or_else(|| anyhow!("sms_backup_restore source {name} missing `backup.path`"))?
         .path();
-    Ok(vec![Box::new(SmsDownload {
+    Ok(vec![Box::new(SmsIngest {
         id: format!("sms_backup_restore/{name}/download"),
         raw_path,
         input_path,
@@ -30,23 +30,23 @@ pub fn plan_download(
 
 /// sms_backup_restore's download processor. Owns its raw doltlite store end to
 /// end (open, register interrupt hook, ingest the export, commit+close).
-struct SmsDownload {
+struct SmsIngest {
     id: String,
     raw_path: PathBuf,
     input_path: PathBuf,
 }
 
 #[async_trait]
-impl DataProcessor for SmsDownload {
+impl DataProcessor for SmsIngest {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = download::db_path_for(&self.raw_path);
-        let db = download::RawDb::open(&entity_db).await?;
+        let entity_db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = download::fetch(download::FetchOptions {
+        let s = ingest::fetch(ingest::FetchOptions {
             cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             db,
             input_path: self.input_path.clone(),

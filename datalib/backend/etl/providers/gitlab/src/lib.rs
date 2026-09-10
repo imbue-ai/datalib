@@ -2,6 +2,6 @@
 //! capture from a GitLab instance. Rendering lives in
 //! [`datalib_etl_gitlab_render`].
 
-pub mod download;
+pub mod ingest;
 pub mod processor;
 pub mod synthesize;

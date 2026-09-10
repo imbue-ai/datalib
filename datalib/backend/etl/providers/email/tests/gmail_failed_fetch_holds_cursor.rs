@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 
 use datalib_etl::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
 use datalib_etl::synthesize::{json_response, write_fixture};
-use datalib_etl_email::download::gmail_api::{self, FetchOptions, FetchSummary};
-use datalib_etl_email::download::{db_path_for, RawDb};
+use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
+use datalib_etl_email::ingest::{db_path_for, RawDb};
 use serde_json::{json, Value};
 
 const BASE: &str = "https://gmail.googleapis.com/gmail/v1/users";

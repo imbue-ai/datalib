@@ -7,11 +7,11 @@
 //! utilities that are not steps.
 
 mod dispatch;
-mod download;
 mod events;
 mod function;
 mod grid_index;
 mod hints;
+mod ingest;
 mod introspect;
 mod methods;
 mod probe;
@@ -288,7 +288,7 @@ async fn run_function(
                 data_root.join(&env.step),
                 params,
             )?;
-            let res = download::run(&planned, &env.step, now, control, emitter).await;
+            let res = ingest::run(&planned, &env.step, now, control, emitter).await;
             hints::emit_auth_hint_on_failure(emitter, planned.source_type, &res);
             res
         }

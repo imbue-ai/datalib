@@ -54,7 +54,7 @@ pub struct WirePayload {
 
 /// A row type whose table is "wire-payload" shaped: id + payload + promoted
 /// columns. `#[derive(WirePayloadRow)]` in `datalib-etl-macros` generates
-/// this and the matching `BulkUpsertable` impl; `signal::download::schema_raw`
+/// this and the matching `BulkUpsertable` impl; `signal::ingest::schema_raw`
 /// is the canonical use.
 pub trait WirePayloadRow {
     fn ddl() -> String;
@@ -158,7 +158,7 @@ fn insert_path(obj: &mut serde_json::Map<String, Value>, path: &[&str], value: V
 
 // ── Shared DDL ──────────────────────────────────────────────────────
 
-/// Append-only log of sync invocations, one row per `download::fetch`.
+/// Append-only log of sync invocations, one row per `ingest::fetch`.
 /// A crash mid-sync leaves its row at `status='running'`.
 pub const SYNC_RUNS_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -777,7 +777,7 @@ pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
 // ── Reset ───────────────────────────────────────────────────────────
 
 /// Truncate every per-row table and its sidecar in one transaction, so the
-/// next `download::fetch` re-downloads from upstream. `sync_runs` and
+/// next `ingest::fetch` re-downloads from upstream. `sync_runs` and
 /// `sync_scope_state` survive — audit log and resume cursor, not content.
 ///
 /// Table names are interpolated; callers pass trusted identifiers.

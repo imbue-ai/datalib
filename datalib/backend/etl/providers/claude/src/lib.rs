@@ -2,6 +2,6 @@
 //! capture from claude.ai/api, plus the bulk-export ingest that writes
 //! the same store. Rendering lives in [`datalib_etl_claude_render`].
 
-pub mod download;
+pub mod ingest;
 pub mod processor;
 pub mod synthesize;

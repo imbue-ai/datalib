@@ -49,7 +49,7 @@ _BAZEL_WORKSPACE_DIR = "_main"
 
 # Tracing event name emitted by signal download when the
 # `ingested_backups` cursor short-circuits a fetch. Source of truth:
-# providers/signal/src/download/mod.rs.
+# providers/signal/src/ingest/mod.rs.
 EV_SIGNAL_ALREADY_INGESTED = "signal_snapshot_already_ingested"
 
 # Providers that must appear in `grid_rows` after a full fixture run.

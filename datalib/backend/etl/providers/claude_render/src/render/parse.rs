@@ -9,8 +9,8 @@ use datalib_etl::blob_cas::{self, BlobBundle};
 use serde_json::{Map, Value};
 use sqlx::sqlite::SqlitePool;
 
-use datalib_etl_claude::download::db::{self, db_path_for, LoadedConversation, LoadedRaw};
-use datalib_etl_claude::download::normalize::normalize_to_export_shape;
+use datalib_etl_claude::ingest::db::{self, db_path_for, LoadedConversation, LoadedRaw};
+use datalib_etl_claude::ingest::normalize::normalize_to_export_shape;
 
 /// SQL projection that maps an Anthropic `file_uuid` to its CAS
 /// blake3. Consumed by [`BlobBundle::load`].
@@ -245,7 +245,7 @@ async fn parse_doltlite_async(
     let scan = scan_diff(&pool, last_render_hash, &pin).await?;
 
     // These three all read tables the download side also reads; the
-    // single copy of each lives in `download::db` (users/orgs go
+    // single copy of each lives in `ingest::db` (users/orgs go
     // through the shared `doltlite_raw` helper). See "One reader per
     // table" there.
     let users =
@@ -476,7 +476,7 @@ async fn scan_diff(
     })
 }
 
-pub fn parse_loaded(raw: datalib_etl_claude::download::db::LoadedRaw) -> ParsedExport {
+pub fn parse_loaded(raw: datalib_etl_claude::ingest::db::LoadedRaw) -> ParsedExport {
     let mut out = ParsedExport::default();
     for u in &raw.users {
         let Some(obj) = u.as_object() else { continue };

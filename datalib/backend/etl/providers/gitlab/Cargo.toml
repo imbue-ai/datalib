@@ -9,8 +9,8 @@ name = "datalib_etl_gitlab"
 path = "src/lib.rs"
 
 [[bin]]
-name = "gitlab-download"
-path = "src/bin/gitlab_download.rs"
+name = "gitlab-ingest"
+path = "src/bin/gitlab_ingest.rs"
 
 [dependencies]
 datalib-etl = { path = "../.." }

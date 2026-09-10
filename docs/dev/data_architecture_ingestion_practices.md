@@ -103,13 +103,13 @@ Reach for the simplest existing provider that's shaped like yours,
 3. Add `etl/providers/<name>` to the workspace `members =` list in
    `datalib/backend/Cargo.toml` and to the `crate.from_cargo`
    manifest list in `MODULE.bazel`.
-4. Implement `download::fetch(...)` and `<name>::render::...`. The
+4. Implement `ingest::fetch(...)` and `<name>::render::...`. The
    render side hands each finished document to `ctx.emit_doc` as a
    [`RenderedMarkdown`](../../datalib/backend/etl/render/src/grid_index.rs);
    the render step writes it into that source's store.
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
    (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
-6. Wire the provider's `processor.rs` (`plan_download` / `plan_render`)
+6. Wire the provider's `processor.rs` (`plan_ingest` / `plan_render`)
    into the per-type dispatch in
    [`datalib_step/src/dispatch.rs`](../../datalib/backend/datalib_step/src/dispatch.rs),
    which is what the running pipeline reads — and what
@@ -124,7 +124,7 @@ Reach for the simplest existing provider that's shaped like yours,
    `bazel run //datalib/backend/datalib_step:ingest_methods.update`
    regenerates the UI's copy.
 
-7. Write `providers/<name>/DOWNLOAD.md`, and
+7. Write `providers/<name>/INGEST.md`, and
    `providers/<name>_render/TRANSLATE.md` too if the provider has a
    render side. See
    [Every provider documents itself, in the same place](#every-provider-documents-itself-in-the-same-place).
@@ -137,7 +137,7 @@ run.
 ### Every provider documents itself, in the same place
 
 A provider's documentation lives beside its code, under a name that is
-the same for every provider: **`DOWNLOAD.md`** in the download crate,
+the same for every provider: **`INGEST.md`** in the download crate,
 and **`TRANSLATE.md`** in the `_render` crate beside the code it
 describes. That consistency is the whole
 point — it is what lets a reader (or an agent) find a provider's docs by
@@ -163,7 +163,7 @@ so the next person can reproduce the number rather than wonder whether
 it went stale.
 
 This is the rule for new providers, not yet a description of all of
-them: several of the earlier ones ship no `DOWNLOAD.md`, and the render
+them: several of the earlier ones ship no `INGEST.md`, and the render
 side is documented more thinly than the download side across the board.
 `ls datalib/backend/etl/providers/*/*.md` is the current state. Adding
 one to a provider you are already working in is a welcome thing to do.
@@ -374,7 +374,7 @@ they're listed here so they don't get lost.
     the durable content had been written down elsewhere and what
     remained was wrong — a checklist naming the retired
     `datalib/backend/sync` crate, `src/extract/` module paths that
-    became `src/download/`, the retired `RefStub` / `pre_seed_ref`
+    became `src/ingest/`, the retired `RefStub` / `pre_seed_ref`
     blob API in its utilities table and code templates, and a
     `journal_mode=DELETE` snippet that contradicts
     `doltlite_raw::open()`, which deliberately does not set the pragma
@@ -396,7 +396,7 @@ they're listed here so they don't get lost.
     drops to zero and drift-vs-payload becomes impossible by
     construction. The `WirePayloadRow` macro would need a per-field
     attribute like `#[wire_payload_row(virtual = "$.profile.real_name")]`.
-    Several FIXMEs in `slack/src/download/schema_raw.rs` (UserRow,
+    Several FIXMEs in `slack/src/ingest/schema_raw.rs` (UserRow,
     ChannelRow, MessageRow) flag the specific columns that would
     convert cleanly.
 

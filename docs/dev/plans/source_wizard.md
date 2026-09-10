@@ -87,7 +87,7 @@ means:
 
 Every check that could happen *before* the first run happens after it,
 as a failure. The knowledge needed to do it right is distributed across
-`hints.rs`, each provider's `DOWNLOAD.md`, and
+`hints.rs`, each provider's `INGEST.md`, and
 `docs/user/config_examples/all_sources.toml` — three places the UI
 never shows you.
 
@@ -450,7 +450,7 @@ One entry per source type. `serde`-serialized to JSON at
   "keywords": ["slack", "chat", "workspace", "channels"],
   "kind": "api",                      // api | local_file | local_dir | export
   "default_name": "slack",            // seeds the step id: slack.download / slack.render
-  "docs": "datalib/backend/etl/providers/slack/DOWNLOAD.md",
+  "docs": "datalib/backend/etl/providers/slack/INGEST.md",
 
   // Just the latchkey service name. latchkey already knows Slack —
   // authOptions, the header shape, the token example and the live

@@ -8,7 +8,7 @@ use clap::Parser;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::progress::Progress;
-use datalib_etl_fsindex::download::{self, FetchOptions, RawDb};
+use datalib_etl_fsindex::ingest::{self, FetchOptions, RawDb};
 use datalib_obs::{init as init_obs, ObsArgs};
 use datalib_time::IsoOffsetTimestamp;
 use tracing::info;
@@ -109,13 +109,13 @@ async fn main() -> Result<()> {
         },
     };
 
-    let summary = download::fetch(opts).await?;
+    let summary = ingest::fetch(opts).await?;
     progress.finish(&format!(
         "done — scanned {}: {} files cached, {} files hashed ({}), {} dirs, {} symlinks, {} errors",
         summary.entries_scanned,
         summary.files_reused,
         summary.files_hashed,
-        download::human_bytes(summary.bytes_hashed),
+        ingest::human_bytes(summary.bytes_hashed),
         summary.dirs,
         summary.symlinks,
         summary.errors,
@@ -126,7 +126,7 @@ async fn main() -> Result<()> {
     // a clean tree so the next open skips the rescue commit); `dolt_gc`
     // then reclaims the per-batch chunk novelty against the committed
     // tree. The reverse order (gc-then-commit on one connection) fails
-    // with "failed to flush" at scale — see `download::fetch`.
+    // with "failed to flush" at scale — see `ingest::fetch`.
     let finished_at = IsoOffsetTimestamp::now_local().to_rfc3339();
     let scan_secs = started.elapsed().as_secs_f64();
     let commit_ms = db
@@ -205,14 +205,14 @@ async fn main() -> Result<()> {
             summary.symlinks,
             summary.stamped_directories,
             summary.errors,
-            download::human_bytes(summary.bytes_hashed),
-            download::human_bytes(summary.bytes_skipped),
+            ingest::human_bytes(summary.bytes_hashed),
+            ingest::human_bytes(summary.bytes_skipped),
             elapsed.as_secs_f64(),
             summary.cache_path.display(),
             summary.cache_entries_loaded,
             summary.cache_entries_written,
             summary.cache_entries_forgotten,
-            download::human_growth(summary.cache_bytes_before, summary.cache_bytes_after),
+            ingest::human_growth(summary.cache_bytes_before, summary.cache_bytes_after),
         );
     }
     Ok(())
@@ -242,7 +242,7 @@ fn commit_message(
     started_at: &str,
     finished_at: &str,
     scan_secs: f64,
-    summary: &download::FetchSummary,
+    summary: &ingest::FetchSummary,
 ) -> String {
     format!(
         "fsindex {source}: {scanned} entries, hashed {files_hashed} files ({hashed}), \
@@ -266,8 +266,8 @@ fn commit_message(
         files_hashed = summary.files_hashed,
         dirs = summary.dirs,
         symlinks = summary.symlinks,
-        hashed = download::human_bytes(summary.bytes_hashed),
-        skipped = download::human_bytes(summary.bytes_skipped),
+        hashed = ingest::human_bytes(summary.bytes_hashed),
+        skipped = ingest::human_bytes(summary.bytes_skipped),
         stamped = summary.stamped_directories,
         errors = summary.errors,
         host = hostname(),

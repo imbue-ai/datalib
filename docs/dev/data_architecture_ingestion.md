@@ -37,7 +37,7 @@ upstream → download → render → grid_index
 ```
 
 - **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<name>/ingest/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `datalib_schema::grid_rows::GridRow`, the render store, or the qmd index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
-- **`render`** depends on `download` (it reads the raw store and projects to the normalized POD + `GridRow` shape). `download::schema_raw` is part of the contract render consumes. **Render reads only the raw store, never the original source.** Its sole input is `<data_root>/<name>/ingest/` (`SourceEntry::raw_path`); it must never reach back into upstream (the API) or into a file-backed source's `input_path` (the `.mbox`, the Takeout export, …). Render shows us **what we have captured and internalized**, not what is currently live at the source.
+- **`render`** depends on `download` (it reads the raw store and projects to the normalized POD + `GridRow` shape). `ingest::schema_raw` is part of the contract render consumes. **Render reads only the raw store, never the original source.** Its sole input is `<data_root>/<name>/ingest/` (`SourceEntry::raw_path`); it must never reach back into upstream (the API) or into a file-backed source's `input_path` (the `.mbox`, the Takeout export, …). Render shows us **what we have captured and internalized**, not what is currently live at the source.
 - **`grid_index`** is provider-agnostic; it lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) and depends on no provider's download or render. Its input contract is the per-source render store.
 
 Why the discipline matters: download is its own deliverable — a user can run it, stop, inspect the raw store, and have something useful (a backup, or mirror, at the very least) even if render has bugs or hasn't been written yet. Render can then be re-implemented or extended without touching download, and disabling a render path for one provider doesn't disturb that provider's download.
@@ -52,7 +52,7 @@ The single most load-bearing principle of this whole document is that **the sche
 Concretely, when starting any non-trivial piece of work in this codebase:
 
 1. **Write the DDL first**
-2. **Document each table *in the same file as the DDL***. Per-provider `schema_raw.rs` files (`etl/providers/<p>/src/download/schema_raw.rs`) are the canonical home for both the `CREATE TABLE` text and the prose commentary on it. Tables without their prose are half-finished.
+2. **Document each table *in the same file as the DDL***. Per-provider `schema_raw.rs` files (`etl/providers/<p>/src/ingest/schema_raw.rs`) are the canonical home for both the `CREATE TABLE` text and the prose commentary on it. Tables without their prose are half-finished.
 
 ## Download schemas must be simple: mostly PK + payload as JSONB
 However, we don't want our DB schema tightly coupled to upstream schemas, so we don't try to translate upstream data into a complete set of SQL columns.
@@ -78,7 +78,7 @@ We lean **heavily** on upstream-provided UUIDs to establish permanent object ide
 ### `schema_raw.rs`: Per-provider schema layout
 Within each provider crate the bytes-at-rest schema is its own file, deliberately declarations-only:
 
-- **`providers/<name>/src/download/schema_raw.rs`** — the raw-store schema: DDL constants (one per table / index / bookkeeping sidecar), schema-evolution migration constants co-located with the table they touch, any synthesized-PK recipe functions, and a tiny `full_ddl()` composer that splices in `dr::bookkeeping_ddl_for(table)` for each entity. **No manipulation code** — `RawDb`, UPSERTs, SELECTs, and parameter binding stay in `download/db.rs` and import from `schema_raw`. The convention is proto/pydantic-flavored: opening the `schema_raw.rs` files at the same fixed path answers "what does the world look like at rest?" without opening anything else.
+- **`providers/<name>/src/ingest/schema_raw.rs`** — the raw-store schema: DDL constants (one per table / index / bookkeeping sidecar), schema-evolution migration constants co-located with the table they touch, any synthesized-PK recipe functions, and a tiny `full_ddl()` composer that splices in `dr::bookkeeping_ddl_for(table)` for each entity. **No manipulation code** — `RawDb`, UPSERTs, SELECTs, and parameter binding stay in `ingest/db.rs` and import from `schema_raw`. The convention is proto/pydantic-flavored: opening the `schema_raw.rs` files at the same fixed path answers "what does the world look like at rest?" without opening anything else.
 - **`providers/<name>_render/src/render/schema_translate.rs`** (aspirational, landing per provider) — the normalized representation render emits: mostly serde-shaped Rust types, not SQL DDL, the in-memory POD form before it's shredded into `GridRow`s. A provider may have multiple `schema_translate_<family>.rs` files; where a shape is shared across providers (chat-human, code-review, time-series, …) the canonical type lives in a shared crate and the per-provider file re-exports.
 
 Each entity table has a JSONB `payload` column holding the raw upstream wire payload, plus a small number of typed columns the writer must populate at insert time (synthesized-PK components, FKs into parent tables that aren't in the payload, namespace discriminators). On disk `payload` is stored as JSONB — purely a storage encoding; the principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
@@ -319,7 +319,7 @@ the input dropped is simply not written back. The old rows stay in
 history, so `dolt_diff` still says what went.
 
 Mechanically it is the config-driven form of `--reset-and-redownload`:
-[`download.rs`](/datalib/backend/datalib_step/src/download.rs) ORs the
+[`download.rs`](/datalib/backend/datalib_step/src/ingest.rs) ORs the
 two together, and every provider already truncates on that knob. The
 blob CAS keeps its bytes — orphans there wait on a collector we have not
 built.
@@ -327,7 +327,7 @@ built.
 The condition is the whole rule: **absence in the input has to mean
 deletion.** For an input that is itself an evicting cache it means "not
 cached here," and the wipe destroys real history — which is why
-[`beeper`](/datalib/backend/etl/providers/beeper/DOWNLOAD.md) must not
+[`beeper`](/datalib/backend/etl/providers/beeper/INGEST.md) must not
 use it. A partial export of a normally-complete source is the same trap.
 
 ### What limits it
@@ -546,7 +546,7 @@ Current consumers, and what each does when the knob widens:
 | yolink | `devices[].start` | Re-walk that device from the new start |
 
 The longest write-up of the reasoning, including what is deliberately
-*not* recorded and why, is `providers/slack/DOWNLOAD.md` § "Config
+*not* recorded and why, is `providers/slack/INGEST.md` § "Config
 changes the cursor would otherwise swallow".
 
 Render has the same failure mode and resolves it differently —
@@ -557,7 +557,7 @@ wholesale invalidation rather than a proportional reaction. See
 Two patterns:
 
 - **Most providers**: shell out to `latchkey curl` (see [`backend/etl/src/latchkey.rs`](/datalib/backend/etl/src/latchkey.rs)). Auth lives in the latchkey keyring, indexed by URL host. The provider's HTTP transport never sees the bearer token.
-- **Yolink**: latchkey doesn't know about `us.yosmart.com`, and the consumer download path isn't bearer-authed — the URL itself is signed (`build_signed_url` in [`providers/yolink/src/download/mod.rs`](/datalib/backend/etl/providers/yolink/src/download/mod.rs)). Per-device secrets live in config (REDACT before publishing).
+- **Yolink**: latchkey doesn't know about `us.yosmart.com`, and the consumer download path isn't bearer-authed — the URL itself is signed (`build_signed_url` in [`providers/yolink/src/ingest/mod.rs`](/datalib/backend/etl/providers/yolink/src/ingest/mod.rs)). Per-device secrets live in config (REDACT before publishing).
 
 If you add a new provider with a new auth shape, prefer extending latchkey upstream before adding a third pattern.
 

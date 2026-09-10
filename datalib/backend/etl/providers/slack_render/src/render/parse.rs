@@ -12,9 +12,9 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl_slack::download::db::db_path_for;
-use datalib_etl_slack::download::schema_raw::slack_thread_uuid;
-use datalib_etl_slack::download::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
+use datalib_etl_slack::ingest::db::db_path_for;
+use datalib_etl_slack::ingest::schema_raw::slack_thread_uuid;
+use datalib_etl_slack::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 use super::{ts_to_iso, Channel, Message, User, Workspace};
 
@@ -351,7 +351,7 @@ async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
                 channel_id: id,
                 name,
                 is_dm: r.try_get::<Option<i64>, _>("is_dm").ok().flatten() == Some(1),
-                dm_user_ids: datalib_etl_slack::download::schema_raw::parse_dm_user_ids(
+                dm_user_ids: datalib_etl_slack::ingest::schema_raw::parse_dm_user_ids(
                     r.try_get::<Option<String>, _>("dm_user_ids")
                         .ok()
                         .flatten()
@@ -672,7 +672,7 @@ fn ingest_channel(c: &Value, out: &mut BTreeMap<String, Channel>) {
             name: opt_str(c, "name"),
             is_dm,
             dm_user_ids: if is_dm {
-                datalib_etl_slack::download::db::dm_participants(c, is_im)
+                datalib_etl_slack::ingest::db::dm_participants(c, is_im)
             } else {
                 Vec::new()
             },

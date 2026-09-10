@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use datalib_etl::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_claude::download::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
+use datalib_etl_claude::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_claude::synthesize::{ClaudeSynth, BASE, DETAIL_QUERY};
 use serde_json::json;
 use tempfile::tempdir;

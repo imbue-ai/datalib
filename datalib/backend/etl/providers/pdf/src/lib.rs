@@ -2,5 +2,5 @@
 //! them in a content-keyed raw store. Converting the readable ones to
 //! markdown lives in [`datalib_etl_pdf_render`].
 
-pub mod download;
+pub mod ingest;
 pub mod processor;

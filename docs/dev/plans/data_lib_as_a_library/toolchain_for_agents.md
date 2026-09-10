@@ -461,6 +461,6 @@ already has.
 - [`multimodal_retrieval.md`](../multimodal_retrieval.md) — the
   retrieval design §4's corpus would give a number to.
 - [`applets.md`](../../applets.md) — the mechanism behind Surface C.
-- [`/datalib/backend/etl/providers/pdf/src/download/schema_raw.rs`](/datalib/backend/etl/providers/pdf/src/download/schema_raw.rs)
+- [`/datalib/backend/etl/providers/pdf/src/ingest/schema_raw.rs`](/datalib/backend/etl/providers/pdf/src/ingest/schema_raw.rs)
   — the content-vs-path identity argument, and the template Surface B
   should be built from.

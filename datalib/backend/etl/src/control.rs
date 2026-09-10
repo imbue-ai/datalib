@@ -1,9 +1,9 @@
-//! Shared cross-provider knobs for `download::fetch`.
+//! Shared cross-provider knobs for `ingest::fetch`.
 
 /// Cross-provider download-time knobs.
 #[derive(Debug, Clone, Default)]
 pub struct DownloadControl {
-    /// When true, the provider's `download::fetch` truncates every
+    /// When true, the provider's `ingest::fetch` truncates every
     /// data + bookkeeping table in its raw doltlite DB before
     /// fetching, so the run re-downloads every entity row from
     /// upstream. Paired with a fresh `dolt_commit` at the end, the
@@ -12,7 +12,7 @@ pub struct DownloadControl {
     /// bookkeeping sidecars are not part of the data diff.
     pub reset_and_redownload: bool,
 
-    /// When true, the provider's `download::fetch` clears the
+    /// When true, the provider's `ingest::fetch` clears the
     /// `blake3` column on its CAS edge table before fetching, so
     /// every attachment is re-fetched on the wire even when its bytes
     /// are already in the sibling CAS file. The edge rows themselves
