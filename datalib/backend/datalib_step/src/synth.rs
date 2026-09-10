@@ -1,7 +1,8 @@
 //! The `synthesize` subcommand: build HTTP playback fixtures for one
-//! source, reading its `input_path` (interpreted as a checked-in raw
-//! fixture tree) and writing replay tapes into `--out`. A dev utility,
-//! not a step: it takes the group id from `--name`, not the environment.
+//! source, reading a checked-in raw fixture tree (`--params` may name it
+//! as `fixture_path`; else the group's ingest tree) and writing replay
+//! tapes into `--out`. A dev utility, not a step: it takes the group id
+//! from `--name`, not the environment.
 
 use std::path::{Path, PathBuf};
 
@@ -20,17 +21,10 @@ pub fn run(
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
     std::fs::create_dir_all(out).with_context(|| format!("create {}", out.display()))?;
-    // input_path, resolved like SourceCommon::resolve_paths: explicit
-    // (tilde-expanded) else the group's ingest tree.
-    let input: PathBuf = match source
-        .pointer("/common/input_path")
-        .and_then(|v| v.as_str())
-    {
-        Some(p) if p.starts_with("~/") => match std::env::var("HOME") {
-            Ok(home) => Path::new(&home).join(&p[2..]),
-            Err(_) => PathBuf::from(p),
-        },
-        Some(p) => PathBuf::from(p),
+    // The fixture tree: explicit (tilde-expanded) else the group's
+    // ingest tree. A synth-only key, not a method table.
+    let input: PathBuf = match source.get("fixture_path").and_then(|v| v.as_str()) {
+        Some(p) => datalib_source_common::expand_tilde(Path::new(p)),
         None => datalib_etl::layout::ingest_root(data_root, name),
     };
     let log = |msg: String| {
@@ -42,25 +36,24 @@ pub fn run(
     };
 
     let synth: Box<dyn Synthesizer> = match step_type {
-        // `claude_export` is deliberately absent: its download reads an
-        // export off disk and makes no requests, so there is no HTTP to
-        // play back.
-        "claude_api" => Box::new(datalib_etl_claude::synthesize::ClaudeSynth::new(
+        // Only the API side of claude makes requests; an export ingest
+        // has no HTTP to play back, and synthesizes the same tapes.
+        "claude" => Box::new(datalib_etl_claude::synthesize::ClaudeSynth::new(
             input.clone(),
         )),
-        "chatgpt_api" => Box::new(datalib_etl_chatgpt::synthesize::ChatgptSynth::new(
+        "chatgpt" => Box::new(datalib_etl_chatgpt::synthesize::ChatgptSynth::new(
             input.clone(),
         )),
-        "slack_api" => Box::new(datalib_etl_slack::synthesize::SlackSynth::new(
+        "slack" => Box::new(datalib_etl_slack::synthesize::SlackSynth::new(
             input.clone(),
         )),
-        "github_api" => Box::new(datalib_etl_github::synthesize::GithubSynth::new(
+        "github" => Box::new(datalib_etl_github::synthesize::GithubSynth::new(
             input.clone(),
         )),
-        "gitlab_api" => Box::new(datalib_etl_gitlab::synthesize::GitlabSynth::new(
+        "gitlab" => Box::new(datalib_etl_gitlab::synthesize::GitlabSynth::new(
             input.clone(),
         )),
-        "notion_api" => Box::new(datalib_etl_notion::synthesize::NotionSynth::new(
+        "notion" => Box::new(datalib_etl_notion::synthesize::NotionSynth::new(
             input.clone(),
         )),
         "beeper" => Box::new(datalib_etl_beeper::synthesize::BeeperSynth::new(

@@ -2,19 +2,22 @@
 //! (serde + anyhow), so the orchestrator can name [`PdfConfig`] without
 //! linking the provider.
 
-use datalib_source_common::SourceCommon;
+use datalib_source_common::{LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The pdf-owned slice of a `pdf` source. The scan root is
-/// `common.input_path`.
+/// `fswalk.path`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PdfConfig {
     /// Shared per-source envelope (paths + cross-source tunables),
-    /// resolved by the orchestrator's `normalize()`. The scanned tree is
-    /// `input_path`.
+    /// resolved by the orchestrator's `normalize()`.
     #[serde(default)]
     pub common: SourceCommon,
+
+    /// The tree to scan.
+    #[serde(default)]
+    pub fswalk: Option<LocalPath>,
 
     /// Gitignore-shaped patterns pruned from the scan, in addition to
     /// any `.gitignore` files found in the tree. Matched by the
@@ -62,9 +65,7 @@ pub type PdfRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for PdfConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::local(
-            "common.input_path",
-        )];
+        &[datalib_source_common::IngestMethod::local("fswalk")];
 }
 
 #[cfg(test)]

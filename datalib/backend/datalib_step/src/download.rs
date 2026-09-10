@@ -24,8 +24,7 @@ pub async fn run(
     };
     anyhow::ensure!(
         !processors.is_empty(),
-        "source {:?} (type={}) has no download work — it needs a `sync:` block \
-         (or a staged input_path for file-backed sources)",
+        "source {:?} (type={}) has no download work — its params name no ingest method",
         planned.name,
         planned.source_type
     );

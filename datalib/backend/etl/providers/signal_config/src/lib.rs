@@ -1,4 +1,4 @@
-//! Provider-owned config schema for the `signal_backup` source (Program A
+//! Provider-owned config schema for the `signal` source (Program A
 //! goal #1). Schema-only (serde + anyhow), so the orchestrator can name
 //! `SignalConfig` without linking the provider.
 
@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The signal-owned slice of a `signal_backup` source. `sync` (decrypt
-/// the newest snapshot under `snapshot_dir`) is its one way in; an
-/// `ingest` step without it is refused (`IngestMethods` below).
+/// The signal-owned slice of a `signal` source. `backup` (decrypt the
+/// newest snapshot under its `path`) is its one way in; an `ingest`
+/// step without it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SignalConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -17,7 +17,7 @@ pub struct SignalConfig {
     #[serde(default)]
     pub common: SourceCommon,
     #[serde(default)]
-    pub sync: Option<SignalSync>,
+    pub backup: Option<SignalSync>,
 }
 
 impl SignalConfig {
@@ -41,19 +41,18 @@ pub struct SignalRenderConfig {
     pub period: Option<String>,
 }
 
-/// Signal-Android directory-format backup sync knobs. The extractor finds the
-/// newest `signal-backup-*` subdir under `snapshot_dir`, decrypts it using the
-/// AEP read from `$aep_env_var` at download time, and UPSERTs frames into a
-/// doltlite raw store. No network; no credentials in this struct — the secret
+/// The `backup` table. The extractor finds the newest `signal-backup-*`
+/// subdir under `path`, decrypts it using the AEP read from
+/// `$aep_env_var` at download time, and UPSERTs frames into a doltlite
+/// raw store. No network; no credentials in this struct — the secret
 /// lives in the user's shell (or .envrc.private).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SignalSync {
     /// Directory containing one or more `signal-backup-*` snapshot
     /// subdirs (Signal Android's "Save backup" target). The newest is
-    /// ingested. Required; the source's `input_path` is reserved for
-    /// the raw doltlite store and defaults to `${data_root}/raw/<name>`.
-    pub snapshot_dir: PathBuf,
+    /// ingested.
+    pub path: PathBuf,
     /// Env var holding the AEP (Account Entropy Pool). Defaults to
     /// `SIGNAL_BACKUP_PASSPHRASE` when omitted. Overridable so a multi-account
     /// setup can scope per-account secrets at the shell layer.
@@ -67,8 +66,13 @@ pub struct SignalSync {
     pub period: Option<String>,
 }
 
-// `sync.snapshot_dir` is a backup on disk.
+impl SignalSync {
+    pub fn path(&self) -> PathBuf {
+        datalib_source_common::expand_tilde(&self.path)
+    }
+}
+
 impl datalib_source_common::IngestMethods for SignalConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::local("sync")];
+        &[datalib_source_common::IngestMethod::local("backup")];
 }

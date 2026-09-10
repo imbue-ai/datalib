@@ -12,7 +12,7 @@ use datalib_etl_yolink_config::{YolinkConfig, YolinkSync};
 
 use crate::download;
 
-/// Download wave: present iff `sync:` (managed).
+/// Download wave: present iff `api`.
 pub fn plan_download(
     ctx: PlanContext,
     config: YolinkConfig,
@@ -20,7 +20,7 @@ pub fn plan_download(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
-    if let Some(sync) = config.sync {
+    if let Some(sync) = config.api {
         procs.push(Box::new(YolinkDownload {
             id: format!("yolink/{name}/download"),
             raw_path,

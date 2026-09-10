@@ -10,13 +10,13 @@ data_root = "~/claude_data_liberated"
 
 [[groups]]
 id = "claude_chats"
-type = "claude_api"
+type = "claude"
 
 [[steps]]
 group = "claude_chats"
 function = "ingest"
 [steps.params]
-sync = {}
+api = {}
 
 [[steps]]
 group = "claude_chats"

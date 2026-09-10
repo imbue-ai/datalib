@@ -317,7 +317,7 @@ writes the tree `DATALIB_DAG_STEP` names, after checking that it is
 `<DATALIB_DAG_GROUP>/<DATALIB_DAG_FUNCTION>`; a render reads its raw
 store from the first entry of `DATALIB_DAG_INPUTS`. It reads
 `--params` as the provider's **function-specific** config — the ingest
-step carries the provider's download config (`common` envelope, `sync`
+step carries the provider's download config (`common` envelope, the method table
 block, …), the render step only the render knobs (nothing for most
 providers; beeper/signal `period`, perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW` and

@@ -11,23 +11,28 @@ whole.
 
 ## Supported data sources
 
+The `type` names the thing mirrored; *how* it comes in is a table on
+the source's ingest step named for the method (`api`, `export`,
+`backup`, `fswalk`, …), and a file-backed method carries its own
+`path`. See `docs/user/config_examples/all_sources.toml` for every
+shape.
+
 | Source | `type` | Input mode | What it mirrors |
 |--------|--------|------------|-----------------|
-| Claude.ai | `claude_api` | Web API (latchkey) | Conversations across every org |
-| Claude export | `claude_export` | File on disk | An unpacked Claude data export |
-| ChatGPT | `chatgpt_api` | Web API (latchkey) | Conversations |
-| Slack | `slack_api` | Web API (latchkey) | Channels + file attachments |
-| GitHub | `github_api` | Web API (latchkey) | Pull requests |
-| GitLab | `gitlab_api` | Web API (latchkey) | Merge requests |
-| Notion | `notion_api` | Web API (latchkey) | Pages (inbox + page subtrees) |
+| Claude | `claude` | Web API (latchkey) **or** an unpacked Claude data export | Conversations across every org, and projects |
+| ChatGPT | `chatgpt` | Web API (latchkey) | Conversations |
+| Slack | `slack` | Web API (latchkey) | Channels + file attachments |
+| GitHub | `github` | Web API (latchkey) | Pull requests |
+| GitLab | `gitlab` | Web API (latchkey) | Merge requests |
+| Notion | `notion` | Web API (latchkey) | Pages (inbox + page subtrees) |
 | Email | `email` | JMAP server (latchkey) **or** Google Takeout `.mbox` | Mail messages |
 | Google Takeout | `google_takeout` | Export tree on disk | Google Chat + Voice messages (rendered to markdown); Maps reviews / saved places / photos, YouTube watch history + subscriptions, and Gemini Apps activity (extracted to the raw store, not yet rendered) |
-| Contacts | `carddav` | CardDAV server (latchkey) **or** local `.vcf` files | Contacts |
+| Contacts | `contacts` | CardDAV server (latchkey) **or** local `.vcf` files | Contacts |
 | Beeper | `beeper` | Local Beeper Texts data dir | Signal, Google Chat, etc. |
 | Perseus | `perseus` | Download | TEI editions from PerseusDL |
 | YoLink | `yolink` | Web API | Per-device sensor CSV history, rendered as one page of interactive plots |
-| Signal | `signal_backup` | Android backup file | Messages + media |
-| WhatsApp | `whatsapp_backup` | Android `crypt15` backup | Messages + media |
+| Signal | `signal` | Android backup file | Messages + media |
+| WhatsApp | `whatsapp` | Android `crypt15` backup | Messages + media |
 | SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
 | Local files | `fsindex` | Local directory tree | An index of every entry (path, kind, size, blake3) — download-only, no rendered markdown |

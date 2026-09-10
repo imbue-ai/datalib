@@ -1,4 +1,4 @@
-//! Provider-owned config schema for the `slack_api` source (Program A goal #1).
+//! Provider-owned config schema for the `slack` source (Program A goal #1).
 //! Schema-only (serde + anyhow).
 
 use datalib_source_common::{LatchkeySettings, SourceCommon};
@@ -15,8 +15,9 @@ pub struct SlackConfig {
     /// forwarded whole to the download client — see [`LatchkeySettings`].
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
+    /// The live Slack API — the one way in.
     #[serde(default)]
-    pub sync: Option<SlackApiSync>,
+    pub api: Option<SlackApiSync>,
 }
 
 impl SlackConfig {
@@ -24,8 +25,8 @@ impl SlackConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
-        if let Some(sync) = &self.sync {
-            sync.validate()?;
+        if let Some(api) = &self.api {
+            api.validate()?;
         }
         Ok(())
     }
@@ -123,7 +124,7 @@ pub type SlackRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for SlackConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::origin("sync")];
+        &[datalib_source_common::IngestMethod::origin("api")];
 }
 
 #[cfg(test)]
@@ -171,16 +172,16 @@ mod tests {
         sync(false, Some(vec![])).validate().unwrap();
     }
 
-    /// `validate()` on the whole config has to reach the `sync` table,
+    /// `validate()` on the whole config has to reach the `api` table,
     /// which is the wiring the step dispatcher actually calls.
     #[test]
-    fn config_validate_reaches_sync() {
+    fn config_validate_reaches_api() {
         let cfg = SlackConfig {
-            sync: Some(sync(false, Some(vec!["alice"]))),
+            api: Some(sync(false, Some(vec!["alice"]))),
             ..Default::default()
         };
         assert!(cfg.validate().is_err());
-        // No `sync` table: nothing for the schema to check. Refusing an
+        // No `api` table: nothing for the schema to check. Refusing an
         // ingest step without one is `datalib-step`'s job.
         SlackConfig::default().validate().unwrap();
     }

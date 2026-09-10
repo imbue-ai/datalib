@@ -597,7 +597,7 @@ mod tests {
             r#"
 [[groups]]
 id = "slack"
-type = "slack_api"
+type = "slack"
 
 [[steps]]
 group = "slack"

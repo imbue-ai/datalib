@@ -134,13 +134,13 @@ mod tests {
 
     #[test]
     fn params_parse_verbatim_and_default_empty() {
-        let p = parse_params(Some(r#"{"sync":{"media":true}}"#)).unwrap();
-        assert_eq!(p["sync"]["media"], true);
+        let p = parse_params(Some(r#"{"api":{"media":true}}"#)).unwrap();
+        assert_eq!(p["api"]["media"], true);
         assert!(parse_params(None).unwrap().as_object().unwrap().is_empty());
         // A leftover old-format `type:` tag inside the params is passed
         // through; the provider config's deny_unknown/ignore rules
         // decide its fate downstream, not this layer.
-        assert!(parse_params(Some(r#"{"type":"slack_api"}"#)).is_ok());
+        assert!(parse_params(Some(r#"{"type":"slack"}"#)).is_ok());
     }
 
     #[test]
@@ -153,7 +153,7 @@ mod tests {
         StepEnv {
             step: step.into(),
             group: group.into(),
-            group_type: Some("slack_api".into()),
+            group_type: Some("slack".into()),
             function: Function::parse(function).unwrap(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
         }

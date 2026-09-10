@@ -194,7 +194,7 @@ test("a probe fills the label picker, and ticking a chip writes the filter", asy
   const toml = wizard(page).locator(".wiz-review pre");
   await expect(toml).toContainText('only_extract_labels = ["Bridge/Logs", "Inbox"]');
   // Presence of the table is what selects the mode; without it the
-  // provider falls through to the mbox path and fails at sync time.
+  // step names no method and is refused at sync time.
   await expect(toml).toContainText("[steps.params.gmail_api]");
   await expect(toml).toContainText('account = "picard@enterprise.gov"');
 });
@@ -261,7 +261,7 @@ test("Fastmail writes its JMAP host without asking, and shows folder counts", as
 
   expect(lastProbeRequest.params).toEqual({
     latchkey_settings: { account: "troi@betazed.example" },
-    sync: { hostname: "api.fastmail.com" },
+    jmap: { hostname: "api.fastmail.com" },
   });
 
   // JMAP reports counts for free. Nested folders keep their full path,

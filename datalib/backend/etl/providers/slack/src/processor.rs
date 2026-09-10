@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the slack_api source (download + render).
+//! Program-A `DataProcessor`s for the slack source (download + render).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use datalib_etl_slack_config::{SlackApiSync, SlackConfig};
 
 use crate::download;
 
-/// Download wave: present iff `sync:` (managed).
+/// Download wave: present iff `api`.
 pub fn plan_download(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
@@ -20,7 +20,7 @@ pub fn plan_download(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dy
     let event_tape_enabled = config.common.event_tape_enabled();
     let latchkey = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
-    if let Some(sync) = config.sync {
+    if let Some(sync) = config.api {
         procs.push(Box::new(SlackDownload {
             id: format!("slack/{name}/download"),
             raw_path,

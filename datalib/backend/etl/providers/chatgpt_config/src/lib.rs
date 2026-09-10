@@ -1,4 +1,4 @@
-//! Provider-owned config schema for the `chatgpt_api` source (Program A goal
+//! Provider-owned config schema for the `chatgpt` source (Program A goal
 //! #1). Schema-only (serde + anyhow).
 
 use datalib_source_common::{LatchkeySettings, SourceCommon};
@@ -15,8 +15,9 @@ pub struct ChatgptConfig {
     /// forwarded whole to the download client — see [`LatchkeySettings`].
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
+    /// The live ChatGPT API — the one way in.
     #[serde(default)]
-    pub sync: Option<ChatgptApiSync>,
+    pub api: Option<ChatgptApiSync>,
 }
 
 impl ChatgptConfig {
@@ -57,5 +58,5 @@ pub type ChatgptRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for ChatgptConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::origin("sync")];
+        &[datalib_source_common::IngestMethod::origin("api")];
 }

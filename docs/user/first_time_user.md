@@ -213,13 +213,13 @@ data_root = "~/datalib"
 [[groups]]
 id = "claude"
 name = "Claude"
-type = "claude_api"
+type = "claude"
 
 [[steps]]
 group = "claude"
 function = "ingest"
 [steps.params]
-sync = {}
+api = {}
 
 [[steps]]
 group = "claude"

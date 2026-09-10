@@ -119,7 +119,7 @@ test.describe("a real sync, driven from the grid", () => {
   // A step's `command` is split shell-style, so a binary path is
   // single-quoted: the runfiles path contains a space whenever the
   // checkout does, and an unquoted one is split into `/Users/thad/Imbue`
-  // and the rest ("spawn …: Permission denied"). `input_path` is a TOML
+  // and the rest ("spawn …: Permission denied"). `fswalk.path` is a TOML
   // value, not argv, so it needs no such treatment.
   //
   // The render step needs no params: it reads the scan root back out of
@@ -142,8 +142,8 @@ type = "pdf"
 group = "pdfs"
 function = "ingest"
 command = "'${STEP_BIN}'"
-[steps.params.common]
-input_path = "${PDF_DIR}"
+[steps.params.fswalk]
+path = "${PDF_DIR}"
 
 [[steps]]
 group = "pdfs"
@@ -159,8 +159,8 @@ type = "fsindex"
 group = "docs"
 function = "ingest"
 command = "'${STEP_BIN}'"
-[steps.params.common]
-input_path = "${dataRoot}/fsindex_scan"
+[steps.params.fswalk]
+path = "${dataRoot}/fsindex_scan"
 
 # Declared and never synced by any test in this file, so "never run" is
 # a state the grid can be observed handling — a Last synced of "—", and
@@ -176,8 +176,8 @@ type = "fsindex"
 group = "unsynced"
 function = "ingest"
 command = "'${STEP_BIN}'"
-[steps.params.common]
-input_path = "${dataRoot}/fsindex_scan"
+[steps.params.fswalk]
+path = "${dataRoot}/fsindex_scan"
 ${applets()}`;
 
   test("syncing one source leaves another source's history untouched", async ({

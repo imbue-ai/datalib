@@ -1,6 +1,6 @@
-//! Program-A `DataProcessor`s for the carddav source. Carddav contributes
-//! an **download** processor ([`CarddavDownload`] — live CardDAV server sync
-//! or file-backed `.vcf` ingest, chosen by config) and a **render**
+//! Program-A `DataProcessor`s for the contacts source. Contacts contributes
+//! a **download** processor ([`CarddavDownload`] — live CardDAV server sync
+//! or file-backed `.vcf` ingest, chosen by which method table is set) and a **render**
 //! processor ([`CarddavRender`]). [`plan_download`] / [`plan_render`] build the
 //! per-wave processors the orchestrator drives, owning every carddav-specific decision (which
 //! download mode) so the orchestrator destructures nothing.
@@ -18,23 +18,24 @@ use datalib_etl_carddav_config::{CarddavConfig, CarddavSync};
 
 use crate::download;
 
-/// Download wave: always present. `sync:` present → live CardDAV
-/// server; absent → file mode (`.vcf` tree under input_path, no
-/// account override).
+/// Download wave: `carddav` → live CardDAV server; `vcf` → file mode
+/// (`.vcf` tree under its `path`, no account override).
 pub fn plan_download(
     ctx: PlanContext,
     config: CarddavConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let input_path = config.common.input_or_raw_path().to_path_buf();
     let latchkey = config.latchkey_settings.clone();
-    let mode = match config.sync {
-        Some(sync) => DownloadMode::Server(sync),
-        None => DownloadMode::File {
-            input_path,
+    let mode = match (config.carddav, config.vcf) {
+        (Some(sync), _) => DownloadMode::Server(sync),
+        (None, Some(vcf)) => DownloadMode::File {
+            input_path: vcf.path(),
             account_id_override: None,
         },
+        (None, None) => anyhow::bail!(
+            "contacts source {name} names neither `carddav` (a server) nor `vcf` (a directory of .vcf files)"
+        ),
     };
     Ok(vec![Box::new(CarddavDownload {
         id: format!("carddav/{name}/download"),

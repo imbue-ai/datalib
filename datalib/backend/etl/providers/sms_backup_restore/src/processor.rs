@@ -3,7 +3,7 @@
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
@@ -17,7 +17,10 @@ pub fn plan_download(
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let input_path = config.common.input_or_raw_path().to_path_buf();
+    let input_path = config
+        .backup
+        .ok_or_else(|| anyhow!("sms_backup_restore source {name} missing `backup.path`"))?
+        .path();
     Ok(vec![Box::new(SmsDownload {
         id: format!("sms_backup_restore/{name}/download"),
         raw_path,

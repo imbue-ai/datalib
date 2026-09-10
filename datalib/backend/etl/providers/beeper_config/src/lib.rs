@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use datalib_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The beeper-owned slice of a `beeper` source. `sync` (the Beeper Texts
-/// ingest) is its one way in; an `ingest` step without it is refused
-/// (`IngestMethods` below).
+/// The beeper-owned slice of a `beeper` source. `texts` — the Beeper
+/// Texts desktop app's own database — is its one way in; an `ingest`
+/// step without it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BeeperConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -17,7 +17,7 @@ pub struct BeeperConfig {
     #[serde(default)]
     pub common: SourceCommon,
     #[serde(default)]
-    pub sync: Option<BeeperSync>,
+    pub texts: Option<BeeperSync>,
 }
 
 impl BeeperConfig {
@@ -43,7 +43,8 @@ pub struct BeeperRenderConfig {
     pub period: Option<String>,
 }
 
-/// Beeper Texts ingest knobs (which networks, where, media, period).
+/// The `texts` table: which networks to read out of Beeper Texts, where
+/// its data directory is, and whether to copy media.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BeeperSync {
@@ -53,10 +54,10 @@ pub struct BeeperSync {
     /// one explicitly.
     #[serde(default)]
     pub sources: Vec<String>,
-    /// Override for Beeper Texts' data dir. Defaults to
+    /// Beeper Texts' data directory. Defaults to
     /// `~/Library/Application Support/BeeperTexts` on macOS.
     #[serde(default)]
-    pub beeper_data_dir: Option<PathBuf>,
+    pub path: Option<PathBuf>,
     /// Copy cached media bytes into the `blobs` table. Off = metadata
     /// + source URL only.
     #[serde(default = "default_true")]
@@ -73,9 +74,17 @@ fn default_true() -> bool {
     true
 }
 
-// Beeper Texts' own SQLite, read off this machine: `sync` selects the
-// ingest, and nothing reaches a service.
+impl BeeperSync {
+    pub fn path(&self) -> Option<PathBuf> {
+        self.path
+            .as_deref()
+            .map(datalib_source_common::expand_tilde)
+    }
+}
+
+// Beeper Texts' own SQLite, read off this machine: nothing reaches a
+// service.
 impl datalib_source_common::IngestMethods for BeeperConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::local("sync")];
+        &[datalib_source_common::IngestMethod::local("texts")];
 }

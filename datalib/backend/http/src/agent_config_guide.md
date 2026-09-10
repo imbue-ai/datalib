@@ -52,7 +52,7 @@ source's rendered markdown feeds the two fan-in steps under the
 [[groups]]
 id = "slack"
 name = "Work Slack"
-type = "slack_api"
+type = "slack"
 
 [[steps]]
 group = "slack"

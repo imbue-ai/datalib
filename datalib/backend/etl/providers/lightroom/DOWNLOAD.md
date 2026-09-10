@@ -396,8 +396,8 @@ type = "lightroom"
 [[steps]]
 group = "lightroom"
 function = "ingest"
-[steps.params.common]
-input_path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
+[steps.params.catalog]
+path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 ```
 
 Or standalone:

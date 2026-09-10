@@ -5,8 +5,8 @@
 // is spelled out in `sourceSteps.ts` and nowhere else. What a snippet
 // adds is a hand-written params body for the ingest step: several of
 // these providers have no wizard form, and some carry params the
-// catalog does not model (`carddav`'s `common.input_path`), which is
-// why they go through `stepToml` rather than `buildSource`. Credentials
+// catalog does not model (`contacts`' `vcf.path`), which is why they go
+// through `stepToml` rather than `buildSource`. Credentials
 // are never here — they come from latchkey at runtime. Bodies are
 // functions so date-dependent parts (Slack's `since`) and the
 // install-specific latchkey CLI hint are computed at click time.
@@ -37,8 +37,8 @@ export const SNIPPETS: Snippet[] = [
     body: (lk) =>
       source(
         "claude",
-        "claude_api",
-        "[steps.params]\nsync = {}",
+        "claude",
+        "[steps.params]\napi = {}",
         `# Prerequisite (one-time): register claude.ai with latchkey and
 # supply your sessionKey cookie (DevTools → Application → Cookies):
 #   ${lk} services register claude-ai --base-api-url="https://claude.ai/"
@@ -49,7 +49,7 @@ export const SNIPPETS: Snippet[] = [
   },
   {
     label: "ChatGPT",
-    body: () => source("chatgpt", "chatgpt_api", "[steps.params]\nsync = {}"),
+    body: () => source("chatgpt", "chatgpt", "[steps.params]\napi = {}"),
   },
   {
     // `since` starts the backfill 30 days back so the first sync stays
@@ -58,8 +58,8 @@ export const SNIPPETS: Snippet[] = [
     body: () =>
       source(
         "slack",
-        "slack_api",
-        `[steps.params.sync]
+        "slack",
+        `[steps.params.api]
 media = true
 channels = ["general"]
 since = "${isoDaysAgo(30)}"`,
@@ -67,11 +67,11 @@ since = "${isoDaysAgo(30)}"`,
   },
   {
     label: "GitHub",
-    body: () => source("github", "github_api", "[steps.params]\nsync = {}"),
+    body: () => source("github", "github", "[steps.params]\napi = {}"),
   },
   {
     label: "GitLab",
-    body: () => source("gitlab", "gitlab_api", "[steps.params]\nsync = {}"),
+    body: () => source("gitlab", "gitlab", "[steps.params]\napi = {}"),
   },
   {
     label: "Email (JMAP)",
@@ -79,26 +79,26 @@ since = "${isoDaysAgo(30)}"`,
       source(
         "fastmail",
         "email",
-        `[steps.params.sync]
+        `[steps.params.jmap]
 hostname = "api.fastmail.com"`,
       ),
   },
   {
-    // `input_path` is part of the shared per-source envelope, so it
-    // lives under `common`, not at the top of the params.
+    // The `vcf` table is the method: a directory of .vcf files.
     label: "Contacts (vCard)",
     body: () =>
       source(
         "contacts",
-        "carddav",
-        `[steps.params.common]
-input_path = "~/Downloads/contacts.vcf"`,
+        "contacts",
+        `[steps.params.vcf]
+path = "~/Downloads/contacts"`,
       ),
   },
   {
-    // Sample public source — no latchkey needed. Bare `sync = {}` pulls
-    // the default Thucydides Histories (Greek + English) from PerseusDL.
+    // Sample public source — no latchkey needed. Bare `github = {}`
+    // pulls the default Thucydides Histories (Greek + English) from
+    // PerseusDL.
     label: "Perseus (sample)",
-    body: () => source("perseus", "perseus", "[steps.params]\nsync = {}"),
+    body: () => source("perseus", "perseus", "[steps.params]\ngithub = {}"),
   },
 ];

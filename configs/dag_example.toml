@@ -1,15 +1,4 @@
-# DAG config (run with `datalib-dag`), equivalent to the retired
-# stanza config:
-#
-#   sources:
-#     - name: slack
-#       source:
-#         type: slack_api
-#         sync: {media: true, channels: ["chat-qi"], since: "2026-06-15"}
-#     - name: claude
-#       source:
-#         type: claude_api
-#         sync: {conv_uuids: ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]}
+# DAG config (run with `datalib-dag`): two sources and the index.
 #
 # Three kinds of entry. A `[[groups]]` entry is one thing on the
 # Manage screen — a source is a group with a `type`, and the unified
@@ -28,9 +17,11 @@
 # (bring the data in), `render_markdown` (turn the raw store into
 # markdown), and the two fan-ins `grid_index` and `qmd_index` over
 # every render_markdown tree. `params` is per-function — the ingest
-# step carries the provider's download config, the render step only
-# render knobs (none for most providers; e.g. beeper's `period`,
-# perseus's `alignment_pairs`).
+# step carries the provider's config, with the way the data comes in
+# as one table named for the method (`api` for a live service; a
+# file-backed one such as `export` or `backup` carries its own `path`),
+# and the render step only render knobs (none for most providers;
+# e.g. beeper's `period`, perseus's `alignment_pairs`).
 #
 # TOML shape: one `[[…]]` table per entry, with a step's `params` as
 # `[steps.params.…]` sub-tables. A table header ends the table it sits
@@ -72,12 +63,12 @@ data_root = "~/tmp/dr-dag"
 [[groups]]
 id = "slack"
 name = "Work Slack"
-type = "slack_api"
+type = "slack"
 
 [[steps]]
 group = "slack"
 function = "ingest"
-[steps.params.sync]
+[steps.params.api]
 media = true
 channels = ["chat-qi"]
 since = "2026-06-15"
@@ -95,12 +86,12 @@ inputs = ["slack/ingest"]
 # See docs/user/getting_your_data.md for the full walkthrough.
 [[groups]]
 id = "claude"
-type = "claude_api"
+type = "claude"
 
 [[steps]]
 group = "claude"
 function = "ingest"
-[steps.params.sync]
+[steps.params.api]
 conv_uuids = ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
 
 [[steps]]

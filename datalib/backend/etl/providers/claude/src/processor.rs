@@ -1,4 +1,5 @@
-//! Program-A `DataProcessor`s for the Claude source types.
+//! Program-A `DataProcessor`s for the `claude` source: the live API
+//! walk and the export ingest, writing one raw store.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -8,51 +9,34 @@ use async_trait::async_trait;
 
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use datalib_etl_claude_config::{ClaudeApiSync, ClaudeConfig, ClaudeExportConfig};
+use datalib_etl_claude_config::{ClaudeApiSync, ClaudeConfig};
 
 use crate::download;
 
+/// Download wave: `api` walks claude.ai, `export` ingests an unpacked
+/// bulk export from its `path`. `validate` has already refused both.
 pub fn plan_download(
     ctx: PlanContext,
     config: ClaudeConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let latchkey_settings = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
-    if let Some(sync) = config.sync {
+    if let Some(sync) = config.api {
         procs.push(Box::new(ClaudeDownload {
             id: format!("claude/{name}/download"),
             raw_path,
             sync,
-            latchkey: latchkey_settings,
+            latchkey: config.latchkey_settings.clone(),
+        }));
+    } else if let Some(export) = config.export {
+        procs.push(Box::new(ClaudeExportIngest {
+            id: format!("claude/{name}/download"),
+            raw_path,
+            input_path: export.path(),
         }));
     }
     Ok(procs)
-}
-
-/// `claude_export` download wave: always present. Ingests the unpacked
-/// export at `common.input_path` into the raw store at
-/// `common.raw_path` — the same `input_path` / `raw_path` split every
-/// other file-backed source uses.
-pub fn plan_export_download(
-    ctx: PlanContext,
-    config: ClaudeExportConfig,
-) -> Result<Vec<Box<dyn DataProcessor>>> {
-    let name = ctx.name;
-    // Without one, `input_or_raw_path()` would fall back to the raw dir
-    // and we would ingest the store into itself — which reads as an
-    // export with nothing in it. Say so instead.
-    let Some(input_path) = config.common.input_path.clone() else {
-        anyhow::bail!(
-            "claude_export needs `common.input_path` set to the directory you              unpacked the Claude export into (the one holding conversations.json)"
-        );
-    };
-    Ok(vec![Box::new(ClaudeExportIngest {
-        id: format!("claude/{name}/download"),
-        raw_path: config.common.raw_path().to_path_buf(),
-        input_path,
-    })])
 }
 
 struct ClaudeDownload {
@@ -136,8 +120,8 @@ impl DataProcessor for ClaudeDownload {
     }
 }
 
-/// `claude_export`'s download processor: an unpacked bulk export on
-/// disk becomes rows in the same raw store the API downloader writes.
+/// The export ingest: an unpacked bulk export on disk becomes rows in
+/// the same raw store the API downloader writes.
 struct ClaudeExportIngest {
     id: String,
     raw_path: PathBuf,

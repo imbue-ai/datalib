@@ -1,12 +1,12 @@
-//! Provider-owned config schema for the `notion_api` source. Schema-only
+//! Provider-owned config schema for the `notion` source. Schema-only
 //! (serde + anyhow), so the orchestrator and `http` can name
 //! `NotionConfig` without linking the provider.
 
 use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The notion-owned slice of a `notion_api` source. `sync` is its one
-/// way in; an `ingest` step without it is refused (`IngestMethods` below).
+/// The notion-owned slice of a `notion` source. `api` is its one way
+/// in; an `ingest` step without it is refused (`IngestMethods` below).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NotionConfig {
     #[serde(default)]
@@ -19,7 +19,7 @@ pub struct NotionConfig {
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
     #[serde(default)]
-    pub sync: Option<NotionSync>,
+    pub api: Option<NotionSync>,
 }
 
 impl NotionConfig {
@@ -27,8 +27,8 @@ impl NotionConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
-        if let Some(sync) = &self.sync {
-            sync.validate()?;
+        if let Some(api) = &self.api {
+            api.validate()?;
         }
         Ok(())
     }
@@ -70,7 +70,7 @@ impl NotionSync {
     pub fn validate(&self) -> anyhow::Result<()> {
         if let Some(0) = self.max_pages {
             return Err(anyhow::anyhow!(
-                "notion_api sync.max_pages = 0 mirrors nothing; omit it for no limit"
+                "notion `api.max_pages = 0` mirrors nothing; omit it for no limit"
             ));
         }
         Ok(())
@@ -87,7 +87,7 @@ pub type NotionRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for NotionConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::origin("sync")];
+        &[datalib_source_common::IngestMethod::origin("api")];
 }
 
 #[cfg(test)]
@@ -99,32 +99,32 @@ mod tests {
         assert!(NotionConfig::default().validate().is_ok());
     }
 
-    /// The rule this replaces: the old schema *rejected* a sync block
+    /// The rule this replaces: the old schema *rejected* an api block
     /// that named neither an inbox nor a subtree page, because there
     /// was no way to discover pages without a seed. Search removed that
-    /// constraint, so an empty sync block is now the whole-workspace
+    /// constraint, so an empty api block is now the whole-workspace
     /// mirror and must validate.
     #[test]
-    fn empty_sync_means_whole_workspace_and_validates() {
+    fn empty_api_means_whole_workspace_and_validates() {
         let cfg = NotionConfig {
-            sync: Some(NotionSync::default()),
+            api: Some(NotionSync::default()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
-        assert!(cfg.sync.unwrap().roots.is_empty());
+        assert!(cfg.api.unwrap().roots.is_empty());
     }
 
     #[test]
     fn roots_narrow_the_mirror() {
         let cfg: NotionConfig = serde_json::from_str(
-            r#"{"sync":{"roots":["https://app.notion.com/p/Proj-348a550faf9580a08973e679d9e1c6c9"]}}"#,
+            r#"{"api":{"roots":["https://app.notion.com/p/Proj-348a550faf9580a08973e679d9e1c6c9"]}}"#,
         )
         .unwrap();
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.sync.unwrap().roots.len(), 1);
+        assert_eq!(cfg.api.unwrap().roots.len(), 1);
     }
 
-    /// The three include-toggles default ON, so a bare `sync = {}`
+    /// The three include-toggles default ON, so a bare `api = {}`
     /// mirrors everything rather than quietly mirroring only bodies.
     #[test]
     fn include_toggles_default_on() {
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn zero_max_pages_is_rejected() {
         let cfg = NotionConfig {
-            sync: Some(NotionSync {
+            api: Some(NotionSync {
                 max_pages: Some(0),
                 ..Default::default()
             }),

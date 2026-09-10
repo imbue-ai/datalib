@@ -95,7 +95,7 @@ pub fn auth_hint_for(source_type: SourceType) -> String {
         // the pasteboard, then the printed `… auth set …` command
         // expands `$(pbpaste)` at exec time. zsh/bash record the literal
         // `$(pbpaste)`, not the resolved value.
-        "chatgpt_api" => {
+        "chatgpt" => {
             "\
 chatgpt access token expired or missing.
 
@@ -122,7 +122,7 @@ chatgpt access token expired or missing.
 
 See datalib/backend/etl/providers/chatgpt/DOWNLOAD.md for details."
         }
-        "claude_api" => {
+        "claude" => {
             "\
 Claude sessionKey expired or missing.
 
@@ -138,7 +138,7 @@ Claude sessionKey expired or missing.
 
 See datalib/backend/etl/providers/claude/DOWNLOAD.md for details."
         }
-        "slack_api" => {
+        "slack" => {
             "\
 slack token expired or missing.
 
@@ -151,7 +151,7 @@ slack token expired or missing.
 
 See datalib/backend/etl/providers/slack/DOWNLOAD.md for details."
         }
-        "github_api" => {
+        "github" => {
             "\
 github PAT expired or missing.
 
@@ -164,7 +164,7 @@ github PAT expired or missing.
 
 See datalib/backend/etl/providers/github/DOWNLOAD.md for details."
         }
-        "gitlab_api" => {
+        "gitlab" => {
             "\
 gitlab token expired or missing.
 
@@ -177,7 +177,7 @@ gitlab token expired or missing.
 
 See datalib/backend/etl/providers/gitlab/DOWNLOAD.md for details."
         }
-        "notion_api" => {
+        "notion" => {
             "\
 notion integration token expired or missing.
 
@@ -240,8 +240,8 @@ beeper download reads Beeper Texts' on-disk SQLite. No auth dance.
   1. Make sure Beeper Texts is installed and has run at least once
      so its data dir exists. Default path:
        ~/Library/Application Support/BeeperTexts/index.db
-     (Pass --beeper-data-dir or set `beeper_data_dir:` in the source's
-     sync block to override.)
+     (Pass --beeper-data-dir, or set `path` in the source's `texts`
+     table, to override.)
   2. Confirm read access (Application Support is NOT Full Disk Access
      protected, so this should just work):
        sqlite3 ~/Library/Application\\ Support/BeeperTexts/index.db \\
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn auth_hint_resolves_latchkey_placeholder() {
-        let hint = auth_hint_for(SourceType::SlackApi);
+        let hint = auth_hint_for(SourceType::Slack);
         assert!(!hint.contains("{LK}"), "placeholder must be substituted");
         assert!(hint.contains("auth set slack"));
         // A type with no hint of its own gets the generic text.

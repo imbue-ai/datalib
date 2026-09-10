@@ -89,7 +89,7 @@ test("the Source column shows the configured name, and source_name: filters by i
 [[groups]]
 id = "slack"
 name = "Work Slack"
-type = "slack_api"
+type = "slack"
 
 [[steps]]
 group = "slack"

@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
@@ -18,7 +18,11 @@ pub fn plan_download(
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let input_path = config.common.input_or_raw_path().to_path_buf();
+    let input_path = config
+        .export
+        .as_ref()
+        .ok_or_else(|| anyhow!("linkedin source {name} missing `export.path`"))?
+        .path();
     let max_sequential_failures = config.common.download_params.max_sequential_failures();
     Ok(vec![Box::new(LinkedinDownload {
         id: format!("linkedin/{name}/download"),

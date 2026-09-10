@@ -53,6 +53,7 @@ import {
   type StoredAccount,
 } from "@/api";
 import { iconUrl } from "@/config/icons";
+import { ingestReach } from "@/config/ingestMethods";
 import { isDesktopApp, pickPath } from "@/desktop";
 
 const props = defineProps<{
@@ -320,8 +321,24 @@ async function browse(f: Field) {
 
 // Connection: which latchkey account, and what it can reach
 
-/// The latchkey service this descriptor authenticates against.
-const service = computed(() => chosen.value?.credentialService ?? null);
+/// The params a probe authenticates with: the ingest step's, as this
+/// form would write them. That is where the credentials and the mode
+/// live, and the render step's pickers are filled from the same answer.
+const probeParams = computed<Record<string, unknown> | null>(() =>
+  chosen.value ? paramsObject(chosen.value, values.value, "download") : null,
+);
+
+/// The latchkey service this source authenticates against — and only
+/// while the params the form would write reach an origin. An import
+/// (`ingestReach` says `local`) has nothing to log in to, however the
+/// descriptor is labelled, so it gets no Connection section.
+const service = computed(() => {
+  const entry = chosen.value;
+  if (!entry?.credentialService) return null;
+  return ingestReach(entry.type, probeParams.value ?? {}) === "origin"
+    ? entry.credentialService
+    : null;
+});
 
 /// The one field, if any, that holds a latchkey account. There is at
 /// most one per descriptor: a step mirrors one identity.
@@ -412,12 +429,6 @@ const probe = ref<{
   report: ProbeReport | null;
 }>({ state: "idle", message: "", report: null });
 
-/// The params a probe authenticates with: the ingest step's, as this
-/// form would write them. That is where the credentials and the mode
-/// live, and the render step's pickers are filled from the same answer.
-const probeParams = computed<Record<string, unknown> | null>(() =>
-  chosen.value ? paramsObject(chosen.value, values.value, "download") : null,
-);
 
 /// Can "Test connection" be offered here at all?
 const canProbe = computed(() => !!chosen.value?.canProbe && !!probeParams.value);

@@ -1,13 +1,15 @@
-//! Provider-owned config schema for the `claude_api` / `claude_export` sources
-//! (Program A goal #1). Schema-only (serde + anyhow), so the orchestrator and
-//! `http` can name `ClaudeConfig` without linking the provider.
+//! Provider-owned config schema for the `claude` source (Program A goal
+//! #1). Schema-only (serde + anyhow), so the orchestrator and `http` can
+//! name `ClaudeConfig` without linking the provider.
 
-use datalib_source_common::{LatchkeySettings, SourceCommon};
+use datalib_source_common::{LatchkeySettings, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
-/// The Claude-owned slice of a `claude_api` source: the live
-/// claude.ai mirror. `sync` is its one way in; an `ingest` step without
-/// it is refused (`IngestMethods` below).
+/// The Claude-owned slice of a `claude` source. Two ways in, one raw
+/// store: `api` walks the live claude.ai API, `export` reads an unpacked
+/// bulk export off disk. Exactly one is set; an `ingest` step with
+/// neither is refused (`IngestMethods` below), and one with both is
+/// refused by [`ClaudeConfig::validate`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClaudeConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
@@ -20,7 +22,12 @@ pub struct ClaudeConfig {
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
     #[serde(default)]
-    pub sync: Option<ClaudeApiSync>,
+    pub api: Option<ClaudeApiSync>,
+    /// The directory a Claude data export was unpacked into — the one
+    /// holding `conversations.json`. Ingested as a whole snapshot: what
+    /// the export no longer has is pruned from the store.
+    #[serde(default)]
+    pub export: Option<LocalPath>,
 }
 
 impl ClaudeConfig {
@@ -28,6 +35,12 @@ impl ClaudeConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
+        if self.api.is_some() && self.export.is_some() {
+            anyhow::bail!(
+                "claude sets both `api` and `export` — pick one. To seed a store from an \
+                 export and then keep it fresh from the API, see the provider's DOWNLOAD.md."
+            );
+        }
         Ok(())
     }
 }
@@ -82,27 +95,6 @@ impl Default for ClaudeApiSync {
     }
 }
 
-/// The Claude-owned slice of a `claude_export` source: an unpacked
-/// Claude bulk export sitting on disk.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ClaudeExportConfig {
-    /// Shared per-source envelope (paths + cross-source tunables), resolved by
-    /// the orchestrator's `normalize()`.
-    #[serde(default)]
-    pub common: SourceCommon,
-}
-
-impl ClaudeExportConfig {
-    pub fn validate(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-/// Params for the `claude_export` render step. The same shape the
-/// `claude_api` render step takes — one renderer, one set of knobs.
-pub type ClaudeExportRenderConfig = ClaudeRenderConfig;
-
 /// Params for the render step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -130,15 +122,10 @@ impl Default for ClaudeRenderConfig {
 }
 
 impl datalib_source_common::IngestMethods for ClaudeConfig {
-    const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::origin("sync")];
-}
-
-impl datalib_source_common::IngestMethods for ClaudeExportConfig {
-    const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::local(
-            "common.input_path",
-        )];
+    const METHODS: &'static [datalib_source_common::IngestMethod] = &[
+        datalib_source_common::IngestMethod::origin("api"),
+        datalib_source_common::IngestMethod::local("export"),
+    ];
 }
 
 #[cfg(test)]
@@ -173,30 +160,25 @@ mod tests {
         );
     }
 
-    /// The API-only knobs are meaningless on an export. Before
-    /// `claude_export` had its own config type it shared
-    /// `ClaudeConfig`, so a `sync:` block on a `claude_export` step
-    /// silently started a live API download instead of being rejected.
+    /// One store, two ways to fill it, and a config that names both
+    /// would run a live download and then prune it to the export's
+    /// snapshot. Refused at validate, with the alternative named.
     #[test]
-    fn claude_export_rejects_api_only_knobs() {
-        for body in ["sync = {}", "[latchkey_settings]"] {
-            let err = toml::from_str::<ClaudeExportConfig>(body)
-                .expect_err("api-only knobs must not parse as claude_export");
-            assert!(err.to_string().contains("unknown field"), "{body}: {err}");
-        }
-    }
-
-    /// …and the shape it does take is the shared envelope, so
-    /// `input_path` (where the export is read from) and `raw_path`
-    /// (where our copy lives) are both nameable.
-    #[test]
-    fn claude_export_takes_the_shared_path_envelope() {
-        let c: ClaudeExportConfig = toml::from_str(
-            "[common]\ninput_path = \"~/backups/claude-export\"\nraw_path = \"/big/disk/claude\"\n",
-        )
-        .unwrap();
-        assert!(c.common.input_path.is_some());
-        assert!(c.validate().is_ok());
+    fn api_and_export_together_are_refused() {
+        let c: ClaudeConfig =
+            toml::from_str("api = {}\n[export]\npath = \"~/claude-export\"\n").unwrap();
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("both"), "{err}");
+        let api_only: ClaudeConfig = toml::from_str("api = {}\n").unwrap();
+        api_only.validate().unwrap();
+        let export_only: ClaudeConfig =
+            toml::from_str("[export]\npath = \"~/claude-export\"\n").unwrap();
+        export_only.validate().unwrap();
+        assert!(export_only
+            .export
+            .unwrap()
+            .path()
+            .ends_with("claude-export"));
     }
 
     #[test]

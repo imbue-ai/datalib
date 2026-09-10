@@ -1,5 +1,5 @@
 //! Program-A `DataProcessor`s for the `google_takeout` source. File-backed:
-//! download walks the unzipped Takeout tree at `input_path` and lands the
+//! download walks the unzipped Takeout tree at `export.path` and lands the
 //! opted-in feeds into a provider-owned doltlite raw store; render renders
 //! the chat-shaped feeds (Google Chat / Google Voice). The source owns its raw
 //! store (open/commit/checkpoint); the orchestrator only drives `run`.
@@ -7,7 +7,7 @@
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
@@ -21,12 +21,14 @@ pub fn plan_download(
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let input_path = config.common.input_or_raw_path().to_path_buf();
+    let export = config
+        .export
+        .ok_or_else(|| anyhow!("google_takeout source {name} missing `export.path`"))?;
     Ok(vec![Box::new(GoogleTakeoutDownload {
         id: format!("google_takeout/{name}/download"),
         raw_path,
-        input_path,
-        sync: sync_flags(config.sync.unwrap_or_default()),
+        input_path: export.path(),
+        sync: sync_flags(export),
     })])
 }
 
