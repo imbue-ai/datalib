@@ -1036,6 +1036,28 @@ const gridOptions: GridOptions<SearchRow> = {
   // collapsed — just the tab strip.
   rowGroupPanelShow: "always",
   sideBar: { toolPanels: ["columns"] },
+  // Grouping this grid by source is the single most useful thing to do
+  // with it — the unified projection holds every source at once, and
+  // "which of my things is this" is the first question anyone asks —
+  // and the bar that does it reads as decoration until you know. So it
+  // says what it is for. AG Grid's own text ("Drag here to set row
+  // groups") names the mechanism and not the result.
+  localeText: {
+    rowGroupColumnsEmptyMessage:
+      "Drag a column here to group the rows by it — Source, Type, Author…",
+  },
+  // The other half, for once a grouping exists: the placeholder above is
+  // gone by then, replaced by the chip for the column now in it, which
+  // is exactly when "you can change this" stops being discoverable. The
+  // group column is always present while a grouping is, so the
+  // explanation lives on it.
+  autoGroupColumnDef: {
+    minWidth: 220,
+    headerTooltip:
+      "Drag a column into the bar above to group by something else, or " +
+      "drag this one out to flatten the list. Drop a second column beside " +
+      "it to group within a group.",
+  },
   // `preventDefaultOnContextMenu: true` makes AG Grid call
   // preventDefault() synchronously on the contextmenu event so the
   // browser's native menu never shows over the grid's. Our
