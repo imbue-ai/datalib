@@ -1,0 +1,180 @@
+# The demo data library baked into the docker image at /opt/datalib/demo.
+#
+# Seven file-backed sources over the Star Trek: TNG fixtures the test
+# suite already uses, staged into the image at /opt/datalib/demo-sources
+# by stage_demo.sh. Nothing here needs a credential or the network, so
+# the ingest, render and grid_index steps run at image build time and
+# the demo is browsable the moment the container starts.
+#
+# No `data_root`: it defaults to this file's directory, so the root can
+# be copied anywhere (a bind mount, say) and still work.
+#
+# The semantic index is the one step NOT built into the image — see the
+# BUILD-TIME CUT marker at the bottom. Everything after that line is
+# dropped for the build-time run and present in the shipped file, so
+# the first `Sync all` (or `datalib-dag` run) in a container builds it.
+# The reason is the release pipeline: the arm64 image is built under
+# QEMU, and embedding under emulation would add tens of minutes to
+# every release for an index that takes a minute to build natively.
+
+[[groups]]
+id = "claude-export"
+name = "Claude export"
+type = "claude_export"
+
+[[steps]]
+group = "claude-export"
+function = "ingest"
+[steps.params.common]
+input_path = "/opt/datalib/demo-sources/claude-export"
+
+[[steps]]
+group = "claude-export"
+function = "render_markdown"
+inputs = ["claude-export/ingest"]
+
+# Google Takeout Gmail: no `sync` block, so the email source reads the
+# `.mbox` at `input_path`. The `mbox` block labels the account row.
+[[groups]]
+id = "gmail-takeout"
+name = "Gmail (Takeout .mbox)"
+type = "email"
+
+[[steps]]
+group = "gmail-takeout"
+function = "ingest"
+[steps.params.common]
+input_path = "/opt/datalib/demo-sources/gmail-takeout/star_trek.mbox"
+[steps.params.mbox]
+account_id = "picard@enterprise.starfleet"
+display_name = "Jean-Luc Picard"
+email_address = "picard@enterprise.starfleet"
+is_personal = true
+
+[[steps]]
+group = "gmail-takeout"
+function = "render_markdown"
+inputs = ["gmail-takeout/ingest"]
+[steps.params]
+outlink_format = "gmail"
+
+[[groups]]
+id = "google-takeout"
+name = "Google Takeout (Chat + Voice)"
+type = "google_takeout"
+
+[[steps]]
+group = "google-takeout"
+function = "ingest"
+[steps.params.common]
+input_path = "/opt/datalib/demo-sources/google-takeout/Takeout"
+[steps.params.sync]
+google_chat = true
+google_voice = true
+google_voice_include_spam = true
+
+[[steps]]
+group = "google-takeout"
+function = "render_markdown"
+inputs = ["google-takeout/ingest"]
+
+[[groups]]
+id = "sms-backup-restore"
+name = "SMS & calls"
+type = "sms_backup_restore"
+
+[[steps]]
+group = "sms-backup-restore"
+function = "ingest"
+[steps.params.common]
+input_path = "/opt/datalib/demo-sources/sms-backup-restore"
+
+[[steps]]
+group = "sms-backup-restore"
+function = "render_markdown"
+inputs = ["sms-backup-restore/ingest"]
+
+[[groups]]
+id = "linkedin"
+name = "LinkedIn export"
+type = "linkedin"
+
+[[steps]]
+group = "linkedin"
+function = "ingest"
+[steps.params.common]
+input_path = "/opt/datalib/demo-sources/linkedin"
+
+[[steps]]
+group = "linkedin"
+function = "render_markdown"
+inputs = ["linkedin/ingest"]
+
+# No `sync` block: file mode, reading the `.vcf` files under `input_path`.
+[[groups]]
+id = "contacts"
+name = "Contacts (vCard)"
+type = "carddav"
+
+[[steps]]
+group = "contacts"
+function = "ingest"
+[steps.params.common]
+input_path = "/opt/datalib/demo-sources/contacts"
+
+[[steps]]
+group = "contacts"
+function = "render_markdown"
+inputs = ["contacts/ingest"]
+
+[[groups]]
+id = "pdfs"
+name = "PDFs"
+type = "pdf"
+
+[[steps]]
+group = "pdfs"
+function = "ingest"
+[steps.params.common]
+input_path = "/opt/datalib/demo-sources/pdfs"
+
+[[steps]]
+group = "pdfs"
+function = "render_markdown"
+inputs = ["pdfs/ingest"]
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = [
+  "claude-export/render_markdown",
+  "gmail-takeout/render_markdown",
+  "google-takeout/render_markdown",
+  "sms-backup-restore/render_markdown",
+  "linkedin/render_markdown",
+  "contacts/render_markdown",
+  "pdfs/render_markdown",
+]
+
+[[applets]]
+group = "unified_index"
+id = "unified_index"
+command = "datalib-applet unified_index"
+
+# === BUILD-TIME CUT === (the Dockerfile drops everything below this line
+# for the build-time run; keep the semantic index step last)
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = [
+  "claude-export/render_markdown",
+  "gmail-takeout/render_markdown",
+  "google-takeout/render_markdown",
+  "sms-backup-restore/render_markdown",
+  "linkedin/render_markdown",
+  "contacts/render_markdown",
+  "pdfs/render_markdown",
+]

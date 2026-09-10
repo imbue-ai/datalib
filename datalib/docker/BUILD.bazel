@@ -1,9 +1,47 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 # Surface the Dockerfile + entrypoint as data targets so consistency
 # tests (e.g. //tools:version_pins_test) can read them at test time.
-# No build rules live here — the docker image is built by
-# `scripts/build_docker.sh` (locally) or the docker-publish job in
-# `.github/workflows/release.yml` (CI), not by Bazel.
+# The image itself is built by `scripts/build_docker.sh` (locally) or
+# the docker-publish job in `.github/workflows/release.yml` (CI), not
+# by Bazel.
 exports_files([
     "Dockerfile",
     "entrypoint.sh",
+    # The baked demo library's config, validated against the provider
+    # schemas by //datalib/backend/datalib_step:datalib_step_unittests
+    # alongside the docs' example configs.
+    "demo/config.toml",
 ])
+
+# Runs docs/user/docker.md's marked shell blocks against a published
+# image and checks what they produce. `manual`: it needs a docker
+# daemon and pulls a multi-GB image from ghcr.io, so nothing runs it
+# by accident; release.yml runs the same script against every image it
+# pushes, and by hand it is
+#   bazelisk test //datalib/docker:doc_test --test_env=DATALIB_DOCKER_IMAGE=…
+sh_test(
+    name = "doc_test",
+    size = "large",
+    srcs = ["doc_test.sh"],
+    data = [
+        "//datalib/backend/etl/providers/email:tng_fixture",
+        "//docs/user:docker.md",
+    ],
+    tags = [
+        "external",  # pulls from ghcr.io
+        "manual",
+        "no-remote-exec",
+        "no-sandbox",  # talks to the host's docker daemon
+        "requires-network",
+    ],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+# `manual` keeps :doc_test out of `//...`, so nothing else ever builds
+# it. See scripts/lint_repo.py check 7.
+build_test(
+    name = "manual_targets_build",
+    targets = [":doc_test"],
+)

@@ -678,11 +678,10 @@ jobs:
 
       # Pull the just-published tarballs from the GitHub Release into
       # the build context at the layout datalib/docker/Dockerfile
-      # expects (`dist/<arch>/<tarball>`). The repo is private, so the
-      # public `releases/download/<tag>/<file>` URLs 404 anonymously —
-      # we use `gh release download` with the workflow's GITHUB_TOKEN
-      # for auth.
-      - name: Stage tarballs into docker build context
+      # expects (`dist/<arch>/<tarball>`), via `gh release download`
+      # with the workflow's GITHUB_TOKEN. The demo library's inputs
+      # come from the checkout (datalib/docker/stage_demo.sh).
+      - name: Stage tarballs and the demo into docker build context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
@@ -691,6 +690,7 @@ jobs:
           mkdir -p ctx/dist/amd64 ctx/dist/arm64
           cp datalib/docker/Dockerfile ctx/Dockerfile
           cp datalib/docker/entrypoint.sh ctx/entrypoint.sh
+          datalib/docker/stage_demo.sh ctx
           gh release download "${REF_NAME}" \
               --repo "${GITHUB_REPOSITORY}" \
               --pattern 'datalib-x86_64-unknown-linux-gnu.tar.gz' \
@@ -813,6 +813,22 @@ jobs:
               --cache-to type=gha,mode=max,scope=docker-publish-slim,version=2 \
               --push \
               ctx
+
+      # Run the user-facing Docker walkthrough (docs/user/docker.md)
+      # against the image just pushed: pull it back, serve the baked
+      # demo, ingest a mounted mbox, query both. The pull is the cost
+      # (~80s cold); the checks themselves take a couple of minutes,
+      # most of it the semantic index build. A failure here does not
+      # un-push the tag — it makes a broken `:latest` visible instead
+      # of leaving it for a user to find.
+      - name: Check docs/user/docker.md against the pushed image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          DATALIB_DOCKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${version}" \
+              datalib/docker/doc_test.sh
 
   # Build and push the devcontainer image to ghcr.io. The devcontainer
   # image inherits from the prod image (`FROM

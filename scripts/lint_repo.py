@@ -74,6 +74,9 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "datalib/backend/etl/providers/claude:claude_live": (
         "manual live test, latchkey needs host keychain"
     ),
+    # Runs docs/user/docker.md against a published image: it needs the
+    # host's docker daemon and a registry pull, and is `manual`.
+    "datalib/docker:doc_test": "manual doc test, needs the host docker daemon",
     "datalib/backend/etl/providers/chatgpt:chatgpt_live": (
         "manual live test, latchkey needs host keychain"
     ),

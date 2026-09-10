@@ -2,8 +2,9 @@
 #
 # Ships the release binaries (`datalib-dag`, `datalib-step`, `datalib-http`,
 # `datalib-migrate-config`, `datalib-applet`, `datalib-doltlite`,
-# `latchkey-curl-impersonate`) plus Node + `latchkey` so users can
-# register services and run syncs from a single container.
+# `latchkey-curl-dispatch`, `latchkey-curl-impersonate`) plus Node +
+# `latchkey` so users can register services and run syncs from a single
+# container, and a pre-baked demo data library to try first.
 #
 # Not built from source: this image consumes the per-triple Linux tarballs
 # already produced by `.github/workflows/release.yml`. The build context
@@ -12,19 +13,25 @@
 #     dist/amd64/datalib-x86_64-unknown-linux-gnu.tar.gz
 #     dist/arm64/datalib-aarch64-unknown-linux-gnu.tar.gz
 #
-# `scripts/build_docker.sh` stages them locally; the docker-publish job in
-# `release.yml` stages them from the just-created GitHub Release.
+# plus `demo/` (the fixtures + config that datalib/docker/stage_demo.sh
+# copies in). `scripts/build_docker.sh` stages all of it locally; the
+# docker-publish job in `release.yml` stages the tarballs from the
+# just-created GitHub Release and the demo from the checkout.
 #
-# Bind mounts at runtime (see docs/docker.md):
+# Bind mounts at runtime (see docs/user/docker.md):
 #   /root/.latchkey                latchkey credentials store
 #                                  (RW for `auth set` / `services register`;
 #                                  may be RO for `datalib-dag`).
-#   /data                          data root: config.toml, the doltlite
-#                                  DB, raw_api/ trees, rendered QMDs,
-#                                  the qmd index.
-#   /root/.cache/qmd/models        (optional) embedding-model cache; avoids
-#                                  re-downloading ~300 MB on every fresh
-#                                  `datalib-dag` run.
+#   /data                          the user's data root: config.toml, one
+#                                  directory per source, the indexes under
+#                                  unified_index/, the server's state
+#                                  under system/.
+#   /import                        (convention, not required) whatever
+#                                  local export a file-backed source
+#                                  reads, mounted read-only.
+#
+# Also baked in: a demo data library at /opt/datalib/demo, ingested at
+# build time from the TNG fixtures — see the demo step near the bottom.
 #
 # Devcontainer: `.devcontainer/Dockerfile` inherits from a published
 # version of THIS image via `FROM ghcr.io/imbue-ai/datalib:<tag>`,
@@ -190,7 +197,7 @@ RUN set -eux; \
     install -m 0755 "$staged/latchkey-curl-impersonate"         /usr/local/bin/latchkey-curl-impersonate; \
     # The doltlite shell, for poking at a store by hand:
     #   docker exec -it … doltlite -readonly \
-    #       /data/unified_index/grid/db.doltlite_db "SELECT * FROM dolt_log();"
+    #       /data/unified_index/grid_index/db.doltlite_db "SELECT * FROM dolt_log();"
     # It used to be installed from dolthub's `.deb` a few layers up,
     # which meant a second copy of the same engine (~31 MB, plus its
     # `libdoltlite0` runtime) and a second version pin to keep in step
@@ -220,16 +227,44 @@ RUN set -eux; \
 COPY entrypoint.sh /usr/local/bin/datalib-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/datalib-entrypoint.sh
 
-# Defaults wired for the documented bind-mount layout:
-#   DATALIB_ROOT     resolves the data root without a positional arg
-#   LATCHKEY_CURL        points latchkey at the dispatch curl (which
-#                        routes marked requests to the impersonator
-#                        sibling; datalib-step also sets this internally
-#                        via sibling resolution, but exporting it means a
-#                        user running `latchkey curl ...` directly inside
-#                        the container gets CF impersonation too)
-ENV DATALIB_ROOT=/data \
-    LATCHKEY_CURL=/usr/local/bin/latchkey-curl-dispatch
+# --- The demo data library ------------------------------------------
+#
+# Seven file-backed sources over the Star Trek: TNG fixtures, staged
+# into the build context by datalib/docker/stage_demo.sh, ingested and
+# rendered here so `datalib-http /opt/datalib/demo` has something to
+# show the moment the container starts. docs/user/docker.md walks a
+# first-time user through it, and datalib/docker/doc_test.sh checks
+# that walkthrough against the built image.
+#
+# The config's semantic-index step sits below a BUILD-TIME CUT marker
+# and is dropped for this run (embedding under the arm64 leg's QEMU
+# emulation would cost every release tens of minutes); the shipped
+# config keeps it, so the first sync in a container builds the index.
+# `--now` is pinned to the fixture's own era so the bookkeeping reads
+# in fixture time rather than in build time, like the test fixture.
+#
+# This layer is also the one smoke test that runs the shipped
+# pipeline end to end: a tarball whose datalib-dag or datalib-step
+# cannot ingest the fixtures fails the image build here.
+COPY demo/ /opt/datalib/demo-sources/
+RUN set -eux; \
+    mkdir -p /opt/datalib/demo; \
+    mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.full.toml; \
+    sed '/^# === BUILD-TIME CUT ===/,$d' /opt/datalib/demo/config.full.toml \
+        > /opt/datalib/demo/config.toml; \
+    datalib-dag /opt/datalib/demo/config.toml --now 2369-04-15T00:00:00+00:00; \
+    mv /opt/datalib/demo/config.full.toml /opt/datalib/demo/config.toml; \
+    datalib-dag --check /opt/datalib/demo/config.toml; \
+    datalib-doltlite -readonly /opt/datalib/demo/unified_index/grid_index/db.doltlite_db \
+        "SELECT provider, count(*) FROM grid_rows GROUP BY 1;" \
+        | tee /dev/stderr | grep -q .
+
+# LATCHKEY_CURL points latchkey at the dispatch curl (which routes
+# marked requests to the impersonator sibling; datalib-step also sets
+# this internally via sibling resolution, but exporting it means a user
+# running `latchkey curl ...` directly inside the container gets CF
+# impersonation too).
+ENV LATCHKEY_CURL=/usr/local/bin/latchkey-curl-dispatch
 
 WORKDIR /data
 
