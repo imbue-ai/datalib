@@ -1157,6 +1157,13 @@ resolve anything.
 
 ### Adding the render step: a checkbox, not a second dialog
 
+*(Built 2026-08-31; superseded 2026-09-10 by
+[`groups_and_functions.md`](groups_and_functions.md) slice 4b, which
+writes the render step with the ingest step from one dialog, puts a
+provider's render fields under a "Rendering" heading of that same
+form, and removed both the checkbox and the "Render to markdown" row
+action. Kept as the record of the shape in between.)*
+
 Only `signal_backup` declares a render-phase field. For every other
 provider the render step has nothing to configure, so it is offered as a
 checkbox at the bottom of the fetch step's form — ticked by default,

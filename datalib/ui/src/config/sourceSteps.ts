@@ -1,33 +1,34 @@
-// Per-*entry* view of a DAG config, for the Manager2 grid.
+// The config as the Manage screen reads and writes it: groups, the steps
+// and applets filed under them, and the TOML the wizard produces.
 //
-// Writes are whole-text: add/delete splice the text the editor holds.
-// Field-level editing that preserves comments needs a format-preserving TOML
-// writer, so until then `paramsAreRepresentable` gates the Edit button and the
-// wizard never silently drops something it can't model.
+// A `[[groups]]` entry is a source: an `id` that is the directory its
+// steps write into, a `name` that is free text, and a `type`. A step
+// under it is `group` + `function`, and its id is composed as
+// `<group>/<function>` — never written, and never split. What a step is
+// (ingest, render, index) is read off its `function`; which group it
+// belongs to is read off `group`. Nothing here takes an id apart to
+// learn either. A step outside any group carries a verbatim `id` and is
+// a custom executable the wizard knows nothing about.
 //
-// A `[[groups]]` entry is the config's own notion of a source: an `id` that
-// is the directory its steps write into, a `name` that is free text, and a
-// `type`. A step under it is `group` + `function`, and its id is composed as
-// `<group>/<function>` — never written, but what every row here is keyed on.
-// A step outside any group carries a verbatim `id`.
+// The wizard writes a source as one unit — the group, its `ingest`
+// step and its `render_markdown` step — from one form, and edits it the
+// same way. Writes are whole-text: add/delete splice the text the
+// editor holds. Field-level editing that preserves comments needs a
+// format-preserving TOML writer, so until then `paramsAreRepresentable`
+// gates the Edit button and the wizard never silently drops something
+// it can't model.
 //
-// This module is still one entry per step. The grid folds them into one
-// row per group with the steps under it (`views/Manager2View.vue`, rules in
-// `groupRows.ts`); the `name` derived here — the group's, suffixed for its
-// render step — is the prose form banners and confirms use, and what the
-// wizard seeds its Name box from.
-//
-// An applet is never scheduled and owns no artifacts, so most row actions
-// don't apply to it — but it is configured, it can fail to start, and that
-// should be visible here rather than as a 502 in another tab.
+// An applet is never scheduled and owns no artifacts, so most row
+// actions don't apply to it — but it is configured, it can fail to
+// start, and that should be visible here rather than as a 502 in
+// another tab.
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import { catalogForStep } from "./catalog";
 import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
 
 /// Which wave a step belongs to, for display and for picking the right
-/// half of a catalog entry's fields. Derived from the shape of the id,
-/// never from anything load-bearing.
+/// half of a catalog entry's fields. Read off the step's `function`.
 export type StepPhase = "ingest" | "render" | "index" | "other";
 
 export type EntryKind = "step" | "applet";
@@ -73,14 +74,6 @@ export type ConfiguredGroup = {
   end: number;
 };
 
-/// The id stem two sibling steps share (`work-slack/ingest` →
-/// `work-slack`). For a grouped step this is the group id; for a custom
-/// step it is a display convenience and nothing more.
-export function stemOf(id: string): string {
-  const at = id.indexOf("/");
-  return at < 0 ? id : id.slice(0, at);
-}
-
 /// The label for a grouped step that wrote no `name` of its own.
 function groupedName(group: ConfiguredGroup, id: string, phase: StepPhase): string {
   if (!group.name) return defaultName(id);
@@ -89,12 +82,21 @@ function groupedName(group: ConfiguredGroup, id: string, phase: StepPhase): stri
   return defaultName(id);
 }
 
-/// The built-in functions, by the directory each writes. Mirrors
-/// `datalib_step::function::Function`; hand-kept in step with it.
-const PHASE_BY_LEAF: Record<string, StepPhase> = {
+/// The built-in functions, each the directory it writes. Mirrors
+/// `datalib_step::function::Function`; hand-kept in step with it. Any
+/// other function is a custom executable's.
+const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   ingest: "ingest",
   render_markdown: "render",
+  grid_index: "index",
+  qmd_index: "index",
 };
+
+/// A step's phase, from its function. A step outside any group has no
+/// function and is a custom executable: `other`.
+function phaseOfFunction(fn: string | null): StepPhase {
+  return fn === null ? "other" : (PHASE_BY_FUNCTION[fn] ?? "other");
+}
 
 /// What to call the shared entries when nobody has named them — a default
 /// that lives here rather than in anyone's config file. A `name =` someone did
@@ -109,14 +111,6 @@ const DEFAULT_NAMES: Record<string, string> = {
 /// to the id, which is what an unnamed step has always shown.
 export function defaultName(id: string): string {
   return DEFAULT_NAMES[id] ?? id;
-}
-
-/// A step's phase, from the shape of its id.
-export function phaseOf(id: string): StepPhase {
-  const segs = id.split("/");
-  if (segs[0] === "unified_index") return "index";
-  if (segs.length === 2 && PHASE_BY_LEAF[segs[1]]) return PHASE_BY_LEAF[segs[1]];
-  return "other";
 }
 
 type ParsedConfig = {
@@ -213,7 +207,7 @@ export function listSteps(text: string): ConfiguredStep[] {
             ? step.id
             : "";
       const groupEntry = group !== null ? groupsById.get(group) : undefined;
-      const phase = phaseOf(id);
+      const phase = phaseOfFunction(fn);
       // Blank is the same as absent: the row falls back to the derived
       // label in both cases, so a whitespace name never blanks a row.
       const name =
@@ -346,7 +340,10 @@ export function presetsFor(entry: CatalogEntry, phase: FieldPhase): Preset[] {
   return (entry.preset ?? []).filter((p) => (p.phase ?? "download") === phase);
 }
 
-/// The step whose output this one reads — its producer.
+/// The step whose output this one reads — its producer: the first input
+/// that names a step, else the ingest step filed under the same group,
+/// which is what `datalib-step` itself falls back to when a render step
+/// declares no inputs.
 export function producerOf(
   step: ConfiguredStep,
   all: ConfiguredStep[],
@@ -355,7 +352,20 @@ export function producerOf(
     const hit = all.find((s) => s.id === id);
     if (hit) return hit;
   }
-  return all.find((s) => s.id === `${stemOf(step.id)}/${functionOf("download")}`);
+  if (step.group === null) return undefined;
+  return all.find((s) => s.group === step.group && s.phase === "ingest");
+}
+
+/// The two steps a source is made of, as the config has them.
+export type SourceSteps = { ingest?: ConfiguredStep; render?: ConfiguredStep };
+
+/// A group's ingest and render steps, by phase.
+export function sourceStepsOf(groupId: string, all: ConfiguredStep[]): SourceSteps {
+  const under = all.filter((s) => s.kind === "step" && s.group === groupId);
+  return {
+    ingest: under.find((s) => s.phase === "ingest"),
+    render: under.find((s) => s.phase === "render"),
+  };
 }
 
 /// The catalog entry describing a step, in the context of the config it
@@ -395,16 +405,18 @@ function matchOption(options: { value: string }[], value: unknown): unknown {
 }
 
 /// The form's starting values for one descriptor: what the config already
-/// says, else the descriptor's default, else empty.
+/// says, else the descriptor's default, else empty. A download field
+/// reads the ingest step's params and a render field the render step's.
 ///
-/// `step` present means *editing*, absent means *creating*, and the difference
-/// is load-bearing for `int` fields: an `int` default is a policy this wizard
-/// imposes where the backend has none, so applying it on edit would cap a
-/// deliberately-uncapped source. `bool` and `select` defaults mirror the
-/// backend's own and seed either way.
-export function seedFieldValues(entry: CatalogEntry, step?: ConfiguredStep): FieldValues {
+/// `steps` present means *editing*, absent means *creating*, and the
+/// difference is load-bearing for `int` fields: an `int` default is a
+/// policy this wizard imposes where the backend has none, so applying it
+/// on edit would cap a deliberately-uncapped source. `bool` and `select`
+/// defaults mirror the backend's own and seed either way.
+export function seedFieldValues(entry: CatalogEntry, steps?: SourceSteps): FieldValues {
   const next: FieldValues = {};
   for (const field of entry.fields ?? []) {
+    const step = (field.phase ?? "download") === "render" ? steps?.render : steps?.ingest;
     const existing = step ? getParam(step.params, field.target) : undefined;
     if (existing !== undefined) {
       next[field.target] =
@@ -413,7 +425,7 @@ export function seedFieldValues(entry: CatalogEntry, step?: ConfiguredStep): Fie
           : field.kind === "select"
             ? matchOption(field.options, existing)
             : existing;
-    } else if (field.kind === "int" && field.default !== undefined && !step) {
+    } else if (field.kind === "int" && field.default !== undefined && !steps) {
       next[field.target] = field.default;
     } else if (field.kind === "bool") {
       next[field.target] = field.default ?? false;
@@ -592,6 +604,12 @@ export function functionOf(phase: FieldPhase): string {
   return phase === "render" ? "render_markdown" : "ingest";
 }
 
+/// The id the loader composes for a group's step of this phase — the
+/// one place this side of the app puts a group and a function together.
+export function stepIdFor(group: string, phase: FieldPhase): string {
+  return `${group}/${functionOf(phase)}`;
+}
+
 /// One source's `[[groups]]` block, with a divider above it. The name
 /// is written only when there is one and it says more than the id.
 export function buildGroup(opts: { id: string; name: string; type: string }): string {
@@ -625,10 +643,32 @@ function = ${quote(functionOf(phase))}${inputsLine}${params ? `\n${params}` : ""
   return block.trimEnd();
 }
 
-/// The id of the render step that would read `fetchId`: its sibling
-/// under the same group.
-export function renderIdFor(fetchId: string): string {
-  return `${stemOf(fetchId)}/${functionOf("render")}`;
+/// Everything the wizard writes for one source, in the order it goes
+/// into the file: the group (when creating), the ingest step, and the
+/// render step for a provider that renders. A provider that renders
+/// nothing (`renderStep: false`) gets no render step and no
+/// `renderId`.
+export function buildSource(opts: {
+  entry: CatalogEntry;
+  group: string;
+  name: string;
+  values: FieldValues;
+  /// Write the `[[groups]]` block too. Off when editing: the group
+  /// already exists and is renamed in place.
+  withGroup: boolean;
+}): { groupBody: string | null; stepsBody: string; renderId: string | null } {
+  const { entry, group, values } = opts;
+  const ingestId = stepIdFor(group, "download");
+  const ingest = buildStep({ entry, group, phase: "download", values });
+  const renders = entry.renderStep !== false;
+  const render = renders
+    ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
+    : null;
+  return {
+    groupBody: opts.withGroup ? buildGroup({ id: group, name: opts.name, type: entry.type }) : null,
+    stepsBody: render ? `${ingest}\n\n${render}` : ingest,
+    renderId: renders ? stepIdFor(group, "render") : null,
+  };
 }
 
 /// Set, replace or (with an empty name) remove the `name` of one
@@ -738,10 +778,13 @@ function extendOverComments(text: string, start: number): number {
   return at;
 }
 
-/// Replace one step with a freshly generated one. Only safe when
-/// `paramsAreRepresentable` said so — see this module's header.
-export function replaceStep(text: string, step: ConfiguredStep, body: string): string {
-  return appendSource(removeSteps(text, [step]), body);
+/// Replace a source's steps with freshly generated ones. All the cuts
+/// happen against the text as parsed, then one append: cutting and
+/// appending one step at a time would leave the second step's offsets
+/// pointing into text the first cut had already shifted. Only safe
+/// when `paramsAreRepresentable` said so — see this module's header.
+export function replaceSteps(text: string, steps: ConfiguredStep[], body: string): string {
+  return appendSource(removeSteps(text, steps), body);
 }
 
 /// A human name reduced to something that can be a directory: NFKD

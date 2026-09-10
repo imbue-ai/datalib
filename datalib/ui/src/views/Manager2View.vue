@@ -50,20 +50,18 @@ import {
   listSteps,
   type EntryKind,
   appendSource,
-  phaseOf,
   removeSteps,
   renameGroup,
-  renderIdFor,
-  replaceStep,
-  stemOf,
+  replaceSteps,
+  sourceStepsOf,
   unwireFromFanIns,
   wireIntoFanIns,
   paramsAreRepresentable,
   entryForStep,
-  producerOf,
   emptyTableDiagnosis,
   type ConfiguredGroup,
   type ConfiguredStep,
+  type SourceSteps,
   type StepPhase,
 } from "@/config/sourceSteps";
 import { calibrationMax, sparkline, type UsageSample } from "@/config/sparkline";
@@ -193,33 +191,18 @@ const canReveal = isDesktopApp();
 const revealLabel = revealActionLabel();
 
 const wizardOpen = ref(false);
-  /// Bumped on every opening, and bound to the dialog's `key`.
-  ///
-  /// Without it the chained "also render this?" flow writes the wrong step:
-  /// `window.confirm` blocks the event loop, so `wizardOpen` goes false and
-  /// back to true inside one tick, Vue never flushes the false, and the wizard
-  /// component is reused with every `ref` still holding the fetch step's
-  /// values — including the id. A changing key forces the remount the flow
-  /// was assuming.
+/// Bumped on every opening, and bound to the dialog's `key`, so a
+/// reopened dialog is a fresh mount rather than a reused component
+/// still holding the last one's refs.
 const wizardKey = ref(0);
+/// The source the wizard is editing: its group, the catalog entry that
+/// describes it, and whichever of its two steps the config has.
 const editing = ref<{
-  step: ConfiguredStep;
+  group: ConfiguredGroup;
   entry: CatalogEntry;
-  downloadParams?: Record<string, unknown>;
+  steps: SourceSteps;
 } | null>(null);
-/// Set while the wizard is being used to add the render step for a
-/// fetch step that was just written (or picked from a row action).
-const renderFor = ref<{
-  fetchId: string;
-  fetchName: string;
-  entry: CatalogEntry;
-  downloadParams?: Record<string, unknown>;
-} | null>(
-  null,
-);
 
-// Only source names gate the wizard: an applet id and a stanza name
-// live in different namespaces and may safely coincide.
 /// Non-null when the table is empty for a reason worth shouting about
 /// rather than the ordinary "you haven't added anything yet".
 const emptyDiagnosis = computed(() =>
@@ -232,19 +215,21 @@ const emptyDiagnosis = computed(() =>
   }),
 );
 
-/// Ids already spoken for: every group, plus the stem of every step —
-/// a custom step's tree is reserved the same way a group's is.
+/// Ids already spoken for: every group, plus the tree of every step
+/// outside a group — a custom step's tree is reserved the same way a
+/// group's is. An applet id lives in another namespace and may coincide.
 const takenIds = computed(
   () =>
     new Set([
       ...configGroups.value.map((g) => g.id),
-      ...sources.value.filter((s) => s.kind === "step").map((s) => stemOf(s.id)),
+      ...sources.value
+        .filter((s) => s.kind === "step")
+        .map((s) => s.group ?? s.id),
     ]),
 );
 
 /// The render step that reads a given fetch step, if the config has
-/// one. What decides whether a fetch row offers "render to markdown",
-/// and what delete has to take with it.
+/// one — what deleting the fetch step has to take with it.
 function renderSiblingOf(fetchId: string): ConfiguredStep | undefined {
   return sources.value.find(
     (s) => s.kind === "step" && s.inputs.includes(fetchId) && s.phase === "render",
@@ -294,14 +279,14 @@ type Row = {
   /// doesn't, which becomes the disabled button's tooltip.
   runBlocked: string | null;
   editBlocked: string | null;
-  renderBlocked: string | null;
   revealBlocked: string | null;
   /// What a sync of this row starts at: the step itself, or for a group
   /// its steps with no inputs. Empty exactly when `runBlocked` says why.
   seeds: string[];
-  /// The step whose form Edit and "Render to markdown" open. A step's
-  /// own id; for a group, its fetch step's, or null when it has none.
-  fetchId: string | null;
+  /// The group whose form Edit opens: the row's own group, or for a
+  /// step under one, that group. A source is edited as one thing, from
+  /// its row or from any step under it. Null where there is no form.
+  editGroup: string | null;
   lastSynced: string | null;
   status: StatusView;
   /// For a group row, the child whose status it shows — the row a
@@ -483,42 +468,21 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
             : `A sync starts at a source step. This one runs whenever any of its ` +
               `sources does: ${seeds.join(", ") || "none it can reach"}.`));
 
-  // Edit: the wizard's forms describe provider steps. Everything else
-  // is hand-written config, and the honest answer is to say so.
+  // Edit: the wizard's one form describes a source — a group and its
+  // two steps — so a step under a group edits through its group.
+  // Everything else is hand-written config, and the honest answer is
+  // to say so. `editBlocked` deliberately gets no dropped-entry
+  // override: editing is how the entry gets fixed.
   let editBlocked: string | null = null;
   if (s.kind === "applet") {
     editBlocked = "No form for applets — edit this one in Advanced below.";
   } else if (s.phase === "index") {
     editBlocked = "A shared index step has no options — its inputs are its whole config.";
-  } else if (!entry) {
-    editBlocked = "This step's group has no type the catalog knows.";
-  } else if (!entry.wizard) {
-    editBlocked = `No guided form for ${entry.label} yet — edit it in Advanced below.`;
+  } else if (group) {
+    editBlocked = groupEditBlocked(group);
   } else {
-    const rep = paramsAreRepresentable(s, entry);
-    if (!rep.ok) {
-      editBlocked =
-        `The form doesn't model ${rep.unknown.join(", ")}, and saving would drop it. ` +
-        `Edit this one in Advanced below.`;
-    }
+    editBlocked = "No guided form for a step outside a group — edit it in Advanced below.";
   }
-
-  // "Render to markdown": offered on a fetch step that has no render
-  // step reading it yet, for a provider that renders at all.
-  let renderBlocked: string | null = null;
-  if (s.kind !== "step" || s.phase !== "ingest") {
-    renderBlocked = "Only an ingest step can have a render step added to it.";
-  } else if (!entry?.wizard) {
-    renderBlocked = "No guided form for this type — add the render step in Advanced below.";
-  } else if (entry.renderStep === false) {
-    renderBlocked = `${entry.label} produces no markdown to render.`;
-  } else if (renderSiblingOf(s.id)) {
-    renderBlocked = "This already has a render step.";
-  }
-  // Wiring a render step onto an entry that isn't in the pipeline
-  // would just add a second broken row. `editBlocked` deliberately
-  // gets no such override: editing is how the entry gets fixed.
-  renderBlocked = droppedWhy ?? renderBlocked;
 
   const revealBlocked =
     s.kind === "applet"
@@ -567,10 +531,9 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
     entry,
     runBlocked,
     editBlocked,
-    renderBlocked,
     revealBlocked,
     seeds: s.kind === "step" && s.inputs.length === 0 ? [s.id] : [],
-    fetchId: s.id,
+    editGroup: editBlocked ? null : group,
     lastSynced: status.at,
     status,
     statusFrom: null,
@@ -585,11 +548,42 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
   };
 }
 
+/// Why a group has no form, or null when the wizard can edit it. A
+/// source is edited as one thing, so the verdict is the group's and
+/// every step under it shows the same one.
+function groupEditBlocked(groupId: string): string | null {
+  const g = configGroups.value.find((x) => x.id === groupId);
+  if (!g) return "This step names a group the config doesn't declare.";
+  const { ingest, render } = sourceStepsOf(g.id, sources.value);
+  const entry = groupEntry(g, { ingest, render });
+  if (!g.type) return "No guided form for this group — edit its entries in Advanced below.";
+  if (!entry) return `No guided form: the catalog doesn't know the type "${g.type}".`;
+  if (!entry.wizard) return `No guided form for ${entry.label} yet — edit it in Advanced below.`;
+  for (const step of [ingest, render]) {
+    if (!step) continue;
+    const rep = paramsAreRepresentable(step, entry);
+    if (!rep.ok) {
+      return (
+        `The form doesn't model ${rep.unknown.join(", ")} on ${step.id}, and saving would ` +
+        `drop it. Edit this one in Advanced below.`
+      );
+    }
+  }
+  return null;
+}
+
+/// The catalog entry describing a group. Its `type` names the provider,
+/// but *which* descriptor — Gmail or Fastmail, both `email` — is read
+/// off its ingest step's params, the way the step row does it.
+function groupEntry(g: ConfiguredGroup, steps: SourceSteps): CatalogEntry | undefined {
+  const step = steps.ingest ?? steps.render;
+  return step ? entryForStep(step, sources.value) : catalogForStep(g.type, {});
+}
+
 /// The row for one `[[groups]]` entry, read off its children's rows.
 function groupRow(g: ConfiguredGroup, children: Row[]): Row {
   const ordered = pipelineOrder(children.map((r) => ({ ...r, kind: r.kind as EntryKind })));
   const steps = ordered.filter((r) => r.kind === "step");
-  const fetch = steps.find((r) => r.phase === "ingest");
   const dropped = droppedReason(g.id, "group");
   const droppedWhy = dropped ? notInPipeline(dropped) : null;
 
@@ -603,10 +597,8 @@ function groupRow(g: ConfiguredGroup, children: Row[]): Row {
         detail: "Nothing is filed under this group yet.",
       });
 
-  // The group's own type decides the mark, but *which* descriptor —
-  // Gmail or Fastmail, both `email` — is read off the fetch step's
-  // params, the way the fetch row itself does it.
-  const entry = fetch?.entry ?? catalogForStep(g.type, {});
+  const entry = groupEntry(g, sourceStepsOf(g.id, sources.value));
+  const editBlocked = groupEditBlocked(g.id);
 
   // The folder the group's steps write into, measured as a tree of its
   // own by the usage walker — not the sum of two series sampled at
@@ -644,17 +636,10 @@ function groupRow(g: ConfiguredGroup, children: Row[]): Row {
     icon: entry?.icon ?? null,
     entry,
     runBlocked,
-    editBlocked: fetch
-      ? fetch.editBlocked
-      : "No guided form for this group — edit its entries in Advanced below.",
-    // Not `??`: a fetch step with nothing in the way has `null` here,
-    // and that null is the answer.
-    renderBlocked: fetch
-      ? fetch.renderBlocked
-      : "Only a fetch step can have a render step added to it.",
+    editBlocked,
     revealBlocked: onDisk ? null : "Nothing on disk yet — this group hasn't produced anything.",
     seeds,
-    fetchId: fetch?.id ?? null,
+    editGroup: editBlocked ? null : g.id,
     lastSynced: dropped
       ? null
       : groupLastSynced(ordered.map((r) => ({ kind: r.kind, phase: r.phase, at: r.status.at }))),
@@ -755,9 +740,6 @@ const ICON_PATHS: Record<string, string> = {
   edit: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
   reveal: "M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z",
   trash: "M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
-  // "add a render step": a document with a plus.
-  render:
-    "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 9h3v2h-3v3h-2v-3H8v-2h3V8h2v3z",
 };
 
 /// An icon button for the Actions cell.
@@ -1089,25 +1071,14 @@ const columnDefs: ColDef<Row>[] = [
           iconButton("run", "Sync now", row.runBlocked, false, () => runRow(row)),
         );
       }
-      // A group's form is its fetch step's: that is where the name and
-      // the download settings live until the one-dialog wizard lands.
-      const formFor = row.fetchId;
+      // A source is one form — the group with both its steps — opened
+      // from the group's row or from either step under it.
+      const formFor = row.editGroup;
       wrap.appendChild(
         iconButton("edit", "Edit settings", row.editBlocked, false, () => {
           if (formFor) openEdit(formFor);
         }),
       );
-      // Only shown where it applies: a fetch step with no render step
-      // reading it yet, or the group holding one. Absent rather than
-      // disabled everywhere else, which would put a dead button on
-      // every index and applet row.
-      if (row.phase === "ingest" || (isGroup && formFor)) {
-        wrap.appendChild(
-          iconButton("render", "Render to markdown", row.renderBlocked, false, () => {
-            if (formFor) openRenderFor(formFor);
-          }),
-        );
-      }
       // Absent rather than disabled in a plain browser — the same
       // "a missing menu item, not a broken one" rule desktop.ts states.
       if (canReveal) {
@@ -1347,10 +1318,10 @@ function reparse() {
   } catch (e) {
     parseError.value = (e as Error).message;
   }
-    // AG Grid reuses a cell whose row id is unchanged, so a button's disabled
-    // state is baked in at first render and does not follow the row. Adding a
-    // render step has to disable "Render to markdown" on the fetch row beside
-    // it, and that row id didn't change.
+  // AG Grid reuses a cell whose row id is unchanged, so a button's
+  // disabled state is baked in at first render and does not follow the
+  // row: a hand-edit that makes a source editable again has to reach
+  // its Edit button, and that row id didn't change.
   gridApi?.refreshCells({ columns: ["actions"], force: true });
 }
 
@@ -1509,48 +1480,23 @@ async function writeConfig(text: string, what: string) {
 function closeWizard() {
   wizardOpen.value = false;
   editing.value = null;
-  renderFor.value = null;
 }
 
 function openAdd() {
   editing.value = null;
-  renderFor.value = null;
   wizardKey.value++;
   wizardOpen.value = true;
 }
 
-function openEdit(id: string) {
-  const step = sources.value.find((s) => s.id === id);
-  if (!step?.type) return;
-  const entry = entryForStep(step, sources.value);
+/// Open the wizard on a source: its group, with both its steps' values
+/// in one form.
+function openEdit(groupId: string) {
+  const group = configGroups.value.find((g) => g.id === groupId);
+  if (!group) return;
+  const steps = sourceStepsOf(group.id, sources.value);
+  const entry = groupEntry(group, steps);
   if (!entry) return;
-  renderFor.value = null;
-  editing.value = {
-    step,
-    entry,
-    // Only meaningful when editing a render step: the credentials its
-    // "Test connection" authenticates with belong to the step it reads.
-    downloadParams:
-      step.phase === "render" ? producerOf(step, sources.value)?.params : undefined,
-  };
-  wizardKey.value++;
-  wizardOpen.value = true;
-}
-
-/// Add the render step that reads an existing fetch step. The row
-/// action; the same dialog the chained "also render this?" opens.
-function openRenderFor(fetchId: string) {
-  const step = sources.value.find((s) => s.id === fetchId);
-  if (!step?.type) return;
-  const entry = entryForStep(step, sources.value);
-  if (!entry) return;
-  editing.value = null;
-  renderFor.value = {
-    fetchId,
-    fetchName: step.name,
-    entry,
-    downloadParams: step.params,
-  };
+  editing.value = { group, entry, steps };
   wizardKey.value++;
   wizardOpen.value = true;
 }
@@ -1558,69 +1504,40 @@ function openRenderFor(fetchId: string) {
 async function onWizardSubmit(payload: {
   id: string;
   name: string;
-  body: string;
-  groupBody: string | null;
   entry: CatalogEntry;
-  inputs: string[];
-  offerRenderFor: {
-    fetchId: string;
-    fetchName: string;
-    downloadParams: Record<string, unknown>;
-  } | null;
-  alsoRender: { id: string; body: string } | null;
+  groupBody: string | null;
+  stepsBody: string;
+  renderId: string | null;
 }) {
   const current = editing.value;
-  let next = current
-    ? replaceStep(configText.value, current.step, payload.body)
-    : appendSource(
-        configText.value,
-        payload.groupBody ? `${payload.groupBody}\n\n${payload.body}` : payload.body,
-      );
-  // The name lives on the group. Editing a fetch step is how it gets
-  // renamed; a render step's label is derived, so its dialog offers
-  // no name and nothing to write here.
-  if (current?.step.group && current.step.phase === "ingest") {
-    next = renameGroup(next, current.step.group, payload.name);
+  let next: string;
+  if (current) {
+    // Both steps are replaced in one cut-and-append, and a step the
+    // source was missing is simply appended with the other. The name
+    // lives on the group, which is renamed in place.
+    const existing = [current.steps.ingest, current.steps.render].filter(
+      (s): s is ConfiguredStep => !!s,
+    );
+    next = replaceSteps(configText.value, existing, payload.stepsBody);
+    next = renameGroup(next, current.group.id, payload.name);
+  } else {
+    next = appendSource(
+      configText.value,
+      payload.groupBody ? `${payload.groupBody}\n\n${payload.stepsBody}` : payload.stepsBody,
+    );
   }
-
-  // The render step written alongside a fetch step, when the wizard's
-  // checkbox was ticked. One save, so a failure leaves neither.
-  if (payload.alsoRender) next = appendSource(next, payload.alsoRender.body);
 
   // The fan-ins name their inputs, so a render step added without this
   // renders happily and is never indexed. Idempotent, so re-saving an
   // edit doesn't duplicate the entry.
-  for (const id of [payload.id, payload.alsoRender?.id]) {
-    if (id && phaseOf(id) === "render") next = wireIntoFanIns(next, id);
-  }
+  if (payload.renderId) next = wireIntoFanIns(next, payload.renderId);
 
   // Banners are for a person, so they say the name; the id is what the
   // config and the disk use.
   const shown = payload.name || payload.id;
-  const what = current ? `Saved ${shown}.` : `Added ${shown}.`;
-  const ok = await writeConfig(
-    next,
-    payload.alsoRender ? `${what.slice(0, -1)}, with a step to render it.` : what,
-  );
+  const ok = await writeConfig(next, current ? `Saved ${shown}.` : `Added ${shown}.`);
   if (!ok) return;
-
-  // Providers whose render step *does* have options get a second dialog
-  // instead of the checkbox. Declining is a real answer — the fetch
-  // step stands on its own, and the row action adds one later.
-  const offer = payload.offerRenderFor;
   closeWizard();
-  if (
-    offer &&
-    window.confirm(
-      `Added ${offer.fetchName}.\n\n` +
-        `Also render it to markdown? That is the step that makes it searchable — ` +
-        `you can add it later from the row's actions instead.`,
-    )
-  ) {
-    renderFor.value = { ...offer, entry: payload.entry };
-    wizardKey.value++;
-    wizardOpen.value = true;
-  }
 }
 
 async function deleteSource(id: string) {
@@ -2203,7 +2120,6 @@ onUnmounted(() => {
       v-if="wizardOpen"
       :key="wizardKey"
       :taken-ids="takenIds"
-      :render-for="renderFor"
       :editing="editing"
       @close="closeWizard"
       @submit="onWizardSubmit"

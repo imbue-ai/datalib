@@ -1,5 +1,5 @@
-// Manager2: one row per group with its steps under it, and the two-step
-// flow that creates them.
+// Manager2: one row per group with its steps under it, and the one
+// dialog that creates and edits them.
 import { test, expect, type Page } from "@playwright/test";
 import { expandGroup, groupRow, pipelineRow as row } from "./grid-helpers";
 
@@ -16,7 +16,6 @@ const field = (page: Page, caption: string) =>
   wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) > .wiz-input`);
 const nameField = (page: Page) => field(page, "Name");
 const idField = (page: Page) => field(page, "Id");
-const alsoRender = (page: Page) => wizard(page).locator(".wiz-check input");
 /// The step-role mark. It rides after the name — there is no Step
 /// column any more — and `aria-label` is the only place the word
 /// survives, which is also what a person gets by hovering it.
@@ -63,16 +62,14 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   await nameField(page).fill("Personal Claude");
   await expect(idField(page)).toHaveValue("personal-claude");
 
-  // Claude has no render options, so the render step is a checkbox
-  // rather than a second dialog — and the preview shows both steps, so
-  // the checkbox demonstrates its consequence instead of asserting it.
-  await expect(alsoRender(page)).toBeChecked();
-
-  // ...and the card around it is a real block, not a sliver.
-  const card = wizard(page).locator("label.wiz-check");
-  const box = await card.boundingBox();
-  expect(box, "the also-render card should be laid out").not.toBeNull();
-  expect(box!.width, "the also-render card collapsed to its checkbox").toBeGreaterThan(200);
+  // The render step is part of the source, not an offer: the form says
+  // what it writes under a Rendering heading, and the preview shows
+  // both steps so the heading demonstrates its consequence rather than
+  // asserting it. Claude's render step has no settings, so the heading
+  // is followed by a sentence and no fields.
+  await expect(wizard(page).locator(".wiz-section-head")).toHaveText("Rendering");
+  await expect(wizard(page).locator(".wiz-section")).toContainText("personal-claude/render_markdown");
+  await expect(wizard(page).locator(".wiz-section")).toContainText("no settings of its own");
   await wizard(page).getByText("Review the TOML this writes").click();
   const preview = wizard(page).locator(".wiz-review pre");
   // The name lands on the group; the two steps are written as
@@ -85,7 +82,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   await expect(preview).toContainText('inputs = ["personal-claude/ingest"]');
 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText(/Added Personal Claude, with a step to render it\./)).toBeVisible();
+  await expect(page.getByText("Added Personal Claude.")).toBeVisible();
 
   // One row for the source: the group's name, with the id muted
   // beside it. The steps are under it, and folded until asked for —
@@ -117,85 +114,82 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   const text = await editor.inputValue();
   expect(text.match(/group = "personal-claude"\nfunction = "render_markdown"/g)).toHaveLength(1);
 
-  // Edit from the group's row: it opens the fetch step's form, where
-  // the name lives. Name free, id fixed, and renaming leaves the id
-  // alone — the property that keeps the index's paths honest.
+  // Edit from the group's row: the same one dialog, over the source.
+  // Name free, id fixed, and renaming leaves the id alone — the
+  // property that keeps the index's paths honest.
   await group.getByRole("button", { name: "Edit settings" }).click();
   await expect(nameField(page)).toHaveValue("Personal Claude");
   await expect(idField(page)).toHaveCount(0);
-  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/ingest");
+  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/");
   await nameField(page).fill("Claude Archive");
-  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/ingest");
+  await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Claude Archive.")).toBeVisible();
 
   // The name belongs to the group, so the group row renames and the
-  // steps under it — labelled by what they do — do not.
+  // steps under it — labelled by what they do — do not. Saving rewrote
+  // both steps and left exactly one of each.
   await expect(groupRow(page, "personal-claude")).toContainText("Claude Archive");
   await expect(row(page, "personal-claude/render_markdown")).toContainText("Render markdown");
   await expect(editor).toHaveValue(/name = "Claude Archive"/);
   await expect(editor).not.toHaveValue(/Personal Claude/);
+  const saved = await editor.inputValue();
+  expect(saved.match(/group = "personal-claude"\nfunction = "ingest"/g)).toHaveLength(1);
+  expect(saved.match(/group = "personal-claude"\nfunction = "render_markdown"/g)).toHaveLength(1);
 });
 
-test("declining the checkbox writes one step, and the group's action adds the other", async ({
+test("a step's Edit opens its source, and a hand-removed render step comes back on save", async ({
   page,
 }) => {
   const editor = page.locator(".m2-editor");
   await pickClaude(page);
   await nameField(page).fill("Fetch Only");
-  await alsoRender(page).uncheck();
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Fetch Only.")).toBeVisible();
+
+  // Take the render step out by hand, the way a config edited in an
+  // editor might lack one.
+  const text = await editor.inputValue();
+  const without = text.replace(
+    /\n\[\[steps\]\]\ngroup = "fetch-only"\nfunction = "render_markdown"\ninputs = \["fetch-only\/ingest"\]\n/,
+    "\n",
+  );
+  expect(without).not.toBe(text);
+  await page.getByText("Advanced — edit config.toml directly").click();
+  await editor.fill(without);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Saved the config.")).toBeVisible();
 
   await expandGroup(page, "fetch-only");
   await expect(row(page, "fetch-only/ingest")).toBeVisible();
   await expect(page.locator('.ag-row[row-id="fetch-only/render_markdown"]')).toHaveCount(0);
-  await expect(editor).not.toHaveValue(/fetch-only\/render_markdown/);
 
-  // The group's row offers the fetch step's action, so the group need
-  // not be opened to add the render step. It mints the sibling id
-  // through the same path the checkbox would have.
-  const group = groupRow(page, "fetch-only");
-  await group.getByRole("button", { name: "Render to markdown" }).click();
-  await expect(idField(page)).toHaveCount(0);
+  // A step under a group edits its source: the step row's button opens
+  // the same dialog the group row's does, name box and all.
+  await row(page, "fetch-only/ingest").getByRole("button", { name: "Edit settings" }).click();
+  await expect(nameField(page)).toHaveValue("Fetch Only");
+  // The dialog says what saving will do beyond changing a value.
+  await expect(wizard(page)).toContainText("This source is missing");
   await expect(wizard(page)).toContainText("fetch-only/render_markdown");
-  // No name box: the render step's label comes from the group's name.
-  await expect(nameField(page)).toHaveCount(0);
-  await wizard(page).getByRole("button", { name: "Add render step" }).click();
+  await wizard(page).getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Saved Fetch Only.")).toBeVisible();
 
   await expect(row(page, "fetch-only/render_markdown")).toBeVisible();
   await expect(editor).toHaveValue(/inputs = \["fetch-only\/ingest"\]/);
-
-  // ...and now the action is spent, on the group row and the step's
-  // alike: there is already a render step.
-  for (const where of [group, row(page, "fetch-only/ingest")]) {
-    const again = where.getByRole("button", { name: "Render to markdown" });
-    await expect(again).toBeDisabled();
-    await expect(again).toHaveAttribute("title", /already has a render step/);
-  }
+  const after = await editor.inputValue();
+  expect(after.match(/group = "fetch-only"\nfunction = "ingest"/g)).toHaveLength(1);
 });
 
-test("a provider whose render step has options writes the sibling id, not the stem", async ({
+test("a provider with render options writes them on the render step, from the one form", async ({
   page,
 }) => {
-  // The path Claude never takes, and the one that was broken.
-  //
-  // That config is not merely untidy — it does not run. `datalib-dag`
-  // rejects it with "a step writes only the tree its id names", which
-  // is a red Status on a source that downloaded perfectly well, and
-  // `phaseOf` reads the stem as `other`, so the step is never wired
-  // into the fan-ins either. Two failures, one cause.
-  //
-  // A provider whose *render* step has options gets a second dialog
-  // instead of the checkbox: `onWizardSubmit` closes the wizard and
-  // reopens it for the render step. Both happen in one synchronous
-  // stretch — `window.confirm` blocks the event loop — so `wizardOpen`
-  // went false and true again inside a single tick, Vue never flushed
-  // the false, and the component was *reused* rather than remounted.
-  // Every ref the wizard sets up in `setup()` therefore kept its
-  // create-mode value, and the id is the one that mattered: the render
-  // step was written as `signal-work` (the stem) instead of
-  // `signal-work/render_markdown`.
+  // Signal's render step has a `period` option. Before the one-dialog
+  // wizard it came as a second dialog, and the remount between the two
+  // once wrote the render step under the group's id instead of its own
+  // — a config `datalib-dag` refuses with "a step writes only the tree
+  // its id names". One dialog has no second mount to get wrong; the
+  // assertion on the composed id stays because that is the config bug
+  // it would catch.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "+ Add Data Source" }).click();
   await wizard(page)
@@ -205,21 +199,12 @@ test("a provider whose render step has options writes the sibling id, not the st
   await wizard(page).locator("input.wiz-path").fill("/tmp/SignalBackups");
   await expect(idField(page)).toHaveValue("signal-work");
 
-  // No checkbox: this provider's render step has a `period` option, so
-  // the offer is a confirm and then a second dialog.
-  await expect(wizard(page).locator("label.wiz-check")).toHaveCount(0);
-  page.once("dialog", (d) => {
-    expect(d.message()).toContain("Also render it to markdown?");
-    void d.accept();
-  });
+  // The render option sits under the Rendering heading, in this form.
+  const section = wizard(page).locator(".wiz-section");
+  await expect(section).toContainText("signal-work/render_markdown");
+  await expect(field(page, "Document span")).toHaveValue("month");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-
-  // The second dialog, freshly mounted: the sibling id, not inherited
-  // from the dialog that just closed. No name box — a render step's
-  // label is derived from its group's name.
-  await expect(nameField(page)).toHaveCount(0);
-  await expect(wizard(page)).toContainText("signal-work/render_markdown");
-  await wizard(page).getByRole("button", { name: "Add render step" }).click();
+  await expect(page.getByText("Added Signal Work.")).toBeVisible();
 
   await expandGroup(page, "signal-work");
   await expect(row(page, "signal-work/render_markdown")).toBeVisible();
@@ -228,8 +213,8 @@ test("a provider whose render step has options writes the sibling id, not the st
   const text = await editor.inputValue();
   expect(text).toContain('group = "signal-work"\nfunction = "render_markdown"');
   expect(text).toContain('inputs = ["signal-work/ingest"]');
-  // One group, written once, by the first dialog — the second wrote a
-  // step under it and nothing else.
+  expect(text).toContain('period = "month"');
+  // One group, written once.
   expect(text.match(/id = "signal-work"/g)).toHaveLength(1);
 });
 
