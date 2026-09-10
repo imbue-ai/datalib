@@ -417,22 +417,23 @@ fn manual_e2e_live_sync_golden() {
         assert_snapshot!("run_summary_steps", step_id_list(&summary1));
     });
 
-    // Layout invariant: data_root is a flat set of stanza dirs plus the one
+    // Layout invariant: data_root is a flat set of group dirs plus the one
     // reserved `system/` dir — never the old top-level `raw/` or
-    // `rendered_md/`, and the aggregate index DB lives under `system/`. Guards
-    // against a regression to the pre-grouping layout.
+    // `rendered_md/`, and the aggregate index DB lives under the
+    // `unified_index` group. Guards against a regression to the
+    // pre-grouping layout.
     assert!(
         !data_root.join("raw").exists() && !data_root.join("rendered_md").exists(),
-        "old top-level raw/ or rendered_md/ found — data_root must be grouped by stanza"
+        "old top-level raw/ or rendered_md/ found — data_root must be grouped by group id"
     );
     assert!(
         data_root
-            .join("unified_index/grid/db.doltlite_db")
+            .join("unified_index/grid_index/db.doltlite_db")
             .is_file(),
-        "backend index DB must live at unified_index/grid/db.doltlite_db"
+        "backend index DB must live at unified_index/grid_index/db.doltlite_db"
     );
     // Only the genuinely-derived index dirs are tagged as rebuildable cache so
-    // `--exclude-caches` backups skip them (the per-stanza `rendered_md/` tags
+    // `--exclude-caches` backups skip them (the per-group `render_markdown/` tags
     // are checked implicitly via the manifest — CACHEDIR.TAG is skipped in the
     // walk below). `system/` must NOT be tagged — job logs are operational
     // history, not rebuildable from raw.
@@ -445,9 +446,9 @@ fn manual_e2e_live_sync_golden() {
         "system/ (operational history) must NOT be tagged as cache"
     );
 
-    // Snapshot each stanza's `raw/` and `rendered_md/` trees, mirroring the
-    // on-disk per-stanza layout. `system/` (the aggregate index + qmd) is
-    // skipped — see the module header.
+    // Snapshot each group's `ingest/` and `render_markdown/` trees, mirroring
+    // the on-disk per-group layout. `system/` and the `unified_index` group
+    // (the aggregate index + qmd) are skipped — see the module header.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
         .expect("read data_root")
         .filter_map(|e| e.ok())
@@ -459,7 +460,7 @@ fn manual_e2e_live_sync_golden() {
 
     let mut manifest: Vec<String> = Vec::new();
     for stanza in &stanzas {
-        for sub in ["raw", "rendered_md"] {
+        for sub in ["ingest", "render_markdown"] {
             let dir = data_root.join(stanza).join(sub);
             snapshot_tree(&dir, &format!("{stanza}/{sub}"), &mut manifest);
         }
@@ -511,7 +512,7 @@ fn manual_e2e_live_sync_golden() {
     // inside that window on the day of the bake.
 
     // ── Third run: --reset-and-redownload content stability ───────────
-    let stability_dbs = ["tiny-slack/raw/entities.doltlite_db"];
+    let stability_dbs = ["tiny-slack/ingest/entities.doltlite_db"];
     // Skip (loudly) any db this config didn't produce, so a reduced config via
     // DATALIB_TEST_CONFIG doesn't crash here. On the full config a missing db
     // means its source failed — which run 1's status assertion already caught.
@@ -775,11 +776,11 @@ fn incrementality_report(data_root: &Path, stanzas: &[String]) -> Value {
         .expect("build tokio runtime for sync_runs read");
     let mut out = serde_json::Map::new();
     for stanza in stanzas {
-        let db = data_root.join(stanza).join("raw/entities.doltlite_db");
+        let db = data_root.join(stanza).join("ingest/entities.doltlite_db");
         let v = if db.is_file() {
             rt.block_on(latest_sync_run(&db))
         } else {
-            Value::String("<no raw/entities.doltlite_db>".into())
+            Value::String("<no ingest/entities.doltlite_db>".into())
         };
         out.insert(stanza.clone(), v);
     }
@@ -923,14 +924,14 @@ fn prune_orphan_snapshots(manifest: &[String]) {
         if p.extension().and_then(|e| e.to_str()) != Some("snap") {
             continue;
         }
-        // Snapshot path mirrors the data layout, so only the per-stanza
-        // tree snaps are manifest-keyed — hence pruning only under a `raw/`
-        // or `rendered_md/` segment.
+        // Snapshot path mirrors the data layout, so only the per-group
+        // tree snaps are manifest-keyed — hence pruning only under an
+        // `ingest/` or `render_markdown/` segment.
         let rel = p.strip_prefix(&base).unwrap().to_string_lossy().to_string();
         let key = rel.strip_suffix(".snap").unwrap_or(&rel);
         let is_tree_snap = key
             .split('/')
-            .any(|seg| seg == "raw" || seg == "rendered_md");
+            .any(|seg| seg == "ingest" || seg == "render_markdown");
         if is_tree_snap && !keys.contains(key) {
             std::fs::remove_file(p)
                 .unwrap_or_else(|e| panic!("delete orphan snapshot {}: {e}", p.display()));
@@ -1023,6 +1024,21 @@ fn rewrite_config(text: &str, data_root: &Path) -> String {
         toml::Value::String(data_root.display().to_string()),
     );
 
+    // A step is `group` + `function`; its provider is the group's `type`.
+    let slack_groups: Vec<String> = doc
+        .get("groups")
+        .and_then(|v| v.as_array())
+        .map(|groups| {
+            groups
+                .iter()
+                .filter_map(|g| g.as_table())
+                .filter(|g| g.get("type").and_then(|t| t.as_str()) == Some("slack"))
+                .filter_map(|g| g.get("id").and_then(|i| i.as_str()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
     let steps = doc
         .get_mut("steps")
         .and_then(|v| v.as_array_mut())
@@ -1033,17 +1049,14 @@ fn rewrite_config(text: &str, data_root: &Path) -> String {
         let Some(m) = step.as_table_mut() else {
             continue;
         };
-        let command = m
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let function = m.get("function").and_then(|v| v.as_str()).unwrap_or("");
         assert!(
-            !command.starts_with("datalib-step qmd_index"),
+            function != "qmd_index",
             "config declares a qmd_index step; the golden test deliberately \
              excludes qmd (non-deterministic status text) — drop the step"
         );
-        if command != "datalib-step download slack_api" {
+        let group = m.get("group").and_then(|v| v.as_str()).unwrap_or("");
+        if function != "ingest" || !slack_groups.iter().any(|g| g == group) {
             continue;
         }
         let params = m
@@ -1052,22 +1065,22 @@ fn rewrite_config(text: &str, data_root: &Path) -> String {
         let Some(params_map) = params.as_table_mut() else {
             continue;
         };
-        let sync_entry = params_map
-            .entry("sync")
+        let api_entry = params_map
+            .entry("api")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-        if let Some(sync_map) = sync_entry.as_table_mut() {
-            sync_map.insert("refresh_window_days".into(), toml::Value::Integer(30));
+        if let Some(api_map) = api_entry.as_table_mut() {
+            api_map.insert("refresh_window_days".into(), toml::Value::Integer(30));
             patched_slack += 1;
         }
     }
     // Warn rather than fail: a reduced config (one provider, for debugging via
     // DATALIB_TEST_CONFIG) legitimately has no slack step, and a hard assert
     // here would make the test unusable for exactly that. On the real config
-    // this line firing means the tweak silently did nothing — the command
-    // string drifted — and you'd see spurious media churn in the goldens.
+    // this line firing means the tweak silently did nothing — the config
+    // shape drifted — and you'd see spurious media churn in the goldens.
     if patched_slack == 0 {
         eprintln!(
-            "[test] WARNING: no `datalib-step download slack_api` step; \
+            "[test] WARNING: no ingest step under a `slack` group; \
              refresh_window_days tweak not applied"
         );
     }
