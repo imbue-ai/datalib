@@ -433,6 +433,7 @@ fn build_chat(
         chat_uuid: tuid.clone(),
         display: subject.clone(),
         title: Some(subject),
+        author: None,
         account: Some(account_id.clone()),
         project: None,
         external_id: Some(bucket.thread_id.clone()),

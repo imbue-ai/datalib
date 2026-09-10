@@ -5,10 +5,10 @@ expression: docs_bundle(&docs)
 === 1c72c68f-86f5-577e-93a8-53e634460711 ===
 {
   "edges": [],
-  "render_version": 6,
+  "render_version": 7,
   "rows": [
     {
-      "account": "00000003-1701-4d00-8000-000000000003",
+      "account": "bcrusher@enterprise.starfleet.test",
       "author": null,
       "byte_size": null,
       "channel": "Tricorder Image Diagnostic",
@@ -38,7 +38,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-15T08:30:00+00:00"
     },
     {
-      "account": "00000003-1701-4d00-8000-000000000003",
+      "account": "bcrusher@enterprise.starfleet.test",
       "author": "Human",
       "byte_size": null,
       "channel": "Tricorder Image Diagnostic",
@@ -68,7 +68,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-15T08:30:00+00:00"
     },
     {
-      "account": "00000003-1701-4d00-8000-000000000003",
+      "account": "bcrusher@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": null,
       "channel": "Tricorder Image Diagnostic",
@@ -98,16 +98,16 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-15T08:30:45+00:00"
     }
   ],
-  "source_fingerprint": "212e914df05c67f6ee4d47cb003b7f5a019bc9bf22d2c85c2fdff91bb6e0b98a"
+  "source_fingerprint": "fcfd3d6838c83dbfb8eef9e64f91d3aad7df0ef215125e0aaad2455217427a8d"
 }
 === 2efdd321-ada2-5000-911f-feb635f27954 ===
 {
   "edges": [],
-  "render_version": 6,
+  "render_version": 7,
   "rows": [
     {
-      "account": "00000002-1701-4d00-8000-000000000002",
-      "author": null,
+      "account": "jlpicard@enterprise.starfleet.test",
+      "author": "Data",
       "byte_size": null,
       "channel": "Stellar Cartography",
       "conversation_name": "Stellar Cartography",
@@ -136,7 +136,7 @@ expression: docs_bundle(&docs)
       "when_ts": null
     },
     {
-      "account": "00000002-1701-4d00-8000-000000000002",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Description",
       "byte_size": null,
       "channel": "Stellar Cartography",
@@ -166,7 +166,7 @@ expression: docs_bundle(&docs)
       "when_ts": null
     },
     {
-      "account": "00000002-1701-4d00-8000-000000000002",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Custom instructions",
       "byte_size": null,
       "channel": "Stellar Cartography",
@@ -196,7 +196,7 @@ expression: docs_bundle(&docs)
       "when_ts": null
     },
     {
-      "account": "00000002-1701-4d00-8000-000000000002",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "charting-conventions.md",
       "byte_size": null,
       "channel": "Stellar Cartography",
@@ -226,16 +226,16 @@ expression: docs_bundle(&docs)
       "when_ts": null
     }
   ],
-  "source_fingerprint": "89faf360d86529f5174b3df601f64ae3c2dfcc8c0d610a5bbe8c05af30b11e25"
+  "source_fingerprint": "d10df2535a8af8c12a968804ccb640ab08168c0ef3d9cf97b5a27f50d83dd8a5"
 }
 === bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0 ===
 {
   "edges": [],
-  "render_version": 6,
+  "render_version": 7,
   "rows": [
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
-      "author": null,
+      "account": "jlpicard@enterprise.starfleet.test",
+      "author": "Jean-Luc Picard",
       "byte_size": null,
       "channel": "Bridge Operations",
       "conversation_name": "Bridge Operations",
@@ -264,7 +264,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2364-03-01T09:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Description",
       "byte_size": null,
       "channel": "Bridge Operations",
@@ -294,7 +294,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2364-03-01T09:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Custom instructions",
       "byte_size": null,
       "channel": "Bridge Operations",
@@ -324,7 +324,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2364-03-01T09:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "hailing-frequencies.md",
       "byte_size": null,
       "channel": "Bridge Operations",
@@ -354,7 +354,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2364-03-01T09:05:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "escalation-ladder.txt",
       "byte_size": null,
       "channel": "Bridge Operations",
@@ -384,15 +384,15 @@ expression: docs_bundle(&docs)
       "when_ts": "2364-03-02T11:30:00+00:00"
     }
   ],
-  "source_fingerprint": "f9c43038506309eb368ef048d72b44cd52d5458280f631e54bb5a9fa3d356b75"
+  "source_fingerprint": "e5dcbed691f42106f9004f66bd7c887724598fbcd57ebc35adab40b065384392"
 }
 === ecb57e3b-24ce-546b-9201-61bf610b0783 ===
 {
   "edges": [],
-  "render_version": 6,
+  "render_version": 7,
   "rows": [
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": null,
       "byte_size": null,
       "channel": "Borg Encryption Signature Lookup",
@@ -422,7 +422,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-16T09:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Human",
       "byte_size": null,
       "channel": "Borg Encryption Signature Lookup",
@@ -452,7 +452,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-16T09:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": null,
       "channel": "Borg Encryption Signature Lookup",
@@ -482,7 +482,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-16T09:00:10+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": null,
       "channel": "Borg Encryption Signature Lookup",
@@ -512,7 +512,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-16T09:00:30+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": null,
       "channel": "Borg Encryption Signature Lookup",
@@ -542,7 +542,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-16T09:01:30+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": null,
       "channel": "Borg Encryption Signature Lookup",
@@ -572,7 +572,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-16T09:01:30+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": null,
       "channel": "Borg Encryption Signature Lookup",
@@ -602,15 +602,15 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-16T09:01:30+00:00"
     }
   ],
-  "source_fingerprint": "24d956547aabd5f85baca416aaa6f90f08a873d51db860513261424b59e3fc27"
+  "source_fingerprint": "623e8731321f2c941f70afc3eedfd50fcddc7584c721b5749b310f53d612a7d1"
 }
 === f6cad624-37b7-5673-af29-80ba9aac61a5 ===
 {
   "edges": [],
-  "render_version": 6,
+  "render_version": 7,
   "rows": [
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": null,
       "byte_size": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -640,7 +640,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-14T10:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Human",
       "byte_size": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -670,7 +670,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-14T10:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -700,7 +700,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-14T10:00:30+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -730,7 +730,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-14T10:00:32+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -760,7 +760,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-14T10:01:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -790,7 +790,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-14T10:01:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Human",
       "byte_size": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -820,5 +820,5 @@ expression: docs_bundle(&docs)
       "when_ts": "2369-04-14T10:02:00+00:00"
     }
   ],
-  "source_fingerprint": "cb972add65c788fc9d52b47385d0dc650fac5a6376699268f804718590d304d4"
+  "source_fingerprint": "b6d81dd5f8a3dad5a8e0e4a731f4201a19bdb002427f12eeb1acd1a10849a78b"
 }

@@ -11,10 +11,10 @@ chat_uuid: 1c72c68f-86f5-577e-93a8-53e634460711
 markdown_uuid: 1c72c68f-86f5-577e-93a8-53e634460711
 period: all
 display: "Tricorder Image Diagnostic"
-account: 00000003-1701-4d00-8000-000000000003
+account: bcrusher@enterprise.starfleet.test
 external_id: c0000004-1701-4d00-8000-00000000c004
 item_count: 2
-source_fingerprint: 212e914df05c67f6ee4d47cb003b7f5a019bc9bf22d2c85c2fdff91bb6e0b98a
+source_fingerprint: fcfd3d6838c83dbfb8eef9e64f91d3aad7df0ef215125e0aaad2455217427a8d
 ---
 
 <h1 class="page-title" data-page-title-uuid="1c72c68f-86f5-577e-93a8-53e634460711">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -47,11 +47,11 @@ chat_uuid: 2efdd321-ada2-5000-911f-feb635f27954
 markdown_uuid: 2efdd321-ada2-5000-911f-feb635f27954
 period: all
 display: "Stellar Cartography"
-account: 00000002-1701-4d00-8000-000000000002
+account: jlpicard@enterprise.starfleet.test
 project: Stellar Cartography
 external_id: 70000002-1701-4d00-8000-000000000702
 item_count: 3
-source_fingerprint: 89faf360d86529f5174b3df601f64ae3c2dfcc8c0d610a5bbe8c05af30b11e25
+source_fingerprint: d10df2535a8af8c12a968804ccb640ab08168c0ef3d9cf97b5a27f50d83dd8a5
 ---
 
 <h1 class="page-title" data-page-title-uuid="2efdd321-ada2-5000-911f-feb635f27954">Claude Project · Stellar Cartography (all) <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -96,11 +96,11 @@ chat_uuid: bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0
 markdown_uuid: bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0
 period: all
 display: "Bridge Operations"
-account: 00000001-1701-4d00-8000-000000000001
+account: jlpicard@enterprise.starfleet.test
 project: Bridge Operations
 external_id: 70000001-1701-4d00-8000-000000000701
 item_count: 4
-source_fingerprint: f9c43038506309eb368ef048d72b44cd52d5458280f631e54bb5a9fa3d356b75
+source_fingerprint: e5dcbed691f42106f9004f66bd7c887724598fbcd57ebc35adab40b065384392
 ---
 
 <h1 class="page-title" data-page-title-uuid="bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -155,10 +155,10 @@ chat_uuid: ecb57e3b-24ce-546b-9201-61bf610b0783
 markdown_uuid: ecb57e3b-24ce-546b-9201-61bf610b0783
 period: all
 display: "Borg Encryption Signature Lookup"
-account: 00000001-1701-4d00-8000-000000000001
+account: jlpicard@enterprise.starfleet.test
 external_id: c0000005-1701-4d00-8000-00000000c005
 item_count: 6
-source_fingerprint: 24d956547aabd5f85baca416aaa6f90f08a873d51db860513261424b59e3fc27
+source_fingerprint: 623e8731321f2c941f70afc3eedfd50fcddc7584c721b5749b310f53d612a7d1
 ---
 
 <h1 class="page-title" data-page-title-uuid="ecb57e3b-24ce-546b-9201-61bf610b0783">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -257,11 +257,11 @@ chat_uuid: f6cad624-37b7-5673-af29-80ba9aac61a5
 markdown_uuid: f6cad624-37b7-5673-af29-80ba9aac61a5
 period: all
 display: "Klingon Diplomatic Greeting Drafting"
-account: 00000001-1701-4d00-8000-000000000001
+account: jlpicard@enterprise.starfleet.test
 project: Bridge Operations
 external_id: c0000003-1701-4d00-8000-00000000c003
 item_count: 6
-source_fingerprint: cb972add65c788fc9d52b47385d0dc650fac5a6376699268f804718590d304d4
+source_fingerprint: b6d81dd5f8a3dad5a8e0e4a731f4201a19bdb002427f12eeb1acd1a10849a78b
 ---
 
 <h1 class="page-title" data-page-title-uuid="f6cad624-37b7-5673-af29-80ba9aac61a5">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>

@@ -315,8 +315,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Sources that rendered documents but carry no storage rows.
 
         Every source's render wave ends by measuring its raw store, so
-        every source in `markdowns` should also appear as an `account`
-        on some `provider='datalib'` row.
+        every source in `markdowns` should also appear as an
+        `upstream_scope` on some `provider='datalib'` row.
 
         The failure this catches is silent and partial. Eight providers
         declare their whole document set via `RunCtx::retain_documents`,
@@ -332,8 +332,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._index_db,
             "SELECT DISTINCT m.source_name FROM markdowns m "
             "WHERE m.source_name NOT IN ("
-            "  SELECT account FROM grid_rows "
-            "  WHERE provider = 'datalib' AND account IS NOT NULL"
+            "  SELECT upstream_scope FROM grid_rows "
+            "  WHERE provider = 'datalib' AND upstream_scope IS NOT NULL"
             ") ORDER BY m.source_name;",
         )
 

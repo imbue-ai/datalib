@@ -100,6 +100,7 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         chat_uuid: id.to_string(),
         display: display.to_string(),
         title: Some(display.to_string()),
+        author: None,
         account: Some("acct-1701".to_string()),
         project: None,
         external_id: Some(format!("upstream-{id}")),

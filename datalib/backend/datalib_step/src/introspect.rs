@@ -53,7 +53,7 @@ const REPORT_REL: &str = "_datalib/storage.md";
 
 /// Bumped when the shape of what this emits changes, so an older
 /// report is re-rendered rather than left to disagree with a newer one.
-pub const RENDER_VERSION: u32 = 1;
+pub const RENDER_VERSION: u32 = 2;
 
 /// One measured thing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,7 +425,10 @@ pub fn plan(
                 .kind(s.kind.label())
                 .source_label(SOURCE_LABEL)
                 .when_ts(Some(now.to_string()))
-                .account(Some(source_name.to_string()))
+                // No `account`: this row measures a source, it belongs
+                // to no upstream login, and the group id it used to
+                // carry here polluted every `account:` filter. The
+                // group id is on `upstream_scope` below.
                 .conversation_name(Some(format!("{source_name} storage")))
                 .conversation_uuid(markdown_uuid.clone())
                 .entire_chat(format!("/chat/{markdown_uuid}"))

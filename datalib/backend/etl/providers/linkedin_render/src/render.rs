@@ -161,6 +161,7 @@ fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
             chat_uuid: uuid5(&format!("chat:{table}:{conv}")),
             display,
             title: None,
+            author: None,
             account: None,
             project: None,
             external_id: Some(conv.clone()),

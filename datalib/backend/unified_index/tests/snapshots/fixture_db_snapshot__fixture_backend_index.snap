@@ -95,9 +95,9 @@ expression: snapshot
       "md_path": "notion/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "df20c23e9b42d6683d915dbc580d648ed284a917d33dd368a43843d797c5f5e3",
-      "source_fingerprint": "3768144fac91c81f1981e0c987ceeed569eb541a984c89432d036494159b5fd7",
+      "source_fingerprint": "fd1ecae1304420377c799310acee93832a0125215af9423cb4a14b24d0ecaa07",
       "source_name": "notion",
       "title": "notion storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -109,9 +109,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "eafa0c95fefb29d8ba189efb83cb8a8ca6673e53524a35ca787996f67072c08a",
-      "source_fingerprint": "d86d58da1b081470a70a8f87cd071cd82b9b44f174e9d51d9fea8035e15ebf6c",
+      "source_fingerprint": "e324fe33e4ff6f0ad8e1ed8b1ae047bb25a0800a1c64c2fc22578df782f8d489",
       "source_name": "slack",
       "title": "slack storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -123,9 +123,9 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/1c72c68f-86f5-577e-93a8-53e634460711/all.md",
       "provider": "claude",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "row_set_hash": "8f2f52d27d3d6a96b56c599ff5487661f67d03a890c0a81f14647fb4a7633ec9",
-      "source_fingerprint": "212e914df05c67f6ee4d47cb003b7f5a019bc9bf22d2c85c2fdff91bb6e0b98a",
+      "source_fingerprint": "fcfd3d6838c83dbfb8eef9e64f91d3aad7df0ef215125e0aaad2455217427a8d",
       "source_name": "claude-api",
       "title": "Tricorder Image Diagnostic",
       "updated_at": "2369-04-15T08:30:45+00:00"
@@ -179,9 +179,9 @@ expression: snapshot
       "md_path": "gitlab/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "665eb2269f8e4e0f8bfccd658e91cf10f0dfb3f1145ba069597686e07df6293e",
-      "source_fingerprint": "bc4dcac788869e86d4787844b3fa80dceb8df7bfdefa9809be5a6a03b108c95b",
+      "source_fingerprint": "ed053ec3b8438dc182716edb0b362e1e1d82b60e20f0dd73b1727026bad0f41b",
       "source_name": "gitlab",
       "title": "gitlab storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -193,9 +193,9 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "59613d7bf70b286f72f59d939ceb3aa23bc4aec17c3e68346d9c35ee0f031421",
-      "source_fingerprint": "0c4905e84766106385573308387d26b0bd3e7b8932e79a54df5a628c83056cb5",
+      "source_fingerprint": "42377b0c86b5b283de7bf742410293924bdea0feb21e2bdfff16c7d52b83a5ab",
       "source_name": "linkedin",
       "title": "linkedin storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -221,9 +221,9 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/2efdd321-ada2-5000-911f-feb635f27954/all.md",
       "provider": "claude",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.6",
-      "row_set_hash": "1cb5c88216dcfe1a12eea317c87a066c235210f51fa4e43b6d779bcf2a3f9a70",
-      "source_fingerprint": "89faf360d86529f5174b3df601f64ae3c2dfcc8c0d610a5bbe8c05af30b11e25",
+      "renderer_version": "rust-v1.7",
+      "row_set_hash": "b036e8b2cdb337b19691af6f32273e3c9d787ad65953785e5f8edd06af92eab1",
+      "source_fingerprint": "d10df2535a8af8c12a968804ccb640ab08168c0ef3d9cf97b5a27f50d83dd8a5",
       "source_name": "claude-api",
       "title": "Stellar Cartography",
       "updated_at": null
@@ -249,9 +249,9 @@ expression: snapshot
       "md_path": "yolink/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "0a7acdb6a0b5a509516490088d98bc63deb8cfb058acba5af7ceba24e6ebd4a2",
-      "source_fingerprint": "ecd91e6a9e8bfe5e1fdcadf5ea3e4c439fb21cb93e63bb2f5af8dd0e9eb861d9",
+      "source_fingerprint": "cd2eef2f5bf2c76bcb787e2281419475d943175003574b846b8616b096df4169",
       "source_name": "yolink",
       "title": "yolink storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -263,9 +263,9 @@ expression: snapshot
       "md_path": "beeper/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "c1ba89882bb332336e34cedea3bd96f607db381c0347f4fb8134c51809316ea2",
-      "source_fingerprint": "95bfe754a7446ac0c0232d857fd954e5b75690ec4d85854d1a67514b04845508",
+      "source_fingerprint": "910504f3300a92b4c679a3fe233e2c9e7c38ae99bf311a260c04fa915274c77b",
       "source_name": "beeper",
       "title": "beeper storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -305,9 +305,9 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "aa2d2bebe77faa1c532c7e49e838663df91b20e0640be1358badef196944bf47",
-      "source_fingerprint": "a3a90bd9da910316055607d44d3eb0941f800736b7c12c4c3fdab14939c76765",
+      "source_fingerprint": "fdb0f8f15fe32b3797d9f395ea1d2b1a2f8fe48c75f006a509c8826b87feb3ee",
       "source_name": "tng_contacts",
       "title": "tng_contacts storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -333,9 +333,9 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "6ca384445fa79efea132ac5c5612ea80bc78a3087bc4ccd844e35dbaee04ad86",
-      "source_fingerprint": "f0a067cf1deeb3e13c300d8b32a39fd8f0c6cb2b9284f2829afce49fb2842894",
+      "source_fingerprint": "866ec1f14648c1ea0abb05ecb27e75b308edad04f02e8cedc22ae73bce3dd85d",
       "source_name": "tng_email",
       "title": "tng_email storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -347,9 +347,9 @@ expression: snapshot
       "md_path": "github/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "ef6441f15eef4fcb3d6f15989e12552af2d78662ee1cc24ec7c0a6cbd9404b74",
-      "source_fingerprint": "a6ee17012ff155e1c4f19b4bc81661da05f30b2253abba00921190d52c1cc48c",
+      "source_fingerprint": "0511916fbc294b9e5dc500db54a0469451384b0a89e341f4f3b73c8e66559a7d",
       "source_name": "github",
       "title": "github storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -389,9 +389,9 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "29c7a1e2b0185e1c1b0d0bb4884b03e2df8ae5a095dc9ec8125b9f6036dfdf71",
-      "source_fingerprint": "b6e56dae2194b43c5763adf72c3aeea3265f3c729fed5e6819071ebbc3c8a88a",
+      "source_fingerprint": "2d8ad1326a08f41b5918af0159b7ab47c51e89457ec4d5dadce14dca80b553d4",
       "source_name": "google-takeout",
       "title": "google-takeout storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -529,9 +529,9 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "050d72e32ab3bc02d484fb03a63b66c382049d38bd0d0e386869cd754d43db0a",
-      "source_fingerprint": "d7c0b5966a5cd3dd928c16795625d0aaf5dce5944f05907f70b174d98411c9dd",
+      "source_fingerprint": "e015070bd168339e7eded550c21edf33a62e8d57f7d24ad5ba033e49b4337492",
       "source_name": "sms-backup-restore",
       "title": "sms-backup-restore storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -543,9 +543,9 @@ expression: snapshot
       "md_path": "signal/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "b15a94241693f568d15ab651ec69091380b550064da3a9d8ded9a4d78c9b7bf6",
-      "source_fingerprint": "bf5e86522bcfef7a6aace521940fed7997e2c0365435e0923f98c21d753d5940",
+      "source_fingerprint": "ac7766bd32ec04a040bd6d33729de27e682ef54aec40da098fe8cb54d2a0a585",
       "source_name": "signal",
       "title": "signal storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -557,9 +557,9 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "8951c4b8f8072a72f9ecf21a409114702b926d7cbd3aa2e59c024fc20f9ae5ea",
-      "source_fingerprint": "49f67da90a1c463edf2f387c5713726749b86e3a625c43c485ccc1a6ac32e99b",
+      "source_fingerprint": "d0bf58eef4542a3604e58ae4df5f42a8d954d2b180f6fcef4c97b34160f4a04b",
       "source_name": "chatgpt-api",
       "title": "chatgpt-api storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -613,9 +613,9 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "8a27892659cbdaae862db5e0b6921518d7111593d5640d3d0e00d192b2147d7b",
-      "source_fingerprint": "1859d8ff9ffbaaad00ef81140e057ec13d5f761c5983319b472a7098c9626305",
+      "source_fingerprint": "e582a62040d3c44b3c8740fcf500340ab83c8e416cf4d724575a233949d301fb",
       "source_name": "whatsapp",
       "title": "whatsapp storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -739,9 +739,9 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "row_set_hash": "443e4c04fcfa11ac661ba333cb26cd6ee75be3ed39f0a78017050d89b24bc268",
-      "source_fingerprint": "3020991d3a7968eab8eaa12c0decb5a4f0aa29f0bbf7e34fae70d5f268763ddb",
+      "source_fingerprint": "b19c11b9df7742d1cefe34ca2d0e18ac81b972ffd05aee6e252cca1f52631bf3",
       "source_name": "tng_pdfs",
       "title": "tng_pdfs storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -781,9 +781,9 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0/all.md",
       "provider": "claude",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.6",
-      "row_set_hash": "07b9edc351421cedfc0281b47913384f6d8d5b1c55e70e10ec068083999a9b52",
-      "source_fingerprint": "f9c43038506309eb368ef048d72b44cd52d5458280f631e54bb5a9fa3d356b75",
+      "renderer_version": "rust-v1.7",
+      "row_set_hash": "2ff36f6123091a1fdeded3b154cff788e72a18b876bd692a8a981b88c987cab4",
+      "source_fingerprint": "e5dcbed691f42106f9004f66bd7c887724598fbcd57ebc35adab40b065384392",
       "source_name": "claude-api",
       "title": "Bridge Operations",
       "updated_at": "2364-03-02T11:30:00+00:00"
@@ -893,9 +893,9 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/_datalib/storage.md",
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
-      "row_set_hash": "0b776b86e0ab5360c6660cad4fd90bf5f1caad83c9784998a5517231cbe42b24",
-      "source_fingerprint": "84e8b33f53e4c750235a9f80e0803c51af75ec7099c8f54d6419a88ffb61f1af",
+      "renderer_version": "rust-v1.2",
+      "row_set_hash": "9d958cfcc9a6cb71b065adecb69b0de461ad2e9cf39f261e64182dfb7fb4265f",
+      "source_fingerprint": "28c27126171d9600361735247170c70a79a95271b5286ac5d2c38a01832a2240",
       "source_name": "claude-api",
       "title": "claude-api storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -1005,9 +1005,9 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/ecb57e3b-24ce-546b-9201-61bf610b0783/all.md",
       "provider": "claude",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "row_set_hash": "4ce0a33be62f0b6230642ea53c45fcff76bac8be76a258cb1b7bc0ef09b6d3ad",
-      "source_fingerprint": "24d956547aabd5f85baca416aaa6f90f08a873d51db860513261424b59e3fc27",
+      "source_fingerprint": "623e8731321f2c941f70afc3eedfd50fcddc7584c721b5749b310f53d612a7d1",
       "source_name": "claude-api",
       "title": "Borg Encryption Signature Lookup",
       "updated_at": "2369-04-16T09:01:30+00:00"
@@ -1061,9 +1061,9 @@ expression: snapshot
       "md_path": "claude-api/render_markdown/f6cad624-37b7-5673-af29-80ba9aac61a5/all.md",
       "provider": "claude",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "row_set_hash": "aa685ae80eebb333e15727dbc04760da43ff56af193d77da4e331e9453f8a36f",
-      "source_fingerprint": "cb972add65c788fc9d52b47385d0dc650fac5a6376699268f804718590d304d4",
+      "source_fingerprint": "b6d81dd5f8a3dad5a8e0e4a731f4201a19bdb002427f12eeb1acd1a10849a78b",
       "source_name": "claude-api",
       "title": "Klingon Diplomatic Greeting Drafting",
       "updated_at": "2369-04-14T10:02:00+00:00"
@@ -1398,7 +1398,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:08:00+00:00"
     },
     {
-      "account": "00000002-1701-4d00-8000-000000000002",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "charting-conventions.md",
       "channel": "Stellar Cartography",
       "conversation_name": "Stellar Cartography",
@@ -1659,7 +1659,7 @@ expression: snapshot
       "when_ts": "2370-08-22T00:00:00Z"
     },
     {
-      "account": "00000002-1701-4d00-8000-000000000002",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Description",
       "channel": "Stellar Cartography",
       "conversation_name": "Stellar Cartography",
@@ -1775,7 +1775,7 @@ expression: snapshot
       "when_ts": "2369-04-14T20:30:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "channel": "Klingon Diplomatic Greeting Drafting",
       "conversation_name": "Klingon Diplomatic Greeting Drafting",
@@ -2268,8 +2268,8 @@ expression: snapshot
       "when_ts": "2364-03-04T20:00:00+00:00"
     },
     {
-      "account": "00000002-1701-4d00-8000-000000000002",
-      "author": null,
+      "account": "jlpicard@enterprise.starfleet.test",
+      "author": "Data",
       "channel": "Stellar Cartography",
       "conversation_name": "Stellar Cartography",
       "conversation_uuid": "2efdd321-ada2-5000-911f-feb635f27954",
@@ -2587,7 +2587,7 @@ expression: snapshot
       "when_ts": "2370-10-26T08:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "channel": "Borg Encryption Signature Lookup",
       "conversation_name": "Borg Encryption Signature Lookup",
@@ -3051,7 +3051,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:01:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Human",
       "channel": "Borg Encryption Signature Lookup",
       "conversation_name": "Borg Encryption Signature Lookup",
@@ -3196,7 +3196,7 @@ expression: snapshot
       "when_ts": "2364-03-01T17:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "channel": "Klingon Diplomatic Greeting Drafting",
       "conversation_name": "Klingon Diplomatic Greeting Drafting",
@@ -3341,7 +3341,7 @@ expression: snapshot
       "when_ts": "2369-05-28T15:15:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Human",
       "channel": "Klingon Diplomatic Greeting Drafting",
       "conversation_name": "Klingon Diplomatic Greeting Drafting",
@@ -4211,7 +4211,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:05:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "channel": "Borg Encryption Signature Lookup",
       "conversation_name": "Borg Encryption Signature Lookup",
@@ -4385,7 +4385,7 @@ expression: snapshot
       "when_ts": "2370-10-25T08:05:20+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "hailing-frequencies.md",
       "channel": "Bridge Operations",
       "conversation_name": "Bridge Operations",
@@ -4472,7 +4472,7 @@ expression: snapshot
       "when_ts": null
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Description",
       "channel": "Bridge Operations",
       "conversation_name": "Bridge Operations",
@@ -4530,7 +4530,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:08:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Custom instructions",
       "channel": "Bridge Operations",
       "conversation_name": "Bridge Operations",
@@ -4646,7 +4646,7 @@ expression: snapshot
       "when_ts": "2369-04-10T09:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "channel": "Borg Encryption Signature Lookup",
       "conversation_name": "Borg Encryption Signature Lookup",
@@ -4936,7 +4936,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:08:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "channel": "Borg Encryption Signature Lookup",
       "conversation_name": "Borg Encryption Signature Lookup",
@@ -5226,8 +5226,8 @@ expression: snapshot
       "when_ts": "2369-05-28T15:11:40+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
-      "author": null,
+      "account": "jlpicard@enterprise.starfleet.test",
+      "author": "Jean-Luc Picard",
       "channel": "Bridge Operations",
       "conversation_name": "Bridge Operations",
       "conversation_uuid": "bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0",
@@ -5980,7 +5980,7 @@ expression: snapshot
       "when_ts": "2024-03-20T14:05:00.000+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "escalation-ladder.txt",
       "channel": "Bridge Operations",
       "conversation_name": "Bridge Operations",
@@ -6009,7 +6009,7 @@ expression: snapshot
       "when_ts": "2364-03-02T11:30:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "channel": "Klingon Diplomatic Greeting Drafting",
       "conversation_name": "Klingon Diplomatic Greeting Drafting",
@@ -6357,7 +6357,7 @@ expression: snapshot
       "when_ts": "2025-02-11T11:33:35+00:00"
     },
     {
-      "account": "00000002-1701-4d00-8000-000000000002",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Custom instructions",
       "channel": "Stellar Cartography",
       "conversation_name": "Stellar Cartography",
@@ -6444,7 +6444,7 @@ expression: snapshot
       "when_ts": "2024-04-10T19:00:00.000+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "Human",
       "channel": "Klingon Diplomatic Greeting Drafting",
       "conversation_name": "Klingon Diplomatic Greeting Drafting",
@@ -6473,7 +6473,7 @@ expression: snapshot
       "when_ts": "2369-04-14T10:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": null,
       "channel": "Borg Encryption Signature Lookup",
       "conversation_name": "Borg Encryption Signature Lookup",
@@ -6734,7 +6734,7 @@ expression: snapshot
       "when_ts": "2026-01-07T09:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": null,
       "channel": "Klingon Diplomatic Greeting Drafting",
       "conversation_name": "Klingon Diplomatic Greeting Drafting",
@@ -6763,7 +6763,7 @@ expression: snapshot
       "when_ts": "2369-04-14T10:00:00+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "channel": "Klingon Diplomatic Greeting Drafting",
       "conversation_name": "Klingon Diplomatic Greeting Drafting",
@@ -6792,7 +6792,7 @@ expression: snapshot
       "when_ts": "2369-04-14T10:00:30+00:00"
     },
     {
-      "account": "00000001-1701-4d00-8000-000000000001",
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "channel": "Borg Encryption Signature Lookup",
       "conversation_name": "Borg Encryption Signature Lookup",
@@ -6901,7 +6901,7 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:0bf353d518691cdf264aeb2ef638eb250e179ee16dcd8839c1de5745245ecf75",
+      "members_sha": "sha256:29cea1a5886f291a7f9419db7864bd4f4f6c8bf008c8c498ea7b2461d84e9507",
       "rows": 7,
       "source": "claude-api"
     },

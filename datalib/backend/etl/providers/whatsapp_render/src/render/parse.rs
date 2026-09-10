@@ -311,6 +311,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
             id: ch.chat_jid.clone(),
             chat_uuid,
             display: ch.display,
+            author: None,
             account: None,
             project: None,
             external_id: Some(ch.chat_jid),

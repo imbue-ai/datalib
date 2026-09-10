@@ -305,6 +305,7 @@ fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
             id: id.clone(),
             chat_uuid: uuid5(&format!("chat:{id}")),
             display,
+            author: None,
             account: None,
             project: Some("SMS Backup".to_string()),
             external_id: Some(external_id),

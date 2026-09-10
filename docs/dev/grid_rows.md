@@ -199,7 +199,8 @@ they sit beside the shared blob store.
 | provider.kind | value |
 |---|---|
 | claude.chat | `''` |
-| claude.message.human | `account_uuid` |
+| claude.project | `projects.payload.creator.full_name` — who made the project, which in a Team workspace is often not the account that downloaded it |
+| claude.message.human | the capitalized `chat_messages[].sender` ("Human") |
 | claude.message.assistant | `conversation.raw_json.model`, else `sender` |
 | chatgpt.message.user | `account_id` |
 | chatgpt.message.assistant | `model_slug`, else `role` |
@@ -214,7 +215,7 @@ they sit beside the shared blob store.
 
 | provider | account | project | channel |
 |---|---|---|---|
-| claude | `conversations.payload.creator.uuid` | the `projects.name` of the conversation's project (bare UUID when projects aren't mirrored) | — |
+| claude | the `users` row's `email_address` (else `full_name`, else the bare UUID) for `conversations.payload.account.uuid`; a project page carries the downloading account, not its creator | the `projects.name` of the conversation's project (bare UUID when projects aren't mirrored) | — |
 | chatgpt | `me.id` | — | — |
 | slack | `workspaces.id` | — | `channels.name` |
 | github | `self_identity.viewer.login` | `pull_request.base.repo.full_name` | — |
