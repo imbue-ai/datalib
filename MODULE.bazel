@@ -500,16 +500,6 @@ crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 #   * `build_script_data` materializes the header + archive into the
 #     execroot the build script runs in, so $(BINDIR) paths resolve.
 #
-#   * The patch also makes the build script take its *linked* path
-#     whenever SQLITE3_LIB_DIR is set. sqlx's `sqlite` feature turns on
-#     libsqlite3-sys's `bundled`, whose build script compiles the
-#     crate's own amalgamation into a second `libsqlite3.a` and never
-#     reads SQLITE3_LIB_DIR. With both archives on the link line, which
-#     SQLite a binary got depended on the linker's search order: the
-#     glibc and darwin links happened to pick doltlite, the static musl
-#     link picked stock SQLite (#366). //datalib/backend:doltlite_link_test
-#     is the check.
-#
 #   * `link_deps = ["//third-party/doltlite:sqlite3"]` threads the same
 #     static archive into the rust_library link step as a native
 #     compile dep, so rustc's final link command actually has the
