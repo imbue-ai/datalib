@@ -1,13 +1,11 @@
 //! Thin wrapper around the `qmd` CLI.
 
-use crate::qmd::mapping::{QmdHit, QueryMode};
+use crate::qmd::mapping::{CollectionScope, QmdHit, QueryMode};
 use crate::qmd::{qmd_cache_home, qmd_index_path};
 use anyhow::{anyhow, bail, Context, Result};
 use std::path::PathBuf;
 
 pub use crate::qmd::DEFAULT_QMD_VERSION;
-
-pub const DEFAULT_COLLECTION: &str = "mirror";
 
 #[derive(Debug, Clone)]
 pub struct QmdRunnerConfig {
@@ -15,7 +13,6 @@ pub struct QmdRunnerConfig {
     /// `unified_index/qmd/index.sqlite`.
     pub qmd_root: PathBuf,
     pub qmd_version: String,
-    pub collection: String,
 }
 
 impl QmdRunnerConfig {
@@ -23,7 +20,6 @@ impl QmdRunnerConfig {
         Self {
             qmd_root: qmd_root.into(),
             qmd_version: DEFAULT_QMD_VERSION.into(),
-            collection: DEFAULT_COLLECTION.into(),
         }
     }
 
@@ -61,33 +57,60 @@ impl QmdRunner {
         &self.cfg
     }
 
-    pub fn query(&self, q: &str, limit: usize) -> Result<Vec<QmdHit>> {
+    pub fn query(&self, q: &str, limit: usize, scope: &CollectionScope) -> Result<Vec<QmdHit>> {
         let rewritten = build_qmd_query(q);
-        self.run("query", &rewritten, limit, &["--no-rerank"])
+        self.run("query", &rewritten, limit, scope, &["--no-rerank"])
     }
 
-    pub fn vsearch(&self, q: &str, limit: usize) -> Result<Vec<QmdHit>> {
-        self.run("vsearch", q, limit, &[])
+    pub fn vsearch(&self, q: &str, limit: usize, scope: &CollectionScope) -> Result<Vec<QmdHit>> {
+        self.run("vsearch", q, limit, scope, &[])
     }
 
-    pub fn search(&self, mode: QueryMode, q: &str, limit: usize) -> Result<Vec<QmdHit>> {
+    pub fn search(
+        &self,
+        mode: QueryMode,
+        q: &str,
+        limit: usize,
+        scope: &CollectionScope,
+    ) -> Result<Vec<QmdHit>> {
+        if scope.is_empty() {
+            return Ok(Vec::new());
+        }
         match mode {
-            QueryMode::Hybrid => self.query(q, limit),
-            QueryMode::Vsearch => self.vsearch(q, limit),
+            QueryMode::Hybrid => self.query(q, limit, scope),
+            QueryMode::Vsearch => self.vsearch(q, limit, scope),
         }
     }
 
-    fn run(&self, mode: &str, q: &str, limit: usize, extra: &[&str]) -> Result<Vec<QmdHit>> {
+    fn run(
+        &self,
+        mode: &str,
+        q: &str,
+        limit: usize,
+        scope: &CollectionScope,
+        extra: &[&str],
+    ) -> Result<Vec<QmdHit>> {
         let mut cmd = crate::qmd::qmd_command(&self.cfg.qmd_version);
         cmd.arg(mode)
             .arg(q)
             .arg("-n")
             .arg(limit.to_string())
             .arg("--json");
+        // `-c` is repeatable and ORs. Omitted entirely for an unscoped
+        // search, which qmd answers from its default collection set.
+        for name in scope.names().unwrap_or(&[]) {
+            cmd.arg("-c").arg(name);
+        }
         for a in extra {
             cmd.arg(a);
         }
+        // See the note on the daemon's spawn: qmd reconciles the index's
+        // `store_collections` against `$XDG_CONFIG_HOME/qmd/index.yml`,
+        // so pointing it at the index without also pointing it at that
+        // index's own config home rewrites the registry and every
+        // collection-scoped search comes back empty.
         cmd.env("XDG_CACHE_HOME", self.cfg.cache_home());
+        cmd.env("XDG_CONFIG_HOME", self.cfg.cache_home());
         let out = cmd.output().with_context(|| {
             format!(
                 "failed to spawn `{}`; is Node.js installed?",

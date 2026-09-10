@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use datalib_etl_render::grid_index::{build_grid_index, init_schema};
 use datalib_obs::{init as init_obs, ObsArgs};
-use datalib_qmd_indexer::{run_index, IndexOptions};
+use datalib_qmd_indexer::{discover_groups, run_index, IndexOptions, LEGACY_COLLECTION_NAME};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::{debug, info, info_span};
 
@@ -114,6 +114,10 @@ async fn main() -> Result<()> {
     if args.qmd_index {
         let mut opts = IndexOptions::new(args.out.clone());
         opts.embed = !args.qmd_no_embed;
+        // No config here to read the groups from, so take every group
+        // that has a rendered tree.
+        opts.groups = discover_groups(&args.out)?;
+        opts.retire_collections = vec![LEGACY_COLLECTION_NAME.to_string()];
         info!(event = "qmd_index_start", root = %args.out.display(), embed = opts.embed);
         let outcome = tokio::task::spawn_blocking(move || run_index(&opts))
             .await

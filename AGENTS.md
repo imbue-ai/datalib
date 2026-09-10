@@ -482,7 +482,9 @@ step (bring the data in, from an origin or from files on disk) and a
 `render_markdown` step, and two shared fan-in steps under the
 `unified_index` group index every source's `render_markdown` tree:
 `grid_index` (the SQL index at `unified_index/grid_index/db.doltlite_db`)
-and `qmd_index` (semantic search at `unified_index/qmd_index/`). Both
+and `qmd_index` (semantic search at `unified_index/qmd_index/`, one qmd
+collection per group so a `source_name:` search scopes retrieval instead
+of filtering its results). Both
 are read by
 the `unified_index` applet, which serves the grid — `datalib-http` does
 not open them. Scheduler state lives at `system/dag_state.json`. A config entry the

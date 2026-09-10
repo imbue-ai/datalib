@@ -16,10 +16,10 @@ use axum::{
 };
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport};
 use datalib_unified_index::qmd::{
-    GridIndex, QmdDaemon, QmdDaemonConfig, QmdIndexReader, QmdIndexSummary, QmdRunner,
-    QmdRunnerConfig, QueryMode,
+    CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdIndexReader, QmdIndexSummary,
+    QmdRunner, QmdRunnerConfig, QueryMode,
 };
-use datalib_unified_index::query::{parse_query, FreeTextMode, ParsedQuery};
+use datalib_unified_index::query::{parse_query, Field, FreeTextMode, ParsedQuery};
 use datalib_unified_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
 use datalib_unified_index::search::SearchRow;
 use serde::{Deserialize, Serialize};
@@ -259,6 +259,7 @@ async fn run_qmd_search(
     let root_owned = root.as_ref().clone();
     let parsed_for_qmd = parsed.clone();
     let daemon = daemon.clone();
+    let scope = collection_scope(parsed);
     // Ask qmd for a generous hit count: a single qmd hit (e.g. a
     // conversation-level snippet) can resolve to many grid rows. We then
     // truncate to `limit` after row expansion.
@@ -272,7 +273,7 @@ async fn run_qmd_search(
         // including a not-yet-built index — we drop down to a fresh
         // `npx … query` shell-out so a missing or misbehaving daemon
         // doesn't kill search entirely.
-        match daemon.search(mode, &parsed_for_qmd.free_text, qmd_limit) {
+        match daemon.search(mode, &parsed_for_qmd.free_text, qmd_limit, &scope) {
             Ok(hits) => return Ok(hits),
             Err(e) => {
                 eprintln!("qmd daemon search failed, falling back to CLI: {e:#}");
@@ -280,7 +281,7 @@ async fn run_qmd_search(
         }
         let cfg = QmdRunnerConfig::new(root_owned);
         let runner = QmdRunner::new(cfg)?;
-        runner.search(mode, &parsed_for_qmd.free_text, qmd_limit)
+        runner.search(mode, &parsed_for_qmd.free_text, qmd_limit, &scope)
     })
     .await
     .map_err(|e| anyhow::anyhow!("qmd task join error: {e}"))??;
@@ -316,6 +317,34 @@ async fn run_qmd_search(
         r.score = scores.get(&r.uuid).copied();
     }
     Ok(rows)
+}
+
+/// The qmd collections a parsed query may draw from.
+///
+/// There is one collection per group, named after it, and
+/// `source_name:` names a group — so a scoped query becomes a scoped
+/// retrieval instead of a filter over whatever the global top-N happened
+/// to contain. That difference is the whole point: a source whose hits
+/// never enter the global list cannot be recovered by filtering, so
+/// `source_name:x <text>` used to come back empty while `x` matched
+/// strongly on its own.
+///
+/// Only positive terms scope. A negated `-source_name:x` is "every
+/// collection but this one", which needs a list this function has no way
+/// to obtain; it stays unscoped and is left to the SQL filter, which is
+/// no worse than before.
+fn collection_scope(parsed: &ParsedQuery) -> CollectionScope {
+    let names: Vec<String> = parsed
+        .terms
+        .iter()
+        .filter(|t| t.field == Field::SourceName && !t.negate)
+        .map(|t| t.value.clone())
+        .collect();
+    if names.is_empty() {
+        CollectionScope::All
+    } else {
+        CollectionScope::Only(names)
+    }
 }
 
 /// Cap on how many documents one `/qmd_state` call may ask about.

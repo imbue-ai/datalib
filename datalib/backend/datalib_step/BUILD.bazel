@@ -82,6 +82,7 @@ rust_binary(
         "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",

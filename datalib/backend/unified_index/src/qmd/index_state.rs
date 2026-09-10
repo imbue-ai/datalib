@@ -8,7 +8,7 @@ use serde::Serialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-use crate::qmd::{qmd_index_path, DEFAULT_COLLECTION};
+use crate::qmd::qmd_index_path;
 use crate::repo::IndexRepo;
 
 /// Max hashes per `IN (…)` batch. SQLite's default
@@ -19,27 +19,33 @@ const HASH_BATCH: usize = 400;
 /// What the qmd index holds for one content hash.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct DocIndexState {
-    /// An active `documents` row in our collection carries this hash —
-    /// i.e. this exact content is in the keyword index.
+    /// An active `documents` row carries this hash — i.e. this exact
+    /// content is in the keyword index.
     pub indexed: bool,
     /// …and it has a complete set of embedding vectors, so semantic
     /// search can reach it.
     pub embedded: bool,
 }
 
-/// Collection-wide totals, for the "N of M documents searchable" line.
+/// Index-wide totals, for the "N of M documents searchable" line.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct QmdIndexSummary {
-    /// Active `documents` rows in our collection.
+    /// Distinct content hashes with an active `documents` row.
     pub documents: u64,
     /// …of which have a complete vector set.
     pub embedded: u64,
 }
 
 /// Read-only handle on a data root's qmd index.
+///
+/// Every query here spans the whole index rather than naming a
+/// collection. The index at `unified_index/qmd_index` has exactly one
+/// writer — the `qmd_index` step — and that step registers one
+/// collection per group, so every row in it is one of ours. Naming a
+/// collection would only create a way to under-report: a source added
+/// after this code was written would read as "not indexed".
 pub struct QmdIndexReader {
     pool: SqlitePool,
-    collection: String,
 }
 
 impl QmdIndexReader {
@@ -63,20 +69,14 @@ impl QmdIndexReader {
             .max_connections(1)
             .connect_with(opts)
             .await?;
-        Ok(Some(Self {
-            pool,
-            collection: DEFAULT_COLLECTION.to_string(),
-        }))
+        Ok(Some(Self { pool }))
     }
 
     /// Wrap a pool that is already open on a qmd-shaped database.
     /// Exists for tests, which build the three tables in a throwaway
     /// file rather than shipping a binary index around.
-    pub fn from_pool(pool: SqlitePool, collection: impl Into<String>) -> Self {
-        Self {
-            pool,
-            collection: collection.into(),
-        }
+    pub fn from_pool(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 
     /// Look up the index state of each of `hashes`. Hashes with no
@@ -101,13 +101,13 @@ impl QmdIndexReader {
                                      MAX(total_chunks) AS expected \
                                 FROM content_vectors GROUP BY hash, model) v \
                      ON v.hash = d.hash \
-                  WHERE d.collection = ? AND d.active = 1 AND d.hash IN ({placeholders}) \
+                  WHERE d.active = 1 AND d.hash IN ({placeholders}) \
                   GROUP BY d.hash"
             );
             // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: the only
             // interpolation is `placeholders`, a `?,?,?` run built from
-            // `chunk.len()`. Collection and hashes are bound.
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&self.collection);
+            // `chunk.len()`. The hashes are bound.
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
             for h in chunk {
                 q = q.bind(h);
             }
@@ -131,7 +131,7 @@ impl QmdIndexReader {
             "SELECT COUNT(*) AS documents, \
                     COALESCE(SUM(CASE WHEN e.embedded = 1 THEN 1 ELSE 0 END), 0) AS embedded \
                FROM (SELECT DISTINCT hash FROM documents \
-                      WHERE collection = ? AND active = 1) d \
+                      WHERE active = 1) d \
                LEFT JOIN (SELECT hash, \
                                  MAX(CASE WHEN chunks >= expected THEN 1 ELSE 0 END) AS embedded \
                             FROM (SELECT hash, model, COUNT(*) AS chunks, \
@@ -140,7 +140,6 @@ impl QmdIndexReader {
                            GROUP BY hash) e \
                  ON e.hash = d.hash",
         )
-        .bind(&self.collection)
         .fetch_one(&self.pool)
         .await?;
         Ok(QmdIndexSummary {
@@ -320,7 +319,7 @@ mod tests {
         add_chunks(&pool, "h_partial", "m1", 2, 3).await;
         add_chunks(&pool, "h_full", "m1", 3, 3).await;
 
-        let r = QmdIndexReader::from_pool(pool, "mirror");
+        let r = QmdIndexReader::from_pool(pool);
         let st = r
             .states_for_hashes(&["h_none".into(), "h_partial".into(), "h_full".into()])
             .await
@@ -359,7 +358,7 @@ mod tests {
         add_chunks(&pool, "h", "old", 2, 3).await;
         add_chunks(&pool, "h", "new", 2, 3).await;
 
-        let r = QmdIndexReader::from_pool(pool, "mirror");
+        let r = QmdIndexReader::from_pool(pool);
         let st = r.states_for_hashes(&["h".into()]).await.unwrap();
         assert!(
             !st["h"].embedded,
@@ -378,29 +377,47 @@ mod tests {
         add_chunks(&pool, "h", "old", 1, 3).await;
         add_chunks(&pool, "h", "new", 3, 3).await;
 
-        let r = QmdIndexReader::from_pool(pool, "mirror");
+        let r = QmdIndexReader::from_pool(pool);
         let st = r.states_for_hashes(&["h".into()]).await.unwrap();
         assert!(st["h"].embedded);
     }
 
     /// Deactivated documents (qmd marks a vanished file `active = 0`
-    /// rather than deleting it) and documents in another collection are
-    /// both invisible — a hash we can't see reports as not indexed.
+    /// rather than deleting it) are invisible — a hash we can't see
+    /// reports as not indexed.
     #[tokio::test]
-    async fn inactive_and_foreign_documents_do_not_count() {
+    async fn inactive_documents_do_not_count() {
         let td = tempfile::tempdir().unwrap();
         let pool = qmd_shaped_db(td.path()).await;
-        add_doc(&pool, "mirror", "gone.md", "h_gone", 0).await;
-        add_doc(&pool, "other", "x.md", "h_other", 1).await;
+        add_doc(&pool, "slack_imbue", "gone.md", "h_gone", 0).await;
         add_chunks(&pool, "h_gone", "m", 1, 1).await;
-        add_chunks(&pool, "h_other", "m", 1, 1).await;
 
-        let r = QmdIndexReader::from_pool(pool, "mirror");
+        let r = QmdIndexReader::from_pool(pool);
+        let st = r.states_for_hashes(&["h_gone".into()]).await.unwrap();
+        assert!(st.is_empty(), "got {st:?}");
+    }
+
+    /// Every collection in this index belongs to some group, so the
+    /// reader spans all of them. Scoping to one name was right when
+    /// there was one collection; with one per source it would report a
+    /// perfectly-indexed document as missing.
+    #[tokio::test]
+    async fn documents_in_every_collection_count() {
+        let td = tempfile::tempdir().unwrap();
+        let pool = qmd_shaped_db(td.path()).await;
+        add_doc(&pool, "slack_imbue", "a.md", "h_slack", 1).await;
+        add_doc(&pool, "claude_personal", "b.md", "h_claude", 1).await;
+        add_chunks(&pool, "h_slack", "m", 1, 1).await;
+        add_chunks(&pool, "h_claude", "m", 1, 1).await;
+
+        let r = QmdIndexReader::from_pool(pool);
         let st = r
-            .states_for_hashes(&["h_gone".into(), "h_other".into()])
+            .states_for_hashes(&["h_slack".into(), "h_claude".into()])
             .await
             .unwrap();
-        assert!(st.is_empty(), "got {st:?}");
+        assert!(st["h_slack"].embedded);
+        assert!(st["h_claude"].embedded);
+        assert_eq!(r.summary().await.unwrap().documents, 2);
     }
 
     /// Two paths with identical content share one hash. Both are
@@ -415,7 +432,7 @@ mod tests {
         add_doc(&pool, "mirror", "c.md", "solo", 1).await;
         add_chunks(&pool, "dup", "m", 1, 1).await;
 
-        let r = QmdIndexReader::from_pool(pool, "mirror");
+        let r = QmdIndexReader::from_pool(pool);
         let s = r.summary().await.unwrap();
         assert_eq!(s.documents, 2);
         assert_eq!(s.embedded, 1);
@@ -431,7 +448,7 @@ mod tests {
         for h in &hashes {
             add_doc(&pool, "mirror", h, h, 1).await;
         }
-        let r = QmdIndexReader::from_pool(pool, "mirror");
+        let r = QmdIndexReader::from_pool(pool);
         let st = r.states_for_hashes(&hashes).await.unwrap();
         assert_eq!(st.len(), hashes.len());
     }

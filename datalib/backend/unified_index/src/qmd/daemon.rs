@@ -1,9 +1,7 @@
 //! Long-lived `qmd mcp` subprocess.
 
-use crate::qmd::mapping::{QmdHit, QueryMode};
-use crate::qmd::runner::{
-    has_lex_syntax, strip_lex_syntax, strip_uri, DEFAULT_COLLECTION, DEFAULT_QMD_VERSION,
-};
+use crate::qmd::mapping::{CollectionScope, QmdHit, QueryMode};
+use crate::qmd::runner::{has_lex_syntax, strip_lex_syntax, strip_uri, DEFAULT_QMD_VERSION};
 use crate::qmd::{qmd_cache_home, qmd_index_path};
 use anyhow::{anyhow, bail, Context, Result};
 use std::io::{BufRead, BufReader, Write};
@@ -17,7 +15,6 @@ use std::time::SystemTime;
 pub struct QmdDaemonConfig {
     pub qmd_root: PathBuf,
     pub qmd_version: String,
-    pub collection: String,
 }
 
 impl QmdDaemonConfig {
@@ -25,7 +22,6 @@ impl QmdDaemonConfig {
         Self {
             qmd_root: qmd_root.into(),
             qmd_version: DEFAULT_QMD_VERSION.into(),
-            collection: DEFAULT_COLLECTION.into(),
         }
     }
 }
@@ -75,7 +71,19 @@ impl QmdDaemon {
     /// Run a search. On any I/O error the child is torn down so the next
     /// call respawns cleanly; the caller decides whether to fall back to
     /// the CLI path.
-    pub fn search(&self, mode: QueryMode, q: &str, limit: usize) -> Result<Vec<QmdHit>> {
+    pub fn search(
+        &self,
+        mode: QueryMode,
+        q: &str,
+        limit: usize,
+        scope: &CollectionScope,
+    ) -> Result<Vec<QmdHit>> {
+        // An empty scope matches nothing. qmd would read an empty
+        // `collections` array as "unscoped" and answer with everything,
+        // so this case never reaches it.
+        if scope.is_empty() {
+            return Ok(Vec::new());
+        }
         // The MCP `query` tool requires typed sub-queries — there's no
         // bare auto-expand entry point like the CLI's `qmd query "<text>"`.
         // For Hybrid we send lex+vec (qmd's own "best recall" recipe);
@@ -104,22 +112,28 @@ impl QmdDaemon {
             ensure_started(&mut guard, &self.cfg, index_mtime)?;
             guard.next_id = guard.next_id.wrapping_add(1);
             let id = guard.next_id;
+            let mut arguments = serde_json::json!({
+                "searches": searches,
+                "limit": limit,
+                "rerank": false,
+            });
+            // Scoping happens *inside* retrieval: qmd searches each named
+            // collection and merges, so a source's hits cannot be crowded
+            // out of a global top-N by a larger one. Filtering the results
+            // afterwards — what the applet used to do alone — returns
+            // nothing at all whenever that crowding happens.
+            if let Some(names) = scope.names() {
+                arguments["collections"] = serde_json::json!(names);
+            }
             let req = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "method": "tools/call",
-                "params": {
-                    "name": "query",
-                    "arguments": {
-                        "searches": searches,
-                        "limit": limit,
-                        "rerank": false,
-                    },
-                },
+                "params": { "name": "query", "arguments": arguments },
             });
             send_request(&mut guard, &req)?;
             let resp = read_response(&mut guard, id)?;
-            parse_query_response(&resp, &self.cfg.collection)
+            parse_query_response(&resp)
         })();
         if res.is_err() {
             teardown(&mut guard);
@@ -184,7 +198,16 @@ fn spawn(state: &mut DaemonState, cfg: &QmdDaemonConfig, index_mtime: SystemTime
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("XDG_CACHE_HOME", qmd_cache_home(&cfg.qmd_root));
+        // Both, and the second one is load-bearing. qmd keeps its
+        // collection registry in `$XDG_CONFIG_HOME/qmd/index.yml` and
+        // reconciles the index's `store_collections` table against it on
+        // startup — so a child pointed at the data root's index but at
+        // some *other* config home rewrites that table to match a file
+        // that describes a different corpus (or none), and every
+        // collection-scoped search then matches nothing. The indexer
+        // sets both for the same reason; these two have to agree.
+        .env("XDG_CACHE_HOME", qmd_cache_home(&cfg.qmd_root))
+        .env("XDG_CONFIG_HOME", qmd_cache_home(&cfg.qmd_root));
     let mut child = cmd.spawn().with_context(|| {
         format!(
             "failed to spawn `{}` (is Node.js installed?)",
@@ -299,7 +322,7 @@ fn read_response(state: &mut DaemonState, id: u64) -> Result<serde_json::Value> 
     }
 }
 
-fn parse_query_response(resp: &serde_json::Value, collection: &str) -> Result<Vec<QmdHit>> {
+fn parse_query_response(resp: &serde_json::Value) -> Result<Vec<QmdHit>> {
     let results = resp
         .get("result")
         .and_then(|r| r.get("structuredContent"))
@@ -325,16 +348,15 @@ fn parse_query_response(resp: &serde_json::Value, collection: &str) -> Result<Ve
     let mut out = Vec::with_capacity(results.len());
     for d in results {
         let raw_file = d.get("file").and_then(|v| v.as_str()).unwrap_or("");
-        // MCP paths look like `mirror/slack/...` — same shape as the
-        // CLI's URI minus the `qmd://` scheme. Re-prepending the scheme
-        // lets us reuse the same prefix-strip logic.
-        let with_scheme = if raw_file.starts_with(&format!("{collection}/")) {
-            format!("qmd://{raw_file}")
-        } else {
-            raw_file.to_string()
-        };
+        // `file` is qmd's `displayPath`, built as `collection || '/' ||
+        // path` — so the first segment is always the collection name,
+        // whatever it is. The CLI returns the same string behind a
+        // `qmd://` scheme, so prepending it lets one function strip that
+        // segment for both paths. What is left is the file's path
+        // relative to the collection's root, which is the data root: the
+        // exact string `grid_rows.qmd_path` holds.
         out.push(QmdHit {
-            path: strip_uri(&with_scheme).to_string(),
+            path: strip_uri(&format!("qmd://{raw_file}")).to_string(),
             score: d.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0),
             snippet: d
                 .get("snippet")
@@ -395,7 +417,7 @@ mod tests {
                         },
                         {
                             "docid": "#def",
-                            "file": "other/foo.qmd",
+                            "file": "slack_imbue/slack_imbue/render_markdown/y.qmd",
                             "score": 0.1,
                             "snippet": "",
                             "title": ""
@@ -404,14 +426,27 @@ mod tests {
                 }
             }
         });
-        let hits = parse_query_response(&resp, "mirror").unwrap();
+        let hits = parse_query_response(&resp).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].path, "slack/x.qmd");
         assert_eq!(hits[0].score, 0.42);
         assert_eq!(hits[0].docid, "#abc");
-        // Path that doesn't start with the configured collection is left
-        // untouched (defensive — shouldn't happen in practice).
-        assert_eq!(hits[1].path, "other/foo.qmd");
+        // With one collection per group the collection name and the
+        // path's first segment are the same word, and only the outer one
+        // is stripped: what is left has to be the `qmd_path` a grid row
+        // carries, `<group>/render_markdown/…`.
+        assert_eq!(hits[1].path, "slack_imbue/render_markdown/y.qmd");
+    }
+
+    /// An empty scope is "nothing can match". qmd reads an empty
+    /// `collections` array as unscoped and would answer with the whole
+    /// corpus, so the request must not be made at all.
+    #[test]
+    fn empty_scope_matches_nothing() {
+        assert!(CollectionScope::Only(Vec::new()).is_empty());
+        assert!(!CollectionScope::All.is_empty());
+        assert!(!CollectionScope::Only(vec!["a".into()]).is_empty());
+        assert_eq!(CollectionScope::All.names(), None);
     }
 
     #[test]

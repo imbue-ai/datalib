@@ -20,8 +20,10 @@ TWO archives come out, and the split is a build-cache decision:
     `materialize_tng_root.sh` extracts to build a data root you can
     actually browse.
 
-  * `qmd_md.tar` — markdown only, matching the mask the qmd indexer scans
-    with (`datalib_qmd_indexer::DEFAULT_MASK` = `*/render_markdown/**/*.md`).
+  * `qmd_md.tar` — markdown only, matching the masks the qmd indexer
+    scans with (one collection per group, each covering
+    `<group>/render_markdown/**/*.md` — see
+    `datalib_qmd_indexer::mask_for_group`).
     This is the ONLY input to the `:ingested_tng_qmd` embedding action.
 
 Why the second archive exists: bazel keys an action on the content of

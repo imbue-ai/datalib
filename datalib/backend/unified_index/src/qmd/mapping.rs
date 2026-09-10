@@ -3,6 +3,39 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+/// Which collections a search may draw from. There is one qmd
+/// collection per group, so this is a set of group ids.
+///
+/// [`CollectionScope::All`] omits the argument rather than naming every
+/// collection: qmd then uses its own default set, which is every
+/// collection the index registers. Either way qmd searches each
+/// collection and merges, so no one source's hits can crowd out
+/// another's — the thing a post-retrieval filter cannot fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CollectionScope {
+    All,
+    /// Exactly these. An empty list means "no collection can match", not
+    /// "all of them" — callers must not send it to qmd, which reads an
+    /// empty `collections` argument as unscoped.
+    Only(Vec<String>),
+}
+
+impl CollectionScope {
+    /// The names to scope to, or `None` for an unscoped search.
+    pub fn names(&self) -> Option<&[String]> {
+        match self {
+            CollectionScope::All => None,
+            CollectionScope::Only(names) => Some(names),
+        }
+    }
+
+    /// True when this scope can never match anything, so the search is
+    /// answerable without asking qmd at all.
+    pub fn is_empty(&self) -> bool {
+        matches!(self, CollectionScope::Only(names) if names.is_empty())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryMode {
     /// Hybrid BM25 + vector + reranker. Default for bare search-bar text.
