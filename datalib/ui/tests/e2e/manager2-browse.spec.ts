@@ -11,21 +11,16 @@ import { test, expect, type Page } from "@playwright/test";
 const ROWS = '.ag-grid-scrolling-rows [role="row"]';
 const SEARCH = '[data-testid="search-input"]';
 
-/// The materialized fixture root's `config.toml` declares the applet and
-/// nothing else — the rendered trees and the index arrive as tars, with
-/// no `[[groups]]` describing them, unlike the config a real root gets
-/// from `scaffold_toml`. So everything this spec browses is declared
-/// here first, the way `grid-source-name.spec.ts` does it.
+/// The fixture root declares the `unified_index` group (as a real root
+/// does) but no sources — the per-source rendered trees arrive as tars,
+/// with nothing in the config describing them. So the sources this spec
+/// browses are declared here first, the way `grid-source-name.spec.ts`
+/// does it.
 ///
-/// `unified_index` is a group with no type, which is what a real root
-/// declares too; `media` is the negative case and is the real shape,
-/// since it is one of the three download-only providers and a config for
-/// it genuinely has no `render_markdown` step.
+/// `media` is the negative case and is the real shape: it is one of the
+/// three download-only providers, so a config for it genuinely has no
+/// `render_markdown` step.
 const GROUPS = `
-[[groups]]
-id = "unified_index"
-name = "Unified Index"
-
 [[groups]]
 id = "slack"
 type = "slack"
@@ -96,6 +91,20 @@ function browseButton(page: Page, groupId: string) {
     .locator('button[aria-label^="Browse"]');
 }
 
+/// Click Browse and wait until the grid card is actually up.
+///
+/// Both screens are AG Grids, so "a row exists" is true on the Manage
+/// screen before the click has gone anywhere — waiting on that alone
+/// reads the old page and fails somewhere far from the cause. The search
+/// box belongs to the card and to nothing else, so it is the honest
+/// signal that the navigation landed.
+async function browse(page: Page, groupId: string, expectQuery: string) {
+  await browseButton(page, groupId).click();
+  await expect(page.locator(SEARCH)).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(SEARCH)).toHaveValue(expectQuery);
+  await page.locator(ROWS).first().waitFor({ timeout: 30_000 });
+}
+
 // Captured before this spec edits it and put back afterwards even on
 // failure — leaving sources in the config would take later specs down.
 let original = "";
@@ -114,13 +123,11 @@ test.afterEach(async ({ page }) => {
 test("a source's row opens that source, with its type's columns", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browseButton(page, "slack").click();
+  await browse(page, "slack", "source_name:slack");
 
   // The card stack IS the URL, which is what makes a browse
   // bookmarkable and shareable rather than a transient view.
   await expect(page).toHaveURL(/source_name%3Aslack/);
-  await page.locator(ROWS).first().waitFor({ timeout: 30_000 });
-  await expect(page.locator(SEARCH)).toHaveValue("source_name:slack");
 
   // Every row came from this source. The Source column is hidden here —
   // one value, so the adaptive rule drops it — which is why this reads
@@ -146,8 +153,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
 test("a different type gets a different column set", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browseButton(page, "github").click();
-  await page.locator(ROWS).first().waitFor({ timeout: 30_000 });
+  await browse(page, "github", "source_name:github");
 
   // GitHub's `project` is the repository it belongs to, and it has no
   // channel. The opposite pair to Slack's, from the same fixture.
@@ -158,12 +164,13 @@ test("a different type gets a different column set", async ({ page }) => {
 test("the index group browses every source", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browseButton(page, "unified_index").click();
-  await page.locator(ROWS).first().waitFor({ timeout: 30_000 });
+  // No filter: the index group's browse is every source at once.
+  await browse(page, "unified_index", "");
 
-  // No filter, and the column that separates sources is the one that
-  // earns its place here — the opposite of a per-source browse.
-  await expect(page.locator(SEARCH)).toHaveValue("");
+  // The column that separates sources is the one that earns its place
+  // here — the opposite of a per-source browse. Polled rather than read
+  // once: the cells land a tick after the card says it is painting them
+  // (#384). The query itself is already asserted by `browse` above.
   await expect
     .poll(async () => {
       const sources = await columnValues(page, "source_name");
