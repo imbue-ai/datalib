@@ -632,14 +632,33 @@ export function buildStep(opts: {
   values: FieldValues;
 }): string {
   const { entry, group, phase, values } = opts;
+  return stepToml({
+    group,
+    phase,
+    inputs: opts.inputs,
+    params: paramsToml(entry, values, phase),
+  });
+}
+
+/// The `[[steps]]` block itself: group, function, inputs, then a
+/// params body already rendered as TOML. What `buildStep` writes once
+/// it has turned form values into that body, and what the Sources tab's
+/// quick-add snippets write with a hand-written body — the one place
+/// the shape of a step is spelled out.
+export function stepToml(opts: {
+  group: string;
+  phase: FieldPhase;
+  inputs?: string[];
+  params?: string;
+}): string {
   const inputs = opts.inputs ?? [];
   const inputsLine = inputs.length
     ? `\ninputs = [${inputs.map(quote).join(", ")}]`
     : "";
-  const params = paramsToml(entry, values, phase);
+  const params = opts.params ?? "";
   const block = `[[steps]]
-group = ${quote(group)}
-function = ${quote(functionOf(phase))}${inputsLine}${params ? `\n${params}` : ""}`;
+group = ${quote(opts.group)}
+function = ${quote(functionOf(opts.phase))}${inputsLine}${params ? `\n${params}` : ""}`;
   return block.trimEnd();
 }
 
