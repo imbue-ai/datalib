@@ -11,9 +11,12 @@ whole.
 
 ## Supported data sources
 
-The `type` names the thing mirrored; *how* it comes in is a table on
-the source's ingest step named for the method (`api`, `export`,
-`backup`, `fswalk`, …), and a file-backed method carries its own
+The `type` names the thing mirrored. *Where the data comes from* is
+one table on the source's ingest step, and its name is read under the
+type: `api` is the product's own API, `export` an unpacked export,
+`backup` a phone backup, `fswalk` a folder to scan. A type that is
+not one product spells its sources out — email's are `jmap`,
+`gmail_api` and `mbox`. A table that reads files carries its own
 `path`. See `docs/user/config_examples/all_sources.toml` for every
 shape.
 

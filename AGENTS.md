@@ -70,11 +70,15 @@ reference doc it relates to.
   which is what makes a step's row read "Download" or "Import" and
   what makes `datalib-step` refuse an ingest step that names no
   method. A group's `type` names the thing mirrored (`slack`,
-  `claude`, `contacts`), never the way it is reached, and the ingest
-  step's params hold one table per method, named for it (`api`,
-  `export`, `mbox`, `backup`, `fswalk`, …), a file-backed one carrying
-  its own `path` — the shape `datalib-migrate-config` rewrites any
-  earlier one into. Still to come, optional: the mechanical crate
+  `claude`, `contacts`), never the way it is reached; where the data
+  comes from is one table on the ingest step, whose name is read
+  under the type — `api` is that product's own API, `export` an
+  unpacked export, `backup` a phone backup — and only a type that is
+  not one product qualifies its sources (email's `jmap`, `gmail_api`,
+  `mbox`). A table that reads files carries its own `path`. There is
+  no global list of these names: each type has its own two or three.
+  That is the shape `datalib-migrate-config` rewrites any earlier one
+  into. Still to come, optional: the mechanical crate
   rename (slice 5).
   Read it before touching step ids, the wizard, or `datalib-step`'s
   dispatch. It reverses the "ungrouping" section of `step_identity.md`.
