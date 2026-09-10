@@ -223,7 +223,7 @@ On a Linux host the files the container writes are owned by root, so
 edit `config.toml` with `sudo` or `chown` the folder afterwards. Docker
 Desktop on macOS maps them to your user.
 
-## 3. Live sources: credentials inside the container
+## 3. Live sources: credentials inside the container (no one's tested this)
 
 A web source such as Slack, Claude.ai or Gmail authenticates through
 [latchkey](https://github.com/imbue-ai/latchkey), which the image
