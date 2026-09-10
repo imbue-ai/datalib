@@ -98,6 +98,22 @@ test("a broken entry costs that entry, and nothing else", async ({
   await expect(page.getByText("entry isn’t in the pipeline")).toBeVisible();
 });
 
+test("a step naming a group the config lacks says so on its Edit button", async ({ page }) => {
+  // Only reachable by writing the file: the PUT refuses a config that
+  // drops an entry. The step has a `group`, so it must not be told it
+  // is "outside a group" — the declared groups are what it is missing
+  // from, and that is what the disabled button has to say.
+  writeConfig(`${original}\n[[steps]]\ngroup = "ghost"\nfunction = "ingest"\n`);
+
+  await page.goto("/sources2");
+  await expect(gate(page)).toHaveCount(0);
+  const edit = page
+    .locator('.ag-row[row-id="ghost/ingest"]')
+    .getByRole("button", { name: "Edit settings" });
+  await expect(edit).toBeDisabled();
+  await expect(edit).toHaveAttribute("title", /names a group the config doesn't declare/);
+});
+
 test("a file that is not a config blocks the app, and unblocks it live", async ({
   page,
   request,

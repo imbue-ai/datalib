@@ -1,51 +1,32 @@
 // Quick-add source templates for the Sources tab. Each body is one
-// `[[groups]]` entry plus its two `[[steps]]` tables appended to the
-// DAG config: the source's ingest step and its render step, each
-// declared as `group` + `function` so its id is composed (see
-// `datalib_dag::config`) and with no `command`, since a built-in step
-// is `datalib-step` reading the environment. Params are per-phase: the
-// ingest step carries the provider's download config; the render step
-// needs none for any of these providers (render-side knobs like
-// beeper's `period` would go on it). Credentials are never here — they come
-// from latchkey at runtime. Bodies are functions so date-dependent
-// parts (Slack's `since`) and the install-specific latchkey CLI hint
-// are computed at click time.
+// source appended to the DAG config — the `[[groups]]` entry, its
+// ingest step and its render step — written through the same writers
+// the wizard uses (`buildGroup`, `stepToml`), so the shape of a source
+// is spelled out in `sourceSteps.ts` and nowhere else. What a snippet
+// adds is a hand-written params body for the ingest step: several of
+// these providers have no wizard form, and some carry params the
+// catalog does not model (`carddav`'s `common.input_path`), which is
+// why they go through `stepToml` rather than `buildSource`. Credentials
+// are never here — they come from latchkey at runtime. Bodies are
+// functions so date-dependent parts (Slack's `since`) and the
+// install-specific latchkey CLI hint are computed at click time.
+
+import { buildGroup, stepIdFor, stepToml } from "./sourceSteps";
 
 // YYYY-MM-DD for `n` days before today (UTC).
 function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
-// One source: its group, then the ingest+render step pair, preceded
-// by a light divider so sources stay visually separated in the raw
-// file. `params` is the ingest step's `[steps.params]` body — written
-// as TOML sub-table headers, so it must come last within its step.
-// `preamble` (optional) is comment lines placed between the divider
-// and the group.
-function stepPair(
-  name: string,
-  type: string,
-  params: string,
-  preamble = "",
-): string {
-  const divider = `# ── ${name} ${"─".repeat(Math.max(4, 66 - name.length))}`;
-  // Instruction preambles get a closing divider so the guidance reads
-  // as its own block, visually separate from the entries below.
-  const preambleBlock = preamble ? `${preamble}# ${"─".repeat(70)}\n` : "";
-  return `${divider}
-${preambleBlock}[[groups]]
-id = "${name}"
-type = "${type}"
-
-[[steps]]
-group = "${name}"
-function = "ingest"
-${params}
-
-[[steps]]
-group = "${name}"
-function = "render_markdown"
-inputs = ["${name}/ingest"]`;
+// One source: its group, then the ingest+render step pair. `params` is
+// the ingest step's `[steps.params]` body — written as TOML sub-table
+// headers, so it must come last within its step. `preamble` (optional)
+// is comment lines placed above the group's divider.
+function source(id: string, type: string, params: string, preamble = ""): string {
+  const group = buildGroup({ id, name: "", type });
+  const ingest = stepToml({ group: id, phase: "download", params });
+  const render = stepToml({ group: id, phase: "render", inputs: [stepIdFor(id, "download")] });
+  return `${preamble}${group}\n\n${ingest}\n\n${render}`;
 }
 
 export type Snippet = { label: string; body: (latchkeyCli: string) => string };
@@ -54,7 +35,7 @@ export const SNIPPETS: Snippet[] = [
   {
     label: "Claude",
     body: (lk) =>
-      stepPair(
+      source(
         "claude",
         "claude_api",
         "[steps.params]\nsync = {}",
@@ -68,14 +49,14 @@ export const SNIPPETS: Snippet[] = [
   },
   {
     label: "ChatGPT",
-    body: () => stepPair("chatgpt", "chatgpt_api", "[steps.params]\nsync = {}"),
+    body: () => source("chatgpt", "chatgpt_api", "[steps.params]\nsync = {}"),
   },
   {
     // `since` starts the backfill 30 days back so the first sync stays
     // small; users widen it once they've seen a sync succeed.
     label: "Slack",
     body: () =>
-      stepPair(
+      source(
         "slack",
         "slack_api",
         `[steps.params.sync]
@@ -86,16 +67,16 @@ since = "${isoDaysAgo(30)}"`,
   },
   {
     label: "GitHub",
-    body: () => stepPair("github", "github_api", "[steps.params]\nsync = {}"),
+    body: () => source("github", "github_api", "[steps.params]\nsync = {}"),
   },
   {
     label: "GitLab",
-    body: () => stepPair("gitlab", "gitlab_api", "[steps.params]\nsync = {}"),
+    body: () => source("gitlab", "gitlab_api", "[steps.params]\nsync = {}"),
   },
   {
     label: "Email (JMAP)",
     body: () =>
-      stepPair(
+      source(
         "fastmail",
         "email",
         `[steps.params.sync]
@@ -107,7 +88,7 @@ hostname = "api.fastmail.com"`,
     // lives under `common`, not at the top of the params.
     label: "Contacts (vCard)",
     body: () =>
-      stepPair(
+      source(
         "contacts",
         "carddav",
         `[steps.params.common]
@@ -118,6 +99,6 @@ input_path = "~/Downloads/contacts.vcf"`,
     // Sample public source — no latchkey needed. Bare `sync = {}` pulls
     // the default Thucydides Histories (Greek + English) from PerseusDL.
     label: "Perseus (sample)",
-    body: () => stepPair("perseus", "perseus", "[steps.params]\nsync = {}"),
+    body: () => source("perseus", "perseus", "[steps.params]\nsync = {}"),
   },
 ];
