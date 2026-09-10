@@ -668,9 +668,9 @@ function = ${quote(functionOf(opts.phase))}${inputsLine}${params ? `\n${params}`
 
 /// Everything the wizard writes for one source, in the order it goes
 /// into the file: the group (when creating), the ingest step, and the
-/// render step for a provider that renders. A provider that renders
-/// nothing (`renderStep: false`) gets no render step and no
-/// `renderId`.
+/// render step for a source that renders. One that doesn't — rendering
+/// turned off, or a provider that declares no render step — gets no
+/// render step and no `renderId`.
 export function buildSource(opts: {
   entry: CatalogEntry;
   group: string;

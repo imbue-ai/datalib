@@ -118,9 +118,10 @@ const values = ref<FieldValues>({});
 /// choice the user made.
 const idTouched = ref(false);
 
-/// Can this provider render at all? A download-only provider (a photo
-/// catalog, a media tree) has no text to render, and no choice to
-/// offer.
+/// Can this provider render at all? One that declares no render step
+/// has no choice to offer. Rendering no *documents* is not that case:
+/// the render step also emits the storage report, so a media tree or a
+/// photo catalog still has one.
 const providerRenders = computed(() => !!chosen.value && chosen.value.renderStep !== false);
 
 /// Whether this source wants its render step. On by default: mirrored
@@ -176,9 +177,9 @@ const missingSteps = computed<string[]>(() => {
   return out;
 });
 
-/// A render step this source has that its provider does not write — a
-/// hand-written one under a download-only type. Saving removes it, and
-/// that is worth a sentence for the same reason a missing step is.
+/// A render step this source has that the dialog would not write —
+/// rendering is off, or the provider declares none. Saving removes it,
+/// and that is worth a sentence for the same reason a missing step is.
 const orphanRender = computed<string | null>(() =>
   props.editing && !renders.value && props.editing.steps.render
     ? props.editing.steps.render.id

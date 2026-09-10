@@ -228,17 +228,36 @@ describe("buildSource", () => {
     expect(listSteps(text).map((s) => s.id)).toEqual(["slack/ingest", "slack/render_markdown"]);
   });
 
-  it("writes no group when editing, and no render step for a provider that renders nothing", () => {
+  it("writes no group when editing, and no render step when rendering is off", () => {
     const out = buildSource({
       entry: LIGHTROOM,
       group: "photos",
       name: "",
       values: { "catalog.path": "~/cat.lrcat" },
       withGroup: false,
+      renders: false,
     });
     expect(out.groupBody).toBeNull();
     expect(out.stepsBody).not.toContain("render_markdown");
     expect(out.renderId).toBeNull();
+  });
+
+  /// Rendering no *documents* is not a reason to skip the render step:
+  /// it is also what emits the storage report, and without it a
+  /// lightroom or media source reaches the grid nowhere at all.
+  it("writes a render step for a source that renders only the storage report", () => {
+    for (const entry of [LIGHTROOM, catalogFor("media")!]) {
+      const out = buildSource({
+        entry,
+        group: "photos",
+        name: "",
+        values: {},
+        withGroup: true,
+      });
+      expect(out.renderId).toBe("photos/render_markdown");
+      expect(out.stepsBody).toContain('function = "render_markdown"');
+      expect(out.stepsBody).toContain('inputs = ["photos/ingest"]');
+    }
   });
 
   // Each phase's fields land on its own step and nowhere else — a

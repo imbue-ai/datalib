@@ -323,8 +323,10 @@ document counts pages.
 Every source's render wave ends by measuring its own raw store and
 emitting a handful of rows tagged `provider = "datalib"`, `source_label
 = "Storage"`. That is what gives a download-only source — `fsindex`,
-`media` — a place in the grid at all: they render no documents, so
-without this they appear nowhere. `source:Storage` is "show me what
+`media`, `lightroom` — a place in the grid at all: they render no
+documents, so without this they appear nowhere. Rendering no *documents*
+is not a reason to leave the render step out of a config: it is the step
+that emits this report. `source:Storage` is "show me what
 everything weighs"; `source_name:<name>` narrows to one source, since
 the rows live under that source's `render_markdown/`.
 

@@ -18,9 +18,9 @@ const SEARCH = '[data-testid="search-input"]';
 /// here first, the way `grid-source-name.spec.ts` does it.
 ///
 /// `unified_index` is a group with no type, which is what a real root
-/// declares too; `media` is the negative case and is the real shape,
-/// since it is one of the three download-only providers and a config for
-/// it genuinely has no `render_markdown` step.
+/// declares too; `media` is the negative case — a group whose config
+/// declares no `render_markdown` step, which is the only thing that
+/// decides whether there is anything to browse.
 const GROUPS = `
 [[groups]]
 id = "unified_index"
@@ -158,10 +158,10 @@ test("the index group browses every source", async ({ page }) => {
   expect(distinct.size).toBeGreaterThan(1);
 });
 
-/// A source that renders nothing has no rows at all — not even the
+/// A source with no render step has no rows at all — not even the
 /// storage rows, which render is what emits. The button says so rather
 /// than opening an empty grid onto a source that looks broken.
-test("a download-only source cannot be browsed", async ({ page }) => {
+test("a source with no render step cannot be browsed", async ({ page }) => {
   await openManage(page);
   const media = browseButton(page, "media");
   await expect(media).toBeDisabled();

@@ -1,8 +1,8 @@
 //! What a source's mirror weighs, as rows the grid can show.
 //!
 //! Every source's render wave ends here, including the ones that render
-//! no documents of their own — which is how `fsindex` and `media` get a
-//! place in the UI at all.
+//! no documents of their own — which is how `fsindex`, `media` and
+//! `lightroom` get a place in the UI at all.
 //!
 //! **Scope is the raw store, not the whole tree.** `<group>/render_markdown`
 //! is datalib's own output, `system/usage.doltlite_db` already tracks it

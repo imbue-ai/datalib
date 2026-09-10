@@ -194,8 +194,9 @@ pub async fn run(
             }
 
             // Every source gets a storage report, including the ones
-            // that render no documents of their own — for `fsindex` and
-            // `media` it is the only thing they put in the grid.
+            // that render no documents of their own — for `fsindex`,
+            // `media` and `lightroom` it is the only thing they put in
+            // the grid.
             //
             // Planned before the retain sweep below so its id can be
             // added to `keep`. That exemption is load-bearing:
