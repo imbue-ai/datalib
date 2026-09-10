@@ -94,7 +94,7 @@ export type EdgeHoverPayload = {
 // CardRender. These are the names in scope when card source is
 // evaluated; `gridView()` in a card's source calls ViewLibs.gridView.
 export type ViewLibs = {
-  gridView: (opts?: { q?: string }) => CardRender;
+  gridView: (opts?: { q?: string; columns?: string[] }) => CardRender;
   documentView: (
     markdownUuid?: string | null,
     sectionUuid?: string | null,

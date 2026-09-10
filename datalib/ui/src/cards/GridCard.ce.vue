@@ -83,6 +83,13 @@ const props = defineProps<{
   // Initial query from the card source (`gridView({q: "…"})`); the
   // persisted state's `q` wins over it when present.
   q?: string;
+  // Which columns this card opens with, from the card source
+  // (`gridView({columns: ["kind", …]})`) — a Browse card names the set
+  // that suits its source's type (see config/browsePresets.ts).
+  // Undefined keeps the grid's own defaults. A persisted column state
+  // wins over it, same as `q`: once the user has moved a column, this
+  // card is theirs.
+  columns?: string[];
 }>();
 
 const initialState = new URLSearchParams(props.ctx.initialState);
@@ -699,6 +706,11 @@ function applyDefaultSort() {
 // values are all identical (including all-empty) get hidden; columns
 // with varying values get shown. "Adaptive rule wins" — manual
 // column-visibility toggles get overwritten on the next query.
+//
+// This list is what the rule may *reveal*, so it is deliberately not
+// "every optional column": a column named here appears in the default
+// grid whenever its values vary, which is exactly what `hide: true` on
+// a colDef is there to prevent. It stays the set it has always been.
 const ADAPTIVE_FIELDS: (keyof SearchRow)[] = [
   "score",
   "source",
@@ -709,6 +721,31 @@ const ADAPTIVE_FIELDS: (keyof SearchRow)[] = [
   "account",
 ];
 
+/// The preset's columns, or null when this card has none — or when the
+/// user's own persisted column state has superseded it, which is the
+/// same rule `q` follows: once someone has moved a column, this card is
+/// theirs. A function, not a computed: `colsEncoded` is a plain `let`,
+/// so a computed would cache its first answer forever.
+function presetColumns(): Set<string> | null {
+  return !colsEncoded && props.columns?.length ? new Set(props.columns) : null;
+}
+
+// A card opened with a `columns` preset runs the rule over the preset's
+// own columns instead. Those are already on screen, so there the rule
+// can only *trim* — hiding whichever the source leaves empty, never
+// revealing one the preset left out. That split is what lets a preset
+// be generous: it names what would be meaningful for the source, and
+// this decides what is actually there.
+//
+// `snippet` is excluded because it is the content, not a facet: a
+// corpus where every row's text matched would otherwise hide the one
+// column worth reading.
+function adaptiveFields(): (keyof SearchRow)[] {
+  const allowed = presetColumns();
+  if (!allowed) return ADAPTIVE_FIELDS;
+  return [...allowed].filter((c) => c !== "snippet") as (keyof SearchRow)[];
+}
+
 function stringifyForCompare(v: unknown): string {
   if (v == null) return "";
   return typeof v === "string" ? v : String(v);
@@ -716,7 +753,7 @@ function stringifyForCompare(v: unknown): string {
 
 function applyAdaptiveVisibility() {
   if (!gridApi || rows.value.length === 0) return;
-  const state = ADAPTIVE_FIELDS.map((field) => {
+  const state = adaptiveFields().map((field) => {
     const first = stringifyForCompare(rows.value[0][field]);
     const allSame = rows.value.every(
       (r) => stringifyForCompare(r[field]) === first,
@@ -725,6 +762,29 @@ function applyAdaptiveVisibility() {
   });
   restoring = true;
   gridApi.applyColumnState({ state });
+  restoring = false;
+}
+
+/// Show exactly the preset's columns, in its order, and hide every
+/// other optional one. Runs once, before any results land, so the first
+/// paint is already the right shape rather than flickering through the
+/// default set.
+function applyPresetColumns() {
+  const columns = props.columns;
+  if (!gridApi || !columns?.length || colsEncoded) return;
+  const wanted = new Set(columns);
+  const state: ColumnState[] = [
+    // Order the preset's own columns as written…
+    ...columns.map((colId) => ({ colId, hide: false })),
+    // …and hide everything else the grid offers. `snippet` is in every
+    // preset, so nothing here can hide the text column by accident.
+    ...columnDefs.value
+      .map((c) => (c.colId ?? c.field) as string)
+      .filter((colId) => colId && !wanted.has(colId))
+      .map((colId) => ({ colId, hide: true })),
+  ];
+  restoring = true;
+  gridApi.applyColumnState({ state, applyOrder: true });
   restoring = false;
 }
 
@@ -815,6 +875,25 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     },
   },
   { field: "kind", headerName: "Type", width: 110 },
+  // Populated by every provider — the chat's title, the PR's title, the
+  // page's name. Hidden by default in the unified grid, where the
+  // snippet already carries the gist; browse presets show it, because
+  // inside one source it is the column that names the thing.
+  {
+    field: "conversation_name",
+    headerName: "Conversation",
+    width: 200,
+    hide: true,
+  },
+  {
+    field: "project",
+    headerName: "Project",
+    width: 150,
+    hide: true,
+    headerTooltip:
+      "What the source calls a grouping above the conversation: a Claude project, " +
+      "a GitHub repo, a GitLab project path.",
+  },
   // Two columns rather than one combined "search state": `qmd update`
   // and `qmd embed` are separate passes, so "in the keyword index" and
   // "reachable by semantic search" are genuinely different facts, and
@@ -1174,6 +1253,7 @@ const gridOptions: GridOptions<SearchRow> = {
     // open — fine for tests, which drive a single grid.
     (window as unknown as { __fwGridApi?: GridApi<SearchRow> }).__fwGridApi =
       e.api;
+    applyPresetColumns();
     if (colsEncoded) {
       const state = decodeColumnState(colsEncoded);
       if (state) {
