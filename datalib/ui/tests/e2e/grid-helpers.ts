@@ -358,6 +358,12 @@ async function dumpRunnerState(page: Page, id: string, why: string): Promise<voi
 
 async function runIsClosed(page: Page): Promise<boolean> {
   const dag = await (await page.request.get("/api/dag")).json();
+  // `ok: false` is the endpoint failing to read the root at that
+  // instant — its record mid-write, say — and it then carries no run
+  // at all. That is not a closed run; it is no answer. Reading it as
+  // closed is how a healthy `Sync everything` once settled as
+  // "Interrupted" on CI, with the dump showing every field null.
+  if (dag.ok === false) return false;
   return !dag.run || dag.run.finished_at != null;
 }
 
@@ -369,41 +375,44 @@ async function settleRowOnly(
   timeout: number,
 ): Promise<string> {
   let last = "(no status)";
-  await expect
-    .poll(
-      async () => {
-        last = (await statusOf(page, id)) ?? "(no status)";
-        const stamp = await stampOf(page, id);
-        const done = TERMINAL.test(last) && stamp !== before;
-        // "Interrupted" is the one terminal status the UI INFERS rather
-        // than reads: `stepStatus` reports it when a step says
-        // `running` on a run with no `finished_at` while `GET /api/dag`
-        // says no runner holds the lock — and that endpoint answers by
-        // taking the lock itself, which its own comment calls "racy by
-        // nature". So the instant a runner is taking or dropping the
-        // root looks like a run that died, and a settle that believes it
-        // returns "Interrupted" for a healthy `Sync everything`.
-        if (done && last === "Interrupted" && !(await runIsClosed(page))) {
-          return `${last} @ ${stamp} (run record still open)`;
-        }
-        return done ? "finished" : `${last} @ ${stamp}`;
-      },
-      {
-        timeout,
-        intervals: [200],
-        message: `${id} never finished a run newer than ${before ?? "(never run)"}`,
-      },
-    )
-    .toBe("finished");
-  // "Interrupted" reaching a caller means the guard above lost its
-  // race: the DOM's verdict was computed from a `/api/dag` poll that
-  // reported the run not live, and by the time we asked, the run had
-  // closed. The caller is about to fail an assertion whose message is
-  // just the word "Interrupted", so leave behind the evidence that
-  // says whether a run really died — Playwright puts test stdout in
-  // the report and in bazel's test log.
-  if (last === "Interrupted") {
-    await dumpRunnerState(page, id, "settle returned Interrupted");
+  try {
+    await expect
+      .poll(
+        async () => {
+          last = (await statusOf(page, id)) ?? "(no status)";
+          const stamp = await stampOf(page, id);
+          const done = TERMINAL.test(last) && stamp !== before;
+          // "Interrupted" is the one terminal status the UI INFERS rather
+          // than reads: `stepStatus` reports it when a step says
+          // `running` on a run with no `finished_at` while `GET /api/dag`
+          // says no runner holds the lock — and that endpoint answers by
+          // taking the lock itself, which its own comment calls "racy by
+          // nature". So the instant a runner is taking or dropping the
+          // root looks like a run that died, and a settle that believes it
+          // returns "Interrupted" for a healthy `Sync everything`.
+          if (done && last === "Interrupted") {
+            if (!(await runIsClosed(page))) return `${last} @ ${stamp} (run record still open)`;
+            // The run has closed, so the next repaint says what really
+            // happened; a verdict inferred before the close is not it.
+            return `${last} @ ${stamp} (waiting for the grid to catch up with the closed run)`;
+          }
+          return done ? "finished" : `${last} @ ${stamp}`;
+        },
+        {
+          timeout,
+          intervals: [200],
+          message: `${id} never finished a run newer than ${before ?? "(never run)"}`,
+        },
+      )
+      .toBe("finished");
+  } finally {
+    // The poll never returns on "Interrupted", so ending on it means
+    // the poll timed out on a row that stayed that way: leave behind
+    // the evidence that says whether a run really died — Playwright
+    // puts test stdout in the report and in bazel's test log.
+    if (last === "Interrupted") {
+      await dumpRunnerState(page, id, "settle timed out on Interrupted");
+    }
   }
   // The value the poll matched, never a fresh read: the row can be
   // claimed by the next job between the two, and the function would
