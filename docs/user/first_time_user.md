@@ -35,7 +35,8 @@ The sections on credentials (step 2) and on getting your data back out
 > from unintended data loss, and it cuts both ways: a message deleted at
 > the source is gone from the current view but still recoverable from
 > the history. If you truly need something gone, delete the whole
-> `.doltlite_db` file.
+> `.doltlite_db` file. We lean toward keeping: history you have is easy
+> to delete, and history you lost is gone for good.
 >
 > **Terms of service.** The Claude.ai and ChatGPT sources use the same
 > undocumented web APIs your browser does, with your own session. Check
