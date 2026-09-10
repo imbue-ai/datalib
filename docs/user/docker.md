@@ -8,9 +8,44 @@ runs on macOS and Linux under Docker Desktop, Docker Engine, or Colima.
 
 It ships with a small demo data library already ingested — seven
 sources of Star Trek: TNG-themed fixture data — so you can see the app
-before you hand it anything of yours. The shell blocks below are run
-against every published image by `datalib/docker/doc_test.sh`, so they
-are known to work as written.
+before you hand it anything of yours.
+
+## The short version
+
+Generate a token, start the demo, open it — on macOS, in one go:
+
+```sh
+export DATALIB_TOKEN=$(openssl rand -hex 16)
+docker run -d --rm --name datalib-demo -p 127.0.0.1:8731:8731 -e DATALIB_TOKEN \
+  ghcr.io/imbue-ai/datalib datalib-http /opt/datalib/demo &&
+  sleep 3 && open "http://127.0.0.1:8731/?token=$DATALIB_TOKEN"
+```
+
+`docker rm -f datalib-demo` when you're done. On Linux, swap `open` for
+`xdg-open`.
+
+Three details are worth carrying into anything you write yourself:
+
+- **`-e DATALIB_TOKEN` deliberately has no `=value`.** That is Docker's
+  passthrough form — it takes the value from your environment. The
+  token never reaches a command line, so it stays out of your shell
+  history and out of anyone else's `ps` output. Writing
+  `-e DATALIB_TOKEN=hunter2` puts it in both.
+- **The URL is in double quotes.** `?` is a glob character in zsh, so
+  an unquoted URL dies with `no matches found` before the browser
+  opens — and the container is already running by then, which makes it
+  look like the server failed when it didn't.
+- **`-p 127.0.0.1:8731:8731`, not `-p 8731:8731`.** The host-side
+  address is the whole reason nobody else on your network can read the
+  data; without it Docker publishes on every interface. And a bare
+  `-p 8731` is different again — it picks a random host port, so the
+  URL above would point at nothing.
+
+Everything below is that same command unpacked, plus how to point
+datalib at data of your own. Every shell block from here on is run
+against every published image by `datalib/docker/doc_test.sh`, so those
+are known to work as written; the one above is not, because its `open`
+is macOS-only.
 
 Set a few variables once, in the shell you'll use for the rest of this
 page:
