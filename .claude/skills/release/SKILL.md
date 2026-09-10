@@ -67,8 +67,17 @@ published from a local machine — the tag is the trigger.
 
    ```sh
    CARGO_BAZEL_REPIN=1 bazelisk build //datalib/backend/table:datalib_table
+   bazelisk build //datalib/backend/table:datalib_table   # again, WITHOUT the env var
    git status --porcelain MODULE.bazel.lock
    ```
+
+   The second build is not redundant. The lock records the *value* of
+   `CARGO_BAZEL_REPIN` as one of its facts, so a lock written by the
+   repin run says `1` and every ordinary build afterwards rewrites it to
+   `\0` — leaving a dirty file in every developer's tree and tripping
+   `lint_repo`'s check 3. Commit the state a plain build produces, which
+   is the one almost every build will produce. v0.31.0 shipped the `1`
+   state; that is what this second line exists to prevent.
 
    Don't be alarmed by its size: it is a **3-line** diff that prints as
    ~360 KB, because one of those lines is a 17 KB single-line generated
