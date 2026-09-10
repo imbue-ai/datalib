@@ -828,6 +828,10 @@ export type LatchkeyService = {
   /// Whether latchkey knows this service at all. False means the name
   /// is free — the only state in which the wizard may register it.
   registered: boolean;
+  /// How to invoke latchkey on the machine running the backend — a
+  /// bundled path, or the `npx` fallback. Any command shown to a person
+  /// has to start with this rather than a bare `latchkey`.
+  cli: string;
   /// Set when latchkey itself could not be asked. Not fatal: the
   /// account can still be typed.
   error: string | null;
