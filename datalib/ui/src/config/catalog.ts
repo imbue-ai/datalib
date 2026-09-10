@@ -630,7 +630,43 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "fsindex", label: "File index", blurb: "Index a directory tree — paths, sizes, content hashes.", keywords: ["files", "filesystem", "index", "directory", "disk"], kind: "local", icon: null, defaultName: "fsindex", wizard: false },
+  {
+    type: "fsindex",
+    label: "File index",
+    blurb: "Index a directory tree — paths, sizes, content hashes.",
+    keywords: ["files", "filesystem", "index", "directory", "disk"],
+    kind: "local",
+    icon: null,
+    defaultName: "fsindex",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder to index",
+        required: true,
+        target: "fswalk.path",
+        label: "Folder",
+        placeholder: "~/Documents",
+        help:
+          "Scanned recursively, recording every entry's path, kind, size and content " +
+          "hash. Rescans are keyed on mtime, size and inode, so an unchanged file is " +
+          "never re-read. Nothing is converted to markdown — the index is queryable in " +
+          "this source's own store, and what reaches the grid is the storage report.",
+      },
+      {
+        kind: "bool",
+        target: "stamp",
+        label: "Write UUID breadcrumbs into the tree",
+        default: false,
+        help:
+          "Off by default, so the scan stays read-only against the folder it reads. On, " +
+          "it writes a UUID into the .fsindex.yaml of any directory that opted in with " +
+          "stamp_me_with_uuid: true — which is how a directory keeps one identity " +
+          "across moves and renames.",
+      },
+    ],
+  },
   {
     type: "media",
     label: "Music, photos & video",
