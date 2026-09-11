@@ -53,8 +53,8 @@ snapshot test.
 ## Run it
 
 ```sh
-bazelisk build //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL=$PWD/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate   # for parity with other providers
+bazelisk build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL=$PWD/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch   # for parity with other providers
 bazelisk run //datalib/backend/etl/providers/github:github_ingest -- \
     --out /tmp/github-mirror \
     --pull-request imbue-ai/mngr#1650

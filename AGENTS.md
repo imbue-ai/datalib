@@ -260,6 +260,14 @@ reference doc it relates to.
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and
   run from source.
+- [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the
+  Chrome-impersonating curl that Cloudflare-fronted hosts are fetched
+  through: upstream `curl-impersonate`, built from source by our own
+  workflow and pinned by sha256. **Read before touching
+  `latchkey_curl_dispatch.rs`, `LATCHKEY_CURL` in any doc, or the pin**:
+  why `LATCHKEY_CURL` must point at the dispatch and never at the
+  impersonator, and the bump procedure (read the upstream patch diff
+  first — it is the whole delta over curl and BoringSSL).
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites;
   [`docs/dev/coverage.md`](docs/dev/coverage.md) — coverage runs.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
@@ -1045,10 +1053,11 @@ bazel run //datalib/backend/unified_index:fixture_db_snapshot_test.update
 bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_render.update
 bazel run //datalib/backend/etl/providers/slack:slack_translate.update
 
-# Live tests — need LATCHKEY_CURL on the host (same as cargo). Builds
-# the shim once:
-bazel build //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate"
+# Live tests — need LATCHKEY_CURL on the host (same as cargo), pointed
+# at the dispatch curl (never at the impersonator itself — see
+# docs/dev/curl_impersonate.md). Builds both once:
+bazel build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch"
 bazel run //datalib/backend/etl/providers/claude:claude_live.update
 ```
 
@@ -1541,7 +1550,9 @@ the longest offset-suffixed form including microseconds.
 
 The Rust downloaders under `datalib/backend/etl/providers/*/src/ingest/`
 read the `sessionKey` cookie out of `latchkey curl -v` stderr and then
-issue the actual requests via the `latchkey-curl-impersonate` so Cloudflare's
-JA3 wall passes. If the cookie is missing or expired,
+issue the actual requests via `latchkey-curl-dispatch`, which routes
+Cloudflare-fronted hosts to the bundled `curl-impersonate` so the
+TLS-fingerprint wall passes (`docs/dev/curl_impersonate.md`). If the
+cookie is missing or expired,
 `latchkey auth set claude-ai` fixes it; if Cloudflare still 403s, the
 IP/UA may be flagged — wait it out or swap networks.

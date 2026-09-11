@@ -98,7 +98,7 @@ jobs:
           fetch-depth: 0
 
       # BuildBuddy serves the remote action cache (the big win — skips
-      # the multi-minute boring-sys2 / tokio / wreq compiles), but
+      # the multi-minute tokio / sqlx / doltlite compiles), but
       # BuildBuddy is action-cache-only: it doesn't cover the
       # bazelisk binary download, the `http_archive` tarball downloads
       # (rules_rust source, protobuf, etc.), or crate_universe's
@@ -124,8 +124,7 @@ jobs:
 
       # Install the Linux-only build dependencies the macOS runner gets
       # for free via Xcode CLT / Homebrew:
-      #   cmake        — boring-sys2's build script shells out to it
-      #                  to build BoringSSL.
+      #   cmake        — protobuf-src's build script shells out to it.
       #   clang        — driver binary plus llvm-config; the latter
       #                  prints the canonical libclang install dir.
       #   libclang-dev — provides the libclang.so symlink. Bindgen
@@ -175,13 +174,15 @@ jobs:
           echo "Resolved LIBCLANG_PATH=$lib_dir"
           echo "LIBCLANG_PATH=$lib_dir" >> "$GITHUB_ENV"
 
-      # The macos-15-intel image (unlike macos-14) doesn't ship cmake,
-      # which boring-sys2's build script needs to build BoringSSL —
-      # v0.23.1's Intel leg died with "is `cmake` not installed?".
-      # Homebrew on Intel macs installs to /usr/local/bin, which is on
-      # bazel's default strict action PATH, so a plain brew install is
-      # all the wiring needed. Guarded so an image that gains cmake
-      # later doesn't fail on "already installed".
+      # The macos-15-intel image (unlike macos-14) doesn't ship cmake —
+      # v0.23.1's Intel leg died with "is `cmake` not installed?" back
+      # when the impersonating curl was compiled here. Today that leg
+      # builds only `:curl_dist`, which needs no cmake (the impersonating
+      # curl is a fetched archive and the dispatch is std-only Rust), so
+      # this step is kept for the full-dist legs, where protobuf-src
+      # needs it. Homebrew on Intel macs installs to /usr/local/bin,
+      # which is on bazel's default strict action PATH. Guarded so an
+      # image that gains cmake later doesn't fail on "already installed".
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         run: |
@@ -846,7 +847,7 @@ jobs:
   #
   # `WARM_BAZEL_CACHE=false` skips the in-image `bazelisk fetch` +
   # `bazelisk build` warmup. Two reasons:
-  #   * The warmup compiles boring-sys2 / tokio / sqlx etc. under
+  #   * The warmup compiles tokio / sqlx / doltlite etc. under
   #     QEMU emulation on the arm64 leg, which would push tag-time
   #     publish wall-clock from ~10 min to ~1 hour.
   #   * BuildBuddy is the cross-run action cache for the test
