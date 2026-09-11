@@ -605,8 +605,8 @@ describe("renameGroup", () => {
     expect(renameGroup(PAIR, "nope", "X")).toBe(PAIR);
   });
 
-  // The description is the qmd collection context; the same in-place
-  // edit as the name, without the "respells the id" rule.
+  // The description gets the same in-place edit as the name, without
+  // the "respells the id" rule.
   it("sets, replaces and clears a description the same way", () => {
     const set = describeGroup(PAIR, "slack", "Mostly infra channels.");
     expect(set).toContain('id = "slack"\ndescription = "Mostly infra channels."');

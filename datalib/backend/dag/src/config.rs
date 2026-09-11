@@ -116,10 +116,9 @@ pub struct GroupEntry {
     #[serde(default)]
     pub r#type: Option<String>,
     /// What this source is to the person who owns it — "work Slack, mostly
-    /// infra channels". Free text. Forwarded to every step that *reads*
-    /// this group's trees and folded into their fingerprints, so a
-    /// consumer that bakes it into what it writes (the qmd index keeps
-    /// it as the collection's context) re-runs when it changes.
+    /// infra channels". Free text, and like `name`: never forwarded to a
+    /// step and never fingerprinted. Nothing reads it yet; imbue-ai/datalib#409
+    /// is the plan for making search use it.
     #[serde(default)]
     pub description: Option<String>,
 }
@@ -670,9 +669,8 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
     diags.extend(group_diags);
 
     let by_id: BTreeMap<&str, &GroupEntry> = groups.iter().map(|g| (g.id.as_str(), g)).collect();
-    let (mut steps, step_diags) = accept_steps(c.steps, &by_id, &dropped_groups, text);
+    let (steps, step_diags) = accept_steps(c.steps, &by_id, &dropped_groups, text);
     diags.extend(step_diags);
-    attach_group_descriptions(&mut steps, &by_id);
 
     let (applets, applet_diags) = accept_applets(c.applets, text);
     diags.extend(applet_diags);
@@ -698,38 +696,6 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         steps,
         applets,
         diagnostics: diags,
-    }
-}
-
-/// Give each step the `description` of every group its inputs are filed
-/// under, keyed by group id. An input names a step, and a grouped step's
-/// group is known here; an input naming nothing is the graph's problem
-/// and contributes nothing.
-fn attach_group_descriptions(
-    steps: &mut [(StepEntry, StepSpec)],
-    groups: &BTreeMap<&str, &GroupEntry>,
-) {
-    let group_of: BTreeMap<String, String> = steps
-        .iter()
-        .filter_map(|(e, _)| Some((e.id.clone(), e.group.clone()?)))
-        .collect();
-    for (entry, spec) in steps.iter_mut() {
-        for input in &entry.inputs {
-            let Some(group) = group_of.get(input) else {
-                continue;
-            };
-            let Some(description) = groups
-                .get(group.as_str())
-                .and_then(|g| g.description.as_deref())
-            else {
-                continue;
-            };
-            let description = description.trim();
-            if !description.is_empty() {
-                spec.group_descriptions
-                    .insert(group.clone(), description.to_string());
-            }
-        }
     }
 }
 
@@ -1661,12 +1627,10 @@ mod tests {
         assert_eq!(email.fingerprint_material(), named.fingerprint_material());
     }
 
-    /// A description reaches the steps that *read* the group's trees and
-    /// moves their fingerprints, so the qmd index re-applies it as the
-    /// collection's context. The group's own ingest step reads nothing
-    /// and is untouched.
+    /// Like `name`, a description is display text: it is not part of what
+    /// any step is, so editing one re-runs nothing.
     #[test]
-    fn a_groups_description_reaches_its_consumers_and_moves_their_fingerprints() {
+    fn a_groups_description_moves_no_fingerprint() {
         let with = |description_line: &str| {
             let cfg: DagConfig = toml::from_str(&format!(
                 r#"
@@ -1694,27 +1658,13 @@ mod tests {
             to_specs(&cfg).expect("to_specs")
         };
         let bare = with("");
-        let described = with(r#"description = "  Fastmail, mostly receipts  ""#);
-        let blank = with(r#"description = "   ""#);
-
-        assert!(bare[1].group_descriptions.is_empty());
-        assert_eq!(
-            described[1].group_descriptions,
-            BTreeMap::from([("mail".to_string(), "Fastmail, mostly receipts".to_string())])
-        );
-        assert_ne!(
-            bare[1].fingerprint_material(),
-            described[1].fingerprint_material()
-        );
-        assert_eq!(
-            bare[0].fingerprint_material(),
-            described[0].fingerprint_material()
-        );
-        assert!(described[0].group_descriptions.is_empty());
-        assert_eq!(
-            bare[1].fingerprint_material(),
-            blank[1].fingerprint_material()
-        );
+        let described = with(r#"description = "Fastmail, mostly receipts""#);
+        for i in 0..2 {
+            assert_eq!(
+                bare[i].fingerprint_material(),
+                described[i].fingerprint_material()
+            );
+        }
     }
 
     #[test]

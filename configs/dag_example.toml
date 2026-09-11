@@ -61,9 +61,9 @@ data_root = "~/tmp/dr-dag"
 # steps run; the steps under it are named for what they do (`ingest`
 # brings the data in, `render_markdown` renders it), and their ids —
 # the directories they write — are composed from the two. An optional
-# `description` says what this source is to you; the semantic-search
-# index keeps it as the collection's context, so "mostly infra
-# channels" steers retrieval towards infra answers.
+# `description` says what this source is to you. Like the name it is
+# display text nothing depends on; search does not read it yet
+# (imbue-ai/datalib#409).
 [[groups]]
 id = "slack"
 name = "Work Slack"

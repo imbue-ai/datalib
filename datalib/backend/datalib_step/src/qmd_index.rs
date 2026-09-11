@@ -109,7 +109,6 @@ pub async fn run(
     }
     let mut opts = datalib_qmd_indexer::IndexOptions::new(data_root);
     opts.groups = groups;
-    opts.descriptions = env.group_descriptions.clone();
     opts.retire_collections = retire;
     if let Some(d) = models_dir {
         opts.models_dir = d;

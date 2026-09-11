@@ -1,7 +1,6 @@
 //! Drive the `qmd` CLI to (re)build a BM25 + embedding index over the
 //! rendered conversation markdown tree at a given root.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -64,12 +63,6 @@ pub struct IndexOptions {
     /// which drops a source's hits entirely whenever a larger source
     /// fills that global list.
     pub groups: Vec<String>,
-    /// What each group is to its owner, by group id, for the groups whose
-    /// config says. Written as the collection's context, which qmd folds
-    /// into retrieval; re-applied on every run, because retiring and
-    /// re-adding a collection drops it, and cleared from a collection
-    /// whose group no longer has one.
-    pub descriptions: BTreeMap<String, String>,
     /// Collections to unregister once this run's indexing pass is done.
     /// See [`run_index`] for why the removal cannot come earlier.
     pub retire_collections: Vec<String>,
@@ -87,7 +80,6 @@ impl IndexOptions {
             embed: true,
             qmd_version: DEFAULT_QMD_VERSION.to_string(),
             groups: Vec::new(),
-            descriptions: BTreeMap::new(),
             retire_collections: Vec::new(),
             models_dir: default_models_dir(),
             pull: true,
@@ -208,12 +200,6 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
                 "--mask",
                 &mask,
             ],
-        )?;
-        set_context(
-            &cache_home,
-            &opts.qmd_version,
-            group,
-            opts.descriptions.get(group).map(String::as_str),
         )?;
     }
     run_qmd(&cache_home, &opts.qmd_version, &["update"])?;
@@ -357,51 +343,6 @@ fn ensure_collection(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Res
     );
     if combined.contains("already exists") {
         status_line!("[qmd-indexer] collection already registered — continuing");
-        return Ok(());
-    }
-    bail!("qmd {:?} failed: {}: {}", args, out.status, combined.trim());
-}
-
-/// The virtual path qmd keys a whole collection's context under.
-fn collection_context_path(group: &str) -> String {
-    format!("qmd://{group}/")
-}
-
-/// Set the collection's context to `description`, or remove it when
-/// there is none. `qmd context rm` exits non-zero with "No context
-/// found" for a collection that has none, which is the state we wanted.
-fn set_context(
-    cache_home: &Path,
-    qmd_version: &str,
-    group: &str,
-    description: Option<&str>,
-) -> Result<()> {
-    let path = collection_context_path(group);
-    let args: Vec<&str> = match description {
-        Some(text) => vec!["context", "add", &path, text],
-        None => vec!["context", "rm", &path],
-    };
-    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version);
-    cmd.args(&args);
-    cmd.env("XDG_CACHE_HOME", cache_home);
-    cmd.env("XDG_CONFIG_HOME", cache_home);
-    cmd.env("NO_COLOR", "1");
-    status_line!(
-        "[qmd-indexer] $ {}",
-        datalib_runtime::node_runtime::display_command(&cmd)
-    );
-    let out = cmd
-        .output()
-        .with_context(|| "failed to spawn qmd; is Node.js installed?")?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    if description.is_none() && combined.contains("No context found") {
         return Ok(());
     }
     bail!("qmd {:?} failed: {}: {}", args, out.status, combined.trim());

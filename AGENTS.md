@@ -61,9 +61,9 @@ reference doc it relates to.
   off its own folder and its children (`ui/src/config/groupRows.ts`
   holds the rules), and the wizard is one dialog that writes and edits
   a source as a group plus both its steps — the group's `name` and
-  its `description` (kept by the qmd index as the source's collection
-  context, so it steers search) edited in place — with the render
-  step's settings under a "Rendering" heading (`SourceWizard.vue`,
+  its `description` (free text nothing reads yet; #409 says why not
+  qmd) edited in place — with the render step's settings under a
+  "Rendering" heading (`SourceWizard.vue`,
   `ui/src/config/sourceSteps.ts`). Nothing in the UI splits a step id
   any more: phase is read off `function`, the source column off the
   group. Every ingest method a provider accepts declares itself

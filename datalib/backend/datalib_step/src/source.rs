@@ -1,8 +1,6 @@
 //! What the runner tells a step about itself: the environment it sets and
 //! the `--params` flag it appends.
 
-use std::collections::BTreeMap;
-
 use anyhow::{Context, Result};
 
 use crate::function::Function;
@@ -15,7 +13,6 @@ pub const GROUP_ENV: &str = "DATALIB_DAG_GROUP";
 pub const GROUP_TYPE_ENV: &str = "DATALIB_DAG_GROUP_TYPE";
 pub const FUNCTION_ENV: &str = "DATALIB_DAG_FUNCTION";
 pub const INPUTS_ENV: &str = "DATALIB_DAG_INPUTS";
-pub const GROUP_DESCRIPTIONS_ENV: &str = "DATALIB_DAG_GROUP_DESCRIPTIONS";
 
 /// The step as the runner declared it. `step` is the composed id, and
 /// the one tree this process may write; the loader composed it from
@@ -30,10 +27,6 @@ pub struct StepEnv {
     /// The trees this step reads, data-root-relative, as the runner
     /// resolved them from the config's `inputs`.
     pub inputs: Vec<String>,
-    /// The `description` of each group those trees are filed under, by
-    /// group id — only the groups that wrote one. What the qmd index
-    /// keeps as a collection's context.
-    pub group_descriptions: BTreeMap<String, String>,
 }
 
 impl StepEnv {
@@ -68,15 +61,12 @@ impl StepEnv {
             .filter(|l| !l.is_empty())
             .map(str::to_string)
             .collect();
-        let group_descriptions =
-            parse_group_descriptions(std::env::var(GROUP_DESCRIPTIONS_ENV).ok().as_deref())?;
         Ok(StepEnv {
             step,
             group,
             group_type,
             function,
             inputs,
-            group_descriptions,
         })
     }
 
@@ -109,14 +99,6 @@ impl StepEnv {
                 rel
             }
         }
-    }
-}
-
-fn parse_group_descriptions(raw: Option<&str>) -> Result<BTreeMap<String, String>> {
-    match raw.map(str::trim).filter(|s| !s.is_empty()) {
-        None => Ok(BTreeMap::new()),
-        Some(s) => serde_json::from_str(s)
-            .with_context(|| format!("{GROUP_DESCRIPTIONS_ENV} is not a JSON object of strings")),
     }
 }
 
@@ -174,20 +156,7 @@ mod tests {
             group_type: Some("slack".into()),
             function: Function::parse(function).unwrap(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
-            group_descriptions: BTreeMap::new(),
         }
-    }
-
-    /// The runner leaves the variable unset when no group wrote a
-    /// description; set, it is a JSON object and nothing else.
-    #[test]
-    fn group_descriptions_are_a_json_object_or_absent() {
-        assert!(parse_group_descriptions(None).unwrap().is_empty());
-        assert!(parse_group_descriptions(Some("  ")).unwrap().is_empty());
-        let parsed =
-            parse_group_descriptions(Some(r#"{"mail":"Fastmail, mostly receipts"}"#)).unwrap();
-        assert_eq!(parsed["mail"], "Fastmail, mostly receipts");
-        assert!(parse_group_descriptions(Some("[1]")).is_err());
     }
 
     /// The raw store is whatever the render's input names — which is how

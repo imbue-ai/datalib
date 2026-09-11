@@ -69,9 +69,9 @@ export type ConfiguredGroup = {
   id: string;
   name: string | null;
   type: string | null;
-  /// What this source is to its owner, in a sentence. The semantic-search
-  /// index keeps it as the source's collection context, so it steers
-  /// retrieval. Edited in the wizard; not shown on the Manage screen.
+  /// What this source is to its owner, in a sentence. Edited in the
+  /// wizard and kept in the config; nothing reads it yet. Meant to help
+  /// search one day — imbue-ai/datalib#409 is why it does not today.
   description: string | null;
   /// [start, end) character offsets covering the `[[groups]]` table.
   start: number;

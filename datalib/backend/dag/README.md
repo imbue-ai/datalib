@@ -26,12 +26,10 @@ once: the first run on binaries with `[[groups]]` re-runs the whole
 pipeline against an existing root. It converges, and nothing is lost.
 
 A group's `description` — what the source is to its owner, free text —
-goes the other way. It is forwarded to, and fingerprinted by, every step
-that *reads* the group's trees (`DATALIB_DAG_GROUP_DESCRIPTIONS`, a JSON
-object keyed by group id), because a consumer may have baked it into
-what it wrote: the qmd index keeps it as the collection's context, which
-qmd folds into retrieval. Editing one re-runs the group's render step
-and both index steps, each an incremental pass that finds nothing new.
+is treated exactly like its `name`: never forwarded, never fingerprinted.
+Nothing reads it yet. It was briefly passed to qmd as the collection's
+context, until that turned out to be result metadata rather than a
+ranking input (imbue-ai/datalib#409 has the evidence and the options).
 
 A step outside any group is a custom executable and writes its `id`
 verbatim. That is the only place a step id is written.

@@ -111,8 +111,8 @@ const chosen = ref<CatalogEntry | null>(props.editing?.entry ?? null);
 /// clearing the box removes the key. Nothing is ever pre-filled here;
 /// see [`nameHint`] for what the box shows instead.
 const name = ref(props.editing?.group.name ?? "");
-/// What the source is to this person, for the search index. Blank
-/// removes the key, like the name.
+/// What the source is to this person. Blank removes the key, like the
+/// name.
 const description = ref(props.editing?.group.description ?? "");
 /// The group's id: the directory its steps write under. Typed while
 /// creating, fixed while editing.
@@ -881,10 +881,10 @@ function submit() {
             placeholder="Work Slack, mostly the infra and on-call channels"
           />
           <small class="wiz-help">
-            Optional. A sentence on what this source holds and what it is to you. Search
-            reads it: the semantic index keeps it as this source's context, so a description
-            steers results towards what you meant. Change it whenever you like; the next sync
-            re-indexes with it.
+            Optional. A sentence on what this source holds and what it is to you — "the
+            company Slack, mostly the on-call channels". Kept with the source's settings.
+            It could help search tell similar sources apart one day, but nothing reads it
+            yet. Change it whenever you like: nothing re-runs.
           </small>
         </label>
 
