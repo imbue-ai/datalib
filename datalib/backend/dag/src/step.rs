@@ -59,6 +59,10 @@ pub struct StepSpec {
     /// What this step does within its group: the second segment of its
     /// id, and the directory it writes under the group's.
     pub function: Option<String>,
+    /// The `description` of every group this step's inputs are filed
+    /// under, keyed by group id; only groups that wrote one. In the
+    /// fingerprint: a consumer may have baked it into what it wrote.
+    pub group_descriptions: BTreeMap<String, String>,
 }
 
 impl StepSpec {
@@ -73,6 +77,17 @@ impl StepSpec {
         m.push('\u{1}');
         m.push_str(self.group_type.as_deref().unwrap_or(""));
         m.push('\u{1}');
+        // Only when there is one: an empty section would still add a
+        // separator, moving every existing fingerprint once.
+        if !self.group_descriptions.is_empty() {
+            for (group, description) in &self.group_descriptions {
+                m.push_str(group);
+                m.push('=');
+                m.push_str(description);
+                m.push('\u{2}');
+            }
+            m.push('\u{1}');
+        }
         for i in &self.inputs {
             m.push_str(i.as_str());
             m.push('\u{2}');
@@ -109,6 +124,7 @@ impl StepSpec {
             group: None,
             group_type: None,
             function: None,
+            group_descriptions: BTreeMap::new(),
         }
     }
 
@@ -240,6 +256,9 @@ pub struct StepCtx {
     pub group: Option<String>,
     pub group_type: Option<String>,
     pub function: Option<String>,
+    /// See the same field on [`StepSpec`]. Forwarded as
+    /// `DATALIB_DAG_GROUP_DESCRIPTIONS`, a JSON object; unset when empty.
+    pub group_descriptions: BTreeMap<String, String>,
     pub data_root: PathBuf,
     /// Concrete input artifacts, resolved from the step's input
     /// patterns (producer outputs + external artifacts), relative to

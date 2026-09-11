@@ -19,6 +19,10 @@ pub const ENV_STEP: &str = "DATALIB_DAG_STEP";
 pub const ENV_GROUP: &str = "DATALIB_DAG_GROUP";
 pub const ENV_GROUP_TYPE: &str = "DATALIB_DAG_GROUP_TYPE";
 pub const ENV_FUNCTION: &str = "DATALIB_DAG_FUNCTION";
+/// A JSON object, group id → that group's `description`, over the groups
+/// the step's inputs are filed under. Only groups that wrote one; unset
+/// when none did.
+pub const ENV_GROUP_DESCRIPTIONS: &str = "DATALIB_DAG_GROUP_DESCRIPTIONS";
 pub const ENV_DATA_ROOT: &str = "DATALIB_DAG_DATA_ROOT";
 pub const ENV_INPUTS: &str = "DATALIB_DAG_INPUTS";
 pub const ENV_CHANGED_INPUTS: &str = "DATALIB_DAG_CHANGED_INPUTS";
@@ -92,10 +96,13 @@ pub(crate) async fn run_subprocess(
     let inputs: Vec<&str> = ctx.inputs.iter().map(|a| a.as_str()).collect();
     let changed: Vec<&str> = ctx.changed_inputs.iter().map(|a| a.as_str()).collect();
     let mut cmd = tokio::process::Command::new(prog);
+    let descriptions = (!ctx.group_descriptions.is_empty())
+        .then(|| serde_json::to_string(&ctx.group_descriptions).expect("string map → JSON"));
     for (key, value) in [
         (ENV_GROUP, &ctx.group),
         (ENV_GROUP_TYPE, &ctx.group_type),
         (ENV_FUNCTION, &ctx.function),
+        (ENV_GROUP_DESCRIPTIONS, &descriptions),
     ] {
         match value {
             Some(v) => cmd.env(key, v),

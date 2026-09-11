@@ -84,6 +84,7 @@ in the environment.
 | `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/ingest`) |
 | `DATALIB_DAG_GROUP` | the group it is filed under (`weather`); unset for a step outside any group |
 | `DATALIB_DAG_GROUP_TYPE` | the group's `type`, when it declares one |
+| `DATALIB_DAG_GROUP_DESCRIPTIONS` | a JSON object, group id → that group's `description`, over the groups your inputs are filed under; only the groups that wrote one, and unset when none did. It is in your fingerprint, so an edit to one re-runs you |
 | `DATALIB_DAG_FUNCTION` | what this step does within its group (`ingest`); unset for a step outside any group |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
 | `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |

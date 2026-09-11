@@ -192,7 +192,7 @@ impl RunReport {
 /// What the dispatcher decided for a ready step.
 enum Decision {
     Run {
-        ctx: StepCtx,
+        ctx: Box<StepCtx>,
     },
     /// Up to date, or outside the runnable subgraph. Either way the
     /// step's output keeps the version recorded for it, so consumers
@@ -368,7 +368,7 @@ impl Runner {
                         let child_env = self.child_env.clone();
                         set.spawn(async move {
                             let (attempts, res) =
-                                invoke_with_retry(&run, ctx, &retry, &sink, &child_env).await;
+                                invoke_with_retry(&run, *ctx, &retry, &sink, &child_env).await;
                             (i, attempts, res, consumed)
                         });
                     }
@@ -408,7 +408,7 @@ impl Runner {
                         let child_env = self.child_env.clone();
                         set.spawn(async move {
                             let (attempts, res) =
-                                invoke_with_retry(&run, ctx, &retry, &sink, &child_env).await;
+                                invoke_with_retry(&run, *ctx, &retry, &sink, &child_env).await;
                             (i, attempts, res, consumed)
                         });
                     }
@@ -866,11 +866,12 @@ impl Runner {
             };
         }
         Decision::Run {
-            ctx: StepCtx {
+            ctx: Box::new(StepCtx {
                 step_id: spec.id.clone(),
                 group: spec.group.clone(),
                 group_type: spec.group_type.clone(),
                 function: spec.function.clone(),
+                group_descriptions: spec.group_descriptions.clone(),
                 data_root: self.data_root.clone(),
                 inputs: graph.resolved_inputs[i].clone(),
                 // "What moved" only means something when the step is
@@ -884,7 +885,7 @@ impl Runner {
                 },
                 checkpoint: checkpoint.clone(),
                 progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
-            },
+            }),
         }
     }
 
