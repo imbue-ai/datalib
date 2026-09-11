@@ -465,6 +465,10 @@ datalib/
                    shared crate.
     table/         `datalib_table`: the `BulkUpsertable` row-write
                    contract, alone, with `sqlx` as its only dependency.
+    probe/         `datalib_probe`: the "Test connection" report shape,
+                   alone (serde + strum). Taken only by providers that
+                   implement a probe, so the wire format can change
+                   without rebuilding every `<p>_config` crate.
     migrate_config/ `datalib-migrate-config`: rewrites a `config.toml`
                    from a shape nothing writes any more into the one the
                    wizard writes. One rewrite at a time (today: ungrouped

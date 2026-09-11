@@ -2,6 +2,10 @@
 //! provider that can be probed produces. `datalib-step probe <type>`
 //! prints it to stdout and the HTTP server forwards it verbatim, so
 //! the field names here are the wire format the wizard reads.
+//!
+//! Its own crate so that a provider gaining a probe, or the report
+//! growing a field, costs the probe-capable providers a rebuild and
+//! nothing else.
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
@@ -114,9 +118,40 @@ impl ProbeItem {
     }
 }
 
+/// Newest first, and an item with no `updated_at` sorts last rather
+/// than jumping to the top the way an empty string would.
+pub fn sort_newest_first(items: &mut [ProbeItem]) {
+    items.sort_by(|a, b| {
+        b.updated_at
+            .is_some()
+            .cmp(&a.updated_at.is_some())
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn conv(path: &str, updated_at: Option<&str>) -> ProbeItem {
+        ProbeItem {
+            updated_at: updated_at.map(str::to_string),
+            ..ProbeItem::new(path, ProbeItemKind::Conversation)
+        }
+    }
+
+    #[test]
+    fn newest_first_and_undated_last() {
+        let mut items = vec![
+            conv("old", Some("2024-01-01T00:00:00Z")),
+            conv("undated", None),
+            conv("new", Some("2026-09-01T00:00:00Z")),
+        ];
+        sort_newest_first(&mut items);
+        let order: Vec<&str> = items.iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(order, vec!["new", "old", "undated"]);
+    }
 
     /// strum and serde are independent derives producing independent
     /// strings; nothing but this makes them agree.
