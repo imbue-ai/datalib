@@ -109,6 +109,12 @@ doltlite -readonly slack/ingest/entities.doltlite_db \
     LIMIT 20;"
 ```
 
+The app shows the same thing: right-click a row on the Manage screen
+and pick **Show commit history**, or ask `GET
+/api/pipeline/history?tree=<group or step id>` for it as JSON — every
+store under that tree, each commit with its per-table row counts and
+what the commit added, deleted and modified (`datalib/backend/history/`).
+
 Each row is one `dolt_commit()` call from the ETL — e.g.
 `download slack: msgs=29 replies=51 media[...]` for a successful Slack
 sync, or `download slack: interrupted (Ctrl-C)` for a

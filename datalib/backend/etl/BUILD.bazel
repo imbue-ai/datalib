@@ -123,6 +123,7 @@ rust_binary(
     edition = "2021",
     deps = [
         ":datalib_etl",
+        "//datalib/backend/history:datalib_history",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
