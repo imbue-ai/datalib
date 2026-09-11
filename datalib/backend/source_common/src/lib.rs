@@ -6,10 +6,8 @@ use std::path::{Path, PathBuf};
 
 pub mod download_params;
 pub mod glob;
-pub mod probe;
 pub use download_params::DownloadParams;
 pub use glob::glob_match;
-pub use probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
 
 /// Append a JSONL line per upsert into `<raw_path>/events/<table>.jsonl`.
 /// Write-only mirror of the raw store, never read by the pipeline. See

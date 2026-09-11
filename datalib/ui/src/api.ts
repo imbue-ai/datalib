@@ -627,6 +627,55 @@ export function fetchPipelineStorage(
   return getJson<PipelineStorage>(`/api/pipeline/storage${q}`, signal);
 }
 
+/// One table as it stood after one commit. Mirrors
+/// `datalib_history::TableState`.
+export type HistoryTable = {
+  table: string;
+  /// Rows after the commit.
+  rows: number;
+  added: number;
+  deleted: number;
+  modified: number;
+};
+
+/// One `dolt_commit`. `date` is ISO-8601 with an explicit `+00:00`.
+export type HistoryCommit = {
+  hash: string;
+  /// First parent; null on the root commit.
+  parent: string | null;
+  committer: string;
+  date: string;
+  message: string;
+  /// Every table, largest first, as of this commit.
+  tables: HistoryTable[];
+};
+
+/// One `.doltlite_db` file's log, newest first.
+export type StoreHistory = {
+  /// The file, data-root-relative.
+  path: string;
+  commits: HistoryCommit[];
+  /// The store has more commits than `limit` allowed.
+  truncated: boolean;
+};
+
+/// What `GET /api/pipeline/history` answers for one declared tree: a
+/// step's store(s), or for a group every store under its steps.
+export type TreeHistory = {
+  tree: string;
+  stores: StoreHistory[];
+};
+
+export function fetchTreeHistory(
+  tree: string,
+  signal?: AbortSignal,
+): Promise<TreeHistory> {
+  return getJson<TreeHistory>(
+    `/api/pipeline/history?tree=${encodeURIComponent(tree)}`,
+    signal,
+  );
+}
+
 export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
   return getJson<SyncSource[]>("/api/sync/sources", signal);
 }
@@ -889,7 +938,7 @@ export type ServiceRegistration = {
 };
 
 /// What one probe item is. Mirrors `ProbeItemKind` in
-/// datalib/backend/source_common/src/probe.rs, hand-kept in step:
+/// datalib/backend/probe/src/lib.rs, hand-kept in step:
 /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
 /// downloadable, but never matched by the render-side filter),
 /// `conversation` (one chat thread — a Claude chat, a Slack DM) or
@@ -897,7 +946,7 @@ export type ServiceRegistration = {
 export type ProbeItemKind = "mailbox" | "keyword" | "conversation" | "channel";
 
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
-/// datalib/backend/source_common/src/probe.rs.
+/// datalib/backend/probe/src/lib.rs.
 export type ProbeItem = {
   /// The exact string to put in the filter — a label path, a
   /// conversation uuid.

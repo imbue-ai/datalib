@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 use datalib_etl_claude_config::ClaudeConfig;
-use datalib_source_common::probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
+use datalib_probe::{sort_newest_first, ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
 
 use crate::ingest::api::ClaudeClient;
 
@@ -111,40 +111,9 @@ pub async fn probe(config: &ClaudeConfig) -> Result<ProbeReport> {
     })
 }
 
-/// Newest first, and an item with no `updated_at` sorts last rather
-/// than jumping to the top the way an empty string would.
-fn sort_newest_first(items: &mut [ProbeItem]) {
-    items.sort_by(|a, b| {
-        b.updated_at
-            .is_some()
-            .cmp(&a.updated_at.is_some())
-            .then_with(|| b.updated_at.cmp(&a.updated_at))
-            .then_with(|| a.path.cmp(&b.path))
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn conv(path: &str, updated_at: Option<&str>) -> ProbeItem {
-        ProbeItem {
-            updated_at: updated_at.map(str::to_string),
-            ..ProbeItem::new(path, ProbeItemKind::Conversation)
-        }
-    }
-
-    #[test]
-    fn newest_first_and_undated_last() {
-        let mut items = vec![
-            conv("old", Some("2024-01-01T00:00:00Z")),
-            conv("undated", None),
-            conv("new", Some("2026-09-01T00:00:00Z")),
-        ];
-        sort_newest_first(&mut items);
-        let order: Vec<&str> = items.iter().map(|i| i.path.as_str()).collect();
-        assert_eq!(order, vec!["new", "old", "undated"]);
-    }
 
     /// An export source has no server to reach, so "test connection"
     /// has to say that rather than report a happy empty account.

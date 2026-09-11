@@ -13,18 +13,22 @@ import {
   themeQuartz,
   colorSchemeVariable,
   type ColDef,
+  type DefaultMenuItem,
+  type GetContextMenuItemsParams,
   type GridApi,
   type GridReadyEvent,
   type ICellRendererComp,
   type ICellRendererParams,
   type IsGroupOpenByDefaultParams,
+  type MenuItemDef,
   type RowGroupOpenedEvent,
   type ValueGetterParams,
 } from "ag-grid-community";
-// Tree data — one row per group with its steps under a chevron — is an
-// enterprise module. GridCard already links the whole enterprise bundle,
-// so this costs nothing new; only the one module is registered here.
-import { TreeDataModule } from "ag-grid-enterprise";
+// Tree data — one row per group with its steps under a chevron — and
+// the right-click menu are enterprise modules. GridCard already links
+// the whole enterprise bundle, so this costs nothing new; only the two
+// modules are registered here.
+import { ContextMenuModule, TreeDataModule } from "ag-grid-enterprise";
 import {
   fetchConfig,
   fetchConfigScaffold,
@@ -33,6 +37,7 @@ import {
   fetchDag,
   fetchRuns,
   fetchPipelineStorage,
+  fetchTreeHistory,
   fetchFrontend,
   enqueueJob,
   cancelJob,
@@ -82,6 +87,7 @@ import { browseColumns, browseQuery } from "@/config/browsePresets";
 import { encodeColumns } from "@/router/columns";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
 import RunLogPanel from "@/components/RunLogPanel.vue";
+import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
 import {
   claimedBy as claimedByJob,
@@ -98,7 +104,7 @@ import { subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 
-ModuleRegistry.registerModules([AllCommunityModule, TreeDataModule]);
+ModuleRegistry.registerModules([AllCommunityModule, TreeDataModule, ContextMenuModule]);
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const configText = ref("");
@@ -1442,6 +1448,237 @@ function onCellDoubleClicked(e: { column?: { getColId: () => string }; data?: Ro
   if (row) void openStepLog(row);
 }
 
+// ── A tree's commit history. Every doltlite store keeps its own log —
+// one commit per sync, checkpoint or render pass — and this is the first
+// place the app shows it: one row per commit, with what it did to each
+// table. Read on demand, and re-read while open whenever the runner's
+// record moves, which is the same push that keeps the size column live.
+
+/// The row whose history is open, or null when the panel is closed.
+const historyFor = ref<Row | null>(null);
+const historyLines = ref<HistoryRow[]>([]);
+const historyTruncated = ref<string[]>([]);
+const historyBusy = ref(false);
+const historyError = ref<string | null>(null);
+const loadHistory = freshest<{ rows: HistoryRow[]; truncated: string[] } | Error>((v) => {
+  historyBusy.value = false;
+  if (v instanceof Error) historyError.value = v.message;
+  else {
+    historyError.value = null;
+    historyLines.value = v.rows;
+    historyTruncated.value = v.truncated;
+  }
+});
+
+async function fetchHistoryRows(tree: string) {
+  try {
+    const h = await fetchTreeHistory(tree);
+    return { rows: historyRows(h), truncated: truncatedStores(h) };
+  } catch (e) {
+    return e as Error;
+  }
+}
+
+function openHistory(row: Row) {
+  historyFor.value = row;
+  historyLines.value = [];
+  historyTruncated.value = [];
+  historyError.value = null;
+  historyBusy.value = true;
+  loadHistory.invalidate();
+  void loadHistory(() => fetchHistoryRows(row.id));
+}
+
+/// While the panel is open, a step that just committed shows up without
+/// a reopen. Cheap enough to do on every `dag_changed`: the walk is
+/// bounded and the answer is small.
+function refreshHistory() {
+  const row = historyFor.value;
+  if (!row) return;
+  void loadHistory(() => fetchHistoryRows(row.id));
+}
+
+let historyGridApi: GridApi<HistoryRow> | null = null;
+let lastHistoryPaint = "";
+function onHistoryGridReady(e: GridReadyEvent<HistoryRow>) {
+  historyGridApi = e.api;
+}
+/// The same clock as the main grid's "Last synced": a commit made while
+/// the panel is open reads "seconds ago", and must go on aging.
+function tickHistoryRelative(now: number) {
+  if (!historyFor.value) return;
+  const next = historyLines.value.map((r) => formatRelative(r.date, now)).join("\u0000");
+  if (next === lastHistoryPaint) return;
+  lastHistoryPaint = next;
+  historyGridApi?.refreshCells({ columns: ["date"], force: true });
+}
+
+/// Where a row's history is kept, for the panel's subtitle.
+function historyStoreNote(row: Row): string {
+  if (row.kind === "group") return `every store under ${row.id}/`;
+  return `the stores in ${row.id}/`;
+}
+
+/// The right-click menu. One entry, and it is the whole reason the menu
+/// exists: an applet writes no store, so its row offers nothing.
+function contextMenuItems(
+  params: GetContextMenuItemsParams<Row>,
+): (MenuItemDef<Row> | DefaultMenuItem)[] {
+  const row = params.node?.data;
+  if (!row || row.kind === "applet") return [];
+  return [
+    {
+      name: "Show commit history",
+      action: () => openHistory(row),
+    },
+  ];
+}
+
+const historyColumnDefs: ColDef<HistoryRow>[] = [
+  {
+    headerName: "When",
+    field: "date",
+    width: 140,
+    sort: "desc",
+    comparator: (a: string, b: string) => compareStamps(a, b),
+    valueFormatter: (p) => (p.value ? formatRelative(p.value, Date.now()) : "—"),
+    tooltipValueGetter: (p) => formatStamp(p.value ?? null),
+  },
+  {
+    // Exact, beside the relative form: a sync commits several times
+    // within a minute, and "18 hours ago" ten times over says nothing
+    // about the order they landed in.
+    headerName: "At",
+    field: "date",
+    colId: "at",
+    width: 176,
+    comparator: (a: string, b: string) => compareStamps(a, b),
+    valueFormatter: (p) => formatStamp(p.value ?? null),
+  },
+  {
+    headerName: "Message",
+    field: "message",
+    flex: 2,
+    minWidth: 220,
+    tooltipField: "message",
+  },
+  {
+    headerName: "Rows",
+    field: "rows",
+    width: 100,
+    type: "numericColumn",
+    valueFormatter: (p) => formatCount(p.value),
+    headerTooltip: "Rows across every data table after this commit",
+  },
+  {
+    headerName: "Added",
+    field: "added",
+    width: 90,
+    type: "numericColumn",
+    valueFormatter: (p) => formatDelta(p.value, "+"),
+  },
+  {
+    headerName: "Deleted",
+    field: "deleted",
+    width: 90,
+    type: "numericColumn",
+    valueFormatter: (p) => formatDelta(p.value, "−"),
+  },
+  {
+    headerName: "Modified",
+    field: "modified",
+    width: 96,
+    type: "numericColumn",
+    valueFormatter: (p) => formatDelta(p.value, "~"),
+  },
+  {
+    headerName: "Tables",
+    field: "tables",
+    flex: 3,
+    minWidth: 260,
+    tooltipField: "tables",
+    headerTooltip: "The data tables, largest first, with what this commit did to each",
+  },
+  {
+    headerName: "Store",
+    field: "store",
+    width: 190,
+    tooltipField: "storePath",
+  },
+  {
+    headerName: "Commit",
+    field: "hash",
+    width: 130,
+    tooltipField: "hash",
+    cellRenderer: (p: ICellRendererParams<HistoryRow>) => {
+      const hash = p.value ? String(p.value) : "";
+      const wrap = document.createElement("span");
+      wrap.className = "m2-history-hash";
+      wrap.textContent = hash.slice(0, 10);
+      if (hash) wrap.appendChild(copyIdButton(hash, "Copy the commit hash"));
+      return wrap;
+    },
+  },
+];
+
+/// The 🆔 button the chat views put beside every uuid, for a commit
+/// hash: the full 40 characters, where the cell shows ten.
+function copyIdButton(id: string, label: string): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "m2-copy-id";
+  btn.title = `${label} (${id})`;
+  btn.setAttribute("aria-label", label);
+  btn.textContent = "🆔";
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (await copyToClipboard(id)) {
+      btn.textContent = "✓";
+      btn.classList.add("copied");
+    } else {
+      btn.classList.add("copy-failed");
+    }
+    setTimeout(() => {
+      btn.textContent = "🆔";
+      btn.classList.remove("copied", "copy-failed");
+    }, 900);
+  });
+  return btn;
+}
+
+/// The async clipboard first; the selection-and-`copy` route when that
+/// is refused, as DocCard does — it is what works in a webview that
+/// has not granted the permission.
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      return document.execCommand("copy");
+    } catch {
+      return false;
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }
+}
+
+const COUNT_FMT = new Intl.NumberFormat();
+function formatCount(n: number | null | undefined): string {
+  return typeof n === "number" ? COUNT_FMT.format(n) : "";
+}
+/// A zero reads as nothing rather than as "0": a column of zeros with
+/// the odd number in it is easier to scan than a column of numbers.
+function formatDelta(n: number | null | undefined, sign: string): string {
+  return n ? `${sign}${COUNT_FMT.format(n)}` : "";
+}
+
 // ── Which groups are open. Remembered per browser, so a reload — or
 // the remount a sync's end does — puts the table back the way it was.
 // A convenience, not state: nothing breaks when it is empty.
@@ -1481,6 +1718,7 @@ function onRowGroupOpened(e: RowGroupOpenedEvent<Row>) {
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape") return;
   if (logFor.value) logFor.value = null;
+  else if (historyFor.value) historyFor.value = null;
   else if (helpOpen.value) helpOpen.value = false;
 }
 
@@ -1982,9 +2220,11 @@ let lastRelativePaint = "";
 function tickRelative() {
   const now = Date.now();
   const next = rows.value.map((r) => formatRelative(r.lastSynced, now)).join("\u0000");
-  if (next === lastRelativePaint) return;
-  lastRelativePaint = next;
-  gridApi?.refreshCells({ columns: ["lastSynced"], force: true });
+  if (next !== lastRelativePaint) {
+    lastRelativePaint = next;
+    gridApi?.refreshCells({ columns: ["lastSynced"], force: true });
+  }
+  tickHistoryRelative(now);
 }
 
 /// Everything this table shows, refetched together — which is the point, and
@@ -2018,6 +2258,7 @@ onMounted(async () => {
           // cadence; this just reads what it found.
         void loadDag();
         void loadStorage();
+        refreshHistory();
       } else if (e.kind === "config_changed") {
         // Config and record together, for the "Never run" reason above.
         void reloadAll();
@@ -2133,6 +2374,8 @@ onUnmounted(() => {
         :groupDefaultExpanded="0"
         :isGroupOpenByDefault="isGroupOpenByDefault"
         :tooltipShowDelay="200"
+        :preventDefaultOnContextMenu="true"
+        :getContextMenuItems="contextMenuItems"
         @grid-ready="onGridReady"
         @cell-double-clicked="onCellDoubleClicked"
         @row-group-opened="onRowGroupOpened"
@@ -2247,7 +2490,9 @@ onUnmounted(() => {
             part in — as a grid you can sort, filter and search; on a group row, the log of the
             step its status came from. <b>Activity</b> is what a running step has reported:
             how much is queued ahead of it, what it has counted so far, and how many warnings
-            and errors it has logged.
+            and errors it has logged. <b>Right-click a row</b> for its <b>commit history</b>:
+            every store under it is versioned, and the panel lists each commit — when, what it
+            said, and what it did to each table — newest first, updating while a sync runs.
           </p>
           <p>
             <b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its
@@ -2275,7 +2520,7 @@ onUnmounted(() => {
     </div>
 
     <div v-if="logFor" class="m2-logs-backdrop" @click.self="logFor = null">
-      <div class="m2-logs" role="dialog" aria-modal="true" aria-label="Step log">
+      <div class="m2-logs m2-runlog" role="dialog" aria-modal="true" aria-label="Step log">
         <header class="m2-logs-head">
           <div>
             <h3>{{ logFor.row.name }}</h3>
@@ -2300,6 +2545,45 @@ onUnmounted(() => {
           :step="logFor.row.id"
           :live="logFor.live"
         />
+      </div>
+    </div>
+
+    <div v-if="historyFor" class="m2-logs-backdrop" @click.self="historyFor = null">
+      <div class="m2-logs m2-history" role="dialog" aria-modal="true" aria-label="Commit history">
+        <header class="m2-logs-head">
+          <div>
+            <h3>{{ historyFor.name }} — commit history</h3>
+            <p>
+              One row per commit in {{ historyStoreNote(historyFor) }}, newest first.
+              <span v-if="historyTruncated.length">
+                Only the newest commits are shown for
+                <code>{{ historyTruncated.join(", ") }}</code>.
+              </span>
+            </p>
+          </div>
+          <button class="m2-btn" @click="historyFor = null">Close</button>
+        </header>
+
+        <p v-if="historyBusy && historyLines.length === 0" class="m2-logs-note">
+          Reading the commit log…
+        </p>
+        <p v-else-if="historyError" class="m2-logs-note bad">{{ historyError }}</p>
+        <p v-else-if="historyLines.length === 0" class="m2-logs-note">
+          No doltlite store under <code>{{ historyFor.id }}/</code> yet. A step that has never
+          run has written nothing, and the QMD index keeps no store of its own.
+        </p>
+        <div v-else class="m2-history-grid">
+          <AgGridVue
+            class="m2-ag"
+            :theme="gridTheme"
+            :columnDefs="historyColumnDefs"
+            :rowData="historyLines"
+            :getRowId="(p: { data: HistoryRow }) => p.data.key"
+            :tooltipShowDelay="200"
+            :enableCellTextSelection="true"
+            @grid-ready="onHistoryGridReady"
+          />
+        </div>
       </div>
     </div>
 
@@ -2552,12 +2836,15 @@ onUnmounted(() => {
   background: var(--datalib-bg);
   border: 1px solid var(--datalib-border);
   border-radius: 8px;
-  width: min(1400px, 100%);
-  height: min(85vh, 100%);
+  width: min(920px, 100%);
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
 }
+/* The log panel is a grid and wants the room: wide for its columns,
+   tall enough that following a run is not a keyhole. */
+.m2-runlog { width: min(1400px, 100%); height: min(85vh, 100%); }
 .m2-logs-head {
   display: flex;
   align-items: flex-start;
@@ -2571,11 +2858,44 @@ onUnmounted(() => {
 .m2-logs-head button { margin-left: auto; }
 .m2-logs-note { margin: 0; padding: 16px; font-size: 13px; color: var(--datalib-muted); max-width: 70ch; }
 .m2-logs-note.bad { color: var(--datalib-log-error); }
+/* The history panel is a grid rather than a list, and wider than the
+   log: nine columns, and the table list is the one worth the room. */
+.m2-history { width: min(1400px, 100%); height: min(720px, 100%); }
+/* `position: relative`, because `.m2-ag` is absolutely placed — see the
+   WebKit note above it. */
+.m2-history-grid { position: relative; flex: 1 1 auto; min-height: 0; margin: 0 16px 16px; }
 </style>
 
 <style>
 /* Cell renderers build plain DOM, so their classes can't be scoped. */
 .m2-cell-source { display: inline-flex; align-items: center; gap: 8px; }
+.m2-history-hash {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+/* The same control as `button.copy-uuid` in ChatBody: a greyed glyph
+   that lights up on hover and flashes its verdict. */
+.m2-copy-id {
+  filter: grayscale(1);
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.9em;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+}
+.m2-copy-id:hover { opacity: 1; }
+.m2-copy-id.copied { color: #16a34a; opacity: 1; filter: none; }
+.m2-copy-id.copy-failed { color: #dc2626; opacity: 1; filter: none; }
 .m2-cell-dir { color: var(--datalib-muted); font-size: 12px; }
 /* The group row is the row: its name leads the tree, so it carries the
    weight, and the steps under it read as its parts. */

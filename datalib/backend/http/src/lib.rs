@@ -39,6 +39,7 @@ pub mod boot;
 pub mod connect;
 mod embed;
 pub mod frontend;
+pub mod history;
 pub mod lock;
 pub mod usage;
 pub mod watch;
@@ -180,6 +181,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/pipeline/storage", get(pipeline_storage))
+        .route("/api/pipeline/history", get(history::tree_history))
         .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
         .route("/api/sync/jobs/all", get(sync_jobs_all))
         .route("/api/sync/jobs/{id}", get(sync_job_get))
