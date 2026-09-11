@@ -864,6 +864,22 @@ the history intact and is cheap to read with `git log --first-parent`.
 In practice: `git pull` (default merge), not `git pull --rebase`. Force-
 push is off the table on shared branches.
 
+## Push early, open the PR early, and watch CI
+
+**Push the branch and open a PR as soon as there is something to test,
+even if nobody asked for one** — CI's runners are free and a full
+`//...` run takes minutes, so starting it early is starting it for free.
+Push again as the work goes; each push restarts the run.
+
+After pushing, check that the PR is mergeable (`gh pr view <n> --json
+mergeable,mergeStateStatus`) and follow the run to its end rather than
+leaving it. If it fails, read the failure and fix it; if the failed
+target looks like a flake (the doltlite-timing ones above, or anything
+`scripts/flaky_tests.py` already lists), re-run the failed jobs once
+before digging in. Before pushing a follow-up, confirm the PR is still
+open — a merged PR does not reopen for a later push, and the commit
+reaches nobody.
+
 ## Python deps: pyproject.toml → requirements.txt → Bazel
 
 `uv` and Bazel read **different** files for Python deps:
