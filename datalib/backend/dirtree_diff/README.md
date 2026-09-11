@@ -1,7 +1,8 @@
 # A move-aware diff viewer for two `fsindex` directory scans
 
-`fsindex` records one row per file and directory — path, kind, size,
-blake3 — into a doltlite store. This prototype turns two such scans into
+`fsindex` records one row per file (path, kind, size, blake3, in
+`files`) and one per directory (path, size, entry count, tree-hash, in
+`dirs`) into a doltlite store. This prototype turns two such scans into
 a single self-contained HTML page: the two trees side by side, colour
 coded, with **moves reported as moves** rather than as a delete plus an
 unrelated create.
@@ -170,9 +171,9 @@ Two things that fix depends on, both of them non-obvious:
 ## How moves are detected
 
 `fsindex` hashes a directory over a canonical encoding of its immediate
-children (`schema_raw.rs` §"Directory tree-hash canonicalization"), so a
-directory's blake3 covers its whole subtree. Move a directory and its
-digest is unchanged — it simply appears at a different path.
+children (`hash.rs`), so a directory's blake3 covers its whole subtree.
+Move a directory and its digest is unchanged — it simply appears at a
+different path.
 
 The prolly diff reports that as a `removed` row and an `added` row
 carrying the **same digest**. Pairing them is the whole trick. Pairing
@@ -180,14 +181,46 @@ is greedy and prefers a candidate that kept its basename, so
 `docs/reports` pairs with `archive/reports` rather than with some
 unrelated directory that happens to hold identical bytes.
 
+### Directories first
+
+The tool diffs `dirs` before `files`, and that order is what makes a
+big move cheap. The `dirs` diff is a few percent of the rows, and a
+moved directory's row already says everything the interior would:
+same digest on both sides, plus `size` and `entries` for the subtree.
+So the moves and copies found among the directory rows are settled
+first, and the `files` diff is then read **leaving those subtrees
+out** — every file under a moved directory is implied by the
+directory, and the tree-hash guarantees the interiors match exactly.
+The page comes out identical; the rows simply never cross into Rust.
+
+Measured on two 500 000-file scans differing by one 50 000-file
+top-level rename (2026-09-11, warm):
+
+| | rows read | wall |
+|---|---|---|
+| `dirs` diff | 23 | ~0 ms |
+| `files` diff, interiors included | 100 000 | 1.2 s end to end |
+| `files` diff, explained interiors skipped | 0 | **0.27 s** end to end |
+
+The skip is a `WHERE` clause on the key ranges, and it saves only the
+transfer: doltlite pushes no predicate into `dolt_diff_<t>`, so the
+engine walks the same chunks either way (0.22 s here). Excluded
+prefixes are bound parameters, capped at 100 moves plus 100 copies per
+side so the statement stays under sqlite's expression-depth limit; past
+the cap, the remaining interiors are fetched and rolled up the ordinary
+way. A move is always skipped on both sides or neither — skipping one
+side alone leaves thousands of rows with nothing to pair against, and
+each of those then costs a corpus scan in copy detection (measured:
+21 s for the same rename).
+
 ### Only the outermost move is reported
 
-Moving `docs/` to `archive/` moves every descendant too, and each one
-arrives from the diff as its own matched pair. Reporting all of them
-buries the one fact worth reading, so a pair is suppressed when an
-ancestor directory made exactly the same journey — same relative suffix
-on both sides. The surviving outermost row carries a count of what it
-absorbed:
+Moving `docs/` to `archive/` moves every descendant too. Whatever
+interior rows do reach the tool (a nested directory's own row, or files
+past the skip cap) are suppressed when an ancestor directory made
+exactly the same journey — same relative suffix on both sides. The
+surviving outermost row carries a count of what it stands for, read
+off the directory row's `entries`:
 
 ```
 docs/reports   moved →   +2 inside      moved to archive/reports
@@ -225,9 +258,10 @@ per-tree total:
 after.doltlite_db @HEAD 05bca079b9cc · 2 duplicated within this tree, 35B reclaimable
 ```
 
-This costs one full scan per side — the `size >= threshold` filter cuts
-transfer and grouping work, not the scan, since `files` has no index on
-`size` either. It announces itself on stderr like the copy check does.
+This costs one full scan of both tables per side — the
+`size >= threshold` filter cuts transfer and grouping work, not the
+scan, since neither table has an index on `size`. It announces itself on
+stderr like the copy check does.
 
 ## Finding where the diff actually is
 
@@ -292,11 +326,13 @@ move detection is free, because both halves of a move are already in the
 diff.
 
 Distinguishing `deleted` from `gone (copy remains)` is not free: it asks
-whether a digest exists *anywhere* on the other side, and `files`
-carries no secondary index on `blake3` (deliberately —
-`STORAGE_NOTES.md` §2 measures what one costs). Each lookup chunk is a
-whole-corpus scan. It runs only for digests the move pairing could not
-already account for, and it says so on stderr rather than hiding:
+whether a digest exists *anywhere* on the other side, and neither table
+carries a secondary index on `blake3` (deliberately —
+`STORAGE_NOTES.md` §2 measures what one costs). A directory digest is
+looked up in `dirs`, which is small enough not to matter; a file digest
+costs a whole-corpus scan of `files` per lookup chunk. It runs only for
+digests the move pairing could not already account for, and it says so
+on stderr rather than hiding:
 
 ```
 note: scanning the corpus at 9447a1f522 for 3 unmatched digest(s) —
@@ -361,38 +397,32 @@ starts refreshing the registry the test fails and the reopen can go.
 
 ## What a subtree move costs, and why
 
-`files` is keyed by **root-relative path**, which is what makes any of
-this possible: two scans taken at different absolute locations compare
-directly, with the absolute root kept separately in `scan_meta`.
+Both tables are keyed by **root-relative path**, which is what makes
+any of this possible: two scans taken at different absolute locations
+compare directly, with the absolute root kept separately in
+`scan_meta`.
 
 The trade-off shows up on exactly the operation this tool exists for.
 Because the path *is* the key, renaming a directory rewrites the key of
-every descendant, so a subtree move lands in the diff as two rows per
-entry. Measured against synthetic scans where one top-level directory
+every descendant, so in `files` a subtree move lands as two rows per
+file. Measured against synthetic scans where one top-level directory
 was renamed and nothing else changed:
 
-| files under the moved dir | diff rows | of those, directory rows |
+| files under the moved dir | `dolt_diff_files` rows | `dolt_diff_dirs` rows |
 |---|---|---|
-| 5 000 | 10 100 | 100 |
-| 50 000 | 100 502 | 502 |
+| 5 000 | 10 000 | 23 |
+| 50 000 | 100 000 | 23 |
 
-Linear, and 100 000 rows to report *one* move. The rollup in this tool
-is downstream cleanup for that.
+Linear in the files, and constant in the directories — which is why
+directories have their own table
+([#276](https://github.com/imbue-ai/datalib/issues/276)) and why this
+tool reads that table first (§"Directories first"). The alternative —
+an index on `kind` — would not have helped: doltlite pushes no
+predicate into `dolt_diff_<t>` or `dolt_at_<t>`, so a filter saves
+transfer and never the walk, and a secondary index on a TEXT-keyed
+table re-stores the path per row.
 
-The directory rows alone — half a percent of the diff — already carry
-the whole story, because a directory's tree-hash covers its subtree. So
-the obvious optimization is to diff directories first and never fetch
-the interior. **That does not work today:** there is no index on `kind`,
-so `WHERE from_kind = 'dir'` makes the query *slower* (0.56s vs 0.23s at
-50k) — it adds a predicate without avoiding the walk. Getting the cheap
-summary would mean either an index on `kind` or splitting directory rows
-into their own table, in the same spirit as the existing
-`files` / `scan_meta` split.
-
-Splitting directory rows into their own table is filed as
-[#276](https://github.com/imbue-ai/datalib/issues/276).
-
-Keying on path components instead (parent id + name) would turn that
+Keying on path components instead (parent id + name) would turn the
 100 000-row diff into a single changed row. It would also cost the
 property the prolly diff currently leans on — a full-path PK means the
 clustered order *is* depth-first tree order, so a subtree is contiguous

@@ -346,13 +346,18 @@ threads_bookkeeping
     volatile_payload
 
 == fsindex/raw ==
+dirs
+    id
+    size
+    entries
+    blake3
+    identity_uuid
 files
     id
     kind
     size
     blake3
     symlink_target
-    identity_uuid
 scan_meta
     id
     abs_path

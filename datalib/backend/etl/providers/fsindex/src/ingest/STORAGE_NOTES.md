@@ -118,8 +118,10 @@ Reading this:
   size. Re-adding any is a one-line `CREATE INDEX` if a SQL-side,
   too-big-for-RAM workload ever materializes.
 
-The current fsindex schema (`files` + `scan_meta`, no secondary indexes)
-lands at **~340 B/file** on realistic paths → **~3.4 GB / 10M**.
+The current fsindex schema (`files` + `dirs` + `scan_meta`, no secondary
+indexes) lands at **~340 B/file** on realistic paths → **~3.4 GB / 10M**.
+(Measured before directories had their own table; they are 1–5% of the
+rows, so the per-file figure stands.)
 
 Net of all three storage changes (blake3 BLOB, no bookkeeping sidecars,
 no secondary indexes): 1M synth db **453 MB → ~215 MB**.

@@ -1,5 +1,5 @@
-//! Bottom-up tree walker that produces one (FileRow, Fingerprint)
-//! pair per visible entry under a root.
+//! Bottom-up tree walker that produces one row (a `FileRow` or a
+//! `DirRow`) plus its `Fingerprint` per visible entry under a root.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,21 +14,36 @@ use super::options::{self, EffectiveOptions, FsindexYaml, OptionsCascade, BREADC
 use datalib_etl::fingerprint_cache::{CachedTree, EntryKind, Fingerprint};
 use datalib_etl::fswalk::{self, StampCursor, StampKind};
 
-use super::schema_raw::{FileKind, FileRow};
+use super::schema_raw::{DirRow, FileKind, FileRow};
 use datalib_etl::fswalk::{FreshStat, StampDecision};
 
 /// Soft upper bound on the size of one streamed batch. The walker
 /// flushes the batch via the callback when it reaches this many rows.
 pub const BATCH_SIZE: usize = 100_000;
 
+/// The content row for one entry, bound for whichever of the two
+/// versioned tables holds its kind.
+pub enum ScanRow {
+    File(FileRow),
+    Dir(DirRow),
+}
+
 /// Output row pair from the walk. The walker emits these in
 /// post-order (children before their containing dir) so directory
 /// hashes can be folded up.
 pub struct ScanResult {
-    /// The content row, bound for the versioned store.
-    pub file_row: FileRow,
+    pub row: ScanRow,
     /// The observation, bound for the host-local cache.
     pub fingerprint: Fingerprint,
+}
+
+impl ScanResult {
+    pub fn id(&self) -> &str {
+        match &self.row {
+            ScanRow::File(f) => &f.id,
+            ScanRow::Dir(d) => &d.id,
+        }
+    }
 }
 
 /// One unreadable entry. Surfaced to the caller so it can land in
@@ -150,11 +165,8 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         Ok(())
     }
 
-    fn push_row(&mut self, file_row: FileRow, fingerprint: Fingerprint) -> Result<()> {
-        self.buf.push(ScanResult {
-            file_row,
-            fingerprint,
-        });
+    fn push_row(&mut self, row: ScanRow, fingerprint: Fingerprint) -> Result<()> {
+        self.buf.push(ScanResult { row, fingerprint });
         self.counters.rows_emitted.fetch_add(1, Ordering::Relaxed);
         if self.buf.len() >= BATCH_SIZE {
             self.counters
@@ -169,13 +181,14 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
     /// Process one directory: emit rows for all of its descendants and
     /// then for the directory itself (post-order, so child hashes are
     /// known before the parent's tree-hash is folded). Returns the
-    /// directory's tree-hash and rolled-up content size.
+    /// directory's tree-hash, rolled-up content size and rolled-up
+    /// entry count.
     fn walk_dir(
         &mut self,
         dir_path: &Path,
         dir_rel: &str,
         dir_meta: &std::fs::Metadata,
-    ) -> Result<(Blake3, i64)> {
+    ) -> Result<(Blake3, i64, i64)> {
         self.counters.dirs_visited.fetch_add(1, Ordering::Relaxed);
         let dir_fresh = fresh_stat_for(dir_meta);
 
@@ -231,6 +244,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
 
         let mut tree_children: Vec<TreeChild> = Vec::with_capacity(children.len());
         let mut dir_size: i64 = 0;
+        let mut dir_entries: i64 = 0;
 
         for (name, child_rel) in children {
             let child_path = dir_path.join(&name);
@@ -253,11 +267,11 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             };
 
             let kind = if meta.file_type().is_symlink() {
-                FileKind::Symlink
+                EntryKind::Symlink
             } else if meta.is_dir() {
-                FileKind::Dir
+                EntryKind::Dir
             } else if meta.is_file() {
-                FileKind::File
+                EntryKind::File
             } else {
                 continue;
             };
@@ -265,7 +279,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             // Ignore filter, with the same semantics as before: a dir is
             // tested against its own cascade (which includes its own
             // breadcrumb frame); a file/symlink against this dir's.
-            let ignored = if matches!(kind, FileKind::Dir) {
+            let ignored = if matches!(kind, EntryKind::Dir) {
                 let eff = cascade_for_dir(
                     self.root,
                     &child_path,
@@ -285,8 +299,9 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             }
 
             let fresh = fresh_stat_for(&meta);
+            let mut entries_below = 0i64;
             let (size, blake3, symlink_target): (i64, Blake3, Option<String>) = match kind {
-                FileKind::File => {
+                EntryKind::File => {
                     self.counters.files_visited.fetch_add(1, Ordering::Relaxed);
                     let cached_hash = self.prev.blake3(&child_rel);
                     let reuse = cached_hash.is_some()
@@ -320,7 +335,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                         }
                     }
                 }
-                FileKind::Symlink => {
+                EntryKind::Symlink => {
                     self.counters
                         .symlinks_visited
                         .fetch_add(1, Ordering::Relaxed);
@@ -344,8 +359,9 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                         Some(target_bytes.into_owned()),
                     )
                 }
-                FileKind::Dir => {
-                    let (h, sz) = self.walk_dir(&child_path, &child_rel, &meta)?;
+                EntryKind::Dir => {
+                    let (h, sz, n) = self.walk_dir(&child_path, &child_rel, &meta)?;
+                    entries_below = n;
                     (sz, h, None)
                 }
             };
@@ -356,29 +372,34 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                 blake3,
             });
             dir_size += size;
+            dir_entries += 1 + entries_below;
 
             // Files and symlinks emit their own row here; a dir already
             // emitted its row inside the recursive call above.
-            if !matches!(kind, FileKind::Dir) {
-                let stamp_kind = match kind {
+            let file_kind = match kind {
+                EntryKind::File => Some(FileKind::File),
+                EntryKind::Symlink => Some(FileKind::Symlink),
+                EntryKind::Dir => None,
+            };
+            if let Some(file_kind) = file_kind {
+                let stamp_kind = match file_kind {
                     FileKind::File => self.default_stamp_kind,
-                    _ => StampKind::NoStamp,
+                    FileKind::Symlink => StampKind::NoStamp,
                 };
                 let file_row = FileRow {
                     id: child_rel.clone(),
-                    kind,
+                    kind: file_kind,
                     size,
                     blake3,
                     symlink_target,
-                    identity_uuid: None,
                 };
                 let fingerprint = Fingerprint {
                     abs_path: fp_abs(self.root, &child_rel),
-                    kind: fp_kind(kind),
+                    kind,
                     blake3,
                     cursor: fp_cursor(stamp_kind, size, &fresh),
                 };
-                self.push_row(file_row, fingerprint)?;
+                self.push_row(ScanRow::File(file_row), fingerprint)?;
             }
         }
 
@@ -388,12 +409,11 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             .frame_for(dir_path)
             .and_then(|y| y.identity.as_ref().map(|i| i.uuid.clone()));
         self.summary.rehashed += 1;
-        let file_row = FileRow {
+        let dir_row = DirRow {
             id: dir_rel.to_string(),
-            kind: FileKind::Dir,
             size: dir_size,
+            entries: dir_entries,
             blake3: dir_hash,
-            symlink_target: None,
             identity_uuid,
         };
         // Directories carry the same `(inode, dev)` identity files do.
@@ -412,9 +432,9 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             // deliberately does not compare it.
             cursor: fp_cursor(stamp_kind, dir_size, &dir_fresh),
         };
-        self.push_row(file_row, fingerprint)?;
+        self.push_row(ScanRow::Dir(dir_row), fingerprint)?;
 
-        Ok((dir_hash, dir_size))
+        Ok((dir_hash, dir_size, dir_entries))
     }
 
     fn read_children(
@@ -490,14 +510,6 @@ fn cascade_for_dir(
 
 fn fp_abs(root: &Path, rel: &str) -> String {
     datalib_etl::fingerprint_cache::abs_key(root, rel)
-}
-
-fn fp_kind(kind: FileKind) -> EntryKind {
-    match kind {
-        FileKind::File => EntryKind::File,
-        FileKind::Dir => EntryKind::Dir,
-        FileKind::Symlink => EntryKind::Symlink,
-    }
 }
 
 fn fp_cursor(stamp_kind: StampKind, size: i64, fresh: &FreshStat) -> StampCursor {
@@ -632,9 +644,9 @@ mod tests {
     fn build_cache(rows: &[ScanResult]) -> CachedTree {
         CachedTree::from_entries(rows.iter().map(|r| {
             (
-                r.file_row.id.clone(),
-                fp_kind(r.file_row.kind),
-                r.file_row.blake3,
+                r.id().to_string(),
+                r.fingerprint.kind,
+                r.fingerprint.blake3,
                 r.fingerprint.cursor,
             )
         }))
@@ -660,11 +672,11 @@ mod tests {
 
     fn blake_of(rows: &[ScanResult], id: &str) -> Option<Blake3> {
         rows.iter()
-            .find(|r| r.file_row.id == id)
-            .map(|r| r.file_row.blake3)
+            .find(|r| r.id() == id)
+            .map(|r| r.fingerprint.blake3)
     }
     fn has(rows: &[ScanResult], id: &str) -> bool {
-        rows.iter().any(|r| r.file_row.id == id)
+        rows.iter().any(|r| r.id() == id)
     }
 
     /// The readdir-skip fast path: an unchanged directory enumerates its
@@ -904,19 +916,19 @@ mod tests {
         );
         let doctored = CachedTree::from_entries(rows_a.iter().map(|r| {
             let mut cursor = r.fingerprint.cursor;
-            if r.file_row.id.is_empty() {
+            if r.id().is_empty() {
                 cursor.mtime_ns = b_root.mtime_ns;
             }
             (
-                r.file_row.id.clone(),
-                fp_kind(r.file_row.kind),
-                r.file_row.blake3,
+                r.id().to_string(),
+                r.fingerprint.kind,
+                r.fingerprint.blake3,
                 cursor,
             )
         }));
 
         let (rows_b, counters) = walk(b.path(), &doctored);
-        let ids: Vec<&str> = rows_b.iter().map(|r| r.file_row.id.as_str()).collect();
+        let ids: Vec<&str> = rows_b.iter().map(|r| r.id()).collect();
         assert!(
             ids.contains(&"nested/only_b.txt"),
             "the walker enumerated the cached tree instead of the real one: {ids:?}"

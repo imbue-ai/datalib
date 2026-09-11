@@ -1,13 +1,13 @@
 //! Content hashing for fsindex.
 
-use super::schema_raw::FileKind;
+use datalib_etl::fingerprint_cache::EntryKind;
 
 pub use datalib_etl::fswalk::{hash_file, hash_symlink_target, Blake3};
 
 /// One immediate-child contribution to a directory's tree-hash.
 pub struct TreeChild {
     pub name: Vec<u8>,
-    pub kind: FileKind,
+    pub kind: EntryKind,
     pub blake3: Blake3,
 }
 
@@ -19,9 +19,9 @@ pub fn hash_tree(children: &[TreeChild]) -> Blake3 {
         buf.extend_from_slice(&c.name);
         buf.push(0x00);
         let tag = match c.kind {
-            FileKind::File => b'F',
-            FileKind::Dir => b'D',
-            FileKind::Symlink => b'L',
+            EntryKind::File => b'F',
+            EntryKind::Dir => b'D',
+            EntryKind::Symlink => b'L',
         };
         buf.push(tag);
         buf.extend_from_slice(&c.blake3);
@@ -44,7 +44,7 @@ mod tests {
     fn children_sort_by_name_bytes() {
         let mk = |name: &[u8], byte: u8| TreeChild {
             name: name.to_vec(),
-            kind: FileKind::File,
+            kind: EntryKind::File,
             blake3: [byte; 32],
         };
         let h1 = hash_tree(&[mk(b"a", 0x00), mk(b"b", 0x11)]);

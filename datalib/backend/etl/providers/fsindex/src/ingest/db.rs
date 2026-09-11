@@ -11,16 +11,17 @@ use sqlx::Row;
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw as dr;
 
-use super::schema_raw::{full_ddl, FileRow, ScanMetaRow, DATA_TABLES};
+use super::schema_raw::{full_ddl, DirRow, FileRow, ScanMetaRow, DATA_TABLES};
 
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
 }
 
-/// Per-`diff_type` row counts for the `files` table between a scan's
-/// commit and its parent. `unchanged` rows are not counted here — they
-/// fall out as `total_scanned - added - modified` at the call site.
+/// Per-`diff_type` row counts over `files` and `dirs` together,
+/// between a scan's commit and its parent. `unchanged` rows are not
+/// counted here — they fall out as `total_scanned - added - modified`
+/// at the call site.
 #[derive(Debug, Default, Clone)]
 pub struct DiffCounts {
     pub added: u64,
@@ -110,13 +111,19 @@ impl RawDb {
     /// Per-batch flushing keeps both our Rust memory and doltlite's
     /// in-transaction buffer bounded on a tens-of-millions-of-rows
     /// scan. Returns the wall time.
-    pub async fn write_batch(&self, files: &[FileRow], _now: &str) -> Result<std::time::Duration> {
+    pub async fn write_batch(
+        &self,
+        files: &[FileRow],
+        dirs: &[DirRow],
+        _now: &str,
+    ) -> Result<std::time::Duration> {
         let started = std::time::Instant::now();
-        if files.is_empty() {
+        if files.is_empty() && dirs.is_empty() {
             return Ok(started.elapsed());
         }
         let mut tx = self.pool.begin().await.context("begin batch tx")?;
         bulk_upsert_entity_in_tx(&mut tx, files).await?;
+        bulk_upsert_entity_in_tx(&mut tx, dirs).await?;
         tx.commit().await.context("commit batch tx")?;
         Ok(started.elapsed())
     }
@@ -155,19 +162,19 @@ impl RawDb {
     /// breadcrumb — bounded by the directory count, which is tiny next
     /// to the file count.
     pub async fn dir_ids(&self) -> Result<Vec<String>> {
-        let ids =
-            sqlx::query_scalar::<_, String>("SELECT id FROM files WHERE kind = 'dir' ORDER BY id")
-                .fetch_all(&self.pool)
-                .await
-                .context("select dir ids")?;
+        let ids = sqlx::query_scalar::<_, String>("SELECT id FROM dirs ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .context("select dir ids")?;
         Ok(ids)
     }
 
     pub async fn all_entry_ids(&self) -> Result<std::collections::BTreeSet<String>> {
         use futures::TryStreamExt;
         let mut out = std::collections::BTreeSet::new();
-        let mut rows = sqlx::query("SELECT id FROM files").fetch(&self.pool);
-        while let Some(r) = rows.try_next().await.context("stream file ids")? {
+        let mut rows =
+            sqlx::query("SELECT id FROM files UNION ALL SELECT id FROM dirs").fetch(&self.pool);
+        while let Some(r) = rows.try_next().await.context("stream entry ids")? {
             out.insert(sqlx::Row::try_get::<String, _>(&r, 0).context("read id")?);
         }
         Ok(out)
@@ -178,27 +185,31 @@ impl RawDb {
     /// explicit enrichment UPDATE the stamping pass issues after the
     /// breadcrumb file lands (see [`super`] stamping notes).
     pub async fn set_identity_uuid(&self, id: &str, uuid: &str) -> Result<()> {
-        sqlx::query("UPDATE files SET identity_uuid = ? WHERE id = ?")
+        sqlx::query("UPDATE dirs SET identity_uuid = ? WHERE id = ?")
             .bind(uuid)
             .bind(id)
             .execute(&self.pool)
             .await
-            .context("update files.identity_uuid")?;
+            .context("update dirs.identity_uuid")?;
         Ok(())
     }
 
-    /// Summarize what the most recent commit changed in `files`
-    /// relative to its parent commit, read from doltlite's
-    /// `dolt_diff_files` system table. Because the scan
+    /// Summarize what the most recent commit changed in `files` and
+    /// `dirs` relative to its parent commit, read from doltlite's
+    /// `dolt_diff_<table>` system tables. Because the scan
     /// truncate-and-rebuilds, a row deleted and re-inserted identically
     /// hashes to the same prolly-tree entry and shows as `unchanged`
-    /// (so it isn't counted) — only genuinely changed files surface as
+    /// (so it isn't counted) — only genuinely changed entries surface as
     /// added/modified/removed.
     pub async fn diff_counts_since_parent(&self) -> Option<DiffCounts> {
         let rows = sqlx::query(
-            "SELECT diff_type, COUNT(*) AS n FROM dolt_diff_files \
-              WHERE from_ref = 'HEAD^' AND to_ref = 'HEAD' \
-                AND diff_type != 'unchanged' GROUP BY diff_type",
+            "SELECT diff_type, COUNT(*) AS n FROM ( \
+                SELECT diff_type FROM dolt_diff_files \
+                 WHERE from_ref = 'HEAD^' AND to_ref = 'HEAD' \
+                UNION ALL \
+                SELECT diff_type FROM dolt_diff_dirs \
+                 WHERE from_ref = 'HEAD^' AND to_ref = 'HEAD') \
+              WHERE diff_type != 'unchanged' GROUP BY diff_type",
         )
         .fetch_all(&self.pool)
         .await

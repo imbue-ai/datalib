@@ -1,8 +1,10 @@
 # fsindex — extract
 
 A directory-tree scanner. Given a local root, walks the tree and
-records `(path, kind, size, blake3, optional identity uuid)` for
-every visible entry in a doltlite raw store.
+records every visible entry in a doltlite raw store: files and
+symlinks as `(path, kind, size, blake3)` rows in `files`, directories
+as `(path, size, entries, blake3, optional identity uuid)` rows in
+`dirs`.
 
 This document covers what's load-bearing and provider-specific.
 For the framework contracts every provider honors —
@@ -12,46 +14,57 @@ see [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_inge
 For the row-level schema, see
 [`src/extract/schema_raw.rs`](src/ingest/schema_raw.rs).
 
-## Why two entity tables
+## Why two entity tables: `files` and `dirs`
 
-The user-visible question `fsindex` answers is "what's in this
-tree, and what changed since last time?" That breaks into two
-sub-questions whose answers update on completely different
-cadences:
+Files and directories are different things, and the difference is
+in the columns: a symlink has a `symlink_target` and a directory
+never does; a directory carries a rolled-up `size`, an `entries`
+count and an `identity_uuid` breadcrumb, none of which a file has.
+Two tables let each row carry only what its kind of entry has.
 
-1. **What is each entry?** — kind, size, blake3, symlink target,
-   identity UUID. Updates only when the content actually changes.
-2. **How do we know it hasn't changed without rehashing it?** —
-   mtime, size, inode, dev. Updates every scan, even on unchanged
-   files (the inode is unchanged but the row's `last_attempt_at`
-   bookkeeping moves; the mtime might also move on touch-without-edit
-   operations Unison treats as no-ops).
+The reason that matters for more than tidiness is the diff. A
+directory's `blake3` is a **tree-hash** over its immediate children's
+`(name, kind, blake3)` (see [`hash.rs`](src/ingest/hash.rs)), so it
+covers the whole subtree and survives a move intact. Both tables are
+keyed by root-relative path, so renaming a directory rewrites the key
+of every descendant — a 50 000-file subtree move is 100 000 rows in
+`dolt_diff_files`. In `dolt_diff_dirs` it is one row per directory
+under it, and those rows already tell the whole story: `top3` gone,
+`renamed3` arrived with the same digest, 50 010 entries and 438 900
+bytes inside. Measured on a 500 000-file scan (2026-09-11):
 
-If those lived on one entity table, `dolt diff files` would be
-noise-dominated — every touched-but-unchanged file would show up
-as a row mutation even though the content is identical. So we
-split:
+| | rows | wall |
+|---|---|---|
+| `dolt_diff_dirs` | 23 | 0.00 s |
+| `dolt_diff_files` | 100 000 | 0.22 s to walk, 0.38 s to materialize |
 
-- `files` — the **content** entity. PK=path; typed columns
-  (`kind`, `size`, `blake3`, `symlink_target`, `identity_uuid`)
-  carry the semantic shape of the entry. Diff here is "what
-  really changed."
-- *(the **cursor** used to be a `file_stats` table here. It is host
-  state — inodes mean nothing on another machine — so it now lives in
-  this machine's `datalib_etl::fingerprint_cache`, a plain-SQLite file
-  outside version control. See `STORAGE_NOTES.md` §3.)* The columns it
-  carried were:
-  (`mtime_ns`, `size`, `stamp_kind`, `inode`, `dev`, `ctime_ns`)
-  carry Unison's fast-rescan triple plus discriminator. Diff
-  here is noisy by design and nobody reads it semantically.
+There is no cheaper way to get that summary out of a single table.
+Doltlite pushes **no** predicate into `dolt_diff_<t>` or
+`dolt_at_<t>` — a `WHERE kind = 'dir'`, a primary-key range, even a
+primary-key equality all cost the same full walk as no filter at all
+(same measurement: `dolt_at_files … WHERE id = '<one path>'` takes
+0.18 s against 0.09 s for an unfiltered `COUNT(*)`). A secondary index
+on `kind` would not help the diff either, and would re-store the full
+path per row (`STORAGE_NOTES.md` §2). A separate table is the one
+arrangement in which "just the directories" is a small walk.
 
-This split is orthogonal to the framework's events-vs-bookkeeping
-split (see
-[`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-§"Events vs bookkeeping"). `files` is
-**entity** tables in the framework's sense, and each gets its own
-`<t>_bookkeeping` sidecar via `dr::bookkeeping_ddl_for` for
-attempt-tracking (`attempt_count`, `last_attempt_at`, `last_error`).
+A consumer that wants the subtree story therefore diffs `dirs` first
+and reaches into `files` only for paths the directory rows do not
+already explain. `datalib-dirtree-diff` does exactly that
+([its README](/datalib/backend/dirtree_diff/README.md)).
+
+The two tables stay consistent by construction rather than by
+foreign key: the walker emits a directory's row only after every
+child's, in the same batch stream, and a directory's tree-hash is
+computed from the very child rows it just emitted. `identity_uuid`
+is set on `dirs` rows alone, by the post-write stamping pass.
+
+The **rescan cursor** — `(mtime_ns, size, inode, dev, stamp_kind)`
+per path — is deliberately in neither table. It is host state
+(inodes mean nothing on another machine), so it lives in this
+machine's `datalib_etl::fingerprint_cache`, a plain-SQLite file
+outside version control; `STORAGE_NOTES.md` §3 has the measurements
+behind that.
 
 ### Typed columns, no JSONB payload
 
@@ -71,9 +84,9 @@ and stable.
 
 ### Truncate-and-rebuild on every scan
 
-Every scan starts by `DELETE FROM files;
-DELETE FROM scan_meta;` (and their `_bookkeeping` sidecars), then
-walks the tree fresh. Two reasons this works:
+Every scan starts by `DELETE FROM files; DELETE FROM dirs;
+DELETE FROM scan_meta;`, then walks the tree fresh. Two reasons this
+works:
 
 1. **Deletions fall out naturally.** A file present at scan-A and
    gone at scan-B simply doesn't get re-inserted, so it disappears
@@ -89,11 +102,10 @@ walks the tree fresh. Two reasons this works:
 
 The Unison-style fast-rescan cache survives the truncate by living
 **in memory**: the orchestrator loads this host's prior fingerprints
-and the prior `files.blake3` for `kind='file'` rows BEFORE the
-truncate, so `stamp::decide` still has cached state to compare
-against and the reuse path still skips the `read(2)` + `blake3`
-on unchanged files. See `extract::fetch` for the load-then-truncate
-ordering.
+— cursor and digest together — BEFORE the truncate, so
+`fswalk::decide` still has cached state to compare against and the
+reuse path still skips the `read(2)` + `blake3` on unchanged files.
+See `ingest::fetch` for the load-then-truncate ordering.
 
 The framework's `--reset-and-redownload` flag now means "ignore
 the cache too" — force a full rehash of every file even if the
@@ -210,7 +222,7 @@ hint, surfaced by these queries:
 - **Fork detection** within a scan:
   ```sql
   SELECT identity_uuid, COUNT(*), GROUP_CONCAT(id)
-  FROM files
+  FROM dirs
   WHERE identity_uuid IS NOT NULL
   GROUP BY identity_uuid
   HAVING COUNT(*) > 1;
@@ -218,7 +230,7 @@ hint, surfaced by these queries:
 - **Move detection** across branches:
   ```sql
   SELECT a.id AS was_at, b.id AS now_at, a.identity_uuid
-  FROM main.files a JOIN laptop2.files b USING(identity_uuid)
+  FROM main.dirs a JOIN laptop2.dirs b USING(identity_uuid)
   WHERE a.id != b.id;
   ```
 
@@ -294,12 +306,19 @@ configuration needs nothing extra.
 ## Inspecting a scan: what changed?
 
 Each scan is one `dolt_commit`, so "what did this scan change?" is a
-diff between the last two commits. The `dolt_diff_files` vtab answers
-it at the row level — and because it's a prolly-tree diff, it only
+diff between the last two commits. Ask `dolt_diff_dirs` first: it is a
+few percent of the rows and names every directory anything changed
+under, with the subtree's size and entry count on the row. Then
+`dolt_diff_files` for the file-level detail — a prolly-tree diff only
 descends into changed subtrees, so it stays fast even on a
 million-entry tree (≈10 s on a 1.7 M-entry index):
 
 ```sh
+doltlite -readonly -box <name>.doltlite_db \
+  "SELECT diff_type, from_id, to_id, to_entries, to_size
+     FROM dolt_diff_dirs
+    WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
+      AND diff_type != 'unchanged';"
 doltlite -readonly -box <name>.doltlite_db \
   "SELECT diff_type, from_id, to_id, hex(to_blake3) AS to_blake3
      FROM dolt_diff_files

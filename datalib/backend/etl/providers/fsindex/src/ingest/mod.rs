@@ -25,12 +25,13 @@ pub use db::RawDb;
 
 use metrics::WalkerCounters;
 use options::{EffectiveOptions, FsindexYaml, Identity, OptionsCascade};
-use schema_raw::{FileRow, ScanMetaRow};
+use schema_raw::{DirRow, FileRow, ScanMetaRow};
+use walker::ScanRow;
 
-/// One batch sent over the producer→consumer channel. files[i] and
-/// fingerprints[i] always match by path; they're emitted as a pair,
-/// then split to their two destinations.
-type Batch = (Vec<FileRow>, Vec<Fingerprint>);
+/// One batch sent over the producer→consumer channel: the file rows
+/// and directory rows bound for their two tables, and one fingerprint
+/// per row of either kind bound for the host cache.
+type Batch = (Vec<FileRow>, Vec<DirRow>, Vec<Fingerprint>);
 
 /// Bounded channel between the walker (producer) and the doltlite
 /// writer (consumer). Small cap so backpressure shows up — if the
@@ -404,10 +405,10 @@ async fn streaming_pipeline(
         let mut total_write = Duration::ZERO;
         let mut batches_written: u64 = 0;
         let mut fingerprints_written: u64 = 0;
-        while let Some((files, fingerprints)) = rx.recv().await {
+        while let Some((files, dirs, fingerprints)) = rx.recv().await {
             // Two destinations, deliberately: content to the versioned
             // store, host observations to the unversioned cache.
-            let took = writer_db.write_batch(&files, &writer_now).await?;
+            let took = writer_db.write_batch(&files, &dirs, &writer_now).await?;
             fingerprints_written += fingerprints.len() as u64;
             writer_cache.store(&fingerprints).await?;
             total_write += took;
@@ -513,12 +514,16 @@ async fn streaming_pipeline(
             let walker = walker::Walker::new(&walker_root, &prev, default_stamp_kind);
             let (errs, summ) = walker.collect_streaming(&walker_counters, |batch| {
                 let mut files = Vec::with_capacity(batch.len());
+                let mut dirs = Vec::new();
                 let mut fingerprints = Vec::with_capacity(batch.len());
                 for r in batch {
-                    files.push(r.file_row);
+                    match r.row {
+                        ScanRow::File(f) => files.push(f),
+                        ScanRow::Dir(d) => dirs.push(d),
+                    }
                     fingerprints.push(r.fingerprint);
                 }
-                tx.blocking_send((files, fingerprints))
+                tx.blocking_send((files, dirs, fingerprints))
                     .map_err(|e| anyhow::anyhow!("writer channel closed: {e}"))?;
                 Ok(())
             })?;
@@ -577,7 +582,7 @@ async fn streaming_pipeline(
 }
 
 /// Post-write stamping pass. The scan has already streamed every row
-/// into `files`; here we walk the directory rows and, for any dir
+/// into `files` and `dirs`; here we walk `dirs` and, for any one
 /// whose `.fsindex.yaml` cascade enables `stamp_me_with_uuid`, ensure
 /// it carries a UUID breadcrumb and `UPDATE` its `identity_uuid`.
 async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> {
