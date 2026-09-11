@@ -822,6 +822,20 @@ overlapping *open* fails inside `open` itself, reported as `commit schema
 after DDL`. `two_live_pools_on_one_store_break_each_others_commits` in
 `doltlite_raw.rs` pins this half.
 
+**A reader can be the peer.** "Read-only costs the writer nothing" is
+measured for what a pinned pass issues — `dolt_hashof`, `sqlite_master`,
+`pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_` views,
+`dolt_diff_*` — and is false for `dolt_status`. Issued from a read-only
+connection while the writer commits, it fails that commit with the same
+`commit conflict`, about once per hundred commits in
+`a_churning_reader_never_makes_the_writers_commit_fail`. That was #400:
+`grid_index` asking every render store whether it was dirty, each
+streaming pass, while a render step was sealing. **So a consumer never
+runs `dolt_status`**, and the same goes for a hand-run
+`datalib-doltlite -readonly … dolt_status` against a store a sync is
+writing. Any other statement a reader adds is presumed guilty until that
+test has run with it.
+
 Three rules follow, and none is optional:
 
 - **Open the store once per pass.** If a stage needs to load rows, run a

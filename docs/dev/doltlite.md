@@ -139,6 +139,12 @@ its own `rescue: ...` commit before doing anything else. A non-empty
 run is mid-flight (or recently was) and a rescue would land on the next
 sync.
 
+Don't run it against a store a sync is writing right now, even with
+`-readonly`: `dolt_status` from a second connection can fail the writer's
+in-flight `dolt_commit` with `commit conflict` (#400; measured by
+`//datalib/backend/etl:doltlite_two_process_test`). Wait for the step to
+finish.
+
 ### What changed between two commits
 
 **Per-table summary** — which tables differ, and is it a data or schema change:

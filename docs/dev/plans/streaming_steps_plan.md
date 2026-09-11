@@ -250,6 +250,22 @@ checkpoint at all. A checkpointing producer makes the window this
 happens in the normal case rather than a rare one, which is why this
 had to be true before step 3 shipped rather than after.
 
+**Read-only is necessary and not sufficient.** Once `render →
+grid_index` was streaming, the TNG fixture began failing a render
+step's final commit with that same `commit conflict`, intermittently
+and with nothing else changed (#400). The peer was the consumer: on every
+pass, `install_views` asked each render store `SELECT count(*) FROM
+dolt_status` so it could warn about uncommitted rows, and that one
+statement, from a read-only connection, fails a writer's overlapping
+`dolt_commit` — in doltlite 0.50.3 the vtab's filter ends in
+`chunkStorePut`, staging the working catalog regardless of how the
+connection was opened. Under streaming the store is dirty *by design*
+while the consumer reads, so the warning was noise as well as a
+hazard; it is gone. `a_churning_reader_never_makes_the_writers_commit_fail`
+in `etl/tests/doltlite_two_process.rs` now runs a pinned pass in a loop
+against a writer committing flat out, and is the test to extend before
+a consumer issues any statement it does not already cover.
+
 ### And a fourth: `to_ref = 'HEAD'` is a moving target
 
 `scan_buckets` samples `new_head` from `dolt_log()` and then runs the
