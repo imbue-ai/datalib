@@ -98,41 +98,6 @@ test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 # absence have not been enumerated.
 build --action_env=HOME
 
-# PROBABLY DEAD: as of the curl-impersonate migration nothing in
-# datalib/backend/Cargo.lock depends on `bindgen` any more (boring-sys2
-# was the last user; libsqlite3-sys resolves to cc + pkg-config only).
-# Removing this and its mirrors in release.yml, test.yml,
-# prepare-bazel and the devcontainer wants a CI run of its own, so it
-# is left in place for now. The history, for whoever removes it:
-#
-# bindgen used `clang-sys` to dlopen libclang. This pointed it at Xcode
-# Command Line Tools' bundled libclang.dylib — present on every macOS
-# host (incl. GitHub Actions `macos-*` runners) since bazel already
-# requires CLT for the C toolchain.
-#
-# `--host_action_env` mirrors `--action_env` so the *exec*-config copy
-# of a bindgen build script found libclang too: boring-sys2 got built
-# `[for tool]` whenever an exec-config build tool in the `//...` graph
-# depended on the HTTP stack, and without the host variant that
-# exec-config bindgen panicked with "Unable to find libclang" the
-# moment the action wasn't a cache hit — which is exactly what reddened
-# `bazel test //...` in CI on a cold BuildBuddy cache. `--action_env`
-# alone only covers target-config actions, so the failure hid behind
-# the remote cache until a miss.
-#
-# Linux hosts must override both on the command line (later flags win):
-#   bazel build ... --action_env=LIBCLANG_PATH=$(llvm-config --libdir) \
-#                   --host_action_env=LIBCLANG_PATH=$(llvm-config --libdir)
-# `release.yml` does this for the linux-amd64 / linux-arm64 matrix
-# entries. The devcontainer's user-level ~/.bazelrc carries the same
-# override so interactive Linux work doesn't need to remember the flag.
-#
-# DO NOT set LIBCLANG_PATH via `crate.annotation(... build_script_env)`
-# in MODULE.bazel — that wins over `--action_env` and would re-break
-# Linux. See the libsqlite3-sys annotation comment.
-build --action_env=LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib
-build --host_action_env=LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib
-
 # Workspace status — tools/workspace_status.sh emits STABLE_GIT_HASH +
 # STABLE_GIT_DESCRIBE. Always run so any `--config=release` invocation
 # has fresh values; the script itself is sub-second.

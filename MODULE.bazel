@@ -594,13 +594,6 @@ crate.annotation(
         "SQLITE3_INCLUDE_DIR": "$(BINDIR)/third-party/doltlite",
         "SQLITE3_LIB_DIR": "$(BINDIR)/third-party/doltlite",
         "SQLITE3_STATIC": "1",
-        # NOTE: LIBCLANG_PATH (also needed by libsqlite3-sys's bindgen
-        # invocation) is set via .bazelrc's `--action_env`, NOT here.
-        # Setting it in `build_script_env` hardcodes a single value
-        # at the rule level and silently overrides `--action_env`
-        # forwarding — which broke the linux-* legs of the release
-        # workflow until we noticed (commit dac4a5d's investigation).
-        # See .bazelrc for the macOS default + Linux override path.
     },
 )
 

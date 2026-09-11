@@ -2,8 +2,8 @@
 #
 # `sqlx` is enabled with the `sqlite-unbundled` feature in workspace
 # `Cargo.toml`, which routes through `libsqlite3-sys`'s unbundled mode.
-# Unbundled mode runs `bindgen` at build time against `sqlite3.h` and
-# emits a `cargo:rustc-link-lib=sqlite3` directive.
+# Unbundled mode ships pre-generated bindings (no bindgen, no libclang)
+# and emits a `cargo:rustc-link-lib=sqlite3` directive.
 #
 # Under Bazel the wiring is done by the `crate.annotation(crate =
 # "libsqlite3-sys", ...)` entry in MODULE.bazel, which points the build
