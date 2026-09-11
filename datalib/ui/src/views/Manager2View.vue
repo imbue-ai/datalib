@@ -12,16 +12,19 @@ import {
   AllCommunityModule,
   themeQuartz,
   colorSchemeVariable,
+  type CellContextMenuEvent,
   type ColDef,
   type DefaultMenuItem,
   type GetContextMenuItemsParams,
   type GridApi,
   type GridReadyEvent,
+  type IRowNode,
   type ICellRendererComp,
   type ICellRendererParams,
   type IsGroupOpenByDefaultParams,
   type MenuItemDef,
   type RowGroupOpenedEvent,
+  type RowSelectionOptions,
   type ValueGetterParams,
 } from "ag-grid-community";
 // Tree data — one row per group with its steps under a chevron — and
@@ -38,6 +41,7 @@ import {
   fetchJobLog,
   fetchPipelineStorage,
   fetchTreeHistory,
+  fetchJob,
   fetchFrontend,
   enqueueJob,
   cancelJob,
@@ -89,6 +93,7 @@ import { encodeColumns } from "@/router/columns";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { stepLogLines, type StepLogLine } from "@/config/stepLog";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
+import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
 import {
   claimedBy as claimedByJob,
@@ -277,6 +282,8 @@ type Row = {
   group: string | null;
   inputs: string[];
   phase: StepPhase;
+  /// The step's function — `ingest`, `qmd_index` — or null off a step.
+  func: string | null;
   /// The word behind the step-role glyph that follows the name —
   /// its `title`, and its accessible name. The only place the word
   /// survives now that the mark has no column of its own.
@@ -551,6 +558,7 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
     inputs: s.inputs,
     dropped,
     phase: s.phase,
+    func: s.function,
     kindLabel: s.kind === "applet" ? "Applet" : PHASE_LABEL[s.phase],
     type: s.type,
     // Under a group the name is the group's; the step's label says
@@ -698,6 +706,7 @@ function groupRow(g: ConfiguredGroup, children: Row[]): Row {
     inputs: [],
     dropped,
     phase: "other",
+    func: null,
     kindLabel: "Group",
     type: g.type,
     name: g.name ?? g.id,
@@ -961,6 +970,16 @@ const columnDefs: ColDef<Row>[] = [
     // stops shrinking at a width a stanza name still fits in.
     flex: 1,
     minWidth: 200,
+    // A group's name is edited in place — from the menu's Rename, or a
+    // double-click on the cell. The value never lands in the row: the
+    // setter writes the config, and the row comes back from the reload.
+    editable: (p) => p.data?.kind === "group",
+    cellEditor: "agTextCellEditor",
+    valueSetter: (p) => {
+      const next = String(p.newValue ?? "").trim();
+      if (p.data && next !== p.oldValue) void renameRow(p.data, next);
+      return false;
+    },
     // The column the tree hangs off: AG Grid's group renderer draws the
     // chevron and the indent, and hands the cell's content to the
     // renderer below. The label leads and the directory name follows
@@ -1274,7 +1293,9 @@ const logError = ref<string | null>(null);
 /// is a fetch of a whole log file.
 const LOG_SEARCH_DEPTH = 8;
 
-async function openStepLog(row: Row) {
+/// With `job`, the log of that one run; without, the newest run whose
+/// log mentions the step.
+async function openStepLog(row: Row, job: SyncJob | null = null) {
   logFor.value = row;
   logLines.value = [];
   logJob.value = null;
@@ -1283,9 +1304,11 @@ async function openStepLog(row: Row) {
   try {
     // Newest first. `fetchAllJobs` returns them that way, but sorting
     // here means this doesn't quietly depend on that.
-    const recent = [...jobs.value]
-      .sort((a, b) => compareStamps(b.created_at, a.created_at))
-      .slice(0, LOG_SEARCH_DEPTH);
+    const recent = job
+      ? [job]
+      : [...jobs.value]
+          .sort((a, b) => compareStamps(b.created_at, a.created_at))
+          .slice(0, LOG_SEARCH_DEPTH);
     for (const job of recent) {
       let text: string;
       try {
@@ -1401,8 +1424,9 @@ function onCellDoubleClicked(e: { column?: { getColId: () => string }; data?: Ro
 // table. Read on demand, and re-read while open whenever the runner's
 // record moves, which is the same push that keeps the size column live.
 
-/// The row whose history is open, or null when the panel is closed.
-const historyFor = ref<Row | null>(null);
+/// The rows whose history is open — several, when several were
+/// selected — or empty when the panel is closed.
+const historyFor = ref<Row[]>([]);
 const historyLines = ref<HistoryRow[]>([]);
 const historyTruncated = ref<string[]>([]);
 const historyBusy = ref(false);
@@ -1417,33 +1441,36 @@ const loadHistory = freshest<{ rows: HistoryRow[]; truncated: string[] } | Error
   }
 });
 
-async function fetchHistoryRows(tree: string) {
+async function fetchHistoryRows(trees: string[]) {
   try {
-    const h = await fetchTreeHistory(tree);
-    return { rows: historyRows(h), truncated: truncatedStores(h) };
+    const hs = await Promise.all(trees.map((t) => fetchTreeHistory(t)));
+    return { rows: historyRows(hs), truncated: truncatedStores(hs) };
   } catch (e) {
     return e as Error;
   }
 }
 
-function openHistory(row: Row) {
-  historyFor.value = row;
+function openHistory(targets: Row[]) {
+  historyFor.value = targets;
   historyLines.value = [];
   historyTruncated.value = [];
   historyError.value = null;
   historyBusy.value = true;
   loadHistory.invalidate();
-  void loadHistory(() => fetchHistoryRows(row.id));
+  void loadHistory(() => fetchHistoryRows(targets.map((r) => r.id)));
 }
 
 /// While the panel is open, a step that just committed shows up without
 /// a reopen. Cheap enough to do on every `dag_changed`: the walk is
 /// bounded and the answer is small.
 function refreshHistory() {
-  const row = historyFor.value;
-  if (!row) return;
-  void loadHistory(() => fetchHistoryRows(row.id));
+  const trees = historyFor.value.map((r) => r.id);
+  if (trees.length === 0) return;
+  void loadHistory(() => fetchHistoryRows(trees));
 }
+
+/// What the panel is titled: one row's name, or the names joined.
+const historyTitle = computed(() => historyFor.value.map((r) => r.name).join(", "));
 
 let historyGridApi: GridApi<HistoryRow> | null = null;
 let lastHistoryPaint = "";
@@ -1453,61 +1480,228 @@ function onHistoryGridReady(e: GridReadyEvent<HistoryRow>) {
 /// The same clock as the main grid's "Last synced": a commit made while
 /// the panel is open reads "seconds ago", and must go on aging.
 function tickHistoryRelative(now: number) {
-  if (!historyFor.value) return;
-  const next = historyLines.value.map((r) => formatRelative(r.date, now)).join("\u0000");
+  if (historyFor.value.length === 0) return;
+  const next = historyLines.value
+    .map((r) => (r.date ? formatRelative(r.date, now) : ""))
+    .join("\u0000");
   if (next === lastHistoryPaint) return;
   lastHistoryPaint = next;
   historyGridApi?.refreshCells({ columns: ["date"], force: true });
 }
 
-/// Where a row's history is kept, for the panel's subtitle.
-function historyStoreNote(row: Row): string {
-  if (row.kind === "group") return `every store under ${row.id}/`;
-  return `the stores in ${row.id}/`;
+/// Where the open rows' history is kept, for the panel's subtitle.
+const historyStoreNote = computed(() => {
+  const rows = historyFor.value;
+  if (rows.length !== 1) return `every store under ${rows.map((r) => `${r.id}/`).join(", ")}`;
+  const [row] = rows;
+  return row.kind === "group" ? `every store under ${row.id}/` : `the stores in ${row.id}/`;
+});
+
+/// A commit's run is a job when the app ran it, and that job's log is
+/// the "how" behind the commit's "what". Filtered to the step that
+/// writes the store, as the Status double-click does.
+async function openRunLog(row: HistoryRow) {
+  if (!row.run) return;
+  const step = rows.value.find((r) => r.kind !== "group" && r.id === row.stepId);
+  if (!step) return;
+  const job = jobs.value.find((j) => j.id === row.run) ?? (await fetchJob(row.run));
+  historyFor.value = [];
+  if (!job) {
+    // A run the app did not start — a terminal `datalib-dag`, or a job
+    // long since cleaned up — has no log here. Say so rather than
+    // showing some other run's.
+    logFor.value = step;
+    logLines.value = [];
+    logJob.value = null;
+    logBusy.value = false;
+    logError.value = `Run ${row.run} was not started from this app, so there is no job log for it here.`;
+    return;
+  }
+  void openStepLog(step, job);
 }
 
-/// The right-click menu. One entry, and it is the whole reason the menu
-/// exists: an applet writes no store, so its row offers nothing.
+// ── The right-click menu. Every action a row offers, in one place,
+// with Lightroom semantics: right-click a row outside the selection
+// and it is the one target; right-click inside it and the whole
+// selection is. An entry that does not apply stays, disabled, with the
+// reason as its tooltip — see `config/rowMenu.ts`.
+
+const rowSelection: RowSelectionOptions<Row> = {
+  mode: "multiRow",
+  checkboxes: false,
+  headerCheckbox: false,
+  enableClickSelection: true,
+};
+
+function onCellContextMenu(e: CellContextMenuEvent<Row>) {
+  if (!gridApi || !e.node) return;
+  if (!e.node.isSelected()) {
+    gridApi.deselectAll();
+    e.node.setSelected(true);
+  }
+}
+
+/// The rows a right-click acts on, in table order.
+function menuTargets(api: GridApi<Row>, anchor: IRowNode<Row> | null | undefined): Row[] {
+  if (!anchor?.data) return [];
+  const selected = (api.getSelectedNodes() as IRowNode<Row>[])
+    .filter((n): n is IRowNode<Row> & { data: Row } => n.data != null)
+    .sort((a, b) => (a.rowIndex ?? 0) - (b.rowIndex ?? 0));
+  if (anchor.isSelected() && selected.length > 0) return selected.map((n) => n.data);
+  return [anchor.data];
+}
+
+function menuTarget(row: Row): MenuTarget {
+  return {
+    id: row.id,
+    name: row.name,
+    kind: row.kind,
+    type: row.type,
+    func: row.func,
+    runBlocked: row.runBlocked,
+    editBlocked: row.editBlocked,
+    revealBlocked: row.revealBlocked,
+    browseBlocked: row.browseBlocked,
+    stopJobId: row.stopJobId,
+    statusFrom: row.statusFrom,
+    revealPath: row.revealPath,
+  };
+}
+
 function contextMenuItems(
   params: GetContextMenuItemsParams<Row>,
 ): (MenuItemDef<Row> | DefaultMenuItem)[] {
-  const row = params.node?.data;
-  if (!row || row.kind === "applet") return [];
-  return [
-    {
-      name: "Show commit history",
-      action: () => openHistory(row),
-    },
-  ];
+  if (!gridApi) return [];
+  const anchor = params.node as IRowNode<Row> | null;
+  const targets = menuTargets(gridApi, anchor);
+  if (targets.length === 0) return [];
+  const column = params.column?.getColId() ?? "";
+  const entries = rowMenu(targets.map(menuTarget), { column, canReveal, revealLabel });
+  return entries.map((entry) => {
+    if (entry.separator) return "separator";
+    return {
+      name: entry.name,
+      disabled: entry.disabled !== null,
+      tooltip: entry.disabled ?? undefined,
+      cssClasses: entry.action === "remove" ? ["m2-menu-danger"] : undefined,
+      action: () => void runMenuAction(entry.action, targets, anchor),
+    };
+  });
+}
+
+async function runMenuAction(action: MenuAction, targets: Row[], anchor: IRowNode<Row> | null) {
+  const [first] = targets;
+  switch (action) {
+    case "browse":
+      openBrowse(first);
+      return;
+    case "sync":
+      await runRows(targets);
+      return;
+    case "stop": {
+      // One stop per job: several rows can be claimed by the same one.
+      const jobs = new Set<string>();
+      for (const t of targets) {
+        if (t.stopJobId && t.stopTarget && !jobs.has(t.stopJobId)) {
+          jobs.add(t.stopJobId);
+          await stopSource(t.stopTarget);
+        }
+      }
+      return;
+    }
+    case "edit":
+      if (first.editGroup) openEdit(first.editGroup);
+      return;
+    case "rename":
+      if (anchor && anchor.rowIndex != null) {
+        gridApi?.startEditingCell({ rowIndex: anchor.rowIndex, colKey: "name" });
+      }
+      return;
+    case "copy_id":
+      await copyToClipboard(targets.map((t) => t.id).join("\n"));
+      return;
+    case "copy_path":
+      await copyToClipboard(
+        targets.map((t) => t.revealPath).filter((p): p is string => !!p).join("\n"),
+      );
+      return;
+    case "log": {
+      const row =
+        first.kind === "group"
+          ? rows.value.find((r) => r.kind !== "group" && r.id === first.statusFrom)
+          : first;
+      if (row) void openStepLog(row);
+      return;
+    }
+    case "history":
+      openHistory(targets);
+      return;
+    case "reveal":
+      for (const t of targets) await reveal(t.key);
+      return;
+    case "remove":
+      await deleteRows(targets);
+      return;
+  }
+}
+
+/// Write a group's new name, or drop the line when it is blank or is
+/// the id again — `renameGroup` treats both as "no name".
+async function renameRow(row: Row, name: string) {
+  if (row.kind !== "group") return;
+  const next = renameGroup(configText.value, row.id, name);
+  if (next === configText.value) return;
+  await writeConfig(next, name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`);
 }
 
 const historyColumnDefs: ColDef<HistoryRow>[] = [
   {
+    // The tree column: a store, the commits under it, the tables under
+    // each commit. The label is the store's file name, the commit's
+    // message, or the table's name; the level says which it is.
+    headerName: "Commit",
+    field: "label",
+    flex: 3,
+    minWidth: 320,
+    showRowGroup: true,
+    cellRenderer: "agGroupCellRenderer",
+    cellRendererParams: {
+      suppressCount: true,
+      innerRenderer: (p: ICellRendererParams<HistoryRow>) => {
+        const row = p.data;
+        const wrap = document.createElement("span");
+        wrap.className = `m2-history-label m2-history-${row?.level ?? "commit"}`;
+        wrap.textContent = row?.label ?? "";
+        if (row?.level === "store") {
+          const dir = document.createElement("span");
+          dir.className = "m2-cell-dir";
+          dir.textContent = row.storePath.slice(0, row.storePath.lastIndexOf("/"));
+          wrap.appendChild(dir);
+        }
+        return wrap;
+      },
+    },
+    tooltipField: "label",
+  },
+  {
+    // Relative on top, exact underneath — stacked like the size cell,
+    // because a sync commits several times inside one minute and ten
+    // "18 hours ago"s in a row say nothing about their order.
     headerName: "When",
     field: "date",
-    width: 140,
-    sort: "desc",
-    comparator: (a: string, b: string) => compareStamps(a, b),
-    valueFormatter: (p) => (p.value ? formatRelative(p.value, Date.now()) : "—"),
-    tooltipValueGetter: (p) => formatStamp(p.value ?? null),
-  },
-  {
-    // Exact, beside the relative form: a sync commits several times
-    // within a minute, and "18 hours ago" ten times over says nothing
-    // about the order they landed in.
-    headerName: "At",
-    field: "date",
-    colId: "at",
-    width: 176,
-    comparator: (a: string, b: string) => compareStamps(a, b),
-    valueFormatter: (p) => formatStamp(p.value ?? null),
-  },
-  {
-    headerName: "Message",
-    field: "message",
-    flex: 2,
-    minWidth: 220,
-    tooltipField: "message",
+    width: 170,
+    cellRenderer: (p: ICellRendererParams<HistoryRow>) => {
+      const wrap = document.createElement("span");
+      if (!p.value) return wrap;
+      wrap.className = "m2-history-when";
+      const rel = document.createElement("span");
+      rel.textContent = formatRelative(p.value, Date.now());
+      const abs = document.createElement("span");
+      abs.className = "m2-cell-dir";
+      abs.textContent = formatStamp(p.value);
+      wrap.append(rel, abs);
+      return wrap;
+    },
   },
   {
     headerName: "Rows",
@@ -1515,7 +1709,7 @@ const historyColumnDefs: ColDef<HistoryRow>[] = [
     width: 100,
     type: "numericColumn",
     valueFormatter: (p) => formatCount(p.value),
-    headerTooltip: "Rows across every data table after this commit",
+    headerTooltip: "Rows after this commit — across the data tables, or in the one table",
   },
   {
     headerName: "Added",
@@ -1539,30 +1733,37 @@ const historyColumnDefs: ColDef<HistoryRow>[] = [
     valueFormatter: (p) => formatDelta(p.value, "~"),
   },
   {
-    headerName: "Tables",
-    field: "tables",
-    flex: 3,
-    minWidth: 260,
-    tooltipField: "tables",
-    headerTooltip: "The data tables, largest first, with what this commit did to each",
+    // The run that made the commit, when the message names one, as the
+    // way to its log: the commit is what the run did, the log is how.
+    headerName: "Run",
+    field: "run",
+    width: 120,
+    cellRenderer: (p: ICellRendererParams<HistoryRow>) => {
+      const wrap = document.createElement("span");
+      const row = p.data;
+      if (!row?.run) return wrap;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "m2-history-run";
+      btn.textContent = row.run.slice(0, 8);
+      btn.title = `Show the log of run ${row.run}`;
+      btn.addEventListener("click", () => void openRunLog(row));
+      wrap.appendChild(btn);
+      return wrap;
+    },
   },
   {
-    headerName: "Store",
-    field: "store",
-    width: 190,
-    tooltipField: "storePath",
-  },
-  {
-    headerName: "Commit",
+    headerName: "Hash",
     field: "hash",
     width: 130,
     tooltipField: "hash",
     cellRenderer: (p: ICellRendererParams<HistoryRow>) => {
-      const hash = p.value ? String(p.value) : "";
       const wrap = document.createElement("span");
+      if (p.data?.level !== "commit" || !p.value) return wrap;
+      const hash = String(p.value);
       wrap.className = "m2-history-hash";
       wrap.textContent = hash.slice(0, 10);
-      if (hash) wrap.appendChild(copyIdButton(hash, "Copy the commit hash"));
+      wrap.appendChild(copyIdButton(hash, "Copy the commit hash"));
       return wrap;
     },
   },
@@ -1665,7 +1866,7 @@ function onRowGroupOpened(e: RowGroupOpenedEvent<Row>) {
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape") return;
   if (logFor.value) logFor.value = null;
-  else if (historyFor.value) historyFor.value = null;
+  else if (historyFor.value.length) historyFor.value = [];
   else if (helpOpen.value) helpOpen.value = false;
 }
 
@@ -1984,6 +2185,53 @@ async function deleteGroup(id: string) {
   await writeConfig(next, `Removed ${name}.`);
 }
 
+/// Several rows at once: one question, one write. A single row keeps
+/// its own wording, which says what else goes with it.
+async function deleteRows(targets: Row[]) {
+  if (targets.length === 1) {
+    const [row] = targets;
+    if (row.kind === "group") await deleteGroup(row.id);
+    else await deleteSource(row.id);
+    return;
+  }
+  const doomed = new Map<string, ConfiguredStep | ConfiguredGroup>();
+  const groups = new Set<string>();
+  for (const t of targets) {
+    if (t.kind === "group") {
+      const group = configGroups.value.find((g) => g.id === t.id);
+      if (!group) continue;
+      groups.add(group.id);
+      doomed.set(`group:${group.id}`, group);
+      for (const m of sources.value.filter((s) => s.group === group.id)) doomed.set(m.id, m);
+    } else {
+      const step = sources.value.find((s) => s.id === t.id);
+      if (!step) continue;
+      doomed.set(step.id, step);
+      const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
+      if (sibling) doomed.set(sibling.id, sibling);
+    }
+  }
+  // A group with nothing left under it goes too, as in `deleteSource`.
+  for (const g of configGroups.value) {
+    if (groups.has(g.id)) continue;
+    const left = sources.value.some((s) => s.group === g.id && !doomed.has(s.id));
+    const had = sources.value.some((s) => s.group === g.id);
+    if (had && !left) doomed.set(`group:${g.id}`, g);
+  }
+  const names = targets.map((t) => `"${t.name}"`).join(", ");
+  const what =
+    `Remove ${names} from the config, with everything under them?\n\n` +
+    `The data stays on disk — these entries just stop running. Adding a source ` +
+    `back later resumes from what's already there.`;
+  if (!window.confirm(what)) return;
+  const entries = [...doomed.values()];
+  let next = removeSteps(configText.value, entries);
+  for (const d of entries) {
+    if ("phase" in d && d.phase === "render") next = unwireFromFanIns(next, d.id);
+  }
+  await writeConfig(next, `Removed ${targets.length} entries.`);
+}
+
 /// Leave the Manage screen for this row's data: one card, the grid,
 /// already filtered to the source and carrying its type's columns.
 ///
@@ -2029,14 +2277,24 @@ async function discardConfigEdits() {
 /// Sync what a row stands for. A step is its own seed; a group's seeds
 /// are its source steps, and the worker takes them comma-joined, one
 /// `--sync` each, so the whole group runs as one job.
-async function runRow(row: Row) {
-  if (row.seeds.length === 0) return;
-  const step = sources.value.find((s) => s.id === row.id);
-  const shown = row.kind === "group" ? row.name : (step?.name ?? row.id);
+function runRow(row: Row) {
+  return runRows([row]);
+}
+
+/// Several rows as one job, so their downstream steps run once.
+async function runRows(targets: Row[]) {
+  const seeds = [...new Set(targets.flatMap((r) => r.seeds))];
+  if (seeds.length === 0) return;
+  const shown = targets
+    .map((row) => {
+      const step = sources.value.find((s) => s.id === row.id);
+      return row.kind === "group" ? row.name : (step?.name ?? row.id);
+    })
+    .join(", ");
   busy.value = true;
   clearBanner();
   try {
-    const job = await enqueueJob({ kind: "all", source_ids: row.seeds.join(",") });
+    const job = await enqueueJob({ kind: "all", source_ids: seeds.join(",") });
     adoptJob(job);
     say(true, `Queued a sync for ${shown}.`, job.id);
     // Before returning: the queue is what puts this row and everything
@@ -2324,9 +2582,11 @@ onUnmounted(() => {
         :groupDefaultExpanded="0"
         :isGroupOpenByDefault="isGroupOpenByDefault"
         :tooltipShowDelay="200"
+        :rowSelection="rowSelection"
         :preventDefaultOnContextMenu="true"
         :getContextMenuItems="contextMenuItems"
         @grid-ready="onGridReady"
+        @cell-context-menu="onCellContextMenu"
         @cell-double-clicked="onCellDoubleClicked"
         @row-group-opened="onRowGroupOpened"
       />
@@ -2437,9 +2697,15 @@ onUnmounted(() => {
             <b>Type</b> and <b>Status</b> are icons, and the mark after a step’s name says what
             it does — hover any of them for the word. <b>Double-click a Status</b> to read that
             step's log from the run it last took part in; on a group row, the log of the step
-            its status came from. <b>Right-click a row</b> for its <b>commit history</b>: every
-            store under it is versioned, and the panel lists each commit — when, what it said,
-            and what it did to each table — newest first, updating while a sync runs.
+            its status came from.
+          </p>
+          <p>
+            <b>Right-click a row</b> for everything it can do — the actions, the log, a rename
+            (on the Name cell), and its <b>commit history</b>: every store under it is versioned,
+            and the panel lists each commit — when, what it said, what it did to each table, and
+            the run that made it — newest first, updating while a sync runs. Right-click inside a
+            selection and the menu acts on all of it; outside one, on that row alone. An entry
+            that doesn’t apply stays, greyed, and says why on hover.
           </p>
           <p>
             <b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its
@@ -2502,20 +2768,21 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="historyFor" class="m2-logs-backdrop" @click.self="historyFor = null">
+    <div v-if="historyFor.length" class="m2-logs-backdrop" @click.self="historyFor = []">
       <div class="m2-logs m2-history" role="dialog" aria-modal="true" aria-label="Commit history">
         <header class="m2-logs-head">
           <div>
-            <h3>{{ historyFor.name }} — commit history</h3>
+            <h3>{{ historyTitle }} — commit history</h3>
             <p>
-              One row per commit in {{ historyStoreNote(historyFor) }}, newest first.
+              Each commit in {{ historyStoreNote }}, newest first; open one for what it did to
+              each table.
               <span v-if="historyTruncated.length">
                 Only the newest commits are shown for
                 <code>{{ historyTruncated.join(", ") }}</code>.
               </span>
             </p>
           </div>
-          <button class="m2-btn" @click="historyFor = null">Close</button>
+          <button class="m2-btn" @click="historyFor = []">Close</button>
         </header>
 
         <p v-if="historyBusy && historyLines.length === 0" class="m2-logs-note">
@@ -2523,7 +2790,7 @@ onUnmounted(() => {
         </p>
         <p v-else-if="historyError" class="m2-logs-note bad">{{ historyError }}</p>
         <p v-else-if="historyLines.length === 0" class="m2-logs-note">
-          No doltlite store under <code>{{ historyFor.id }}/</code> yet. A step that has never
+          No doltlite store under <code>{{ historyStoreNote }}</code> yet. A step that has never
           run has written nothing, and the QMD index keeps no store of its own.
         </p>
         <div v-else class="m2-history-grid">
@@ -2533,8 +2800,13 @@ onUnmounted(() => {
             :columnDefs="historyColumnDefs"
             :rowData="historyLines"
             :getRowId="(p: { data: HistoryRow }) => p.data.key"
+            :treeData="true"
+            treeDataDisplayType="custom"
+            :getDataPath="(r: HistoryRow) => r.path"
+            :groupDefaultExpanded="1"
             :tooltipShowDelay="200"
             :enableCellTextSelection="true"
+            :suppressColumnVirtualisation="true"
             @grid-ready="onHistoryGridReady"
           />
         </div>
@@ -2850,6 +3122,26 @@ onUnmounted(() => {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
+.m2-history-label { display: inline-flex; align-items: baseline; gap: 8px; }
+.m2-history-store { font-weight: 600; }
+.m2-history-table { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+/* Two lines in one row's height, like the size cell. */
+.m2-history-when { display: inline-flex; flex-direction: column; line-height: 1.25; justify-content: center; height: 100%; }
+.m2-history-when .m2-cell-dir { font-size: 11px; }
+.m2-history-run {
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  color: var(--datalib-accent);
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+/* The destructive entry, told apart the way the trash button is. */
+.ag-menu-option.m2-menu-danger:not(.ag-menu-option-disabled) { color: var(--datalib-log-error); }
 /* The same control as `button.copy-uuid` in ChatBody: a greyed glyph
    that lights up on hover and flashes its verdict. */
 .m2-copy-id {

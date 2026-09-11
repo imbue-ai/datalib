@@ -641,6 +641,9 @@ export type HistoryCommit = {
   committer: string;
   date: string;
   message: string;
+  /// The run that made the commit, when the message ends in the step's
+  /// ` run=<id>` stamp — the job id, when the app ran it.
+  run: string | null;
   /// Every table, largest first, as of this commit.
   tables: HistoryTable[];
 };
@@ -759,6 +762,17 @@ export async function cancelJob(id: string, signal?: AbortSignal): Promise<void>
   if (!r.ok) {
     throw new Error(`POST /api/sync/jobs/${id}/cancel → ${r.status}`);
   }
+}
+
+/// One job by id — a run the commit history names, which may be older
+/// than the list the Manage screen holds. Null when the app never ran
+/// it, without the toast `getJson` would raise: a run started from a
+/// terminal is an ordinary answer here, not a failure.
+export async function fetchJob(id: string, signal?: AbortSignal): Promise<SyncJob | null> {
+  const r = await fetch(`/api/sync/jobs/${encodeURIComponent(id)}`, { signal });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`GET /api/sync/jobs/${id} → ${r.status}`);
+  return (await r.json()) as SyncJob;
 }
 
 export async function fetchJobLog(id: string, signal?: AbortSignal): Promise<string> {
