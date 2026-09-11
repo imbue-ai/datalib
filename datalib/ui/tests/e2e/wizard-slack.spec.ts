@@ -1,6 +1,6 @@
 // Slack: the Connection block fills the channel picker and, once DMs
-// are on, the people picker — through the same probe and the same
-// grid the email and Claude forms use.
+// are on, the DM picker — through the same probe and the same grid the
+// email and Claude forms use.
 import { test, expect, type Page } from "@playwright/test";
 
 const wizard = (page: Page) => page.getByRole("dialog");
@@ -28,7 +28,7 @@ const SLACK_SERVICE = {
 
 /// What `datalib-step probe slack` prints for a small workspace: every
 /// channel the account can see, tagged where it matters, and one row
-/// per person on the far end of a DM.
+/// per DM, titled the way the sync will title it.
 const SLACK_PROBE = {
   mode: "api",
   account: { id: "U_PICARD", address: null, display_name: "picard in Enterprise", message_estimate: null },
@@ -36,8 +36,8 @@ const SLACK_PROBE = {
     { path: "bridge", kind: "channel", title: null, role: null, messages: null, members: 12, updated_at: null },
     { path: "engineering", kind: "channel", title: null, role: "private", messages: null, members: 4, updated_at: null },
     { path: "ten-forward", kind: "channel", title: null, role: "not a member", messages: null, members: 40, updated_at: null },
-    { path: "U_RIKER", kind: "person", title: "William Riker", role: "@riker", messages: null, members: null, updated_at: null },
-    { path: "U_DATA", kind: "person", title: "Data", role: "@data", messages: null, members: null, updated_at: null },
+    { path: "D_RIKER", kind: "conversation", title: "@William Riker", role: null, messages: null, members: null, updated_at: null },
+    { path: "G_AWAYTEAM", kind: "conversation", title: "@William Riker, Worf", role: "group", messages: null, members: 2, updated_at: null },
   ],
   notes: [],
 };
@@ -95,7 +95,7 @@ test("a probe fills the channel picker, and ticking rows writes `channels`", asy
   // A Slack account has no address, so the line names the handle and
   // the workspace, and counts both kinds of thing that came back.
   await expect(wizard(page).locator(".wiz-probe-note")).toContainText(
-    "Reached picard in Enterprise — 3 channels, 2 people.",
+    "Reached picard in Enterprise — 3 channels, 2 conversations.",
   );
   // The probe authenticates with what Save would write: the `api`
   // table that selects the live method, with the form's defaults.
@@ -110,9 +110,9 @@ test("a probe fills the channel picker, and ticking rows writes `channels`", asy
     /#engineering.*private.*4/,
     /#ten-forward.*not a member.*40/,
   ]);
-  // The people picker belongs to a field that only exists once DMs
-  // are on, so it isn't on the page yet.
-  await expect(picker(page, "Only DMs with these people")).toHaveCount(0);
+  // The DM picker belongs to a field that only exists once DMs are
+  // on, so it isn't on the page yet.
+  await expect(picker(page, "Only these DMs")).toHaveCount(0);
 
   await tick(page, "Channels", "engineering");
   await tick(page, "Channels", "bridge");
@@ -122,7 +122,7 @@ test("a probe fills the channel picker, and ticking rows writes `channels`", asy
   await expect(toml).toContainText('channels = ["engineering", "bridge"]');
 });
 
-test("turning DMs on reveals a people picker filled from the same probe", async ({ page }) => {
+test("turning DMs on reveals a DM picker filled from the same probe", async ({ page }) => {
   await pickSlack(page);
   await wizard(page).getByRole("button", { name: "Test connection" }).click();
   await expect(wizard(page).locator(".wiz-probe-note")).toContainText("Reached");
@@ -130,17 +130,18 @@ test("turning DMs on reveals a people picker filled from the same probe", async 
   // One probe, both pickers: no second "Test connection" after the
   // toggle.
   await toggle(page, "Download direct messages").check();
-  await expect(rows(page, "Only DMs with these people")).toHaveText([
-    /William Riker.*@riker/,
-    /Data.*@data/,
+  // Titled after who is on the far end, a group DM tagged and counted.
+  await expect(rows(page, "Only these DMs")).toHaveText([
+    /@William Riker/,
+    /@William Riker, Worf.*group.*2/,
   ]);
 
-  await tick(page, "Only DMs with these people", "U_RIKER");
+  await tick(page, "Only these DMs", "G_AWAYTEAM");
   await wizard(page).getByText("Review the TOML this writes").click();
   const toml = wizard(page).locator(".wiz-review pre");
-  // The user id: the one spelling of a person that can't collide or
-  // be renamed out from under the config.
-  await expect(toml).toContainText('dm_users = ["U_RIKER"]');
+  // Slack's own id for the conversation, which is what the downloader
+  // walks — never the title, which is derived and can change.
+  await expect(toml).toContainText('dm_conversations = ["G_AWAYTEAM"]');
   await expect(toml).toContainText("dms = true");
 });
 
@@ -150,12 +151,13 @@ test("a typed name is checked the way the downloader reads it", async ({ page })
   // a channel.
   await field(page, "Channels").fill("#bridge, bridg");
   await toggle(page, "Download direct messages").check();
-  // A handle with its `@`, a real name in the wrong case, and a
-  // stranger: `dm_users` resolves the first two, and only the third
-  // would mirror nothing.
-  await field(page, "Only DMs with these people").fill("@riker, william riker, wesley");
+  // The link `Copy link` hands out resolves to its id; a person's
+  // handle is not a conversation and would mirror nothing.
+  await field(page, "Only these DMs").fill(
+    "https://enterprise.slack.com/archives/D_RIKER, @riker",
+  );
   await wizard(page).getByRole("button", { name: "Test connection" }).click();
 
   await expect(wizard(page).getByText(/Not on this account: bridg\./)).toBeVisible();
-  await expect(wizard(page).getByText(/Not on this account: wesley\./)).toBeVisible();
+  await expect(wizard(page).getByText(/Not on this account: @riker\./)).toBeVisible();
 });

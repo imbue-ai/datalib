@@ -53,13 +53,11 @@ struct Args {
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     dms: bool,
 
-    /// Restrict `--dms` to conversations with these people. Repeat the
-    /// flag. Each value is a Slack user id or any of that user's names
-    /// (handle, display name, real name), with an optional leading `@`.
-    /// Group DMs are skipped while this is set — see the provider's
-    /// INGEST.md.
-    #[arg(long = "dm-user", value_name = "PERSON")]
-    dm_users: Vec<String>,
+    /// Restrict `--dms` to these conversations. Repeat the flag. Each
+    /// value is a Slack conversation id (`D…` for a 1:1, `G…`/`C…` for a
+    /// group DM) or a pasted link to it — see the provider's INGEST.md.
+    #[arg(long = "dm-conversation", value_name = "ID_OR_LINK")]
+    dm_conversations: Vec<String>,
 
     #[command(flatten)]
     obs: ObsArgs,
@@ -77,13 +75,13 @@ async fn main() -> Result<()> {
     };
 
     // Same rule the config path enforces in `SlackApiSync::validate`:
-    // naming people to mirror DMs with, while DMs are off, would either
-    // silently mirror nothing or silently turn the feature on.
-    if !args.dms && !args.dm_users.is_empty() {
+    // naming DMs to mirror while DMs are off would either silently
+    // mirror nothing or silently turn the feature on.
+    if !args.dms && !args.dm_conversations.is_empty() {
         anyhow::bail!(
-            "--dm-user was given {} time(s) but --dms is false, so no direct messages \
-             would be mirrored. Pass --dms true, or drop --dm-user.",
-            args.dm_users.len(),
+            "--dm-conversation was given {} time(s) but --dms is false, so no direct \
+             messages would be mirrored. Pass --dms true, or drop --dm-conversation.",
+            args.dm_conversations.len(),
         );
     }
 
@@ -97,7 +95,8 @@ async fn main() -> Result<()> {
         members_only: args.members_only,
         media: args.media,
         dms: args.dms,
-        dm_users: (!args.dm_users.is_empty()).then(|| args.dm_users.clone()),
+        dm_conversations: (!args.dm_conversations.is_empty())
+            .then(|| args.dm_conversations.clone()),
         ..FetchOptions::new(db.clone())
     };
 

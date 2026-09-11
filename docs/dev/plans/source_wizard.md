@@ -58,10 +58,10 @@ Differences from the design, and why:
 design calls for: a `text` field can be marked `latchkey: true` (it
 becomes the account control), a `string_list` can be marked
 `probe: <noun>` (it grows an AG Grid checklist from the probe — the
-nouns are `labels`, `mailboxes`, `conversations`, `channels` and
-`people`, and `ProbeItemPicker.vue` picks its columns from the kind
-of item the list holds), and an entry can carry `preset` values it
-writes without asking. It
+nouns are `labels`, `mailboxes`, `conversations` and `channels`, and
+`ProbeItemPicker.vue` picks its columns from the kind of item the
+list holds), and an entry can carry `preset` values it writes without
+asking. It
 also grew `variantKey`, which the design did not anticipate: Gmail and
 Fastmail are two descriptors over one step type (`email`), so `type`
 stopped being a unique key. `entryKey` is the unique one, and
@@ -69,11 +69,11 @@ stopped being a unique key. `entryKey` is the unique one, and
 
 **Probes exist for email, Claude and Slack** (`probe.rs` in each
 provider crate, dispatched by `datalib_step/src/probe.rs`). Slack's
-lists every channel the account can see as `channel` items and the
-people behind its DMs as `person` items, so the `channels` and
-`dm_users` fields are pickers over the live workspace — the "live
-channel multi-select" slice 2 below asks for, in the shared shape
-rather than a Slack-specific `list.channels` op.
+lists every channel the account can see as `channel` items and every
+DM as a `conversation` item — the same kind a Claude chat is — so the
+`channels` and `dm_conversations` fields are pickers over the live
+workspace: the "live channel multi-select" slice 2 below asks for, in
+the shared shape rather than a Slack-specific `list.channels` op.
 
 **Not built**, and still described as proposals below: the served
 catalog (`GET /api/sources/catalog` — the table is still a TS file),

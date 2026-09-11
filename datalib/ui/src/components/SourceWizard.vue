@@ -609,7 +609,6 @@ const PROBE_KINDS: Record<ProbeNoun, string[]> = {
   mailboxes: ["mailbox"],
   conversations: ["conversation"],
   channels: ["channel"],
-  people: ["person"],
 };
 
 /// What a `probe:` field should offer, given what came back.
@@ -628,19 +627,17 @@ function chosenValues(field: Field): string[] {
 
 /// Does a typed value name this item, the way the provider will read
 /// it? Exact on the path, except where the downloader itself is looser:
-/// Slack drops a leading `#` from a channel name, and resolves a
-/// `dm_users` entry against handle, real name or id without case.
+/// Slack drops a leading `#` from a channel name, and every chat source
+/// takes a pasted link to a conversation as well as its bare id — so a
+/// value that *ends* in the id, after a `/`, counts.
 function namesItem(value: string, item: ProbeItem): boolean {
-  if (value === item.path) return true;
+  const v = value.trim();
+  if (v === item.path) return true;
   switch (item.kind) {
     case "channel":
-      return value.trim().replace(/^#/, "") === item.path;
-    case "person": {
-      const want = value.trim().replace(/^@/, "").trim().toLowerCase();
-      return [item.path, item.title, item.role?.replace(/^@/, "")]
-        .filter((c): c is string => !!c)
-        .some((c) => c.trim().toLowerCase() === want);
-    }
+      return v.replace(/^#/, "") === item.path;
+    case "conversation":
+      return v.split(/[?#]/)[0]?.split("/").includes(item.path) ?? false;
     default:
       return false;
   }
@@ -655,14 +652,13 @@ function unknownValues(field: Field): string[] {
 
 /// What a field's picker is a picker *of*, for the sentences around it.
 /// An email account has folders and labels, a Claude account has
-/// conversations, a Slack workspace has channels and people — and
-/// calling any of them "labels" reads as a bug.
+/// conversations, a Slack workspace has channels and DMs — and calling
+/// any of them "labels" reads as a bug.
 const PROBE_NOUNS: Record<ProbeNoun, string> = {
   labels: "labels",
   mailboxes: "folders",
   conversations: "conversations",
   channels: "channels",
-  people: "people",
 };
 
 /// The noun each item kind is counted under in the "Reached …" line.
@@ -671,12 +667,11 @@ const KIND_NOUNS: Record<string, ProbeNoun> = {
   keyword: "labels",
   conversation: "conversations",
   channel: "channels",
-  person: "people",
 };
 
 /// What the probe came back with, counted by kind: "3 channels, 2
-/// people". A report with nothing in it says so in words, since there
-/// is no one noun to count zero of.
+/// conversations". A report with nothing in it says so in words, since
+/// there is no one noun to count zero of.
 const probeSummary = computed(() => {
   const counts = new Map<ProbeNoun, number>();
   for (const item of probe.value.report?.items ?? []) {

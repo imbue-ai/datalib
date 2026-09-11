@@ -66,7 +66,7 @@ fn write_workspace(api: &Path) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn probe_lists_channels_and_the_people_behind_dms() {
+async fn probe_lists_channels_and_dms() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_raw");
     let playback = d.path().join("playback");
@@ -85,32 +85,28 @@ async fn probe_lists_channels_and_the_people_behind_dms() {
         Some("picard in Enterprise")
     );
 
-    let rows: Vec<(String, String, Option<String>, Option<String>)> = report
+    let rows: Vec<(&str, &str, &str, &str)> = report
         .items
         .iter()
         .map(|i| {
             (
-                i.kind.as_str().to_string(),
-                i.path.clone(),
-                i.title.clone(),
-                i.role.clone(),
+                i.kind.as_str(),
+                i.path.as_str(),
+                i.title.as_deref().unwrap_or(""),
+                i.role.as_deref().unwrap_or(""),
             )
         })
         .collect();
-    let s = |v: &str| Some(v.to_string());
+    // A DM's path is the id `dm_conversations` takes, and its title is
+    // what the sync will call it.
     assert_eq!(
         rows,
         vec![
-            ("channel".into(), "general".into(), None, None),
-            ("channel".into(), "warp-core".into(), None, s("private")),
-            ("channel".into(), "holodeck".into(), None, s("not a member")),
-            ("person".into(), "U3".into(), s("Data"), s("@data")),
-            (
-                "person".into(),
-                "U2".into(),
-                s("William Riker"),
-                s("@riker")
-            ),
+            ("channel", "general", "", ""),
+            ("channel", "warp-core", "", "private"),
+            ("channel", "holodeck", "", "not a member"),
+            ("conversation", "D1", "@William Riker", ""),
+            ("conversation", "G1", "@William Riker, Data", "group"),
         ]
     );
     assert_eq!(report.items[0].members, Some(3));

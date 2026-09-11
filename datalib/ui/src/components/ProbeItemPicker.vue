@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The picker behind a filter field whose values a probe can enumerate:
-// an account's mailboxes, its conversations, a workspace's channels,
-// the people behind its DMs. One scrollable grid with a checkbox per
+// an account's mailboxes, its conversations (a Claude chat, a Slack
+// DM), a workspace's channels. One scrollable grid with a checkbox per
 // row, and the checked set *is* the field's value — the text box
 // beside it edits the same array. What the columns are follows from
 // what kind of item the list holds; nothing else differs per source.
@@ -46,7 +46,7 @@ const idTooltip = (p: { data?: ProbeItem }) => p.data?.path ?? "";
 
 /// One column set per item kind. A mailbox is named by the very string
 /// the filter matches, so it needs no second column for it; a
-/// conversation or a person is named by a title over an opaque id.
+/// conversation is named by a title over an opaque id.
 const COLUMNS: Record<string, { placeholder: string; columns: ColDef<ProbeItem>[] }> = {
   mailbox: {
     placeholder: "Search these labels…",
@@ -66,7 +66,11 @@ const COLUMNS: Record<string, { placeholder: string; columns: ColDef<ProbeItem>[
         tooltipValueGetter: idTooltip,
         valueGetter: byTitle,
       },
-      { headerName: "Updated", width: 118, valueGetter: byDate },
+      // A Slack DM carries a `group` tag and a head-count, a Claude
+      // chat a date; whichever a source leaves empty is pruned below.
+      { headerName: "", field: "role", width: 80 },
+      { headerName: "People", field: "members", width: 90, type: "numericColumn" },
+      { headerName: "Updated", field: "updated_at", width: 118, valueGetter: byDate },
     ],
   },
   channel: {
@@ -82,28 +86,23 @@ const COLUMNS: Record<string, { placeholder: string; columns: ColDef<ProbeItem>[
       { headerName: "Members", field: "members", width: 110, type: "numericColumn" },
     ],
   },
-  person: {
-    placeholder: "Search these people…",
-    columns: [
-      {
-        headerName: "Person",
-        flex: 1,
-        minWidth: 200,
-        tooltipValueGetter: idTooltip,
-        valueGetter: byTitle,
-      },
-      { headerName: "Handle", field: "role", width: 150 },
-    ],
-  },
 };
 
 /// Every list a probe returns is one kind throughout, `labels` being
 /// the exception: it mixes mailboxes with keywords, and both read as a
 /// label. So the first item's kind decides, and a keyword reads as a
-/// mailbox.
+/// mailbox. A column for a field no row fills in — Gmail's message
+/// counts, a Claude chat's head-count — is dropped rather than shown
+/// blank.
 const layout = computed(() => {
   const kind = props.items[0]?.kind ?? "mailbox";
-  return COLUMNS[kind === "keyword" ? "mailbox" : kind] ?? COLUMNS.mailbox;
+  const { placeholder, columns } = COLUMNS[kind === "keyword" ? "mailbox" : kind] ?? COLUMNS.mailbox;
+  const filled = (field: keyof ProbeItem) =>
+    props.items.some((i) => i[field] !== null && i[field] !== undefined);
+  return {
+    placeholder,
+    columns: columns.filter((c) => !c.field || filled(c.field as keyof ProbeItem)),
+  };
 });
 
 /// Set while this component is writing the grid's selection from

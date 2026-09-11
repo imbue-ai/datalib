@@ -1,10 +1,11 @@
 //! Read-only workspace probe: "do these credentials reach Slack, and
-//! which channels and people can this account name?" The same three
+//! which channels and DMs can this account name?" The same three
 //! listing calls a download starts with (`auth.test`, `users.list`,
 //! `conversations.list`) and nothing else — no history is fetched.
 //! Channels come back as `channel` items whose path is the bare name
-//! `channels` takes; the people behind the account's DMs come back as
-//! `person` items whose path is the user id `dm_users` takes.
+//! `channels` takes; the account's DMs come back as `conversation`
+//! items whose path is the Slack id `dm_conversations` takes, titled
+//! the way the sync titles them.
 
 use std::collections::BTreeMap;
 
@@ -17,7 +18,7 @@ use datalib_source_common::probe::{ProbeAccount, ProbeItem, ProbeItemKind, Probe
 
 use crate::ingest::api::call_slack;
 use crate::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_USERS};
-use crate::ingest::{conversation_types, next_cursor};
+use crate::ingest::{conversation_types, next_cursor, schema_raw};
 
 pub async fn probe(config: &SlackConfig) -> Result<ProbeReport> {
     config.validate()?;
@@ -33,21 +34,25 @@ pub async fn probe(config: &SlackConfig) -> Result<ProbeReport> {
     let self_user_id = me.get("user_id").and_then(Value::as_str);
 
     let users = list_pages(M_USERS, BTreeMap::new(), "members", latchkey).await?;
-    let directory: BTreeMap<&str, &Value> = users
+    let labels: BTreeMap<String, String> = users
         .iter()
-        .filter_map(|u| Some((u.get("id")?.as_str()?, u)))
+        .filter_map(|u| {
+            let id = u.get("id")?.as_str()?;
+            let name = u.get("name").and_then(Value::as_str);
+            Some((id.to_string(), crate::user_label(real_name(u), name, id)))
+        })
         .collect();
 
     // Every kind at once, DMs included: the probe is not the place to
-    // honour `dms` — the picker for `dm_users` only appears once it is
-    // on, and by then the answer has to already be here.
+    // honour `dms` — the picker for `dm_conversations` only appears
+    // once it is on, and by then the answer has to already be here.
     let mut params = BTreeMap::new();
     params.insert("exclude_archived".to_string(), "true".to_string());
     params.insert("types".to_string(), conversation_types(true).to_string());
     let conversations = list_pages(M_CHANNELS, params, "channels", latchkey).await?;
 
     let mut items = channel_items(&conversations);
-    items.extend(person_items(&conversations, &directory, self_user_id));
+    items.extend(dm_items(&conversations, &labels, self_user_id));
 
     Ok(ProbeReport {
         mode: "api".to_string(),
@@ -146,54 +151,43 @@ fn channel_items(conversations: &[Value]) -> Vec<ProbeItem> {
     items.into_iter().map(|(_, item)| item).collect()
 }
 
-/// Everyone on the other end of a DM: the counterpart of each 1:1, and
-/// every member of each group DM but the account itself. One item per
-/// person however many conversations they appear in, named from the
-/// user directory where it knows them.
-fn person_items(
+/// One item per DM, 1:1 or group, titled after the people on the far
+/// end exactly as the sync will title it — so what the picker shows is
+/// what the progress line and the rendered page will say.
+fn dm_items(
     conversations: &[Value],
-    directory: &BTreeMap<&str, &Value>,
+    labels: &BTreeMap<String, String>,
     self_user_id: Option<&str>,
 ) -> Vec<ProbeItem> {
-    let mut people: BTreeMap<String, ProbeItem> = BTreeMap::new();
-    for c in conversations {
-        let ids: Vec<&str> = if flag(c, "is_im") {
-            c.get("user").and_then(Value::as_str).into_iter().collect()
-        } else if flag(c, "is_mpim") {
-            c.get("members")
-                .and_then(Value::as_array)
-                .map(|m| m.iter().filter_map(Value::as_str).collect())
-                .unwrap_or_default()
-        } else {
-            continue;
-        };
-        for id in ids {
-            if Some(id) == self_user_id || people.contains_key(id) {
-                continue;
-            }
-            let user = directory.get(id).copied();
-            people.insert(
-                id.to_string(),
-                ProbeItem {
-                    title: user.and_then(real_name).map(str::to_string),
-                    role: user
-                        .and_then(|u| u.get("name"))
-                        .and_then(Value::as_str)
-                        .map(|handle| format!("@{handle}")),
-                    ..ProbeItem::new(id, ProbeItemKind::Person)
-                },
-            );
-        }
-    }
-    let mut items: Vec<ProbeItem> = people.into_values().collect();
-    items.sort_by(|a, b| {
-        a.title
-            .is_none()
-            .cmp(&b.title.is_none())
-            .then_with(|| a.title.cmp(&b.title))
-            .then_with(|| a.path.cmp(&b.path))
-    });
+    let mut items: Vec<ProbeItem> = conversations
+        .iter()
+        .filter(|c| flag(c, "is_im") || flag(c, "is_mpim"))
+        .filter_map(|c| {
+            let id = c.get("id").and_then(Value::as_str)?;
+            let participants = crate::ingest::db::dm_participants(c, flag(c, "is_im"));
+            let counterparts = schema_raw::dm_counterparts(&participants, self_user_id);
+            let name = c.get("name").and_then(Value::as_str);
+            let group = flag(c, "is_mpim");
+            Some(ProbeItem {
+                title: Some(schema_raw::dm_display_name(&counterparts, name, id, labels)),
+                role: group.then(|| "group".to_string()),
+                members: group.then_some(counterparts.len() as u64),
+                updated_at: c.get("updated").and_then(Value::as_i64).map(millis_to_iso),
+                ..ProbeItem::new(id, ProbeItemKind::Conversation)
+            })
+        })
+        .collect();
+    items.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.path.cmp(&b.path)));
     items
+}
+
+/// Slack's `updated` is epoch milliseconds with no zone, so it is
+/// rendered as UTC with the offset written out — the timestamp
+/// convention in AGENTS.md.
+fn millis_to_iso(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, false))
+        .unwrap_or_else(|| ms.to_string())
 }
 
 /// The same first choice [`crate::user_label`] makes, read off the
@@ -248,30 +242,47 @@ mod tests {
         assert_eq!(items[1].members, Some(4));
     }
 
-    /// One row per person, the account itself left out of its own
-    /// group DM, and someone the directory doesn't know still listed
-    /// under their id so the DM isn't silently unpickable.
+    /// One row per DM, group DMs included, titled after who is on the
+    /// far end — the account itself subtracted from its own group DM,
+    /// and a counterpart the directory doesn't know shown by id rather
+    /// than dropped.
     #[test]
-    fn people_are_the_far_end_of_every_dm() {
-        let users = directory();
-        let dir: BTreeMap<&str, &Value> = users
+    fn dms_are_titled_after_their_counterparts() {
+        let labels: BTreeMap<String, String> = directory()
             .iter()
-            .map(|u| (u["id"].as_str().unwrap(), u))
+            .map(|u| {
+                let id = u["id"].as_str().unwrap();
+                (
+                    id.to_string(),
+                    crate::user_label(real_name(u), u["name"].as_str(), id),
+                )
+            })
             .collect();
-        let items = person_items(&conversations(), &dir, Some("U_ME"));
-        let rows: Vec<(&str, Option<&str>, Option<&str>)> = items
+        let items = dm_items(&conversations(), &labels, Some("U_ME"));
+        let rows: Vec<(&str, &str)> = items
             .iter()
-            .map(|i| (i.path.as_str(), i.title.as_deref(), i.role.as_deref()))
+            .map(|i| (i.path.as_str(), i.title.as_deref().unwrap_or("")))
             .collect();
         assert_eq!(
             rows,
             vec![
-                ("U_RIKER", Some("William Riker"), Some("@riker")),
-                ("U_STRANGER", None, None),
-                ("U_WORF", None, Some("@worf")),
+                ("D2", "@U_STRANGER"),
+                ("D1", "@William Riker"),
+                ("G1", "@William Riker, worf"),
             ]
         );
-        assert!(items.iter().all(|i| i.kind == ProbeItemKind::Person));
+        assert_eq!(items[2].role.as_deref(), Some("group"));
+        assert_eq!(items[2].members, Some(2));
+        assert!(items[0].role.is_none() && items[0].members.is_none());
+        assert!(items.iter().all(|i| i.kind == ProbeItemKind::Conversation));
+    }
+
+    #[test]
+    fn updated_is_rendered_as_utc_with_an_offset() {
+        assert_eq!(
+            millis_to_iso(1_735_689_600_123),
+            "2025-01-01T00:00:00.123+00:00"
+        );
     }
 
     #[test]
