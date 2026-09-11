@@ -58,7 +58,6 @@ pub struct DocumentMeta<'a> {
     /// [`super::doc_qmd_path_rel`]. Anything shorter makes the document
     /// unfindable through qmd search.
     pub qmd_path: Option<&'a str>,
-    pub source_name: &'a str,
 }
 
 /// Display title: the PDF's own title if it has a usable one, else the
@@ -120,7 +119,7 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         source_label: SOURCE_LABEL.into(),
         when_ts: when.map(str::to_string),
         author: meta.author.map(str::to_string),
-        account: Some(meta.source_name.to_string()),
+        account: None,
         project: None,
         org_uuid: None,
         org_name: None,
@@ -167,7 +166,7 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             // chat provider stamps the author on each message row so
             // the grid can filter without a join.
             author: author.clone(),
-            account: Some(meta.source_name.to_string()),
+            account: None,
             project: None,
             org_uuid: None,
             org_name: None,
@@ -209,7 +208,6 @@ mod tests {
             created_at: Some("2024-01-15T10:30:00-08:00"),
             modified_at: None,
             qmd_path: Some("papers/render_markdown/docs/abc123.md"),
-            source_name: "papers",
         }
     }
 

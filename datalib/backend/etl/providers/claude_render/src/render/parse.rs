@@ -195,16 +195,12 @@ impl ParsedExport {
     /// one org can share a full name — then the name, and the UUID only
     /// when the `users` table has no row at all.
     pub fn account_label(&self, uuid: &str) -> Option<String> {
-        if uuid.is_empty() {
-            return None;
-        }
-        let nonblank = |s: &Option<String>| s.clone().filter(|s| !s.trim().is_empty());
-        let label = self
-            .accounts
-            .iter()
-            .find(|a| a.account_uuid == uuid)
-            .and_then(|a| nonblank(&a.email).or_else(|| nonblank(&a.full_name)));
-        Some(label.unwrap_or_else(|| uuid.to_string()))
+        let row = self.accounts.iter().find(|a| a.account_uuid == uuid);
+        datalib_etl_chat_common::account_label(
+            uuid,
+            row.and_then(|a| a.email.as_deref()),
+            row.and_then(|a| a.full_name.as_deref()),
+        )
     }
 
     pub fn viewer_account_label(&self) -> Option<String> {

@@ -4,7 +4,6 @@
 use datalib_etl_render::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
@@ -20,6 +19,8 @@ use serde_json::Value;
 
 use datalib_etl_linkedin::ingest::schema_raw::ns_id as uuid5;
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
+
+use crate::processor::Source;
 
 use crate::render::{parse_date_ms, RENDER_VERSION};
 use datalib_schema::providers::Provider;
@@ -42,9 +43,7 @@ fn profile() -> RenderProfile {
 }
 
 pub fn render_posts(
-    raw_dir: &Path,
-    out_dir: &Path,
-    source_name: &str,
+    source: &Source<'_>,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -53,6 +52,12 @@ pub fn render_posts(
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderPass> {
+    let Source {
+        raw_dir,
+        out_dir,
+        name: source_name,
+        account,
+    } = *source;
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(RenderPass::Skipped);
@@ -93,7 +98,7 @@ pub fn render_posts(
         return Ok(RenderPass::Skipped);
     };
 
-    let chats = build_post_chats(&shares, &comments);
+    let chats = build_post_chats(&shares, &comments, account);
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
     let s = cc_render_all(
@@ -118,7 +123,11 @@ struct Thread<'a> {
     comments: Vec<&'a Value>,
 }
 
-fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat> {
+fn build_post_chats(
+    shares: &[Value],
+    comments: &[Value],
+    account: Option<&str>,
+) -> Vec<NormalizedChat> {
     // BTreeMap keeps thread order stable across runs.
     let mut by_post: BTreeMap<String, Thread> = BTreeMap::new();
 
@@ -200,7 +209,7 @@ fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat>
             display: thread_title(thread.share, &thread.comments),
             title: None,
             author: None,
-            account: None,
+            account: account.map(str::to_string),
             project: None,
             external_id: nonempty(&key).map(str::to_string),
             // Whole-post linkout on the thread header / chat-level row.
@@ -384,7 +393,7 @@ mod tests {
         let shares = vec![share(ugc, "2026-05-07 16:41:18", "My post body")];
         let comments = vec![comment(ugc, "2026-05-08 09:00:00", "Following up")];
 
-        let chats = build_post_chats(&shares, &comments);
+        let chats = build_post_chats(&shares, &comments, None);
         assert_eq!(chats.len(), 1, "share + comment on same URN merge");
         let items = &chats[0].buckets[0].items;
         assert_eq!(items.len(), 2, "post + one comment");
@@ -411,7 +420,11 @@ mod tests {
     #[test]
     fn comment_only_thread_notes_missing_original() {
         let act = "https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567681";
-        let chats = build_post_chats(&[], &[comment(act, "2026-04-30 15:32:07", "Great point!")]);
+        let chats = build_post_chats(
+            &[],
+            &[comment(act, "2026-04-30 15:32:07", "Great point!")],
+            None,
+        );
         assert_eq!(chats.len(), 1);
         let items = &chats[0].buckets[0].items;
         assert_eq!(items.len(), 2, "placeholder + one comment");
@@ -437,6 +450,7 @@ mod tests {
                 share(b, "2026-01-02 00:00:00", "B"),
             ],
             &[],
+            None,
         );
         assert_eq!(chats.len(), 2, "two distinct posts → two threads");
     }

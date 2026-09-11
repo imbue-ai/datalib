@@ -8,8 +8,10 @@ use regex::{Captures, Regex};
 
 static USER_REF: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"<@([UW][A-Z0-9_]+)(?:\|([^>]+))?>").unwrap());
+// The label may be empty (`<#C123|>`): Slack emits that for a channel
+// the message's author can see but the reader may not.
 static CHANNEL_REF: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<#([CG][A-Z0-9_]+)(?:\|([^>]+))?>").unwrap());
+    Lazy::new(|| Regex::new(r"<#([CG][A-Z0-9_]+)(?:\|([^>]*))?>").unwrap());
 static SUBTEAM_REF: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"<!subteam\^[A-Z0-9_]+(?:\|([^>]+))?>").unwrap());
 static SPECIAL_REF: Lazy<Regex> =
@@ -36,42 +38,60 @@ pub fn emojize_shortcodes(text: &str) -> String {
         .into_owned()
 }
 
-pub fn resolve_user_mentions(text: &str, user_labels: &BTreeMap<String, String>) -> String {
+/// What a mention resolves to: `user_id` → real name, `channel_id` →
+/// channel name. An id with no entry falls back to the id itself
+/// (`@U…`, `#C…`), so a mention is never silently dropped.
+#[derive(Clone, Copy)]
+pub struct Labels<'a> {
+    pub users: &'a BTreeMap<String, String>,
+    pub channels: &'a BTreeMap<String, String>,
+}
+
+/// Mentions and emoji only — what a thread title needs, without the
+/// rest of the CommonMark conversion.
+pub fn resolve_mentions(text: &str, labels: Labels<'_>) -> String {
     let replaced = USER_REF
-        .replace_all(text, |caps: &Captures<'_>| {
-            user_replacement(caps, user_labels)
+        .replace_all(text, |caps: &Captures<'_>| user_replacement(caps, labels))
+        .into_owned();
+    let replaced = CHANNEL_REF
+        .replace_all(&replaced, |caps: &Captures<'_>| {
+            channel_replacement(caps, labels)
         })
         .into_owned();
     emojize_shortcodes(&replaced)
 }
 
-fn user_replacement(caps: &Captures<'_>, user_labels: &BTreeMap<String, String>) -> String {
+fn user_replacement(caps: &Captures<'_>, labels: Labels<'_>) -> String {
     let uid = &caps[1];
     let label = caps.get(2).map(|m| m.as_str().to_string());
     let resolved = label
-        .or_else(|| user_labels.get(uid).cloned())
+        .or_else(|| labels.users.get(uid).cloned())
         .unwrap_or_else(|| uid.to_string());
     format!("@{resolved}")
 }
 
-/// Render Slack mrkdwn `text` into CommonMark. `user_labels` maps
-/// `user_id` → display label (real name); missing ids fall back to
-/// `@U…`. Channel labels come from the source string itself
-/// (`<#C…|name>`), so no lookup needed.
-pub fn to_commonmark(text: &str, user_labels: &BTreeMap<String, String>) -> String {
+fn channel_replacement(caps: &Captures<'_>, labels: Labels<'_>) -> String {
+    let cid = &caps[1];
+    let label = caps.get(2).map(|m| m.as_str()).filter(|l| !l.is_empty());
+    let resolved = label
+        .or_else(|| labels.channels.get(cid).map(String::as_str))
+        .unwrap_or(cid);
+    format!("#{resolved}")
+}
+
+/// Render Slack mrkdwn `text` into CommonMark. A `<#C…|name>` carries
+/// its own label; a bare `<#C…>` or `<#C…|>` is looked up in
+/// `labels.channels`.
+pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
     let mut out = text.to_string();
 
     out = USER_REF
-        .replace_all(&out, |caps: &Captures<'_>| {
-            user_replacement(caps, user_labels)
-        })
+        .replace_all(&out, |caps: &Captures<'_>| user_replacement(caps, labels))
         .into_owned();
 
     out = CHANNEL_REF
         .replace_all(&out, |caps: &Captures<'_>| {
-            let cid = &caps[1];
-            let name = caps.get(2).map(|m| m.as_str()).unwrap_or(cid);
-            format!("#{name}")
+            channel_replacement(caps, labels)
         })
         .into_owned();
 
@@ -147,59 +167,103 @@ fn terminate_blockquotes(text: &str) -> String {
 mod tests {
     use super::*;
 
-    fn labels() -> BTreeMap<String, String> {
+    use once_cell::sync::Lazy;
+
+    static USERS: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
         let mut m = BTreeMap::new();
         m.insert("U_PICARD".to_string(), "Jean-Luc Picard".to_string());
         m.insert("U_DATA".to_string(), "Lt. Cmdr. Data".to_string());
         m
+    });
+    static CHANNELS: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
+        let mut m = BTreeMap::new();
+        m.insert("C_BRIDGE".to_string(), "bridge".to_string());
+        m
+    });
+    static NONE: Lazy<BTreeMap<String, String>> = Lazy::new(BTreeMap::new);
+
+    fn labels() -> Labels<'static> {
+        Labels {
+            users: &USERS,
+            channels: &CHANNELS,
+        }
+    }
+
+    fn no_labels() -> Labels<'static> {
+        Labels {
+            users: &NONE,
+            channels: &NONE,
+        }
     }
 
     #[test]
     fn bold_strike_user_url() {
         let lbl = labels();
-        assert_eq!(to_commonmark("hello *world*", &lbl), "hello **world**");
-        assert_eq!(to_commonmark("~old~ news", &lbl), "~~old~~ news");
+        assert_eq!(to_commonmark("hello *world*", lbl), "hello **world**");
+        assert_eq!(to_commonmark("~old~ news", lbl), "~~old~~ news");
         assert_eq!(
-            to_commonmark("hi <@U_PICARD>!", &lbl),
+            to_commonmark("hi <@U_PICARD>!", lbl),
             "hi @Jean-Luc Picard!"
         );
         assert_eq!(
-            to_commonmark("<https://slack.com|Slack>", &lbl),
+            to_commonmark("<https://slack.com|Slack>", lbl),
             "[Slack](https://slack.com)"
         );
         assert_eq!(
-            to_commonmark("<https://slack.com>", &lbl),
+            to_commonmark("<https://slack.com>", lbl),
             "<https://slack.com>"
         );
     }
 
     #[test]
     fn channel_subteam_special() {
-        let lbl = BTreeMap::new();
-        assert_eq!(to_commonmark("see <#C_BRIDGE|bridge>", &lbl), "see #bridge");
+        let lbl = no_labels();
+        assert_eq!(to_commonmark("see <#C_BRIDGE|bridge>", lbl), "see #bridge");
         assert_eq!(
-            to_commonmark("<!subteam^S_OPS|ops-team> deploy", &lbl),
+            to_commonmark("<!subteam^S_OPS|ops-team> deploy", lbl),
             "@ops-team deploy"
         );
-        assert_eq!(to_commonmark("<!here> heads up", &lbl), "@here heads up");
+        assert_eq!(to_commonmark("<!here> heads up", lbl), "@here heads up");
+    }
+
+    /// Slack emits `<#C…|>` — an empty label — for a channel the reader
+    /// may not see, and a bare `<#C…>` from older clients. Both used to
+    /// reach the page as-is: the regex required a non-empty label, so the
+    /// first was left verbatim in the body and HTML-escaped into the
+    /// thread title.
+    #[test]
+    fn unlabelled_channel_mentions_resolve_through_the_channel_table() {
+        let lbl = labels();
+        assert_eq!(
+            to_commonmark("lunch in <#C_BRIDGE|>", lbl),
+            "lunch in #bridge"
+        );
+        assert_eq!(
+            to_commonmark("lunch in <#C_BRIDGE>", lbl),
+            "lunch in #bridge"
+        );
+        assert_eq!(resolve_mentions("<#C_BRIDGE|> now", lbl), "#bridge now");
+        // An id the table does not have still shows as a channel, not as
+        // raw mrkdwn.
+        assert_eq!(to_commonmark("<#C_UNKNOWN|>", lbl), "#C_UNKNOWN");
     }
 
     #[test]
     fn html_entities_and_emoji() {
-        let lbl = BTreeMap::new();
+        let lbl = no_labels();
         assert_eq!(
-            to_commonmark("a &amp; b &lt;3 &gt;_&lt;", &lbl),
+            to_commonmark("a &amp; b &lt;3 &gt;_&lt;", lbl),
             "a & b <3 >_<"
         );
-        assert!(to_commonmark(":thumbsup:", &lbl).contains('👍'));
+        assert!(to_commonmark(":thumbsup:", lbl).contains('👍'));
         // Unknown shortcode passes through.
-        assert_eq!(to_commonmark(":notarealemoji:", &lbl), ":notarealemoji:");
+        assert_eq!(to_commonmark(":notarealemoji:", lbl), ":notarealemoji:");
     }
 
     #[test]
     fn blockquote_terminator() {
-        let lbl = BTreeMap::new();
-        let out = to_commonmark("> quoted\nplain follow", &lbl);
+        let lbl = no_labels();
+        let out = to_commonmark("> quoted\nplain follow", lbl);
         assert_eq!(out, "> quoted\n\nplain follow");
     }
 }

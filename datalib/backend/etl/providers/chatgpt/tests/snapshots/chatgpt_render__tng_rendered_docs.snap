@@ -5,10 +5,10 @@ expression: docs_bundle(&docs)
 === 40497823-e5f8-5775-9407-65834d6381ae ===
 {
   "edges": [],
-  "render_version": 7,
+  "render_version": 8,
   "rows": [
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": null,
       "byte_size": null,
       "channel": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
@@ -38,7 +38,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-26T08:00:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "User",
       "byte_size": null,
       "channel": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
@@ -68,7 +68,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-26T08:00:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
       "byte_size": null,
       "channel": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
@@ -98,15 +98,15 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-26T08:05:00+00:00"
     }
   ],
-  "source_fingerprint": "8d74b3b2e45e9a2b99c0b4081bc42375563585ec6d73a7c691c200762f74fac0"
+  "source_fingerprint": "043f50e35e487c74b89c957fce2878cb95722764120d33226e43bb2744c86687"
 }
 === 62b1d972-57f0-5b4c-a81b-805d6c650bde ===
 {
   "edges": [],
-  "render_version": 7,
+  "render_version": 8,
   "rows": [
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": null,
       "byte_size": null,
       "channel": "Sonnet on a Cat Named Spot",
@@ -136,7 +136,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-24T08:00:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "System",
       "byte_size": null,
       "channel": "Sonnet on a Cat Named Spot",
@@ -166,7 +166,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-24T08:00:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "User",
       "byte_size": null,
       "channel": "Sonnet on a Cat Named Spot",
@@ -196,7 +196,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-24T08:00:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
       "byte_size": null,
       "channel": "Sonnet on a Cat Named Spot",
@@ -226,7 +226,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-24T08:02:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "User",
       "byte_size": null,
       "channel": "Sonnet on a Cat Named Spot",
@@ -256,15 +256,15 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-24T08:05:00+00:00"
     }
   ],
-  "source_fingerprint": "f8cf2e43e478aebac64e1f6528cf900369701095ba822501b04e872c3176ab51"
+  "source_fingerprint": "4d91f28f724b5ec2791e9383e1d0a861d290fe62a43c609b04acccb497bf6b3c"
 }
 === d1f64243-f79a-5057-a85b-b5f6908ecf52 ===
 {
   "edges": [],
-  "render_version": 7,
+  "render_version": 8,
   "rows": [
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": null,
       "byte_size": null,
       "channel": "Polynomial Fit for Sensor Calibration",
@@ -294,7 +294,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-25T08:00:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "User",
       "byte_size": null,
       "channel": "Polynomial Fit for Sensor Calibration",
@@ -324,7 +324,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-25T08:00:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
       "byte_size": null,
       "channel": "Polynomial Fit for Sensor Calibration",
@@ -354,7 +354,7 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-25T08:03:20+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
       "byte_size": null,
       "channel": "Polynomial Fit for Sensor Calibration",
@@ -384,5 +384,5 @@ expression: docs_bundle(&docs)
       "when_ts": "2370-10-25T08:05:20+00:00"
     }
   ],
-  "source_fingerprint": "85785f1d64664ae92e17a8070cd5c1b62ac441ae6605a5b11e31ced0717b43d5"
+  "source_fingerprint": "ce8c1aebc3a3f7bad47dfab1c44056fe69849b70ac21ad86cc628cfffd7723f9"
 }

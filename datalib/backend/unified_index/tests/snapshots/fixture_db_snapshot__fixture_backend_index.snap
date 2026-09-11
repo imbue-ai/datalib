@@ -11,9 +11,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "564bf57cab0c4086cab58d6a3a04c2a41af211e18dea6dc6c0ebf6a36bc5e6c3",
-      "source_fingerprint": "2495389e275e900db04c15f2ead34fc92befe1e4e0dd2b081fbf4725bdd4aed2",
+      "source_fingerprint": "42db1d7c190581964b1631cc84156c092fa73857b715b01a72edb62f82b3c3e2",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:11:40+00:00"
@@ -25,9 +25,9 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md",
       "provider": "pdf",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "row_set_hash": "<machine-specific: rows embed an absolute path>",
-      "source_fingerprint": "1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.v3",
+      "source_fingerprint": "1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.v4",
       "source_name": "tng_pdfs",
       "title": "Captain's Log",
       "updated_at": "2364-04-13T08:45:00-07:00"
@@ -39,9 +39,9 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/14207f4b-af38-5ee1-8d55-6fd426d572f2/index.md",
       "provider": "contacts",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "a85effabfd4d1e5be2caf7c24915fb759cd93a5a19f0d38f631f5c309b5b989c",
-      "source_fingerprint": "1f31ebc8e2a37cd48fac125518c9e69114e7202adde20579f1cd28deee4486bd",
+      "source_fingerprint": "5f0a36513cd5503b8d4af01b7c3e95547646d03347f1b4b124b2e5e4af0bc38f",
       "source_name": "tng_contacts",
       "title": "Bridge",
       "updated_at": "2370-08-22T00:00:00Z"
@@ -53,9 +53,9 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/1544ef1c-ce85-59cd-a01f-235133651a2c/index.md",
       "provider": "contacts",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "7f439d91d4fb6b2e6880285b86a646025b57192e0cd6e773237499d7b4765005",
-      "source_fingerprint": "ff4971f0bb62acd09ec3ea954a45adf952898902c78b1256ea2bbb05440e4195",
+      "source_fingerprint": "c7fdcdc32984391fda1ce9204affba39a33cc04790f1cfa1ca00cc91fb30ffd2",
       "source_name": "tng_contacts",
       "title": "Engineering",
       "updated_at": "2370-09-04T00:00:00Z"
@@ -81,9 +81,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/1803e003-56a7-5c12-9024-5265850e9eaa/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "c9191487bd8a2e4a3aa1a23d7da57dfd2597d6421ba8665346661f5fc9a9d749",
-      "source_fingerprint": "85dc8be43b62ea936f873f3b8a065f6a49fb1e8729a4be3b015809b255072034",
+      "source_fingerprint": "fe7354baffcc8da499b0def66fcc10351b16c0ad3bb382ecef3861da3c3fc4a3",
       "source_name": "slack",
       "title": "@William T. Riker",
       "updated_at": "2369-05-28T15:21:41+00:00"
@@ -151,9 +151,9 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/1db2d2f9-e79a-58ad-978f-eb56fba5060f/index.md",
       "provider": "contacts",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "d55758e10a449f0d1d3530c10b6719105421ed5cc1a8076ee32c5475e2c8381f",
-      "source_fingerprint": "264679d66ad47cd34b4961e388ad607429d5ebf24ccf79e477d327240b3d163d",
+      "source_fingerprint": "864b7c90de9fade283be70d2e5e815bb9d0b250fee3071054c23b3658a874c72",
       "source_name": "tng_contacts",
       "title": "Bridge",
       "updated_at": "2370-02-11T00:00:00Z"
@@ -194,8 +194,8 @@ expression: snapshot
       "provider": "datalib",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
-      "row_set_hash": "59613d7bf70b286f72f59d939ceb3aa23bc4aec17c3e68346d9c35ee0f031421",
-      "source_fingerprint": "42377b0c86b5b283de7bf742410293924bdea0feb21e2bdfff16c7d52b83a5ab",
+      "row_set_hash": "82e1235e4be3ffe14ce428df648965fc081c0ab2be487f4c8b2f70827151f7ab",
+      "source_fingerprint": "6d391c454c464cec5dd5443b7a6290d190638b0deb29d5b0051bd2a201adabc2",
       "source_name": "linkedin",
       "title": "linkedin storage",
       "updated_at": "2369-04-15T00:00:00+00:00"
@@ -235,9 +235,9 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md",
       "provider": "pdf",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "row_set_hash": "<machine-specific: rows embed an absolute path>",
-      "source_fingerprint": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.v3",
+      "source_fingerprint": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.v4",
       "source_name": "tng_pdfs",
       "title": "warp_core_manual.pdf",
       "updated_at": null
@@ -277,9 +277,9 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/40497823-e5f8-5775-9407-65834d6381ae/all.md",
       "provider": "chatgpt",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "row_set_hash": "14f00c2ed0c06a32c98bdacbb131307d583a08243eb13b5e08b3e8a250a82509",
-      "source_fingerprint": "8d74b3b2e45e9a2b99c0b4081bc42375563585ec6d73a7c691c200762f74fac0",
+      "source_fingerprint": "043f50e35e487c74b89c957fce2878cb95722764120d33226e43bb2744c86687",
       "source_name": "chatgpt-api",
       "title": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
       "updated_at": "2370-10-26T08:05:00+00:00"
@@ -319,9 +319,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/56f6c1d9-495c-5104-8a26-be13bc28718e/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "1fe7b509b5f232c9119352ca91be9bfbcf4ab29febde6d1cd4ad69d46da2432c",
-      "source_fingerprint": "fa8bc2598ebf3dc9475ab0da804d4f246a38594b010c8bc72c4681922941acbf",
+      "source_fingerprint": "2a71e88a1cb7bd4b08a975626f0c2ab04ca2b8e6b4ffa7ceff6b4593e53c0d4f",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:20:00+00:00"
@@ -375,9 +375,9 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/62b1d972-57f0-5b4c-a81b-805d6c650bde/all.md",
       "provider": "chatgpt",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "row_set_hash": "394e4fde241d3abc829623370a9d6d8349e7973494528a66855498088fc0e16a",
-      "source_fingerprint": "f8cf2e43e478aebac64e1f6528cf900369701095ba822501b04e872c3176ab51",
+      "source_fingerprint": "4d91f28f724b5ec2791e9383e1d0a861d290fe62a43c609b04acccb497bf6b3c",
       "source_name": "chatgpt-api",
       "title": "Sonnet on a Cat Named Spot",
       "updated_at": "2370-10-24T08:05:00+00:00"
@@ -403,9 +403,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/658ccd8e-50ad-527c-8cc3-401cf8b315db/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "4030a8397daef7785cb2034fa3775065615f1f6185b08ce08cbcdd1e77de3f58",
-      "source_fingerprint": "2c401dbf92b0dcf78360bc9a035de6b2869bcb085fac7b56490e949ee64c484d",
+      "source_fingerprint": "196b92adeb53a23d384a2382d2c6c1b5baa37f786d9be0f3a0dcf391cc771c3a",
       "source_name": "slack",
       "title": "@William T. Riker, Worf",
       "updated_at": "2369-05-28T15:21:44+00:00"
@@ -431,9 +431,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/68000dc2-0cb1-5eb4-ba26-89498049dfa8/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "6df9a54670db811e02796516463234469f88d471b7e048764c343ae1e1dc58cf",
-      "source_fingerprint": "ffc1aefb2687dc2f51962c518e83b3084544e09c7d7b5ecfced6e512c08724ca",
+      "source_fingerprint": "e5ae1e7ec46aac83be2b67ba4d803bbf83c6f1a3dac5b89c67d271ddbae5959d",
       "source_name": "slack",
       "title": "#engineering",
       "updated_at": "2369-05-28T15:15:00+00:00"
@@ -459,9 +459,9 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/docs/c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2.md",
       "provider": "pdf",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "row_set_hash": "<machine-specific: rows embed an absolute path>",
-      "source_fingerprint": "c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2.v3",
+      "source_fingerprint": "c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2.v4",
       "source_name": "tng_pdfs",
       "title": "Hull Integrity Survey",
       "updated_at": null
@@ -501,9 +501,9 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/0f7d3aa5-e30a-5528-9ea5-d5b6fa547fc0/all.md",
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "c10289edf3fa18a47f145142850b0828722d4fe344876151c7dfb6656f436f77",
-      "source_fingerprint": "4124718a9a5e20914f8fca4be4a65ac60941caf3e83044e9cab49dff1d309959",
+      "source_fingerprint": "f27316d0ed37dc5d2a5c6b90d93ce9bb1e93f9e94ab41d6297ca75ab96449d35",
       "source_name": "linkedin",
       "title": "Jean-Luc Picard, William Riker",
       "updated_at": "2369-04-10T09:06:30+00:00"
@@ -515,9 +515,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/777b8f58-706d-549a-82b8-699fc856030e/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "b7466e0519339e973015c7c242885cb40d77f42ac8a4bca42efbde1cd7437f0d",
-      "source_fingerprint": "7b843daa85e51bc67b224671a1b38dcc8f03703e57d3f8f7caa9a01e9717b79a",
+      "source_fingerprint": "5d8505aeb6bbfa1adaed27ed219f0aa6b80e04c9295869739cb408a2420fd651",
       "source_name": "slack",
       "title": "@William T. Riker",
       "updated_at": "2369-05-28T15:21:40+00:00"
@@ -599,9 +599,9 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/861a616f-cf0e-550e-b7bc-28efd43b7867/index.md",
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "73e284bc919c3bdf15008680999f232223ae0e76956dd6bbe09d95e47aa62b36",
-      "source_fingerprint": "89838f8e077e249890eff862eefa22d79380670417fb0147fd8bb0e61269a3ee",
+      "source_fingerprint": "098d6dcabb717431eb10463d31d02ebf8274ad3ef8a624918caffc8cf33ec2d5",
       "source_name": "linkedin",
       "title": "Connections",
       "updated_at": "2369-04-10T00:00:00+00:00"
@@ -627,9 +627,9 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
       "provider": "pdf",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.3",
+      "renderer_version": "rust-v1.4",
       "row_set_hash": "<machine-specific: rows embed an absolute path>",
-      "source_fingerprint": "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.v3",
+      "source_fingerprint": "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.v4",
       "source_name": "tng_pdfs",
       "title": "Captain's Log",
       "updated_at": "2364-04-13T08:45:00-07:00"
@@ -641,9 +641,9 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/a9d22a8f-656e-5347-bd95-454448be45e7/all.md",
       "provider": "email",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "8fe864c6a08da377ed4f21707c5f994025a477d5114d428f7623bd5fd6147546",
-      "source_fingerprint": "e87e1e791cd56728e1d5558b41b9b4fca5c55bb232fc1e8e08d85517c7bc57a6",
+      "source_fingerprint": "e96488aa1b2e802463e3c3e6f4b46f72a368d395e449cb9f8e7a721eabd7a77c",
       "source_name": "tng_email",
       "title": "Captain's Log — Stardate 80124.1",
       "updated_at": "2026-01-07T14:00:00+00:00"
@@ -655,9 +655,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/aa7f900b-31b9-5603-995a-5ed36db03478/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "024e9d7f799d50f96e6eb8f1b5621293a8e95b15a6e13c9ccec1b9010fe52366",
-      "source_fingerprint": "242ec8cb6487c372391303ec1f8465e6c4422adb8bc92b797be727216e0e4e4a",
+      "source_fingerprint": "b4ed58daf10f882cac2a1b06e2e36c4666e1c2a12e70a4af7a55356da9b74c3c",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:13:20+00:00"
@@ -683,9 +683,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/b168a24b-fddb-55c2-88fe-523dec59fd5c/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "87fafde5d3f9bc96d708402ed2f888c77706340ebd4c5bc6f2e2967efd6d02f5",
-      "source_fingerprint": "f3ac0d187036f5e0a00dd84d8d2da20c65e44bf7d880c19fcb5ea3d5a4d21db7",
+      "source_fingerprint": "bb64cd6049915fd48ee79253a2920e490fa1ee0308594c13e01c057e6041cc9d",
       "source_name": "slack",
       "title": "@William T. Riker, Worf",
       "updated_at": "2369-05-28T15:21:43+00:00"
@@ -753,9 +753,9 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/b52e719c-9f85-5e53-bdd3-483ba67e5637/all.md",
       "provider": "email",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "cfdb2a923e88ab53a79c4e3cc83b3325dbfc6d83f7935ba65ace9f16cdb71086",
-      "source_fingerprint": "afb4c2c3b6b8baa938c568f4f47df36ba5ef4caccceb81a7463a0e20272c5d84",
+      "source_fingerprint": "fe1c54c03262ff53744fd2d32ff05fa2c87838202493ecf7f25763f71c4efff2",
       "source_name": "tng_email",
       "title": "Your shore leave awaits!",
       "updated_at": "2026-01-06T08:00:00+00:00"
@@ -767,9 +767,9 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/b55690ec-c377-56ca-bf0a-e51a006a1071/index.md",
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "40f0824bf3afdd52a7b8afe8ddaf6245066b4fddb01efa311afbe6238af62771",
-      "source_fingerprint": "20075570d70449c3d503ed14ea15a4c8ec1a7ab726ea150766af20a8cd3b0956",
+      "source_fingerprint": "76855bc2ad7e9f59f067e7a1e127f288f0a992a0e964def803439bffd855393a",
       "source_name": "linkedin",
       "title": "Connections",
       "updated_at": "2369-04-09T00:00:00+00:00"
@@ -795,9 +795,9 @@ expression: snapshot
       "md_path": "tng_contacts/render_markdown/c27813c9-e0d8-551d-87fe-33ed24b93bb6/index.md",
       "provider": "contacts",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "1ab4538dda1c2c70f9592c96f50d855fa020334a4286364d059de6bb879db2b5",
-      "source_fingerprint": "6d478b6dd63a53c920b04b11d74aaa6c7b87a4f2dbe4a096f0444447d5205e47",
+      "source_fingerprint": "19264f0554a8d519f8b5b1149b1f6257d5b64709cbf94fc594acfadc459de2c1",
       "source_name": "tng_contacts",
       "title": "Bridge",
       "updated_at": "2370-04-15T00:00:00Z"
@@ -809,9 +809,9 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/c99c303c-2182-50ac-a7e2-321ead150a4c/all.md",
       "provider": "email",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "7ac405482595b8094ee9a86f4f7f5b0a68bd91cab838531a8367759c3b38ed2a",
-      "source_fingerprint": "34408d4bcc683237239b2175f3042dc39ad5285a1ec96b933a4768b14fe0ddee",
+      "source_fingerprint": "e046ebcb89e20f0952a0edb36cedfac0558d82e8bb5c724d26854c83a35cc070",
       "source_name": "tng_email",
       "title": "Mission Briefing — Sector 001",
       "updated_at": "2026-01-05T11:15:00+00:00"
@@ -865,9 +865,9 @@ expression: snapshot
       "md_path": "chatgpt-api/render_markdown/d1f64243-f79a-5057-a85b-b5f6908ecf52/all.md",
       "provider": "chatgpt",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "row_set_hash": "a12fa8b766d035da1ffadd10c11a3a8f4203e8de9306c98d23611de640d04201",
-      "source_fingerprint": "85785f1d64664ae92e17a8070cd5c1b62ac441ae6605a5b11e31ced0717b43d5",
+      "source_fingerprint": "ce8c1aebc3a3f7bad47dfab1c44056fe69849b70ac21ad86cc628cfffd7723f9",
       "source_name": "chatgpt-api",
       "title": "Polynomial Fit for Sensor Calibration",
       "updated_at": "2370-10-25T08:05:20+00:00"
@@ -907,9 +907,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "8be085995ab714f215ef66121e49d8a29dcdcd1a3b7569b0716ca6600e580cc3",
-      "source_fingerprint": "bdc2ced76c938710009dba35c1492255c8c8c778cadfb571d244ca0e15afacff",
+      "source_fingerprint": "be1c66ec2fa356432383f2eeff0235616db934386ab726bc65211e932dba79f1",
       "source_name": "slack",
       "title": "#ten-forward",
       "updated_at": "2369-05-28T15:18:20+00:00"
@@ -921,9 +921,9 @@ expression: snapshot
       "md_path": "linkedin/render_markdown/dfabaa93-8b49-5738-bfc5-f2671bace58a/index.md",
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "8d5796f99a174afc26416c4afdbe27edf2e0da6eddc32e3c060db61c7c75276d",
-      "source_fingerprint": "893e38ad3aa3db042c8e6249fa0ac8dfeba2cf136e995c78591a34608c57de9c",
+      "source_fingerprint": "94a642bbf78a4933778d3029272edb2032c677dfddfe267804cc9b7150aeec12",
       "source_name": "linkedin",
       "title": "Connections",
       "updated_at": "2369-04-08T00:00:00+00:00"
@@ -949,9 +949,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "639ce322e0f0e661fbb1d69e5459c90797c336197b12a787789032e3d3d76d61",
-      "source_fingerprint": "073699116fda6f8c195635b9ee2def77ad99c15d77f85b1057c8b22631fec753",
+      "source_fingerprint": "361388f7c01ccda9574660bf6ea8432f54644220605f391bd0fb3e2527d74223",
       "source_name": "slack",
       "title": "@Lt. Cmdr. Data",
       "updated_at": "2369-05-28T15:21:42+00:00"
@@ -977,9 +977,9 @@ expression: snapshot
       "md_path": "yolink/render_markdown/index.md",
       "provider": "yolink",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "c42aa4b6a18cc5dfdcfb8e2cbe5810d28d6d557d63f54ec10eaa8a17e0e64e3e",
-      "source_fingerprint": "af2a562ccd70806d678c5df10da6e9e09d63270861c1c5b39dd2d611465febea",
+      "source_fingerprint": "01ce2148e455d06608713980cc75728aa89601f3cf0eaf339548a7ec4d436458",
       "source_name": "yolink",
       "title": "YoLink sensors — yolink",
       "updated_at": "2369-04-14T23:55:00+00:00"
@@ -1019,9 +1019,9 @@ expression: snapshot
       "md_path": "slack/render_markdown/efd7f060-7cc7-508b-811f-afbb133a9ff6/all.md",
       "provider": "slack",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "cf55396fe78a0c8d1df7fb49530a5e3938446415a0bf9b005647a66f7ba0e74d",
-      "source_fingerprint": "3fa3978cfb10d1a5840823a5e818201be3b6b72e184d07ecd4133833db3ca98e",
+      "source_fingerprint": "da4de64c00db4a34614402ebabbc9c2fba6caf8b43758fcd73907a8a78d5f7e0",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:18:20+00:00"
@@ -1047,9 +1047,9 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/f568b5f9-c761-5a5d-be84-35cf144c21ba/all.md",
       "provider": "email",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.5",
+      "renderer_version": "rust-v1.6",
       "row_set_hash": "58835e895ec583ebbc70b862f4172e3f8ce0bb1c00d573a3214c96e04a1ad627",
-      "source_fingerprint": "ec9bd4716135ee51fa08dc2e8fdef5f8bf1a9f7cb2e3325b5a8c63a860a169f0",
+      "source_fingerprint": "2a1c4d7585e408949550331ad038292e969d85ab731937e9def79f0adf98227b",
       "source_name": "tng_email",
       "title": "Bridge status display",
       "updated_at": "2026-01-07T09:00:00+00:00"
@@ -1074,7 +1074,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=76 markdowns_read=76 markdowns_removed=0 markdowns_skipped=0 rows_inserted=348"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=76 markdowns_read=76 markdowns_removed=0 markdowns_skipped=0 rows_inserted=349"
     }
   ],
   "grid_rows": [
@@ -1166,7 +1166,7 @@ expression: snapshot
       "when_ts": "2369-04-15T14:00:00Z"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
       "channel": "@William T. Riker, Worf",
       "conversation_name": "@William T. Riker, Worf",
@@ -1178,8 +1178,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/658ccd8e-50ad-527c-8cc3-401cf8b315db/all.md",
@@ -1369,7 +1369,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:08:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -1381,8 +1381,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -1543,7 +1543,7 @@ expression: snapshot
       "when_ts": "2369-04-15T14:00:00.000Z"
     },
     {
-      "account": "tng_pdfs",
+      "account": null,
       "author": "Jean-Luc Picard",
       "channel": null,
       "conversation_name": "Captain's Log",
@@ -1659,7 +1659,7 @@ expression: snapshot
       "when_ts": "2369-04-15T10:00:00+00:00"
     },
     {
-      "account": "tng_contacts",
+      "account": null,
       "author": "William T. Riker",
       "channel": "Bridge",
       "conversation_name": "Bridge",
@@ -1717,7 +1717,7 @@ expression: snapshot
       "when_ts": null
     },
     {
-      "account": "tng_pdfs",
+      "account": null,
       "author": "Jean-Luc Picard",
       "channel": null,
       "conversation_name": "Captain's Log",
@@ -1746,7 +1746,7 @@ expression: snapshot
       "when_ts": "2364-04-13T08:45:00-07:00"
     },
     {
-      "account": "tng_contacts",
+      "account": null,
       "author": "Geordi La Forge",
       "channel": "Engineering",
       "conversation_name": "Engineering",
@@ -1891,7 +1891,7 @@ expression: snapshot
       "when_ts": "2369-04-15T08:30:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "@William T. Riker",
       "conversation_name": "@William T. Riker",
@@ -1903,8 +1903,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/1803e003-56a7-5c12-9024-5265850e9eaa/all.md",
@@ -1920,7 +1920,7 @@ expression: snapshot
       "when_ts": "2369-05-28T15:21:41+00:00"
     },
     {
-      "account": "yolink",
+      "account": null,
       "author": "sickbay_plasma_fridge",
       "channel": "sickbay_plasma_fridge",
       "conversation_name": "YoLink sensors — yolink",
@@ -1949,7 +1949,7 @@ expression: snapshot
       "when_ts": "2369-04-14T23:55:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "System",
       "channel": "Sonnet on a Cat Named Spot",
       "conversation_name": "Sonnet on a Cat Named Spot",
@@ -2007,7 +2007,7 @@ expression: snapshot
       "when_ts": "2369-04-15T08:30:00+00:00"
     },
     {
-      "account": "tng_pdfs",
+      "account": null,
       "author": "Jean-Luc Picard",
       "channel": null,
       "conversation_name": "Captain's Log",
@@ -2065,7 +2065,7 @@ expression: snapshot
       "when_ts": "2369-04-14T18:30:00+00:00"
     },
     {
-      "account": "tng_contacts",
+      "account": null,
       "author": "Data",
       "channel": "Bridge",
       "conversation_name": "Bridge",
@@ -2094,7 +2094,7 @@ expression: snapshot
       "when_ts": "2370-02-11T00:00:00Z"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -2106,8 +2106,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/efd7f060-7cc7-508b-811f-afbb133a9ff6/all.md",
@@ -2123,7 +2123,7 @@ expression: snapshot
       "when_ts": "2369-05-28T15:18:20+00:00"
     },
     {
-      "account": "yolink",
+      "account": null,
       "author": "stasis_unit_alpha",
       "channel": "stasis_unit_alpha",
       "conversation_name": "YoLink sensors — yolink",
@@ -2152,7 +2152,7 @@ expression: snapshot
       "when_ts": "2369-04-14T23:55:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "User",
       "channel": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
       "conversation_name": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
@@ -2413,7 +2413,7 @@ expression: snapshot
       "when_ts": "2024-04-02T23:20:00.000+00:00"
     },
     {
-      "account": "tng_pdfs",
+      "account": null,
       "author": "Geordi La Forge",
       "channel": null,
       "conversation_name": "warp_core_manual.pdf",
@@ -2500,7 +2500,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:08:20+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Worf",
       "channel": "#ten-forward",
       "conversation_name": "#ten-forward",
@@ -2512,8 +2512,8 @@ expression: snapshot
       "message_index": 1,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md",
@@ -2558,7 +2558,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:06:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "William T. Riker",
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -2570,8 +2570,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -2616,7 +2616,7 @@ expression: snapshot
       "when_ts": "2369-04-15T10:00:00.000Z"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": null,
       "channel": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
       "conversation_name": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
@@ -2703,7 +2703,7 @@ expression: snapshot
       "when_ts": "2369-04-14T19:30:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
       "channel": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
       "conversation_name": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
@@ -2732,7 +2732,7 @@ expression: snapshot
       "when_ts": "2370-10-26T08:05:00+00:00"
     },
     {
-      "account": "yolink",
+      "account": null,
       "author": "deck_12_water_main",
       "channel": "deck_12_water_main",
       "conversation_name": "YoLink sensors — yolink",
@@ -2790,7 +2790,7 @@ expression: snapshot
       "when_ts": "2369-04-15T14:00:01Z"
     },
     {
-      "account": null,
+      "account": "data@enterprise.starfleet.test",
       "author": "William Riker",
       "channel": "Jean-Luc Picard, William Riker",
       "conversation_name": "Jean-Luc Picard, William Riker",
@@ -2964,7 +2964,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:05:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -2976,8 +2976,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/56f6c1d9-495c-5104-8a26-be13bc28718e/all.md",
@@ -3022,7 +3022,7 @@ expression: snapshot
       "when_ts": "2364-03-03T19:00:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Lt. Cmdr. Data",
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -3034,8 +3034,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/56f6c1d9-495c-5104-8a26-be13bc28718e/all.md",
@@ -3051,7 +3051,7 @@ expression: snapshot
       "when_ts": "2369-05-28T15:20:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -3063,8 +3063,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -3138,7 +3138,7 @@ expression: snapshot
       "when_ts": "2369-04-16T09:00:00+00:00"
     },
     {
-      "account": "tng_pdfs",
+      "account": null,
       "author": "Geordi La Forge",
       "channel": null,
       "conversation_name": "warp_core_manual.pdf",
@@ -3283,7 +3283,7 @@ expression: snapshot
       "when_ts": "2369-04-14T10:00:32+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": null,
       "channel": "Sonnet on a Cat Named Spot",
       "conversation_name": "Sonnet on a Cat Named Spot",
@@ -3312,7 +3312,7 @@ expression: snapshot
       "when_ts": "2370-10-24T08:00:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "@William T. Riker, Worf",
       "conversation_name": "@William T. Riker, Worf",
@@ -3324,8 +3324,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/658ccd8e-50ad-527c-8cc3-401cf8b315db/all.md",
@@ -3370,7 +3370,7 @@ expression: snapshot
       "when_ts": "2024-03-20T13:58:20.000+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Lt. Cmdr. Data",
       "channel": "#engineering",
       "conversation_name": "#engineering",
@@ -3382,8 +3382,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/68000dc2-0cb1-5eb4-ba26-89498049dfa8/all.md",
@@ -3457,7 +3457,7 @@ expression: snapshot
       "when_ts": "2024-04-02T11:30:00.000+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "#engineering",
       "conversation_name": "#engineering",
@@ -3469,8 +3469,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/68000dc2-0cb1-5eb4-ba26-89498049dfa8/all.md",
@@ -3544,7 +3544,7 @@ expression: snapshot
       "when_ts": "2369-04-15T11:30:00Z"
     },
     {
-      "account": "tng_pdfs",
+      "account": null,
       "author": null,
       "channel": null,
       "conversation_name": "Hull Integrity Survey",
@@ -3718,7 +3718,7 @@ expression: snapshot
       "when_ts": "2369-04-15T09:01:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
       "channel": "@Lt. Cmdr. Data",
       "conversation_name": "@Lt. Cmdr. Data",
@@ -3730,8 +3730,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md",
@@ -3805,7 +3805,7 @@ expression: snapshot
       "when_ts": "2026-01-05T10:30:00+00:00"
     },
     {
-      "account": null,
+      "account": "data@enterprise.starfleet.test",
       "author": null,
       "channel": "Jean-Luc Picard, William Riker",
       "conversation_name": "Jean-Luc Picard, William Riker",
@@ -3834,7 +3834,7 @@ expression: snapshot
       "when_ts": "2369-04-10T09:00:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "@William T. Riker",
       "conversation_name": "@William T. Riker",
@@ -3846,8 +3846,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/777b8f58-706d-549a-82b8-699fc856030e/all.md",
@@ -4008,7 +4008,7 @@ expression: snapshot
       "when_ts": "2024-03-15T09:10:00.000+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Worf",
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -4020,8 +4020,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/aa7f900b-31b9-5603-995a-5ed36db03478/all.md",
@@ -4124,7 +4124,7 @@ expression: snapshot
       "when_ts": "2369-04-15T14:30:00Z"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
       "channel": "Polynomial Fit for Sensor Calibration",
       "conversation_name": "Polynomial Fit for Sensor Calibration",
@@ -4153,7 +4153,7 @@ expression: snapshot
       "when_ts": "2370-10-25T08:03:20+00:00"
     },
     {
-      "account": "linkedin",
+      "account": "data@enterprise.starfleet.test",
       "author": "Jean-Luc Picard",
       "channel": "Connections",
       "conversation_name": "Connections",
@@ -4385,7 +4385,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:09:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "William T. Riker",
       "channel": "#ten-forward",
       "conversation_name": "#ten-forward",
@@ -4397,8 +4397,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md",
@@ -4414,7 +4414,7 @@ expression: snapshot
       "when_ts": "2369-05-28T15:16:40+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
       "channel": "Polynomial Fit for Sensor Calibration",
       "conversation_name": "Polynomial Fit for Sensor Calibration",
@@ -4472,7 +4472,7 @@ expression: snapshot
       "when_ts": "2364-03-01T09:05:00+00:00"
     },
     {
-      "account": "tng_pdfs",
+      "account": null,
       "author": "Jean-Luc Picard",
       "channel": null,
       "conversation_name": "Captain's Log",
@@ -4501,7 +4501,7 @@ expression: snapshot
       "when_ts": "2364-04-13T08:45:00-07:00"
     },
     {
-      "account": "tng_pdfs",
+      "account": null,
       "author": null,
       "channel": null,
       "conversation_name": "Hull Integrity Survey",
@@ -4675,7 +4675,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:01:00+00:00"
     },
     {
-      "account": null,
+      "account": "data@enterprise.starfleet.test",
       "author": "Jean-Luc Picard",
       "channel": "Jean-Luc Picard, William Riker",
       "conversation_name": "Jean-Luc Picard, William Riker",
@@ -4733,7 +4733,7 @@ expression: snapshot
       "when_ts": "2369-04-16T09:00:10+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "User",
       "channel": "Sonnet on a Cat Named Spot",
       "conversation_name": "Sonnet on a Cat Named Spot",
@@ -4762,7 +4762,7 @@ expression: snapshot
       "when_ts": "2370-10-24T08:00:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "gpt-5",
       "channel": "Sonnet on a Cat Named Spot",
       "conversation_name": "Sonnet on a Cat Named Spot",
@@ -4849,7 +4849,7 @@ expression: snapshot
       "when_ts": "2369-04-15T10:01:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Worf",
       "channel": "@William T. Riker, Worf",
       "conversation_name": "@William T. Riker, Worf",
@@ -4861,8 +4861,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/b168a24b-fddb-55c2-88fe-523dec59fd5c/all.md",
@@ -4936,7 +4936,7 @@ expression: snapshot
       "when_ts": "2026-01-07T14:00:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -4948,8 +4948,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/aa7f900b-31b9-5603-995a-5ed36db03478/all.md",
@@ -5023,7 +5023,7 @@ expression: snapshot
       "when_ts": "2369-04-16T09:00:30+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "@William T. Riker, Worf",
       "conversation_name": "@William T. Riker, Worf",
@@ -5035,8 +5035,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/b168a24b-fddb-55c2-88fe-523dec59fd5c/all.md",
@@ -5197,7 +5197,7 @@ expression: snapshot
       "when_ts": "2026-01-06T08:00:00+00:00"
     },
     {
-      "account": "linkedin",
+      "account": "data@enterprise.starfleet.test",
       "author": "William Riker",
       "channel": "Connections",
       "conversation_name": "Connections",
@@ -5255,7 +5255,7 @@ expression: snapshot
       "when_ts": "2024-03-20T14:00:00.000+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "William T. Riker",
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -5267,8 +5267,8 @@ expression: snapshot
       "message_index": 2,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -5429,7 +5429,7 @@ expression: snapshot
       "when_ts": "2369-04-15T10:30:00.000Z"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Lt. Cmdr. Data",
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -5441,8 +5441,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -5458,7 +5458,7 @@ expression: snapshot
       "when_ts": "2369-05-28T15:10:00+00:00"
     },
     {
-      "account": "tng_contacts",
+      "account": null,
       "author": "Jean-Luc Picard",
       "channel": "Bridge",
       "conversation_name": "Bridge",
@@ -5487,7 +5487,7 @@ expression: snapshot
       "when_ts": "2370-04-15T00:00:00Z"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "User",
       "channel": "Sonnet on a Cat Named Spot",
       "conversation_name": "Sonnet on a Cat Named Spot",
@@ -5516,7 +5516,7 @@ expression: snapshot
       "when_ts": "2370-10-24T08:05:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "William T. Riker",
       "channel": "#ten-forward",
       "conversation_name": "#ten-forward",
@@ -5528,8 +5528,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md",
@@ -5545,7 +5545,7 @@ expression: snapshot
       "when_ts": "2369-05-28T15:18:20+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "William T. Riker",
       "channel": "@William T. Riker",
       "conversation_name": "@William T. Riker",
@@ -5557,8 +5557,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/777b8f58-706d-549a-82b8-699fc856030e/all.md",
@@ -5719,7 +5719,7 @@ expression: snapshot
       "when_ts": "2364-03-03T19:00:00+00:00"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": "User",
       "channel": "Polynomial Fit for Sensor Calibration",
       "conversation_name": "Polynomial Fit for Sensor Calibration",
@@ -5864,7 +5864,7 @@ expression: snapshot
       "when_ts": "2369-04-15T01:10:00.000Z"
     },
     {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
+      "account": "data@enterprise.starfleet.test",
       "author": null,
       "channel": "Polynomial Fit for Sensor Calibration",
       "conversation_name": "Polynomial Fit for Sensor Calibration",
@@ -5951,7 +5951,7 @@ expression: snapshot
       "when_ts": "2369-04-14T18:30:00+00:00"
     },
     {
-      "account": null,
+      "account": "data@enterprise.starfleet.test",
       "author": "Jean-Luc Picard",
       "channel": "Jean-Luc Picard, William Riker",
       "conversation_name": "Jean-Luc Picard, William Riker",
@@ -6096,7 +6096,7 @@ expression: snapshot
       "when_ts": "2369-04-14T10:01:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "#ten-forward",
       "conversation_name": "#ten-forward",
@@ -6108,8 +6108,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md",
@@ -6154,7 +6154,7 @@ expression: snapshot
       "when_ts": "2364-03-04T20:00:00+00:00"
     },
     {
-      "account": "linkedin",
+      "account": "data@enterprise.starfleet.test",
       "author": "Data Soong",
       "channel": "Connections",
       "conversation_name": "Connections",
@@ -6212,7 +6212,7 @@ expression: snapshot
       "when_ts": "2024-03-15T09:00:00.000+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -6224,8 +6224,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -6299,7 +6299,7 @@ expression: snapshot
       "when_ts": "2025-03-05T21:34:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "@Lt. Cmdr. Data",
       "conversation_name": "@Lt. Cmdr. Data",
@@ -6311,8 +6311,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md",
@@ -6444,7 +6444,7 @@ expression: snapshot
       "when_ts": null
     },
     {
-      "account": "yolink",
+      "account": null,
       "author": null,
       "channel": null,
       "conversation_name": "YoLink sensors — yolink",
@@ -6560,7 +6560,7 @@ expression: snapshot
       "when_ts": "2369-04-16T09:00:00+00:00"
     },
     {
-      "account": "tng_pdfs",
+      "account": null,
       "author": "Jean-Luc Picard",
       "channel": null,
       "conversation_name": "Captain's Log",
@@ -6589,7 +6589,7 @@ expression: snapshot
       "when_ts": "2364-04-13T08:45:00-07:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Lt. Cmdr. Data",
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -6601,8 +6601,8 @@ expression: snapshot
       "message_index": 1,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -6618,7 +6618,7 @@ expression: snapshot
       "when_ts": "2369-05-28T15:10:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Lt. Cmdr. Data",
       "channel": "@Lt. Cmdr. Data",
       "conversation_name": "@Lt. Cmdr. Data",
@@ -6630,8 +6630,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md",
@@ -6676,7 +6676,7 @@ expression: snapshot
       "when_ts": "2364-04-11T00:12:00+00:00"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": null,
       "channel": "#bridge",
       "conversation_name": "#bridge",
@@ -6688,8 +6688,8 @@ expression: snapshot
       "message_index": null,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/efd7f060-7cc7-508b-811f-afbb133a9ff6/all.md",
@@ -6734,7 +6734,7 @@ expression: snapshot
       "when_ts": "2369-04-15T10:05:00.000Z"
     },
     {
-      "account": "T_NCC1701D",
+      "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
       "channel": "@William T. Riker",
       "conversation_name": "@William T. Riker",
@@ -6746,8 +6746,8 @@ expression: snapshot
       "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
+      "org_name": "USS Enterprise NCC-1701-D",
+      "org_uuid": "T_NCC1701D",
       "project": null,
       "provider": "slack",
       "qmd_path": "slack/render_markdown/1803e003-56a7-5c12-9024-5265850e9eaa/all.md",
@@ -6908,7 +6908,7 @@ expression: snapshot
       "when_ts": "2369-04-16T09:01:30+00:00"
     },
     {
-      "account": "yolink",
+      "account": null,
       "author": "ten_forward_cooler",
       "channel": "ten_forward_cooler",
       "conversation_name": "YoLink sensors — yolink",
@@ -7060,8 +7060,8 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:09158d2da5e78b7c97c53727e1f65a630eb769a1c8b6b7b7c26f64f9acb5a4bc",
-      "rows": 5,
+      "members_sha": "sha256:c4823056b632c88595b5844d06071e6edba539883a15aa54af7e714e70159c94",
+      "rows": 6,
       "source": "linkedin"
     },
     {
@@ -7231,6 +7231,6 @@ expression: snapshot
     "documents_count": 76,
     "dolt_log_count": 2,
     "grid_rows_count": 202,
-    "storage_rows_count": 146
+    "storage_rows_count": 147
   }
 }
