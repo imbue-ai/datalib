@@ -82,6 +82,8 @@ const emit = defineEmits<{
       /// The group's name as typed. The caller writes it on the group —
       /// as part of `groupBody` when creating, by renaming when editing.
       name: string;
+      /// The group's description as typed, written the same two ways.
+      description: string;
       entry: CatalogEntry;
       /// The `[[groups]]` block, when this dialog is creating a source.
       /// Null when editing: the group already exists.
@@ -109,6 +111,9 @@ const chosen = ref<CatalogEntry | null>(props.editing?.entry ?? null);
 /// clearing the box removes the key. Nothing is ever pre-filled here;
 /// see [`nameHint`] for what the box shows instead.
 const name = ref(props.editing?.group.name ?? "");
+/// What the source is to this person. Blank removes the key, like the
+/// name.
+const description = ref(props.editing?.group.description ?? "");
 /// The group's id: the directory its steps write under. Typed while
 /// creating, fixed while editing.
 const id = ref(props.editing?.group.id ?? "");
@@ -293,6 +298,7 @@ const source = computed(() =>
         entry: chosen.value,
         group: groupId.value,
         name: name.value,
+        description: description.value,
         values: values.value,
         withGroup: mode.value === "create",
         renders: renders.value,
@@ -662,6 +668,7 @@ function submit() {
   emit("submit", {
     id: groupId.value,
     name: name.value.trim(),
+    description: description.value.trim(),
     entry: chosen.value,
     groupBody: source.value.groupBody,
     stepsBody: source.value.stepsBody,
@@ -863,6 +870,21 @@ function submit() {
             included, and <b>{{ nameHint }}</b> is only an example. Change it whenever you
             like: nothing on disk moves and no step re-runs. Leave it blank to be shown as
             <code>{{ groupId || "…" }}</code>.
+          </small>
+        </label>
+
+        <label class="wiz-field">
+          <span class="wiz-label">Description</span>
+          <input
+            v-model="description"
+            class="wiz-input"
+            placeholder="Work Slack, mostly the infra and on-call channels"
+          />
+          <small class="wiz-help">
+            Optional. A sentence on what this source holds and what it is to you — "the
+            company Slack, mostly the on-call channels". Kept with the source's settings.
+            It could help search tell similar sources apart one day, but nothing reads it
+            yet. Change it whenever you like: nothing re-runs.
           </small>
         </label>
 

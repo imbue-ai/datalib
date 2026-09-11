@@ -11,6 +11,7 @@ import {
   buildGroup,
   buildSource,
   buildStep,
+  describeGroup,
   fieldIsActive,
   listGroups,
   listSteps,
@@ -273,6 +274,21 @@ describe("buildGroup", () => {
     expect(buildGroup({ id: "slack", name: "", type: "slack" })).not.toContain("name =");
     // A name that only respells the id is not a name.
     expect(buildGroup({ id: "slack", name: " slack ", type: "slack" })).not.toContain("name =");
+  });
+
+  it("writes a description only when there is one", () => {
+    const body = buildGroup({
+      id: "slack",
+      name: "",
+      type: "slack",
+      description: "  Mostly infra channels.  ",
+    });
+    expect(body).toContain('type = "slack"\ndescription = "Mostly infra channels."');
+    expect(listGroups(body)[0]!.description).toBe("Mostly infra channels.");
+    expect(buildGroup({ id: "slack", name: "", type: "slack", description: " " })).not.toContain(
+      "description =",
+    );
+    expect(buildGroup({ id: "slack", name: "", type: "slack" })).not.toContain("description =");
   });
 });
 
@@ -587,6 +603,27 @@ describe("renameGroup", () => {
 
   it("leaves the text alone for a group it cannot find", () => {
     expect(renameGroup(PAIR, "nope", "X")).toBe(PAIR);
+  });
+
+  // The description gets the same in-place edit as the name, without
+  // the "respells the id" rule.
+  it("sets, replaces and clears a description the same way", () => {
+    const set = describeGroup(PAIR, "slack", "Mostly infra channels.");
+    expect(set).toContain('id = "slack"\ndescription = "Mostly infra channels."');
+    expect(listGroups(set).find((g) => g.id === "slack")!.description).toBe(
+      "Mostly infra channels.",
+    );
+    // Unlike a name, a description that respells the id is still text.
+    expect(describeGroup(PAIR, "slack", "slack")).toContain('description = "slack"');
+
+    const replaced = describeGroup(set, "slack", "The on-call channels.");
+    expect(replaced).toContain('description = "The on-call channels."');
+    expect(replaced).not.toContain("infra");
+
+    const cleared = describeGroup(set, "slack", "  ");
+    expect(cleared).not.toContain("description =");
+    expect(cleared).toContain('id = "slack"\nname = "Work Slack"');
+    expect(describeGroup(PAIR, "slack", "")).toBe(PAIR);
   });
 
   // A name is user text; `$1`, `$&` and `$$` in it must land verbatim,
