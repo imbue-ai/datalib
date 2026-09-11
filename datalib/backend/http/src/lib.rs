@@ -956,22 +956,22 @@ pub struct DagStepInfo {
     /// there is one: `running`, `succeeded`, `blocked`, … `None` means
     /// the scheduler has not reached it yet.
     pub current_state: Option<String>,
-    /// How far in, for the run currently in flight. `None` when the
-    /// step has not reported anything — which is not the same as zero,
-    /// and should be drawn as a spinner rather than an empty bar.
+    /// What the step has reported in the run currently in flight.
+    /// `None` when it has reported nothing — which is not the same as
+    /// zero, and should be drawn as a spinner rather than an empty bar.
     pub progress: Option<DagStepProgress>,
 }
 
-/// A step's live position, from `system/progress.sqlite`.
+/// A step's live numbers and words, from `system/runs.sqlite`.
 #[derive(Debug, Serialize)]
 pub struct DagStepProgress {
-    /// Work units completed.
-    pub done: Option<i64>,
-    /// Total expected. `None` is *indeterminate* — a paginated API walk
-    /// that cannot know its length up front — not zero.
-    pub total: Option<i64>,
     /// The step's own words: "conversations.list", "3 of 9 channels".
     pub msg: Option<String>,
+    /// Current value per metric series, keyed `name` or `name{labels}`
+    /// (`rows_upserted{table=slack_messages}`). `done` and `queued` are
+    /// the two the runner derives for a step that reports the simple
+    /// `progress_length` / `progress_inc` form.
+    pub metrics: std::collections::BTreeMap<String, i64>,
     pub updated_at: String,
 }
 
@@ -1033,20 +1033,42 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         .map(|r| r.states.clone())
         .unwrap_or_default();
 
-    // Live progress, but only when the bus describes the run we are
-    // reporting. The bus is remade at the start of every run, so in the
-    // window between a run opening its record and the runner recreating
-    // the file, the rows on disk still belong to the run before — and
-    // painting those bars onto this run's steps is worse than showing
-    // no bars at all.
-    let bus = datalib_progress::snapshot(&s.root).await;
-    let progress: std::collections::HashMap<String, datalib_progress::ProgressRow> =
-        match (&run, &bus.run_id) {
-            (Some(r), Some(bus_run)) if &r.run_id == bus_run => {
-                bus.steps.into_iter().map(|p| (p.step.clone(), p)).collect()
+    // Live progress, but only when the store's newest run is the one we
+    // are reporting. In the window between a run opening its record and
+    // the runner writing its first row, the newest run in the store is
+    // still the run before — and painting its numbers onto this run's
+    // steps is worse than showing none at all.
+    let store = datalib_runs::snapshot(&s.root).await;
+    let progress: std::collections::HashMap<String, DagStepProgress> = match (&run, &store.run_id) {
+        (Some(r), Some(store_run)) if &r.run_id == store_run => {
+            let mut by_step: std::collections::HashMap<String, DagStepProgress> = store
+                .steps
+                .into_iter()
+                .map(|p| {
+                    (
+                        p.step,
+                        DagStepProgress {
+                            msg: p.msg,
+                            metrics: Default::default(),
+                            updated_at: p.updated_at,
+                        },
+                    )
+                })
+                .collect();
+            for m in store.metrics {
+                let key = if m.labels.is_empty() {
+                    m.name
+                } else {
+                    format!("{}{{{}}}", m.name, m.labels)
+                };
+                if let Some(p) = by_step.get_mut(&m.step) {
+                    p.metrics.insert(key, m.value);
+                }
             }
-            _ => Default::default(),
-        };
+            by_step
+        }
+        _ => Default::default(),
+    };
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path())?;
@@ -1102,9 +1124,8 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                         }),
                     current_state: states.get(&sp.id).cloned(),
                     progress: progress.get(&sp.id).map(|p| DagStepProgress {
-                        done: p.done,
-                        total: p.total,
                         msg: p.msg.clone(),
+                        metrics: p.metrics.clone(),
                         updated_at: p.updated_at.clone(),
                     }),
                 }

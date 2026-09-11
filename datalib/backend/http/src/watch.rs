@@ -26,8 +26,8 @@ pub enum RootEvent {
     /// `<root>/config.toml` was written — by this server's own
     /// `PUT /api/config`, by an agent, or by hand in an editor.
     ConfigChanged,
-    /// The runner's record or its progress bus moved:
-    /// `system/dag_state.json`, `system/progress.sqlite`. This is the
+    /// The runner's record or its run store moved:
+    /// `system/dag_state.json`, `system/runs.sqlite`. This is the
     /// one that covers a `datalib-dag` run started from a terminal,
     /// which the job stream can never see because no job row exists
     /// for it.
@@ -58,9 +58,9 @@ fn classify(root: &Path, path: &Path) -> Option<RootEvent> {
         return Some(RootEvent::FrontendChanged);
     }
     if path.parent() == Some(system.as_path()) {
-        // `progress.sqlite-wal` / `-journal` are the same write as the
+        // `runs.sqlite-wal` / `-journal` are the same write as the
         // database itself, so match on the stem rather than equality.
-        if name == "dag_state.json" || name.starts_with("progress.sqlite") {
+        if name == "dag_state.json" || name.starts_with("runs.sqlite") {
             return Some(RootEvent::DagChanged);
         }
     }
@@ -184,7 +184,7 @@ mod tests {
             Some(RootEvent::DagChanged)
         );
         assert_eq!(
-            classify(root, &root.join("system/progress.sqlite-wal")),
+            classify(root, &root.join("system/runs.sqlite-wal")),
             Some(RootEvent::DagChanged)
         );
         assert_eq!(

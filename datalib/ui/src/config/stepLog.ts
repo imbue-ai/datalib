@@ -118,7 +118,14 @@ export function stepLogLines(logText: string, stepId: string): StepLogLine[] {
         const msg = typeof e.msg === "string" ? e.msg : "";
         if (!msg) continue;
         const un = unwrapMessage(msg);
-        text = un.text;
+        // The runner now unwraps tracing envelopes itself and carries the
+        // structured fields beside the message; older logs still have the
+        // envelope inside `msg`, which `unwrapMessage` handles.
+        const fields =
+          e.fields && typeof e.fields === "object" && !Array.isArray(e.fields)
+            ? trailing(e.fields as Record<string, unknown>)
+            : "";
+        text = [un.text, fields].filter(Boolean).join(" ");
         level = un.level ?? normalizeLevel(e.level) ?? "info";
         break;
       }

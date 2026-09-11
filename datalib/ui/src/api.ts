@@ -431,21 +431,32 @@ export type DagStep = {
   // What it is doing in the run currently in flight. Null means the
   // scheduler hasn't reached it, which reads as queued.
   current_state: DagRunState | null;
-  // How far into the current run, from the progress bus
-  // (system/progress.sqlite). Null when the step has reported nothing —
-  // which is not zero, and should read as a spinner rather than an
-  // empty bar.
+  // What the step has reported in the current run, from the run store
+  // (system/runs.sqlite). Null when it has reported nothing — which is
+  // not zero, and should read as a spinner rather than an empty bar.
   progress: DagStepProgress | null;
 };
 
-// A step's live position. `total: null` means indeterminate: a
-// paginated walk that cannot know its length up front.
+// A step's live numbers and words. `metrics` is the current value per
+// series, keyed `name` or `name{labels}`; `done` and `queued` are the
+// two the runner derives for a step reporting a plain count, and the
+// pair a bar can be drawn from. Empty means the step has only spoken.
 export type DagStepProgress = {
-  done: number | null;
-  total: number | null;
   msg: string | null;
+  metrics: Record<string, number>;
   updated_at: string;
 };
+
+// The fraction a step's `done` / `queued` pair describes, or null when
+// the step has not said how much is ahead of it — a bar drawn from an
+// invented total claims more than we know.
+export function progressFraction(p: DagStepProgress | null | undefined): number | null {
+  if (!p) return null;
+  const done = p.metrics.done;
+  const queued = p.metrics.queued;
+  if (done == null || queued == null || done + queued <= 0) return null;
+  return Math.max(0, Math.min(1, done / (done + queued)));
+}
 
 // What a step is doing, or did, in one run — the runner's own
 // vocabulary (`RunState` in datalib/backend/dag/src/run_state.rs).

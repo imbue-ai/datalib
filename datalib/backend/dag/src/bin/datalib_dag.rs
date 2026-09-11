@@ -23,7 +23,7 @@ const VERSION_RESOLVED: &str = {
     }
 };
 use datalib_dag::events::FanOutSink;
-use datalib_dag::progress_bus::ProgressBusSink;
+use datalib_dag::runs_sink::RunStoreSink;
 use datalib_dag::step::FailureKind;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 
@@ -169,7 +169,7 @@ async fn main() -> Result<()> {
     let now =
         now.unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
     // The scheduler takes its run id from ENV_NOW, so this is the same
-    // string it will stamp on the run — keep it for the progress bus.
+    // string it will stamp on the run — keep it for the run store.
     let run_id = now.clone();
     child_env.insert(subprocess::ENV_NOW.into(), now);
     if reset_and_redownload {
@@ -219,17 +219,18 @@ async fn main() -> Result<()> {
 
     std::fs::create_dir_all(&data_root)
         .with_context(|| format!("create data_root {}", data_root.display()))?;
-    // stderr stays the log; the bus is the live view. Both, not either:
-    // the stream is a record of everything that happened, the bus is a
-    // coalesced answer to "what is happening now" that a second process
-    // can read. Publishing the bus here rather than inside `Runner`
-    // means every way of starting a sync gets it — the http server's
-    // worker shells out to this binary too — while a library caller
-    // embedding `Runner` is not forced to own a file.
+    // stderr stays the stream; the store is the record. Both, not
+    // either: the stream is what a terminal or a tee sees as it happens,
+    // the store is what a second process reads — live, and after the
+    // fact. Publishing the store here rather than inside `Runner` means
+    // every way of starting a sync gets it — the http server's worker
+    // shells out to this binary too — while a library caller embedding
+    // `Runner` is not forced to own a file.
     let code = {
         let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
-        match ProgressBusSink::start(&data_root, &run_id) {
-            Some(bus) => sinks.push(Arc::new(bus)),
+        let retention = cfg.run_history.map(|h| h.retention()).unwrap_or_default();
+        match RunStoreSink::start(&data_root, &run_id, &run_id, retention) {
+            Some(store) => sinks.push(Arc::new(store)),
             None => {
                 // This binary has no tracing subscriber and no indicatif
                 // bars, so the macro's usual objection does not apply and
@@ -238,7 +239,7 @@ async fn main() -> Result<()> {
                 // cannot parse), so a plain line is safe here.
                 #[allow(clippy::disallowed_macros)]
                 {
-                    eprintln!("datalib-dag: progress bus unavailable; no live progress this run");
+                    eprintln!("datalib-dag: run store unavailable; nothing recorded this run");
                 }
             }
         }
@@ -299,6 +300,6 @@ async fn main() -> Result<()> {
         } else {
             2
         }
-    }; // every sink drops here, so the bus flushes and joins before we exit
+    }; // every sink drops here, so the store flushes and joins before we exit
     std::process::exit(code);
 }

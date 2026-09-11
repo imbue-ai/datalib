@@ -222,7 +222,7 @@ host-local cache rather than in the provider's versioned store:
   because the cursor re-stores the full path as its own primary key.
 
 It is plain SQLite (via the `doltlite_engine=sqlite` URI parameter, the same
-door `datalib_progress::bus` uses), because losing a cache costs a rehash
+door `datalib_runs::store` uses), because losing a cache costs a rehash
 rather than correctness, and it needs no commits, no history and no prolly
 tree.
 

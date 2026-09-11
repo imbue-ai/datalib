@@ -70,6 +70,8 @@ impl WireOutcome {
                          output — see docs/dev/step_protocol.md",
                         row.path.as_str()
                     ),
+                    target: None,
+                    fields: None,
                 }),
             }
         }
@@ -143,11 +145,7 @@ pub(crate) async fn run_subprocess(
         let mut tail: Vec<String> = Vec::new();
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            stderr_sink.emit(&Event::Log {
-                step: stderr_step.clone(),
-                level: stderr_level(&line),
-                msg: line.clone(),
-            });
+            stderr_sink.emit(&unwrap_stderr_line(&stderr_step, &line));
             tail.push(line);
             if tail.len() > 20 {
                 tail.remove(0);
@@ -227,20 +225,79 @@ pub(crate) async fn run_subprocess(
     }
 }
 
-/// Severity for a forwarded stderr line. Structured tracing output
-/// (JSON with a `level` field, e.g. tracing-subscriber's JSON format)
-/// keeps its own WARN/ERROR; everything else — progress bars, plain
-/// chatter, even JSON INFO lines — is `info`.
-fn stderr_level(line: &str) -> LogLevel {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-        return LogLevel::Info;
+/// Keys of tracing-subscriber's JSON envelope that say where a line came
+/// from rather than what happened. Dropped from `fields`: a file and a
+/// line number are the right thing to log and the wrong thing to show
+/// someone asking why their sync is red.
+const ENVELOPE_NOISE: &[&str] = &[
+    "timestamp",
+    "level",
+    "target",
+    "filename",
+    "line_number",
+    "threadId",
+    "threadName",
+    "fields",
+    "span",
+    "spans",
+];
+
+/// A forwarded stderr line. Structured tracing output (JSON with a
+/// `level` field, e.g. tracing-subscriber's JSON format) is unwrapped —
+/// its message, target and severity become the event's, and its other
+/// fields ride along as `fields` — so nothing downstream parses an
+/// envelope out of a string. Everything else — progress bars, plain
+/// chatter — is the line itself at `info`.
+fn unwrap_stderr_line(step: &str, line: &str) -> Event {
+    let plain = || Event::Log {
+        step: step.to_string(),
+        level: LogLevel::Info,
+        msg: line.to_string(),
+        target: None,
+        fields: None,
     };
-    match v.get("level").and_then(|l| l.as_str()) {
-        Some(l) if l.eq_ignore_ascii_case("warn") || l.eq_ignore_ascii_case("warning") => {
-            LogLevel::Warn
-        }
-        Some(l) if l.eq_ignore_ascii_case("error") => LogLevel::Error,
+    let Ok(serde_json::Value::Object(mut env)) = serde_json::from_str::<serde_json::Value>(line)
+    else {
+        return plain();
+    };
+    let Some(level_word) = env.get("level").and_then(|l| l.as_str()) else {
+        return plain();
+    };
+    let level = match level_word {
+        l if l.eq_ignore_ascii_case("warn") || l.eq_ignore_ascii_case("warning") => LogLevel::Warn,
+        l if l.eq_ignore_ascii_case("error") => LogLevel::Error,
         _ => LogLevel::Info,
+    };
+    let target = env
+        .get("target")
+        .and_then(|t| t.as_str())
+        .map(str::to_string);
+    let mut fields = match env.remove("fields") {
+        Some(serde_json::Value::Object(f)) => f,
+        _ => serde_json::Map::new(),
+    };
+    // `message` is the ordinary case; `event` is what the providers use
+    // for their structured "this happened" records, which have no prose
+    // at all — the event name is the sentence.
+    let msg = ["message", "event"]
+        .iter()
+        .find_map(|k| {
+            fields
+                .remove(*k)
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| line.to_string());
+    for (k, v) in env {
+        if !ENVELOPE_NOISE.contains(&k.as_str()) {
+            fields.entry(k).or_insert(v);
+        }
+    }
+    Event::Log {
+        step: step.to_string(),
+        level,
+        msg,
+        target,
+        fields: (!fields.is_empty()).then_some(fields),
     }
 }
 
@@ -249,6 +306,8 @@ fn forward_text(sink: &Arc<dyn EventSink>, ctx: &StepCtx, line: &str) {
         step: ctx.step_id.clone(),
         level: LogLevel::Info,
         msg: line.to_string(),
+        target: None,
+        fields: None,
     });
 }
 
@@ -269,10 +328,29 @@ fn retag(ev: Event, id: &str) -> Event {
         Event::ProgressLength { total, .. } => Event::ProgressLength { step: id, total },
         Event::ProgressInc { delta, .. } => Event::ProgressInc { step: id, delta },
         Event::ProgressMessage { msg, .. } => Event::ProgressMessage { step: id, msg },
-        Event::Log { level, msg, .. } => Event::Log {
+        Event::Metric {
+            name,
+            labels,
+            value,
+            ..
+        } => Event::Metric {
+            step: id,
+            name,
+            labels,
+            value,
+        },
+        Event::Log {
+            level,
+            msg,
+            target,
+            fields,
+            ..
+        } => Event::Log {
             step: id,
             level,
             msg,
+            target,
+            fields,
         },
         Event::Hint { msg, .. } => Event::Hint { step: id, msg },
         // through unmodified rather than inventing a policy.
@@ -467,7 +545,7 @@ mod tests {
                 echo '{"event":"progress_message","step":"me","msg":"halfway"}'
                 echo plain text line
                 echo "downloading 3/10..." >&2
-                echo '{"timestamp":"t","level":"ERROR","fields":{"message":"boom"}}' >&2
+                echo '{"timestamp":"t","level":"ERROR","target":"slack::ingest","filename":"x.rs","fields":{"message":"boom","channel":"C1"}}' >&2
                 echo '{"event":"outcome","outputs":[{"path":"shell/raw","version":"v1"}]}'
             "#),
         );
@@ -507,10 +585,35 @@ mod tests {
             e,
             Event::Log { level: LogLevel::Info, msg, .. } if msg == "downloading 3/10..."
         )));
-        assert!(events.iter().any(|e| matches!(
-            e,
-            Event::Log { level: LogLevel::Error, msg, .. } if msg.contains("boom")
-        )));
+        // A tracing envelope is unwrapped: message, target and the
+        // leftover fields become columns, and the location noise is gone.
+        let boom = events
+            .iter()
+            .find(|e| {
+                matches!(
+                    e,
+                    Event::Log {
+                        level: LogLevel::Error,
+                        ..
+                    }
+                )
+            })
+            .expect("the tracing error line reaches the stream");
+        match boom {
+            Event::Log {
+                msg,
+                target,
+                fields,
+                ..
+            } => {
+                assert_eq!(msg, "boom");
+                assert_eq!(target.as_deref(), Some("slack::ingest"));
+                let fields = fields.as_ref().expect("the extra field survives");
+                assert_eq!(fields["channel"], "C1");
+                assert!(!fields.contains_key("filename"));
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[tokio::test]

@@ -221,16 +221,18 @@ root that had never run would sprout a lock file from being looked at. It is
 racy by nature: the holder may let go a microsecond later. Don't build an
 invariant on it.
 
-## Progress: the accumulator is in the sink, not the bus
+## Progress: the store takes positions, never deltas
 
-`Event::ProgressInc` carries a **delta**. The bus coalesces — of the ticks
-between two flushes only the newest is written — and coalescing deltas
-silently loses work, turning "347 of 900" into whatever fraction of the
-increments happened to land on a flush boundary.
+The run store (`system/runs.sqlite`, written through `runs_sink.rs`)
+coalesces — of the ticks between two flushes only the newest is written —
+and coalescing deltas silently loses work, turning "347 of 900" into
+whatever fraction of the increments happened to land on a flush boundary.
 
-So the running total is kept per step in `progress_bus.rs`, and what reaches
-the bus is always an absolute position. Dropping one of those is lossless,
-which is what makes the coalescing correct rather than merely cheap.
+So `Event::Metric` carries an **absolute value**, and the one event that
+still carries a delta, `Event::ProgressInc`, is summed per step in
+`runs_sink.rs` before anything reaches the store. Dropping a position is
+lossless, which is what makes the coalescing correct rather than merely
+cheap.
 
 ## The run record
 
@@ -240,11 +242,11 @@ never "ran"), a `finished_at` that distinguishes a completed run from a
 crashed one, and per-step timings.
 
 The run id is the pinned `DATALIB_DAG_NOW`, verbatim. `datalib-dag` mints
-that value and hands it to the progress bus as the run id *before* calling
-`run`, so the two derive the same string independently. If they diverge
-nothing errors — the bus describes a run nobody is displaying, `/api/dag`
-filters every row out on the id mismatch, and the UI silently shows no
-progress at all.
+that value and hands it to the run store (`system/runs.sqlite`) as the run
+id *before* calling `run`, so the two derive the same string independently.
+If they diverge nothing errors — the store describes a run nobody is
+displaying, `/api/dag` filters every row out on the id mismatch, and the
+UI silently shows no progress at all.
 
 State is saved on `running`, not only on terminal states. That file is the
 only channel to a reader who did not spawn the run, so without the

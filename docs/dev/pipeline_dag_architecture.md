@@ -177,10 +177,13 @@ The event schema is essentially what TracingSink already emits:
 {"event": "progress.finish",  "node": "\<id\>", "msg":   "done"}
 
 > **Addendum — shipped schema.** The implemented events use underscore
-> names keyed by `step`: `progress_length` / `progress_inc` /
-> `progress_message` (no separate finish event — completion is a `log`
-> line plus the step's `outcome`). See `docs/dev/step_protocol.md` for
-> the authoritative wire format.
+> names keyed by `step`: `metric` (an absolute value per named series —
+> the primary form), with `progress_length` / `progress_inc` kept as
+> sugar for a step that counts one thing, and `progress_message` (no
+> separate finish event — completion is a `log` line plus the step's
+> `outcome`). See `docs/dev/step_protocol.md` for the authoritative
+> wire format, and `docs/dev/plans/logs_and_metrics.md` for where the
+> runner records them.
 
 Complementary channels, not either/or:
 

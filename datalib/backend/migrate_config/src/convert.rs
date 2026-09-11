@@ -41,6 +41,8 @@ struct OldConfig {
     #[serde(default)]
     checkpoint_cadence: Option<datalib_dag::config::CheckpointCadence>,
     #[serde(default)]
+    run_history: Option<datalib_dag::config::RunHistory>,
+    #[serde(default)]
     groups: Vec<GroupIn>,
     #[serde(default)]
     steps: Vec<StepIn>,
@@ -663,11 +665,14 @@ fn header(cfg: &OldConfig) -> Result<String> {
         binary_dir: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         checkpoint_cadence: Option<datalib_dag::config::CheckpointCadence>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        run_history: Option<datalib_dag::config::RunHistory>,
     }
     toml::to_string(&Head {
         data_root: cfg.data_root.clone(),
         binary_dir: cfg.binary_dir.clone(),
         checkpoint_cadence: cfg.checkpoint_cadence,
+        run_history: cfg.run_history,
     })
     .context("serialize the top-level keys")
 }

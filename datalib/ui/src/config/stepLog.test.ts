@@ -25,6 +25,13 @@ describe("narrowing a job log to one step", () => {
     ]);
   });
 
+  it("shows the fields the runner already unwrapped beside the message", () => {
+    const line = `{"ts":"t","event":"log","step":"s/raw","level":"warn","msg":"rate limited","target":"slack::http","fields":{"retry_in":30}}`;
+    expect(stepLogLines(line, "s/raw")).toEqual([
+      { ts: "t", level: "warn", text: "rate limited retry_in=30" },
+    ]);
+  });
+
   it("carries the failure message, at error level", () => {
     const lines = stepLogLines(LOG, "signal-work");
     const last = lines[lines.length - 1];

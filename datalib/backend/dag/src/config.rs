@@ -53,6 +53,40 @@ pub struct DagConfig {
     /// before the step finishes. Omitted means the step's own default.
     #[serde(default)]
     pub checkpoint_cadence: Option<CheckpointCadence>,
+    /// How much of the run store (`system/runs.sqlite`: every run's step
+    /// states, log lines and metrics) to keep. Omitted means the defaults
+    /// in [`RunHistory`].
+    #[serde(default)]
+    pub run_history: Option<RunHistory>,
+}
+
+/// The retention rule for `system/runs.sqlite`, as a person writes it in
+/// `config.toml`. Both limits apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunHistory {
+    /// Keep at most this many runs, newest first.
+    #[serde(default = "RunHistory::default_max_runs")]
+    pub max_runs: u32,
+    /// Drop a run older than this many days, however few runs there are.
+    #[serde(default = "RunHistory::default_max_age_days")]
+    pub max_age_days: u32,
+}
+
+impl RunHistory {
+    fn default_max_runs() -> u32 {
+        datalib_runs::Retention::default().max_runs
+    }
+    fn default_max_age_days() -> u32 {
+        datalib_runs::Retention::default().max_age_days
+    }
+
+    pub fn retention(self) -> datalib_runs::Retention {
+        datalib_runs::Retention {
+            max_runs: self.max_runs,
+            max_age_days: self.max_age_days,
+        }
+    }
 }
 
 /// The latency/history tradeoff, in seconds, as a person writes it in
@@ -571,6 +605,8 @@ struct RawConfig {
     applets: Vec<toml::Spanned<toml::Value>>,
     #[serde(default)]
     checkpoint_cadence: Option<CheckpointCadence>,
+    #[serde(default)]
+    run_history: Option<RunHistory>,
 }
 
 /// One entry on its way in: where it sits in the file, and what it
@@ -1306,6 +1342,7 @@ fn entries_of(text: &str) -> Entries {
             steps,
             applets: accepted.applets,
             checkpoint_cadence: raw.checkpoint_cadence,
+            run_history: raw.run_history,
         },
         specs,
         spans,
@@ -1425,6 +1462,7 @@ impl DagConfig {
             steps: Vec::new(),
             applets: Vec::new(),
             checkpoint_cadence: None,
+            run_history: None,
         }
     }
 }

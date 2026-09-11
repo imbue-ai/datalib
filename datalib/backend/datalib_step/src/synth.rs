@@ -33,6 +33,8 @@ pub fn run(
             step: String::new(), // re-tagged by the runner if any
             level: LogLevel::Info,
             msg,
+            target: None,
+            fields: None,
         });
     };
 

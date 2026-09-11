@@ -1,43 +1,48 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# The progress bus: a plain-SQLite file the runner writes and anything
-# can read. Deliberately a leaf crate with no datalib dependencies — the
+# The run store: a plain-SQLite file the runner writes and anything can
+# read — step states, log lines and metrics, across runs. Deliberately a
+# leaf crate with no datalib dependency beyond `datalib_time`: the
 # runner takes it without taking `datalib_core`, and `datalib-http`
 # takes it to read what the runner wrote.
 rust_library(
-    name = "datalib_progress",
+    name = "datalib_runs",
     srcs = glob(["src/**/*.rs"]),
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",    ],
+        "@datalib_crates//:tracing",
+    ],
 )
 
 # The load-bearing experiment, run against the real engine: that
-# `doltlite_engine=sqlite` survives sqlx and reaches doltlite, so the bus
-# on disk is stock SQLite. Everything else here rests on it.
+# `doltlite_engine=sqlite` survives sqlx and reaches doltlite, so the
+# store on disk is stock SQLite. Everything else here rests on it.
 rust_test(
     name = "stock_sqlite_engine_test",
     srcs = ["tests/stock_sqlite_engine.rs"],
     edition = "2021",
     deps = [
-        ":datalib_progress",
+        ":datalib_runs",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
 )
 
-# The bus end to end: publish, read back, and the coalescing rules.
+# The store end to end: publish, read back, the coalescing rules, and
+# retention.
 rust_test(
-    name = "bus_roundtrip_test",
-    srcs = ["tests/bus_roundtrip.rs"],
+    name = "store_roundtrip_test",
+    srcs = ["tests/store_roundtrip.rs"],
     edition = "2021",
     deps = [
-        ":datalib_progress",
+        ":datalib_runs",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],

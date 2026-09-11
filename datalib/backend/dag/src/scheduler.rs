@@ -512,6 +512,8 @@ impl Runner {
                                           streams_output; no consumer will be \
                                           dispatched early"
                                         .to_string(),
+                                    target: None,
+                                    fields: None,
                                 });
                             }
                             break 'checkpoint;
@@ -643,6 +645,8 @@ impl Runner {
                             "streaming pass failed, deferring to the final pass: {}",
                             errors[i].as_deref().unwrap_or("")
                         ),
+                        target: None,
+                        fields: None,
                     });
                     errors[i] = None;
                 }
@@ -1017,6 +1021,8 @@ fn resolve_outputs(
                 msg: format!(
                     "reported no version for {path}; reading the whole tree to hash it.                      A version the step derives from what it wrote would be cheaper."
                 ),
+                target: None,
+                fields: None,
             });
             tree_version(&data_root.join(path))?
         }

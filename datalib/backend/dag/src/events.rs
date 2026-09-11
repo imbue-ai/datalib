@@ -1,5 +1,6 @@
 //! The uniform per-step event stream: progress, logs, and lifecycle.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -67,7 +68,21 @@ pub enum Event {
         step: StepId,
         version: String,
     },
+    /// The current value of one of the step's metrics: rows written,
+    /// requests made, items still queued. Always an absolute value — the
+    /// store coalesces to the newest, and a dropped delta would be lost
+    /// work while a dropped position is nothing. A value that goes down
+    /// is simply a gauge; nothing on the wire distinguishes the two.
+    Metric {
+        step: StepId,
+        name: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        labels: BTreeMap<String, String>,
+        value: i64,
+    },
     /// Total expected work units, if known (`None` → indeterminate).
+    /// Sugar for a step that counts one thing: the runner turns this and
+    /// [`Event::ProgressInc`] into the `done` and `queued` metrics.
     ProgressLength {
         step: StepId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,10 +96,18 @@ pub enum Event {
         step: StepId,
         msg: String,
     },
+    /// One log line. A line that arrived as structured tracing output
+    /// is unwrapped here: `msg` is its message, `target` its target, and
+    /// `fields` whatever else it carried — so no reader has to parse a
+    /// JSON envelope out of a string a second time.
     Log {
         step: StepId,
         level: LogLevel,
         msg: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fields: Option<serde_json::Map<String, serde_json::Value>>,
     },
     /// Actionable remediation text for a failure (e.g. the latchkey
     /// re-auth walkthrough on a 401/403). Distinct from `Log` so a UI
@@ -124,12 +147,30 @@ pub struct OutputSummary {
     pub changed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum LogLevel {
     Info,
     Warn,
     Error,
+}
+
+impl LogLevel {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
 }
 
 /// Where events go. Object-safe so the orchestrator can fan out to a
@@ -224,11 +265,21 @@ impl StepProgress {
             msg: msg.into(),
         });
     }
+    pub fn metric(&self, name: &str, labels: BTreeMap<String, String>, value: i64) {
+        self.sink.emit(&Event::Metric {
+            step: self.step.clone(),
+            name: name.to_string(),
+            labels,
+            value,
+        });
+    }
     pub fn log(&self, level: LogLevel, msg: impl Into<String>) {
         self.sink.emit(&Event::Log {
             step: self.step.clone(),
             level,
             msg: msg.into(),
+            target: None,
+            fields: None,
         });
     }
 }
@@ -273,6 +324,47 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// The wire shape `step_protocol.md` documents, with the labels map
+    /// dropped when empty so a step counting one thing writes the short
+    /// form.
+    #[test]
+    fn metric_event_json_shape_matches_doc() {
+        let e = Event::Metric {
+            step: "slack/ingest".into(),
+            name: "rows_upserted".into(),
+            labels: BTreeMap::from([("table".to_string(), "slack_messages".to_string())]),
+            value: 1234,
+        };
+        let j = serde_json::to_value(&e).unwrap();
+        assert_eq!(j["event"], "metric");
+        assert_eq!(j["labels"]["table"], "slack_messages");
+        assert_eq!(j["value"], 1234);
+
+        let bare: Event = serde_json::from_str(
+            r#"{"event":"metric","step":"s","name":"api_requests","value":7}"#,
+        )
+        .unwrap();
+        match bare {
+            Event::Metric { labels, value, .. } => {
+                assert!(labels.is_empty());
+                assert_eq!(value, 7);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// strum and serde spell the levels independently; the store writes
+    /// the strum one and a reader matches the serde one.
+    #[test]
+    fn log_level_strum_and_serde_agree() {
+        for &l in <LogLevel as strum::VariantArray>::VARIANTS {
+            assert_eq!(
+                serde_json::to_string(&l).unwrap(),
+                format!("\"{}\"", l.as_str())
+            );
+        }
     }
 
     #[test]
