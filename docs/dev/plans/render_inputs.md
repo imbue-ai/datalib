@@ -119,6 +119,75 @@ So the proposal removes the routes that come from *inferring* deletion
 and leaves the one that comes from *reading a torn store*, which no
 mapping can fix.
 
+## The principle: the raw store's diff *is* the deletion record
+
+Everything below rests on one assumption, and it is worth stating as
+a rule so it can be enforced rather than hoped for:
+
+> **`dolt_diff` between two commits of our own raw store reports every
+> row that left. Render never infers a deletion from anything else.**
+
+Doltlite gives us this for free at the commit level — a row present at
+`from_ref` and absent at `to_ref` is a `removed` diff row, however many
+commits lie between, and a row that left and came back in between is
+`unchanged` or `modified`, which is also the right answer. So "the raw
+store has no row with this id" (what `buckets_without_rows` asks) is
+never the primary signal; the diff already said `removed`, and the
+probe exists only because the forward projection lost track of which
+document that row belonged to. `render_inputs` is what lets the diff's
+own `removed` rows name the document directly.
+
+Three conditions turn "assume" into "ensure", and the tree fails two of
+them today:
+
+1. **Never lose the range.** The render cursor (`_render_cursor.json`)
+   names the `from_ref`. Lose it and there is no diff, and with no diff
+   there is no deletion information at all — only a full walk, which is
+   the inference-from-absence this whole doc is trying to retire.
+   Today it is lost on purpose in two places: `discard_tree` removes
+   the whole `render_markdown/` directory on a renderer-version bump,
+   and the cursor file lives inside it; and the migration recipe
+   recommends wiping the cursor on `--reset-and-redownload`. Both
+   conflate "re-render every bucket" with "forget where I was", and
+   they are different things. A version bump, a param change and a
+   reset all want *every bucket rendered again*; none of them wants the
+   diff range dropped. A reset is a committed truncate followed by a
+   committed refill, and the diff across that range is exactly right:
+   rows in both are `unchanged` or `modified`, rows only in the old
+   commit are `removed`. So: the cursor moves into the render store
+   (a `render_cursor` table beside `render_inputs`, one row, the same
+   two fields plus the params), the store is never discarded — a
+   version bump rewrites its rows the way any other full re-render
+   does — and `--reset-and-redownload` leaves the cursor alone.
+   A cursor naming a commit the raw store no longer has then means the
+   raw store *file* was replaced, which is not something datalib does
+   and is worth a `warn` every run until somebody looks.
+2. **Every raw commit is a consistent snapshot.** A perfect diff of a
+   torn commit is perfectly wrong: a checkpoint taken mid-wipe says
+   every row left, and the diff will report exactly that. This is the
+   [streaming plan's rule](streaming_steps_plan.md#the-rule-that-is-easy-to-get-wrong)
+   that a wiping run does not checkpoint; the principle here is why
+   that rule is load-bearing for deletion and not only for progress.
+3. **Ingest owns "upstream deleted it".** Render mirrors the raw store,
+   not upstream. Whether a row leaves the raw store is each ingest's
+   decision — an export ingest prunes to its snapshot, a mirror ingest
+   truncates and refills, most API ingests never delete at all, and
+   beeper must *not* delete when its local `index.db` evicts. Every one
+   of those is a question about the source, answered in the ingest
+   crate, and render needs no opinion on any of them. That layering is
+   the real content of the principle: the diff is perfect *about the
+   raw store*, and the raw store is ingest's claim about upstream.
+
+One precondition: `dolt_diff_<t>` needs a primary key, so a mirrored
+table without one is not diffable. `sqlite_mirror` already synthesizes
+one where it can; a table it cannot key should be refused at DDL time
+rather than silently left out of the diff.
+
+With condition 1 held, the only inference-from-absence left in this
+design is the cold-start sweep in §"Deletion, derived" step 3, and it
+is reachable only when the range is really gone — which becomes an
+anomaly to report rather than a path four routine events take.
+
 ## The proposal
 
 Two additions to the render store, one to what a renderer emits, and a
@@ -219,9 +288,12 @@ above is a chunked probe from Rust rather than a SQL join, the way
 `buckets_without_rows` already probes. Both stores are open for the
 whole pass in any case.
 
-Cold start is the same path with `stale = every bucket_key in
-markdowns` plus whatever the provider's full walk finds. There is no
-second code path for it.
+"Render everything" — a renderer-version bump, a render-param change,
+`--reset-and-redownload` — is the same path with `stale = every
+bucket_key in markdowns` plus whatever the forward projection adds,
+and the diff range kept, so deletion still comes from `removed` rows.
+A true cold start (no range) is that plus a full walk. There is no
+second code path for either.
 
 ### Deletion, derived
 
@@ -239,12 +311,14 @@ After the provider has run:
    whose primary entity is gone; a periodized bucket that re-rendered
    to fewer documents drops the extra ones. Same rule, no special
    case.
-3. On a cold start, a bucket in `markdowns` that the full walk did not
-   declare is treated the same way — its documents go. That is the
-   one place absence still means deletion, and it is bounded: a cold
-   start happens for four named reasons, each already logged, and
-   never because a store could not be read (that fails the
-   scan, and a failed scan has no `stale` set to sweep).
+3. A cold start — the range is gone, per §"The principle" condition 1
+   the only reason left — walks everything, and a bucket in
+   `markdowns` that the walk did not declare loses its documents. That
+   is the one place absence still means deletion. It never happens
+   because a store could not be read (that fails the scan, and a
+   failed scan has no `stale` set to sweep), and it never happens for
+   a version bump, a param change or a reset, which keep the range and
+   simply put every bucket into `stale`.
 
 `remove_conversation`, `retain_documents`, `RenderPass`,
 `buckets_without_rows`, `documents_for_conversation`,
@@ -356,13 +430,18 @@ work downstream of them — are skipped. It costs one map load.
    by instrumenting one provider's loader; check it against the
    `grid_rows` count there. If it is not within small-integer multiples,
    revisit the bucket-level keying before writing any DDL.
-1. **The store.** `render_inputs` DDL in `datalib_schema`,
+1. **Keep the range.** Move the render cursor into the render store,
+   stop `discard_tree` on a version bump (re-render in place), and
+   stop wiping the cursor on `--reset-and-redownload`. Independent of
+   the rest and worth landing first: it is the condition everything
+   else assumes, and today's code fails it.
+2. **The store.** `render_inputs` DDL in `datalib_schema`,
    `markdowns.bucket_key`, `declare_bucket` on `RenderCtx`,
    `bucket_key` on `RenderedMarkdown`. The driver writes both; the scan
    and the sweep are unchanged. Every provider compiles by emitting an
    empty declaration, and the driver logs at `warn` per source with no
    inputs — so the migration state is visible, not silent.
-2. **The test that keeps input lists complete.** Over the TNG fixture:
+3. **The test that keeps input lists complete.** Over the TNG fixture:
    render cold, record `render_inputs`; then for every raw table, for
    every row, mutate one non-key column in a scratch copy of the raw
    store and run the incremental path; assert that the buckets which
@@ -370,19 +449,19 @@ work downstream of them — are skipped. It costs one map load.
    declared that row. Expensive, so it runs per provider as an
    `insta`-style golden of the *declared* sets rather than the
    mutation loop on every CI run — the mutation loop is the `.update`.
-3. **chat-common.** Its parse helpers declare; ten providers move
+4. **chat-common.** Its parse helpers declare; ten providers move
    together. Drop their `global_fanout_tables`; verify with the test
-   from step 2 that a `users` change names exactly the threads that
+   from step 3 that a `users` change names exactly the threads that
    user is in.
-4. **The driver-side scan and sweep**, switching one provider at a time
+5. **The driver-side scan and sweep**, switching one provider at a time
    off `remove_conversation` / `retain_documents`. The migration
    recipe's "same commit" rule applies in reverse: a provider moves
    off the old deletion path in the same commit that its declarations
    become complete.
-5. **Delete** the five guards, the two callbacks, `RenderPass`,
+6. **Delete** the five guards, the two callbacks, `RenderPass`,
    `buckets_without_rows`, `prior_fingerprints` from every provider
    signature. Close #27.
-6. **contacts.** Port it; it was the provider that could not be.
+7. **contacts.** Port it; it was the provider that could not be.
 
 ## Relation to other documents
 
