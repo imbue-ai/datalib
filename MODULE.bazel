@@ -115,6 +115,41 @@ http_archive(
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
+# `curl-impersonate`, the Chrome-impersonating curl that
+# `latchkey-curl-dispatch` execs for Cloudflare-fronted hosts. Built
+# from source by .github/workflows/curl-impersonate.yml (upstream commit
+# and release tag in third-party/curl-impersonate/pin.env) and published
+# as a release of this repo; these are that release's tarballs, one per
+# triple release.yml ships. //third-party/curl-impersonate selects the
+# one for the target platform. Why our own build rather than upstream's
+# prebuilts, and how to bump: docs/dev/curl_impersonate.md.
+#
+# The sha256s come from the SHA256SUMS the workflow publishes with the
+# release. `//third-party/curl-impersonate:pin_test` checks the tag
+# below against pin.env.
+CURL_IMPERSONATE_RELEASE = "curl-impersonate-v2.2.2-1"
+
+[
+    http_archive(
+        name = "curl_impersonate_%s" % triple.replace("-", "_"),
+        urls = ["https://github.com/imbue-ai/datalib/releases/download/%s/curl-impersonate-%s.tar.gz" % (
+            CURL_IMPERSONATE_RELEASE,
+            triple,
+        )],
+        sha256 = sha,
+        strip_prefix = "curl-impersonate-%s" % triple,
+        build_file_content = 'exports_files(["curl-impersonate"])',
+    )
+    for triple, sha in [
+        ("aarch64-apple-darwin", "3df522dcdcbc922bf730ab4044ee9e4589c0d5082f05dea0ed2e6594e5505e2d"),
+        ("x86_64-apple-darwin", "8b4271c1b98efa7e9cbc8e093e5927ca5f88cd5663db7f5750becd8a7aaa8d95"),
+        ("x86_64-unknown-linux-gnu", "908b1e3c0cdcd645e29d157a43845b1df22ce482478d62d07df5c02c28ea1dfc"),
+        ("aarch64-unknown-linux-gnu", "9098cb004d74e028ea159abf1224a45696f9359dec16b999e5749e14ee674018"),
+        ("x86_64-unknown-linux-musl", "eef9c448b0f9e4d0d67924969ae9afe9d84b0e7f43275b5a132b1dba77116d71"),
+        ("aarch64-unknown-linux-musl", "c2bb9bd8caa1c5aafaa3a04f7be30bf166b7a98290aba83427323255b8bc582f"),
+    ]
+]
+
 # Lightroom test catalogs — four real `.lrcat` files from
 # github.com/thadd3us/lightroom_db_diff, captured as a chronological
 # progression of one library: fresh, then GPS/captions/collections/
@@ -436,9 +471,9 @@ register_toolchains("@rust_toolchains//:all")
 
 # Hermetic musl-libc GCC cross toolchains (bazel-contrib/musl-toolchain)
 # for the C/C++ half of the musl builds: the doltlite amalgamation,
-# and every cargo build script that compiles native code (boring-sys2's
-# cmake-driven BoringSSL, openssl-src, zstd-sys, onig_sys, ...) picks
-# its CC/CXX up from the resolved cc toolchain. The toolchain enables
+# and every cargo build script that compiles native code (onig_sys,
+# protobuf-src's cmake build, ...) picks its CC/CXX up from the
+# resolved cc toolchain. The toolchain enables
 # `fully_static_link`, which is what makes the shipped binaries run on
 # any Linux, glibc or musl, with no runtime deps. Exec platforms
 # covered upstream: linux + macOS, x86_64 + arm64.
@@ -462,9 +497,9 @@ use_repo(toolchains_musl, "musl_toolchains_hub")
 # (registered by an earlier module in the graph, and constraint-wise a
 # match for any `linux + <cpu>` platform — it carries no linker
 # constraint) win the musl platforms on Linux hosts. Symptom: the
-# release leg linked `latchkey_curl_impersonate` with `/usr/bin/gcc` against
-# glibc-compiled BoringSSL objects and died on `__memcpy_chk` /
-# `fopen64`. Harmless for every other build: these toolchains require
+# release leg linked the (since-removed) wreq-based impersonating curl
+# with `/usr/bin/gcc` against glibc-compiled BoringSSL objects and
+# died on `__memcpy_chk` / `fopen64`. Harmless for every other build: these toolchains require
 # `//platforms:musl`, which only the musl platforms carry. (macOS
 # hosts never hit the ambiguity — a darwin host cc toolchain can't
 # target linux at all.)

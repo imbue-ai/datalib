@@ -2,7 +2,9 @@
 # x86_64-apple-darwin leg. Exists because that leg only otherwise runs
 # on `v*` tags — v0.23.0 and v0.23.1 each burned a release on an
 # Intel-leg failure that a branch run would have caught (a missing
-# crate_universe triple, then a missing cmake). Run it against a branch
+# crate_universe triple, then a missing cmake — the latter no longer
+# applies, the impersonating curl is fetched rather than compiled, but
+# the step is mirrored regardless). Run it against a branch
 # before tagging whenever release.yml's Intel leg or its toolchain
 # assumptions change:
 #

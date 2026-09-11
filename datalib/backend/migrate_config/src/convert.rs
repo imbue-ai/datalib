@@ -55,6 +55,8 @@ struct GroupIn {
     name: Option<String>,
     #[serde(default)]
     r#type: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -384,6 +386,8 @@ struct GroupOut {
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     r#type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 /// One step, shaped for output: `group` + `function` or `id`, never both,
@@ -460,6 +464,7 @@ pub fn rewrite(text: &str) -> Result<String> {
             id: g.id.clone(),
             name: g.name.clone(),
             r#type: g.r#type.as_deref().map(|t| rename_type(t).to_string()),
+            description: g.description.clone(),
         })
         .collect();
     // Every built-in step's id moves with its function; everything that
@@ -521,6 +526,7 @@ pub fn rewrite(text: &str) -> Result<String> {
                     id: b.group.clone(),
                     name: None,
                     r#type: None,
+                    description: None,
                 });
                 groups.len() - 1
             }

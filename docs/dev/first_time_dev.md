@@ -8,7 +8,7 @@ just want to *run* the released tools against your own data, start with the
 
 ```sh
 # 1. Host tools Bazel can't provide for itself. `cmake` is required by the
-#    `boring-sys2` crate (BoringSSL bindings) at build time; `bazel` is the
+#    `protobuf-src` crate's build script; `bazel` is the
 #    build driver.
 brew install bazel cmake
 
@@ -272,12 +272,13 @@ sibling `chatgpt_live`, `github_live`, `gitlab_live`, `notion_live`, and
 conversation), then asserts a curated stable view against committed
 [insta](https://insta.rs) snapshots. All are tagged `manual` + `external`
 + `no-sandbox`, so they are excluded from `bazel test //...`; they need
-`latchkey` creds for the service and `LATCHKEY_CURL` pointing at the curl
-shim:
+`latchkey` creds for the service and `LATCHKEY_CURL` pointing at the
+dispatch curl (which routes Cloudflare-fronted hosts to the bundled
+`curl-impersonate` next to it — see `docs/dev/curl_impersonate.md`):
 
 ```sh
-bazel build //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate"
+bazel build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch"
 bazelisk test //datalib/backend/etl/providers/claude:claude_live \
     --test_arg=--ignored --test_env=PATH --test_env=HOME --test_env=USER \
     --test_env=LATCHKEY_CURL

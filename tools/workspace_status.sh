@@ -27,7 +27,11 @@ fi
 #                                 changes
 # Consumed by datalib-dag's --version stamp. Falls back to
 # "unknown" outside a git checkout for parity with STABLE_GIT_HASH.
-if describe=$(git describe --tags --always --dirty 2>/dev/null); then
+# `--match` keeps this to datalib's own `v<semver>` tags: the repo also
+# carries `curl-impersonate-v*` tags (releases of the impersonating curl
+# binaries, see .github/workflows/curl-impersonate.yml), and describe
+# would otherwise name whichever tag is nearest.
+if describe=$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null); then
     echo "STABLE_GIT_DESCRIBE ${describe}"
 else
     echo "STABLE_GIT_DESCRIBE unknown"

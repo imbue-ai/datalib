@@ -1,0 +1,102 @@
+# The `curl-impersonate` binary for the target platform, picked from the
+# six per-triple archives MODULE.bazel pins. Nothing here is compiled:
+# the binaries are built from source by .github/workflows/curl-impersonate.yml
+# and published as a release of this repo (see pin.env for the upstream
+# commit and docs/dev/curl_impersonate.md for why).
+#
+# `//datalib/backend/etl:latchkey_curl_impersonate` copies `:curl_impersonate`
+# next to the dispatch curl, which is where the dispatch looks for it.
+
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+
+# Linux needs the libc told apart: `@platforms//` has no libc constraint,
+# so the musl release builds carry `//platforms:musl` (see that file) and
+# everything else `//platforms:unknown`.
+config_setting(
+    name = "darwin_aarch64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "darwin_x86_64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "linux_x86_64_gnu",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+        "//platforms:unknown",
+    ],
+)
+
+config_setting(
+    name = "linux_aarch64_gnu",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+        "//platforms:unknown",
+    ],
+)
+
+config_setting(
+    name = "linux_x86_64_musl",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+        "//platforms:musl",
+    ],
+)
+
+config_setting(
+    name = "linux_aarch64_musl",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+        "//platforms:musl",
+    ],
+)
+
+alias(
+    name = "curl_impersonate",
+    actual = select({
+        ":darwin_aarch64": "@curl_impersonate_aarch64_apple_darwin//:curl-impersonate",
+        ":darwin_x86_64": "@curl_impersonate_x86_64_apple_darwin//:curl-impersonate",
+        ":linux_x86_64_gnu": "@curl_impersonate_x86_64_unknown_linux_gnu//:curl-impersonate",
+        ":linux_aarch64_gnu": "@curl_impersonate_aarch64_unknown_linux_gnu//:curl-impersonate",
+        ":linux_x86_64_musl": "@curl_impersonate_x86_64_unknown_linux_musl//:curl-impersonate",
+        ":linux_aarch64_musl": "@curl_impersonate_aarch64_unknown_linux_musl//:curl-impersonate",
+    }),
+    visibility = ["//visibility:public"],
+)
+
+# pin.env names the release the workflow publishes; MODULE.bazel names
+# the release the archives are fetched from. They are edited by hand in
+# two files, so check they agree.
+genrule(
+    name = "release_tag_from_pin",
+    srcs = ["pin.env"],
+    outs = ["release_tag_from_pin.txt"],
+    cmd = "sed -n 's/^RELEASE_TAG=//p' $(location pin.env) > $@",
+)
+
+genrule(
+    name = "release_tag_from_module",
+    srcs = ["//:MODULE.bazel"],
+    outs = ["release_tag_from_module.txt"],
+    cmd = "sed -n 's/^CURL_IMPERSONATE_RELEASE = \"\\(.*\\)\"$$/\\1/p' $(location //:MODULE.bazel) > $@",
+)
+
+diff_test(
+    name = "pin_test",
+    failure_message = "third-party/curl-impersonate/pin.env RELEASE_TAG and MODULE.bazel CURL_IMPERSONATE_RELEASE must name the same release",
+    file1 = ":release_tag_from_pin",
+    file2 = ":release_tag_from_module",
+)

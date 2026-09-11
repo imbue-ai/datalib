@@ -60,6 +60,9 @@ pub struct User {
     pub name: Option<String>,
     pub real_name: Option<String>,
     pub display_name: Option<String>,
+    /// `profile.email`. Slack only serves it with the `users:read.email`
+    /// scope, so it is often absent for everyone but the account itself.
+    pub email: Option<String>,
 }
 
 impl User {
@@ -147,7 +150,7 @@ impl Message {
     }
 }
 
-pub use mrkdwn::resolve_user_mentions;
+pub use mrkdwn::{resolve_mentions, Labels};
 
 /// A Slack message permalink. With `thread_ts` (and when it differs from
 /// `ts`) the reply-in-thread params are appended so the link deep-links

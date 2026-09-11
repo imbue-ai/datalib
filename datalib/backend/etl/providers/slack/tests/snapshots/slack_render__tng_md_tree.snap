@@ -11,10 +11,10 @@ chat_uuid: 0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba
 markdown_uuid: 0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba
 period: all
 display: "#bridge"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: C_BRIDGE#12604000100.000100
 item_count: 3
-source_fingerprint: 2495389e275e900db04c15f2ead34fc92befe1e4e0dd2b081fbf4725bdd4aed2
+source_fingerprint: 42db1d7c190581964b1631cc84156c092fa73857b715b01a72edb62f82b3c3e2
 ---
 
 <h1 class="page-title" data-page-title-uuid="0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba">#bridge: Mr. Data, status report. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -57,10 +57,10 @@ chat_uuid: 1803e003-56a7-5c12-9024-5265850e9eaa
 markdown_uuid: 1803e003-56a7-5c12-9024-5265850e9eaa
 period: all
 display: "@William T. Riker"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: D_RIKER#12604000901.000901
 item_count: 1
-source_fingerprint: 85dc8be43b62ea936f873f3b8a065f6a49fb1e8729a4be3b015809b255072034
+source_fingerprint: fe7354baffcc8da499b0def66fcc10351b16c0ad3bb382ecef3861da3c3fc4a3
 ---
 
 <h1 class="page-title" data-page-title-uuid="1803e003-56a7-5c12-9024-5265850e9eaa">@William T. Riker: Thank you, Number One. Make it so. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -83,10 +83,10 @@ chat_uuid: 56f6c1d9-495c-5104-8a26-be13bc28718e
 markdown_uuid: 56f6c1d9-495c-5104-8a26-be13bc28718e
 period: all
 display: "#bridge"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: C_BRIDGE#12604000800.000800
 item_count: 1
-source_fingerprint: fa8bc2598ebf3dc9475ab0da804d4f246a38594b010c8bc72c4681922941acbf
+source_fingerprint: 2a71e88a1cb7bd4b08a975626f0c2ab04ca2b8e6b4ffa7ceff6b4593e53c0d4f
 ---
 
 <h1 class="page-title" data-page-title-uuid="56f6c1d9-495c-5104-8a26-be13bc28718e">#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -109,10 +109,10 @@ chat_uuid: 658ccd8e-50ad-527c-8cc3-401cf8b315db
 markdown_uuid: 658ccd8e-50ad-527c-8cc3-401cf8b315db
 period: all
 display: "@William T. Riker, Worf"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: G_AWAYTEAM#12604000904.000904
 item_count: 1
-source_fingerprint: 2c401dbf92b0dcf78360bc9a035de6b2869bcb085fac7b56490e949ee64c484d
+source_fingerprint: 196b92adeb53a23d384a2382d2c6c1b5baa37f786d9be0f3a0dcf391cc771c3a
 ---
 
 <h1 class="page-title" data-page-title-uuid="658ccd8e-50ad-527c-8cc3-401cf8b315db">@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -135,10 +135,10 @@ chat_uuid: 68000dc2-0cb1-5eb4-ba26-89498049dfa8
 markdown_uuid: 68000dc2-0cb1-5eb4-ba26-89498049dfa8
 period: all
 display: "#engineering"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: C_ENG#12604000500.000500
 item_count: 1
-source_fingerprint: ffc1aefb2687dc2f51962c518e83b3084544e09c7d7b5ecfced6e512c08724ca
+source_fingerprint: e5ae1e7ec46aac83be2b67ba4d803bbf83c6f1a3dac5b89c67d271ddbae5959d
 ---
 
 <h1 class="page-title" data-page-title-uuid="68000dc2-0cb1-5eb4-ba26-89498049dfa8">#engineering: Warp core efficiency at 99.7%. (all) <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -161,10 +161,10 @@ chat_uuid: 777b8f58-706d-549a-82b8-699fc856030e
 markdown_uuid: 777b8f58-706d-549a-82b8-699fc856030e
 period: all
 display: "@William T. Riker"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: D_RIKER#12604000900.000900
 item_count: 1
-source_fingerprint: 7b843daa85e51bc67b224671a1b38dcc8f03703e57d3f8f7caa9a01e9717b79a
+source_fingerprint: 5d8505aeb6bbfa1adaed27ed219f0aa6b80e04c9295869739cb408a2420fd651
 ---
 
 <h1 class="page-title" data-page-title-uuid="777b8f58-706d-549a-82b8-699fc856030e">@William T. Riker: Captain, the away team roster is ready for your review. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -187,10 +187,10 @@ chat_uuid: aa7f900b-31b9-5603-995a-5ed36db03478
 markdown_uuid: aa7f900b-31b9-5603-995a-5ed36db03478
 period: all
 display: "#bridge"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: C_BRIDGE#12604000400.000400
 item_count: 1
-source_fingerprint: 242ec8cb6487c372391303ec1f8465e6c4422adb8bc92b797be727216e0e4e4a
+source_fingerprint: b4ed58daf10f882cac2a1b06e2e36c4666e1c2a12e70a4af7a55356da9b74c3c
 ---
 
 <h1 class="page-title" data-page-title-uuid="aa7f900b-31b9-5603-995a-5ed36db03478">#bridge: I recommend raising shields, Captain. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -213,10 +213,10 @@ chat_uuid: b168a24b-fddb-55c2-88fe-523dec59fd5c
 markdown_uuid: b168a24b-fddb-55c2-88fe-523dec59fd5c
 period: all
 display: "@William T. Riker, Worf"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: G_AWAYTEAM#12604000903.000903
 item_count: 1
-source_fingerprint: f3ac0d187036f5e0a00dd84d8d2da20c65e44bf7d880c19fcb5ea3d5a4d21db7
+source_fingerprint: bb64cd6049915fd48ee79253a2920e490fa1ee0308594c13e01c057e6041cc9d
 ---
 
 <h1 class="page-title" data-page-title-uuid="b168a24b-fddb-55c2-88fe-523dec59fd5c">@William T. Riker, Worf: I must object to beaming down unarmed. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -239,10 +239,10 @@ chat_uuid: dcda988e-79b9-5b19-b3d7-7325524c86dd
 markdown_uuid: dcda988e-79b9-5b19-b3d7-7325524c86dd
 period: all
 display: "#ten-forward"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: C_TENFWD#12604000600.000600
 item_count: 2
-source_fingerprint: bdc2ced76c938710009dba35c1492255c8c8c778cadfb571d244ca0e15afacff
+source_fingerprint: be1c66ec2fa356432383f2eeff0235616db934386ab726bc65211e932dba79f1
 ---
 
 <h1 class="page-title" data-page-title-uuid="dcda988e-79b9-5b19-b3d7-7325524c86dd">#ten-forward: Anyone up for poker tonight? (all) <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -275,10 +275,10 @@ chat_uuid: e5c54890-5a44-5a3d-9efe-e28b37b48edf
 markdown_uuid: e5c54890-5a44-5a3d-9efe-e28b37b48edf
 period: all
 display: "@Lt. Cmdr. Data"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: D_DATA#12604000902.000902
 item_count: 1
-source_fingerprint: 073699116fda6f8c195635b9ee2def77ad99c15d77f85b1057c8b22631fec753
+source_fingerprint: 361388f7c01ccda9574660bf6ea8432f54644220605f391bd0fb3e2527d74223
 ---
 
 <h1 class="page-title" data-page-title-uuid="e5c54890-5a44-5a3d-9efe-e28b37b48edf">@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all) <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -303,10 +303,10 @@ chat_uuid: efd7f060-7cc7-508b-811f-afbb133a9ff6
 markdown_uuid: efd7f060-7cc7-508b-811f-afbb133a9ff6
 period: all
 display: "#bridge"
-account: T_NCC1701D
+account: picard@enterprise.starfleet
 external_id: C_BRIDGE#12604000700.000700
 item_count: 1
-source_fingerprint: 3fa3978cfb10d1a5840823a5e818201be3b6b72e184d07ecd4133833db3ca98e
+source_fingerprint: da4de64c00db4a34614402ebabbc9c2fba6caf8b43758fcd73907a8a78d5f7e0
 ---
 
 <h1 class="page-title" data-page-title-uuid="efd7f060-7cc7-508b-811f-afbb133a9ff6">#bridge: New combadge prototypes — thoughts? (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>

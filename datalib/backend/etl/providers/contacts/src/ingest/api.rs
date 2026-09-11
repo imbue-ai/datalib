@@ -455,9 +455,7 @@ pub fn vcard_all(vcard: &str, name: &str) -> Vec<VcardProp> {
     let unfolded = unfold_vcard_lines(vcard);
     let mut out = Vec::new();
     for line in unfolded.lines() {
-        let head_end = line.find([':', ';']).unwrap_or(line.len());
-        let prop = &line[..head_end];
-        if !prop.eq_ignore_ascii_case(name) {
+        if !property_name(line).eq_ignore_ascii_case(name) {
             continue;
         }
         let Some(colon) = line.find(':') else {
@@ -506,14 +504,20 @@ impl VcardProp {
     }
 }
 
+/// The property name of one unfolded line, `NAME[;params]:value`,
+/// without the optional `group.` prefix RFC 6350 §3.3 allows — Apple
+/// and Google both write `item1.EMAIL;…` for a labelled address, and a
+/// matcher that keeps the prefix drops every one of those.
+fn property_name(line: &str) -> &str {
+    let head_end = line.find([':', ';']).unwrap_or(line.len());
+    let head = &line[..head_end];
+    head.rsplit_once('.').map_or(head, |(_, name)| name)
+}
+
 fn extract_property(vcard: &str, name: &str) -> Option<String> {
     let unfolded = unfold_vcard_lines(vcard);
     for line in unfolded.lines() {
-        // Property lines are `NAME[;params]:value`. Match the prefix
-        // before any `;` or `:`.
-        let head_end = line.find([':', ';']).unwrap_or(line.len());
-        let prop = &line[..head_end];
-        if prop.eq_ignore_ascii_case(name) {
+        if property_name(line).eq_ignore_ascii_case(name) {
             if let Some(colon) = line.find(':') {
                 let value = line[colon + 1..].trim().to_string();
                 if !value.is_empty() {
@@ -573,6 +577,29 @@ pub fn deleted_hrefs(ms: &Multistatus) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A grouped property (`item1.EMAIL`) is the same property. Every
+    /// email-only card in a real Google export was rendering with no
+    /// fields at all because the matcher compared the whole `item1.EMAIL`.
+    #[test]
+    fn grouped_properties_match_by_their_name() {
+        let card = "BEGIN:VCARD\nitem1.EMAIL;TYPE=INTERNET:a@x.test\nitem1.X-ABLabel:\nEMAIL;TYPE=WORK:b@x.test\nitem2.TEL:+1-555\nEND:VCARD";
+        let emails: Vec<String> = vcard_all(card, "EMAIL")
+            .into_iter()
+            .map(|p| p.value)
+            .collect();
+        assert_eq!(emails, vec!["a@x.test", "b@x.test"]);
+        assert_eq!(
+            vcard_all(card, "EMAIL")[0].params,
+            vec![("TYPE".to_string(), "INTERNET".to_string())]
+        );
+        assert_eq!(extract_property(card, "TEL").as_deref(), Some("+1-555"));
+        assert_eq!(
+            extract_property(card, "X-ABLabel"),
+            None,
+            "blank value stays absent"
+        );
+    }
 
     /// Fastmail-shaped current-user-principal response (lowercase
     /// `d:` prefix). Verifies our parser is namespace-prefix

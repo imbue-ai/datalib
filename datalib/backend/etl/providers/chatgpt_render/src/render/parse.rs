@@ -154,6 +154,19 @@ pub struct ParsedChatGPTApi {
     pub vanished_buckets: Vec<String>,
 }
 
+impl ParsedChatGPTApi {
+    /// What the grid's Account column shows for one `me.id`: the email
+    /// off the `me` row, else its name, else the id itself.
+    pub fn account_label(&self, account_id: &str) -> Option<String> {
+        let row = self.accounts.iter().find(|a| a.account_id == account_id);
+        datalib_etl_chat_common::account_label(
+            account_id,
+            row.and_then(|a| a.email.as_deref()),
+            row.and_then(|a| a.name.as_deref()),
+        )
+    }
+}
+
 fn epoch_to_iso(v: &Value) -> Option<String> {
     match v {
         Value::Null => None,
