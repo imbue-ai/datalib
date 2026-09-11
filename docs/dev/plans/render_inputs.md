@@ -137,8 +137,11 @@ probe exists only because the forward projection lost track of which
 document that row belonged to. `render_inputs` is what lets the diff's
 own `removed` rows name the document directly.
 
-Three conditions turn "assume" into "ensure", and the tree fails two of
-them today:
+Three conditions turn "assume" into "ensure". The tree was audited
+against the first two on 2026-09-11 —
+[`deletion_record_audit_2026_09_11.md`](deletion_record_audit_2026_09_11.md)
+— and fails both, in more places than the paragraphs below name; read
+the audit before treating any of this as held:
 
 1. **Never lose the range.** The render cursor (`_render_cursor.json`)
    names the `from_ref`. Lose it and there is no diff, and with no diff
@@ -430,11 +433,14 @@ work downstream of them — are skipped. It costs one map load.
    by instrumenting one provider's loader; check it against the
    `grid_rows` count there. If it is not within small-integer multiples,
    revisit the bucket-level keying before writing any DDL.
-1. **Keep the range.** Move the render cursor into the render store,
-   stop `discard_tree` on a version bump (re-render in place), and
-   stop wiping the cursor on `--reset-and-redownload`. Independent of
-   the rest and worth landing first: it is the condition everything
-   else assumes, and today's code fails it.
+1. **Keep the range, and stop committing torn stores.** The audit's
+   §"What to fix" items 1–7: the cursor into the render store, no
+   `discard_tree`, a param change as "render everything", wipe-at-end
+   (or an interrupt hook and rescue that honour a wipe), the slack
+   applet on `open_reader`. Independent of the rest and worth landing
+   first: it is the condition everything else assumes, and today's
+   code fails it — reset does *not* wipe the cursor, whatever the
+   recipe says; what it does is commit the wipe on Ctrl-C.
 2. **The store.** `render_inputs` DDL in `datalib_schema`,
    `markdowns.bucket_key`, `declare_bucket` on `RenderCtx`,
    `bucket_key` on `RenderedMarkdown`. The driver writes both; the scan

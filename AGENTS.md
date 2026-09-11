@@ -240,6 +240,13 @@ reference doc it relates to.
   exist today and the routes by which a document gets deleted and
   added back, and says which of those it fixes and which (a checkpoint
   taken mid-wipe) it cannot.
+  [`deletion_record_audit_2026_09_11.md`](docs/dev/plans/deletion_record_audit_2026_09_11.md)
+  is that proposal's first two conditions checked against the tree —
+  measurement, not intent. Read it before touching `discard_tree`,
+  `_render_cursor.json`, the Ctrl-C checkpoint hook, or
+  `rescue_dirty_working_tree`: each is a way the deletion record is
+  lost or a torn commit lands in history, and it says which are
+  reachable through the runner (none) and by hand (two).
 - [`docs/dev/plans/multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md)
   — *proposal*, nothing built: replacing the `qmd_index` step with a
   retrieval layer that takes an arbitrary `grid_rows` metadata
