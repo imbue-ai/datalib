@@ -241,12 +241,16 @@ state for *every* step (including ones that were skipped or blocked and
 never "ran"), a `finished_at` that distinguishes a completed run from a
 crashed one, and per-step timings.
 
-The run id is the pinned `DATALIB_DAG_NOW`, verbatim. `datalib-dag` mints
-that value and hands it to the run store (`system/runs.sqlite`) as the run
-id *before* calling `run`, so the two derive the same string independently.
-If they diverge nothing errors — the store describes a run nobody is
+The run id is `DATALIB_DAG_RUN_ID`, verbatim — a UUID v7 `datalib-dag`
+mints (or takes from `--run-id`; the http worker passes its job id, so
+the job row *is* the run). The binary puts it in the child environment
+and hands the same string to the run store (`system/runs.sqlite`)
+*before* calling `run`, and `Runner` reads it back out of that
+environment, so the record, the store and every step name one run. If
+they diverge nothing errors — the store describes a run nobody is
 displaying, `/api/dag` filters every row out on the id mismatch, and the
-UI silently shows no progress at all.
+UI silently shows no progress at all. `started_at` stays the pinned
+`DATALIB_DAG_NOW`.
 
 State is saved on `running`, not only on terminal states. That file is the
 only channel to a reader who did not spawn the run, so without the

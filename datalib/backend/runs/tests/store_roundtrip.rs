@@ -258,6 +258,30 @@ async fn a_corrupt_store_is_replaced() {
     assert_eq!(log_after(td.path(), "run-1", None, 0, 10).await.len(), 1);
 }
 
+/// A store written by another schema version is remade, not migrated
+/// and not fatal — the same trade as a corrupt file.
+#[tokio::test]
+async fn a_store_from_another_schema_version_is_replaced() {
+    let td = tempfile::tempdir().unwrap();
+    {
+        let w = start(td.path(), "run-1");
+        w.log(line("a", "info", "from before"));
+    }
+    let path = datalib_runs::runs_path(td.path());
+    let pool = datalib_runs::open_or_create(&path).await.unwrap();
+    sqlx::query("PRAGMA user_version = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    {
+        let w = start(td.path(), "run-2");
+        w.log(line("a", "info", "after"));
+    }
+    assert!(log_after(td.path(), "run-1", None, 0, 10).await.is_empty());
+    assert_eq!(log_after(td.path(), "run-2", None, 0, 10).await.len(), 1);
+}
+
 /// The property the whole design is for: a reader can read *while* the
 /// writer is writing, without contending. Here the reader is a separate
 /// connection opened per poll, which is what `datalib-http` does.

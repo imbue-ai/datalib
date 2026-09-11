@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
-use crate::{is_terminal, runs_path, Retention, SCHEMA};
+use crate::{is_terminal, runs_path, Retention, SCHEMA, SCHEMA_VERSION};
 
 /// How often the writer thread flushes. 200ms is under the threshold
 /// where a progress display reads as laggy, and far above the cost of
@@ -84,29 +84,65 @@ fn remove_with_sidecars(path: &Path) {
 }
 
 /// Open the store and make sure its schema is there, replacing a file
-/// that will not open. `synchronous=Off` means an OS crash can leave an
-/// unreadable file behind, and losing old logs is a better outcome than
-/// a run that refuses to start.
+/// that will not open or was written by another schema version.
+/// `synchronous=Off` means an OS crash can leave an unreadable file
+/// behind, and losing old logs is a better outcome than a run that
+/// refuses to start.
 async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
-    let first = match open_or_create(path).await {
-        Ok(pool) => match sqlx::raw_sql(SCHEMA).execute(&pool).await {
-            Ok(_) => return Ok(pool),
+    let why = match open_or_create(path).await {
+        Ok(pool) => match schema_matches(&pool).await {
+            Ok(true) => return Ok(pool),
+            Ok(false) => {
+                pool.close().await;
+                "written by another schema version".to_string()
+            }
             Err(e) => {
                 pool.close().await;
-                e
+                e.to_string()
             }
         },
-        Err(e) => e,
+        Err(e) => e.to_string(),
     };
     tracing::warn!(
         path = %path.display(),
-        error = %first,
-        "run store: could not open; deleting it and starting a fresh one"
+        why,
+        "run store: replacing the file"
     );
     remove_with_sidecars(path);
     let pool = open_or_create(path).await?;
-    sqlx::raw_sql(SCHEMA).execute(&pool).await?;
+    install_schema(&pool).await?;
     Ok(pool)
+}
+
+/// `true` when the file carries this build's schema; `false` for another
+/// version's. A brand-new file (version 0, no tables) gets the schema
+/// installed and reads as a match.
+async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    let version: i32 = sqlx::query_scalar("PRAGMA user_version")
+        .fetch_one(pool)
+        .await?;
+    if version == SCHEMA_VERSION {
+        return Ok(true);
+    }
+    let tables: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'")
+        .fetch_one(pool)
+        .await?;
+    if version == 0 && tables == 0 {
+        install_schema(pool).await?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+async fn install_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::raw_sql(SCHEMA).execute(pool).await?;
+    // Safe: a compile-time integer, not input.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "PRAGMA user_version = {SCHEMA_VERSION}"
+    )))
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// One step's state in one run, as a reader sees it.
@@ -131,10 +167,19 @@ pub struct LogRow {
     pub seq: i64,
     /// `None` for a line about the run rather than one step.
     pub step: Option<String>,
+    /// Which invocation of the step within the run; 0 when unknown.
+    pub attempt: u32,
+    /// The line's own timestamp when it carried one, else when the
+    /// runner saw it.
     pub ts: String,
+    /// `stdout` or `stderr` for a subprocess's line; `None` for one the
+    /// runner wrote.
+    pub stream: Option<String>,
     pub level: String,
     /// The tracing target, when the line was structured tracing output.
     pub target: Option<String>,
+    /// The thread that wrote it, when the line said.
+    pub thread: Option<String>,
     pub msg: String,
     /// A JSON object of the structured fields beyond the message, when
     /// there were any.
@@ -261,7 +306,7 @@ pub async fn log_after(
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT seq, step, ts, level, target, msg, fields FROM log \
+        "SELECT seq, step, attempt, ts, stream, level, target, thread, msg, fields FROM log \
          WHERE run_id = ? AND seq > ? AND (? IS NULL OR step = ?) \
          ORDER BY seq LIMIT ?",
     )
@@ -278,9 +323,12 @@ pub async fn log_after(
         .map(|r| LogRow {
             seq: r.get("seq"),
             step: r.get("step"),
+            attempt: r.get::<i64, _>("attempt") as u32,
             ts: r.get("ts"),
+            stream: r.get("stream"),
             level: r.get("level"),
             target: r.get("target"),
+            thread: r.get("thread"),
             msg: r.get("msg"),
             fields: r.get("fields"),
         })
@@ -529,13 +577,17 @@ async fn flush(
     }
     for l in &batch.logs {
         sqlx::query(
-            "INSERT INTO log (run_id, step, ts, level, target, msg, fields) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO log (run_id, step, attempt, ts, stream, level, target, thread, msg, fields) \
+             VALUES (?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(run_id)
         .bind(&l.step)
+        .bind(l.attempt as i64)
         .bind(&l.ts)
+        .bind(&l.stream)
         .bind(&l.level)
         .bind(&l.target)
+        .bind(&l.thread)
         .bind(&l.msg)
         .bind(&l.fields)
         .execute(&mut *tx)
