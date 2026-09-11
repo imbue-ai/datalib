@@ -219,7 +219,6 @@ fn render_one(
         created_at: t.doc_created_at.as_deref(),
         modified_at: t.doc_modified_at.as_deref(),
         qmd_path: Some(&qmd_rel),
-        source_id,
     };
     let rows = grid_rows::rows_for_document(&meta, &page_rows);
 

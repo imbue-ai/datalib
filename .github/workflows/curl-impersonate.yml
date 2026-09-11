@@ -1,0 +1,190 @@
+# Builds `curl-impersonate` from source and publishes the binaries as a
+# GitHub release of this repo, which MODULE.bazel then pins by sha256.
+#
+# Why we build it ourselves rather than downloading lexiforest's
+# prebuilts: the impersonating curl is the process latchkey hands live
+# session cookies to. Its source is small enough to read (two patches
+# over hash-pinned upstream curl and BoringSSL), but upstream publishes
+# no attestation linking its release binaries to that source. Building
+# here closes that gap: every byte we ship traces to a commit we named
+# and a run whose log is ours. See docs/dev/curl_impersonate.md.
+#
+# What is pinned where:
+#   third-party/curl-impersonate/pin.env   the upstream commit and our
+#                                          release tag (this file reads it)
+#   MODULE.bazel                           the published tarballs' sha256s
+#
+# Triggers: `workflow_dispatch` once this file is on main; the
+# `curl-impersonate/**` branch pattern is for the run that has to happen
+# *before* that — a PR bumping the pin needs the release to exist so it
+# can pin the hashes. Both publish. A release tag that already exists
+# fails the run rather than overwriting bytes MODULE.bazel may pin.
+#
+# Six legs, one per triple in release.yml, all running
+# third-party/curl-impersonate/build.sh. The linux-musl legs run it
+# inside an `alpine:3.21` container via `docker run`, so the C compiler
+# is a distro package rather than a fetched cross toolchain — `docker
+# run` rather than the job-level `container:` because GitHub cannot run
+# its JavaScript actions (checkout, upload-artifact) inside an Alpine
+# container on an arm64 runner.
+name: curl-impersonate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "curl-impersonate/**"
+
+permissions:
+  contents: write  # gh release create
+
+jobs:
+  build:
+    name: build (${{ matrix.triple }})
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: aarch64-apple-darwin
+            runs-on: macos-14
+          - triple: x86_64-apple-darwin
+            runs-on: macos-15-intel
+          - triple: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+          - triple: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm
+          - triple: x86_64-unknown-linux-musl
+            runs-on: ubuntu-latest
+          - triple: aarch64-unknown-linux-musl
+            runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read the pin
+        id: pin
+        run: |
+          set -euo pipefail
+          grep -v '^#' third-party/curl-impersonate/pin.env >> "$GITHUB_OUTPUT"
+
+      - name: Install build tools (ubuntu)
+        if: startsWith(matrix.runs-on, 'ubuntu') && endsWith(matrix.triple, '-gnu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build perl golang-go patch file
+
+      - name: Install build tools (macos)
+        if: startsWith(matrix.runs-on, 'macos')
+        run: |
+          for tool in cmake ninja go; do
+              command -v "$tool" >/dev/null 2>&1 || brew install "$tool"
+          done
+
+      - name: Fetch upstream at the pinned commit
+        env:
+          UPSTREAM_TAG: ${{ steps.pin.outputs.UPSTREAM_TAG }}
+          UPSTREAM_COMMIT: ${{ steps.pin.outputs.UPSTREAM_COMMIT }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${UPSTREAM_TAG}" https://github.com/lexiforest/curl-impersonate.git upstream
+          actual="$(git -C upstream rev-parse HEAD)"
+          if [[ "${actual}" != "${UPSTREAM_COMMIT}" ]]; then
+              echo "ERROR: tag ${UPSTREAM_TAG} resolves to ${actual}, pin.env says ${UPSTREAM_COMMIT}" >&2
+              exit 1
+          fi
+
+      - name: Build
+        env:
+          TRIPLE: ${{ matrix.triple }}
+          UPSTREAM_COMMIT: ${{ steps.pin.outputs.UPSTREAM_COMMIT }}
+          BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          case "${TRIPLE}" in
+              *-linux-musl)
+                  docker run --rm -v "${PWD}:/work" -w /work \
+                      -e UPSTREAM_COMMIT -e BUILD_URL \
+                      alpine:3.21 sh -c '
+                          set -e
+                          apk add --no-cache bash ninja cmake make patch linux-headers build-base perl go file tar >/dev/null
+                          third-party/curl-impersonate/build.sh "$0" upstream out
+                      ' "${TRIPLE}"
+                  ;;
+              *)
+                  third-party/curl-impersonate/build.sh "${TRIPLE}" upstream out
+                  ;;
+          esac
+
+      # The musl binaries are static, so this runs on the host for every
+      # leg. JA4 is order-independent (stable across handshakes); this is
+      # what a real Chromium presented when the pin was made.
+      - name: Smoke-test the fingerprint
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          bin="out/curl-impersonate-${TRIPLE}/curl-impersonate"
+          "${bin}" -sS --compressed --impersonate chrome150 https://tls.browserleaks.com/json > fp.json
+          cat fp.json
+          grep -q '"ja4": *"t13d1516h2_8daaf6152771_' fp.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: curl-impersonate-${{ matrix.triple }}
+          path: out/curl-impersonate-${{ matrix.triple }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read the pin
+        id: pin
+        run: |
+          set -euo pipefail
+          grep -v '^#' third-party/curl-impersonate/pin.env >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.pin.outputs.RELEASE_TAG }}
+          UPSTREAM_TAG: ${{ steps.pin.outputs.UPSTREAM_TAG }}
+          UPSTREAM_COMMIT: ${{ steps.pin.outputs.UPSTREAM_COMMIT }}
+        run: |
+          set -euo pipefail
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+              echo "ERROR: release ${RELEASE_TAG} already exists; bump BUILD in pin.env" >&2
+              exit 1
+          fi
+          cd assets
+          sha256sum curl-impersonate-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          notes="$(cat <<EOF
+          \`curl-impersonate\` built from source at [lexiforest/curl-impersonate ${UPSTREAM_TAG}](https://github.com/lexiforest/curl-impersonate/tree/${UPSTREAM_COMMIT}) (\`${UPSTREAM_COMMIT}\`) by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}.
+
+          Not a datalib release: these are the impersonating-curl binaries MODULE.bazel pins. See \`docs/dev/curl_impersonate.md\`.
+
+          \`\`\`
+          $(cat SHA256SUMS)
+          \`\`\`
+          EOF
+          )"
+          # `--latest=false`: scripts/install.sh resolves
+          # releases/latest/download/…, which must keep pointing at a
+          # datalib release.
+          gh release create "${RELEASE_TAG}" \
+              --target "${GITHUB_SHA}" \
+              --latest=false \
+              --title "${RELEASE_TAG}" \
+              --notes "${notes}" \
+              curl-impersonate-*.tar.gz SHA256SUMS

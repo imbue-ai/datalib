@@ -3,7 +3,6 @@
 
 use datalib_etl_render::processor::RenderPass;
 use std::collections::HashMap;
-use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::progress::Progress;
@@ -18,6 +17,8 @@ use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
 use datalib_etl_linkedin::ingest::schema_raw::{connection_uuid, ns_id};
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
+use crate::processor::Source;
+
 use crate::render::RENDER_VERSION;
 use datalib_schema::providers::Provider;
 
@@ -30,9 +31,7 @@ const GROUP_LABEL: &str = "Connections";
 const FIELD_COLUMNS: &[&str] = &["Company", "Position", "Email Address", "Connected On"];
 
 pub fn render_connections(
-    raw_dir: &Path,
-    out_dir: &Path,
-    source_id: &str,
+    source: &Source<'_>,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -41,6 +40,12 @@ pub fn render_connections(
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderPass> {
+    let Source {
+        raw_dir,
+        out_dir,
+        name: source_id,
+        account,
+    } = *source;
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(RenderPass::Skipped);
@@ -99,6 +104,7 @@ pub fn render_connections(
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         contact_kind: "Contact".to_string(),
+        account: account.map(str::to_string),
         render_version: RENDER_VERSION,
     };
     let s = cc_render_all(

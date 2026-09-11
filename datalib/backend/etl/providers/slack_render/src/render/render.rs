@@ -18,7 +18,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 
-use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
+use super::mrkdwn::{emojize_shortcodes, resolve_mentions, to_commonmark, Labels};
 use super::{slack_link, ts_to_ms, Message, ParsedSlack};
 use datalib_schema::providers::Provider;
 
@@ -34,7 +34,9 @@ use datalib_schema::providers::Provider;
 ///     real-looking `1970-01-01T00:00:00` — see
 ///     `docs/dev/data_architecture_parse_and_render.md` §6. Any document
 ///     holding such a row renders differently, so stale docs must go.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: `account` is the login's email rather than the `T…` workspace
+///     id; the workspace moves to `org_name` / `org_uuid`.
+pub const RENDER_VERSION: u32 = 6;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -86,8 +88,17 @@ pub fn render_all(
         .iter()
         .map(|(id, u)| (id.clone(), u.label()))
         .collect();
+    let channel_labels: BTreeMap<String, String> = parsed
+        .channels
+        .iter()
+        .filter_map(|(id, c)| Some((id.clone(), c.name.clone()?)))
+        .collect();
+    let labels = Labels {
+        users: &user_labels,
+        channels: &channel_labels,
+    };
 
-    let (chats, blobs_by_chat) = build_chats(parsed, &user_labels);
+    let (chats, blobs_by_chat) = build_chats(parsed, labels);
 
     // Incremental skip is driven upstream by dolt_diff, so the
     // fingerprint map is intentionally empty: every changed thread that
@@ -123,7 +134,7 @@ pub fn render_all(
 
 fn build_chats(
     parsed: &ParsedSlack,
-    user_labels: &BTreeMap<String, String>,
+    labels: Labels<'_>,
 ) -> (Vec<NormalizedChat>, HashMap<String, BlobBundle>) {
     // Who this mirror belongs to, from `auth.test`. Used to subtract
     // the account itself out of a group DM's participant list when
@@ -132,6 +143,14 @@ fn build_chats(
         .workspace
         .as_ref()
         .and_then(|w| w.self_user_id.as_deref());
+    let account = parsed.account_label();
+    // The workspace is the organization this login lives in, which is
+    // what `org_name` means for Claude's Team workspaces too.
+    let org_name = parsed
+        .workspace
+        .as_ref()
+        .and_then(|w| w.team_name.clone())
+        .filter(|n| !n.trim().is_empty());
     let mut chats = Vec::with_capacity(parsed.threads.len());
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
 
@@ -145,7 +164,7 @@ fn build_chats(
         // `#<channel_id>` when the channel row never arrived — the same
         // fallback this line has always had. See `Channel::display`.
         let cname = match parsed.channels.get(&root.channel_id) {
-            Some(c) => c.display(user_labels, self_user_id),
+            Some(c) => c.display(labels.users, self_user_id),
             None => format!("#{}", root.channel_id),
         };
         let thread_uuid = bucket.thread_uuid.clone();
@@ -153,12 +172,12 @@ fn build_chats(
         let items: Vec<NormalizedChatItem> = bucket
             .messages
             .iter()
-            .map(|m| build_item(m, root, user_labels))
+            .map(|m| build_item(m, root, labels))
             .collect();
 
         // "#channel: <root snippet>" preserves the old scannable H1; the
         // bare "#channel" remains the conversation_name (via `display`).
-        let title = format!("{cname}: {}", thread_title(&root.text, user_labels));
+        let title = format!("{cname}: {}", thread_title(&root.text, labels));
 
         chats.push(NormalizedChat {
             path_prefix: None,
@@ -167,7 +186,7 @@ fn build_chats(
             display: cname,
             title: Some(title),
             author: None,
-            account: Some(root.team_id.clone()),
+            account: account.clone(),
             project: None,
             // The exact natural key the thread's `uuid` was minted
             // from — `{channel_id}#{thread_ts}`, the tuple
@@ -184,8 +203,8 @@ fn build_chats(
             // `Scope::Upstream(team_id)`; the round-trip check
             // recomputes `uuid` from this exact string.
             upstream_scope: Some(root.team_id.clone()),
-            org_uuid: None,
-            org_name: None,
+            org_uuid: Some(root.team_id.clone()),
+            org_name: org_name.clone(),
             buckets: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
                 period_key: "all".to_string(),
@@ -198,19 +217,15 @@ fn build_chats(
     (chats, blobs_by_chat)
 }
 
-fn build_item(
-    m: &Message,
-    root: &Message,
-    user_labels: &BTreeMap<String, String>,
-) -> NormalizedChatItem {
+fn build_item(m: &Message, root: &Message, labels: Labels<'_>) -> NormalizedChatItem {
     let author_display = m
         .user_id
         .as_deref()
-        .and_then(|u| user_labels.get(u).cloned())
+        .and_then(|u| labels.users.get(u).cloned())
         .unwrap_or_else(|| m.user_id.clone().unwrap_or_else(|| "unknown".into()));
-    let body = to_commonmark(m.text.trim_end(), user_labels);
+    let body = to_commonmark(m.text.trim_end(), labels);
     let attachments = build_attachments(&m.raw_json);
-    let reactions = build_reactions(&m.raw_json, m, user_labels);
+    let reactions = build_reactions(&m.raw_json, m, labels.users);
     let kind = if attachments.is_empty() {
         ItemKind::Text
     } else {
@@ -238,8 +253,8 @@ fn build_item(
     }
 }
 
-fn thread_title(root_text: &str, user_labels: &BTreeMap<String, String>) -> String {
-    let resolved = resolve_user_mentions(root_text, user_labels);
+fn thread_title(root_text: &str, labels: Labels<'_>) -> String {
+    let resolved = resolve_mentions(root_text, labels);
     let first = resolved
         .lines()
         .map(str::trim)

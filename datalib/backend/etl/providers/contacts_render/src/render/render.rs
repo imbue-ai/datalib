@@ -20,8 +20,9 @@ use datalib_schema::providers::Provider;
 /// Bump when the rendered layout changes enough that every existing
 /// contact doc needs re-rendering. Bumped to 2 when contacts adopted the
 /// shared contact-common layout (uuid-named files, generic frontmatter,
-/// richer grid-row search text).
-pub const RENDER_VERSION: u32 = 2;
+/// richer grid-row search text); to 3 when `account` stopped carrying
+/// the source name.
+pub const RENDER_VERSION: u32 = 3;
 
 pub fn render_all(
     parsed: &ParsedContacts,
@@ -39,6 +40,8 @@ pub fn render_all(
         provider: Provider::Contacts,
         source_label: humanize_source_label(source_id),
         contact_kind: "Contact".to_string(),
+        // A `.vcf` file has no login behind it.
+        account: None,
         render_version: RENDER_VERSION,
     };
     let contacts: Vec<NormalizedContact> = parsed

@@ -100,19 +100,18 @@ or a machine whose `chatgpt` service you would rather not deregister.
    resolved token, so nothing sensitive lands in `~/.zsh_history`.
 
 `chatgpt.com` is fronted by Cloudflare's managed-challenge system,
-which fingerprints TLS handshakes. To clear the challenge, point
-`LATCHKEY_CURL` at a Chrome-impersonating curl. The simplest option
-is the in-tree `latchkey-curl-impersonate` bin (a `wreq`-backed shim, mirror
-of `src/ingest/latchkey_curl_impersonate.py`):
+which fingerprints TLS handshakes. To clear the challenge, requests go
+out through a Chrome-impersonating curl — the bundled
+`curl-impersonate`, reached via the dispatch curl
+(`docs/dev/curl_impersonate.md`). Leave `LATCHKEY_CURL` unset and the
+downloader finds the dispatch itself; to set it by hand, point it at
+the **dispatch**, which brings the impersonator along as a sibling:
 
 ```sh
-bazelisk build //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate"
+bazelisk build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch"
 chatgpt-ingest --out ~/backups/chatgpt_api
 ```
-
-A standalone `curl-impersonate` binary works too — point
-`LATCHKEY_CURL` at it instead.
 
 ### Why no `cf_clearance` cookie?
 
@@ -123,9 +122,9 @@ Cloudflare gates clients with two layered checks:
    fingerprint is suspect, to certify "this client passed the
    challenge once."
 
-Because the shim performs a Chrome 131 handshake from byte zero
-(boring-ssl + the same cipher suite ordering / ALPN / extensions as
-real Chrome), Cloudflare never elevates us to the challenge tier in
+Because `curl-impersonate` performs a Chrome handshake from byte zero
+(patched BoringSSL + the same cipher suite ordering / ALPN / extensions
+as real Chrome), Cloudflare never elevates us to the challenge tier in
 the first place. The `cf_clearance` cookie therefore never gets
 issued and is not needed in the latchkey credential set — a single
 `Authorization: Bearer …` header is the full auth surface.

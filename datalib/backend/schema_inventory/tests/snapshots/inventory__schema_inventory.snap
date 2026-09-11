@@ -1115,6 +1115,14 @@ wa_jid
     agent
     device
     type
+wa_jid_map
+    lid_jid
+    jid
+    sort_id
+wa_lid_display_name
+    lid_jid
+    display_name
+    username
 wa_media_files
     blake3
     relative_path

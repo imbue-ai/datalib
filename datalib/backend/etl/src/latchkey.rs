@@ -81,9 +81,9 @@ fn resolve() -> Option<PathBuf> {
     which_on_path(DISPATCH_BIN)
 }
 
-/// Look for the shim next to `current_exe()`. This is how an installed
-/// release (e.g. `~/.local/bin/datalib-step`)
-/// finds its bundled `latchkey-curl-impersonate` sibling without
+/// Look for the dispatch curl next to `current_exe()`. This is how an
+/// installed release (e.g. `~/.local/bin/datalib-step`)
+/// finds its bundled `latchkey-curl-dispatch` sibling without
 /// needing `~/.local/bin` on `PATH` or any env override. Follow the
 /// symlink that scripts/install.sh resolved to so we look in the real
 /// install dir, not a shim dir.

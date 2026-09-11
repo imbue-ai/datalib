@@ -112,9 +112,9 @@ ID_SEP = "\x1f"
 SCOPE_TAG_BY_PROVIDER = {
     "claude": ("pg", ""),
     "chatgpt": ("pg", ""),
-    # Slack scopes on `team_id`, which the row carries in `account`.
-    # Resolved per-row rather than from a constant here — see
-    # `_roundtrip_failures`.
+    # Slack scopes on `team_id`, which the row carries in
+    # `upstream_scope`. Resolved per-row rather than from a constant
+    # here — see `_roundtrip_failures`.
     "slack": ("up", None),
 }
 

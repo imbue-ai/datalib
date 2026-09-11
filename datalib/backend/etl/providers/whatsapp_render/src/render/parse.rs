@@ -75,8 +75,10 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
         .await
         .context("pin the whatsapp raw store for render")?;
 
+    let names = JidNames::load(&pool).await?;
+
     // 1) Pull every chat with its display label. Group chats use
-    //    `subject`; 1:1 chats fall back to the JID's local part.
+    //    `subject`; 1:1 chats fall back to what the JID resolves to.
     let chat_rows = sqlx::query(
         "SELECT chat_jid, subject, group_type FROM pinned_wa_chat wa_chat ORDER BY chat_jid",
     )
@@ -89,7 +91,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
             let chat_jid: String = r.get("chat_jid");
             let subject: Option<String> = r.get("subject");
             let group_type: Option<i64> = r.get("group_type");
-            let display = subject.clone().unwrap_or_else(|| label_from_jid(&chat_jid));
+            let display = subject.clone().unwrap_or_else(|| names.label(&chat_jid));
             ChatHeader {
                 chat_jid,
                 display,
@@ -213,7 +215,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
         let emoji: Option<String> = r.get("reaction");
         let timestamp: Option<i64> = r.get("timestamp");
         let reactor_display = match sender_jid.as_deref() {
-            Some(j) => label_from_jid(j),
+            Some(j) => names.label(j),
             None if add_on_from_me == 1 => "Me".to_string(),
             None => "?".to_string(),
         };
@@ -243,7 +245,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
             // Orphan message — chat row missing. Synthesize a
             // placeholder chat so the message still surfaces; downstream
             // search will show it under a `(unknown chat)` heading.
-            let display = label_from_jid(&chat_jid);
+            let display = names.label(&chat_jid);
             let header = ChatHeader {
                 chat_jid: chat_jid.clone(),
                 display: display.clone(),
@@ -268,6 +270,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
                 &key_id,
                 from_me,
                 r,
+                &names,
                 &mut media_by_msg,
                 &mut reactions_by_parent,
             );
@@ -295,6 +298,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
             &key_id,
             from_me,
             r,
+            &names,
             &mut media_by_msg,
             &mut reactions_by_parent,
         );
@@ -400,6 +404,7 @@ fn build_item(
     key_id: &str,
     from_me: i64,
     r: &sqlx::sqlite::SqliteRow,
+    names: &JidNames,
     media_by_msg: &mut HashMap<(String, String, i64), Vec<NormalizedAttachment>>,
     reactions_by_parent: &mut HashMap<(String, String, i64), Vec<NormalizedReaction>>,
 ) -> NormalizedChatItem {
@@ -411,10 +416,10 @@ fn build_item(
     let author_display = if from_me == 1 {
         "Me".to_string()
     } else if let Some(j) = sender_jid.clone() {
-        label_from_jid(&j)
+        names.label(&j)
     } else {
         // 1:1 incoming: the chat JID IS the sender, by definition.
-        label_from_jid(chat_jid)
+        names.label(chat_jid)
     };
     let author_id = sender_jid
         .clone()
@@ -479,6 +484,52 @@ struct ChatHeader {
     _subject_kept_for_search: Option<String>,
 }
 
+/// What msgstore knows about who a JID is. A `…@lid` (linked id) is an
+/// opaque number; `lid_display_name` may name it and `jid_map` may say
+/// which phone number it stands for. Neither table is total — the
+/// measured backup mapped 5 of 6 `@lid` chats and named none — so the
+/// raw JID stays as the last resort, and `label_from_jid` is what makes
+/// a phone-number JID dialable.
+#[derive(Default)]
+struct JidNames {
+    display_name: HashMap<String, String>,
+    phone_jid: HashMap<String, String>,
+}
+
+impl JidNames {
+    async fn load(pool: &SqlitePool) -> Result<Self> {
+        let mut out = Self::default();
+        let rows = sqlx::query(
+            "SELECT lid_jid, display_name FROM pinned_wa_lid_display_name wa_lid_display_name",
+        )
+        .fetch_all(pool)
+        .await
+        .context("select wa_lid_display_name")?;
+        for r in &rows {
+            let name: String = r.get("display_name");
+            if !name.trim().is_empty() {
+                out.display_name.insert(r.get("lid_jid"), name);
+            }
+        }
+        let rows = sqlx::query("SELECT lid_jid, jid FROM pinned_wa_jid_map wa_jid_map")
+            .fetch_all(pool)
+            .await
+            .context("select wa_jid_map")?;
+        for r in &rows {
+            out.phone_jid.insert(r.get("lid_jid"), r.get("jid"));
+        }
+        Ok(out)
+    }
+
+    fn label(&self, jid: &str) -> String {
+        if let Some(name) = self.display_name.get(jid) {
+            return name.clone();
+        }
+        let jid = self.phone_jid.get(jid).map(String::as_str).unwrap_or(jid);
+        label_from_jid(jid)
+    }
+}
+
 fn label_from_jid(jid: &str) -> String {
     if let Some((user, server)) = jid.split_once('@') {
         if (server.starts_with("s.whatsapp.net") || server.starts_with("c.us"))
@@ -489,4 +540,33 @@ fn label_from_jid(jid: &str) -> String {
         }
     }
     jid.to_string()
+}
+
+#[cfg(test)]
+mod jid_names_tests {
+    use super::JidNames;
+
+    /// The precedence the issue asked for: a learned name, else the
+    /// phone number behind the linked id, else the raw JID — and a
+    /// mapping that is missing must not turn into a blank.
+    #[test]
+    fn name_then_mapped_phone_then_raw_jid() {
+        let mut names = JidNames::default();
+        names.phone_jid.insert(
+            "1@lid".to_string(),
+            "17015550101@s.whatsapp.net".to_string(),
+        );
+        names.phone_jid.insert(
+            "2@lid".to_string(),
+            "17015550102@s.whatsapp.net".to_string(),
+        );
+        names
+            .display_name
+            .insert("2@lid".to_string(), "Will Riker".to_string());
+        assert_eq!(names.label("1@lid"), "+17015550101");
+        assert_eq!(names.label("2@lid"), "Will Riker");
+        assert_eq!(names.label("3@lid"), "3@lid");
+        assert_eq!(names.label("17015550105@s.whatsapp.net"), "+17015550105");
+        assert_eq!(names.label("bridge-crew@g.us"), "bridge-crew@g.us");
+    }
 }

@@ -38,7 +38,7 @@
 
     // Persist the expensive caches across container rebuilds. Without
     // this, every `Rebuild Container` repeats the ~10-minute cold
-    // boring-sys2 / tokio build (or wipes whatever the cache-warmup
+    // tokio / sqlx build (or wipes whatever the cache-warmup
     // step in the Dockerfile pre-populated). Each named volume is
     // scoped by the container name so multiple checkouts don't
     // collide.

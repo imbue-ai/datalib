@@ -34,7 +34,9 @@ use datalib_schema::providers::Provider;
 ///     inherit from — gets a null `when_ts` instead of a real-looking
 ///     `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: `account` is the login's email rather than OpenAI's opaque
+///     `user-…` id.
+pub const RENDER_VERSION: u32 = 8;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -76,7 +78,7 @@ pub fn render_all(
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     for c in &parsed.conversations {
         let shredded = shred(c);
-        let chat = build_chat(&shredded);
+        let chat = build_chat(&shredded, parsed);
         blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
         chats.push(chat);
     }
@@ -106,7 +108,7 @@ pub fn render_all(
 /// One [`NormalizedChat`] per conversation. Messages are ordered by the
 /// `current_node → root` parent walk (falling back to a `create_time`
 /// sort), one [`NormalizedChatItem`] each.
-fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
+fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> NormalizedChat {
     let conv = &shredded.conv;
     let conv_id = conv.conversation_id.clone();
 
@@ -196,7 +198,10 @@ fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
         display: title.clone(),
         title: Some(title),
         author: None,
-        account: conv.account_id.clone(),
+        account: conv
+            .account_id
+            .as_deref()
+            .and_then(|id| parsed.account_label(id)),
         project: None,
         // ChatGPT's own conversation id — the round-trip route back
         // to chatgpt.com now that `uuid` is a minted v5.

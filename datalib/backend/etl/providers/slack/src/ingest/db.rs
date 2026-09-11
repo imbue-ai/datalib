@@ -373,10 +373,9 @@ impl RawDb {
             .collect())
     }
 
-    /// Every mirrored user's ids and names, for resolving the
-    /// `dm_users` allowlist and labelling DM progress lines. Typed
-    /// columns only — no payload parse, since this runs before the
-    /// walk on every DM-enabled run.
+    /// Every mirrored user's ids and names, for labelling DMs and their
+    /// progress lines. Typed columns only — no payload parse, since
+    /// this runs before the walk on every DM-enabled run.
     pub async fn user_directory(&self) -> Result<Vec<UserDirectoryEntry>> {
         let rows = sqlx::query("SELECT id, name, real_name, display_name FROM users")
             .fetch_all(&self.pool)
@@ -697,8 +696,7 @@ pub struct FetchTarget {
     pub dm_user_ids: Vec<String>,
 }
 
-/// One user's ids and names, for resolving `dm_users` entries and
-/// labelling DMs.
+/// One user's ids and names, for labelling DMs.
 #[derive(Debug, Clone)]
 pub struct UserDirectoryEntry {
     pub id: String,

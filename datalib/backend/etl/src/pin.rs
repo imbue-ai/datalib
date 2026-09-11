@@ -154,19 +154,6 @@ fn store_filename(pool: &sqlx::SqlitePool) -> String {
     pool.connect_options().get_filename().display().to_string()
 }
 
-/// Create one `pinned_<table>` view per table on this connection, and return
-/// how many. Call it once, when a store is opened for reading.
-///
-/// The views are temp-schema objects, so they last exactly as long as the
-/// connection, are invisible to every other reader of the file, and write
-/// nothing to it. Our pools are size 1 with recycling disabled (see
-/// `doltlite_raw`'s `open_disables_connection_recycling`) because doltlite's
-/// own session state is per-connection, so one call covers the pool's life.
-///
-/// There is deliberately no "install them unpinned" path. A caller with no
-/// commit to pin to is already in trouble — the store has nothing committed —
-/// and building views over the bare tables would answer that by handing back
-/// the working set, which is the failure this module exists to prevent.
 /// Whether any commit in this store carries a schema.
 ///
 /// A doltlite file gets an "Initialize data repository" commit when it is
@@ -205,8 +192,29 @@ pub(crate) async fn carries_committed_schema(pool: &sqlx::SqlitePool) -> bool {
     modules > 0
 }
 
+/// Create one `pinned_<table>` view per table on this connection, and return
+/// how many. Call it once, when a store is opened for reading.
+///
+/// The views are temp-schema objects, so they last exactly as long as the
+/// connection, are invisible to every other reader of the file, and write
+/// nothing to it. Our pools are size 1 with recycling disabled (see
+/// `doltlite_raw`'s `open_disables_connection_recycling`) because doltlite's
+/// own session state is per-connection, so one call covers the pool's life.
+///
+/// There is deliberately no "install them unpinned" path. A caller with no
+/// commit to pin to is already in trouble — the store has nothing committed —
+/// and building views over the bare tables would answer that by handing back
+/// the working set, which is the failure this module exists to prevent.
+///
+/// **Nothing here may read `dolt_status`.** It looks like a read, but a
+/// reader running it while a writer commits to the same file makes that
+/// `dolt_commit` fail with `commit conflict` — measured by
+/// `a_churning_reader_never_makes_the_writers_commit_fail` in
+/// `tests/doltlite_two_process.rs`; in doltlite 0.50.3 the vtab's filter ends
+/// in `chunkStorePut`, staging the working catalog even on a read-only
+/// connection. Under streaming the writer is live by design, so a reader that
+/// asks whether the store is dirty breaks the producer it is reading.
 pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> {
-    warn_if_dirty(pool).await;
     // `sqlite_*` are the engine's own bookkeeping tables; SQLite refuses to
     // create a view over some of them, and a reader has no business in them.
     let names: Vec<String> = sqlx::query_scalar(
@@ -245,36 +253,6 @@ pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> 
         create_view(pool, t, &body).await?;
     }
     Ok(tables.len())
-}
-
-/// `None` from a build with no dolt extensions, where there is no
-/// `dolt_status` to ask.
-async fn dirty_table_count(pool: &sqlx::SqlitePool) -> Option<i64> {
-    sqlx::query_scalar("SELECT count(*) FROM dolt_status")
-        .fetch_one(pool)
-        .await
-        .ok()
-}
-
-/// The reader's half of what `doltlite_raw`'s rescue commit does for a writer.
-///
-/// A writer seals a dirty tree on the way in. A reader must not write to a
-/// store it does not own, so all it can do is say what it is about to miss:
-/// rows nobody committed are invisible to every pinned read below, and they
-/// read back exactly like a source that holds nothing. That ambiguity is the
-/// whole reason this line exists — nothing downstream can recover it.
-async fn warn_if_dirty(pool: &sqlx::SqlitePool) {
-    let Some(dirty) = dirty_table_count(pool).await else {
-        return;
-    };
-    if dirty > 0 {
-        tracing::warn!(
-            store = %store_filename(pool),
-            dirty_tables = dirty,
-            "reading a store with uncommitted changes: whoever wrote them never \
-             sealed, and a pinned read cannot tell those rows from an empty source",
-        );
-    }
 }
 
 async fn create_view(pool: &sqlx::SqlitePool, table: &str, body: &str) -> Result<()> {
@@ -342,6 +320,15 @@ mod view_tests {
     //! each fails loudly if doltlite or SQLite stops behaving this way.
 
     use super::*;
+
+    /// Tables `dolt_status` reports dirty. Asked of a *writer's* own pool
+    /// only; `install_views` says why a reader must never run it.
+    async fn dirty_table_count(pool: &sqlx::SqlitePool) -> Option<i64> {
+        sqlx::query_scalar("SELECT count(*) FROM dolt_status")
+            .fetch_one(pool)
+            .await
+            .ok()
+    }
 
     async fn store(dir: &std::path::Path, name: &str, ddl: &[&str]) -> sqlx::SqlitePool {
         crate::doltlite_raw::open(&dir.join(name), ddl)

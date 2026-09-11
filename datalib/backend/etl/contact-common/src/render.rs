@@ -31,6 +31,9 @@ pub struct ContactRenderProfile {
     pub source_label: String,
     /// Discriminator for the contact's grid row (e.g. `"Contact"`).
     pub contact_kind: String,
+    /// Whose mirror this is — the `account` column on every row. A
+    /// LinkedIn export names its owner; a `.vcf` file names nobody.
+    pub account: Option<String>,
     /// Bumped by the provider when its contact rendering changes
     /// meaningfully; stamped into the store so a re-run invalidates
     /// stale docs.
@@ -316,7 +319,7 @@ fn build_grid_row(
         .source_label(profile.source_label.clone())
         .when_ts(contact.when_ts.clone())
         .author(Some(title))
-        .account(Some(source_id.to_string()))
+        .account(profile.account.clone())
         .channel(Some(contact.group_label.clone()))
         .conversation_name(Some(contact.group_label.clone()))
         .conversation_uuid(contact.group_uuid.clone())
@@ -404,6 +407,7 @@ mod tests {
             provider: Provider::Linkedin,
             source_label: "LinkedIn".to_string(),
             contact_kind: "Contact".to_string(),
+            account: Some("jlp@enterprise.test".to_string()),
             render_version: 1,
         }
     }
@@ -453,5 +457,8 @@ mod tests {
             row.conversation_name.as_deref(),
             Some("LinkedIn Connections")
         );
+        // The profile's account, not the source name: a source name is
+        // not a login and polluted every `account:` filter.
+        assert_eq!(row.account.as_deref(), Some("jlp@enterprise.test"));
     }
 }

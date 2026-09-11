@@ -4,6 +4,7 @@
 /// Every entity id this provider mints. See `docs/dev/entity_ids.md`.
 pub mod ids;
 pub mod ingest;
+pub mod probe;
 pub mod processor;
 pub mod synthesize;
 

@@ -857,9 +857,9 @@ pub fn credential_hint(e: ClaudeError) -> anyhow::Error {
          expands it, and claude.ai answers `account_session_invalid`,\n\
          which reads exactly like an expired key. A real sessionKey\n\
          starts `sk-ant-sid01-` and is >100 chars. This prints only the\n\
-         length, never the secret (LATCHKEY_CURL must be unset — the\n\
-         impersonating shim drops `-v`):\n\
-              env -u LATCHKEY_CURL {lk} curl -v \\\n\
+         length, never the secret (the response is irrelevant, only the\n\
+         request header `-v` echoes is read):\n\
+              {lk} curl -v \\\n\
                 https://claude.ai/api/organizations 2>&1 >/dev/null |\\\n\
                 sed -n 's/.*sessionKey=\\([^;]*\\).*/\\1/p' |\\\n\
                 awk '{{print \"sessionKey length: \" length($0)}}'\n\
@@ -1339,11 +1339,10 @@ mod tests {
             hint.contains("sk-ant-sid01-"),
             "hint must say what a real key looks like; got:\n{hint}"
         );
-        // The shape check is only useful if it can actually run: the
-        // impersonating shim swallows `-v`, so the command must clear it.
+        // The shape check reads the request header back out of `-v`.
         assert!(
-            hint.contains("env -u LATCHKEY_CURL"),
-            "shape-check command must unset LATCHKEY_CURL; got:\n{hint}"
+            hint.contains("curl -v"),
+            "shape-check command must run curl verbosely; got:\n{hint}"
         );
         // ...and it must never suggest printing the secret itself.
         assert!(

@@ -11,6 +11,7 @@ import {
   buildGroup,
   buildSource,
   buildStep,
+  describeGroup,
   fieldIsActive,
   listGroups,
   listSteps,
@@ -20,6 +21,7 @@ import {
   removeSteps,
   renameGroup,
   replaceSteps,
+  seedFieldValues,
   sourceStepsOf,
   stepIdFor,
   unwireFromFanIns,
@@ -274,6 +276,21 @@ describe("buildGroup", () => {
     // A name that only respells the id is not a name.
     expect(buildGroup({ id: "slack", name: " slack ", type: "slack" })).not.toContain("name =");
   });
+
+  it("writes a description only when there is one", () => {
+    const body = buildGroup({
+      id: "slack",
+      name: "",
+      type: "slack",
+      description: "  Mostly infra channels.  ",
+    });
+    expect(body).toContain('type = "slack"\ndescription = "Mostly infra channels."');
+    expect(listGroups(body)[0]!.description).toBe("Mostly infra channels.");
+    expect(buildGroup({ id: "slack", name: "", type: "slack", description: " " })).not.toContain(
+      "description =",
+    );
+    expect(buildGroup({ id: "slack", name: "", type: "slack" })).not.toContain("description =");
+  });
 });
 
 describe("buildStep", () => {
@@ -360,13 +377,13 @@ describe("buildStep", () => {
     expect(body).toContain("dms = false");
   });
 
-  it("writes the DM allowlist when direct messages are on", () => {
+  it("writes the DM list when direct messages are on", () => {
     const body = fetch({
       "api.dms": true,
-      "api.dm_users": ["@riker", "Jean-Luc Picard"],
+      "api.dm_conversations": ["D024BE7LH", "G0ABC12DE"],
     });
     expect(body).toContain("dms = true");
-    expect(body).toContain('dm_users = ["@riker", "Jean-Luc Picard"]');
+    expect(body).toContain('dm_conversations = ["D024BE7LH", "G0ABC12DE"]');
   });
 
   // The one `select` field in the catalog. Its value is always written:
@@ -395,32 +412,57 @@ describe("buildStep", () => {
     expect(body).toContain('period = "fortnight"');
   });
 
-  // `SlackApiSync::validate` rejects `dm_users` with `dms = false`, so
-  // a form that emitted it would write a config the backend refuses.
-  // The gate has to drop the value, not just hide the input.
+  // `SlackApiSync::validate` rejects `dm_conversations` with
+  // `dms = false`, so a form that emitted it would write a config the
+  // backend refuses. The gate has to drop the value, not just hide
+  // the input.
   it("drops a gated field whose switch is off", () => {
     const body = fetch({
       "api.dms": false,
-      "api.dm_users": ["@riker"],
+      "api.dm_conversations": ["D024BE7LH"],
     });
     expect(body).toContain("dms = false");
-    expect(body).not.toContain("dm_users");
+    expect(body).not.toContain("dm_conversations");
   });
 });
 
 describe("fieldIsActive", () => {
-  const dmUsers = SLACK.fields!.find((f) => f.target === "api.dm_users")!;
+  const dms = SLACK.fields!.find((f) => f.target === "api.dm_conversations")!;
   const channels = SLACK.fields!.find((f) => f.target === "api.channels")!;
 
   it("gates a field on its `requires` target", () => {
-    expect(fieldIsActive(dmUsers, { "api.dms": true })).toBe(true);
-    expect(fieldIsActive(dmUsers, { "api.dms": false })).toBe(false);
+    expect(fieldIsActive(dms, { "api.dms": true })).toBe(true);
+    expect(fieldIsActive(dms, { "api.dms": false })).toBe(false);
     // Unset reads as off, which is what a freshly opened form has.
-    expect(fieldIsActive(dmUsers, {})).toBe(false);
+    expect(fieldIsActive(dms, {})).toBe(false);
   });
 
   it("leaves an ungated field alone", () => {
     expect(fieldIsActive(channels, {})).toBe(true);
+  });
+});
+
+describe("the Slack pickers", () => {
+  const dms = SLACK.fields!.find((f) => f.target === "api.dm_conversations")!;
+  const channels = SLACK.fields!.find((f) => f.target === "api.channels")!;
+
+  /// Same probe, same grid as email and Claude: `channels` is filled
+  /// from the workspace's channel items and `dm_conversations` from
+  /// its DMs — the same `conversation` kind a Claude chat is, since
+  /// both are an id with a title over it.
+  it("offer channels and DMs from the one probe", () => {
+    expect(SLACK.canProbe).toBe(true);
+    expect(channels.kind === "string_list" && channels.probe).toBe("channels");
+    expect(dms.kind === "string_list" && dms.probe).toBe("conversations");
+  });
+
+  /// What "Test connection" authenticates with is what Save writes —
+  /// the `api` table that selects the live method, defaults included.
+  it("probe with the ingest params the form would write", () => {
+    expect(paramsObject(SLACK, seedFieldValues(SLACK), "download")).toEqual({
+      api: { media: true, all_channels: false, dms: false },
+      common: { blob_size_limit_bytes: 5_000_000 },
+    });
   });
 });
 
@@ -587,6 +629,27 @@ describe("renameGroup", () => {
 
   it("leaves the text alone for a group it cannot find", () => {
     expect(renameGroup(PAIR, "nope", "X")).toBe(PAIR);
+  });
+
+  // The description gets the same in-place edit as the name, without
+  // the "respells the id" rule.
+  it("sets, replaces and clears a description the same way", () => {
+    const set = describeGroup(PAIR, "slack", "Mostly infra channels.");
+    expect(set).toContain('id = "slack"\ndescription = "Mostly infra channels."');
+    expect(listGroups(set).find((g) => g.id === "slack")!.description).toBe(
+      "Mostly infra channels.",
+    );
+    // Unlike a name, a description that respells the id is still text.
+    expect(describeGroup(PAIR, "slack", "slack")).toContain('description = "slack"');
+
+    const replaced = describeGroup(set, "slack", "The on-call channels.");
+    expect(replaced).toContain('description = "The on-call channels."');
+    expect(replaced).not.toContain("infra");
+
+    const cleared = describeGroup(set, "slack", "  ");
+    expect(cleared).not.toContain("description =");
+    expect(cleared).toContain('id = "slack"\nname = "Work Slack"');
+    expect(describeGroup(PAIR, "slack", "")).toBe(PAIR);
   });
 
   // A name is user text; `$1`, `$&` and `$$` in it must land verbatim,

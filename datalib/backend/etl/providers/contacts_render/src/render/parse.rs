@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use datalib_etl_contacts::ingest::api::{vcard_all, vcard_fn, vcard_rev, vcard_uid, VcardProp};
+use datalib_etl_contacts::ingest::api::{
+    vcard_all, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid, VcardProp,
+};
 use datalib_etl_contacts::ingest::db::{LoadedRawContact, RawDb};
 
 /// One parsed vCard, with everything render cares about pulled
@@ -159,6 +161,24 @@ fn split_vcards(body: &str) -> Vec<String> {
     out
 }
 
+/// `FN`, else the `N` line's given and family names, else the first
+/// email, else the first phone, else the organization. A card with none
+/// of these keeps `None` and is titled by its id downstream — but an
+/// address-book export routinely holds cards that are just an email
+/// address, and `contacts:#93:0` says nothing where `weishi@x.test` does.
+fn display_name(block: &str, emails: &[VcardProp], phones: &[VcardProp]) -> Option<String> {
+    let nonblank = |s: String| (!s.trim().is_empty()).then(|| s.trim().to_string());
+    vcard_fn(block)
+        .and_then(nonblank)
+        .or_else(|| {
+            vcard_n_family_given(block)
+                .and_then(|(family, given)| nonblank([given, family].join(" ")))
+        })
+        .or_else(|| emails.first().and_then(|e| nonblank(e.value.clone())))
+        .or_else(|| phones.first().and_then(|p| nonblank(p.value.clone())))
+        .or_else(|| extract_single(block, "ORG").and_then(|o| nonblank(o.replace(';', " — "))))
+}
+
 fn parse_block(
     block: &str,
     source_path: &Path,
@@ -176,7 +196,7 @@ fn parse_block(
         uid,
         addressbook: addressbook.to_string(),
         source_path: source_path.to_path_buf(),
-        display_name: vcard_fn(block),
+        display_name: display_name(block, &emails, &phones),
         revision: vcard_rev(block),
         emails,
         phones,
@@ -271,6 +291,44 @@ mod tests {
             addressbook_label: label.into(),
             vcard: vcard.into(),
         }
+    }
+
+    /// A card with no `FN` used to be titled by its synthesized uid
+    /// (`contacts:#93:0`), which is how a real address book's
+    /// email-only cards rendered.
+    #[test]
+    fn nameless_card_is_titled_by_what_it_does_have() {
+        let name = |block: &str| {
+            parse_block(block, Path::new("x.vcf"), "book", 0)
+                .unwrap()
+                .display_name
+        };
+        assert_eq!(
+            name("BEGIN:VCARD\nN:Picard;Jean-Luc;;;\nEMAIL:jlp@x.test\nEND:VCARD").as_deref(),
+            Some("Jean-Luc Picard")
+        );
+        assert_eq!(
+            name("BEGIN:VCARD\nitem1.EMAIL;TYPE=INTERNET:weishi@x.test\nEND:VCARD").as_deref(),
+            Some("weishi@x.test")
+        );
+        assert_eq!(
+            name("BEGIN:VCARD\nTEL:+1-555\nEND:VCARD").as_deref(),
+            Some("+1-555")
+        );
+        assert_eq!(
+            name("BEGIN:VCARD\nORG:Starfleet;Ops\nEND:VCARD").as_deref(),
+            Some("Starfleet — Ops")
+        );
+        assert_eq!(name("BEGIN:VCARD\nEND:VCARD"), None);
+        // `FN` still wins when present, and a blank one does not.
+        assert_eq!(
+            name("BEGIN:VCARD\nFN:Captain\nEMAIL:jlp@x.test\nEND:VCARD").as_deref(),
+            Some("Captain")
+        );
+        assert_eq!(
+            name("BEGIN:VCARD\nFN: \nEMAIL:jlp@x.test\nEND:VCARD").as_deref(),
+            Some("jlp@x.test")
+        );
     }
 
     #[test]
