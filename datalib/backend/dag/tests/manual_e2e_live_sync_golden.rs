@@ -210,6 +210,32 @@ fn is_github_repo_object(map: &serde_json::Map<String, Value>) -> bool {
 /// certain — no shape-sniffing required.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[("sync_scope_config", &["updated_at"])];
 
+/// Stores dumped as one row count per table instead of row by row. A
+/// mirror source's store is every table of an application's own
+/// database — 78 for Photos, 113 for Lightroom — and whether the copy is
+/// faithful is not this test's question: `sqlite_mirror`'s roundtrip
+/// tests, `lightroom`'s `real_catalogs` and `apple_photos`'s
+/// `photos_roundtrip` pin that, byte for byte. What this golden has to
+/// show is that the step ran and what it produced, and for that the set
+/// of tables and their sizes is the whole story: a table gone from the
+/// schema, a shadow table let back in, or a count that moved all diff,
+/// without twenty thousand lines around them.
+///
+/// Keyed by stanza (the group id in dag.toml), which is also what names
+/// the snapshot directory. A store not listed is dumped in full.
+const ROW_COUNT_ONLY_STANZAS: &[&str] = &["apple_photos", "lightroom"];
+
+/// The stanza a store belongs to: `<data_root>/<stanza>/<sub>/<file>`.
+fn stanza_of(path: &Path) -> Option<String> {
+    Some(
+        path.parent()?
+            .parent()?
+            .file_name()?
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
 const REDACTED: &str = "[redacted]";
 
 /// Path components whose entire contents we deliberately omit. Slack's
@@ -1174,8 +1200,22 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
         .map(|r| r.try_get::<String, _>(0).unwrap_or_default())
         .collect();
 
+    let counts_only =
+        stanza_of(path).is_some_and(|stanza| ROW_COUNT_ONLY_STANZAS.contains(&stanza.as_str()));
+
     let mut out = serde_json::Map::new();
     for t in tables {
+        if counts_only {
+            // Golden-test dump: `t` is a table name this test just read out
+            // of the store's own `sqlite_master`.
+            let n: i64 = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM \"{t}\"")))
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("count {t}: {e}"))
+                .get(0);
+            out.insert(t, Value::String(format!("{n} rows")));
+            continue;
+        }
         // Pull column names so we know whether to wrap `payload` in
         // `json(...)` and which column to ORDER BY.
         // Golden-test dump: `t` is a table name this test just read out of the
