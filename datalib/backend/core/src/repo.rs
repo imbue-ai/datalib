@@ -53,7 +53,7 @@ pub trait AppRepo: Send + Sync {
     async fn enqueue_job(
         &self,
         _kind: JobKind,
-        _source_name: Option<&str>,
+        _source_ids: Option<&str>,
     ) -> Result<SyncJobRow, RepoError> {
         Err(RepoError::ReadOnly)
     }

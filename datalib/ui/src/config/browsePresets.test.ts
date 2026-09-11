@@ -74,9 +74,9 @@ describe("browseColumns", () => {
 });
 
 describe("browseQuery", () => {
-  /// A group id is its directory under the data root, and `source_name:`
+  /// A group id is its directory under the data root, and `source_id:`
   /// matches the first segment of a row's `qmd_path` — the same string.
   it("filters on the group id", () => {
-    expect(browseQuery("tiny-slack")).toBe("source_name:tiny-slack");
+    expect(browseQuery("tiny-slack")).toBe("source_id:tiny-slack");
   });
 });

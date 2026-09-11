@@ -44,7 +44,7 @@ use datalib_etl_render::html::escape_text;
 /// provider.
 #[derive(Debug, Clone)]
 pub struct RenderProfile {
-    /// On-disk subdir under `render_markdown/<provider>/<source_name>/…`
+    /// On-disk subdir under `render_markdown/<provider>/<source_id>/…`
     /// and the value of the markdown's `provider:` frontmatter key.
     pub provider: Provider,
     /// The `source_label` column on every grid_row this provider
@@ -98,7 +98,7 @@ pub fn render_all(
     profile: &RenderProfile,
     chats: &[NormalizedChat],
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     blobs_by_chat: &HashMap<String, BlobBundle>,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
@@ -119,7 +119,7 @@ pub fn render_all(
                 chat,
                 doc,
                 out_dir,
-                source_name,
+                source_id,
                 bundle,
                 prior_fingerprints,
                 on_doc_complete,
@@ -150,13 +150,13 @@ fn render_one(
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     blobs: &BlobBundle,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Outcome> {
     let fingerprint = compute_fingerprint(profile.render_version, LAYOUT_VERSION, chat, doc);
-    let (md_path, page_dir) = output_paths(out_dir, source_name, chat, &doc.period_key);
+    let (md_path, page_dir) = output_paths(out_dir, source_id, chat, &doc.period_key);
 
     if prior_fingerprints
         .get(&doc.markdown_uuid)
@@ -204,7 +204,7 @@ fn render_one(
         doc,
         &chat_title,
         &md_rel,
-        source_name,
+        source_id,
         &mut problems,
     );
 
@@ -217,7 +217,7 @@ fn render_one(
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: doc.markdown_uuid.clone(),
-        source_name: source_name.to_string(),
+        source_id: source_id.to_string(),
         source_fingerprint: fingerprint,
         upstream_cursor: None,
         md_path,
@@ -277,11 +277,11 @@ fn materialize_attachment_bytes(
 /// human title still lives in the markdown frontmatter and the grid_rows DB.
 fn output_paths(
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     chat: &NormalizedChat,
     period_key: &str,
 ) -> (PathBuf, PathBuf) {
-    let mut page_dir = datalib_etl::layout::render_markdown_root(out_dir, source_name);
+    let mut page_dir = datalib_etl::layout::render_markdown_root(out_dir, source_id);
     if let Some(prefix) = &chat.path_prefix {
         page_dir = page_dir.join(prefix);
     }
@@ -574,7 +574,7 @@ fn build_grid_rows(
     doc: &NormalizedDoc,
     chat_title: &str,
     md_rel: &str,
-    source_name: &str,
+    source_id: &str,
     problems: &mut Vec<RenderProblemRow>,
 ) -> Vec<GridRow> {
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + doc.items.len());
@@ -627,7 +627,7 @@ fn build_grid_rows(
             .upstream_scope(chat.upstream_scope.clone())
             .markdown_uuid(Some(doc.markdown_uuid.clone()))
             .build_or_record(
-                source_name,
+                source_id,
                 &doc.markdown_uuid,
                 profile.render_version,
                 problems,
@@ -690,7 +690,7 @@ fn build_grid_rows(
                 )
                 .markdown_uuid(Some(doc.markdown_uuid.clone()))
                 .build_or_record(
-                    source_name,
+                    source_id,
                     &doc.markdown_uuid,
                     profile.render_version,
                     problems,
@@ -705,7 +705,7 @@ fn build_grid_rows(
                 &conversation_name,
                 &entire_chat,
                 md_rel,
-                source_name,
+                source_id,
                 problems,
             ));
         }
@@ -720,7 +720,7 @@ fn build_grid_rows(
                 &conversation_name,
                 &entire_chat,
                 md_rel,
-                source_name,
+                source_id,
                 problems,
             ));
         }
@@ -737,7 +737,7 @@ fn reaction_row(
     conversation_name: &Option<String>,
     entire_chat: &str,
     md_rel: &str,
-    source_name: &str,
+    source_id: &str,
     problems: &mut Vec<RenderProblemRow>,
 ) -> Option<GridRow> {
     GridRow::builder()
@@ -762,7 +762,7 @@ fn reaction_row(
         .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(doc.markdown_uuid.clone()))
         .build_or_record(
-            source_name,
+            source_id,
             &doc.markdown_uuid,
             profile.render_version,
             problems,
@@ -1017,7 +1017,7 @@ mod tests {
         let p = &problems[0];
         assert_eq!(p.outcome, "dropped");
         assert_eq!(p.stage, "grid_row");
-        assert_eq!(p.source_name, "test_source");
+        assert_eq!(p.source_id, "test_source");
         assert_eq!(
             p.scope_key, chat.buckets[0].markdown_uuid,
             "swept with the document it belongs to"

@@ -50,7 +50,7 @@ pub fn render_all(
     blobs_by_chat: &HashMap<String, BlobBundle>,
     raw_dir: &Path,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     _prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -63,7 +63,7 @@ pub fn render_all(
     // source's render directory, ask doltlite which chats changed
     // between that hash and HEAD. Skip the rest. Cold start (no cursor)
     // or no doltlite db on disk renders every chat.
-    let cursor_path = render_cursor::cursor_path(out_dir, source_name);
+    let cursor_path = render_cursor::cursor_path(out_dir, source_id);
     let prior = render_cursor::read_for_params(&cursor_path, &render_cursor::no_params())?;
     let db_path = doltlite_raw::db_path_for(raw_dir);
 
@@ -83,7 +83,7 @@ pub fn render_all(
                 .collect::<Vec<_>>()
         });
         tracing::info!(
-            source = source_name,
+            source = source_id,
             scan_elapsed_ms = scan.elapsed.map(|d| d.as_millis() as u64),
             changed_chats = scan
                 .changed
@@ -117,7 +117,7 @@ pub fn render_all(
         &profile(),
         to_render,
         out_dir,
-        source_name,
+        source_id,
         blobs_by_chat,
         progress,
         &empty_fingerprints,

@@ -26,6 +26,7 @@ tracing = "0.1"
 datalib-obs = { path = "../obs" }
 
 [dev-dependencies]
+datalib-etl-fsindex = { path = "../etl/providers/fsindex" }
 hex = "0.4"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

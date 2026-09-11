@@ -80,9 +80,9 @@ export function browseColumns(type: string | null): BrowseColumn[] | null {
 
 /// The search a Browse of this group opens: everything filed under it.
 /// A group id is its directory under the data root, which is what
-/// `source_name:` matches on. Its own data, not datalib's report on it:
+/// `source_id:` matches on. Its own data, not datalib's report on it:
 /// the storage rows sit in the same directory but are filed under
 /// `datalib`, and the filter leaves them out.
 export function browseQuery(groupId: string): string {
-  return `source_name:${groupId}`;
+  return `source_id:${groupId}`;
 }

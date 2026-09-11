@@ -64,14 +64,14 @@ fn profile() -> RenderProfile {
 pub fn render_all(
     parsed: &ParsedSlack,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     // Log how long the dolt_diff scan took (matches chatgpt/claude).
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
-        source = source_name,
+        source = source_id,
         scan_elapsed_ms = elapsed_ms,
         changed_threads = parsed
             .scan
@@ -108,7 +108,7 @@ pub fn render_all(
         &profile(),
         &chats,
         out_dir,
-        source_name,
+        source_id,
         &blobs_by_chat,
         progress,
         &no_priors,
@@ -120,7 +120,7 @@ pub fn render_all(
     // managed to read HEAD at scan time. Without HEAD the next run is
     // another cold start (the right behavior — nothing to anchor on).
     if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(out_dir, source_name);
+        let cursor_path = render_cursor::cursor_path(out_dir, source_id);
         render_cursor::write(&cursor_path, head, &render_cursor::no_params())
             .with_context(|| format!("write slack render cursor {}", cursor_path.display()))?;
     }

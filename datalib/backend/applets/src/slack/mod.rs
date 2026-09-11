@@ -487,7 +487,7 @@ mod tests {
                 dir,
                 &RenderedMarkdown {
                     markdown_uuid: md.to_string(),
-                    source_name: "slack".into(),
+                    source_id: "slack".into(),
                     source_fingerprint: format!("fp-{md}"),
                     upstream_cursor: None,
                     md_path: dir.join(format!("{md}.md")),
@@ -535,7 +535,7 @@ mod tests {
                 dir,
                 &RenderedMarkdown {
                     markdown_uuid: md.to_string(),
-                    source_name: "slack".into(),
+                    source_id: "slack".into(),
                     source_fingerprint: format!("fp-{md}"),
                     upstream_cursor: None,
                     md_path: dir.join(format!("{md}.md")),

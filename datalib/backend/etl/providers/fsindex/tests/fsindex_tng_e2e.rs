@@ -38,19 +38,20 @@ fn copy_deref(src: &std::path::Path, dst: &std::path::Path) {
     }
 }
 
-async fn file_ids(db: &RawDb) -> Vec<(String, String)> {
-    let rows = sqlx::query("SELECT id, kind FROM files ORDER BY id")
-        .fetch_all(db.pool())
-        .await
-        .unwrap();
-    rows.into_iter()
-        .map(|r| {
-            (
-                r.try_get::<String, _>("id").unwrap(),
-                r.try_get::<String, _>("kind").unwrap(),
-            )
-        })
-        .collect()
+/// Every entry id across both tables, tagged with the table it came from.
+async fn entry_ids(db: &RawDb) -> Vec<(String, &'static str)> {
+    let mut out = Vec::new();
+    for (table, sql) in [
+        ("dirs", "SELECT id FROM dirs ORDER BY id"),
+        ("files", "SELECT id FROM files ORDER BY id"),
+    ] {
+        let rows = sqlx::query(sql).fetch_all(db.pool()).await.unwrap();
+        out.extend(
+            rows.into_iter()
+                .map(|r| (r.try_get::<String, _>("id").unwrap(), table)),
+        );
+    }
+    out
 }
 
 #[tokio::test]
@@ -100,8 +101,18 @@ async fn scans_tng_tree() {
     assert_eq!(summary.symlinks, 0);
     assert_eq!(summary.entries_scanned, 7);
 
-    let rows = file_ids(&db).await;
+    let rows = entry_ids(&db).await;
     let ids: BTreeSet<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
+    let dirs: BTreeSet<&str> = rows
+        .iter()
+        .filter(|(_, table)| *table == "dirs")
+        .map(|(id, _)| id.as_str())
+        .collect();
+    assert_eq!(
+        dirs,
+        ["", "bridge", "holodeck"].into_iter().collect(),
+        "directories land in `dirs`, nowhere else"
+    );
     let expected: BTreeSet<&str> = [
         "",
         "bridge",

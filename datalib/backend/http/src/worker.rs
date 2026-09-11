@@ -23,7 +23,9 @@ use tokio::sync::broadcast;
 pub struct ProgressEvent {
     pub id: String,
     pub kind: String,
-    pub source_name: Option<String>,
+    /// Comma-separated source-step ids, mirroring
+    /// [`SyncJobRow::source_ids`].
+    pub source_ids: Option<String>,
     pub state: JobState,
     pub progress_pct: Option<f64>,
     pub progress_msg: Option<String>,
@@ -378,7 +380,7 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
                     let _ = cfg.progress_tx.send(ProgressEvent {
                         id,
                         kind: String::new(),
-                        source_name: None,
+                        source_ids: None,
                         state: JobState::Failed,
                         progress_pct: None,
                         progress_msg: Some(msg),
@@ -406,7 +408,7 @@ fn emit(
     let _ = tx.send(ProgressEvent {
         id: job.id.clone(),
         kind: job.kind.clone(),
-        source_name: job.source_name.clone(),
+        source_ids: job.source_ids.clone(),
         state,
         progress_pct: pct,
         progress_msg: msg.map(str::to_string),
@@ -449,14 +451,14 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
     }
     // Per-source "Sync now": subset-sync the selected source steps
     // (fringe steps, by id); everything downstream follows normal
-    // change propagation. `source_name` may carry several
+    // change propagation. `source_ids` may carry several
     // comma-separated step ids (the UI's "Sync selected" checkboxes) —
     // ids with commas aren't supported, so the separator is
     // unambiguous. (The old `ingest`/`render` kinds had a
     // `--skip-extract` shortcut; the DAG runner has no equivalent —
     // downloads re-poll and everything unchanged skips, which is the
     // same outcome a little slower.)
-    if let Some(srcs) = job.source_name.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(srcs) = job.source_ids.as_deref().filter(|s| !s.is_empty()) {
         for src in srcs.split(',').filter(|s| !s.is_empty()) {
             command.arg("--sync").arg(src);
         }
@@ -479,7 +481,7 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let label = job.source_name.as_deref().unwrap_or("all sources");
+    let label = job.source_ids.as_deref().unwrap_or("all sources");
     let starting = format!("syncing {label}…");
     repo.update_job_progress(&job.id, None, Some(&starting))
         .await

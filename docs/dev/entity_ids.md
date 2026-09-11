@@ -94,8 +94,9 @@ the config format* rather than a property of one Vue component:
 | `id` | identity. Path-safe, unique, forms the directory structure. Changing it is a migration; the wizard makes it read-only on edit. |
 | `name` | what a person types and every screen shows. Free text, meaningless to every program, freely changed. |
 
-A renderer receives `source_name(tree)` — the first segment of the
-step's `id` — so only the stable half ever reaches an id.
+A renderer receives the source's **id** — the first segment of the
+step's id, which is its group — so only the stable half ever reaches an
+id.
 
 So the real argument against scoping on it was never the rename hazard.
 It is that such an id is a function of *configuration* rather than of
@@ -177,11 +178,11 @@ Three checks stand between a bad recipe and silent data loss.
 1. **`IdClaims`** ([`datalib_etl_render::grid_index`](../../datalib/backend/etl/render/src/grid_index.rs))
    fails an index run when two sources claim one `markdown_uuid` or one
    `grid_rows.uuid`, naming both. Scoped to a single run on purpose:
-   the same ids arriving under a new `source_name` is a *rename*, which
+   the same ids arriving under a new source id is a *rename*, which
    is legitimate, whereas two documents claiming one id inside one walk
    is always a misconfiguration or a recipe missing a discriminator.
 2. **`//tests/fixtures:ingested_tng_test`** asserts `grid_rows.uuid` is
-   unique, that no `markdown_uuid` is claimed by two `source_name`s, and
+   unique, that no `markdown_uuid` is claimed by two source ids, and
    that the set of providers minting non-UUID primary keys equals
    `NON_UUID_PK_PROVIDERS` exactly — in both directions, so the
    allowlist cannot rot into a permanent exemption.

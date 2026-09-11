@@ -30,7 +30,7 @@ fn fixture_dir() -> PathBuf {
 }
 
 /// The stanza name this harness renders under. Both the render's
-/// `source_name` argument and the `<stanza>/` prefix of every path it
+/// `source_id` argument and the `<stanza>/` prefix of every path it
 /// writes, exactly as the step wires them (`processor.rs`).
 const STANZA: &str = "logs";
 
@@ -69,7 +69,7 @@ impl Harness {
         let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
         let summary = ingest::fetch(ingest::FetchOptions {
             db: db.clone(),
-            source_name: STANZA.to_string(),
+            source_id: STANZA.to_string(),
             root: self.root.clone(),
             ignore: vec![],
             cache: cache.clone(),

@@ -64,7 +64,7 @@ pub fn profile() -> RenderProfile {
 pub fn render_all(
     parsed: &ParsedSignal,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     render_params: &serde_json::Value,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -73,7 +73,7 @@ pub fn render_all(
     // (including cold start with `None`) so the timing shows up in
     // sync output without the user having to crack the cursor open.
     tracing::info!(
-        source = source_name,
+        source = source_id,
         scan_elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64),
         changed_chats = parsed
             .scan
@@ -91,7 +91,7 @@ pub fn render_all(
     progress.set_length(Some((parsed.docs.len() + parsed.docs_skipped) as u64));
     progress.inc(parsed.docs_skipped as u64);
 
-    let (chats, blobs_by_chat) = to_chats(parsed, source_name);
+    let (chats, blobs_by_chat) = to_chats(parsed, source_id);
     // Empty on purpose. chat-common skips a document whose fingerprint
     // is unchanged, and parse has *already* made that decision from
     // `dolt_diff` — a bucket reaching here is one we have committed to
@@ -107,7 +107,7 @@ pub fn render_all(
         &profile(),
         &chats,
         out_dir,
-        source_name,
+        source_id,
         &blobs_by_chat,
         progress,
         &prior_fingerprints,
@@ -121,7 +121,7 @@ pub fn render_all(
     // cursor unwritten — next run is another cold start, which is the
     // right behavior since we have no way to anchor the diff.
     if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(out_dir, source_name);
+        let cursor_path = render_cursor::cursor_path(out_dir, source_id);
         render_cursor::write(&cursor_path, head, render_params)
             .with_context(|| format!("write signal render cursor {}", cursor_path.display()))?;
     }

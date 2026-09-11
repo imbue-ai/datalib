@@ -82,8 +82,8 @@ pub async fn run(
     let out_rel = env.step.clone();
     let rendered_rel = env.step.clone();
     // `planned` moves into the render task below; the post-render check
-    // still needs the source's name for its message.
-    let source_name = name.clone();
+    // still needs the source's id for its message.
+    let source_id = name.clone();
     let data_root = data_root.to_path_buf();
     // Owned, not borrowed: the render runs on a blocking thread that
     // outlives this frame.
@@ -306,7 +306,7 @@ pub async fn run(
         let dropped = problem_counts.get("dropped").copied().unwrap_or(0);
         let nulled = problem_counts.get("nulled").copied().unwrap_or(0);
         tracing::warn!(
-            source = %source_name,
+            source = %source_id,
             total,
             dropped,
             nulled,
@@ -318,7 +318,7 @@ pub async fn run(
         ));
     }
     every_stored_version_must_be_declared(
-        &source_name,
+        &source_id,
         &rendered_root,
         &versions_on_disk,
         declared.as_ref(),
@@ -540,7 +540,7 @@ mod stale_tree_tests {
                 root,
                 &RenderedMarkdown {
                     markdown_uuid: chat_uuid.to_string(),
-                    source_name: "claude_web".into(),
+                    source_id: "claude_web".into(),
                     source_fingerprint: format!("fp-{chat_uuid}"),
                     upstream_cursor: None,
                     md_path: root.join(chat_uuid).join("all.md"),

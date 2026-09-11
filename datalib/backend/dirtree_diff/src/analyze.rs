@@ -28,6 +28,12 @@ pub struct Link {
     pub src: String,
     pub dst: String,
     pub kind: String,
+    /// Entries this correspondence stands for besides itself: a
+    /// directory's whole interior, which its matching digest proves
+    /// identical on both sides. Starts as the directory row's own
+    /// count; [`roll_up`] raises it to the interior links it covered
+    /// when those were fetched anyway. Zero for a file, and for a
+    /// covered directory.
     pub rolled_up: u32,
     /// True when an ancestor directory made the same journey, so this
     /// correspondence is implied rather than independently interesting.
@@ -35,15 +41,23 @@ pub struct Link {
 }
 
 impl Link {
-    pub fn new(src: &str, dst: &str, kind: &str) -> Self {
+    pub fn new(src: &str, dst: &str, kind: &str, rolled_up: u32) -> Self {
         Link {
             src: src.to_string(),
             dst: dst.to_string(),
             kind: kind.to_string(),
-            rolled_up: 0,
+            rolled_up,
             covered: false,
         }
     }
+
+    pub fn between(src: &Entry, dst: &Entry) -> Self {
+        Link::new(&src.path, &dst.path, &dst.kind, interior(dst))
+    }
+}
+
+fn interior(entry: &Entry) -> u32 {
+    entry.entries.clamp(0, u32::MAX as i64) as u32
 }
 
 fn covering(links: &[Link], accepted: &[usize], i: usize) -> Option<usize> {
@@ -79,19 +93,25 @@ pub fn roll_up(links: &mut [Link]) {
     // Decide first, mutate after: `covering` reads the whole slice, so
     // marking a link covered while still scanning would change what the
     // remaining links are compared against.
-    let mut bumps: Vec<usize> = Vec::new();
-    let mut covered = vec![false; links.len()];
-    for (i, flag) in covered.iter_mut().enumerate() {
-        if let Some(parent) = covering(links, &accepted, i) {
-            bumps.push(parent);
-            *flag = true;
-        }
+    let parent_of: Vec<Option<usize>> = (0..links.len())
+        .map(|i| covering(links, &accepted, i))
+        .collect();
+    let mut absorbed = vec![0u32; links.len()];
+    for parent in parent_of.iter().flatten() {
+        absorbed[*parent] += 1;
     }
-    for (link, flag) in links.iter_mut().zip(covered) {
-        link.covered = flag;
-    }
-    for parent in bumps {
-        links[parent].rolled_up += 1;
+    // Two counts of one interior: the directory row's own `entries`,
+    // and the interior links that happened to be fetched. Each is
+    // exact when it is available at all, so the larger one is right —
+    // the store skips the interior of a directory it can explain, and
+    // a hand-built diff carries no `entries`.
+    for (i, link) in links.iter_mut().enumerate() {
+        link.covered = parent_of[i].is_some();
+        link.rolled_up = if link.covered {
+            0
+        } else {
+            link.rolled_up.max(absorbed[i])
+        };
     }
 }
 
@@ -174,8 +194,8 @@ pub fn group_duplicates(entries: &[Entry]) -> Vec<DupGroup> {
             digest,
             kind,
             size: members[0].size,
+            rolled_up: interior(&members[0]),
             paths: members.into_iter().map(|e| e.path).collect(),
-            rolled_up: 0,
         });
     }
     roll_up_duplicates(groups)
@@ -187,12 +207,14 @@ fn roll_up_duplicates(mut groups: Vec<DupGroup>) -> Vec<DupGroup> {
     for (gi, group) in groups.iter().enumerate() {
         let canonical = &group.paths[0];
         for other in &group.paths[1..] {
-            links.push(Link::new(canonical, other, &group.kind));
+            links.push(Link::new(canonical, other, &group.kind, group.rolled_up));
             owner.push(gi);
         }
     }
     roll_up(&mut links);
 
+    // A group's rollup is what every surviving copy absorbed: the
+    // interior, once per copy beyond the first.
     let mut survives = vec![false; groups.len()];
     let mut rolled = vec![0u32; groups.len()];
     for (link, &gi) in links.iter().zip(owner.iter()) {
@@ -256,7 +278,7 @@ pub fn classify(
 
     let mut move_links: Vec<Link> = moves
         .iter()
-        .map(|m| Link::new(&m.src.path, &m.dst.path, &m.src.kind))
+        .map(|m| Link::between(&m.src, &m.dst))
         .collect();
     roll_up(&mut move_links);
 
@@ -266,7 +288,7 @@ pub fn classify(
         .collect();
     let mut kept_links: Vec<Link> = kept
         .iter()
-        .map(|e| Link::new(&e.path, &copies_right[&e.digest], &e.kind))
+        .map(|e| Link::new(&e.path, &copies_right[&e.digest], &e.kind, interior(e)))
         .collect();
     roll_up(&mut kept_links);
 
@@ -276,7 +298,7 @@ pub fn classify(
         .collect();
     let mut copied_links: Vec<Link> = copied
         .iter()
-        .map(|e| Link::new(&copies_left[&e.digest], &e.path, &e.kind))
+        .map(|e| Link::new(&copies_left[&e.digest], &e.path, &e.kind, interior(e)))
         .collect();
     roll_up(&mut copied_links);
 
@@ -420,7 +442,11 @@ pub fn classify(
 
     let summary = Summary {
         moves: move_links.iter().filter(|l| !l.covered).count(),
-        moved_entries: moves.len(),
+        moved_entries: move_links
+            .iter()
+            .filter(|l| !l.covered)
+            .map(|l| 1 + l.rolled_up as usize)
+            .sum(),
         rolled_up,
         removed: gone.len(),
         removed_but_copy_remains: kept_links.iter().filter(|l| !l.covered).count(),
@@ -434,6 +460,53 @@ pub fn classify(
         ..Summary::default()
     };
     (left, right, summary)
+}
+
+/// The subtrees a directory-level diff already accounts for: a
+/// directory that moved or was copied whole, digest intact, so every
+/// row beneath it on that side is implied by the directory row. Each
+/// list is largest interior first.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Explained {
+    /// `(path on the left, path on the right)` of each outermost move.
+    /// Kept as pairs: skipping one side's interior without the other's
+    /// would leave thousands of rows nothing can pair with.
+    pub moves: Vec<(String, String)>,
+    /// Gone from the left, with a copy still on the right.
+    pub left_copies: Vec<String>,
+    /// New on the right, copied from somewhere on the left.
+    pub right_copies: Vec<String>,
+}
+
+pub fn explained_subtrees(
+    dirs_diff: &Diff,
+    copies_right: &BTreeMap<String, String>,
+    copies_left: &BTreeMap<String, String>,
+) -> Explained {
+    let (left, right, _) = classify(dirs_diff, copies_right, copies_left);
+    let dirs = |findings: &[Finding], status: Status| -> Vec<Finding> {
+        let mut out: Vec<Finding> = findings
+            .iter()
+            .filter(|f| f.entry.is_dir() && !f.entry.path.is_empty() && f.status == status)
+            .cloned()
+            .collect();
+        out.sort_by_key(|f| std::cmp::Reverse(f.rolled_up));
+        out
+    };
+    let paths = |findings: Vec<Finding>| -> Vec<String> {
+        findings.into_iter().map(|f| f.entry.path).collect()
+    };
+    Explained {
+        moves: dirs(&left, Status::MovedOut)
+            .into_iter()
+            .map(|f| {
+                let dst = f.peer.clone().unwrap_or_default();
+                (f.entry.path, dst)
+            })
+            .collect(),
+        left_copies: paths(dirs(&left, Status::RemovedButCopyRemains)),
+        right_copies: paths(dirs(&right, Status::AddedFromCopy)),
+    }
 }
 
 // tree assembly

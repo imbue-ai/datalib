@@ -4,7 +4,7 @@ export const CONFIG_MUTATING = [
   "manager2-browse",
   "manager2-sync",
   "manager2-name",
-  "grid-source-name",
+  "grid-source-id",
   "sources-view",
   "wizard-select",
   "wizard-email",

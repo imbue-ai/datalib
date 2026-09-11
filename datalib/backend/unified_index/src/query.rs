@@ -12,12 +12,16 @@ pub enum Field {
     /// The provider's human label ("Slack") — one value per source
     /// *type*, so it cannot separate two configured Slack workspaces.
     Source,
-    /// The configured source: the stanza directory a row's rendered
-    /// document lives under. Matched as a prefix of `qmd_path` rather
-    /// than as a column of its own — `grid_rows` has no `source_name`.
-    /// Note this filters on the *name*, never on the mutable `label`
-    /// the config may also carry: the index has never read the config.
-    SourceName,
+    /// The configured source's **id** — the group id, which is also
+    /// the stanza directory a row's rendered document lives under.
+    /// Matched as a prefix of `qmd_path` rather than as a column of its
+    /// own: `grid_rows` has no column for it.
+    ///
+    /// It is the id and never the group's display name. A name is
+    /// mutable and two groups may share one, so a filter on it would
+    /// be wrong twice over; the index has never read the config, so it
+    /// could not resolve one anyway.
+    SourceId,
     Kind,
     Channel,
     /// UUID-load-bearing filter on `conversation_uuid`. Token values follow
@@ -40,7 +44,11 @@ impl Field {
             "subj" => Field::Subj,
             "type" => Field::Type,
             "source" => Field::Source,
-            "source_name" => Field::SourceName,
+            "source_id" => Field::SourceId,
+            // `source_name:` is what this filter was called while a
+            // source had nothing but an id. Kept because users type it
+            // and saved queries hold it.
+            "source_name" => Field::SourceId,
             "kind" => Field::Kind,
             "channel" => Field::Channel,
             "convo" => Field::Convo,
@@ -410,6 +418,21 @@ mod tests {
         let q = parse_query("source:Slack kind:Chat");
         assert_eq!(q.filters[&Field::Source], vec!["Slack".to_string()]);
         assert_eq!(q.filters[&Field::Kind], vec!["Chat".to_string()]);
+    }
+
+    /// `source_name:` was this filter's only spelling for as long as a
+    /// source had nothing but an id, so it is in users' fingers and in
+    /// saved queries. Both spellings have to reach the same field, or
+    /// one of them silently becomes free text.
+    #[test]
+    fn source_id_accepts_its_old_source_name_spelling() {
+        for q in ["source_id:slack", "source_name:slack"] {
+            let parsed = parse_query(q);
+            assert_eq!(parsed.terms.len(), 1, "{q}");
+            assert_eq!(parsed.terms[0].field, Field::SourceId, "{q}");
+            assert_eq!(parsed.terms[0].value, "slack", "{q}");
+            assert!(parsed.free_text.is_empty(), "{q}: {:?}", parsed.free_text);
+        }
     }
 
     #[test]

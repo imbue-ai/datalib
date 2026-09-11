@@ -654,8 +654,10 @@ pub struct SourceInfo {
 #[derive(Debug, Deserialize)]
 pub struct EnqueueJobRequest {
     pub kind: String,
-    #[serde(default)]
-    pub source_name: Option<String>,
+    /// Comma-separated source-step ids to narrow the run to. Empty or
+    /// absent syncs the whole config.
+    #[serde(default, alias = "source_name")]
+    pub source_ids: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1261,7 +1263,7 @@ async fn sync_enqueue(
 ) -> Result<Json<SyncJobRow>, StatusCode> {
     // Validate the discriminator server-side; the DB column is a
     // VARCHAR with no enum constraint so we'd otherwise accept
-    // anything. `All` (one DAG run, `source_name` optionally selecting
+    // anything. `All` (one DAG run, `source_ids` optionally selecting
     // a subset) is the only live kind — the legacy fixed-phase kinds
     // died with the fixed-phase orchestrator and are rejected, though
     // historical rows keep whatever kind they were written with.
@@ -1271,7 +1273,7 @@ async fn sync_enqueue(
     }
     let row = s
         .app
-        .enqueue_job(kind, req.source_name.as_deref())
+        .enqueue_job(kind, req.source_ids.as_deref())
         .await
         .map_err(repo_err_to_status)?;
     // Push the new (pending) job so SSE clients show it immediately,
@@ -1279,7 +1281,7 @@ async fn sync_enqueue(
     let _ = s.progress_tx.send(worker::ProgressEvent {
         id: row.id.clone(),
         kind: row.kind.clone(),
-        source_name: row.source_name.clone(),
+        source_ids: row.source_ids.clone(),
         state: row.job_state().unwrap_or(JobState::Pending),
         progress_pct: row.progress_pct,
         progress_msg: row.progress_msg.clone(),
@@ -1340,7 +1342,7 @@ async fn sync_job_cancel(
     let _ = s.progress_tx.send(worker::ProgressEvent {
         id,
         kind: String::new(),
-        source_name: None,
+        source_ids: None,
         state: JobState::Canceled,
         progress_pct: None,
         progress_msg: None,
@@ -1407,6 +1409,21 @@ mod tests {
             checked.diagnostics
         );
         source_ids(&checked)
+    }
+
+    /// The field was called `source_name` for as long as a source had
+    /// nothing but an id, and a script or agent driving the HTTP API
+    /// may still post that spelling.
+    #[test]
+    fn enqueue_accepts_the_old_source_name_key() {
+        let old: EnqueueJobRequest =
+            serde_json::from_str(r#"{"kind":"all","source_name":"slack/ingest"}"#).unwrap();
+        assert_eq!(old.source_ids.as_deref(), Some("slack/ingest"));
+        let new: EnqueueJobRequest =
+            serde_json::from_str(r#"{"kind":"all","source_ids":"slack/ingest"}"#).unwrap();
+        assert_eq!(new.source_ids, old.source_ids);
+        let neither: EnqueueJobRequest = serde_json::from_str(r#"{"kind":"all"}"#).unwrap();
+        assert_eq!(neither.source_ids, None);
     }
 
     /// Whatever the scaffold emits has to survive the round trip the

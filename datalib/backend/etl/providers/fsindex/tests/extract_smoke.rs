@@ -31,26 +31,39 @@ fn make_initial_tree(root: &Path) {
     symlink("subdir/nested.txt", root.join("hello.link")).unwrap();
 }
 
-async fn dump_files(db: &RawDb) -> String {
-    let rows = sqlx::query(
-        "SELECT id, kind, size, blake3, symlink_target, identity_uuid \
-         FROM files ORDER BY id",
-    )
-    .fetch_all(db.pool())
-    .await
-    .unwrap();
+fn hex(bytes: Vec<u8>) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Both tables, `dirs` first, each in id order.
+async fn dump_entries(db: &RawDb) -> String {
     let mut out = String::new();
-    for r in rows {
+    let dirs = sqlx::query("SELECT id, size, entries, blake3, identity_uuid FROM dirs ORDER BY id")
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+    for r in dirs {
+        let id: String = r.try_get("id").unwrap();
+        let size: i64 = r.try_get("size").unwrap();
+        let entries: i64 = r.try_get("entries").unwrap();
+        let blake3 = hex(r.try_get("blake3").unwrap());
+        let identity_uuid: Option<String> = r.try_get("identity_uuid").unwrap();
+        out.push_str(&format!(
+            "dir     id={id:24} size={size:5} entries={entries:3} blake3={blake3} uuid={identity_uuid:?}\n"
+        ));
+    }
+    let files = sqlx::query("SELECT id, kind, size, blake3, symlink_target FROM files ORDER BY id")
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+    for r in files {
         let id: String = r.try_get("id").unwrap();
         let kind: String = r.try_get("kind").unwrap();
         let size: i64 = r.try_get("size").unwrap();
-        // blake3 is a 32-byte BLOB; render as hex for the snapshot.
-        let blake3_bytes: Vec<u8> = r.try_get("blake3").unwrap();
-        let blake3: String = blake3_bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let blake3 = hex(r.try_get("blake3").unwrap());
         let symlink_target: Option<String> = r.try_get("symlink_target").unwrap();
-        let identity_uuid: Option<String> = r.try_get("identity_uuid").unwrap();
         out.push_str(&format!(
-            "id={id:32} kind={kind:7} size={size:5} blake3={blake3} symlink={symlink_target:?} uuid={identity_uuid:?}\n"
+            "{kind:7} id={id:24} size={size:5} blake3={blake3} symlink={symlink_target:?}\n"
         ));
     }
     out
@@ -113,7 +126,7 @@ fn fetch_opts(db: &RawDb, root: &Path, cache: FingerprintCache) -> FetchOptions 
 }
 
 async fn dir_identity_uuid(db: &RawDb, id: &str) -> Option<String> {
-    let row = sqlx::query("SELECT identity_uuid FROM files WHERE id = ? AND kind = 'dir'")
+    let row = sqlx::query("SELECT identity_uuid FROM dirs WHERE id = ?")
         .bind(id)
         .fetch_one(db.pool())
         .await
@@ -146,9 +159,9 @@ async fn initial_scan_and_incremental_rescan() {
         "no_stamp=true, no breadcrumbs written"
     );
     // `junk.tmp` is ignored; `.fsindex.yaml` is scanner metadata, not
-    // a content row. So `files` should hold:
-    //   root (D), hello.txt (F), empty.txt (F), hello.link (L),
-    //   subdir (D), subdir/nested.txt (F), subdir/another.txt (F)
+    // a content row. So `dirs` should hold root and subdir, and `files`
+    //   hello.txt (F), empty.txt (F), hello.link (L),
+    //   subdir/nested.txt (F), subdir/another.txt (F)
     // = 7 entries on unix; 6 on non-unix (no symlink).
     #[cfg(unix)]
     assert_eq!(summary_a.entries_scanned, 7);
@@ -156,7 +169,7 @@ async fn initial_scan_and_incremental_rescan() {
     assert_eq!(summary_a.entries_scanned, 6);
     assert_inode_stamp_kind(&cache, &root).await;
 
-    insta::assert_snapshot!("initial_scan", dump_files(&db).await);
+    insta::assert_snapshot!("initial_scan", dump_entries(&db).await);
 
     // ── Phase A2: rescan with no changes — Unison fast path ─────────
     // This is the test that the inode-based cursor is actually
@@ -224,7 +237,7 @@ async fn initial_scan_and_incremental_rescan() {
         assert_eq!(summary_b.symlinks, 1);
     }
 
-    let dump_b = dump_files(&db).await;
+    let dump_b = dump_entries(&db).await;
     // Truncate-and-rebuild: the deleted file must not appear.
     assert!(
         !dump_b.contains("empty.txt"),
@@ -235,7 +248,7 @@ async fn initial_scan_and_incremental_rescan() {
 
 /// Stamping is the same streaming scan plus a post-write enrichment
 /// pass: a dir whose cascade enables `stamp_me_with_uuid` gets a UUID
-/// breadcrumb written into it and its `files.identity_uuid` set. A
+/// breadcrumb written into it and its `dirs.identity_uuid` set. A
 /// second scan is idempotent — it reuses the existing breadcrumb and
 /// writes no new ones. This is the path that used to be the untested
 /// `legacy_inmemory` branch.

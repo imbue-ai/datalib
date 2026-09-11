@@ -83,7 +83,7 @@ impl Harness {
         let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
         ingest::fetch(tweak(ingest::FetchOptions {
             db,
-            source_name: STANZA.to_string(),
+            source_id: STANZA.to_string(),
             root: self.root.clone(),
             cache,
             ignore: vec![],

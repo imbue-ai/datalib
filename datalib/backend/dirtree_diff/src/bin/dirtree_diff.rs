@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use datalib_dirtree_diff::model::{Inputs, SideInput};
-use datalib_dirtree_diff::store::{self, SideSpec};
+use datalib_dirtree_diff::analyze::{explained_subtrees, pair_moves};
+use datalib_dirtree_diff::model::{Diff, Entry, Inputs, SideInput};
+use datalib_dirtree_diff::store::{self, SideSpec, Skip, Table};
 use datalib_dirtree_diff::{analyze, parse_size, render};
 use datalib_obs::{init as init_obs, ObsArgs};
 
@@ -98,20 +99,43 @@ async fn main() -> Result<()> {
         store::open(&unified).await?
     };
 
-    let diff = store::fetch_diff(&pool, &left_commit, &right_commit).await?;
-
+    // Directories first. A directory's tree-hash covers its subtree,
+    // so the `dirs` diff — a few percent of the rows — already says
+    // which subtrees moved or were copied whole, and the `files` diff
+    // can leave their interiors out.
+    let mut diff = store::fetch_diff(
+        &pool,
+        Table::Dirs,
+        &left_commit,
+        &right_commit,
+        &Skip::default(),
+    )
+    .await?;
     let (mut copies_right, mut copies_left) = (Default::default(), Default::default());
     if !args.no_copy_detection {
-        // Only digests the move pairing could not already account for
-        // need the corpus scan.
-        let (_, residual_removed, residual_added) =
-            datalib_dirtree_diff::analyze::pair_moves(&diff);
-        let want_right: BTreeSet<String> =
-            residual_removed.iter().map(|e| e.digest.clone()).collect();
-        let want_left: BTreeSet<String> = residual_added.iter().map(|e| e.digest.clone()).collect();
+        let (want_right, want_left) = unmatched(&diff);
         copies_right = store::lookup_digests(&pool, &right_commit, &want_right).await?;
         copies_left = store::lookup_digests(&pool, &left_commit, &want_left).await?;
     }
+    let skip = Skip::new(&explained_subtrees(&diff, &copies_right, &copies_left));
+    tracing::info!(
+        dir_rows = diff.removed.len() + diff.added.len() + diff.modified.len(),
+        skipped_left = skip.left.len(),
+        skipped_right = skip.right.len(),
+        "directory-level diff read; leaving the explained subtrees out of the file diff"
+    );
+
+    let files = store::fetch_diff(&pool, Table::Files, &left_commit, &right_commit, &skip).await?;
+    if !args.no_copy_detection {
+        // Only digests the move pairing could not already account for
+        // need the corpus scan.
+        let (want_right, want_left) = unmatched(&files);
+        copies_right.extend(store::lookup_digests(&pool, &right_commit, &want_right).await?);
+        copies_left.extend(store::lookup_digests(&pool, &left_commit, &want_left).await?);
+    }
+    diff.removed.extend(files.removed);
+    diff.added.extend(files.added);
+    diff.modified.extend(files.modified);
 
     let inputs = Inputs {
         left: SideInput {
@@ -188,4 +212,16 @@ async fn main() -> Result<()> {
         tracing::info!(path = %kept.display(), "scratch database kept");
     }
     Ok(())
+}
+
+/// The `(kind, digest)` pairs the move pairing left over on each side:
+/// removed rows to look for on the right, added rows on the left.
+#[allow(clippy::type_complexity)]
+fn unmatched(diff: &Diff) -> (BTreeSet<(String, String)>, BTreeSet<(String, String)>) {
+    let (_, residual_removed, residual_added) = pair_moves(diff);
+    let key = |e: &Entry| (e.kind.clone(), e.digest.clone());
+    (
+        residual_removed.iter().map(key).collect(),
+        residual_added.iter().map(key).collect(),
+    )
 }
