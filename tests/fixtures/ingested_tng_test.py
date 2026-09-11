@@ -591,8 +591,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """`source_id -> store_commit` from the index's cursor table."""
         rows = self._query(
             self._index_db,
-            "SELECT source_id, store_commit FROM source_cursors "
-            "ORDER BY source_id;",
+            "SELECT source_id, store_commit FROM source_cursors ORDER BY source_id;",
         )
         out: dict[str, str] = {}
         for line in rows:
