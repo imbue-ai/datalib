@@ -37,7 +37,7 @@ pub struct RenderSummary {
 pub fn render_all(
     parsed: &ParsedBeeper,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -59,7 +59,7 @@ pub fn render_all(
             &network.profile,
             &network.chats,
             out_dir,
-            source_name,
+            source_id,
             &blobs_by_chat,
             progress,
             prior_fingerprints,

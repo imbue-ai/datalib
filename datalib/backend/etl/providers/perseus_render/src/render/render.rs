@@ -50,7 +50,7 @@ pub fn render_all(
     parsed: &ParsedPerseus,
     alignments: &PerseusAlignments,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -87,7 +87,7 @@ pub fn render_all(
         render_book(
             book,
             out_dir,
-            source_name,
+            source_id,
             prior_fingerprints,
             &mut summary,
             on_doc_complete,
@@ -106,7 +106,7 @@ pub fn render_all(
                     edition,
                     alignments,
                     out_dir,
-                    source_name,
+                    source_id,
                     prior_fingerprints,
                     &mut summary,
                     on_doc_complete,
@@ -129,7 +129,7 @@ fn chapter_covers(chapter: &Chapter, edition_id: &str) -> bool {
 fn render_book(
     book: &Book,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     prior_fingerprints: &HashMap<String, String>,
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -137,7 +137,7 @@ fn render_book(
 ) -> Result<()> {
     let m_uuid = book_uuid(&book.n);
     let fingerprint = compute_book_fingerprint(book);
-    let book_dir = render_markdown_root(out_dir, source_name).join(book_content_rel(&book.n));
+    let book_dir = render_markdown_root(out_dir, source_id).join(book_content_rel(&book.n));
     fs::create_dir_all(&book_dir).with_context(|| format!("mkdir -p {}", book_dir.display()))?;
     let md_path = book_dir.join("index.md");
 
@@ -154,7 +154,7 @@ fn render_book(
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
     let mut problems: Vec<RenderProblemRow> = Vec::new();
-    let rows: Vec<GridRow> = book_grid_row(source_name, book, &m_uuid, &mut problems)
+    let rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &mut problems)
         .into_iter()
         .collect();
     let edges: Vec<EdgeRow> = Vec::new();
@@ -162,7 +162,7 @@ fn render_book(
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
-        source_name: source_name.to_string(),
+        source_id: source_id.to_string(),
         source_fingerprint: fingerprint,
         upstream_cursor: None,
         md_path,
@@ -184,7 +184,7 @@ fn render_chapter(
     edition: &Edition,
     alignments: &PerseusAlignments,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     prior_fingerprints: &HashMap<String, String>,
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -192,7 +192,7 @@ fn render_chapter(
 ) -> Result<()> {
     let m_uuid = chapter_uuid(&book.n, &chapter.n, &edition.id);
     let fingerprint = compute_chapter_fingerprint(book, chapter, edition, alignments);
-    let rel = chapter_md_rel(source_name, &book.n, &chapter.n, &edition.id);
+    let rel = chapter_md_rel(source_id, &book.n, &chapter.n, &edition.id);
     let md_path = out_dir.join(&rel);
 
     seen.insert(m_uuid.clone());
@@ -219,7 +219,7 @@ fn render_chapter(
         edition,
         &m_uuid,
         &rel,
-        source_name,
+        source_id,
         &mut problems,
     ));
     let mut idx = 0i64;
@@ -239,7 +239,7 @@ fn render_chapter(
             &rel,
             text,
             idx,
-            source_name,
+            source_id,
             &mut problems,
         ));
         idx += 1;
@@ -249,7 +249,7 @@ fn render_chapter(
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
-        source_name: source_name.to_string(),
+        source_id: source_id.to_string(),
         source_fingerprint: fingerprint,
         upstream_cursor: None,
         md_path,

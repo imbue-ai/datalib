@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use crate::db::{build_where, datalib_source_name, snippet, ChatMeta};
+use crate::db::{build_where, datalib_source_id, snippet, ChatMeta};
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::repo::{DocRow, EdgeRowOut, IndexRepo};
@@ -66,7 +66,7 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
         org_name: r.try_get("org_name").unwrap_or_default(),
         entire_chat: r.try_get("entire_chat").unwrap_or_default(),
         source: r.try_get("source_label").unwrap_or_default(),
-        source_name: source_name_for(provider.as_deref(), &qmd_path),
+        source_id: source_id_for(provider.as_deref(), &qmd_path),
         kind,
         author,
         channel: r.try_get("channel").unwrap_or_default(),
@@ -81,30 +81,28 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
     }
 }
 
-/// The source a row is filed under, which is the source it *belongs to*
-/// rather than the directory it happens to sit in.
+/// The id of the source a row is filed under, which is the source it
+/// *belongs to* rather than the directory it happens to sit in.
 ///
 /// For everything a provider rendered the two are the same, and the
-/// answer is [`source_name_from_qmd_path`]. The storage rows are the
+/// answer is [`source_id_from_qmd_path`]. The storage rows are the
 /// exception: each source's measurements are written into that source's
 /// own `render_markdown/`, because that is the one tree the render step
 /// may write, but a measurement is datalib describing the mirror rather
 /// than part of it. So they are filed under datalib, which is what
 /// their `provider` tag already says — see `Provider::Datalib`.
-fn source_name_for(provider: Option<&str>, qmd_path: &str) -> String {
-    if provider == Some(datalib_source_name()) {
-        return datalib_source_name().to_string();
+fn source_id_for(provider: Option<&str>, qmd_path: &str) -> String {
+    if provider == Some(datalib_source_id()) {
+        return datalib_source_id().to_string();
     }
-    source_name_from_qmd_path(qmd_path)
+    source_id_from_qmd_path(qmd_path)
 }
 
 /// The first segment of a document's data-root-relative path
-/// (`slack/render_markdown/x/all.md` → `slack`). This is the same
-/// derivation `datalib-step` uses to name a source from its declared
-/// outputs, and the same one `grid_index` uses when it walks one
-/// directory per stanza — the stanza directory name *is* the
-/// config-level name.
-fn source_name_from_qmd_path(qmd_path: &str) -> String {
+/// (`slack/render_markdown/x/all.md` → `slack`). The stanza directory
+/// *is* the group id, which is what `grid_index` relies on when it
+/// walks one directory per group.
+fn source_id_from_qmd_path(qmd_path: &str) -> String {
     match qmd_path.split_once('/') {
         Some((first, _)) => first.to_string(),
         None => String::new(),
@@ -416,24 +414,24 @@ mod tests {
     /// `datalib-step` names a source from its declared outputs and how
     /// `grid_index` names one from the directory it walked.
     #[test]
-    fn source_name_is_the_first_path_segment() {
+    fn source_id_is_the_first_path_segment() {
         assert_eq!(
-            source_name_from_qmd_path("slack/render_markdown/abc/all.md"),
+            source_id_from_qmd_path("slack/render_markdown/abc/all.md"),
             "slack"
         );
         assert_eq!(
-            source_name_from_qmd_path("claude-api/render_markdown/x/all.md"),
+            source_id_from_qmd_path("claude-api/render_markdown/x/all.md"),
             "claude-api"
         );
         // Sharded renders nest deeper; the stanza is still segment one.
         assert_eq!(
-            source_name_from_qmd_path("beeper/render_markdown/googlechat/x/2024-03.md"),
+            source_id_from_qmd_path("beeper/render_markdown/googlechat/x/2024-03.md"),
             "beeper"
         );
         // No separator means the renderer wrote outside its own tree —
         // report nothing rather than claim the filename is a source.
-        assert_eq!(source_name_from_qmd_path("all.md"), "");
-        assert_eq!(source_name_from_qmd_path(""), "");
+        assert_eq!(source_id_from_qmd_path("all.md"), "");
+        assert_eq!(source_id_from_qmd_path(""), "");
     }
 
     /// A storage row sits under the source it measures and is filed
@@ -442,8 +440,8 @@ mod tests {
     #[test]
     fn measurements_are_filed_under_datalib_not_the_measured_source() {
         let path = "claude-api/render_markdown/_datalib/storage.md";
-        assert_eq!(source_name_for(Some("datalib"), path), "datalib");
-        assert_eq!(source_name_for(Some("claude"), path), "claude-api");
-        assert_eq!(source_name_for(None, path), "claude-api");
+        assert_eq!(source_id_for(Some("datalib"), path), "datalib");
+        assert_eq!(source_id_for(Some("claude"), path), "claude-api");
+        assert_eq!(source_id_for(None, path), "claude-api");
     }
 }

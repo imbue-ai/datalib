@@ -147,7 +147,7 @@ function currentMarkdownUuids(): string[] {
 async function loadSourceNames() {
   try {
     const cfg = await fetchConfig();
-    // A row's `source_name` is the group its document lives under
+    // A row's `source_id` is the group its document lives under
     // (`work-slack`) — the directory, not a step id — so the join is
     // group id → the group's name, and a group with no name shows its
     // id, the same as the column showed before names existed.
@@ -156,7 +156,7 @@ async function loadSourceNames() {
       if (group.name) m.set(group.id, group.name);
     }
     sourceNames.value = m;
-    gridApi?.refreshCells({ columns: ["source_name"], force: true });
+    gridApi?.refreshCells({ columns: ["source_id"], force: true });
   } catch {
     /* names are cosmetic; the column falls back to the source id */
   }
@@ -164,7 +164,7 @@ async function loadSourceNames() {
 
 /// Datalib's own rows — each source's storage report — are filed under
 /// datalib rather than under the source they measure, so their
-/// `source_name` names no configured group and the display name has to
+/// `source_id` names no configured group and the display name has to
 /// come from here.
 const DATALIB_SOURCE_ID = "datalib";
 const DATALIB_SOURCE_NAME = "Datalib";
@@ -172,9 +172,9 @@ const DATALIB_SOURCE_NAME = "Datalib";
 /// What the "Source" column shows: the configured name when there is
 /// one, else the id — the directory the row's document lives under.
 function sourceNameFor(row: SearchRow | null | undefined): string {
-  if (!row?.source_name) return "";
-  if (row.source_name === DATALIB_SOURCE_ID) return DATALIB_SOURCE_NAME;
-  return sourceNames.value.get(row.source_name) ?? row.source_name;
+  if (!row?.source_id) return "";
+  if (row.source_id === DATALIB_SOURCE_ID) return DATALIB_SOURCE_NAME;
+  return sourceNames.value.get(row.source_id) ?? row.source_id;
 }
 
 // True when either index-state column is on screen. Both are hidden by
@@ -397,7 +397,7 @@ type FilterCtx = {
 };
 
 // Map AG Grid colId → query-language key + header. Keep in sync with
-// `column_for_field` in backend/core/src/db.rs.
+// `column_for_field` in backend/unified_index/src/db.rs.
 //
 // `uuidCol` (when set) names a sibling row field carrying the load-bearing
 // UUID for this filter. The cell's display text becomes a non-load-bearing
@@ -408,7 +408,7 @@ const FILTER_COLUMNS: Record<
   { key: string; header: string; uuidCol?: keyof SearchRow }
 > = {
   source: { key: "source", header: "Provider" },
-  source_name: { key: "source_name", header: "Source" },
+  source_id: { key: "source_id", header: "Source" },
   kind: { key: "kind", header: "Type" },
   channel: { key: "channel", header: "Channel" },
   author: { key: "author", header: "Author", uuidCol: "author" },
@@ -868,8 +868,8 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   // The configured source, as opposed to the provider icon left of it:
   // two Slack workspaces are one "Provider" and two of these.
   {
-    field: "source_name",
-    colId: "source_name",
+    field: "source_id",
+    colId: "source_id",
     headerName: "Source",
     headerTooltip:
       "The configured source this row came from — its id is its directory under the " +
@@ -878,7 +878,7 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     width: 130,
     valueGetter: (p) => sourceNameFor(p.data),
     tooltipValueGetter: (p) => {
-      const id = p.data?.source_name ?? "";
+      const id = p.data?.source_id ?? "";
       if (!id) return "";
       if (id === DATALIB_SOURCE_ID) return "Datalib's own row, not a source's data";
       const name = sourceNames.value.get(id);

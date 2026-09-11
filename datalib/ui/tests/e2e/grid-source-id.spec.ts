@@ -1,4 +1,4 @@
-// The unified index grid's "Source" column, and the `source_name:`
+// The unified index grid's "Source" column, and the `source_id:`
 // filter behind it.
 //
 // The column answers a question the "Provider" column cannot: which
@@ -12,7 +12,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { searchAndSettle } from "./grid-helpers";
 
-const SOURCE_CELLS = '.ag-grid-scrolling-rows [col-id="source_name"]';
+const SOURCE_CELLS = '.ag-grid-scrolling-rows [col-id="source_id"]';
 
 /// The distinct, non-empty texts in the Source column, in set order.
 async function distinctSourceCells(page: Page): Promise<string[]> {
@@ -55,7 +55,7 @@ test.afterEach(async ({ page }) => {
   if (original) await writeConfig(page, original);
 });
 
-test("the Source column shows the configured name, and source_name: filters by id", async ({
+test("the Source column shows the configured name, and source_id: filters by id", async ({
   page,
 }) => {
   // Two config writes plus five searches, any of which may land after
@@ -66,18 +66,26 @@ test("the Source column shows the configured name, and source_name: filters by i
   await openGrid(page);
   await expect(page.locator(SOURCE_CELLS, { hasText: "slack" }).first()).toBeVisible();
 
-  // --- `source_name:` narrows to one source ------------------------
+  // --- `source_id:` narrows to one source --------------------------
   // Every visible cell must read `slack` — the filter is a whole-segment
   // prefix test on qmd_path, not a substring match on anything.
-  await searchAndSettle(page, "source_name:slack type:all");
+  await searchAndSettle(page, "source_id:slack type:all");
   await expect(page.locator(SOURCE_CELLS).first()).toBeVisible();
+  expect(
+    await distinctSourceCells(page),
+  ).toEqual(["slack"]);
+
+  // `source_name:` is the spelling this filter had before a source had
+  // a name to collide with, so it is in saved queries and in people's
+  // fingers. It has to keep landing on the same rows.
+  await searchAndSettle(page, "source_name:slack type:all");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["slack"]);
 
   // A stanza that exists in the fixture but isn't the one asked for
   // must be excluded, so the filter is provably doing work.
-  await searchAndSettle(page, "source_name:claude-api type:all");
+  await searchAndSettle(page, "source_id:claude-api type:all");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["claude-api"]);
@@ -86,7 +94,7 @@ test("the Source column shows the configured name, and source_name: filters by i
   // under `datalib` rather than the source they measure, which is why
   // neither search above turned one up. They have their own bucket,
   // and the column spells it out.
-  await searchAndSettle(page, "source_name:datalib type:all");
+  await searchAndSettle(page, "source_id:datalib type:all");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["Datalib"]);
@@ -112,13 +120,13 @@ inputs = ["slack/ingest"]
   );
 
   await openGrid(page);
-  await searchAndSettle(page, "source_name:slack type:all");
+  await searchAndSettle(page, "source_id:slack type:all");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["Work Slack"]);
 
   // The filter token still carries the id, not the name: the index has
   // never heard of names, and two sources may share one.
-  await searchAndSettle(page, 'source_name:"Work Slack" type:all');
+  await searchAndSettle(page, 'source_id:"Work Slack" type:all');
   await expect(page.locator(SOURCE_CELLS)).toHaveCount(0);
 });

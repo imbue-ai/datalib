@@ -332,9 +332,9 @@ export function claimedBy(
   const stepIds = steps.filter((s) => s.kind === "step").map((s) => s.id);
   for (const job of jobs) {
     if (job.state !== "pending" && job.state !== "running") continue;
-    // The worker splits `source_name` on commas and passes each as its
+    // The worker splits `source_ids` on commas and passes each as its
     // own `--sync`; empty means the whole config.
-    const seeds = (job.source_name ?? "")
+    const seeds = (job.source_ids ?? "")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
@@ -411,16 +411,16 @@ export function stepStatus(args: {
     // is the row most likely to be read: a source step is what you
     // pressed the button on. Name the sync only when it is some *other*
     // row's.
-    const seeds = (claim.source_name ?? "")
+    const seeds = (claim.source_ids ?? "")
       .split(",")
       .map((x) => x.trim())
       .filter(Boolean);
     const isOwnSync = seeds.length === 1 && seeds[0] === args.id;
-    const sync = !claim.source_name
+    const sync = !claim.source_ids
       ? "a sync of everything"
       : isOwnSync
         ? "this sync"
-        : `the sync of ${claim.source_name}`;
+        : `the sync of ${claim.source_ids}`;
     // Name what this row is behind. Upstream steps first, because that
     // is the specific answer; the job itself is the fallback when there
     // is nothing upstream left to wait for.

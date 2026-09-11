@@ -14,7 +14,7 @@ const SEARCH = '[data-testid="search-input"]';
 /// The fixture root declares the `unified_index` group (as a real root
 /// does) but no sources — the per-source rendered trees arrive as tars,
 /// with nothing in the config describing them. So the sources this spec
-/// browses are declared here first, the way `grid-source-name.spec.ts`
+/// browses are declared here first, the way `grid-source-id.spec.ts`
 /// does it.
 ///
 /// `media` is the negative case and is the real shape: it is one of the
@@ -123,11 +123,11 @@ test.afterEach(async ({ page }) => {
 test("a source's row opens that source, with its type's columns", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browse(page, "slack", "source_name:slack");
+  await browse(page, "slack", "source_id:slack");
 
   // The card stack IS the URL, which is what makes a browse
   // bookmarkable and shareable rather than a transient view.
-  await expect(page).toHaveURL(/source_name%3Aslack/);
+  await expect(page).toHaveURL(/source_id%3Aslack/);
 
   // Every row came from this source. The Source column is hidden here —
   // one value, so the adaptive rule drops it — which is why this reads
@@ -156,7 +156,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
 test("a different type gets a different column set", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browse(page, "github", "source_name:github");
+  await browse(page, "github", "source_id:github");
 
   // GitHub's preset is an author and the repo the row belongs to, and
   // no channel — the opposite pair to Slack's, from the same fixture.
@@ -179,7 +179,7 @@ test("the index group browses every source", async ({ page }) => {
   // (#384). The query itself is already asserted by `browse` above.
   await expect
     .poll(async () => {
-      const sources = await columnValues(page, "source_name");
+      const sources = await columnValues(page, "source_id");
       return new Set(sources.map((s) => s.trim()).filter(Boolean)).size;
     })
     .toBeGreaterThan(1);

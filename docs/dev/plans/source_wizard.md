@@ -11,7 +11,7 @@ that took the grid routes out of `datalib-http`, and the removal of the
 download report. Claims below have been re-checked against that main;
 the ones that changed are called out where they sit.
 Related: [#171](https://github.com/imbue-ai/datalib/issues/171)
-(`grid_rows` needs `source_name` before the sources grid can count rows
+(`grid_rows` needs a per-source id before the sources grid can count rows
 per source). Per
 [`AGENTS.md`](../../../AGENTS.md), don't cite this file as a description of
 the tree — it describes work we intend to do. When the first slice
@@ -288,7 +288,7 @@ and neither was recorded per step:
 
 - `sync_jobs` (in `system/jobs.doltlite_db`) is per *run*, and a run
   routinely covers several steps — the UI comma-joins step ids into one
-  job's `source_name`. A multi-step job that failed didn't say which
+  job's `source_ids`. A multi-step job that failed didn't say which
   step failed. That is what the `~` marker beside the status was
   apologizing for.
 - `DagState`'s `StepState` *was* per step, but held only
@@ -354,7 +354,7 @@ against its own child.
 ### Document counts must go through the applet
 
 The first draft had `datalib-http` running
-`SELECT source_name, COUNT(*) FROM markdowns GROUP BY source_name`.
+`SELECT source_id, COUNT(*) FROM markdowns GROUP BY source_id`.
 **That is no longer allowed.** `core/src/layout.rs` now states that
 `unified_index/` is "owned end to end by the `unified_index` applet and
 the two steps that write it; nothing in `datalib-http` or `datalib-dag`
@@ -876,7 +876,7 @@ loader before it comes back.
 "Create" appends it to the editor buffer and saves via the existing
 `PUT /api/config`. A trailing checkbox — *Sync this source now* —
 enqueues the job that already exists (`enqueueJob({kind:"all",
-source_name})`), which is the seam where this flow hands off to the
+source_ids})`), which is the seam where this flow hands off to the
 execution half.
 
 ## Create, edit, delete: one descriptor, three verbs
@@ -942,7 +942,7 @@ Column list and data sources are in [The Manage screen](#the-manage-screen)
 above. What follows is the part that needs argument rather than a table.
 
 `markdowns` is what makes per-source attribution possible at all: it
-carries `source_name`, so counts attribute to the *configured source*.
+carries `source_id`, so counts attribute to the *configured source*.
 `grid_rows` has only `provider` and `source_label`, under which two
 email sources (`fastmail` and `gmail-takeout`) collapse into one bucket
 — hence [#171](https://github.com/imbue-ai/datalib/issues/171).
@@ -972,7 +972,7 @@ the cell "stored elsewhere" — do not render a confident 0 B.
 
 A source's name is its identity everywhere: it is the stanza directory
 on disk (`<data_root>/<name>/`), the prefix of both its artifact paths
-(`<name>/raw`, `<name>/rendered_md`), the `markdowns.source_name` its
+(`<name>/raw`, `<name>/rendered_md`), the `markdowns.source_id` its
 rows carry, and the stem of its two step ids. Nothing currently enforces
 that it is unique, and the wizard is the moment that stops being
 academic — a "Add Data Source" button with a pre-filled default name
@@ -1047,7 +1047,7 @@ outputs = ["work-slack/raw"]
 **Why the id can't just be renamed.** A source's id appears in seven
 places, and only two of them move when you `mv` the directory. The other
 five have to be rewritten: `system/dag_state.json` keys,
-`markdowns.md_path`, `markdowns.source_name`, `grid_rows.qmd_path`, and
+`markdowns.md_path`, `markdowns.source_id`, `grid_rows.qmd_path`, and
 any applet's `params.tree`. The last three are the dangerous ones,
 because `grid_index` skips a document whose `source_fingerprint` still
 matches — and that fingerprint is the *renderer's input hash*, which does
@@ -1094,25 +1094,29 @@ through its own `params` — so they are shown by their `id`.
 beside the provider icon (which is now labelled "Provider", because that
 is what it always was). The join is client-side and that is the point:
 
-- `SearchRow.source_name` is the source's id, derived server-side as the
+- `SearchRow.source_id` is the source's id, derived server-side as the
   first segment of the row's `qmd_path`
-  (`dolt_repo::source_name_from_qmd_path`) — the same derivation
-  `datalib-step` uses to name a source from its outputs and `grid_index`
-  uses when it walks one directory per source.
+  (`dolt_repo::source_id_from_qmd_path`) — the group's directory, which
+  is also what `grid_index` walks one of per group.
 - The name comes from `config.toml`, read once on mount by `GridCard`
   and joined by that id. It is deliberately *not* an index column: a
   name is free text edited at any moment, while `grid_rows` is written
   by a pipeline step, so storing it there would make renaming a
   re-indexing job — exactly the cost this feature exists to avoid.
 - The cell shows the name; the row still carries the id, so right-click
-  "Keep only" emits `source_name:<id>`. Filtering on a name would be
+  "Keep only" emits `source_id:<id>`. Filtering on a name would be
   wrong twice over: names are mutable, and two sources may share one.
 
-`source_name:` is the one filter with no column behind it. `build_where`
+`source_id:` is the one filter with no column behind it. `build_where`
 matches it as `INSTR(qmd_path, ?) = 1` with a trailing separator on the
 needle — `LIKE 'slack_work/%'` would be wrong, since an id may legally
 contain `_` and LIKE reads that as a wildcard, so
-`source_name:slack_work` would also return a `slackXwork` source.
+`source_id:slack_work` would also return a `slackXwork` source.
+
+The filter answered to `source_name:` for as long as a source had
+nothing but an id, so the parser still accepts that spelling and maps it
+to the same field — saved queries keep working. New callers should emit
+`source_id:` (`browsePresets.ts` and the grid's "Keep only" both do).
 
 **What is and isn't unique.** Names may collide freely — two workspaces
 both called "Slack" is a legitimate thing to want, and the muted id is
@@ -1228,7 +1232,7 @@ document runs `DELETE … WHERE markdown_uuid = ?` followed by an insert
 Nothing in `etl/render/src/grid_index.rs` sweeps rows whose sidecar has
 disappeared, so deleting a `rendered_md` tree by hand today leaves its
 `grid_rows`, `markdowns` and `edges` rows in the index indefinitely.
-An orphan sweep keyed on `source_name` would be the first piece of that
+An orphan sweep keyed on `source_id` would be the first piece of that
 work. (Established by reading the module and its callers, not by
 running it.)
 

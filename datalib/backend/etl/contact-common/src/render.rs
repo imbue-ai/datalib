@@ -57,7 +57,7 @@ pub fn render_all(
     profile: &ContactRenderProfile,
     contacts: &[NormalizedContact],
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -74,7 +74,7 @@ pub fn render_all(
             profile,
             contact,
             out_dir,
-            source_name,
+            source_id,
             prior_fingerprints,
             on_doc_complete,
         ) {
@@ -109,14 +109,14 @@ fn render_one(
     profile: &ContactRenderProfile,
     contact: &NormalizedContact,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Outcome> {
     let m_uuid = &contact.contact_uuid;
     let fingerprint = compute_fingerprint(profile.render_version, contact);
 
-    let (md_path, page_dir) = output_paths(out_dir, source_name, contact);
+    let (md_path, page_dir) = output_paths(out_dir, source_id, contact);
     if prior_fingerprints.get(m_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
     {
@@ -136,7 +136,7 @@ fn render_one(
     let md = render_markdown(
         profile,
         contact,
-        source_name,
+        source_id,
         &fingerprint,
         photo_rel.as_deref(),
     );
@@ -149,13 +149,13 @@ fn render_one(
         .into_owned();
 
     let mut problems: Vec<RenderProblemRow> = Vec::new();
-    let row = build_grid_row(profile, contact, source_name, &md_rel, &mut problems);
+    let row = build_grid_row(profile, contact, source_id, &md_rel, &mut problems);
 
     // `row` reaches the index through `on_doc_complete` below; the
     // renderer writes no projection of its own any more.
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
-        source_name: source_name.to_string(),
+        source_id: source_id.to_string(),
         source_fingerprint: fingerprint,
         upstream_cursor: contact.when_ts.clone(),
         md_path,
@@ -171,7 +171,7 @@ fn render_one(
 
 fn output_paths(
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     contact: &NormalizedContact,
 ) -> (PathBuf, PathBuf) {
     // One directory per contact, keyed by the stable contact UUID — never a
@@ -179,7 +179,7 @@ fn output_paths(
     // The contact's `blobs/` (photo) live inside this dir. Display name and
     // group label still live in the frontmatter + grid row.
     let page_dir =
-        datalib_etl::layout::render_markdown_root(out_dir, source_name).join(&contact.contact_uuid);
+        datalib_etl::layout::render_markdown_root(out_dir, source_id).join(&contact.contact_uuid);
     let md_path = page_dir.join("index.md");
     (md_path, page_dir)
 }
@@ -228,7 +228,7 @@ fn compute_fingerprint(render_version: u32, contact: &NormalizedContact) -> Stri
 fn render_markdown(
     profile: &ContactRenderProfile,
     contact: &NormalizedContact,
-    source_name: &str,
+    source_id: &str,
     fingerprint: &str,
     photo_rel: Option<&str>,
 ) -> String {
@@ -238,7 +238,7 @@ fn render_markdown(
     out.push_str("---\n");
     out.push_str(&format!("markdown_uuid: {m_uuid}\n"));
     out.push_str(&format!("source_fingerprint: {fingerprint}\n"));
-    out.push_str(&format!("source_name: {source_name}\n"));
+    out.push_str(&format!("source_id: {source_id}\n"));
     out.push_str(&format!("provider: {}\n", profile.provider));
     out.push_str(&format!("group: {}\n", yaml_safe(&contact.group_label)));
     if let Some(id) = &contact.external_id {
@@ -299,7 +299,7 @@ fn render_markdown(
 fn build_grid_row(
     profile: &ContactRenderProfile,
     contact: &NormalizedContact,
-    source_name: &str,
+    source_id: &str,
     md_rel: &str,
     problems: &mut Vec<RenderProblemRow>,
 ) -> Option<GridRow> {
@@ -330,7 +330,7 @@ fn build_grid_row(
         .upstream_id(contact.external_id.clone())
         .markdown_uuid(Some(contact.contact_uuid.clone()))
         .build_or_record(
-            source_name,
+            source_id,
             &contact.contact_uuid,
             profile.render_version,
             problems,

@@ -324,7 +324,7 @@ The cost is one schema change and one dispatch branch:
 
 - `sync_jobs` has no payload column (`app_schema/src/sync_jobs.rs`). Add
   `payload: Option<String>` (JSON). The alternative — smuggling a
-  request-file token through `source_name` — saves a column and costs a
+  request-file token through `source_ids` — saves a column and costs a
   concept; not worth it.
 - `sync_enqueue` (`http/src/lib.rs:1098`) currently rejects every kind
   but `"all"`. Add `"qmd_index"`, whose payload is
@@ -497,7 +497,7 @@ Both surfaced while verifying the join against the fixture.
    (`schema/src/grid_rows.rs`) described paths as rooted under
    `rendered_md/<provider>/…` and listed a per-provider mapping table
    that no longer matched any provider. The real shape is
-   `<source_name>/rendered_md/<tail>`. Rewritten against
+   `<source_id>/rendered_md/<tail>`. Rewritten against
    fixture-verified values.
 
 2. **Filed separately.** The `pdf` provider writes `qmd_path` as

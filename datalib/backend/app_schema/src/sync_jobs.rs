@@ -94,10 +94,10 @@ pub struct SyncJobRow {
     #[col(sql = "VARCHAR(36)")]
     pub id: String,
     /// Comma-separated source-step ids this run syncs (the UI's "Sync
-    /// now" → `--sync <group>/raw` per source). NULL/empty = the whole
-    /// config.
+    /// now" → `--sync <group>/ingest` per source). NULL/empty = the
+    /// whole config. Plural: one job routinely covers several steps.
     #[col(sql = "VARCHAR(64)")]
-    pub source_name: Option<String>,
+    pub source_ids: Option<String>,
     /// A [`JobKind`], as its `as_str`.
     #[col(sql = "VARCHAR(16)")]
     pub kind: String,

@@ -190,7 +190,7 @@ impl GridRowBuilder {
     /// built and return `None` so the caller drops it and keeps going.
     pub fn build_or_record(
         self,
-        source_name: &str,
+        source_id: &str,
         scope_key: &str,
         render_version: u32,
         problems: &mut Vec<RenderProblemRow>,
@@ -220,7 +220,7 @@ impl GridRowBuilder {
                 let key = if uuid.trim().is_empty() {
                     format!(
                         "noid:{}",
-                        &blake3_hex(&format!("{source_name}\x1f{scope_key}\x1f{e}"))[..16]
+                        &blake3_hex(&format!("{source_id}\x1f{scope_key}\x1f{e}"))[..16]
                     )
                 } else {
                     uuid
@@ -236,7 +236,7 @@ impl GridRowBuilder {
                     uuid: key,
                     scope_key: scope_key.to_string(),
                     scope_kind: ScopeKind::Markdown.as_str().to_string(),
-                    source_name: source_name.to_string(),
+                    source_id: source_id.to_string(),
                     stage: Stage::GridRow.as_str().to_string(),
                     outcome: Outcome::Dropped.as_str().to_string(),
                     problems: serde_json::to_string(&vec![problem]).unwrap_or_else(|_| "[]".into()),

@@ -219,8 +219,8 @@ email where the raw store has one, else its name, else the provider's
 own id — so grouping by Account groups one person's data across
 sources, and a raw id in the column means "this login has no row to
 resolve against". A source with no login at all (a PDF folder, a
-`.vcf` file, YoLink) leaves it null; the source name is on
-`source_name`, not here.
+`.vcf` file, YoLink) leaves it null; the source's id is on
+`source_id`, not here.
 
 | provider | account | project | channel |
 |---|---|---|---|
@@ -292,8 +292,10 @@ notion.thread) and the parent's for everything below them.
 
 ### `qmd_path`
 
-`<source_name>/render_markdown/<renderer-specific tail>`, where `<source_name>`
-is the config step's name. Verified against the TNG fixture:
+`<source_id>/render_markdown/<renderer-specific tail>`, where `<source_id>`
+is the group's id — its directory under the data root, never the
+display name the config may also give it. Verified against the TNG
+fixture:
 
 ```text
 claude   claude-api/render_markdown/{conversation_uuid}/all.md
@@ -347,19 +349,19 @@ everything weighs".
 **They are filed under `datalib`, not under the source they measure.**
 The report's markdown does sit in the measured source's
 `render_markdown/`, because that is the one tree the render step is
-allowed to write, and a source name is normally just the first segment
+allowed to write, and a source id is normally just the first segment
 of `qmd_path`. Reading it that way here would put "what claude weighs"
 in the same bucket as the Claude conversations — which is precisely
 what the `provider` tag already refuses to do. So the derivation asks
 `provider` first: a `datalib` row is datalib's, whatever directory it
 came out of. Two halves, and they have to agree:
 
-- `source_name_for` in `unified_index/src/dolt_repo.rs` decides what the
+- `source_id_for` in `unified_index/src/dolt_repo.rs` decides what the
   grid's Source column shows (`Datalib`, spelled out by the UI);
-- the `Field::SourceName` arm of `build_where` in
-  `unified_index/src/db.rs` decides what `source_name:` matches —
-  `source_name:datalib` selects on the provider tag, and every other
-  name excludes the datalib rows despite the path prefix.
+- the `Field::SourceId` arm of `build_where` in
+  `unified_index/src/db.rs` decides what `source_id:` matches —
+  `source_id:datalib` selects on the provider tag, and every other id
+  excludes the datalib rows despite the path prefix.
 
 Which source a measurement describes is still on the row: `account` is
 the source name and `conversation_name` is `<name> storage`. One

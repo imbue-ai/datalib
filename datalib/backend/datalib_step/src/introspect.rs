@@ -72,10 +72,10 @@ pub struct Subject {
 }
 
 impl Subject {
-    fn uuid(&self, source_name: &str) -> String {
+    fn uuid(&self, source_id: &str) -> String {
         entity_id_str(
             IdNamespace::Datalib,
-            Scope::SourceInstance(source_name),
+            Scope::SourceInstance(source_id),
             self.kind.as_str(),
             &self.path,
         )
@@ -356,10 +356,10 @@ fn fingerprint(subjects: &[Subject]) -> String {
     h.finalize().to_hex().to_string()
 }
 
-fn report_body(source_name: &str, subjects: &[Subject], now: &str) -> String {
+fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
     let mut out = format!(
-        "---\ntitle: {source_name} storage\nsource: {source_name}\nmeasured_at: {now}\n---\n\n\
-         # {source_name} — storage\n\nMeasured {now}.\n\n"
+        "---\ntitle: {source_id} storage\nsource: {source_id}\nmeasured_at: {now}\n---\n\n\
+         # {source_id} — storage\n\nMeasured {now}.\n\n"
     );
     // One table, not one wrapped `<div>` per measurement. A source with
     // a dozen stores and tables used to render a dozen bordered cards
@@ -369,7 +369,7 @@ fn report_body(source_name: &str, subjects: &[Subject], now: &str) -> String {
     // wherever it sits, and a row is what a reader wants to land on.
     out.push_str("| Kind | What | Size | Count | Id |\n|---|---|---|---|---|\n");
     for s in subjects {
-        let uuid = s.uuid(source_name);
+        let uuid = s.uuid(source_id);
         out.push_str(&format!(
             "| {kind} | `{path}` | {size} | {count} | \
              <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">`{short}`</span> |\n",
@@ -398,7 +398,7 @@ fn report_body(source_name: &str, subjects: &[Subject], now: &str) -> String {
 /// caller and leaves the previous stamp standing.
 pub fn plan(
     data_root: &Path,
-    source_name: &str,
+    source_id: &str,
     rendered_rel: &str,
     subjects: Vec<Subject>,
     now: &str,
@@ -413,7 +413,7 @@ pub fn plan(
         .iter()
         .find(|s| s.kind == MeasurementKind::Tree)
         .unwrap_or(&subjects[0])
-        .uuid(source_name);
+        .uuid(source_id);
 
     let md_path = data_root.join(rendered_rel).join(REPORT_REL);
     let qmd_rel = format!("{rendered_rel}/{REPORT_REL}");
@@ -421,7 +421,7 @@ pub fn plan(
     let mut rows = Vec::with_capacity(subjects.len());
     let mut samples = Vec::with_capacity(subjects.len());
     for s in &subjects {
-        let uuid = s.uuid(source_name);
+        let uuid = s.uuid(source_id);
         rows.push(
             GridRow::builder()
                 .uuid(uuid.clone())
@@ -433,7 +433,7 @@ pub fn plan(
                 // to no upstream login, and the group id it used to
                 // carry here polluted every `account:` filter. The
                 // group id is on `upstream_scope` below.
-                .conversation_name(Some(format!("{source_name} storage")))
+                .conversation_name(Some(format!("{source_id} storage")))
                 .conversation_uuid(markdown_uuid.clone())
                 .entire_chat(format!("/chat/{markdown_uuid}"))
                 .text(s.summary())
@@ -447,7 +447,7 @@ pub fn plan(
                 // thing it measured.
                 .upstream_id(Some(s.path.clone()))
                 .upstream_entity_kind(Some(s.kind.as_str().to_string()))
-                .upstream_scope(Some(source_name.to_string()))
+                .upstream_scope(Some(source_id.to_string()))
                 .byte_size(s.bytes)
                 .item_count(s.items)
                 .build()
@@ -465,7 +465,7 @@ pub fn plan(
     Ok(Some(Measured {
         doc: RenderedMarkdown {
             markdown_uuid,
-            source_name: source_name.to_string(),
+            source_id: source_id.to_string(),
             source_fingerprint: fingerprint(&subjects),
             upstream_cursor: None,
             md_path,
@@ -475,7 +475,7 @@ pub fn plan(
             problems: Vec::new(),
         },
         samples,
-        body: report_body(source_name, &subjects, now),
+        body: report_body(source_id, &subjects, now),
     }))
 }
 

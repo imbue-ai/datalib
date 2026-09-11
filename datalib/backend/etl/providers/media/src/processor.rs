@@ -55,7 +55,7 @@ impl DataProcessor for MediaIngest {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = ingest::fetch(ingest::FetchOptions {
             db,
-            source_name: ctx.name.to_string(),
+            source_id: ctx.name.to_string(),
             root: self.root.clone(),
             cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             ignore: self.ignore.clone(),

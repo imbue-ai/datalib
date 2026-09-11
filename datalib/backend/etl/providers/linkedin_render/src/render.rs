@@ -56,7 +56,7 @@ pub fn render(
     let Source {
         raw_dir,
         out_dir,
-        name: source_name,
+        name: source_id,
         account,
     } = *source;
     let db_path = db_path_for(raw_dir);
@@ -111,7 +111,7 @@ pub fn render(
         &profile(),
         &chats,
         out_dir,
-        source_name,
+        source_id,
         &blobs,
         progress,
         prior_fingerprints,

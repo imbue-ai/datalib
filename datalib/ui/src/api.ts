@@ -27,15 +27,15 @@ export type SearchRow = {
   org_name: string;
   entire_chat: string;
   // The provider's human label ("Slack") — a property of the source
-  // *type*. Two Slack workspaces both say "Slack"; source_name is what
+  // *type*. Two Slack workspaces both say "Slack"; source_id is what
   // separates them.
   source: string;
-  // The configured source this row came from: the stanza directory under
-  // the data root (the first segment of its qmd_path). Empty when the row
-  // has no rendered document. The friendly `label` a person may have put
-  // on that source lives in config.toml, not here — the grid joins the
-  // two client-side so relabelling never needs a re-index.
-  source_name: string;
+  // The **id** of the configured source this row came from: the group's
+  // directory under the data root (the first segment of its qmd_path).
+  // Empty when the row has no rendered document. The name a person gave
+  // that group lives in config.toml, not here — the grid joins the two
+  // client-side so renaming never needs a re-index.
+  source_id: string;
   kind: string;
   author: string;
   channel: string;
@@ -528,7 +528,7 @@ export type SyncSource = {
 
 export type SyncJobState = "pending" | "running" | "done" | "failed" | "canceled";
 // The only kind enqueued today: one DAG run over the whole config
-// (`source_name` optionally narrows it to selected sources).
+// (`source_ids` optionally narrows it to selected sources).
 export type SyncJobKind = "all";
 
 export type SyncJob = {
@@ -536,7 +536,8 @@ export type SyncJob = {
   // Free-form, not SyncJobKind: historical rows may carry retired
   // kinds ("download" / "ingest" / "render").
   kind: string;
-  source_name: string | null;
+  // Comma-separated source-step ids, or null for the whole config.
+  source_ids: string | null;
   state: SyncJobState;
   progress_pct: number | null;
   progress_msg: string | null;
@@ -648,7 +649,7 @@ export type SyncTask = {
 export type JobProgressEvent = {
   id: string;
   kind: string;
-  source_name: string | null;
+  source_ids: string | null;
   state: SyncJobState;
   progress_pct: number | null;
   progress_msg: string | null;
@@ -669,7 +670,7 @@ export function fetchAllJobs(limit = 50, signal?: AbortSignal): Promise<SyncJob[
 }
 
 export async function enqueueJob(
-  req: { kind: SyncJobKind; source_name?: string | null },
+  req: { kind: SyncJobKind; source_ids?: string | null },
   signal?: AbortSignal,
 ): Promise<SyncJob> {
   const r = await fetch("/api/sync/jobs", {

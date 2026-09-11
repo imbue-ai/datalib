@@ -171,7 +171,7 @@ async fn snapshot_grid_rows_and_documents() {
     // Includes source_fingerprint (render's input-hash) since the
     // markdowns_loaded table merged into documents.
     let drows = sqlx::query(
-        "SELECT markdown_uuid, source_name, provider, kind, title, \
+        "SELECT markdown_uuid, source_id, provider, kind, title, \
                 created_at, updated_at, md_path, source_fingerprint, \
                 row_set_hash, renderer_version, rendered_at \
          FROM markdowns ORDER BY markdown_uuid",
@@ -185,7 +185,7 @@ async fn snapshot_grid_rows_and_documents() {
         .map(|r| {
             json!({
                 "markdown_uuid": r.try_get::<String, _>("markdown_uuid").ok(),
-                "source_name": r.try_get::<String, _>("source_name").ok(),
+                "source_id": r.try_get::<String, _>("source_id").ok(),
                 "provider": r.try_get::<String, _>("provider").ok(),
                 "kind": r.try_get::<String, _>("kind").ok(),
                 "title": r.try_get::<Option<String>, _>("title").ok().flatten(),

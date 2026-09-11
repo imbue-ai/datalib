@@ -551,7 +551,7 @@ impl IndexedMarkdownStore {
                     .unwrap_or(0);
                 out.push(RenderedMarkdown {
                     markdown_uuid: md.markdown_uuid.clone(),
-                    source_name: md.source_name.clone(),
+                    source_id: md.source_id.clone(),
                     source_fingerprint: md.source_fingerprint.clone().unwrap_or_default(),
                     upstream_cursor: md.upstream_cursor.clone(),
                     md_path: match md.md_path.as_deref() {
@@ -632,7 +632,7 @@ mod tests {
     ) -> RenderedMarkdown {
         RenderedMarkdown {
             markdown_uuid: markdown_uuid.to_string(),
-            source_name: "src".into(),
+            source_id: "src".into(),
             source_fingerprint: fingerprint.into(),
             upstream_cursor: None,
             md_path: dir.join(format!("{markdown_uuid}.md")),
@@ -814,7 +814,7 @@ mod tests {
             uuid: uuid.into(),
             scope_key: scope.into(),
             scope_kind: ScopeKind::Markdown.as_str().into(),
-            source_name: "src".into(),
+            source_id: "src".into(),
             stage: Stage::GridRow.as_str().into(),
             outcome: Outcome::Nulled.as_str().into(),
             problems: serde_json::to_string(&vec![Problem::field(
