@@ -239,6 +239,51 @@ mod tests {
         }
     }
 
+    /// A declared method path is a string, and the field it names is a
+    /// struct member serde reads by its own name; nothing but this makes
+    /// the two agree. A path that names no field would make the step
+    /// refuse every config for that type as holding no method — or, for
+    /// a flag path, never count the flag as held. So: write params that
+    /// hold exactly the declared path, hand them to the real planner, and
+    /// accept anything except serde's "unknown field" — a missing sibling
+    /// (`export.path`) is fine, it proves the table is real.
+    #[test]
+    fn every_declared_method_names_a_field_the_config_has() {
+        use crate::dispatch::{plan, Phase};
+        let td = tempfile::tempdir().unwrap();
+        for &t in SourceType::VARIANTS {
+            for m in ingest_methods(t) {
+                let params = holding(m.path);
+                let raw = datalib_etl::layout::ingest_root(td.path(), t.as_str());
+                if let Err(e) = plan(t.as_str(), Phase::Ingest, t.as_str(), raw, params) {
+                    let err = format!("{e:#}");
+                    assert!(
+                        !err.contains("unknown field"),
+                        "{t}: declared method `{}` names no field of the config: {err}",
+                        m.path
+                    );
+                }
+            }
+        }
+    }
+
+    /// Params in which exactly this dotted path is held: `{}` for a
+    /// table, `true` for a flag at the end of one.
+    fn holding(path: &str) -> serde_json::Value {
+        let segs: Vec<&str> = path.split('.').collect();
+        let (last, parents) = segs.split_last().unwrap();
+        let leaf = if parents.is_empty() {
+            json!({})
+        } else {
+            json!(true)
+        };
+        let mut value = json!({ *last: leaf });
+        for seg in parents.iter().rev() {
+            value = json!({ *seg: value });
+        }
+        value
+    }
+
     /// The UI reads the declarations through a checked-in JSON generated
     /// from them. Regenerate with
     /// `bazel run //datalib/backend/datalib_step:ingest_methods.update`.
