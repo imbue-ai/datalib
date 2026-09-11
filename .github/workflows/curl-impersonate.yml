@@ -20,9 +20,13 @@
 # can pin the hashes. Both publish. A release tag that already exists
 # fails the run rather than overwriting bytes MODULE.bazel may pin.
 #
-# Six legs, one per triple in release.yml. Linux gnu and musl legs both
-# build natively on the same runner; musl inside an Alpine container so
-# the C compiler is a distro package, not a fetched cross toolchain.
+# Six legs, one per triple in release.yml, all running
+# third-party/curl-impersonate/build.sh. The linux-musl legs run it
+# inside an `alpine:3.21` container via `docker run`, so the C compiler
+# is a distro package rather than a fetched cross toolchain — `docker
+# run` rather than the job-level `container:` because GitHub cannot run
+# its JavaScript actions (checkout, upload-artifact) inside an Alpine
+# container on an arm64 runner.
 name: curl-impersonate
 
 on:
@@ -34,59 +38,38 @@ on:
 permissions:
   contents: write  # gh release create
 
-env:
-  # Mirrors upstream's own Linux builds. The binary reads the host's CA
-  # store the way the system curl does; `SSL_CERT_FILE` / `CURL_CA_BUNDLE`
-  # override it at run time.
-  LINUX_CA_FLAGS: -DCURL_CA_PATH=/etc/ssl/certs -DCURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-
 jobs:
   build:
     name: build (${{ matrix.triple }})
     runs-on: ${{ matrix.runs-on }}
-    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # An empty `container` means none: the leg runs on the runner.
           - triple: aarch64-apple-darwin
             runs-on: macos-14
-            container: ""
           - triple: x86_64-apple-darwin
             runs-on: macos-15-intel
-            container: ""
           - triple: x86_64-unknown-linux-gnu
             runs-on: ubuntu-latest
-            container: ""
           - triple: aarch64-unknown-linux-gnu
             runs-on: ubuntu-24.04-arm
-            container: ""
           - triple: x86_64-unknown-linux-musl
             runs-on: ubuntu-latest
-            container: alpine:3.21
           - triple: aarch64-unknown-linux-musl
             runs-on: ubuntu-24.04-arm
-            container: alpine:3.21
 
     steps:
-      # Alpine has no git or bash; checkout needs both, and so do the
-      # steps below.
-      - name: Install build tools (alpine)
-        if: startsWith(matrix.container, 'alpine')
-        run: apk add --no-cache bash git tar ninja cmake make patch linux-headers build-base perl go file
-
       - uses: actions/checkout@v6
 
       - name: Read the pin
         id: pin
-        shell: bash
         run: |
           set -euo pipefail
           grep -v '^#' third-party/curl-impersonate/pin.env >> "$GITHUB_OUTPUT"
 
       - name: Install build tools (ubuntu)
-        if: startsWith(matrix.runs-on, 'ubuntu') && matrix.container == ''
+        if: startsWith(matrix.runs-on, 'ubuntu') && endsWith(matrix.triple, '-gnu')
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build perl golang-go patch file
@@ -99,7 +82,6 @@ jobs:
           done
 
       - name: Fetch upstream at the pinned commit
-        shell: bash
         env:
           UPSTREAM_TAG: ${{ steps.pin.outputs.UPSTREAM_TAG }}
           UPSTREAM_COMMIT: ${{ steps.pin.outputs.UPSTREAM_COMMIT }}
@@ -112,99 +94,46 @@ jobs:
               exit 1
           fi
 
-      # Every upstream source tarball (curl, BoringSSL, nghttp2/3, ngtcp2,
-      # brotli, zstd, zlib) is fetched by upstream's CMakeLists.txt with a
-      # URL_HASH, so a moved tarball fails here. IDN is off everywhere:
-      # we never resolve an internationalized host, and libidn2 is the
-      # one LGPL component in upstream's Linux builds.
       - name: Build
-        shell: bash
+        env:
+          TRIPLE: ${{ matrix.triple }}
+          UPSTREAM_COMMIT: ${{ steps.pin.outputs.UPSTREAM_COMMIT }}
+          BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          case "${TRIPLE}" in
+              *-linux-musl)
+                  docker run --rm -v "${PWD}:/work" -w /work \
+                      -e UPSTREAM_COMMIT -e BUILD_URL \
+                      alpine:3.21 sh -c '
+                          set -e
+                          apk add --no-cache bash ninja cmake make patch linux-headers build-base perl go file tar >/dev/null
+                          third-party/curl-impersonate/build.sh "$0" upstream out
+                      ' "${TRIPLE}"
+                  ;;
+              *)
+                  third-party/curl-impersonate/build.sh "${TRIPLE}" upstream out
+                  ;;
+          esac
+
+      # The musl binaries are static, so this runs on the host for every
+      # leg. JA4 is order-independent (stable across handshakes); this is
+      # what a real Chromium presented when the pin was made.
+      - name: Smoke-test the fingerprint
         env:
           TRIPLE: ${{ matrix.triple }}
         run: |
           set -euo pipefail
-          cd upstream
-          args=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DUSE_LIBIDN2=OFF)
-          case "${TRIPLE}" in
-              *-apple-darwin)
-                  args+=(-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0)
-                  ;;
-              *-linux-gnu)
-                  args+=(${LINUX_CA_FLAGS})
-                  ;;
-              *-linux-musl)
-                  args+=(${LINUX_CA_FLAGS})
-                  args+=(-DCMAKE_EXE_LINKER_FLAGS="-static -static-libstdc++ -static-libgcc")
-                  # See the script for why the C compiler is a wrapper.
-                  args+=(-DCMAKE_C_COMPILER="${GITHUB_WORKSPACE}/third-party/curl-impersonate/cc-static-cxx")
-                  ;;
-              *) echo "unknown triple ${TRIPLE}" >&2; exit 1 ;;
-          esac
-          cmake -S . -B build "${args[@]}"
-          cmake --build build --parallel
-          bin=build/deps/build/curl/src/curl-impersonate
-          case "${TRIPLE}" in
-              *-apple-darwin) strip -x "${bin}" ;;
-              *) strip "${bin}" ;;
-          esac
-          file "${bin}"
-          "${bin}" --version
-
-      # The same check release.yml applies to every musl binary it
-      # ships: no dynamic loader, no shared-library deps.
-      - name: Assert fully static (musl)
-        if: endsWith(matrix.triple, '-musl')
-        shell: bash
-        run: |
-          set -euo pipefail
-          bin=upstream/build/deps/build/curl/src/curl-impersonate
-          if file "${bin}" | grep -q 'dynamically linked'; then
-              echo "ERROR: ${bin} is dynamically linked" >&2
-              exit 1
-          fi
-
-      - name: Smoke-test the fingerprint
-        shell: bash
-        run: |
-          set -euo pipefail
-          bin=upstream/build/deps/build/curl/src/curl-impersonate
+          bin="out/curl-impersonate-${TRIPLE}/curl-impersonate"
           "${bin}" -sS --compressed --impersonate chrome150 https://tls.browserleaks.com/json > fp.json
           cat fp.json
-          # JA4 is order-independent, so it is stable across handshakes;
-          # this is what a real Chromium presented when the pin was made.
           grep -q '"ja4": *"t13d1516h2_8daaf6152771_' fp.json
-
-      - name: Stage tarball
-        shell: bash
-        env:
-          TRIPLE: ${{ matrix.triple }}
-          UPSTREAM_TAG: ${{ steps.pin.outputs.UPSTREAM_TAG }}
-          UPSTREAM_COMMIT: ${{ steps.pin.outputs.UPSTREAM_COMMIT }}
-        run: |
-          set -euo pipefail
-          stage="curl-impersonate-${TRIPLE}"
-          mkdir -p "${stage}"
-          cp upstream/build/deps/build/curl/src/curl-impersonate "${stage}/curl-impersonate"
-          # The notices the binary's licenses require to travel with it.
-          cp upstream/LICENSE "${stage}/LICENSE-curl-impersonate"
-          cp upstream/build/deps/src/curl/COPYING "${stage}/LICENSE-curl"
-          cp upstream/build/deps/src/boringssl/LICENSE "${stage}/LICENSE-boringssl"
-          cp upstream/build/deps/src/nghttp2/COPYING "${stage}/LICENSE-nghttp2"
-          cp upstream/build/deps/src/nghttp3/COPYING "${stage}/LICENSE-nghttp3"
-          cp upstream/build/deps/src/ngtcp2/COPYING "${stage}/LICENSE-ngtcp2"
-          cp upstream/build/deps/src/brotli/LICENSE "${stage}/LICENSE-brotli"
-          cp upstream/build/deps/src/zstd/LICENSE "${stage}/LICENSE-zstd"
-          cp upstream/build/deps/src/zlib/LICENSE "${stage}/LICENSE-zlib"
-          cat > "${stage}/SOURCE" <<EOF
-          lexiforest/curl-impersonate ${UPSTREAM_TAG} (${UPSTREAM_COMMIT})
-          built by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          EOF
-          tar -czf "${stage}.tar.gz" "${stage}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: curl-impersonate-${{ matrix.triple }}
-          path: curl-impersonate-${{ matrix.triple }}.tar.gz
+          path: out/curl-impersonate-${{ matrix.triple }}.tar.gz
           if-no-files-found: error
 
   publish:

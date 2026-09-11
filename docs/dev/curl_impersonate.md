@@ -55,13 +55,18 @@ The pieces, in the order they run:
    names the upstream tag **and commit** (the tag alone can move) and
    the release tag we publish under.
 2. [`.github/workflows/curl-impersonate.yml`](../../.github/workflows/curl-impersonate.yml)
-   clones that commit on each of the six runners `release.yml` uses,
-   runs upstream's CMake build, and publishes one
-   `curl-impersonate-<triple>.tar.gz` per leg — binary plus the license
-   notices of everything linked into it — as a GitHub release of this
-   repo, with a `SHA256SUMS`. Upstream's CMake fetches curl, BoringSSL,
-   nghttp2, nghttp3, ngtcp2, brotli, zstd and zlib by URL **with a
-   pinned sha256 each**, so nothing in the build is unpinned.
+   clones that commit on each of the six runners `release.yml` uses and
+   runs [`build.sh`](../../third-party/curl-impersonate/build.sh) —
+   upstream's CMake build plus our flags, staged as one
+   `curl-impersonate-<triple>.tar.gz` holding the binary and the license
+   notices of everything linked into it. The musl legs run the same
+   script inside an `alpine:3.21` container. The workflow then publishes
+   the six tarballs as a GitHub release of this repo, with a
+   `SHA256SUMS`. Upstream's CMake fetches curl, BoringSSL, nghttp2,
+   nghttp3, ngtcp2, brotli, zstd and zlib by URL **with a pinned sha256
+   each**, so nothing in the build is unpinned. `build.sh` runs by hand
+   too (`build.sh <triple> <upstream checkout> <out dir>`; a mac leg
+   takes about two minutes).
 3. `MODULE.bazel` declares those six tarballs as `http_archive`s with
    their sha256s, and
    [`//third-party/curl-impersonate`](../../third-party/curl-impersonate/BUILD.bazel)
