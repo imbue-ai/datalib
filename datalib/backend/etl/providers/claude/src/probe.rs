@@ -7,9 +7,7 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 use datalib_etl_claude_config::ClaudeConfig;
-use datalib_source_common::probe::{
-    sort_newest_first, ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport,
-};
+use datalib_probe::{sort_newest_first, ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
 
 use crate::ingest::api::ClaudeClient;
 

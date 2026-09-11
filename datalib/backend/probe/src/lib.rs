@@ -2,6 +2,10 @@
 //! provider that can be probed produces. `datalib-step probe <type>`
 //! prints it to stdout and the HTTP server forwards it verbatim, so
 //! the field names here are the wire format the wizard reads.
+//!
+//! Its own crate so that a provider gaining a probe, or the report
+//! growing a field, costs the probe-capable providers a rebuild and
+//! nothing else.
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};

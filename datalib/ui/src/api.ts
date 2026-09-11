@@ -860,7 +860,7 @@ export type ServiceRegistration = {
 };
 
 /// What one probe item is. Mirrors `ProbeItemKind` in
-/// datalib/backend/source_common/src/probe.rs, hand-kept in step:
+/// datalib/backend/probe/src/lib.rs, hand-kept in step:
 /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
 /// downloadable, but never matched by the render-side filter),
 /// `conversation` (one chat thread — a Claude chat, a Slack DM) or
@@ -868,7 +868,7 @@ export type ServiceRegistration = {
 export type ProbeItemKind = "mailbox" | "keyword" | "conversation" | "channel";
 
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
-/// datalib/backend/source_common/src/probe.rs.
+/// datalib/backend/probe/src/lib.rs.
 export type ProbeItem = {
   /// The exact string to put in the filter — a label path, a
   /// conversation uuid.

@@ -32,7 +32,7 @@ rust_library(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
         "//datalib/backend/id:datalib_id",
-        "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
