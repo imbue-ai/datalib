@@ -336,6 +336,11 @@ These sources need nothing but a path on their ingest step:
 - **`media`** — `fswalk.path`, a directory tree of music, photos and video.
 - **`fsindex`** — `fswalk.path`, any directory tree, indexed by path.
 - **`lightroom`** — an Adobe Lightroom Classic `.lrcat` catalog (see its entry in `all_sources.toml` for the table name).
+- **`apple_photos`** — `library.path`, an Apple Photos `.photoslibrary`. On
+  macOS the library is a protected location: in the app, choose it with
+  the picker rather than typing the path, and if a sync still reports
+  "Operation not permitted", grant Datalib Full Disk Access in System
+  Settings → Privacy & Security.
 
 ## Other sources
 

@@ -32,6 +32,7 @@ import { catalogFor } from "../src/config/catalog";
 const SLACK = catalogFor("slack")!;
 const CLAUDE = catalogFor("claude")!;
 const LIGHTROOM = catalogFor("lightroom")!;
+const APPLE_PHOTOS = catalogFor("apple_photos")!;
 const SIGNAL = catalogFor("signal")!;
 
 /** One source's group and two steps plus the index group and its steps. */
@@ -350,6 +351,33 @@ describe("buildStep", () => {
       values: { "catalog.path": "~/Pictures/cat.lrcat", skip_xmp: true },
     });
     expect(body.indexOf("[steps.params]")).toBeLessThan(body.indexOf("[steps.params.catalog]"));
+  });
+
+  // The Photos form is the Lightroom form with a different method table
+  // and preset: one bundle path, download-only, and the same shape on
+  // disk that `apple_photos_config`'s `deny_unknown_fields` accepts.
+  it("writes an Apple Photos source as one ingest step under its library table", () => {
+    const out = buildSource({
+      entry: APPLE_PHOTOS,
+      group: "apple_photos",
+      name: "",
+      values: {
+        "library.path": "~/Pictures/Photos Library.photoslibrary",
+        skip_history: false,
+      },
+      withGroup: true,
+    });
+    expect(out.groupBody).toContain('type = "apple_photos"');
+    expect(out.stepsBody).not.toContain("render_markdown");
+    expect(out.stepsBody).toContain("skip_history = false");
+    expect(out.stepsBody).toContain(
+      '[steps.params.library]\npath = "~/Pictures/Photos Library.photoslibrary"',
+    );
+    expect(out.stepsBody.indexOf("[steps.params]")).toBeLessThan(
+      out.stepsBody.indexOf("[steps.params.library]"),
+    );
+    const text = `${out.groupBody}\n\n${out.stepsBody}`;
+    expect(listSteps(text).map((s) => s.id)).toEqual(["apple_photos/ingest"]);
   });
 
   // The method table is what names the ingest method, so it is written

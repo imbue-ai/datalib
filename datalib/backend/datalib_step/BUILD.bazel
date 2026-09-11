@@ -27,6 +27,8 @@ rust_binary(
         "//datalib/backend/etl/providers/claude_render:datalib_etl_claude_render",
         "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
         "//datalib/backend/etl/providers/beeper:datalib_etl_beeper",
+        "//datalib/backend/etl/providers/apple_photos:datalib_etl_apple_photos",
+        "//datalib/backend/etl/providers/apple_photos_config:datalib_etl_apple_photos_config",
         "//datalib/backend/etl/providers/beeper_render:datalib_etl_beeper_render",
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
         "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",

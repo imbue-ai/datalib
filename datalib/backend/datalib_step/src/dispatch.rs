@@ -320,6 +320,11 @@ pub fn plan(
             datalib_etl_lightroom_config::LightroomRenderConfig,
             datalib_etl_lightroom
         ),
+        SourceType::ApplePhotos => ingest_only!(
+            datalib_etl_apple_photos_config::ApplePhotosConfig,
+            datalib_etl_apple_photos_config::ApplePhotosRenderConfig,
+            datalib_etl_apple_photos
+        ),
         SourceType::Fsindex => ingest_only!(
             datalib_etl_fsindex_config::FsindexConfig,
             datalib_etl_fsindex_config::FsindexRenderConfig,

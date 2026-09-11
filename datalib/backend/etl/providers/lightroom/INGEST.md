@@ -2,9 +2,17 @@
 
 Adobe Lightroom Classic keeps its library in a `.lrcat`, which is an
 ordinary SQLite database. So does a lot of other desktop software
-(Quicken for Mac, Apple Photos, Things, …). This provider mirrors such a
+(Apple Photos, Quicken for Mac, Things, …). This provider mirrors such a
 database, table for table, into a doltlite store and lets doltlite's
 content-addressed prolly trees do the deduplication.
+
+The engine is
+[`datalib_etl_sqlite_mirror`](/datalib/backend/etl/sqlite_mirror/), its
+own crate since `apple_photos` became its second user; this provider is
+the config that points it at a `.lrcat` and the `id_global` /
+`skip_xmp` defaults. This document is still where the engine is
+explained. [`apple_photos/INGEST.md`](../apple_photos/INGEST.md) covers
+only what differs there.
 
 The result is an incremental, versioned backup that costs one pass over
 the catalog per run and stores only what actually changed, with every
@@ -36,7 +44,7 @@ with the same 419 rows, and `dolt_status` comes back **clean**.
 
 Which means an ingest of an unchanged catalog produces **no commit at
 all** — verified against a real catalog and asserted by
-`tests/mirror_roundtrip.rs::unchanged_source_produces_no_commit`, which
+`sqlite_mirror/tests/mirror_roundtrip.rs::unchanged_source_produces_no_commit`, which
 was watched failing against a deliberately broken build before being
 believed.
 
@@ -79,6 +87,7 @@ Tables and their rows. Deliberately not mirrored:
 | Dropped | Why |
 | --- | --- |
 | Indexes | doltlite keys each table by its primary key in a prolly tree. A secondary index costs space in every commit and buys a backup nothing. |
+| Shadow tables | The backing storage of a virtual table (`<name>_node`, `_content`, …): an index's pages as blobs. The virtual table itself is mirrored, as rows, when the engine has its module (rtree does); one it lacks is skipped with a warning. `PRAGMA table_list` is what tells a shadow table from a real one — `sqlite_master` calls both `table`. A Lightroom catalog has none; a Photos library has an R-tree. |
 | Triggers, views | Behavior, not data. The mirror is never written to by an application. |
 | CHECK / FOREIGN KEY, collations | `PRAGMA table_info` doesn't surface them, and enforcing the source's integrity rules on a copy of already-valid data buys nothing. |
 | Generated columns | No stored value to copy. |
@@ -129,13 +138,18 @@ optimize. Beside it sits `id_global UNIQUE NOT NULL`, a stable UUID. Key
 the mirror on `id_local` and a renumbering reads as *every row deleted
 and re-added*: a huge, meaningless commit that also costs real space.
 
-So the mirror prefers a **stable key**: any single-column UNIQUE index
-whose column is named in `stable_key_columns` (default `["id_global"]`)
-wins over the declared primary key. `id_local` is still mirrored — it is
-data, just not identity. A renumbering then reads as one modified column
-per row.
+So the mirror prefers a **stable key**: a column named in
+`stable_key_columns` (default `["id_global"]`) wins over the declared
+primary key when the source has a single-column UNIQUE index on it — or,
+failing that, when this run finds it distinct and non-NULL in every row
+of the table, which is checked with one `COUNT` query per table and
+falls back to the declared key with a warning. The second path exists
+for Apple Photos, which indexes `ZUUID` without ever declaring it
+unique; on a Lightroom catalog the first path always fires. `id_local`
+is still mirrored — it is data, just not identity. A renumbering then
+reads as one modified column per row.
 
-`tests/mirror_roundtrip.rs::id_local_renumbering_is_a_modification_not_a_churn`
+`sqlite_mirror/tests/mirror_roundtrip.rs::id_local_renumbering_is_a_modification_not_a_churn`
 asserts this, and was watched producing
 `["added" ×4, "removed" ×4]` against a build with the rewrite disabled
 before being believed.
@@ -291,7 +305,7 @@ surfaced only on a byte-for-byte comparison against the source, and the
 first version of *that* check was an `EXCEPT` query against the ATTACHed
 catalog, which hit the same bug and lied.
 
-Until the fix landed, [`mirror::rebuild_table`](src/ingest/mirror.rs)
+Until the fix landed, [`mirror::rebuild_table`](/datalib/backend/etl/sqlite_mirror/src/mirror.rs)
 routed rows through a keyless staging table whenever the mirror's key was
 not a single `INTEGER` column. That detour is gone;
 `large_values_round_trip_byte_for_byte` is the regression test that
@@ -513,7 +527,10 @@ need:
 - **`fsindex` as a companion**, if you want to know whether the files the
   catalog points at are still there.
 
-Once a second SQLite-backed source lands (Quicken, say), lift
-`download/mirror.rs` + `download/plan.rs` into `datalib_etl` and let both
-provider crates depend on it. Keeping it in this crate until then avoids
-inventing a shared abstraction from a single example.
+The second SQLite-backed source was Apple Photos, and the engine moved
+out to [`datalib_etl_sqlite_mirror`](/datalib/backend/etl/sqlite_mirror/)
+when it landed — as its own crate rather than into `datalib_etl`, so that
+an engine change rebuilds two providers and not the eighty test targets
+downstream of the shared crate. The tests that pin the model
+(`mirror_roundtrip.rs`) went with it and still run against the
+Lightroom-shaped fixture.

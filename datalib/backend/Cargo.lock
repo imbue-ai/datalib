@@ -1036,6 +1036,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-etl-apple-photos"
+version = "0.31.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "datalib-etl",
+ "datalib-etl-sqlite-mirror",
+ "datalib-obs",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "datalib-etl-beeper"
 version = "0.31.1"
 dependencies = [
@@ -1512,6 +1528,7 @@ dependencies = [
  "async-trait",
  "clap",
  "datalib-etl",
+ "datalib-etl-sqlite-mirror",
  "datalib-obs",
  "sqlx",
  "tempfile",
@@ -1917,6 +1934,18 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "datalib-etl-sqlite-mirror"
+version = "0.31.1"
+dependencies = [
+ "anyhow",
+ "datalib-etl",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

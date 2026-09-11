@@ -27,6 +27,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
             datalib_etl_google_takeout_config::GoogleTakeoutConfig::METHODS
         }
         SourceType::Lightroom => datalib_etl_lightroom_config::LightroomConfig::METHODS,
+        SourceType::ApplePhotos => datalib_etl_apple_photos_config::ApplePhotosConfig::METHODS,
         SourceType::Linkedin => datalib_etl_linkedin_config::LinkedinConfig::METHODS,
         SourceType::Media => datalib_etl_media_config::MediaConfig::METHODS,
         SourceType::Notion => datalib_etl_notion_config::NotionConfig::METHODS,

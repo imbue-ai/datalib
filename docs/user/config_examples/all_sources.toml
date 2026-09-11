@@ -956,6 +956,68 @@ function = "ingest"
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 
+# --- apple_photos (Apple Photos library backup) --------------------------
+
+# File-backed: point `library.path` at a `.photoslibrary` bundle. What gets
+# mirrored is its `database/Photos.sqlite`, an ordinary SQLite database
+# with Photos' Core Data schema (about 90 tables; every asset, album,
+# person, face, keyword and edit is a row in one of them). The engine is
+# the one lightroom uses, so the same properties hold: only changed rows
+# are stored, every prior state stays queryable, and an unchanged library
+# produces no commit.
+#
+# DOWNLOAD-ONLY, like lightroom: nothing is rendered. The originals sit
+# beside the database at `<library>/originals/<X>/<UUID>.<ext>`; a `media`
+# source pointed at that folder gives you their EXIF and content hashes.
+# See datalib/backend/etl/providers/apple_photos/INGEST.md.
+#
+# macOS protects `~/Pictures/Photos Library.photoslibrary`. In the app,
+# choose the library with the picker: that is what grants Datalib access.
+# From a terminal, the terminal needs Full Disk Access (System Settings →
+# Privacy & Security); an ingest that reports "Operation not permitted"
+# is missing that, not the file.
+[[groups]]
+id = "apple_photos"
+type = "apple_photos"
+
+[[steps]]
+group = "apple_photos"
+function = "ingest"
+[steps.params]
+# Leave out Core Data's persistent history (`ACHANGE`, `ATRANSACTION`, …),
+# the daemons' work queue and per-entity counters, and the `Z_OPT` version
+# counter on every row. ON by default, unlike lightroom's `skip_xmp`:
+# Photos' background daemons write those tables continuously, so with this
+# off every run commits whether or not a photo changed. Nothing about a
+# photo lives in them — the mirror's own `dolt_log` is the history.
+# skip_history = true
+#
+# Photos keys every table on `Z_PK`, a rowid it renumbers on a library
+# repair or an iCloud re-sync. `ZUUID` is the stable id beside it, so the
+# mirror keys on that instead — checking each run that it is unique and
+# set on every row of a table, and keeping `Z_PK` (with a warning) where it
+# is not. Set to [] to mirror the declared keys verbatim.
+# stable_key_columns = ["ZUUID"]
+#
+# Pin a key yourself when you know one; an empty list forces keyless.
+# primary_keys = { ZDETECTEDFACE = ["Z_PK"] }
+#
+# Table / column filters. Globs, `*` and `?` only. The `Z_RT_*` R-tree's
+# shadow tables are never mirrored — the R-tree itself is, as rows.
+# include_tables = ["*"]
+# exclude_tables = ["ZCLOUD*"]      # e.g. skip the iCloud sync bookkeeping
+# exclude_columns = ["ZASSET.*HIGHLIGHTBEING*"]   # the auto-curation links
+#
+# Take a `VACUUM INTO` snapshot before reading. Photos' daemons keep the
+# library open (and its WAL un-checkpointed) at all times, so this is the
+# only way to read a consistent state. On by default.
+# snapshot = true
+#
+# Collect unreachable chunks each run; see lightroom above.
+# gc = false
+[steps.params.library]
+path = "~/Pictures/Photos Library.photoslibrary"
+
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is
 # an applet rather than a built-in so the backend does not have to know
