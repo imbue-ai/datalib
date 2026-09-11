@@ -1,0 +1,19 @@
+[package]
+name = "datalib-etl-sqlite-mirror"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_etl_sqlite_mirror"
+path = "src/lib.rs"
+
+[dependencies]
+datalib-etl = { path = ".." }
+anyhow = { workspace = true }
+sqlx = { workspace = true }
+tempfile = "3"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

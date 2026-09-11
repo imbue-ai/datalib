@@ -2,7 +2,7 @@
 """Generate a small, Lightroom-shaped `.lrcat` fixture.
 
 Run as a Bazel genrule
-(`//datalib/backend/etl/providers/lightroom:tng_catalog`, which reaches
+(`//datalib/backend/etl/sqlite_mirror:tng_catalog`, which reaches
 this file across the package boundary); the output is a **plain SQLite
 file**.
 

@@ -170,6 +170,20 @@ reference doc it relates to.
   audio-vs-visual table split, why playlists keep their unresolvable
   entries, and the one place this repo's timestamp convention is
   deliberately deviated from.
+- [`datalib/backend/etl/providers/lightroom/INGEST.md`](datalib/backend/etl/providers/lightroom/INGEST.md)
+  — the SQLite→doltlite **mirror engine**
+  (`datalib/backend/etl/sqlite_mirror/`), explained through its first
+  user: drop and refill every table each run and let doltlite's
+  content-addressed storage make that an incremental, versioned backup.
+  Read it before touching how any SQLite-backed application's data is
+  mirrored — the stable-key rule, what is deliberately not mirrored,
+  and the doltlite blob bug it found.
+  [`apple_photos/INGEST.md`](datalib/backend/etl/providers/apple_photos/INGEST.md)
+  is the second user and covers only what Photos adds: `ZUUID` without
+  a UNIQUE index, the `skip_history` preset and the churn it was
+  measured against, the R-tree and its shadow tables, and the macOS
+  permission the library sits behind. It also records why Apple Music
+  is *not* the same case (`Library.musicdb` is not SQLite).
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
   — the `email` source's three download modes (JMAP, Gmail API, mbox),
   what keeps them writing one deduped schema, and why an IMAP mode was
@@ -397,8 +411,15 @@ datalib/
                    Three providers scan local trees and share
                    etl/src/fswalk.rs (blake3 + Unison's rescan cursor):
                    fsindex (path-keyed, no render), pdf and media (both
-                   content-keyed; media has no render side either), so
-                   fsindex, media and lightroom have no <p>_render.
+                   content-keyed; media has no render side either).
+                   Two mirror a SQLite file through etl/sqlite_mirror/
+                   (lightroom, apple_photos). fsindex, media, lightroom
+                   and apple_photos have no <p>_render.
+    etl/sqlite_mirror/ `datalib_etl_sqlite_mirror`: the table-for-table
+                   SQLite→doltlite mirror engine behind lightroom and
+                   apple_photos. Its own crate, not part of datalib_etl,
+                   so an engine change rebuilds two providers rather
+                   than everything downstream of the shared crate.
     table/         `datalib_table`: the `BulkUpsertable` row-write
                    contract, alone, with `sqlx` as its only dependency.
     migrate_config/ `datalib-migrate-config`: rewrites a `config.toml`
@@ -598,10 +619,10 @@ Two rules follow:
   re-export in `render/mod.rs` — which read as a render dependency and
   would now not compile.
 - **A source that renders nothing has no `_render` crate at all.**
-  fsindex, media and lightroom are download-only, and `download_only!`
-  in `datalib_step/src/dispatch.rs` says so once rather than three
-  providers each carrying a `plan_render` stub — and, with it, a
-  dependency on a framework they have no use for.
+  fsindex, media, lightroom and apple_photos are download-only, and
+  `ingest_only!` in `datalib_step/src/dispatch.rs` says so once rather
+  than four providers each carrying a `plan_render` stub — and, with
+  it, a dependency on a framework they have no use for.
 
 The measurement that motivated the split is the one that checks it:
 

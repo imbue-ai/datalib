@@ -1,4 +1,5 @@
-//! End-to-end tests for the Lightroom→doltlite mirror.
+//! End-to-end tests for the SQLite→doltlite mirror engine, against a
+//! Lightroom-shaped fixture.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -9,8 +10,15 @@ use sqlx::Row;
 
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
-use datalib_etl_lightroom::ingest::{self, mirror, FetchOptions, MirrorOptions, MirrorStats};
-use datalib_etl_lightroom_config::XMP_COLUMN_PATTERNS;
+use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
+
+/// What `lightroom`'s `skip_xmp` expands to; spelled out here so the
+/// engine's tests do not depend on a provider's config crate.
+const XMP_COLUMN_PATTERNS: &[&str] = &[
+    "Adobe_AdditionalMetadata.xmp",
+    "AgMetadataSearchIndex.*SearchIndex",
+    "AgMetadataSearchIndex.searchIndex",
+];
 
 // Harness
 
@@ -59,14 +67,8 @@ impl Fixture {
 
     async fn ingest_with(&self, opts: MirrorOptions) -> Result<(MirrorStats, Option<String>)> {
         let pool = mirror::open_mirror(&self.mirror).await?;
-        let stats = ingest::fetch(FetchOptions {
-            mirror_path: self.mirror.clone(),
-            pool: Some(pool.clone()),
-            options: opts,
-            progress: Progress::noop(),
-        })
-        .await?;
-        let commit = dr::commit_run(&pool, &format!("lightroom: {}", stats.summary())).await?;
+        let stats = mirror::run(&pool, &opts, &Progress::noop()).await?;
+        let commit = dr::commit_run(&pool, &format!("mirror: {}", stats.summary())).await?;
         pool.close().await;
         Ok((stats, commit))
     }
@@ -94,8 +96,8 @@ impl Fixture {
 }
 
 fn fixture_catalog() -> PathBuf {
-    let p = std::env::var("LIGHTROOM_TNG_CATALOG")
-        .expect("LIGHTROOM_TNG_CATALOG must point at the generated .lrcat fixture");
+    let p = std::env::var("SQLITE_MIRROR_TNG_CATALOG")
+        .expect("SQLITE_MIRROR_TNG_CATALOG must point at the generated .lrcat fixture");
     let p = PathBuf::from(p);
     assert!(p.exists(), "catalog fixture missing at {}", p.display());
     p

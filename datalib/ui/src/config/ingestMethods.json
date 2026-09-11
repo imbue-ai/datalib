@@ -1,4 +1,10 @@
 {
+  "apple_photos": [
+    {
+      "path": "library",
+      "reach": "local"
+    }
+  ],
   "beeper": [
     {
       "path": "texts",

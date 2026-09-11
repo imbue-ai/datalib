@@ -293,7 +293,8 @@ type Row = {
   revealBlocked: string | null;
   /// Why this row has nothing to browse, or null when it does. A source
   /// reaches the grid only through a `render_markdown` step — the three
-  /// download-only providers (fsindex, media, lightroom) declare none,
+  /// download-only providers (fsindex, media, lightroom, apple_photos)
+  /// declare none,
   /// and even their storage rows come from render, so they have no rows
   /// at all rather than a few.
   browseBlocked: string | null;

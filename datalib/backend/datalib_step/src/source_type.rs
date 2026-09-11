@@ -38,6 +38,10 @@ use strum::VariantArray;
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum SourceType {
+    /// An Apple Photos library — the product's name is just "Photos",
+    /// which next to `media` would name nothing; the vendor earns its
+    /// place here the way it does in `google_takeout`.
+    ApplePhotos,
     Beeper,
     Chatgpt,
     /// Claude.ai over the API, or an unpacked export; one raw store.
@@ -165,7 +169,10 @@ mod tests {
             let tag = Provider::parse(t.as_str());
             let download_only = matches!(
                 t,
-                SourceType::Fsindex | SourceType::Lightroom | SourceType::Media
+                SourceType::ApplePhotos
+                    | SourceType::Fsindex
+                    | SourceType::Lightroom
+                    | SourceType::Media
             );
             assert_eq!(
                 tag.is_some(),

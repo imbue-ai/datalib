@@ -10,8 +10,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool, SqlitePoo
 use sqlx::{Connection, Row};
 
 use datalib_etl::progress::Progress;
+use datalib_source_common::glob_match;
 
-use super::plan::{self, ColumnSpec, KeyOrigin, SourceColumn, TableSpec};
+use crate::plan::{self, ColumnSpec, KeyOrigin, SourceColumn, TableKind, TableSpec};
 
 /// Schema alias the source catalog is ATTACHed under. Deliberately
 /// unlikely to collide with anything a user would name a database.
@@ -23,11 +24,12 @@ const SRC_SCHEMA: &str = "datalib_mirror_src";
 /// store's own metadata.
 const RESERVED_TABLES: &[&str] = &["sync_runs", "sync_scope_state", "sync_scope_config"];
 
-/// Everything the engine needs. Built from `LightroomConfig` by the
-/// processor, or from flags by the standalone CLI.
+/// Everything the engine needs. Built from a provider's config by its
+/// processor, or from flags by a standalone CLI.
 #[derive(Debug, Clone)]
 pub struct MirrorOptions {
-    /// The SQLite database to mirror (a `.lrcat`, for Lightroom).
+    /// The SQLite database to mirror (a `.lrcat` for Lightroom,
+    /// `Photos.sqlite` for Apple Photos).
     pub source_path: PathBuf,
     /// Take a `VACUUM INTO` snapshot before reading. See [`snapshot`].
     pub snapshot: bool,
@@ -52,9 +54,16 @@ pub struct MirrorStats {
     /// that drops every table by definition and is not worth counting.
     pub stale_tables_dropped: usize,
     pub columns_dropped: usize,
-    /// Tables keyed on a stable UNIQUE column instead of the declared
-    /// primary key — the `id_global` rewrite.
+    /// Tables keyed on a stable column instead of the declared primary
+    /// key — the `id_global` / `ZUUID` rewrite, whether the source
+    /// declared the column UNIQUE or the run checked it.
     pub tables_restably_keyed: usize,
+    /// Virtual tables' backing storage, never mirrored: the virtual
+    /// table itself carries the rows.
+    pub shadow_tables_skipped: usize,
+    /// Virtual tables whose module this build lacks, so their rows
+    /// could not be read. Each one is also a warning in the log.
+    pub virtual_tables_skipped: usize,
     pub source_bytes: u64,
 }
 
@@ -86,9 +95,9 @@ pub async fn snapshot(source: &Path) -> Result<Snapshot> {
             tracing::warn!(
                 source = %source.display(),
                 error = %format!("{e:#}"),
-                "lightroom: VACUUM INTO snapshot failed; falling back to a file copy. \
-                 If the catalog is open in Lightroom the copy may be inconsistent — \
-                 close Lightroom for a clean backup."
+                "sqlite_mirror: VACUUM INTO snapshot failed; falling back to a file copy. \
+                 If the database is open in its application the copy may be \
+                 inconsistent — close the application for a clean backup."
             );
             let dest = dir.path().join(
                 source
@@ -175,10 +184,10 @@ pub async fn run(
         // Best-effort: a failed collection costs disk, not correctness,
         // and must not fail the backup.
         match sqlx::query("SELECT dolt_gc()").execute(pool).await {
-            Ok(_) => tracing::info!("lightroom: collected unreachable chunks"),
+            Ok(_) => tracing::info!("sqlite_mirror: collected unreachable chunks"),
             Err(e) => tracing::warn!(
                 error = %format!("{e:#}"),
-                "lightroom: dolt_gc failed; continuing (the store keeps its garbage)"
+                "sqlite_mirror: dolt_gc failed; continuing (the store keeps its garbage)"
             ),
         }
     }
@@ -232,16 +241,19 @@ async fn mirror_attached(
     opts: &MirrorOptions,
     progress: &Progress,
 ) -> Result<MirrorStats> {
-    let specs = build_specs(&mut *conn, opts).await?;
-    let mut stats = MirrorStats {
-        tables: specs.len(),
-        columns_dropped: specs.iter().map(|s| s.dropped_columns.len()).sum(),
-        tables_restably_keyed: specs
-            .iter()
-            .filter(|s| s.key_origin == KeyOrigin::StableUnique)
-            .count(),
-        ..Default::default()
-    };
+    let mut stats = MirrorStats::default();
+    let specs = build_specs(&mut *conn, opts, &mut stats).await?;
+    stats.tables = specs.len();
+    stats.columns_dropped = specs.iter().map(|s| s.dropped_columns.len()).sum();
+    stats.tables_restably_keyed = specs
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.key_origin,
+                KeyOrigin::StableUnique | KeyOrigin::StableVerified
+            )
+        })
+        .count();
 
     progress.set_length(Some(specs.len() as u64));
 
@@ -257,7 +269,7 @@ async fn mirror_attached(
     stats.stale_tables_dropped = dropped
         .iter()
         .filter(|n| !wanted.contains(n.as_str()))
-        .inspect(|n| tracing::info!(table = %n, "lightroom: table gone from source"))
+        .inspect(|n| tracing::info!(table = %n, "sqlite_mirror: table gone from source"))
         .count();
 
     for spec in &specs {
@@ -269,10 +281,15 @@ async fn mirror_attached(
     Ok(stats)
 }
 
-async fn build_specs(conn: &mut SqliteConnection, opts: &MirrorOptions) -> Result<Vec<TableSpec>> {
-    let names = plan::table_names(&mut *conn, SRC_SCHEMA).await?;
+async fn build_specs(
+    conn: &mut SqliteConnection,
+    opts: &MirrorOptions,
+    stats: &mut MirrorStats,
+) -> Result<Vec<TableSpec>> {
+    let tables = plan::source_tables(&mut *conn, SRC_SCHEMA).await?;
     let mut specs = Vec::new();
-    for name in names {
+    for table in tables {
+        let name = table.name;
         if !wants_table(opts, &name) {
             continue;
         }
@@ -282,21 +299,94 @@ async fn build_specs(conn: &mut SqliteConnection, opts: &MirrorOptions) -> Resul
                  exclude it with exclude_tables = [{name:?}]"
             );
         }
-        let source_cols = plan::table_columns(&mut *conn, SRC_SCHEMA, &name).await?;
+        if table.kind == TableKind::Shadow {
+            stats.shadow_tables_skipped += 1;
+            continue;
+        }
+        let source_cols = match plan::table_columns(&mut *conn, SRC_SCHEMA, &name).await {
+            Ok(cols) => cols,
+            // A virtual table whose module this build lacks cannot be
+            // read at all. Say so and move on rather than fail the
+            // backup over an index: its shadow tables were skipped above,
+            // so nothing of it lands.
+            Err(e) if table.kind == TableKind::Virtual => {
+                tracing::warn!(
+                    table = %name,
+                    error = %format!("{e:#}"),
+                    "sqlite_mirror: cannot read virtual table; skipping it"
+                );
+                stats.virtual_tables_skipped += 1;
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         let unique_cols = plan::unique_single_columns(&mut *conn, SRC_SCHEMA, &name).await?;
-        specs.push(build_spec(opts, &name, &source_cols, &unique_cols)?);
+        let verified_cols =
+            verified_stable_columns(&mut *conn, opts, &name, &source_cols, &unique_cols).await?;
+        specs.push(build_spec(
+            opts,
+            &name,
+            &source_cols,
+            &unique_cols,
+            &verified_cols,
+        )?);
     }
     Ok(specs)
 }
 
+/// The stable-key candidates the source did not declare UNIQUE but
+/// which hold a distinct non-NULL value in every row right now. Apple
+/// Photos indexes `ZUUID` without declaring it unique, so without this
+/// check its tables would key on a rowid the app renumbers.
+async fn verified_stable_columns(
+    conn: &mut SqliteConnection,
+    opts: &MirrorOptions,
+    table: &str,
+    source_cols: &[SourceColumn],
+    unique_cols: &[String],
+) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for c in &opts.stable_key_columns {
+        if unique_cols.contains(c) || !source_cols.iter().any(|s| &s.spec.name == c) {
+            continue;
+        }
+        // Audited: table and column names come out of the source's own
+        // schema and go through `plan::quote_ident`; the schema alias is
+        // a const.
+        let sql = format!(
+            "SELECT COUNT(*) AS n, COUNT(DISTINCT {c}) AS distinct_n, COUNT({c}) AS non_null \
+             FROM {s}.{t}",
+            c = plan::quote_ident(c),
+            s = plan::quote_ident(SRC_SCHEMA),
+            t = plan::quote_ident(table),
+        );
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .fetch_one(&mut *conn)
+            .await
+            .with_context(|| format!("check stable key {table}.{c}"))?;
+        let n: i64 = row.get("n");
+        let distinct_n: i64 = row.get("distinct_n");
+        let non_null: i64 = row.get("non_null");
+        if n == distinct_n && n == non_null {
+            out.push(c.clone());
+        } else {
+            tracing::warn!(
+                table,
+                column = %c,
+                rows = n,
+                distinct = distinct_n,
+                non_null,
+                "sqlite_mirror: stable key column is not unique and non-NULL in every row; \
+                 keying on the declared primary key instead"
+            );
+        }
+    }
+    Ok(out)
+}
+
 fn wants_table(opts: &MirrorOptions, name: &str) -> bool {
-    opts.include_tables
-        .iter()
-        .any(|p| datalib_etl_lightroom_config::glob_match(p, name))
-        && !opts
-            .exclude_tables
-            .iter()
-            .any(|p| datalib_etl_lightroom_config::glob_match(p, name))
+    opts.include_tables.iter().any(|p| glob_match(p, name))
+        && !opts.exclude_tables.iter().any(|p| glob_match(p, name))
 }
 
 pub fn build_spec(
@@ -304,6 +394,7 @@ pub fn build_spec(
     name: &str,
     source_cols: &[SourceColumn],
     unique_cols: &[String],
+    verified_cols: &[String],
 ) -> Result<TableSpec> {
     let mut columns: Vec<ColumnSpec> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
@@ -312,9 +403,10 @@ pub fn build_spec(
         // expression is out of scope (and `table_xinfo` doesn't expose
         // it), so it's dropped like a filtered column.
         let filtered = c.generated
-            || opts.exclude_columns.iter().any(|p| {
-                datalib_etl_lightroom_config::glob_match(p, &format!("{name}.{}", c.spec.name))
-            });
+            || opts
+                .exclude_columns
+                .iter()
+                .any(|p| glob_match(p, &format!("{name}.{}", c.spec.name)));
         if filtered {
             dropped.push(c.spec.name.clone());
         } else {
@@ -349,11 +441,16 @@ pub fn build_spec(
     } else if let Some(stable) = opts
         .stable_key_columns
         .iter()
-        .find(|c| unique_cols.contains(c) && present(c))
+        .find(|c| (unique_cols.contains(c) || verified_cols.contains(c)) && present(c))
         // A stable key that IS the declared key is not a rewrite.
         .filter(|c| declared.as_slice() != std::slice::from_ref(*c))
     {
-        (vec![stable.clone()], KeyOrigin::StableUnique)
+        let origin = if unique_cols.contains(stable) {
+            KeyOrigin::StableUnique
+        } else {
+            KeyOrigin::StableVerified
+        };
+        (vec![stable.clone()], origin)
     } else if !declared.is_empty() && declared.iter().all(present) {
         (declared, KeyOrigin::Declared)
     } else {
@@ -436,12 +533,15 @@ impl MirrorStats {
     pub fn summary(&self) -> String {
         format!(
             "tables={} rows={} stale_tables_dropped={} dropped_columns={} \
-             stable_keys={} source_bytes={}",
+             stable_keys={} shadow_tables_skipped={} virtual_tables_skipped={} \
+             source_bytes={}",
             self.tables,
             self.rows,
             self.stale_tables_dropped,
             self.columns_dropped,
             self.tables_restably_keyed,
+            self.shadow_tables_skipped,
+            self.virtual_tables_skipped,
             self.source_bytes,
         )
     }
@@ -493,6 +593,7 @@ mod tests {
             "Adobe_AdditionalMetadata",
             &lightroom_cols(),
             &["id_global".to_string()],
+            &[],
         )
         .unwrap();
         assert_eq!(s.pk, vec!["id_global".to_string()]);
@@ -501,10 +602,30 @@ mod tests {
         assert!(s.columns.iter().any(|c| c.name == "id_local"));
     }
 
+    /// The Apple Photos shape: `ZUUID` is indexed but never declared
+    /// UNIQUE, so the run itself has to vouch for it.
+    #[test]
+    fn a_verified_stable_key_beats_the_declared_rowid_key() {
+        let cols = vec![
+            scol("Z_PK", "INTEGER", 1),
+            scol("ZUUID", "VARCHAR", 0),
+            scol("ZFAVORITE", "INTEGER", 0),
+        ];
+        let mut o = opts();
+        o.stable_key_columns = vec!["ZUUID".into()];
+        let s = build_spec(&o, "ZASSET", &cols, &[], &["ZUUID".to_string()]).unwrap();
+        assert_eq!(s.pk, vec!["ZUUID".to_string()]);
+        assert_eq!(s.key_origin, KeyOrigin::StableVerified);
+        // Unverified and undeclared, the same column is not a key.
+        let s = build_spec(&o, "ZASSET", &cols, &[], &[]).unwrap();
+        assert_eq!(s.pk, vec!["Z_PK".to_string()]);
+        assert_eq!(s.key_origin, KeyOrigin::Declared);
+    }
+
     #[test]
     fn declared_key_is_used_when_no_stable_candidate_exists() {
         let cols = vec![scol("id_local", "INTEGER", 1), scol("v", "", 0)];
-        let s = build_spec(&opts(), "AgHarvestedExifMetadata", &cols, &[]).unwrap();
+        let s = build_spec(&opts(), "AgHarvestedExifMetadata", &cols, &[], &[]).unwrap();
         assert_eq!(s.pk, vec!["id_local".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Declared);
     }
@@ -518,6 +639,7 @@ mod tests {
             "Adobe_images",
             &lightroom_cols(),
             &["id_global".to_string()],
+            &[],
         )
         .unwrap();
         assert_eq!(s.pk, vec!["id_local".to_string()]);
@@ -542,7 +664,7 @@ mod tests {
             pk_seq: 1,
             generated: false,
         }];
-        let s = build_spec(&opts(), "MigrationSchemaVersion", &cols, &[]).unwrap();
+        let s = build_spec(&opts(), "MigrationSchemaVersion", &cols, &[], &[]).unwrap();
         assert_eq!(s.pk, vec!["version".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Declared);
         assert!(s.create_ddl().contains(r#"PRIMARY KEY ("version")"#));
@@ -551,7 +673,7 @@ mod tests {
     #[test]
     fn a_source_table_with_no_key_mirrors_keyless() {
         let cols = vec![scol("a", "", 0), scol("b", "", 0)];
-        let s = build_spec(&opts(), "AgOzSpaceIds", &cols, &[]).unwrap();
+        let s = build_spec(&opts(), "AgOzSpaceIds", &cols, &[], &[]).unwrap();
         assert!(s.pk.is_empty());
         assert_eq!(s.key_origin, KeyOrigin::Keyless);
     }
@@ -561,7 +683,7 @@ mod tests {
         let mut o = opts();
         o.exclude_columns = vec!["T.id_local".into()];
         o.stable_key_columns.clear();
-        let s = build_spec(&o, "T", &lightroom_cols(), &[]).unwrap();
+        let s = build_spec(&o, "T", &lightroom_cols(), &[], &[]).unwrap();
         assert!(s.pk.is_empty());
         assert_eq!(s.key_origin, KeyOrigin::Keyless);
         assert_eq!(s.dropped_columns, vec!["id_local".to_string()]);
@@ -571,7 +693,7 @@ mod tests {
     fn excluded_columns_are_absent_not_blanked() {
         let mut o = opts();
         o.exclude_columns = vec!["Adobe_AdditionalMetadata.xmp".into()];
-        let s = build_spec(&o, "Adobe_AdditionalMetadata", &lightroom_cols(), &[]).unwrap();
+        let s = build_spec(&o, "Adobe_AdditionalMetadata", &lightroom_cols(), &[], &[]).unwrap();
         assert!(!s.columns.iter().any(|c| c.name == "xmp"));
         assert_eq!(s.dropped_columns, vec!["xmp".to_string()]);
         assert!(!s.create_ddl().contains("xmp"));
@@ -583,7 +705,7 @@ mod tests {
         let mut o = opts();
         o.primary_keys
             .insert("T".into(), vec!["id_local".into(), "id_global".into()]);
-        let s = build_spec(&o, "T", &lightroom_cols(), &["id_global".to_string()]).unwrap();
+        let s = build_spec(&o, "T", &lightroom_cols(), &["id_global".to_string()], &[]).unwrap();
         assert_eq!(s.pk, vec!["id_local".to_string(), "id_global".to_string()]);
         assert_eq!(s.key_origin, KeyOrigin::Override);
         assert!(s
@@ -595,7 +717,7 @@ mod tests {
     fn an_empty_override_forces_keyless() {
         let mut o = opts();
         o.primary_keys.insert("T".into(), Vec::new());
-        let s = build_spec(&o, "T", &lightroom_cols(), &["id_global".to_string()]).unwrap();
+        let s = build_spec(&o, "T", &lightroom_cols(), &["id_global".to_string()], &[]).unwrap();
         assert!(s.pk.is_empty());
         assert_eq!(s.key_origin, KeyOrigin::Keyless);
     }
@@ -605,7 +727,7 @@ mod tests {
         let mut o = opts();
         o.exclude_columns = vec!["T.xmp".into()];
         o.primary_keys.insert("T".into(), vec!["xmp".into()]);
-        assert!(build_spec(&o, "T", &lightroom_cols(), &[]).is_err());
+        assert!(build_spec(&o, "T", &lightroom_cols(), &[], &[]).is_err());
     }
 
     #[test]
@@ -620,7 +742,7 @@ mod tests {
             pk_seq: 0,
             generated: true,
         });
-        let s = build_spec(&opts(), "T", &cols, &[]).unwrap();
+        let s = build_spec(&opts(), "T", &cols, &[], &[]).unwrap();
         assert!(!s.columns.iter().any(|c| c.name == "computed"));
         assert!(s.dropped_columns.contains(&"computed".to_string()));
     }
@@ -629,7 +751,7 @@ mod tests {
     fn excluding_every_column_is_an_error_not_an_empty_table() {
         let mut o = opts();
         o.exclude_columns = vec!["T.*".into()];
-        assert!(build_spec(&o, "T", &lightroom_cols(), &[]).is_err());
+        assert!(build_spec(&o, "T", &lightroom_cols(), &[], &[]).is_err());
     }
 
     #[test]

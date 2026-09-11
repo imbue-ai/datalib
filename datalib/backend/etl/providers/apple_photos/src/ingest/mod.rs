@@ -1,5 +1,5 @@
-//! Download (ingest) side of the `lightroom` source: the shared
-//! SQLite→doltlite mirror engine, pointed at a `.lrcat`.
+//! Download (ingest) side of the `apple_photos` source: the shared
+//! SQLite→doltlite mirror engine, pointed at a library's `Photos.sqlite`.
 
 use std::path::PathBuf;
 
@@ -24,7 +24,7 @@ pub struct FetchOptions {
     pub progress: Progress,
 }
 
-/// Ingest the catalog into the mirror. Does not commit; see
+/// Ingest the library into the mirror. Does not commit; see
 /// [`mirror::run`].
 pub async fn fetch(opts: FetchOptions) -> Result<MirrorStats> {
     let owned;
