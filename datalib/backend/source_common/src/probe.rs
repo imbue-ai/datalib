@@ -59,8 +59,11 @@ pub enum ProbeItemKind {
     /// A Gmail flag — downloadable, but never matched by the
     /// render-side filter.
     Keyword,
-    /// One chat thread.
+    /// One chat thread: a claude.ai conversation, a Slack DM. `path` is
+    /// the provider's id for it.
     Conversation,
+    /// A Slack channel, public or private. `path` is its bare name.
+    Channel,
 }
 
 impl ProbeItemKind {
@@ -83,11 +86,15 @@ pub struct ProbeItem {
     /// A human name for it, when `path` is an opaque id. `None` when
     /// the path already reads as its own name.
     pub title: Option<String>,
-    /// JMAP role (`inbox`, `sent`, `archive`, …) when the mailbox has
-    /// one. Used only for ordering and for a hint in the picker.
+    /// A short tag the provider attaches: a JMAP mailbox's role
+    /// (`inbox`, `sent`, …), a channel's `private` / `not a member`, a
+    /// DM's `group`. Used for ordering and for a hint column in the
+    /// picker, never matched by a filter.
     pub role: Option<String>,
     /// Messages here, when the provider reports it for free.
     pub messages: Option<u64>,
+    /// People in it, when the provider reports it for free.
+    pub members: Option<u64>,
     /// When this last changed, for a picker that sorts by recency.
     pub updated_at: Option<String>,
 }
@@ -101,6 +108,7 @@ impl ProbeItem {
             title: None,
             role: None,
             messages: None,
+            members: None,
             updated_at: None,
         }
     }

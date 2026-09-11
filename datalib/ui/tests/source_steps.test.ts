@@ -21,6 +21,7 @@ import {
   removeSteps,
   renameGroup,
   replaceSteps,
+  seedFieldValues,
   sourceStepsOf,
   stepIdFor,
   unwireFromFanIns,
@@ -376,13 +377,13 @@ describe("buildStep", () => {
     expect(body).toContain("dms = false");
   });
 
-  it("writes the DM allowlist when direct messages are on", () => {
+  it("writes the DM list when direct messages are on", () => {
     const body = fetch({
       "api.dms": true,
-      "api.dm_users": ["@riker", "Jean-Luc Picard"],
+      "api.dm_conversations": ["D024BE7LH", "G0ABC12DE"],
     });
     expect(body).toContain("dms = true");
-    expect(body).toContain('dm_users = ["@riker", "Jean-Luc Picard"]');
+    expect(body).toContain('dm_conversations = ["D024BE7LH", "G0ABC12DE"]');
   });
 
   // The one `select` field in the catalog. Its value is always written:
@@ -411,32 +412,57 @@ describe("buildStep", () => {
     expect(body).toContain('period = "fortnight"');
   });
 
-  // `SlackApiSync::validate` rejects `dm_users` with `dms = false`, so
-  // a form that emitted it would write a config the backend refuses.
-  // The gate has to drop the value, not just hide the input.
+  // `SlackApiSync::validate` rejects `dm_conversations` with
+  // `dms = false`, so a form that emitted it would write a config the
+  // backend refuses. The gate has to drop the value, not just hide
+  // the input.
   it("drops a gated field whose switch is off", () => {
     const body = fetch({
       "api.dms": false,
-      "api.dm_users": ["@riker"],
+      "api.dm_conversations": ["D024BE7LH"],
     });
     expect(body).toContain("dms = false");
-    expect(body).not.toContain("dm_users");
+    expect(body).not.toContain("dm_conversations");
   });
 });
 
 describe("fieldIsActive", () => {
-  const dmUsers = SLACK.fields!.find((f) => f.target === "api.dm_users")!;
+  const dms = SLACK.fields!.find((f) => f.target === "api.dm_conversations")!;
   const channels = SLACK.fields!.find((f) => f.target === "api.channels")!;
 
   it("gates a field on its `requires` target", () => {
-    expect(fieldIsActive(dmUsers, { "api.dms": true })).toBe(true);
-    expect(fieldIsActive(dmUsers, { "api.dms": false })).toBe(false);
+    expect(fieldIsActive(dms, { "api.dms": true })).toBe(true);
+    expect(fieldIsActive(dms, { "api.dms": false })).toBe(false);
     // Unset reads as off, which is what a freshly opened form has.
-    expect(fieldIsActive(dmUsers, {})).toBe(false);
+    expect(fieldIsActive(dms, {})).toBe(false);
   });
 
   it("leaves an ungated field alone", () => {
     expect(fieldIsActive(channels, {})).toBe(true);
+  });
+});
+
+describe("the Slack pickers", () => {
+  const dms = SLACK.fields!.find((f) => f.target === "api.dm_conversations")!;
+  const channels = SLACK.fields!.find((f) => f.target === "api.channels")!;
+
+  /// Same probe, same grid as email and Claude: `channels` is filled
+  /// from the workspace's channel items and `dm_conversations` from
+  /// its DMs — the same `conversation` kind a Claude chat is, since
+  /// both are an id with a title over it.
+  it("offer channels and DMs from the one probe", () => {
+    expect(SLACK.canProbe).toBe(true);
+    expect(channels.kind === "string_list" && channels.probe).toBe("channels");
+    expect(dms.kind === "string_list" && dms.probe).toBe("conversations");
+  });
+
+  /// What "Test connection" authenticates with is what Save writes —
+  /// the `api` table that selects the live method, defaults included.
+  it("probe with the ingest params the form would write", () => {
+    expect(paramsObject(SLACK, seedFieldValues(SLACK), "download")).toEqual({
+      api: { media: true, all_channels: false, dms: false },
+      common: { blob_size_limit_bytes: 5_000_000 },
+    });
   });
 });
 

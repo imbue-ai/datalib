@@ -42,6 +42,15 @@ registration is needed — the same `slack` credential signs both
 `shapes.rs` is the shape-of-the-response catalog: which path holds the
 items, what counts as the cursor key, how to dedup.
 
+The first three are also the whole of `datalib-step probe slack`
+(`src/probe.rs`), which is what the wizard's "Test connection" runs:
+it lists every channel the account can see as a `channel` item and
+every DM as a `conversation` item (path = Slack's id, title = what the
+sync will call it), and the `channels` / `dm_conversations` pickers
+are built from that. It always asks for all four surfaces, whatever
+`dms` says — nothing is stored, and the DM picker has to be ready
+before the toggle is on.
+
 ## Channels and DMs
 
 `conversations.list` covers four surfaces, selected by its `types`
@@ -51,10 +60,18 @@ never asking**, not by filtering a response that already contains your
 DMs.
 
 The two scopes are independent namespaces and neither filters the
-other: `channels` names channels (`#`), `dm_users` names people (`@`).
-A DM has no channel name to match, so folding both into one list would
-silently drop every DM. `dm_users` set with `dms = false` is a config
-error, because both silent readings of it are wrong.
+other: `channels` names channels by name, `dm_conversations` names DMs
+by Slack's conversation id (`D…` for a 1:1, `G…`/`C…` for a group DM),
+either bare or inside a pasted link — `Copy link` on a DM gives
+`https://<ws>.slack.com/archives/<id>`, and `conversation_id` in
+`ingest/mod.rs` reads the id out of any of Slack's link shapes. A DM
+has no channel name to match, so folding both into one list would
+silently drop every DM. `dm_conversations` set with `dms = false` is a
+config error, because both silent readings of it are wrong. (An
+earlier `dm_users` named *people* instead, and resolved them through
+the user directory; a conversation id is one string with one meaning,
+so it replaced that outright — a config still carrying `dm_users`
+fails to load rather than mirroring every DM.)
 
 What the surfaces actually look like on the wire (checked against the
 live API 2026-08-31 — worth knowing, because the differences are what
@@ -205,7 +222,7 @@ nothing in the pipeline deletes. `channels` and `refresh_window_days` are
 deliberately *not* recorded — a newly listed channel has no rows so it
 cold-starts on its own, and the refresh window is re-applied every run.
 
-`dms` and `dm_users` aren't recorded either, for the same reason one
+`dms` and `dm_conversations` aren't recorded either, for the same reason one
 level up: a newly listed DM has no message rows, so it cold-starts from
 `since` unaided. What turning `dms` on *does* need is a fresh
 `conversations.list` — the cached sweep was taken under the narrower

@@ -73,10 +73,13 @@ pub struct SlackApiSync {
     /// start mirroring them because a new field appeared.
     #[serde(default)]
     pub dms: bool,
-    /// Restrict DM mirroring to conversations with these people. Unset
-    /// (with `dms = true`) means every DM the account can see.
+    /// Restrict DM mirroring to these conversations, by Slack's own id
+    /// for each (`D…` for a 1:1, `G…` or `C…` for a group DM) or a
+    /// pasted link to it — the `Copy link` on a DM gives
+    /// `https://<workspace>.slack.com/archives/<id>`. Unset (with
+    /// `dms = true`) means every DM the account can see.
     #[serde(default)]
-    pub dm_users: Option<Vec<String>>,
+    pub dm_conversations: Option<Vec<String>>,
 }
 
 impl Default for SlackApiSync {
@@ -88,29 +91,29 @@ impl Default for SlackApiSync {
             all_channels: false,
             media: true,
             dms: false,
-            dm_users: None,
+            dm_conversations: None,
         }
     }
 }
 
 impl SlackApiSync {
-    /// `dm_users` without `dms = true` is rejected rather than silently
-    /// resolved either way. Both silent readings are bad: honoring the
-    /// list would start mirroring DMs from a config that never asked
-    /// to, and ignoring it would mirror nothing while the file plainly
-    /// says which people to mirror. Neither is discoverable from the
-    /// outcome, so this fails at config-load time with the fix in the
-    /// message.
+    /// `dm_conversations` without `dms = true` is rejected rather than
+    /// silently resolved either way. Both silent readings are bad:
+    /// honoring the list would start mirroring DMs from a config that
+    /// never asked to, and ignoring it would mirror nothing while the
+    /// file plainly says which conversations to mirror. Neither is
+    /// discoverable from the outcome, so this fails at config-load
+    /// time with the fix in the message.
     pub fn validate(&self) -> anyhow::Result<()> {
         if !self.dms {
-            if let Some(users) = &self.dm_users {
-                if !users.is_empty() {
+            if let Some(convs) = &self.dm_conversations {
+                if !convs.is_empty() {
                     anyhow::bail!(
-                        "`dm_users` lists {} entr{} but `dms` is false, so no direct \
+                        "`dm_conversations` lists {} entr{} but `dms` is false, so no direct \
                          messages would be mirrored at all. Set `dms = true` to mirror \
-                         DMs with those people, or drop `dm_users` to turn DMs off.",
-                        users.len(),
-                        if users.len() == 1 { "y" } else { "ies" },
+                         those conversations, or drop `dm_conversations` to turn DMs off.",
+                        convs.len(),
+                        if convs.len() == 1 { "y" } else { "ies" },
                     );
                 }
             }
@@ -132,10 +135,10 @@ impl datalib_source_common::IngestMethods for SlackConfig {
 mod tests {
     use super::*;
 
-    fn sync(dms: bool, dm_users: Option<Vec<&str>>) -> SlackApiSync {
+    fn sync(dms: bool, dm_conversations: Option<Vec<&str>>) -> SlackApiSync {
         SlackApiSync {
             dms,
-            dm_users: dm_users.map(|v| v.into_iter().map(String::from).collect()),
+            dm_conversations: dm_conversations.map(|v| v.into_iter().map(String::from).collect()),
             ..Default::default()
         }
     }
@@ -145,32 +148,43 @@ mod tests {
     #[test]
     fn dms_default_off() {
         assert!(!SlackApiSync::default().dms);
-        assert!(SlackApiSync::default().dm_users.is_none());
+        assert!(SlackApiSync::default().dm_conversations.is_none());
         SlackApiSync::default().validate().unwrap();
     }
 
     #[test]
-    fn dm_users_without_dms_is_rejected() {
-        let err = sync(false, Some(vec!["alice"]))
+    fn dm_conversations_without_dms_is_rejected() {
+        let err = sync(false, Some(vec!["D0123ABCD"]))
             .validate()
             .expect_err("should reject");
         let msg = err.to_string();
         // The message has to name the fix, since neither silent reading
         // of this combination is discoverable from the outcome.
-        assert!(msg.contains("dm_users"), "{msg}");
+        assert!(msg.contains("dm_conversations"), "{msg}");
         assert!(msg.contains("dms = true"), "{msg}");
     }
 
     #[test]
-    fn dm_users_with_dms_is_accepted() {
-        sync(true, Some(vec!["alice"])).validate().unwrap();
+    fn dm_conversations_with_dms_is_accepted() {
+        sync(true, Some(vec!["D0123ABCD"])).validate().unwrap();
     }
 
     /// An empty list is the same as none — it asks for nothing, so it
     /// can't be the "you forgot the switch" mistake the error catches.
     #[test]
-    fn empty_dm_users_without_dms_is_fine() {
+    fn empty_dm_conversations_without_dms_is_fine() {
         sync(false, Some(vec![])).validate().unwrap();
+    }
+
+    /// The people-shaped field this replaced. `deny_unknown_fields`
+    /// already refuses it; this pins that a stale config fails at load
+    /// rather than quietly mirroring every DM.
+    #[test]
+    fn the_old_dm_users_field_is_refused() {
+        let err = toml::from_str::<SlackConfig>("[api]\ndms = true\ndm_users = [\"@riker\"]\n")
+            .expect_err("dm_users is gone")
+            .to_string();
+        assert!(err.contains("dm_users"), "{err}");
     }
 
     /// `validate()` on the whole config has to reach the `api` table,
@@ -178,7 +192,7 @@ mod tests {
     #[test]
     fn config_validate_reaches_api() {
         let cfg = SlackConfig {
-            api: Some(sync(false, Some(vec!["alice"]))),
+            api: Some(sync(false, Some(vec!["D0123ABCD"]))),
             ..Default::default()
         };
         assert!(cfg.validate().is_err());

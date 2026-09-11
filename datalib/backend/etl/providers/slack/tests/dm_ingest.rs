@@ -1,4 +1,4 @@
-//! Whole-download tests for the `dms` / `dm_users` config knobs.
+//! Whole-download tests for the `dms` / `dm_conversations` config knobs.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -117,7 +117,7 @@ fn write_all_histories(api: &Path) {
     write_history(api, "G1", "1735689600.000400", "group dm");
 }
 
-async fn run_fetch(out: &Path, dms: bool, dm_users: Option<Vec<&str>>) {
+async fn run_fetch(out: &Path, dms: bool, dm_conversations: Option<Vec<&str>>) {
     // Open the store here and close it before anything reads it back:
     // a second live connection to one file makes the `dolt_commit`s
     // inside `open` fail with "commit conflict".
@@ -129,7 +129,7 @@ async fn run_fetch(out: &Path, dms: bool, dm_users: Option<Vec<&str>>) {
         members_only: false,
         media: false,
         dms,
-        dm_users: dm_users.map(|v| v.into_iter().map(String::from).collect()),
+        dm_conversations: dm_conversations.map(|v| v.into_iter().map(String::from).collect()),
         ..FetchOptions::new(db.clone())
     })
     .await;
@@ -198,10 +198,11 @@ async fn dms_on_mirrors_direct_and_group_messages() {
     );
 }
 
-/// `dm_users` narrows to the named person's 1:1 DM. Every other DM has
-/// a fixture ready, so walking one lands its message and fails this.
+/// `dm_conversations` narrows to exactly the conversations named. Every
+/// other DM has a fixture ready, so walking one lands its message and
+/// fails this.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn dm_users_allowlist_narrows_to_the_named_person() {
+async fn dm_conversations_narrows_to_the_named_conversations() {
     let _guard = ENV_LOCK.lock().await;
     let d = tempdir().unwrap();
     let api = d.path().join("input_raw");
@@ -215,23 +216,27 @@ async fn dm_users_allowlist_narrows_to_the_named_person() {
     SlackSynth::new(&api).synthesize(&playback).unwrap();
     std::env::set_var(PLAYBACK_ENV, &playback);
 
-    // By real name, to prove the allowlist resolves through the user
-    // directory rather than string-matching a channel id.
-    run_fetch(&out, true, Some(vec!["William Riker"])).await;
+    // One as a bare id, one as the link `Copy link` hands out.
+    run_fetch(
+        &out,
+        true,
+        Some(vec!["D1", "https://enterprise.slack.com/archives/G1"]),
+    )
+    .await;
 
     assert_eq!(
         channels_with_messages(&out),
         set(&["C1", "D1", "G1"]),
-        "Riker's 1:1 DM and the group DM he is in are both conversations \
-         with Riker; Data's 1:1 (D2) is not and must be left alone",
+        "Riker's 1:1 DM and the group DM were named; Data's 1:1 (D2) was \
+         not and must be left alone",
     );
 }
 
-/// Allowlisting the account itself must not sweep in every group DM:
-/// an `mpim`'s `members` includes you, so a match run against raw
-/// participants rather than counterparts would mirror the lot.
+/// A list that names nothing this account has must mirror no DMs — not
+/// fall open to all of them, and not quietly turn a user id or a name
+/// into a match.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn dm_users_allowlist_does_not_match_the_account_itself() {
+async fn dm_conversations_naming_nothing_walks_no_dms() {
     let _guard = ENV_LOCK.lock().await;
     let d = tempdir().unwrap();
     let api = d.path().join("input_raw");
@@ -245,9 +250,8 @@ async fn dm_users_allowlist_does_not_match_the_account_itself() {
     SlackSynth::new(&api).synthesize(&playback).unwrap();
     std::env::set_var(PLAYBACK_ENV, &playback);
 
-    // U1 — the `auth.test` user. Nobody is in a DM *with* themselves
-    // here, so no DM is in scope.
-    run_fetch(&out, true, Some(vec!["picard"])).await;
+    // A person, not a conversation — the shape the old `dm_users` took.
+    run_fetch(&out, true, Some(vec!["U2", "@riker"])).await;
 
     assert_eq!(channels_with_messages(&out), set(&["C1"]));
 }
