@@ -53,6 +53,7 @@ import {
   type EntryKind,
   appendSource,
   removeSteps,
+  describeGroup,
   renameGroup,
   replaceSteps,
   sourceStepsOf,
@@ -1623,6 +1624,7 @@ function openEdit(groupId: string) {
 async function onWizardSubmit(payload: {
   id: string;
   name: string;
+  description: string;
   entry: CatalogEntry;
   groupBody: string | null;
   stepsBody: string;
@@ -1633,12 +1635,13 @@ async function onWizardSubmit(payload: {
   if (current) {
     // Both steps are replaced in one cut-and-append, and a step the
     // source was missing is simply appended with the other. The name
-    // lives on the group, which is renamed in place.
+    // and the description live on the group, which is edited in place.
     const existing = [current.steps.ingest, current.steps.render].filter(
       (s): s is ConfiguredStep => !!s,
     );
     next = replaceSteps(configText.value, existing, payload.stepsBody);
     next = renameGroup(next, current.group.id, payload.name);
+    next = describeGroup(next, current.group.id, payload.description);
     // A render step the provider does not write back — hand-written
     // under a download-only type — leaves with the cut above, so its
     // edges have to go too, or the fan-ins name a step that no longer

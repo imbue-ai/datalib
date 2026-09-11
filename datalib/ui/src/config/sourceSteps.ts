@@ -69,6 +69,10 @@ export type ConfiguredGroup = {
   id: string;
   name: string | null;
   type: string | null;
+  /// What this source is to its owner, in a sentence. The semantic-search
+  /// index keeps it as the source's collection context, so it steers
+  /// retrieval. Edited in the wizard; not shown on the Manage screen.
+  description: string | null;
   /// [start, end) character offsets covering the `[[groups]]` table.
   start: number;
   end: number;
@@ -156,16 +160,24 @@ function groupsOf({ ast, root }: ParsedConfig): ConfiguredGroup[] {
   if (!Array.isArray(root.groups)) return [];
   const groupRanges = ranges(ast, "groups");
   return root.groups.map((raw, i) => {
-    const g = raw as { id?: unknown; name?: unknown; type?: unknown } | null;
+    const g = raw as
+      | { id?: unknown; name?: unknown; type?: unknown; description?: unknown }
+      | null;
     const [start, end] = groupRanges.get(i) ?? [0, 0];
     return {
       id: typeof g?.id === "string" ? g.id : "",
-      name: typeof g?.name === "string" && g.name.trim() !== "" ? g.name.trim() : null,
+      name: nonBlank(g?.name),
       type: typeof g?.type === "string" ? g.type : null,
+      description: nonBlank(g?.description),
       start,
       end,
     };
   });
+}
+
+/// A string with something in it, trimmed; anything else is "not set".
+function nonBlank(v: unknown): string | null {
+  return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
 }
 
 /// The `[[groups]]` entries a config declares, in file order.
@@ -615,13 +627,36 @@ export function stepIdFor(group: string, phase: FieldPhase): string {
 }
 
 /// One source's `[[groups]]` block, with a divider above it. The name
-/// is written only when there is one and it says more than the id.
-export function buildGroup(opts: { id: string; name: string; type: string }): string {
+/// is written only when there is one and it says more than the id; the
+/// description only when there is one.
+export function buildGroup(opts: {
+  id: string;
+  name: string;
+  type: string;
+  description?: string;
+}): string {
   const { id, type } = opts;
-  const name = opts.name.trim();
   const divider = `# ── ${id} ${"─".repeat(Math.max(4, 66 - id.length))}`;
-  const nameLine = name && name !== id ? `\nname = ${quote(name)}` : "";
-  return `${divider}\n[[groups]]\nid = ${quote(id)}${nameLine}\ntype = ${quote(type)}`;
+  const lines = [
+    `id = ${quote(id)}`,
+    nameLine(id, opts.name),
+    `type = ${quote(type)}`,
+    descriptionLine(opts.description ?? ""),
+  ].filter((l): l is string => l !== null);
+  return `${divider}\n[[groups]]\n${lines.join("\n")}`;
+}
+
+/// The `name = …` line for a group, or none: a blank name, or one that
+/// only repeats the id, is not worth a line.
+function nameLine(groupId: string, name: string): string | null {
+  const next = name.trim();
+  return next && next !== groupId ? `name = ${quote(next)}` : null;
+}
+
+/// The `description = …` line for a group, or none when it is blank.
+function descriptionLine(description: string): string | null {
+  const next = description.trim();
+  return next ? `description = ${quote(next)}` : null;
 }
 
 /// One step, as a `[[steps]]` block. No name: a grouped step's label
@@ -675,6 +710,7 @@ export function buildSource(opts: {
   entry: CatalogEntry;
   group: string;
   name: string;
+  description?: string;
   values: FieldValues;
   /// Write the `[[groups]]` block too. Off when editing: the group
   /// already exists and is renamed in place.
@@ -692,7 +728,14 @@ export function buildSource(opts: {
     ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
     : null;
   return {
-    groupBody: opts.withGroup ? buildGroup({ id: group, name: opts.name, type: entry.type }) : null,
+    groupBody: opts.withGroup
+      ? buildGroup({
+          id: group,
+          name: opts.name,
+          type: entry.type,
+          description: opts.description,
+        })
+      : null,
     stepsBody: render ? `${ingest}\n\n${render}` : ingest,
     renderId: renders ? stepIdFor(group, "render") : null,
   };
@@ -701,17 +744,28 @@ export function buildSource(opts: {
 /// Set, replace or (with an empty name) remove the `name` of one
 /// `[[groups]]` entry, leaving everything else in the text alone.
 export function renameGroup(text: string, groupId: string, name: string): string {
+  return setGroupLine(text, groupId, "name", nameLine(groupId, name));
+}
+
+/// Set, replace or (with a blank description) remove the `description`
+/// of one `[[groups]]` entry, leaving everything else in the text alone.
+export function describeGroup(text: string, groupId: string, description: string): string {
+  return setGroupLine(text, groupId, "description", descriptionLine(description));
+}
+
+/// Replace the `<key> = …` line of one `[[groups]]` entry with `line`,
+/// remove it when `line` is null, or add it under the `id` line when the
+/// entry has none. The rest of the text is untouched.
+function setGroupLine(text: string, groupId: string, key: string, line: string | null): string {
   const group = listGroups(text).find((g) => g.id === groupId);
   if (!group || group.end === 0) return text;
   const body = text.slice(group.start, group.end);
-  const next = name.trim();
-  const line = next && next !== groupId ? `name = ${quote(next)}` : null;
-  const nameRe = /^[ \t]*name[ \t]*=.*$/m;
+  const keyRe = new RegExp(`^[ \\t]*${key}[ \\t]*=.*$`, "m");
   let edited: string;
-  // Function replacers: a name is user text, and as a replacement
+  // Function replacers: the value is user text, and as a replacement
   // *string* `$1`, `$&` and `$$` in it would be expanded.
-  if (nameRe.test(body)) {
-    edited = body.replace(nameRe, () => line ?? "").replace(/\n\n(?=\S)/, "\n");
+  if (keyRe.test(body)) {
+    edited = body.replace(keyRe, () => line ?? "").replace(/\n\n(?=\S)/, "\n");
   } else if (line) {
     edited = body.replace(/^([ \t]*id[ \t]*=.*)$/m, (_m, idLine: string) => `${idLine}\n${line}`);
   } else {
