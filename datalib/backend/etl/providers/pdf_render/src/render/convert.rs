@@ -6,8 +6,9 @@ use std::path::Path;
 
 /// Bumped when render output changes in a way that should invalidate
 /// previously-rendered documents — the markdown itself, or the shape of
-/// the `grid_rows` projected from it.
-pub const RENDER_VERSION: u32 = 3;
+/// the `grid_rows` projected from it. v4: `account` stopped carrying
+/// the source name.
+pub const RENDER_VERSION: u32 = 4;
 
 /// One page of converted text.
 pub struct Page {

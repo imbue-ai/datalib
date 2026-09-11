@@ -9,11 +9,24 @@
     { "id": 3, "raw_string": "17015550103@s.whatsapp.net", "user": "17015550103", "server": "s.whatsapp.net" },
     { "id": 4, "raw_string": "17015550104@s.whatsapp.net", "user": "17015550104", "server": "s.whatsapp.net" },
     { "id": 5, "raw_string": "17015550105@s.whatsapp.net", "user": "17015550105", "server": "s.whatsapp.net" },
-    { "id": 6, "raw_string": "bridge-crew@g.us",            "user": "bridge-crew",  "server": "g.us" }
+    { "id": 6, "raw_string": "bridge-crew@g.us",            "user": "bridge-crew",  "server": "g.us" },
+    { "id": 7, "raw_string": "100000000000103@lid",         "user": "100000000000103", "server": "lid" },
+    { "id": 8, "raw_string": "100000000000108@lid",         "user": "100000000000108", "server": "lid" },
+    { "id": 9, "raw_string": "100000000000105@lid",         "user": "100000000000105", "server": "lid" }
+  ],
+  "jid_map": [
+    { "lid_row_id": 7, "jid_row_id": 3 },
+    { "lid_row_id": 9, "jid_row_id": 5 }
+  ],
+  "lid_display_names": [
+    { "lid_row_id": 9, "display_name": "Worf, Son of Mogh" }
   ],
   "chats": [
     { "id": 100, "jid_row_id": 6, "subject": "Bridge Crew", "group_type": 1 },
-    { "id": 101, "jid_row_id": 2, "subject": null,           "group_type": 0 }
+    { "id": 101, "jid_row_id": 2, "subject": null,           "group_type": 0 },
+    { "id": 102, "jid_row_id": 7, "subject": null,           "group_type": 0 },
+    { "id": 103, "jid_row_id": 8, "subject": null,           "group_type": 0 },
+    { "id": 104, "jid_row_id": 9, "subject": null,           "group_type": 0 }
   ],
   "messages": [
     { "id": 1, "chat_row_id": 100, "from_me": 1, "key_id": "TNG0001", "sender_jid_row_id": 1, "timestamp": 12442118400000, "message_type": 0, "text_data": "Status report." },
@@ -28,7 +41,12 @@
     { "id": 12, "chat_row_id": 100, "from_me": 0, "key_id": "TNG0012", "sender_jid_row_id": 5, "timestamp": 12442119060000, "message_type": 2, "text_data": null, "media": { "mime_type": "audio/ogg", "file_path": "Media/WhatsApp Voice Notes/2364/tactical-briefing.opus", "file_size": 640, "media_caption": null, "width": null, "height": null } },
     { "id": 9, "chat_row_id": 101, "from_me": 0, "key_id": "TNG0009", "sender_jid_row_id": 2, "timestamp": 12442118880000, "message_type": 0, "text_data": "Captain, a private word about Commander Data?" },
     { "id": 10, "chat_row_id": 101, "from_me": 1, "key_id": "TNG0010", "sender_jid_row_id": 1, "timestamp": 12442118940000, "message_type": 0, "text_data": "Come in, Number One." },
-    { "id": 13, "chat_row_id": 101, "from_me": 0, "key_id": "TNG0013", "sender_jid_row_id": 2, "timestamp": 12442119120000, "message_type": 1, "text_data": null, "media": { "mime_type": "image/jpeg", "file_path": "Media/WhatsApp Images/holodeck-poker-night.jpg", "file_size": 768, "media_caption": "Deleted off the phone — the message row outlives the file.", "width": 800, "height": 600 } }
+    { "id": 13, "chat_row_id": 101, "from_me": 0, "key_id": "TNG0013", "sender_jid_row_id": 2, "timestamp": 12442119120000, "message_type": 1, "text_data": null, "media": { "mime_type": "image/jpeg", "file_path": "Media/WhatsApp Images/holodeck-poker-night.jpg", "file_size": 768, "media_caption": "Deleted off the phone — the message row outlives the file.", "width": 800, "height": 600 } },
+    { "id": 14, "chat_row_id": 100, "from_me": 0, "key_id": "TNG0014", "sender_jid_row_id": 7, "timestamp": 12442119180000, "message_type": 0, "text_data": "Sensor sweep complete: nothing on long range." },
+    { "id": 15, "chat_row_id": 102, "from_me": 0, "key_id": "TNG0015", "sender_jid_row_id": 7, "timestamp": 12442119240000, "message_type": 0, "text_data": "Captain, I have a question about humour." },
+    { "id": 16, "chat_row_id": 102, "from_me": 1, "key_id": "TNG0016", "sender_jid_row_id": 1, "timestamp": 12442119300000, "message_type": 0, "text_data": "Ask away, Data." },
+    { "id": 17, "chat_row_id": 103, "from_me": 0, "key_id": "TNG0017", "sender_jid_row_id": 8, "timestamp": 12442119360000, "message_type": 0, "text_data": "Is this the Enterprise? Wrong number, sorry." },
+    { "id": 18, "chat_row_id": 104, "from_me": 0, "key_id": "TNG0018", "sender_jid_row_id": 9, "timestamp": 12442119420000, "message_type": 0, "text_data": "Sir, I request permission to run a tactical drill." }
   ],
   "reactions": [
     { "parent_message_id": 8, "from_me": 0, "sender_jid_row_id": 2, "reaction": "🫡", "timestamp": 12442118880000, "key_id": "REACT001" },

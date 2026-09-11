@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_linkedin_config::LinkedinRenderConfig;
 use datalib_etl_render::processor::{RenderCtx, RenderPass, RenderProcessor};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Render wave: always present (renders whatever is in the raw store).
 pub fn plan_render(
@@ -20,6 +20,16 @@ pub fn plan_render(
         raw_path,
         name,
     })])
+}
+
+/// What every feed's render needs to know about the source it is
+/// rendering: where the raw store and the output tree are, what the
+/// source is called, and whose export it is.
+pub struct Source<'a> {
+    pub raw_dir: &'a Path,
+    pub out_dir: &'a Path,
+    pub name: &'a str,
+    pub account: Option<&'a str>,
 }
 
 /// LinkedIn's render processor — renders the three feeds (messages,
@@ -47,12 +57,17 @@ impl RenderProcessor for LinkedinRender {
         // holds is a document whose source is gone. The driver sweeps.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
+        let account = crate::account::load_account(&self.raw_path).context("linkedin account")?;
+        let source = Source {
+            raw_dir: &self.raw_path,
+            out_dir: ctx.root,
+            name: &self.name,
+            account: account.as_deref(),
+        };
 
         // Every message-shaped feed (DMs + AI-coach transcripts) renders.
         let r_pass = crate::render::render(
-            &self.raw_path,
-            ctx.root,
-            &self.name,
+            &source,
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
@@ -62,9 +77,7 @@ impl RenderProcessor for LinkedinRender {
         // Connections render as first-class contacts via the shared contact
         // renderer (sibling of the chat path above).
         let c_pass = crate::connections::render_connections(
-            &self.raw_path,
-            ctx.root,
-            &self.name,
+            &source,
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
@@ -74,9 +87,7 @@ impl RenderProcessor for LinkedinRender {
         // Your own posts (Shares) and the comments you left, grouped one
         // chat-style thread per post, with linkouts back to linkedin.com.
         let p_pass = crate::posts::render_posts(
-            &self.raw_path,
-            ctx.root,
-            &self.name,
+            &source,
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,

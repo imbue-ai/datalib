@@ -27,7 +27,9 @@ use datalib_schema::providers::Provider;
 ///     `docs/dev/data_architecture_parse_and_render.md` §6. Malformed
 ///     `Date` headers are common in real mail, so this changes real
 ///     output and stale docs must be re-rendered.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: `account` is the mailbox's address rather than the JMAP account
+///     id (`u432643a7`).
+pub const RENDER_VERSION: u32 = 6;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -169,6 +171,15 @@ pub fn render_all(
         })
         .collect();
 
+    let account_label: HashMap<String, String> = parsed
+        .accounts
+        .iter()
+        .filter_map(|a| {
+            let id = a.get("id")?.as_str()?;
+            Some((id.to_string(), account_label_from_payload(id, a)?))
+        })
+        .collect();
+
     // Optional render-time label filter. Resolve the configured label
     // paths to mailbox ids against the same tree (`parentId`) the chips
     // use; `None` = render every thread. Resolution and exact-match
@@ -215,7 +226,7 @@ pub fn render_all(
                 continue;
             }
         }
-        let (chat, bundle) = build_chat(bucket, &mailbox_name, outlink);
+        let (chat, bundle) = build_chat(bucket, &mailbox_name, &account_label, outlink);
         blobs_by_chat.insert(chat.id.clone(), bundle);
         chats.push(chat);
     }
@@ -241,9 +252,19 @@ pub fn render_all(
     Ok(())
 }
 
+/// The `accounts` row is a JMAP `Account` object, a Gmail stand-in
+/// shaped like one, or what the mbox config said. Only mbox and Gmail
+/// carry an explicit address; JMAP's `name` is, per RFC 8620, "the
+/// email address representing the owner of the account".
+fn account_label_from_payload(id: &str, payload: &serde_json::Value) -> Option<String> {
+    let s = |k: &str| payload.get(k).and_then(|v| v.as_str());
+    datalib_etl_chat_common::account_label(id, s("emailAddress").or_else(|| s("email")), s("name"))
+}
+
 fn build_chat(
     bucket: &super::parse::EmailThreadBucket,
     mailbox_name: &HashMap<String, String>,
+    account_label: &HashMap<String, String>,
     outlink: Option<OutlinkFormat>,
 ) -> (NormalizedChat, BlobBundle) {
     let account_id = &bucket.account_id;
@@ -434,7 +455,12 @@ fn build_chat(
         display: subject.clone(),
         title: Some(subject),
         author: None,
-        account: Some(account_id.clone()),
+        account: Some(
+            account_label
+                .get(account_id)
+                .cloned()
+                .unwrap_or_else(|| account_id.clone()),
+        ),
         project: None,
         external_id: Some(bucket.thread_id.clone()),
         source_url: thread_source_url,

@@ -4,7 +4,7 @@ expression: rows
 ---
 [
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Jean-Luc Picard",
     "byte_size": null,
     "channel": "#bridge",
@@ -18,8 +18,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -34,7 +34,7 @@ expression: rows
     "when_ts": "2369-05-28T15:08:20+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Lt. Cmdr. Data",
     "byte_size": null,
     "channel": "#bridge",
@@ -48,8 +48,8 @@ expression: rows
     "message_index": 1,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -64,7 +64,7 @@ expression: rows
     "when_ts": "2369-05-28T15:10:00+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "William T. Riker",
     "byte_size": null,
     "channel": "#bridge",
@@ -78,8 +78,8 @@ expression: rows
     "message_index": 2,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -94,7 +94,7 @@ expression: rows
     "when_ts": "2369-05-28T15:11:40+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Worf",
     "byte_size": null,
     "channel": "#bridge",
@@ -108,8 +108,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/aa7f900b-31b9-5603-995a-5ed36db03478/all.md",
@@ -124,7 +124,7 @@ expression: rows
     "when_ts": "2369-05-28T15:13:20+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Lt. Cmdr. Data",
     "byte_size": null,
     "channel": "#engineering",
@@ -138,8 +138,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/68000dc2-0cb1-5eb4-ba26-89498049dfa8/all.md",
@@ -154,7 +154,7 @@ expression: rows
     "when_ts": "2369-05-28T15:15:00+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "William T. Riker",
     "byte_size": null,
     "channel": "#ten-forward",
@@ -168,8 +168,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md",
@@ -184,7 +184,7 @@ expression: rows
     "when_ts": "2369-05-28T15:16:40+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Jean-Luc Picard",
     "byte_size": null,
     "channel": "#bridge",
@@ -198,8 +198,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/efd7f060-7cc7-508b-811f-afbb133a9ff6/all.md",
@@ -214,7 +214,7 @@ expression: rows
     "when_ts": "2369-05-28T15:18:20+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Worf",
     "byte_size": null,
     "channel": "#ten-forward",
@@ -228,8 +228,8 @@ expression: rows
     "message_index": 1,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md",
@@ -244,7 +244,7 @@ expression: rows
     "when_ts": "2369-05-28T15:18:20+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Lt. Cmdr. Data",
     "byte_size": null,
     "channel": "#bridge",
@@ -258,8 +258,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/56f6c1d9-495c-5104-8a26-be13bc28718e/all.md",
@@ -274,7 +274,7 @@ expression: rows
     "when_ts": "2369-05-28T15:20:00+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "William T. Riker",
     "byte_size": null,
     "channel": "@William T. Riker",
@@ -288,8 +288,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/777b8f58-706d-549a-82b8-699fc856030e/all.md",
@@ -304,7 +304,7 @@ expression: rows
     "when_ts": "2369-05-28T15:21:40+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Jean-Luc Picard",
     "byte_size": null,
     "channel": "@William T. Riker",
@@ -318,8 +318,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/1803e003-56a7-5c12-9024-5265850e9eaa/all.md",
@@ -334,7 +334,7 @@ expression: rows
     "when_ts": "2369-05-28T15:21:41+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Lt. Cmdr. Data",
     "byte_size": null,
     "channel": "@Lt. Cmdr. Data",
@@ -348,8 +348,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md",
@@ -364,7 +364,7 @@ expression: rows
     "when_ts": "2369-05-28T15:21:42+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Worf",
     "byte_size": null,
     "channel": "@William T. Riker, Worf",
@@ -378,8 +378,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/b168a24b-fddb-55c2-88fe-523dec59fd5c/all.md",
@@ -394,7 +394,7 @@ expression: rows
     "when_ts": "2369-05-28T15:21:43+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Jean-Luc Picard",
     "byte_size": null,
     "channel": "@William T. Riker, Worf",
@@ -408,8 +408,8 @@ expression: rows
     "message_index": 0,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/658ccd8e-50ad-527c-8cc3-401cf8b315db/all.md",
@@ -424,7 +424,7 @@ expression: rows
     "when_ts": "2369-05-28T15:21:44+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "William T. Riker",
     "byte_size": null,
     "channel": "#bridge",
@@ -438,8 +438,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -454,7 +454,7 @@ expression: rows
     "when_ts": "2369-05-28T15:10:00+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Lt. Cmdr. Data",
     "byte_size": null,
     "channel": "#bridge",
@@ -468,8 +468,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -484,7 +484,7 @@ expression: rows
     "when_ts": "2369-05-28T15:10:00+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Jean-Luc Picard",
     "byte_size": null,
     "channel": "#bridge",
@@ -498,8 +498,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -514,7 +514,7 @@ expression: rows
     "when_ts": "2369-05-28T15:10:00+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "William T. Riker",
     "byte_size": null,
     "channel": "#ten-forward",
@@ -528,8 +528,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md",
@@ -544,7 +544,7 @@ expression: rows
     "when_ts": "2369-05-28T15:18:20+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": "Jean-Luc Picard",
     "byte_size": null,
     "channel": "@Lt. Cmdr. Data",
@@ -558,8 +558,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md",
@@ -574,7 +574,7 @@ expression: rows
     "when_ts": "2369-05-28T15:21:42+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "#bridge",
@@ -588,8 +588,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
@@ -604,7 +604,7 @@ expression: rows
     "when_ts": "2369-05-28T15:08:20+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "#bridge",
@@ -618,8 +618,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/aa7f900b-31b9-5603-995a-5ed36db03478/all.md",
@@ -634,7 +634,7 @@ expression: rows
     "when_ts": "2369-05-28T15:13:20+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "#engineering",
@@ -648,8 +648,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/68000dc2-0cb1-5eb4-ba26-89498049dfa8/all.md",
@@ -664,7 +664,7 @@ expression: rows
     "when_ts": "2369-05-28T15:15:00+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "#ten-forward",
@@ -678,8 +678,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md",
@@ -694,7 +694,7 @@ expression: rows
     "when_ts": "2369-05-28T15:16:40+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "#bridge",
@@ -708,8 +708,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/efd7f060-7cc7-508b-811f-afbb133a9ff6/all.md",
@@ -724,7 +724,7 @@ expression: rows
     "when_ts": "2369-05-28T15:18:20+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "#bridge",
@@ -738,8 +738,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/56f6c1d9-495c-5104-8a26-be13bc28718e/all.md",
@@ -754,7 +754,7 @@ expression: rows
     "when_ts": "2369-05-28T15:20:00+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "@William T. Riker",
@@ -768,8 +768,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/777b8f58-706d-549a-82b8-699fc856030e/all.md",
@@ -784,7 +784,7 @@ expression: rows
     "when_ts": "2369-05-28T15:21:40+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "@William T. Riker",
@@ -798,8 +798,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/1803e003-56a7-5c12-9024-5265850e9eaa/all.md",
@@ -814,7 +814,7 @@ expression: rows
     "when_ts": "2369-05-28T15:21:41+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "@Lt. Cmdr. Data",
@@ -828,8 +828,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md",
@@ -844,7 +844,7 @@ expression: rows
     "when_ts": "2369-05-28T15:21:42+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "@William T. Riker, Worf",
@@ -858,8 +858,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/b168a24b-fddb-55c2-88fe-523dec59fd5c/all.md",
@@ -874,7 +874,7 @@ expression: rows
     "when_ts": "2369-05-28T15:21:43+00:00"
   },
   {
-    "account": "T_NCC1701D",
+    "account": "picard@enterprise.starfleet",
     "author": null,
     "byte_size": null,
     "channel": "@William T. Riker, Worf",
@@ -888,8 +888,8 @@ expression: rows
     "message_index": null,
     "notion_block_uuid": null,
     "notion_page_uuid": null,
-    "org_name": null,
-    "org_uuid": null,
+    "org_name": "USS Enterprise NCC-1701-D",
+    "org_uuid": "T_NCC1701D",
     "project": null,
     "provider": "slack",
     "qmd_path": "slack_api/render_markdown/658ccd8e-50ad-527c-8cc3-401cf8b315db/all.md",
