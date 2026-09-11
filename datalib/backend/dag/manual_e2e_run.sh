@@ -86,22 +86,27 @@ TARGET="//datalib/backend/dag:manual_e2e_live_sync_golden"
 # `cf-mitigated: challenge` and a "Just a moment..." HTML body — no
 # Retry-After, no x-ratelimit-* headers, because it is a challenge and not a
 # rate limit. There is nothing to wait out: the same request returns 200
-# immediately once LATCHKEY_CURL points at the impersonator.
+# immediately once LATCHKEY_CURL points at the dispatch curl.
 #
 # This is worth automating rather than documenting. The 403 reads exactly
 # like throttling, which sent us chasing a non-existent rate limit for an
 # afternoon (and, two months earlier, got the claude source disabled in
 # the golden config for the same wrong reason).
 if [[ -z "${LATCHKEY_CURL:-}" ]]; then
+  # The dispatch, not the impersonator: only the dispatch acts on the
+  # marker header, and the impersonator is a plain curl without the
+  # flags the dispatch adds (docs/dev/curl_impersonate.md). Building
+  # both puts them side by side, which is how the dispatch finds it.
+  DISPATCH_TARGET="//datalib/backend/etl:latchkey_curl_dispatch"
   IMPERSONATE_TARGET="//datalib/backend/etl:latchkey_curl_impersonate"
-  echo "[manual-e2e] building ${IMPERSONATE_TARGET} for LATCHKEY_CURL…" >&2
-  bazel build "$IMPERSONATE_TARGET" >&2
+  echo "[manual-e2e] building ${DISPATCH_TARGET} + ${IMPERSONATE_TARGET} for LATCHKEY_CURL…" >&2
+  bazel build "$DISPATCH_TARGET" "$IMPERSONATE_TARGET" >&2
   # `bazel info bazel-bin` rather than the convenience symlink: the symlink
   # is absent on a fresh clone until something is built, and points at the
   # wrong config when the last build used different flags.
-  LATCHKEY_CURL="$(bazel info bazel-bin)/datalib/backend/etl/latchkey_curl_impersonate"
+  LATCHKEY_CURL="$(bazel info bazel-bin)/datalib/backend/etl/latchkey_curl_dispatch"
   if [[ ! -x "$LATCHKEY_CURL" ]]; then
-    echo "error: built the impersonator but it is not at $LATCHKEY_CURL" >&2
+    echo "error: built the dispatch curl but it is not at $LATCHKEY_CURL" >&2
     exit 1
   fi
   export LATCHKEY_CURL

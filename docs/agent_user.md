@@ -56,7 +56,8 @@ Ten binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API
 server + web UI), `datalib-applet` (the applet host, spawned on demand
 by the http gateway), `latchkey-curl-dispatch` +
-`latchkey-curl-impersonate` (Cloudflare-safe HTTP for downloaders),
+`latchkey-curl-impersonate` (upstream `curl-impersonate`: Cloudflare-safe
+HTTP for downloaders),
 `datalib-doltlite` (the shell for reading and exporting the stores —
 see "Reading the mirrored data" below), `datalib-fsindex` (the
 directory-tree scanner, also reachable as a step) and

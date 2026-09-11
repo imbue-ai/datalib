@@ -1,0 +1,16 @@
+#!/bin/sh
+# gcc, with the C++ runtime appended to every link line. Used as the C
+# compiler for the fully-static musl builds in
+# .github/workflows/curl-impersonate.yml.
+#
+# Why: BoringSSL is C++ and curl is C, and upstream's CMake puts
+# `-lstdc++` in CMAKE_EXE_LINKER_FLAGS — which lands *before* the objects
+# on the link line. That is fine for a shared libstdc++ and fatal for a
+# static one, since a static archive only resolves symbols that objects
+# before it already asked for. Upstream avoids the problem by building
+# its musl legs with zig, whose driver orders the runtime itself; we
+# build with the distro gcc and order it here instead.
+case " $* " in
+    *" -c "* | *" -E "* | *" -S "* | *" -M "* | *" -MM "*) exec gcc "$@" ;;
+    *) exec gcc "$@" -lstdc++ ;;
+esac

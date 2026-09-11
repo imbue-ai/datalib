@@ -8,19 +8,12 @@ publish.workspace = true
 name = "datalib_etl"
 path = "src/lib.rs"
 
-# Curl-compatible CLI shim wrapping rquest's Chrome TLS impersonation.
-# Mirror of `src/ingest/latchkey_curl_impersonate.py` — point latchkey at it
-# via `LATCHKEY_CURL=<path-to-this-binary>` to clear Cloudflare without
-# a separate curl-impersonate install.
-[[bin]]
-name = "latchkey-curl-impersonate"
-path = "src/bin/latchkey_curl_impersonate.rs"
-
 # Drop-in `curl` that dispatches on a private marker header: requests
-# carrying `-H "X-Imbue-Impersonate:"` go to the impersonating binary
-# above (found as a sibling of this one), everything else passes through
-# to `curl` on PATH. Lets a single `LATCHKEY_CURL` binary serve both
-# kinds of caller. std-only, so it links none of this crate's HTTP stack.
+# carrying `-H "X-Imbue-Impersonate:"` go to `curl-impersonate` (shipped
+# as a sibling of this binary, `latchkey-curl-impersonate`; see
+# //third-party/curl-impersonate), everything else passes through to
+# `curl` on PATH. Lets a single `LATCHKEY_CURL` binary serve both kinds
+# of caller. std-only, so it links none of this crate's HTTP stack.
 [[bin]]
 name = "latchkey-curl-dispatch"
 path = "src/bin/latchkey_curl_dispatch.rs"
@@ -62,11 +55,6 @@ tracing = "0.1"
 # `datalib-obs` so the shared MP type is identical.
 indicatif = "0.18"
 
-# Curl-compatible TLS-impersonating HTTP client. Used by
-# `latchkey-curl-impersonate`; gated by a feature in case downstream
-# consumers don't want the boring-ssl build cost.
-wreq = { version = "=6.0.0-rc.28", default-features = false, features = ["webpki-roots"] }
-wreq-util = "=3.0.0-rc.11"
 strum = { workspace = true }
 
 [dev-dependencies]

@@ -41,18 +41,18 @@ test --zip_undeclared_test_outputs=true
 # (`/opt/homebrew/bin` covers the brew defaults on arm macs;
 # `/usr/local/bin` covers Intel macs — brew's prefix there — plus
 # Linux tools installed outside the system dirs; `/usr/bin:/bin`
-# covers system `make`/`perl`/`cc` etc.). boring-sys2's build script
-# in particular shells out to cmake + a C toolchain to build
-# boringssl — the release workflow's x86_64-apple-darwin leg failed
-# until /usr/local/bin was added here, because that's where the
-# macos-15-intel runner's cmake lives.
+# covers system `make`/`perl`/`cc` etc.). protobuf-src's build script
+# in particular shells out to cmake + a C toolchain — the release
+# workflow's x86_64-apple-darwin leg failed until /usr/local/bin was
+# added here, because that's where the macos-15-intel runner's cmake
+# lives.
 #
 # We deliberately do NOT `--action_env=NPX_BIN`. Forwarded host env
 # vars contribute to every action's cache key, so any caller-side
 # variance (direnv loaded vs not, `which npx` resolving to different
 # paths in different shells, agent sessions, CI machines) invalidates
-# every cached action — including the expensive boring-sys2 build
-# script. Rust call sites still honor `$NPX_BIN` if set at *runtime*
+# every cached action — including the expensive native build
+# scripts. Rust call sites still honor `$NPX_BIN` if set at *runtime*
 # (handy when running the sync binary directly outside bazel), but
 # bazel doesn't propagate it into the action graph.
 # Resolver:
@@ -98,21 +98,27 @@ test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 # absence have not been enumerated.
 build --action_env=HOME
 
-# libsqlite3-sys's build script invokes bindgen, which uses
-# `clang-sys` to dlopen libclang and parse <sqlite3.h>. Point it at
-# Xcode Command Line Tools' bundled libclang.dylib — present on every
-# macOS host (incl. GitHub Actions `macos-*` runners) since bazel
-# already requires CLT for the C toolchain.
+# PROBABLY DEAD: as of the curl-impersonate migration nothing in
+# datalib/backend/Cargo.lock depends on `bindgen` any more (boring-sys2
+# was the last user; libsqlite3-sys resolves to cc + pkg-config only).
+# Removing this and its mirrors in release.yml, test.yml,
+# prepare-bazel and the devcontainer wants a CI run of its own, so it
+# is left in place for now. The history, for whoever removes it:
+#
+# bindgen used `clang-sys` to dlopen libclang. This pointed it at Xcode
+# Command Line Tools' bundled libclang.dylib — present on every macOS
+# host (incl. GitHub Actions `macos-*` runners) since bazel already
+# requires CLT for the C toolchain.
 #
 # `--host_action_env` mirrors `--action_env` so the *exec*-config copy
-# of every bindgen build script finds libclang too. boring-sys2 (and
-# other `wreq`/BoringSSL users) gets built `[for tool]` whenever an
-# exec-config build tool in the `//...` graph depends on the HTTP
-# stack; without the host variant that exec-config bindgen panics with
-# "Unable to find libclang" the moment the action isn't a cache hit —
-# which is exactly what reddened `bazel test //...` in CI on a cold
-# BuildBuddy cache. `--action_env` alone only covers target-config
-# actions, so the failure hid behind the remote cache until a miss.
+# of a bindgen build script found libclang too: boring-sys2 got built
+# `[for tool]` whenever an exec-config build tool in the `//...` graph
+# depended on the HTTP stack, and without the host variant that
+# exec-config bindgen panicked with "Unable to find libclang" the
+# moment the action wasn't a cache hit — which is exactly what reddened
+# `bazel test //...` in CI on a cold BuildBuddy cache. `--action_env`
+# alone only covers target-config actions, so the failure hid behind
+# the remote cache until a miss.
 #
 # Linux hosts must override both on the command line (later flags win):
 #   bazel build ... --action_env=LIBCLANG_PATH=$(llvm-config --libdir) \
@@ -190,7 +196,7 @@ test  --experimental_disk_cache_gc_max_size=150G
 #
 # Why this is huge for our build: actions that anyone (you, CI, the
 # devcontainer warmup, a contributor) builds once become cache hits
-# for everyone else. boring-sys2's BoringSSL compile, rules_rust's
+# for everyone else. The doltlite amalgamation compile, rules_rust's
 # crate compiles, and the bzlmod-resolved external repos all flow
 # through, so first-build cold cost on a fresh machine drops by ~90%.
 #
@@ -305,15 +311,10 @@ build:remote --jobs=80
 # MODULE.bazel registers the same musl target toolchains for Apple
 # Silicon hosts, so much of the release path can be debugged locally
 # (e.g. `datalib_http_bin` cross-builds to a fully-static ELF from
-# a mac). The known exception: anything that pulls boring-sys2 (wreq —
-# so `latchkey_curl_impersonate` and `datalib_sync_bin`) only musl-builds
-# with a Linux exec platform (the CI runners, the devcontainer),
-# because boring-sys2's build script runs bindgen against the musl
-# target triple, which needs linux libc headers on the include path;
-# a linux host supplies them via /usr/include, a mac has none for a
-# linux triple and bindgen dies on `stddef.h`. The `bazel build ...
-# (musl static)` step in test.yml gates the full musl dist on every
-# PR, so darwin's partial coverage is fine.
+# a mac). The `bazel build ... (musl static)` step in test.yml gates
+# the full musl dist on every PR. The impersonating curl is not built
+# by bazel at all under any config: it is fetched, one prebuilt
+# archive per triple (see //third-party/curl-impersonate).
 #
 # The resulting binaries are statically linked against musl libc (no
 # DT_NEEDED entries at all — verify with `file`, which should say
