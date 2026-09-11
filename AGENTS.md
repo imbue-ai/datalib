@@ -277,6 +277,23 @@ reference doc it relates to.
   commented group with its `ingest` + `render_markdown` step pair per
   source).
 
+## Breaking changes are fine
+
+**There are no real users yet, so nothing here has to stay
+backward-compatible.** A rename that costs a re-index, a config shape
+that stops loading, a stored column that changes name — all of these are
+cheaper now than they will ever be again, and far cheaper than leaving a
+confusing pattern in place for someone to trip over later. When you find
+a name that lies or a shape that fights you, fix it properly rather than
+layering a compatibility shim over it.
+
+Two things this does *not* license. Keep a compatibility path where the
+input comes from a **person** rather than from our own code — a filter
+somebody typed into the search bar lives in their fingers and in their
+saved queries, and an alias costs one line. And say what breaks: a
+change that invalidates a store or a config belongs in the commit
+message, so whoever hits it knows it was deliberate.
+
 ## Prose can be stale — verify claims against the tree
 
 The docs above, `TODO.md`, and this repo's commit messages are unusually
@@ -1314,23 +1331,21 @@ the `source_id:` search filter, `Field::SourceId`. The grid's "Source"
 column shows the *name*, joined client-side from `config.toml` — which is
 what keeps renaming a source free of a re-index.
 
-Three older spellings survive on purpose, and each is the storage or the
-user, not a second opinion:
+Every stored column moved with the code — `markdowns.source_id`,
+`source_cursors.source_id`, `render_problems.source_id` — so there is no
+gap between what a field is called and what its column is called. The
+cost was one re-index — the trade
+[Breaking changes are fine](#breaking-changes-are-fine) describes.
+`sync_jobs.source_ids` is the one plural: it holds a comma-separated
+list of step ids, so the old singular was wrong twice over.
 
-- **The stored columns** `markdowns.source_name`, `source_cursors.source_name`
-  and `sync_jobs.source_name` hold ids and keep the old name. These stores
-  have no migration step — a renamed column is a dropped and recreated
-  table — so renaming them would cost a re-index of every mirror to change
-  a word nobody sees. `sync_jobs` shows how to move the Rust side anyway:
-  the field is `source_ids` (plural, because it is a comma-separated list)
-  and `#[col(name = "source_name")]` pins the column.
-- **`source_name:` in the search bar** parses to `Field::SourceId`. It was
-  the filter's only spelling for as long as a source had nothing but an
-  id, so it is in saved queries; new callers emit `source_id:`.
-- **`source_name` on the render side** (`RenderedMarkdown`, the
-  `source_name` parameter threaded through every `<p>_render` crate) is
-  the value that lands in `markdowns.source_name`, so it matches its
-  column. `RenderCtx` carries the same id as `name`.
+`source_name` survives in exactly two places, and both are inputs a
+**person** types rather than names we chose: `source_name:` in the
+search bar parses to `Field::SourceId`, and `POST /api/sync/jobs` takes
+`source_name` as a serde alias for `source_ids`. Each was the only
+spelling for as long as a source had nothing but an id, so both are in
+saved queries and in people's fingers. New callers emit `source_id:` and
+`source_ids`.
 
 Background: [#279](https://github.com/imbue-ai/datalib/issues/279).
 

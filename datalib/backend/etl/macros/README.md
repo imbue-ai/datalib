@@ -129,14 +129,6 @@ source of truth the same way `schema_raw.rs` already was.
 - `#[col(sql = "VARCHAR(96)")]` — required on every field. Nullability is
   inferred from the Rust type: `Option<T>` is nullable, anything else gets
   `NOT NULL`.
-- `#[col(sql = "VARCHAR(64)", name = "source_name")]` — optional `name`
-  pins the column to a spelling the field no longer uses. It exists for
-  one case: a field renamed after its column was already on disk. These
-  stores have no migration step, so a renamed column is a dropped and
-  recreated table (`reconcile_table_schema` in `doltlite_raw.rs`); `name`
-  is how a Rust-side rename costs nothing. Pair it with a comment saying
-  which is which, because the hand-written SQL around it keeps using the
-  stored spelling.
 - `#[derived(name = "when_ts_utc", sql = "VARCHAR(40)")]` — repeatable, on
   the column it follows. Declares a column that lives in the DB but is
   computed at load time and so is absent from the struct.

@@ -29,15 +29,12 @@ pub struct MarkdownRow {
     /// idempotent.
     #[col(sql = "VARCHAR(96)")]
     pub markdown_uuid: String,
-    /// The **id** of the source that produced this markdown — its group,
+    /// The id of the source that produced this markdown — its group,
     /// which is the first segment of the producing step's artifact
     /// paths. Never the display name a person gave that group; a name
     /// is mutable and two groups may share one.
-    ///
-    /// The column keeps the older spelling because renaming it would
-    /// cost a re-index of every mirror, and it is not user-visible.
     #[col(sql = "VARCHAR(64)")]
-    pub source_name: String,
+    pub source_id: String,
     /// Denormalized provider tag, matches `grid_rows.provider` for the
     /// rows that point at this markdown. Stored here so the markdowns
     /// table is queryable without a join when filtering the sync page.

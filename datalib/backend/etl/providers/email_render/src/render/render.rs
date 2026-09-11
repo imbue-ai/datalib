@@ -130,7 +130,7 @@ pub fn render_params(outlink: Option<OutlinkFormat>, only_labels: &[String]) -> 
 pub fn render_all(
     parsed: &ParsedEmail,
     root: &std::path::Path,
-    source_name: &str,
+    source_id: &str,
     outlink: Option<OutlinkFormat>,
     only_labels: &[String],
     progress: &Progress,
@@ -142,7 +142,7 @@ pub fn render_all(
     let render_params = render_params(outlink, only_labels);
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
-        source = source_name,
+        source = source_id,
         scan_elapsed_ms = elapsed_ms,
         changed_threads = parsed
             .scan
@@ -186,7 +186,7 @@ pub fn render_all(
         let resolved = datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels);
         if !resolved.unmatched.is_empty() {
             tracing::warn!(
-                source = source_name,
+                source = source_id,
                 unmatched = ?resolved.unmatched,
                 "only_render_labels matched no mailbox; check spelling / parent path",
             );
@@ -225,7 +225,7 @@ pub fn render_all(
         &profile(),
         &chats,
         root,
-        source_name,
+        source_id,
         &blobs_by_chat,
         progress,
         &no_priors,
@@ -234,7 +234,7 @@ pub fn render_all(
     .context("email chat-common render")?;
 
     if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(root, source_name);
+        let cursor_path = render_cursor::cursor_path(root, source_id);
         render_cursor::write(&cursor_path, head, &render_params)
             .with_context(|| format!("write email render cursor {}", cursor_path.display()))?;
     }

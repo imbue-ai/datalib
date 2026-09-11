@@ -353,7 +353,7 @@ pub fn render_github(
         let rows = rows_for_pr(pr, &comments, stanza, &mut problems);
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: pr.uuid.clone(),
-            source_name: String::new(),
+            source_id: String::new(),
             source_fingerprint: fingerprint,
             upstream_cursor: None,
             md_path: md_path.clone(),

@@ -11,7 +11,7 @@ that took the grid routes out of `datalib-http`, and the removal of the
 download report. Claims below have been re-checked against that main;
 the ones that changed are called out where they sit.
 Related: [#171](https://github.com/imbue-ai/datalib/issues/171)
-(`grid_rows` needs `source_name` before the sources grid can count rows
+(`grid_rows` needs a per-source id before the sources grid can count rows
 per source). Per
 [`AGENTS.md`](../../../AGENTS.md), don't cite this file as a description of
 the tree — it describes work we intend to do. When the first slice
@@ -343,7 +343,7 @@ against its own child.
 ### Document counts must go through the applet
 
 The first draft had `datalib-http` running
-`SELECT source_name, COUNT(*) FROM markdowns GROUP BY source_name`.
+`SELECT source_id, COUNT(*) FROM markdowns GROUP BY source_id`.
 **That is no longer allowed.** `core/src/layout.rs` now states that
 `unified_index/` is "owned end to end by the `unified_index` applet and
 the two steps that write it; nothing in `datalib-http` or `datalib-dag`
@@ -931,7 +931,7 @@ Column list and data sources are in [The Manage screen](#the-manage-screen)
 above. What follows is the part that needs argument rather than a table.
 
 `markdowns` is what makes per-source attribution possible at all: it
-carries `source_name`, so counts attribute to the *configured source*.
+carries `source_id`, so counts attribute to the *configured source*.
 `grid_rows` has only `provider` and `source_label`, under which two
 email sources (`fastmail` and `gmail-takeout`) collapse into one bucket
 — hence [#171](https://github.com/imbue-ai/datalib/issues/171).
@@ -961,7 +961,7 @@ the cell "stored elsewhere" — do not render a confident 0 B.
 
 A source's name is its identity everywhere: it is the stanza directory
 on disk (`<data_root>/<name>/`), the prefix of both its artifact paths
-(`<name>/raw`, `<name>/rendered_md`), the `markdowns.source_name` its
+(`<name>/raw`, `<name>/rendered_md`), the `markdowns.source_id` its
 rows carry, and the stem of its two step ids. Nothing currently enforces
 that it is unique, and the wizard is the moment that stops being
 academic — a "Add Data Source" button with a pre-filled default name
@@ -1036,7 +1036,7 @@ outputs = ["work-slack/raw"]
 **Why the id can't just be renamed.** A source's id appears in seven
 places, and only two of them move when you `mv` the directory. The other
 five have to be rewritten: `system/dag_state.json` keys,
-`markdowns.md_path`, `markdowns.source_name`, `grid_rows.qmd_path`, and
+`markdowns.md_path`, `markdowns.source_id`, `grid_rows.qmd_path`, and
 any applet's `params.tree`. The last three are the dangerous ones,
 because `grid_index` skips a document whose `source_fingerprint` still
 matches — and that fingerprint is the *renderer's input hash*, which does
@@ -1221,7 +1221,7 @@ document runs `DELETE … WHERE markdown_uuid = ?` followed by an insert
 Nothing in `etl/render/src/grid_index.rs` sweeps rows whose sidecar has
 disappeared, so deleting a `rendered_md` tree by hand today leaves its
 `grid_rows`, `markdowns` and `edges` rows in the index indefinitely.
-An orphan sweep keyed on `source_name` would be the first piece of that
+An orphan sweep keyed on `source_id` would be the first piece of that
 work. (Established by reading the module and its callers, not by
 running it.)
 

@@ -95,14 +95,8 @@ pub struct SyncJobRow {
     pub id: String,
     /// Comma-separated source-step ids this run syncs (the UI's "Sync
     /// now" → `--sync <group>/ingest` per source). NULL/empty = the
-    /// whole config.
-    ///
-    /// The column is still spelled `source_name`: it was named that
-    /// before ids and display names were different things, and these
-    /// stores have no migration step, so renaming it would drop the
-    /// job history. Hand-written SQL against this table therefore uses
-    /// the old spelling; the field is the current one.
-    #[col(sql = "VARCHAR(64)", name = "source_name")]
+    /// whole config. Plural: one job routinely covers several steps.
+    #[col(sql = "VARCHAR(64)")]
     pub source_ids: Option<String>,
     /// A [`JobKind`], as its `as_str`.
     #[col(sql = "VARCHAR(16)")]
@@ -180,19 +174,5 @@ mod tests {
         for &v in JobKind::VARIANTS {
             assert_eq!(JobKind::parse(v.as_str()), Some(v));
         }
-    }
-
-    /// `source_ids` is a `#[col(name = ...)]` rename: the field moved,
-    /// the column must not. `AppStore::open` only runs
-    /// `CREATE TABLE IF NOT EXISTS` — there is no reconcile on this
-    /// file — so a column that changed name on an existing store is a
-    /// `no such column` on every read of the sync page.
-    #[test]
-    fn the_source_ids_column_keeps_its_stored_name() {
-        let (_, cols) = COLUMNS[0];
-        assert!(cols.contains(&"source_name"), "{cols:?}");
-        assert!(!cols.contains(&"source_ids"), "{cols:?}");
-        let (_, ddl) = DDL[0];
-        assert!(ddl.contains("source_name VARCHAR(64)"), "{ddl}");
     }
 }

@@ -391,7 +391,7 @@ pub fn render_notion(
 
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: page_uuid.clone(),
-            source_name: String::new(),
+            source_id: String::new(),
             source_fingerprint: source_fingerprint.clone(),
             upstream_cursor: None,
             md_path: md_path.clone(),
@@ -435,7 +435,7 @@ pub fn render_notion(
         let p = render_thread(discussion_uuid, page_title, members, anchor, dir)?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: discussion_uuid.clone(),
-            source_name: String::new(),
+            source_id: String::new(),
             source_fingerprint: source_fingerprint.clone(),
             upstream_cursor: None,
             md_path: p,

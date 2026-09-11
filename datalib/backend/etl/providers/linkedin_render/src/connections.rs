@@ -32,7 +32,7 @@ const FIELD_COLUMNS: &[&str] = &["Company", "Position", "Email Address", "Connec
 pub fn render_connections(
     raw_dir: &Path,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -105,7 +105,7 @@ pub fn render_connections(
         &profile,
         &contacts,
         out_dir,
-        source_name,
+        source_id,
         progress,
         prior_fingerprints,
         on_doc_complete,

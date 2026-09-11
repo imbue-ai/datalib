@@ -330,11 +330,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """
         return self._query(
             self._index_db,
-            "SELECT DISTINCT m.source_name FROM markdowns m "
-            "WHERE m.source_name NOT IN ("
+            "SELECT DISTINCT m.source_id FROM markdowns m "
+            "WHERE m.source_id NOT IN ("
             "  SELECT upstream_scope FROM grid_rows "
             "  WHERE provider = 'datalib' AND upstream_scope IS NOT NULL"
-            ") ORDER BY m.source_name;",
+            ") ORDER BY m.source_id;",
         )
 
     def _pdf_shape(self) -> dict[str, int]:
@@ -424,13 +424,13 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
 
     def _cross_source_shared_markdowns(self) -> list[str]:
-        """`markdown_uuid`s claimed by more than one `source_name`.
+        """`markdown_uuid`s claimed by more than one `source_id`.
 
         The failure this catches is silent by construction:
         `apply_markdown` DELETEs `grid_rows` by `markdown_uuid` before
         inserting, so when two configured sources mint the same id the
         sidecar applied second erases the first one's rows and rewrites
-        the `markdowns` row with its own `md_path` and `source_name`.
+        the `markdowns` row with its own `md_path` and `source_id`.
         The run reports success and the row count looks plausible — one
         source has simply vanished from the index.
 
@@ -443,8 +443,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """
         return self._query(
             self._index_db,
-            "SELECT markdown_uuid, COUNT(DISTINCT source_name) FROM markdowns "
-            "GROUP BY markdown_uuid HAVING COUNT(DISTINCT source_name) > 1;",
+            "SELECT markdown_uuid, COUNT(DISTINCT source_id) FROM markdowns "
+            "GROUP BY markdown_uuid HAVING COUNT(DISTINCT source_id) > 1;",
         )
 
     def _roundtrip_failures(self) -> list[str]:
@@ -588,11 +588,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         return out
 
     def _source_cursors(self) -> dict[str, str]:
-        """`source_name -> store_commit` from the index's cursor table."""
+        """`source_id -> store_commit` from the index's cursor table."""
         rows = self._query(
             self._index_db,
-            "SELECT source_name, store_commit FROM source_cursors "
-            "ORDER BY source_name;",
+            "SELECT source_id, store_commit FROM source_cursors "
+            "ORDER BY source_id;",
         )
         out: dict[str, str] = {}
         for line in rows:
@@ -601,7 +601,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         return out
 
     def _store_heads(self) -> dict[str, str]:
-        """`source_name -> HEAD` of each source's render store."""
+        """`source_id -> HEAD` of each source's render store."""
         out: dict[str, str] = {}
         for store in sorted(
             self.workspace.glob("*/render_markdown/indexed_markdown.doltlite_db")
@@ -863,7 +863,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._cross_source_shared_markdowns(),
             [],
-            "a markdown_uuid claimed by two source_names means one "
+            "a markdown_uuid claimed by two source_ids means one "
             "source's rows were silently overwritten",
         )
         # Exactly the known offenders still mint non-UUID primary keys.

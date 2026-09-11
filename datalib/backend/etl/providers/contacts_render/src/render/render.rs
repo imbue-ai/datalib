@@ -26,7 +26,7 @@ pub const RENDER_VERSION: u32 = 2;
 pub fn render_all(
     parsed: &ParsedContacts,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -37,20 +37,20 @@ pub fn render_all(
 ) -> Result<RenderSummary> {
     let profile = ContactRenderProfile {
         provider: Provider::Contacts,
-        source_label: humanize_source_label(source_name),
+        source_label: humanize_source_label(source_id),
         contact_kind: "Contact".to_string(),
         render_version: RENDER_VERSION,
     };
     let contacts: Vec<NormalizedContact> = parsed
         .contacts
         .iter()
-        .map(|c| normalize(c, source_name))
+        .map(|c| normalize(c, source_id))
         .collect();
     let summary = cc_render_all(
         &profile,
         &contacts,
         out_dir,
-        source_name,
+        source_id,
         progress,
         prior_fingerprints,
         on_doc_complete,
@@ -59,7 +59,7 @@ pub fn render_all(
     Ok(summary)
 }
 
-fn normalize(contact: &ParsedContact, source_name: &str) -> NormalizedContact {
+fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
     let mut fields: Vec<ContactField> = Vec::new();
     if let Some(org) = &contact.org {
         fields.push(ContactField::new("Org", org.replace(';', " — ")));
@@ -91,8 +91,8 @@ fn normalize(contact: &ParsedContact, source_name: &str) -> NormalizedContact {
     }
 
     NormalizedContact {
-        contact_uuid: contact_uuid(source_name, &contact.addressbook, &contact.uid),
-        group_uuid: addressbook_uuid(source_name, &contact.addressbook),
+        contact_uuid: contact_uuid(source_id, &contact.addressbook, &contact.uid),
+        group_uuid: addressbook_uuid(source_id, &contact.addressbook),
         group_label: contact.addressbook.clone(),
         display_name: contact.display_name.clone(),
         external_id: Some(contact.uid.clone()),
@@ -122,15 +122,15 @@ fn field_label(base: &str, type_label: &Option<String>) -> String {
     }
 }
 
-/// `source_name` is the YAML config key (`apple_contacts`,
-/// `fastmail_contacts`, …). Surface a human label on grid rows by
-/// stripping the `_contacts` suffix + casing. Keeps the row's Source
-/// column from looking like a slug.
-fn humanize_source_label(source_name: &str) -> String {
-    let base = source_name
+/// `source_id` is the group id (`apple_contacts`, `fastmail_contacts`,
+/// …). Surface a human label on grid rows by stripping the `_contacts`
+/// suffix + casing. Keeps the row's Source column from looking like a
+/// slug.
+fn humanize_source_label(source_id: &str) -> String {
+    let base = source_id
         .strip_suffix("_contacts")
-        .or_else(|| source_name.strip_suffix("-contacts"))
-        .unwrap_or(source_name);
+        .or_else(|| source_id.strip_suffix("-contacts"))
+        .unwrap_or(source_id);
     let mut out = String::new();
     let mut capitalize = true;
     for c in base.chars() {

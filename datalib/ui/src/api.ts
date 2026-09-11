@@ -537,8 +537,6 @@ export type SyncJob = {
   // kinds ("download" / "ingest" / "render").
   kind: string;
   // Comma-separated source-step ids, or null for the whole config.
-  // Stored in a column still spelled `source_name`; the backend renames
-  // it on the way out.
   source_ids: string | null;
   state: SyncJobState;
   progress_pct: number | null;

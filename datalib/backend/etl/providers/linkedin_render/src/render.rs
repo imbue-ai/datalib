@@ -43,7 +43,7 @@ fn profile() -> RenderProfile {
 pub fn render(
     raw_dir: &Path,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -104,7 +104,7 @@ pub fn render(
         &profile(),
         &chats,
         out_dir,
-        source_name,
+        source_id,
         &blobs,
         progress,
         prior_fingerprints,

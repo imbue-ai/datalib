@@ -26,7 +26,7 @@ use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
 /// was already one per document.
 pub fn to_chats(
     parsed: &ParsedSignal,
-    source_name: &str,
+    source_id: &str,
 ) -> (Vec<NormalizedChat>, HashMap<String, BlobBundle>) {
     let mut chats = Vec::with_capacity(parsed.docs.len());
     let mut blobs_by_chat = HashMap::new();
@@ -41,7 +41,7 @@ pub fn to_chats(
             );
             continue;
         };
-        let chat_uuid = signal_chat_uuid(source_name, &chat.id);
+        let chat_uuid = signal_chat_uuid(source_id, &chat.id);
         let bundle_key = format!("{}#{}", chat.id, doc.period_key);
 
         let items: Vec<NormalizedChatItem> = doc
@@ -53,7 +53,7 @@ pub fn to_chats(
             // them, so `message_index` disagreed with the rendered
             // order whenever one appeared.
             .filter(|i| i.text.is_some() || !i.attachments.is_empty())
-            .map(|item| to_item(parsed, chat, item, source_name))
+            .map(|item| to_item(parsed, chat, item, source_id))
             .collect();
 
         chats.push(NormalizedChat {
@@ -91,7 +91,7 @@ fn to_item(
     parsed: &ParsedSignal,
     chat: &ParsedChat,
     item: &ParsedChatItem,
-    source_name: &str,
+    source_id: &str,
 ) -> NormalizedChatItem {
     let attachments: Vec<NormalizedAttachment> = item
         .attachments
@@ -115,7 +115,7 @@ fn to_item(
         .collect();
 
     NormalizedChatItem {
-        message_uuid: signal_message_uuid(source_name, &chat.id, &item.author_id, item.date_sent),
+        message_uuid: signal_message_uuid(source_id, &chat.id, &item.author_id, item.date_sent),
         author_id: item.author_id.clone(),
         author_display: author_display(parsed, item),
         date_ms: Some(item.date_sent),
