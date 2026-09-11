@@ -66,3 +66,18 @@ rust_test(
         "@datalib_crates//:tempfile",
     ],
 )
+
+# Diagnostic: inventory a real msgstore and measure rowid stability across
+# two backups. Not shipped; see the file header.
+rust_binary(
+    name = "whatsapp_msgstore_probe",
+    srcs = ["src/bin/whatsapp_msgstore_probe.rs"],
+    edition = "2021",
+    deps = [
+        "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
