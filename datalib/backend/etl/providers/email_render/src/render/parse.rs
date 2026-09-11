@@ -43,7 +43,10 @@ pub struct ScanResult {
 
 #[derive(Clone, Default)]
 pub struct ParsedEmail {
-    pub accounts: Vec<Value>,
+    /// `(account id, payload)`. The id rides beside the payload rather
+    /// than inside it: a JMAP `Account` object has no `id` field — the
+    /// id is the key it sits under in the session's `accounts` map.
+    pub accounts: Vec<(String, Value)>,
     pub mailboxes: Vec<Value>,
     pub threads: Vec<Value>,
     /// One bucket per `(account_id, thread_id)` whose thread changed
@@ -117,7 +120,7 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         .await
         .context("pin the email raw store for render")?;
 
-    let accounts = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "accounts").await?;
+    let accounts = load_accounts(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     let mailboxes = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "mailboxes").await?;
     let threads = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "threads").await?;
 
@@ -371,6 +374,28 @@ async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, Stri
         let t: String = r.try_get("thread_id").unwrap_or_default();
         if !a.is_empty() && !t.is_empty() {
             out.insert((a, t));
+        }
+    }
+    Ok(out)
+}
+
+async fn load_accounts(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+) -> Result<Vec<(String, Value)>> {
+    let table = reads.table("accounts");
+    let sql = format!("SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
+    // Audited: `table` is a literal.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await
+        .context("load accounts")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let id: String = r.try_get("id").unwrap_or_default();
+        let s: String = r.try_get("payload").unwrap_or_default();
+        if let Ok(v) = serde_json::from_str::<Value>(&s) {
+            out.push((id, v));
         }
     }
     Ok(out)
