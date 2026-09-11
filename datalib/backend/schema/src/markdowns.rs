@@ -29,10 +29,13 @@ pub struct MarkdownRow {
     /// idempotent.
     #[col(sql = "VARCHAR(96)")]
     pub markdown_uuid: String,
-    /// Name of the source that produced this markdown — the `<name>`
-    /// prefix of the producing step's artifact paths in `config.toml`.
-    /// Lets the sync UI show per-source delta counts and the worker
-    /// scope re-renders to a single source.
+    /// The **id** of the source that produced this markdown — its group,
+    /// which is the first segment of the producing step's artifact
+    /// paths. Never the display name a person gave that group; a name
+    /// is mutable and two groups may share one.
+    ///
+    /// The column keeps the older spelling because renaming it would
+    /// cost a re-index of every mirror, and it is not user-visible.
     #[col(sql = "VARCHAR(64)")]
     pub source_name: String,
     /// Denormalized provider tag, matches `grid_rows.provider` for the

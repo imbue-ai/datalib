@@ -841,8 +841,8 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut columns: Vec<PortableColumn> = Vec::new();
     for f in &fields {
         let ident = f.ident.as_ref().expect("named field");
-        let name = ident.to_string();
-        let sql = parse_col_attr(f)?;
+        let ColAttr { sql, name } = parse_col_attr(f)?;
+        let name = name.unwrap_or_else(|| ident.to_string());
         // Nullability follows the Rust type: Option<T> → nullable.
         let decl = if is_option(&f.ty) {
             format!("{name} {sql}")
@@ -1002,22 +1002,35 @@ fn parse_portable_table_attr(
     ))
 }
 
-fn parse_col_attr(field: &Field) -> syn::Result<String> {
+/// A parsed `#[col(...)]`. `name` overrides the column name, which
+/// otherwise follows the field ident — for a field renamed after its
+/// column was already written to disk.
+struct ColAttr {
+    sql: String,
+    name: Option<String>,
+}
+
+fn parse_col_attr(field: &Field) -> syn::Result<ColAttr> {
     for attr in &field.attrs {
         if !attr.path().is_ident("col") {
             continue;
         }
         let mut sql: Option<String> = None;
+        let mut name: Option<String> = None;
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("sql") {
                 sql = Some(meta.value()?.parse::<LitStr>()?.value());
                 Ok(())
+            } else if meta.path.is_ident("name") {
+                name = Some(meta.value()?.parse::<LitStr>()?.value());
+                Ok(())
             } else {
-                Err(meta.error("unknown #[col(...)] key; supported keys: `sql`"))
+                Err(meta.error("unknown #[col(...)] key; supported keys: `sql`, `name`"))
             }
         })?;
-        return sql
-            .ok_or_else(|| syn::Error::new_spanned(attr, "#[col(sql = \"...\")] is required"));
+        let sql =
+            sql.ok_or_else(|| syn::Error::new_spanned(attr, "#[col(sql = \"...\")] is required"))?;
+        return Ok(ColAttr { sql, name });
     }
     Err(syn::Error::new_spanned(
         field,

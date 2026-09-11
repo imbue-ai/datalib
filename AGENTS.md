@@ -191,7 +191,7 @@ reference doc it relates to.
   table.
 - [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — **read before
   adding a provider or touching any `*_uuid` recipe**: the one rule for
-  minting `grid_rows.uuid`, why the scope is never our `source_name`
+  minting `grid_rows.uuid`, why the scope is never our `source_id`
   (nor `source_type`), the `source_native_id` backpointer, and the
   per-provider porting status.
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting
@@ -483,7 +483,7 @@ step (bring the data in, from an origin or from files on disk) and a
 `unified_index` group index every source's `render_markdown` tree:
 `grid_index` (the SQL index at `unified_index/grid_index/db.doltlite_db`)
 and `qmd_index` (semantic search at `unified_index/qmd_index/`, one qmd
-collection per group so a `source_name:` search scopes retrieval instead
+collection per group so a `source_id:` search scopes retrieval instead
 of filtering its results). Both
 are read by
 the `unified_index` applet, which serves the grid — `datalib-http` does
@@ -640,10 +640,11 @@ When you add or change a `grid_rows` column:
    `datalib/backend/unified_index/src/dolt_repo.rs` — both
    `SEARCH_ROW_COLUMNS` and `search_row_from` — plus `SearchRow` in
    `unified_index/src/search.rs` if the column reaches the API.
-4. If it should be a grid column, add it to `default_columns()` in
-   `datalib/backend/applets/src/unified_index/mod.rs` (which is the
-   applet's wire contract, and has a test counting it) and to the
-   `SearchRow` type in `datalib/ui/src/api.ts`.
+4. If it should be a grid column, add it to the `SearchRow` type in
+   `datalib/ui/src/api.ts` and to `columnDefs` in
+   `datalib/ui/src/cards/GridCard.ce.vue`. The column list is the
+   grid's, not the applet's — there is no `default_columns()` and no
+   `/columns` endpoint any more (checked 2026-09-11).
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## QMDs are write-only
@@ -1297,6 +1298,41 @@ issues, because there the distinction is real and load-bearing:
 The one deliberate survivor of the rename is the `anthropic` **search
 keyword** in `ui/src/config/catalog.ts`: someone who thinks of the
 company should still find the source in the picker.
+
+## A source's id is not its name
+
+A source has two identifiers and they are different things:
+
+| | |
+|---|---|
+| **id** | its group id — the directory under the data root, the stem of its step ids, the first segment of every `qmd_path`. Path-safe, unique, changing it is a migration. |
+| **name** | what a person typed in the wizard. Free text, mutable, and two sources may share one. |
+
+**Everything that identifies, filters or joins uses the id**, and the
+Rust/TypeScript field for it is called `source_id`: `SearchRow.source_id`,
+the `source_id:` search filter, `Field::SourceId`. The grid's "Source"
+column shows the *name*, joined client-side from `config.toml` — which is
+what keeps renaming a source free of a re-index.
+
+Three older spellings survive on purpose, and each is the storage or the
+user, not a second opinion:
+
+- **The stored columns** `markdowns.source_name`, `source_cursors.source_name`
+  and `sync_jobs.source_name` hold ids and keep the old name. These stores
+  have no migration step — a renamed column is a dropped and recreated
+  table — so renaming them would cost a re-index of every mirror to change
+  a word nobody sees. `sync_jobs` shows how to move the Rust side anyway:
+  the field is `source_ids` (plural, because it is a comma-separated list)
+  and `#[col(name = "source_name")]` pins the column.
+- **`source_name:` in the search bar** parses to `Field::SourceId`. It was
+  the filter's only spelling for as long as a source had nothing but an
+  id, so it is in saved queries; new callers emit `source_id:`.
+- **`source_name` on the render side** (`RenderedMarkdown`, the
+  `source_name` parameter threaded through every `<p>_render` crate) is
+  the value that lands in `markdowns.source_name`, so it matches its
+  column. `RenderCtx` carries the same id as `name`.
+
+Background: [#279](https://github.com/imbue-ai/datalib/issues/279).
 
 ## Unordered collections: give a bag an order before storing it
 

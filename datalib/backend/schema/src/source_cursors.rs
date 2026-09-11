@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
 #[portable_table(table = "source_cursors", primary_key = "source_name")]
 pub struct SourceCursorRow {
-    /// The stanza / config-level source name — the same value
-    /// `markdowns.source_name` carries.
+    /// The source's id — its group, the same value
+    /// `markdowns.source_name` carries. The column keeps that older
+    /// spelling for the same reason: it is this table's primary key,
+    /// and renaming it would cost a re-index.
     #[col(sql = "VARCHAR(64)")]
     pub source_name: String,
     /// The render store's `dolt_log()` HEAD at the moment the index

@@ -162,7 +162,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
 
 /// A source's storage report is written into that source's own
 /// `render_markdown/` tree, so the first segment of its `qmd_path` is
-/// the measured source. It must not be filed there: `source_name:` has
+/// the measured source. It must not be filed there: `source_id:` has
 /// to answer `datalib` for it, and the measured source's own name has to
 /// leave it out. Both halves — the column's value and the SQL filter —
 /// are checked here against a real store, because the two are derived
@@ -206,10 +206,10 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     let all = repo.search(&parse_query("type:all"), 100).await.unwrap();
     assert_eq!(all.len(), 2, "{all:?}");
     let storage = all.iter().find(|r| r.uuid == "s-1").expect("storage row");
-    assert_eq!(storage.source_name, "datalib");
+    assert_eq!(storage.source_id, "datalib");
 
     let measured = repo
-        .search(&parse_query("source_name:claude-work type:all"), 100)
+        .search(&parse_query("source_id:claude-work type:all"), 100)
         .await
         .unwrap();
     assert_eq!(
@@ -219,7 +219,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     );
 
     let datalibs = repo
-        .search(&parse_query("source_name:datalib type:all"), 100)
+        .search(&parse_query("source_id:datalib type:all"), 100)
         .await
         .unwrap();
     assert_eq!(

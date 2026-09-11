@@ -57,7 +57,7 @@ async function bytesOf(page: Page, id: string): Promise<number | null> {
 async function gridRows(
   page: Page,
 ): Promise<
-  { sender: string; conversation_name: string; source: string; source_name: string }[]
+  { sender: string; conversation_name: string; source: string; source_id: string }[]
 > {
   return await page.evaluate(() => {
     type Node = {
@@ -65,7 +65,7 @@ async function gridRows(
         sender: string;
         conversation_name: string;
         source: string;
-        source_name: string;
+        source_id: string;
       };
     };
     const api = (
@@ -77,7 +77,7 @@ async function gridRows(
       sender: string;
       conversation_name: string;
       source: string;
-      source_name: string;
+      source_id: string;
     }[] = [];
     api.forEachNode((n) => {
       if (n.data) out.push(n.data);
@@ -238,14 +238,14 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await openExplore(page);
     const first = await gridRows(page);
     expect(first.length, "the PDFs should be indexed").toBeGreaterThan(0);
-    // `source_name`, not `source`: the question is whether a row leaked
+    // `source_id`, not `source`: the question is whether a row leaked
     // in from another *configured source*, and this library has exactly
     // one. `source` is the provider label. `datalib` is not a second
     // source — it is where the storage rows every source emits are
     // filed, so that a measurement never sits in the same bucket as
     // what it measures. See docs/dev/grid_rows.md.
     expect(
-      first.every((r) => r.source_name === "pdfs" || r.source_name === "datalib"),
+      first.every((r) => r.source_id === "pdfs" || r.source_id === "datalib"),
       `every row should come from the one source configured: ${JSON.stringify(first)}`,
     ).toBe(true);
     expect(first.map((r) => r.conversation_name)).toContain("Captain's Log");

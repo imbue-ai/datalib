@@ -322,7 +322,7 @@ async function syncSelected() {
   busySelected.value = true;
   error.value = null;
   try {
-    await enqueueJob({ kind: "all", source_name: names.join(",") });
+    await enqueueJob({ kind: "all", source_ids: names.join(",") });
     await loadJobs();
   } catch (e) {
     error.value = (e as Error).message;
@@ -612,7 +612,7 @@ onUnmounted(() => {
           <tr :class="{ 'row-failed': j.state === 'failed' }">
             <td><code>{{ j.id.slice(0, 8) }}</code></td>
             <td>{{ j.kind }}</td>
-            <td>{{ j.source_name || "" }}</td>
+            <td>{{ j.source_ids || "" }}</td>
             <td>
               <span class="state-pill" :data-state="j.state">{{ j.state }}</span>
             </td>

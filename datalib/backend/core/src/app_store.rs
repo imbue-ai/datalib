@@ -179,13 +179,13 @@ impl AppRepo for AppStore {
     async fn enqueue_job(
         &self,
         kind: JobKind,
-        source_name: Option<&str>,
+        source_ids: Option<&str>,
     ) -> Result<SyncJobRow, RepoError> {
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let row = SyncJobRow {
             id: id.clone(),
-            source_name: source_name.map(|s| s.to_string()),
+            source_ids: source_ids.map(|s| s.to_string()),
             kind: kind.as_str().to_string(),
             parent_job_id: None,
             state: JobState::Pending.as_str().to_string(),
@@ -209,7 +209,9 @@ impl AppRepo for AppStore {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
-        .bind(&row.source_name)
+        // The column is `source_name`; the field is `source_ids`.
+        // See `SyncJobRow::source_ids` for why they differ.
+        .bind(&row.source_ids)
         .bind(&row.kind)
         .bind(&row.parent_job_id)
         .bind(&row.state)
@@ -435,7 +437,7 @@ async fn probe_dolt_extensions(pool: &SqlitePool) -> bool {
 fn row_to_sync_job(r: &sqlx::sqlite::SqliteRow) -> SyncJobRow {
     SyncJobRow {
         id: r.try_get("id").unwrap_or_default(),
-        source_name: r.try_get("source_name").ok(),
+        source_ids: r.try_get("source_name").ok(),
         kind: r.try_get("kind").unwrap_or_default(),
         parent_job_id: r.try_get("parent_job_id").ok(),
         state: r.try_get("state").unwrap_or_default(),

@@ -98,7 +98,8 @@ struct RetainSink<'a> {
 
 /// Driver-owned context handed to every [`RenderProcessor::run`].
 pub struct RenderCtx<'a> {
-    /// Source name (`sources[].name`).
+    /// The source's id — its group, the directory its rendered tree
+    /// lives under. Not the display name the config may also give it.
     pub name: &'a str,
     /// Workspace root — the parent of the `render_markdown/` tree render
     /// processors write into.
