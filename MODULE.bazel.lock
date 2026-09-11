@@ -442,7 +442,7 @@
           "FILE:@@//datalib/backend/etl/providers/fsindex/Cargo.toml 8529c84e4e1daa8e2cad308f6836e9f4e89a28bcc8f0db1e95fa58b280e2c62e",
           "FILE:@@//datalib/backend/etl/Cargo.toml bd323b50094269c912048b1972483d483a8379a0a31f9b72025481cca4ecb70c",
           "FILE:@@//datalib/backend/qmd_indexer/Cargo.toml 279104395bf666fae95e4753059588167ab8b9aacf45707eaa46af0887a47b86",
-          "FILE:@@//datalib/backend/http/Cargo.toml 19b2b7ef097365e1efafd51eb62adfee2e63a9c5b9099fe461e98fa29cad7e7f",
+          "FILE:@@//datalib/backend/http/Cargo.toml 65dc1f513f903c345e636dd2805f074ac7ad22764d2e4ae20ddb5aab36d76311",
           "FILE:@@//datalib/backend/id/Cargo.toml f4f055e48adfd603ec6c464d09c295206c5e61717bae613c6c3f4872ca898f7f",
           "FILE:@@//datalib/backend/etl/render/Cargo.toml 4077408fffd12821e1c9f06b347cf375acafeb5edb63d0a30f0dfa0d13cfa859",
           "FILE:@@//datalib/backend/etl/providers/claude/Cargo.toml 8228726dda64579a9cb89fbe431978fef796b641035e614f762e6ef374b78740",

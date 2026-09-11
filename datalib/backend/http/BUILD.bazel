@@ -30,6 +30,7 @@ rust_library(
         "src/connect.rs",
         "src/frontend.rs",
         "src/embed.rs",
+        "src/history.rs",
         "src/lib.rs",
         "src/lock.rs",
         "src/usage.rs",
@@ -67,6 +68,7 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/history:datalib_history",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -146,6 +148,24 @@ rust_test(
         "//datalib/backend/core:datalib_core",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+# `GET /api/pipeline/history`: a tree's doltlite commit log, read from
+# a store written in a temp dir. Hermetic.
+rust_test(
+    name = "pipeline_history_test",
+    srcs = ["tests/pipeline_history.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",

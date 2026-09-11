@@ -491,6 +491,13 @@ datalib/
                    per applet (slack, unified_index). An applet
                    contributes card components and/or the endpoints
                    behind them.
+    history/       `datalib_history`: a doltlite store's commit log —
+                   `dolt_log` walked from HEAD with what each commit did
+                   to each table. Third-party deps only (Bazel-only, no
+                   `Cargo.toml`), so `datalib-http` serves it at
+                   `GET /api/pipeline/history` without linking `etl`,
+                   and the two-process doltlite test runs its statements
+                   against a live writer.
     http/          `datalib-http`: API server + sync worker + UI host +
                    the applet gateway (src/applets.rs). Every route is
                    behind a per-process API token (src/auth.rs) — read
@@ -893,7 +900,11 @@ after DDL`. `two_live_pools_on_one_store_break_each_others_commits` in
 **A reader can be the peer.** "Read-only costs the writer nothing" is
 measured for what a pinned pass issues — `dolt_hashof`, `sqlite_master`,
 `pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_` views,
-`dolt_diff_*` — and is false for `dolt_status`. Issued from a read-only
+`dolt_diff_*` — and for what the commit-history panel issues —
+`dolt_log()`, `dolt_commit_ancestors`, `dolt_diff_summary`,
+`dolt_diff_stat`, a `COUNT(*)` per table
+(`a_history_reader_never_makes_the_writers_commit_fail`) — and is false
+for `dolt_status`. Issued from a read-only
 connection while the writer commits, it fails that commit with the same
 `commit conflict` for as long as the statement is running, and the rows
 the writer inserted before each failed commit are gone afterwards
