@@ -28,6 +28,12 @@ struct Spec {
     #[allow(dead_code)]
     self_jid: String,
     jids: Vec<JidSpec>,
+    /// `jid_map` rows: which phone-number jid a `…@lid` jid stands for.
+    /// Leave an `@lid` chat out of here to exercise the raw-id fallback.
+    #[serde(default)]
+    jid_map: Vec<JidMapSpec>,
+    #[serde(default)]
+    lid_display_names: Vec<LidDisplayNameSpec>,
     chats: Vec<ChatSpec>,
     messages: Vec<MessageSpec>,
     #[serde(default)]
@@ -42,6 +48,20 @@ struct JidSpec {
     raw_string: String,
     user: String,
     server: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct JidMapSpec {
+    lid_row_id: i64,
+    jid_row_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct LidDisplayNameSpec {
+    lid_row_id: i64,
+    display_name: String,
+    #[serde(default)]
+    username: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +202,7 @@ async fn build_msgstore(spec: &Spec) -> Result<Vec<u8>> {
         let pool = open_writable_sqlite(&path).await?;
         create_msgstore_schema(&pool).await?;
         insert_jids(&pool, &spec.jids).await?;
+        insert_jid_map(&pool, &spec.jid_map, &spec.lid_display_names).await?;
         insert_chats(&pool, &spec.chats).await?;
         let msg_id_to_pk = insert_messages(&pool, &spec.messages).await?;
         insert_reactions(&pool, &spec.reactions, &msg_id_to_pk).await?;
@@ -215,6 +236,16 @@ async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {
             device INTEGER,
             type INTEGER,
             raw_string TEXT
+        )",
+        "CREATE TABLE jid_map (
+            lid_row_id INTEGER PRIMARY KEY NOT NULL,
+            jid_row_id INTEGER NOT NULL,
+            sort_id INTEGER
+        )",
+        "CREATE TABLE lid_display_name (
+            lid_row_id INTEGER PRIMARY KEY NOT NULL,
+            display_name TEXT NOT NULL,
+            username TEXT
         )",
         "CREATE TABLE chat (
             _id INTEGER PRIMARY KEY,
@@ -398,6 +429,34 @@ async fn insert_jids(pool: &SqlitePool, jids: &[JidSpec]) -> Result<()> {
             .execute(pool)
             .await
             .context("insert jid")?;
+    }
+    Ok(())
+}
+
+async fn insert_jid_map(
+    pool: &SqlitePool,
+    jid_map: &[JidMapSpec],
+    names: &[LidDisplayNameSpec],
+) -> Result<()> {
+    for (i, m) in jid_map.iter().enumerate() {
+        sqlx::query("INSERT INTO jid_map (lid_row_id, jid_row_id, sort_id) VALUES (?, ?, ?)")
+            .bind(m.lid_row_id)
+            .bind(m.jid_row_id)
+            .bind(i as i64)
+            .execute(pool)
+            .await
+            .context("insert jid_map")?;
+    }
+    for n in names {
+        sqlx::query(
+            "INSERT INTO lid_display_name (lid_row_id, display_name, username) VALUES (?, ?, ?)",
+        )
+        .bind(n.lid_row_id)
+        .bind(&n.display_name)
+        .bind(&n.username)
+        .execute(pool)
+        .await
+        .context("insert lid_display_name")?;
     }
     Ok(())
 }
