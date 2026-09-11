@@ -140,6 +140,12 @@ it does today — it just stops being the thing that knows what a source
 
 ### 3. Pipeline state as a table
 
+> **Superseded** by [`logs_and_metrics.md`](logs_and_metrics.md), which
+> built the run history and log tables as one file per data root
+> (`system/runs.sqlite`) rather than one per step. The incrementality
+> ledger (`dag_state.json`'s `steps`) stays a JSON file. §3 and §4 below
+> are kept as the argument that was made; the decision is in that plan.
+
 `system/dag_state.json` becomes `system/pipeline.sqlite`.
 
 **Plain SQLite**, opened through doltlite's `doltlite_engine=sqlite`

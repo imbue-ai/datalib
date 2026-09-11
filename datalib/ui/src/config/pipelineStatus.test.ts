@@ -215,7 +215,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
         "a/ingest": dagStep({
           current_state: "running",
           last_run: { started_at: T.runStart, finished_at: null, status: "", attempts: 0, error: null },
-          progress: { done: 3, total: 10, msg: "page 3", updated_at: T.runStart },
+          progress: { msg: "page 3", metrics: { done: 3, queued: 7 }, updated_at: T.runStart },
         }),
       },
     },
@@ -274,7 +274,7 @@ describe("the sequence a sync actually produces", () => {
 
   it("reaches Running, with the step's own progress", () => {
     expect(seen[2].s.key).toBe("running");
-    expect(TIMELINE[2].frame.dag["a/ingest"].progress).toMatchObject({ done: 3, total: 10 });
+    expect(TIMELINE[2].frame.dag["a/ingest"].progress?.metrics).toMatchObject({ done: 3, queued: 7 });
   });
 
   it("ends on the real outcome, with the time it actually happened", () => {
@@ -431,13 +431,13 @@ describe("the pushed sequence, with the polled record still stale", () => {
   it("keeps a polled numeric bar rather than letting a pushed message erase it", () => {
     const polled = dagStep({
       current_state: "running",
-      progress: { done: 5, total: 10, msg: "polled", updated_at: T.runStart },
+      progress: { msg: "polled", metrics: { done: 5, queued: 5 }, updated_at: T.runStart },
     });
     const merged = withOverlay(polled, "a/ingest", {
       current_state: "running",
-      progress: { done: null, total: null, msg: "pushed", updated_at: T.runStart },
+      progress: { msg: "pushed", metrics: {}, updated_at: T.runStart },
     });
-    expect(merged?.progress).toMatchObject({ done: 5, total: 10 });
+    expect(merged?.progress?.metrics).toMatchObject({ done: 5, queued: 5 });
   });
 });
 

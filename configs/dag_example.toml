@@ -50,6 +50,13 @@
 # explicitly for a real run.
 data_root = "~/tmp/dr-dag"
 
+# How much of the run store (`system/runs.sqlite`: every run's step
+# states, log lines and metrics) to keep. Both limits apply; omit the
+# table for the defaults, which are these.
+[run_history]
+max_runs = 100
+max_age_days = 30
+
 # ── slack ──────────────────────────────────────────────────────────
 # A group has two names. Its `id` is the identity: unique, path-safe,
 # and the directory every step under it writes into — so changing it

@@ -72,9 +72,7 @@ export function pushedOverlay(
       // person, not parsed back. Carrying it as the message keeps the
       // tooltip live; the numeric bar stays with `/api/dag`, which has
       // the counts as numbers.
-      progress: t.detail
-        ? { done: null, total: null, msg: t.detail, updated_at: now }
-        : null,
+      progress: t.detail ? { msg: t.detail, metrics: {}, updated_at: now } : null,
     };
   }
   return out;
@@ -119,7 +117,9 @@ export function withOverlay(
     // message. Prefer whichever is more informative rather than letting
     // the newer one erase a bar.
     progress:
-      base.progress?.total != null ? base.progress : (overlay?.progress ?? base.progress),
+      base.progress && Object.keys(base.progress.metrics).length > 0
+        ? base.progress
+        : (overlay?.progress ?? base.progress),
   };
 }
 

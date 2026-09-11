@@ -798,7 +798,7 @@ Each of these is a reviewable PR that leaves the tree green.
    when clean, cadence from config), the two commit seams with **blobs
    committed before entities**, checkpointing disabled for
    wipe-and-re-ingest runs, the `checkpoint` event, `subprocess.rs`
-   parsing it, `progress_bus.rs` showing it. Consumers still only run
+   parsing it, the run store sink (then `progress_bus.rs`, now `runs_sink.rs`) showing it. Consumers still only run
    at the end, so this ships durability and "N rows committed so far"
    progress with no scheduling risk. Answers most of #164 on its own.
 4. ~~**Consumers pin.**~~ Folded into step 2, per above. Done for

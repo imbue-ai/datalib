@@ -18,6 +18,11 @@ pub trait ProgressSink: Send + Sync {
     /// the result. Distinct from the progress calls above: those say how far
     /// along the work is, this says a consumer could start on it.
     fn checkpoint(&self, _version: &str) {}
+    /// The current value of one named number — rows written, requests
+    /// made, items queued. Always the whole value, never a delta: the
+    /// runner's store coalesces to the newest, and a dropped position
+    /// costs nothing where a dropped delta is lost work.
+    fn metric(&self, _name: &str, _labels: &[(&str, &str)], _value: i64) {}
     fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
         Arc::new(NoopSink)
     }
@@ -57,6 +62,9 @@ impl Progress {
     }
     pub fn checkpoint(&self, version: &str) {
         self.sink.checkpoint(version);
+    }
+    pub fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
+        self.sink.metric(name, labels, value);
     }
     pub fn child(&self, prefix: &str) -> Progress {
         Progress::new(self.sink.child(prefix))
@@ -126,6 +134,15 @@ impl ProgressSink for TracingSink {
             version = %version,
         );
     }
+    fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
+        tracing::trace!(
+            event = "progress.metric",
+            source = %self.source,
+            name = name,
+            labels = ?labels,
+            value = value,
+        );
+    }
     fn set_message(&self, msg: &str) {
         tracing::trace!(
             event = "progress.message",
@@ -162,6 +179,11 @@ impl ProgressSink for FanOut {
     fn checkpoint(&self, version: &str) {
         for s in &self.sinks {
             s.checkpoint(version);
+        }
+    }
+    fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
+        for s in &self.sinks {
+            s.metric(name, labels, value);
         }
     }
     fn set_length(&self, total: Option<u64>) {
@@ -210,6 +232,7 @@ mod tests {
     struct RecordingSink {
         finish_and_clear: Arc<AtomicUsize>,
         checkpoints: Arc<std::sync::Mutex<Vec<String>>>,
+        metrics: Arc<std::sync::Mutex<Vec<(String, i64)>>>,
     }
     impl ProgressSink for RecordingSink {
         fn finish_and_clear(&self) {
@@ -217,6 +240,9 @@ mod tests {
         }
         fn checkpoint(&self, version: &str) {
             self.checkpoints.lock().unwrap().push(version.to_string());
+        }
+        fn metric(&self, name: &str, _labels: &[(&str, &str)], value: i64) {
+            self.metrics.lock().unwrap().push((name.to_string(), value));
         }
         fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
             Arc::new(self.clone())
@@ -273,6 +299,27 @@ mod tests {
             vec!["deadbeef".to_string()],
             "FanOut must forward checkpoint to its second sink",
         );
+    }
+
+    /// One method later again: a metric that stops at `FanOut` never
+    /// reaches the wire, and the Manage screen shows a step with no numbers
+    /// rather than anything that looks broken.
+    #[test]
+    fn fanout_forwards_metric_to_every_sink() {
+        let a = Arc::new(RecordingSink::default());
+        let b = Arc::new(RecordingSink::default());
+        let sinks: Vec<Arc<dyn ProgressSink>> = vec![a.clone(), b.clone()];
+        let fan = FanOut::new(sinks);
+
+        fan.metric("rows_upserted", &[("table", "messages")], 12);
+
+        for (name, sink) in [("first", &a), ("second", &b)] {
+            assert_eq!(
+                *sink.metrics.lock().unwrap(),
+                vec![("rows_upserted".to_string(), 12)],
+                "FanOut must forward metric to its {name} sink",
+            );
+        }
     }
 
     // The same gap affected inner per-unit bars: providers call

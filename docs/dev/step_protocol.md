@@ -116,19 +116,47 @@ private to you. Keep it under your own output trees.
 stdout is parsed line by line as NDJSON. Lines that don't parse are
 forwarded as plain `info` logs, so `echo` output is captured, not
 lost. Parseable lines let you drive live progress in the runner and
-the UI's task board:
+the Manage screen:
+
+```json
+{"event":"metric","step":"me","name":"rows_upserted","labels":{"table":"messages"},"value":1234}
+{"event":"metric","step":"me","name":"queued","value":17}
+{"event":"progress_message","step":"me","msg":"fetching page 3"}
+{"event":"log","step":"me","level":"info","msg":"hello","target":"me::fetch","fields":{"page":3}}
+```
+
+**`metric` is a current value, never a delta.** Name the thing counted
+(`rows_upserted`, `api_requests`, `bytes_fetched`) and send the total so
+far each time it moves; `labels` is optional and splits one name into
+series (`table=messages`). A value that goes down is simply a gauge, and
+the one gauge the UI looks for is **`queued`** — how much work is ahead
+of you right now, which you usually know even when you cannot know the
+total. Absolute values are what make the runner's coalescing lossless:
+it keeps the newest value per series, and a dropped position costs
+nothing where a dropped increment would be lost work.
+
+A step that counts one thing and knows its total may use the shorter
+form instead, which the runner translates into the `done` and `queued`
+metrics for it:
 
 ```json
 {"event":"progress_length","step":"me","total":42}
 {"event":"progress_inc","step":"me","delta":1}
-{"event":"progress_message","step":"me","msg":"fetching page 3"}
-{"event":"log","step":"me","level":"info","msg":"hello"}
 ```
+
+`progress_message` is the step's own words — a phase, not a number.
+`log`'s `target` and `fields` are optional; a plain `msg` is fine.
 
 The `step` field is required by the schema but its value doesn't
 matter — the runner re-tags every event with the authoritative step
 id (children of `datalib-step` label sub-work `parent/child`, which
 also just flows through).
+
+Everything above lands in `<data_root>/system/runs.sqlite` — plain
+SQLite, one row per log line, the newest value per metric, every
+step's state — for this run and the ones before it, which is what the
+Manage screen reads. `[run_history]` in the config sets how many runs
+are kept.
 
 ### The outcome line
 
@@ -249,8 +277,12 @@ exist hashes to the distinguished version `absent`
 
 stderr is yours for humans: every line is captured into the event
 stream as an `info` log, and the last ~20 lines become the error
-message if you exit non-zero. Structured tracing-JSON lines (with a
-`level` field) keep their own `warn`/`error` severity.
+message if you exit non-zero. A structured tracing-JSON line (with a
+`level` field, as tracing-subscriber's JSON format writes) is
+unwrapped rather than quoted: its `fields.message` becomes the log's
+`msg`, its `target` and severity are kept, and its other fields ride
+along as `fields` — so the Manage screen shows the sentence, not the
+envelope.
 
 ## Signals: graceful cancellation (optional)
 

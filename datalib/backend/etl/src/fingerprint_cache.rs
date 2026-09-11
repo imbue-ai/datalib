@@ -193,7 +193,7 @@ impl FingerprintCache {
         // parameters it does not know, while the filename field reaches
         // `sqlite3_open_v2` verbatim — but only while sqlx has no URI
         // parameters of its own to add, so `immutable` and `vfs` must
-        // stay unset here. See `datalib_progress::bus`.
+        // stay unset here. See `datalib_runs::store`.
         let opts = SqliteConnectOptions::new()
             .filename(connect_string(path))
             .create_if_missing(true)

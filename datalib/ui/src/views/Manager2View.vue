@@ -39,6 +39,7 @@ import {
   type DagRun,
   type DagStep,
   type DagStepProgress,
+  progressFraction,
   type Diagnostic,
   type SyncJob,
   type SyncJobState,
@@ -1088,13 +1089,12 @@ const columnDefs: ColDef<Row>[] = [
         spin.setAttribute("aria-label", label);
         wrap.appendChild(spin);
 
-        const prog = row.progress;
-        // A known total gets a bar. An unknown one gets none: a bar at
-        // an invented fraction claims more than we know, and the
-        // spinner is already the honest signal that something is
-        // happening.
-        if (prog && prog.total != null && prog.total > 0 && prog.done != null) {
-          const frac = Math.max(0, Math.min(1, prog.done / prog.total));
+        // A step that said how much is ahead of it gets a bar. One that
+        // did not gets none: a bar at an invented fraction claims more
+        // than we know, and the spinner is already the honest signal
+        // that something is happening.
+        const frac = progressFraction(row.progress);
+        if (frac != null) {
           const bar = document.createElement("span");
           bar.className = "m2-progress";
           const fill = document.createElement("span");

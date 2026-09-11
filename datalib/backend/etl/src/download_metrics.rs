@@ -1,17 +1,17 @@
-//! General per-download-step "what changed" metrics.
+//! General per-download-step "what changed" counters, published as
+//! metrics as they move.
 
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::progress::ProgressSink;
-
-// Live counters + ambient task-local context
+use crate::progress::Progress;
 
 /// Per-source live counters, accumulated at the shared chokepoints for
-/// the duration of one source's download. Cheap to clone behind the
-/// `Arc` the orchestrator hands out.
+/// the duration of one source's download. Every change is published as
+/// a metric through the step's [`Progress`], so the runner's store — and
+/// the Manage screen — see the same numbers the counters hold.
 #[derive(Default)]
 pub struct DownloadMetrics {
     /// Total requests issued through [`crate::http::latchkey_curl`].
@@ -23,34 +23,40 @@ pub struct DownloadMetrics {
     /// some are no-op updates / `INSERT OR IGNORE` dupes — which is the
     /// requested "rows_upserted (some upserts may be updates)" signal.
     rows_upserted: Mutex<BTreeMap<String, u64>>,
-    /// The real progress sink for this source's top-level bar, stored so
-    /// a chokepoint can re-render the live suffix as counters move.
-    /// `None` until [`DownloadMetrics::attach_bar`] runs (e.g. headless).
-    bar: Mutex<Option<Arc<dyn ProgressSink>>>,
-    /// The latest message the provider set on its bar, so re-renders
-    /// triggered by counter updates don't clobber it.
-    provider_msg: Mutex<String>,
+    sink: Progress,
 }
 
 impl DownloadMetrics {
+    /// Counters that publish nowhere; what a test or a headless caller
+    /// wants.
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
+    pub fn publishing_to(sink: Progress) -> Arc<Self> {
+        Arc::new(Self {
+            sink,
+            ..Default::default()
+        })
+    }
+
     pub fn record_api_request(&self) {
-        self.api_requests.fetch_add(1, Ordering::Relaxed);
-        self.render();
+        let n = self.api_requests.fetch_add(1, Ordering::Relaxed) + 1;
+        self.sink.metric("api_requests", &[], n as i64);
     }
 
     pub fn record_upserts(&self, table: &str, n: u64) {
         if n == 0 {
             return;
         }
-        {
+        let total = {
             let mut m = self.rows_upserted.lock().unwrap();
-            *m.entry(table.to_string()).or_insert(0) += n;
-        }
-        self.render();
+            let t = m.entry(table.to_string()).or_insert(0);
+            *t += n;
+            *t
+        };
+        self.sink
+            .metric("rows_upserted", &[("table", table)], total as i64);
     }
 
     pub fn api_requests(&self) -> u64 {
@@ -63,44 +69,6 @@ impl DownloadMetrics {
 
     pub fn rows_upserted_snapshot(&self) -> BTreeMap<String, u64> {
         self.rows_upserted.lock().unwrap().clone()
-    }
-
-    pub fn attach_bar(&self, sink: Arc<dyn ProgressSink>) {
-        *self.bar.lock().unwrap() = Some(sink);
-    }
-
-    fn set_provider_message(&self, msg: &str) {
-        *self.provider_msg.lock().unwrap() = msg.to_string();
-        self.render();
-    }
-
-    fn compose(&self) -> String {
-        let msg = self.provider_msg.lock().unwrap().clone();
-        let api = self.api_requests.load(Ordering::Relaxed);
-        let rows = self.rows_upserted.lock().unwrap();
-        let mut suffix = String::new();
-        if api > 0 {
-            suffix.push_str(&format!("api={api}"));
-        }
-        if !rows.is_empty() {
-            if !suffix.is_empty() {
-                suffix.push(' ');
-            }
-            let parts: Vec<String> = rows.iter().map(|(t, n)| format!("{t}={n}")).collect();
-            suffix.push_str(&format!("rows[{}]", parts.join(" ")));
-        }
-        match (msg.is_empty(), suffix.is_empty()) {
-            (_, true) => msg,
-            (true, false) => suffix,
-            (false, false) => format!("{msg}  ·  {suffix}"),
-        }
-    }
-
-    fn render(&self) {
-        let sink = self.bar.lock().unwrap().clone();
-        if let Some(sink) = sink {
-            sink.set_message(&self.compose());
-        }
     }
 }
 
@@ -136,50 +104,10 @@ pub fn record_upserts(table: &str, n: usize) {
     let _ = with_current(|m| m.record_upserts(table, n as u64));
 }
 
-// Live-suffix progress sink
-
-/// Wraps a source's top-level bar so every `set_message` the provider
-/// emits gets the live `api=… rows[…]` suffix appended. All other calls
-/// pass straight through, and `child` returns the unwrapped inner sink
-/// so nested per-unit bars stay clean.
-pub struct MetricsSink {
-    inner: Arc<dyn ProgressSink>,
-    metrics: Arc<DownloadMetrics>,
-}
-
-impl MetricsSink {
-    pub fn new(inner: Arc<dyn ProgressSink>, metrics: Arc<DownloadMetrics>) -> Self {
-        Self { inner, metrics }
-    }
-}
-
-impl ProgressSink for MetricsSink {
-    fn set_length(&self, total: Option<u64>) {
-        self.inner.set_length(total);
-    }
-    fn inc(&self, delta: u64) {
-        self.inner.inc(delta);
-    }
-    fn set_message(&self, msg: &str) {
-        // Store + recompose, then emit via the metrics' own render path
-        // (which targets the same inner sink) so the message and the
-        // counter suffix always render together.
-        self.metrics.set_provider_message(msg);
-    }
-    fn finish(&self, msg: &str) {
-        self.inner.finish(msg);
-    }
-    fn finish_and_clear(&self) {
-        self.inner.finish_and_clear();
-    }
-    fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
-        self.inner.child(prefix)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress::ProgressSink;
 
     #[tokio::test]
     async fn counters_only_record_inside_scope() {
@@ -202,5 +130,48 @@ mod tests {
         assert_eq!(snap.get("messages").copied(), Some(15));
         assert_eq!(snap.get("cas_objects").copied(), Some(2));
         assert_eq!(m2.rows_upserted_total(), 17);
+    }
+
+    type Published = (String, Vec<(String, String)>, i64);
+
+    #[derive(Default)]
+    struct Recording(Mutex<Vec<Published>>);
+    impl ProgressSink for Recording {
+        fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
+            self.0.lock().unwrap().push((
+                name.into(),
+                labels
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                value,
+            ));
+        }
+    }
+
+    /// What reaches the wire is the running total, not the increment:
+    /// the store keeps only the newest value per series.
+    #[test]
+    fn every_change_is_published_as_the_running_total() {
+        let rec = Arc::new(Recording::default());
+        let m = DownloadMetrics::publishing_to(Progress::new(rec.clone()));
+        m.record_api_request();
+        m.record_api_request();
+        m.record_upserts("messages", 10);
+        m.record_upserts("messages", 5);
+        m.record_upserts("messages", 0);
+
+        let got = rec.0.lock().unwrap();
+        let table = vec![("table".to_string(), "messages".to_string())];
+        assert_eq!(
+            *got,
+            vec![
+                ("api_requests".to_string(), vec![], 1),
+                ("api_requests".to_string(), vec![], 2),
+                ("rows_upserted".to_string(), table.clone(), 10),
+                ("rows_upserted".to_string(), table, 15),
+            ],
+            "a zero-row upsert publishes nothing"
+        );
     }
 }

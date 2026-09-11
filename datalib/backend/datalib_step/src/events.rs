@@ -119,11 +119,24 @@ impl ProgressSink for EmitterSink {
             version: version.to_string(),
         });
     }
+    fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
+        self.emitter.event(&Event::Metric {
+            step: self.step.clone(),
+            name: name.to_string(),
+            labels: labels
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            value,
+        });
+    }
     fn finish(&self, msg: &str) {
         self.emitter.event(&Event::Log {
             step: self.step.clone(),
             level: LogLevel::Info,
             msg: format!("finish: {msg}"),
+            target: None,
+            fields: None,
         });
     }
     fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {

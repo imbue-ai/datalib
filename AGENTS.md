@@ -90,6 +90,14 @@ reference doc it relates to.
   doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
+- [`docs/dev/plans/logs_and_metrics.md`](docs/dev/plans/logs_and_metrics.md)
+  — *agreed plan (2026-09-11), being built*: one plain-SQLite run store
+  (`system/runs.sqlite`) written by the runner alone, holding every
+  run's step states, log lines and metrics; progress reported as
+  absolute `metric` events rather than a percentage; queue depth per
+  step. Its §"Order of work" says what has landed. Read it before
+  touching how a step reports progress, how the Manage screen shows a
+  run, or `datalib_runs`.
 - [`docs/dev/plans/streaming_steps_plan.md`](docs/dev/plans/streaming_steps_plan.md)
   — *plan*, partly built: how to build the above, measured against the
   tree, with each step marked done or not. Read it before touching how
@@ -803,6 +811,9 @@ Where the stores live under a data root:
 <data_root>/system/feedback.doltlite_db         filed feedback
 <data_root>/system/jobs.doltlite_db             the sync job queue
 <data_root>/system/usage.doltlite_db            bytes-on-disk over time
+<data_root>/system/runs.sqlite                  every run's step states, log lines and
+                                                metrics (plain SQLite, not doltlite —
+                                                any sqlite3 opens it)
 ```
 
 One writer per file, and it is load-bearing: doltlite's working set is
@@ -1531,7 +1542,7 @@ One enum per vocabulary, living with whoever mints it:
 |---|---|---|
 | what a step is doing in a run | `RunState` | `dag/src/run_state.rs` |
 | why a step failed | `FailureKind` | `dag/src/step.rs` |
-| what the progress bus itself names | `LiveState` | `progress/src/lib.rs` |
+| what the run store itself names | `LiveState` | `runs/src/lib.rs` |
 | a sync job's lifecycle | `JobState`, `JobKind` | `app_schema/src/sync_jobs.rs` |
 | a task board row | `TaskState` | `http/src/worker.rs` |
 | a browser-login attempt | `ConnectState` | `http/src/connect.rs` |

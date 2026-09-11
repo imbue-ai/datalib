@@ -35,7 +35,7 @@ pub async fn run(
         "download: ingest method declared by the provider",
     );
     let progress = emitter.progress();
-    let metrics = datalib_etl::download_metrics::DownloadMetrics::new();
+    let metrics = datalib_etl::download_metrics::DownloadMetrics::publishing_to(progress.clone());
     let diagnostics = datalib_obs::diagnostics::Diagnostics::new();
     // Shared with the SIGINT handler: providers register their commit
     // hooks here as they open their stores, so an interrupt can seal

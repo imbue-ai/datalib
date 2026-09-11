@@ -12,7 +12,7 @@ binary here statically links doltlite as its `sqlite3` (see
 `MODULE.bazel`), and while a file doltlite creates is in its own
 prolly-tree format by default, the `doltlite_engine=sqlite` URI
 parameter selects the stock engine for a new empty file — see
-`datalib/backend/progress/src/bus.rs`. Generating the input with
+`datalib/backend/runs/src/store.rs`. Generating the input with
 stdlib `sqlite3` keeps that choice out of the fixture entirely.
 
 The table definitions are copied verbatim from a real Lightroom Classic
