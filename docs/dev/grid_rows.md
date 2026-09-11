@@ -219,8 +219,8 @@ email where the raw store has one, else its name, else the provider's
 own id — so grouping by Account groups one person's data across
 sources, and a raw id in the column means "this login has no row to
 resolve against". A source with no login at all (a PDF folder, a
-`.vcf` file, YoLink) leaves it null; the source name is on
-`source_name`, not here.
+`.vcf` file, YoLink) leaves it null; the source's id is on
+`source_id`, not here.
 
 | provider | account | project | channel |
 |---|---|---|---|
