@@ -20,6 +20,7 @@ import {
   removeSteps,
   renameGroup,
   replaceSteps,
+  seedFieldValues,
   sourceStepsOf,
   stepIdFor,
   unwireFromFanIns,
@@ -421,6 +422,30 @@ describe("fieldIsActive", () => {
 
   it("leaves an ungated field alone", () => {
     expect(fieldIsActive(channels, {})).toBe(true);
+  });
+});
+
+describe("the Slack pickers", () => {
+  const dmUsers = SLACK.fields!.find((f) => f.target === "api.dm_users")!;
+  const channels = SLACK.fields!.find((f) => f.target === "api.channels")!;
+
+  /// Same probe, same grid as email and Claude: `channels` is filled
+  /// from the workspace's channel items and `dm_users` from the people
+  /// behind its DMs, and neither writes anything the downloader would
+  /// not have matched by hand.
+  it("offer channels and people from the one probe", () => {
+    expect(SLACK.canProbe).toBe(true);
+    expect(channels.kind === "string_list" && channels.probe).toBe("channels");
+    expect(dmUsers.kind === "string_list" && dmUsers.probe).toBe("people");
+  });
+
+  /// What "Test connection" authenticates with is what Save writes —
+  /// the `api` table that selects the live method, defaults included.
+  it("probe with the ingest params the form would write", () => {
+    expect(paramsObject(SLACK, seedFieldValues(SLACK), "download")).toEqual({
+      api: { media: true, all_channels: false, dms: false },
+      common: { blob_size_limit_bytes: 5_000_000 },
+    });
   });
 });
 

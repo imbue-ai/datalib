@@ -42,6 +42,14 @@ registration is needed — the same `slack` credential signs both
 `shapes.rs` is the shape-of-the-response catalog: which path holds the
 items, what counts as the cursor key, how to dedup.
 
+The first three are also the whole of `datalib-step probe slack`
+(`src/probe.rs`), which is what the wizard's "Test connection" runs:
+it lists every channel the account can see as a `channel` item and
+everyone on the far end of a DM as a `person` item, and the
+`channels` / `dm_users` pickers are built from that. It always asks
+for all four surfaces, whatever `dms` says — nothing is stored, and
+the people picker has to be ready before the toggle is on.
+
 ## Channels and DMs
 
 `conversations.list` covers four surfaces, selected by its `types`

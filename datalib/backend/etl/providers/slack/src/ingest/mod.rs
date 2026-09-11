@@ -91,7 +91,7 @@ async fn fetch_self(
 /// when DMs are wanted: the parameter is what decides whether Slack
 /// hands us DM conversations at all, so leaving it at the channel pair
 /// is the enforcement point for `dms = false`, not just a filter.
-fn conversation_types(dms: bool) -> &'static str {
+pub(crate) fn conversation_types(dms: bool) -> &'static str {
     if dms {
         "public_channel,private_channel,im,mpim"
     } else {
@@ -235,7 +235,7 @@ async fn fetch_users(
     Ok(count)
 }
 
-fn next_cursor(resp: &Value) -> Option<String> {
+pub(crate) fn next_cursor(resp: &Value) -> Option<String> {
     resp.get("response_metadata")
         .and_then(|m| m.get("next_cursor"))
         .and_then(|v| v.as_str())

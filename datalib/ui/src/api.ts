@@ -854,13 +854,17 @@ export type ProbeItem = {
   /// conversation uuid.
   path: string;
   /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
-  /// downloadable, but never matched by the render-side filter), or
-  /// `conversation` (one chat thread).
+  /// downloadable, but never matched by the render-side filter),
+  /// `conversation` (one chat thread), `channel` (a Slack channel) or
+  /// `person` (someone the account has a DM with).
   kind: string;
   /// A human name, when `path` is an opaque id.
   title: string | null;
+  /// A short tag: a mailbox's role, a channel's `private`, a person's
+  /// `@handle`. Shown, never matched.
   role: string | null;
   messages: number | null;
+  members: number | null;
   updated_at: string | null;
 };
 
