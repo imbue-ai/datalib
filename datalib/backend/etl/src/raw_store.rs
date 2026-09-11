@@ -26,7 +26,7 @@ pub struct RawStoreSession {
 #[derive(datalib_etl_macros::RawStoreHandle)]
 struct SealState {
     pool: SqlitePool,
-    source_name: String,
+    source_id: String,
     /// Sibling blob CAS, when this source has one. Sealed *before* the
     /// entities pool, always — see [`SealState::seal`].
     cas_pool: Option<SqlitePool>,
@@ -51,7 +51,7 @@ pub struct Sealer {
 impl std::fmt::Debug for Sealer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Sealer")
-            .field("source", &self.state.source_name)
+            .field("source", &self.state.source_id)
             .finish_non_exhaustive()
     }
 }
@@ -86,7 +86,7 @@ impl RawStoreSession {
         let session = Self {
             state: Arc::new(SealState {
                 pool,
-                source_name: ctx.name.to_string(),
+                source_id: ctx.name.to_string(),
                 cas_pool,
                 checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(
                     ctx.checkpoint_policy(),
@@ -108,7 +108,7 @@ impl RawStoreSession {
     fn checkpoint_hook(&self) -> Arc<dyn Checkpoint> {
         Arc::new(RawStoreCheckpoint {
             pool: self.state.pool.clone(),
-            source_name: self.state.source_name.clone(),
+            source_id: self.state.source_id.clone(),
         })
     }
 
@@ -121,7 +121,7 @@ impl RawStoreSession {
     /// goes with the entity pool without this having to name either.
     pub async fn finish(self, _ctx: &RunCtx<'_>, summary: String) -> String {
         let final_summary =
-            commit_with_suffix(&self.state.pool, &self.state.source_name, summary).await;
+            commit_with_suffix(&self.state.pool, &self.state.source_id, summary).await;
         self.state.close_all().await;
         final_summary
     }
@@ -146,7 +146,7 @@ impl SealState {
             // AGENTS.md's "prefer failing loudly" section is about.
             if let Err(e) = self.seal().await {
                 tracing::warn!(
-                    source = %self.source_name,
+                    source = %self.source_id,
                     error = %format!("{e:#}"),
                     "checkpoint commit failed; the rows stay pending until the run's final commit",
                 );
@@ -165,10 +165,10 @@ impl SealState {
         // is already routine: the CAS is content-addressed and written with
         // `INSERT OR IGNORE`.
         if let Some(cas) = self.cas_pool.as_ref() {
-            let msg = format!("checkpoint {}: blobs", self.source_name);
+            let msg = format!("checkpoint {}: blobs", self.source_id);
             crate::doltlite_raw::commit_run(cas, &msg).await?;
         }
-        let msg = format!("checkpoint {}: entities", self.source_name);
+        let msg = format!("checkpoint {}: entities", self.source_id);
         let sealed = crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
         // `None` means there was nothing dirty after all; no version moved,
         // so there is nothing to announce.
@@ -184,13 +184,13 @@ impl SealState {
 /// store.
 struct RawStoreCheckpoint {
     pool: SqlitePool,
-    source_name: String,
+    source_id: String,
 }
 
 #[async_trait]
 impl Checkpoint for RawStoreCheckpoint {
     async fn checkpoint(&self) -> Result<()> {
-        let msg = format!("download {}: interrupted (Ctrl-C)", self.source_name);
+        let msg = format!("download {}: interrupted (Ctrl-C)", self.source_id);
         crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
         Ok(())
     }
@@ -200,14 +200,14 @@ impl Checkpoint for RawStoreCheckpoint {
 /// <summary>`) and append the resulting `commit=<hash>` to the summary, exactly
 /// as the old orchestrator did. Best-effort — a failure logs and returns the
 /// bare summary (the data is already on disk). Does NOT close the pool.
-async fn commit_with_suffix(pool: &SqlitePool, source_name: &str, summary: String) -> String {
-    let msg = format!("download {source_name}: {summary}");
+async fn commit_with_suffix(pool: &SqlitePool, source_id: &str, summary: String) -> String {
+    let msg = format!("download {source_id}: {summary}");
     match crate::doltlite_raw::commit_run(pool, &msg).await {
         Ok(Some(h)) => format!("{summary} commit={h}"),
         Ok(None) => summary,
         Err(e) => {
             tracing::error!(
-                source = %source_name,
+                source = %source_id,
                 error = %format!("{e:#}"),
                 "download commit FAILED",
             );
@@ -239,7 +239,7 @@ mod tests {
     fn state(pool: SqlitePool, cas: Option<SqlitePool>, p: crate::progress::Progress) -> SealState {
         SealState {
             pool,
-            source_name: "t".into(),
+            source_id: "t".into(),
             cas_pool: cas,
             checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(
                 crate::checkpointer::Policy::Every(crate::checkpointer::Cadence {

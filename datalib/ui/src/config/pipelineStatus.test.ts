@@ -66,7 +66,7 @@ function job(over: Partial<SyncJob> = {}): SyncJob {
   return {
     id: "job-1",
     kind: "all",
-    source_name: "a/ingest",
+    source_ids: "a/ingest",
     state: "running",
     progress_pct: null,
     progress_msg: null,
@@ -134,7 +134,7 @@ describe("what a single snapshot means", () => {
   });
 
   it("a job naming no source claims every step", () => {
-    const claims = claimedBy(steps(), [job({ source_name: null })]);
+    const claims = claimedBy(steps(), [job({ source_ids: null })]);
     expect(claims.size).toBe(5);
   });
 
@@ -470,7 +470,7 @@ describe("what a queued row is waiting for", () => {
   });
 
   function queuedDetail(id: string, blockers: string[], state: SyncJob["state"]) {
-    const j = job({ state, source_name: "a/ingest", started_at: state === "pending" ? null : T.jobStart });
+    const j = job({ state, source_ids: "a/ingest", started_at: state === "pending" ? null : T.jobStart });
     return stepStatus({
       id,
       step: undefined,

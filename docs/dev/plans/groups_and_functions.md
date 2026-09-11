@@ -677,7 +677,7 @@ Each slice is a PR; each leaves the tree green.
      - A step's phase is read off its `function` (`ingest`,
        `render_markdown`, `grid_index`, `qmd_index`; anything else is
        a custom step), never off the shape of its id. The grid's
-       Source column joins `source_name` to a *group's* name the same
+       Source column joins `source_id` to a *group's* name the same
        way, so nothing in the UI splits an id any more.
      - The "Render to markdown" row action went with the chain: a
        source's render step is written with its ingest step, and Edit

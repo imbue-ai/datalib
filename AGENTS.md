@@ -172,6 +172,20 @@ reference doc it relates to.
   audio-vs-visual table split, why playlists keep their unresolvable
   entries, and the one place this repo's timestamp convention is
   deliberately deviated from.
+- [`datalib/backend/etl/providers/lightroom/INGEST.md`](datalib/backend/etl/providers/lightroom/INGEST.md)
+  — the SQLite→doltlite **mirror engine**
+  (`datalib/backend/etl/sqlite_mirror/`), explained through its first
+  user: drop and refill every table each run and let doltlite's
+  content-addressed storage make that an incremental, versioned backup.
+  Read it before touching how any SQLite-backed application's data is
+  mirrored — the stable-key rule, what is deliberately not mirrored,
+  and the doltlite blob bug it found.
+  [`apple_photos/INGEST.md`](datalib/backend/etl/providers/apple_photos/INGEST.md)
+  is the second user and covers only what Photos adds: `ZUUID` without
+  a UNIQUE index, the `skip_history` preset and the churn it was
+  measured against, the R-tree and its shadow tables, and the macOS
+  permission the library sits behind. It also records why Apple Music
+  is *not* the same case (`Library.musicdb` is not SQLite).
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
   — the `email` source's three download modes (JMAP, Gmail API, mbox),
   what keeps them writing one deduped schema, and why an IMAP mode was
@@ -193,7 +207,7 @@ reference doc it relates to.
   table.
 - [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — **read before
   adding a provider or touching any `*_uuid` recipe**: the one rule for
-  minting `grid_rows.uuid`, why the scope is never our `source_name`
+  minting `grid_rows.uuid`, why the scope is never our `source_id`
   (nor `source_type`), the `source_native_id` backpointer, and the
   per-provider porting status.
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting
@@ -286,6 +300,23 @@ reference doc it relates to.
   and [`docs/user/config_examples/`](docs/user/config_examples/) (one
   commented group with its `ingest` + `render_markdown` step pair per
   source).
+
+## Breaking changes are fine
+
+**There are no real users yet, so nothing here has to stay
+backward-compatible.** A rename that costs a re-index, a config shape
+that stops loading, a stored column that changes name — all of these are
+cheaper now than they will ever be again, and far cheaper than leaving a
+confusing pattern in place for someone to trip over later. When you find
+a name that lies or a shape that fights you, fix it properly rather than
+layering a compatibility shim over it.
+
+Two things this does *not* license. Keep a compatibility path where the
+input comes from a **person** rather than from our own code — a filter
+somebody typed into the search bar lives in their fingers and in their
+saved queries, and an alias costs one line. And say what breaks: a
+change that invalidates a store or a config belongs in the commit
+message, so whoever hits it knows it was deliberate.
 
 ## Prose can be stale — verify claims against the tree
 
@@ -407,8 +438,15 @@ datalib/
                    Three providers scan local trees and share
                    etl/src/fswalk.rs (blake3 + Unison's rescan cursor):
                    fsindex (path-keyed, no render), pdf and media (both
-                   content-keyed; media has no render side either), so
-                   fsindex, media and lightroom have no <p>_render.
+                   content-keyed; media has no render side either).
+                   Two mirror a SQLite file through etl/sqlite_mirror/
+                   (lightroom, apple_photos). fsindex, media, lightroom
+                   and apple_photos have no <p>_render.
+    etl/sqlite_mirror/ `datalib_etl_sqlite_mirror`: the table-for-table
+                   SQLite→doltlite mirror engine behind lightroom and
+                   apple_photos. Its own crate, not part of datalib_etl,
+                   so an engine change rebuilds two providers rather
+                   than everything downstream of the shared crate.
     table/         `datalib_table`: the `BulkUpsertable` row-write
                    contract, alone, with `sqlx` as its only dependency.
     migrate_config/ `datalib-migrate-config`: rewrites a `config.toml`
@@ -493,7 +531,7 @@ step (bring the data in, from an origin or from files on disk) and a
 `unified_index` group index every source's `render_markdown` tree:
 `grid_index` (the SQL index at `unified_index/grid_index/db.doltlite_db`)
 and `qmd_index` (semantic search at `unified_index/qmd_index/`, one qmd
-collection per group so a `source_name:` search scopes retrieval instead
+collection per group so a `source_id:` search scopes retrieval instead
 of filtering its results). Both
 are read by
 the `unified_index` applet, which serves the grid — `datalib-http` does
@@ -608,10 +646,10 @@ Two rules follow:
   re-export in `render/mod.rs` — which read as a render dependency and
   would now not compile.
 - **A source that renders nothing has no `_render` crate at all.**
-  fsindex, media and lightroom are download-only, and `download_only!`
-  in `datalib_step/src/dispatch.rs` says so once rather than three
-  providers each carrying a `plan_render` stub — and, with it, a
-  dependency on a framework they have no use for.
+  fsindex, media, lightroom and apple_photos are download-only, and
+  `ingest_only!` in `datalib_step/src/dispatch.rs` says so once rather
+  than four providers each carrying a `plan_render` stub — and, with
+  it, a dependency on a framework they have no use for.
 
 The measurement that motivated the split is the one that checks it:
 
@@ -650,10 +688,11 @@ When you add or change a `grid_rows` column:
    `datalib/backend/unified_index/src/dolt_repo.rs` — both
    `SEARCH_ROW_COLUMNS` and `search_row_from` — plus `SearchRow` in
    `unified_index/src/search.rs` if the column reaches the API.
-4. If it should be a grid column, add it to `default_columns()` in
-   `datalib/backend/applets/src/unified_index/mod.rs` (which is the
-   applet's wire contract, and has a test counting it) and to the
-   `SearchRow` type in `datalib/ui/src/api.ts`.
+4. If it should be a grid column, add it to the `SearchRow` type in
+   `datalib/ui/src/api.ts` and to `columnDefs` in
+   `datalib/ui/src/cards/GridCard.ce.vue`. The column list is the
+   grid's, not the applet's — there is no `default_columns()` and no
+   `/columns` endpoint any more (checked 2026-09-11).
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## QMDs are write-only
@@ -1341,6 +1380,39 @@ issues, because there the distinction is real and load-bearing:
 The one deliberate survivor of the rename is the `anthropic` **search
 keyword** in `ui/src/config/catalog.ts`: someone who thinks of the
 company should still find the source in the picker.
+
+## A source's id is not its name
+
+A source has two identifiers and they are different things:
+
+| | |
+|---|---|
+| **id** | its group id — the directory under the data root, the stem of its step ids, the first segment of every `qmd_path`. Path-safe, unique, changing it is a migration. |
+| **name** | what a person typed in the wizard. Free text, mutable, and two sources may share one. |
+
+**Everything that identifies, filters or joins uses the id**, and the
+Rust/TypeScript field for it is called `source_id`: `SearchRow.source_id`,
+the `source_id:` search filter, `Field::SourceId`. The grid's "Source"
+column shows the *name*, joined client-side from `config.toml` — which is
+what keeps renaming a source free of a re-index.
+
+Every stored column moved with the code — `markdowns.source_id`,
+`source_cursors.source_id`, `render_problems.source_id` — so there is no
+gap between what a field is called and what its column is called. The
+cost was one re-index — the trade
+[Breaking changes are fine](#breaking-changes-are-fine) describes.
+`sync_jobs.source_ids` is the one plural: it holds a comma-separated
+list of step ids, so the old singular was wrong twice over.
+
+`source_name` survives in exactly two places, and both are inputs a
+**person** types rather than names we chose: `source_name:` in the
+search bar parses to `Field::SourceId`, and `POST /api/sync/jobs` takes
+`source_name` as a serde alias for `source_ids`. Each was the only
+spelling for as long as a source had nothing but an id, so both are in
+saved queries and in people's fingers. New callers emit `source_id:` and
+`source_ids`.
+
+Background: [#279](https://github.com/imbue-ai/datalib/issues/279).
 
 ## Unordered collections: give a bag an order before storing it
 

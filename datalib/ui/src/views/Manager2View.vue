@@ -294,7 +294,8 @@ type Row = {
   revealBlocked: string | null;
   /// Why this row has nothing to browse, or null when it does. A source
   /// reaches the grid only through a `render_markdown` step — the three
-  /// download-only providers (fsindex, media, lightroom) declare none,
+  /// download-only providers (fsindex, media, lightroom, apple_photos)
+  /// declare none,
   /// and even their storage rows come from render, so they have no rows
   /// at all rather than a few.
   browseBlocked: string | null;
@@ -926,7 +927,7 @@ class ActionsRenderer implements ICellRendererComp<Row> {
       setButton(
         this.run,
         "stop",
-        claim?.source_name ? `Stop the sync of ${claim.source_name}` : "Stop the sync in progress",
+        claim?.source_ids ? `Stop the sync of ${claim.source_ids}` : "Stop the sync in progress",
         null,
       );
       this.run.classList.add("danger");
@@ -1797,7 +1798,7 @@ async function runRow(row: Row) {
   busy.value = true;
   clearBanner();
   try {
-    const job = await enqueueJob({ kind: "all", source_name: row.seeds.join(",") });
+    const job = await enqueueJob({ kind: "all", source_ids: row.seeds.join(",") });
     adoptJob(job);
     say(true, `Queued a sync for ${shown}.`, job.id);
     // Before returning: the queue is what puts this row and everything
@@ -1850,7 +1851,7 @@ async function stopSource(id: string) {
     await cancelJob(job.id);
     say(
       true,
-      `Stopping the sync of ${job.source_name || "everything"}. Steps in flight ` +
+      `Stopping the sync of ${job.source_ids || "everything"}. Steps in flight ` +
         `checkpoint what they have and exit.`,
       job.id,
     );
@@ -1907,7 +1908,7 @@ function mergeJob(e: JobProgressEvent) {
     {
       id: e.id,
       kind: e.kind,
-      source_name: e.source_name,
+      source_ids: e.source_ids,
       state: e.state,
       progress_pct: e.progress_pct,
       progress_msg: e.progress_msg,
@@ -2229,7 +2230,7 @@ onUnmounted(() => {
               <code>{{ logFor.id }}</code>
               <span v-if="logJob">
                 · from the sync of
-                <b>{{ logJob.source_name || "everything" }}</b>
+                <b>{{ logJob.source_ids || "everything" }}</b>
                 <span :title="formatStamp(logJob.created_at)">
                   {{ formatRelative(logJob.created_at, Date.now()) }}</span>
               </span>

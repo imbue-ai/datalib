@@ -71,7 +71,7 @@ pub async fn load_targets(raw_dir: &Path) -> Result<Option<Vec<RenderTarget>>> {
 pub fn render_targets(
     targets: &[RenderTarget],
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -104,7 +104,7 @@ pub fn render_targets(
             continue;
         }
 
-        match render_one(t, &md_path, source_name, &doc_uuid) {
+        match render_one(t, &md_path, source_id, &doc_uuid) {
             Ok(rendered) => {
                 summary.converted += 1;
                 on_doc_complete(rendered)?;
@@ -127,7 +127,7 @@ pub fn render_targets(
 pub async fn render(
     raw_dir: &Path,
     out_dir: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -138,7 +138,7 @@ pub async fn render(
     render_targets(
         &targets,
         out_dir,
-        source_name,
+        source_id,
         progress,
         prior_fingerprints,
         on_doc_complete,
@@ -148,13 +148,13 @@ pub async fn render(
 fn render_one(
     t: &RenderTarget,
     md_path: &Path,
-    source_name: &str,
+    source_id: &str,
     doc_uuid: &str,
 ) -> Result<RenderedMarkdown> {
     let pages = convert::convert(&t.abs_path)?;
     let title = grid_rows::display_title(t.title.as_deref(), &t.rel_path);
 
-    let qmd_rel = doc_qmd_path_rel(source_name, &t.blake3);
+    let qmd_rel = doc_qmd_path_rel(source_id, &t.blake3);
 
     let mut body = String::new();
     body.push_str("---\n");
@@ -224,7 +224,7 @@ fn render_one(
 
     Ok(RenderedMarkdown {
         markdown_uuid: doc_uuid.to_string(),
-        source_name: source_name.to_string(),
+        source_id: source_id.to_string(),
         source_fingerprint: render_fingerprint(&t.blake3),
         upstream_cursor: None,
         md_path: md_path.to_path_buf(),

@@ -800,6 +800,66 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
+  {
+    type: "apple_photos",
+    label: "Apple Photos",
+    blurb: "Mirror an Apple Photos library's database, with full history.",
+    keywords: ["apple", "photos", "photoslibrary", "iphone", "icloud", "sqlite", "images"],
+    kind: "local",
+    icon: null,
+    defaultName: "apple_photos",
+    nameHint: "Photos library",
+    wizard: true,
+    // Download-only, like lightroom: nothing is rendered.
+    renderStep: false,
+    fields: [
+      {
+        kind: "path",
+        // A .photoslibrary is a package: the folder picker cannot select
+        // it, and choosing it here is also what grants the app access to
+        // it on macOS (docs/dev/wizard_file_pickers.md).
+        picks: "file",
+        pickTitle: "Choose your Photos library",
+        extensions: ["photoslibrary"],
+        required: true,
+        target: "library.path",
+        label: "Photos library",
+        placeholder: "~/Pictures/Photos Library.photoslibrary",
+        help:
+          "The library bundle; its database/Photos.sqlite is what gets mirrored. Choose it " +
+          "with the picker rather than typing the path: macOS protects the library, and " +
+          "picking it is what lets Datalib read it. If a sync still fails with " +
+          "\"Operation not permitted\", grant Datalib Full Disk Access in System Settings.",
+      },
+      {
+        kind: "bool",
+        target: "skip_history",
+        label: "Skip Core Data's change log and daemon bookkeeping",
+        default: true,
+        help:
+          "Photos never stops writing its history tables and work queue, so with this off " +
+          "every run commits even when no photo changed. Nothing about a photo lives there.",
+      },
+      {
+        kind: "bool",
+        target: "snapshot",
+        label: "Snapshot before reading",
+        default: true,
+        help:
+          "Take a VACUUM INTO copy first. Photos' daemons keep the library open at all " +
+          "times, so this is the only way to read a consistent state.",
+      },
+      {
+        kind: "bool",
+        target: "gc",
+        label: "Collect unreachable chunks each run",
+        default: false,
+        help:
+          "Much smaller store, history unaffected — but it rewrites the whole chunk store " +
+          "every run.",
+      },
+    ],
+  },
   { type: "perseus", method: "github", label: "Perseus library", blurb: "Classical texts from the Perseus Digital Library.", keywords: ["perseus", "greek", "latin", "classics", "sample"], kind: "local", icon: null, defaultName: "perseus", nameHint: "Greek and Latin texts", wizard: false },
 ];
 

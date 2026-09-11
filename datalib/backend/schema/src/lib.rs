@@ -66,20 +66,21 @@ mod tests {
         }
     }
 
-    /// The `markdowns` DDL this struct derives is what `grid_index`
-    /// creates, so it must stay byte-equal to the string that lived
-    /// there before the two were consolidated. Three drifts had already
-    /// opened up while nothing read the struct: it was missing
-    /// `source_fingerprint` and `upstream_cursor`, it declared `title`
-    /// as `VARCHAR(512)` where production had `TEXT`, and it made
-    /// `row_set_hash` / `renderer_version` NOT NULL where production
-    /// allows NULL — the last of which fails a write rather than
-    /// merely reading wrong.
+    /// The `markdowns` DDL this struct derives is the one `grid_index`
+    /// creates, so this spells it out in full: a change to the struct
+    /// that nobody meant to make to the table shows up here. Three
+    /// drifts had already opened up while nothing read the struct — it
+    /// was missing `source_fingerprint` and `upstream_cursor`, it
+    /// declared `title` as `VARCHAR(512)` where the table had `TEXT`,
+    /// and it made `row_set_hash` / `renderer_version` NOT NULL where
+    /// the table allows NULL, the last of which fails a write rather
+    /// than merely reading wrong. Update the expectation when the
+    /// change is deliberate; a re-index is the cost.
     #[test]
-    fn markdowns_ddl_matches_what_the_index_has_always_created() {
-        const PRODUCTION: &str = r#"CREATE TABLE IF NOT EXISTS markdowns (
+    fn markdowns_ddl_is_exactly_this() {
+        const EXPECTED: &str = r#"CREATE TABLE IF NOT EXISTS markdowns (
     markdown_uuid VARCHAR(96) NOT NULL,
-    source_name VARCHAR(64) NOT NULL,
+    source_id VARCHAR(64) NOT NULL,
     provider VARCHAR(32) NOT NULL,
     kind VARCHAR(32) NOT NULL,
     title TEXT,
@@ -97,8 +98,8 @@ mod tests {
         let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
         assert_eq!(
             norm(derived),
-            norm(PRODUCTION),
-            "\nderived: {derived}\n\nproduction: {PRODUCTION}"
+            norm(EXPECTED),
+            "\nderived: {derived}\n\nexpected: {EXPECTED}"
         );
     }
 

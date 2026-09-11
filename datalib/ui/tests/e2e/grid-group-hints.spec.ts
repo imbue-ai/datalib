@@ -54,7 +54,7 @@ test("once grouped, the group column explains how to change it", async ({
   page,
 }) => {
   await openGrid(page);
-  await groupBy(page, "source_name");
+  await groupBy(page, "source_id");
 
   const header = page.locator('.ag-header-cell[col-id="ag-Grid-AutoColumn"]');
   await expect(header).toBeVisible();

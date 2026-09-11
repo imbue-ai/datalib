@@ -64,6 +64,11 @@ pub enum KeyOrigin {
     /// A single-column UNIQUE index named in `stable_key_columns`, chosen
     /// over the declared key. This is the Lightroom `id_global` case.
     StableUnique,
+    /// A column named in `stable_key_columns` that the source did not
+    /// declare UNIQUE, but which this run checked holds a distinct
+    /// non-NULL value in every row. This is the Apple Photos `ZUUID`
+    /// case.
+    StableVerified,
     /// An explicit `primary_keys` config override.
     Override,
     /// No key: the source had none and no stable candidate matched.
@@ -114,22 +119,62 @@ pub fn quote_ident(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
+/// How SQLite classifies an entry in `sqlite_master`. Only two kinds
+/// hold rows we copy; the others exist so the mirror can say why it
+/// left something out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableKind {
+    /// An ordinary table.
+    Table,
+    /// `CREATE VIRTUAL TABLE`: readable as rows only when its module is
+    /// compiled into the engine doing the reading.
+    Virtual,
+    /// A virtual table's backing storage (`<name>_node`, `_content`,
+    /// …). Opaque pages of an index, not data — the virtual table above
+    /// it *is* the data.
+    Shadow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceTable {
+    pub name: String,
+    pub kind: TableKind,
+}
+
+/// Every table in `schema`, classified. Views are not tables and are
+/// not listed. `PRAGMA table_list` is what tells a shadow table from a
+/// real one; `sqlite_master` calls both `table`.
+pub async fn source_tables(conn: &mut SqliteConnection, schema: &str) -> Result<Vec<SourceTable>> {
+    let rows = sqlx::query(
+        "SELECT name, type FROM pragma_table_list \
+         WHERE schema = ? AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )
+    .bind(schema)
+    .fetch_all(&mut *conn)
+    .await
+    .with_context(|| format!("list tables in {schema}"))?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let kind = match r.get::<String, _>("type").as_str() {
+            "table" => TableKind::Table,
+            "virtual" => TableKind::Virtual,
+            "shadow" => TableKind::Shadow,
+            _ => continue,
+        };
+        out.push(SourceTable {
+            name: r.get("name"),
+            kind,
+        });
+    }
+    Ok(out)
+}
+
 pub async fn table_names(conn: &mut SqliteConnection, schema: &str) -> Result<Vec<String>> {
-    let sql = format!(
-        "SELECT name FROM {}.sqlite_master \
-         WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-        quote_ident(schema)
-    );
-    // Audited: every interpolated identifier goes through `plan::quote_ident`,
-    // which double-quotes and escapes embedded quotes (covered by
-    // `quote_ident_escapes_embedded_quotes`). Source catalog names are
-    // attacker-shaped only in the sense that they come from the user's own
-    // Lightroom file, and quoting is what makes that safe.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .fetch_all(&mut *conn)
-        .await
-        .with_context(|| format!("list tables in {schema}"))?;
-    Ok(rows.iter().map(|r| r.get::<String, _>("name")).collect())
+    Ok(source_tables(conn, schema)
+        .await?
+        .into_iter()
+        .map(|t| t.name)
+        .collect())
 }
 
 /// One source column as `PRAGMA table_xinfo` reports it, plus the bits

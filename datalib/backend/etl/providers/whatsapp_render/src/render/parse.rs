@@ -40,7 +40,7 @@ pub struct ParsedWhatsApp {
     pub blobs_by_chat: HashMap<String, BlobBundle>,
 }
 
-pub fn parse(raw_dir: &Path, period: Period, source_name: &str) -> Result<ParsedWhatsApp> {
+pub fn parse(raw_dir: &Path, period: Period, source_id: &str) -> Result<ParsedWhatsApp> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(ParsedWhatsApp::default());
@@ -51,15 +51,15 @@ pub fn parse(raw_dir: &Path, period: Period, source_name: &str) -> Result<Parsed
     tokio::task::block_in_place(|| {
         let rt = tokio::runtime::Handle::try_current();
         match rt {
-            Ok(handle) => handle.block_on(parse_async(&db_path, period, source_name)),
+            Ok(handle) => handle.block_on(parse_async(&db_path, period, source_id)),
             Err(_) => {
-                tokio::runtime::Runtime::new()?.block_on(parse_async(&db_path, period, source_name))
+                tokio::runtime::Runtime::new()?.block_on(parse_async(&db_path, period, source_id))
             }
         }
     })
 }
 
-async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Result<ParsedWhatsApp> {
+async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<ParsedWhatsApp> {
     let pool: SqlitePool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open {}", db_path.display()))?;
@@ -224,7 +224,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
             .or_default()
             .push(NormalizedReaction {
                 reaction_uuid: whatsapp_reaction_uuid(
-                    source_name,
+                    source_id,
                     &add_on_chat_jid,
                     &add_on_key_id,
                     add_on_from_me,
@@ -265,7 +265,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
             let key_id: String = r.get("key_id");
             let from_me: i64 = r.get("from_me");
             let item = build_item(
-                source_name,
+                source_id,
                 &chat_jid,
                 &key_id,
                 from_me,
@@ -293,7 +293,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
         let key_id: String = r.get("key_id");
         let from_me: i64 = r.get("from_me");
         let item = build_item(
-            source_name,
+            source_id,
             &chat_jid,
             &key_id,
             from_me,
@@ -319,7 +319,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
     // 6) Materialize into NormalizedChat.
     let mut out: Vec<NormalizedChat> = Vec::with_capacity(chats.len());
     for ch in chats.into_iter().filter(|c| !c.items_by_period.is_empty()) {
-        let chat_uuid = whatsapp_chat_uuid(source_name, &ch.chat_jid);
+        let chat_uuid = whatsapp_chat_uuid(source_id, &ch.chat_jid);
         let mut keys: Vec<String> = ch.items_by_period.keys().cloned().collect();
         keys.sort();
         let mut buckets: Vec<NormalizedDoc> = Vec::with_capacity(keys.len());
@@ -399,7 +399,7 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
 
 #[allow(clippy::too_many_arguments)]
 fn build_item(
-    source_name: &str,
+    source_id: &str,
     chat_jid: &str,
     key_id: &str,
     from_me: i64,
@@ -452,7 +452,7 @@ fn build_item(
     };
 
     NormalizedChatItem {
-        message_uuid: whatsapp_message_uuid(source_name, chat_jid, key_id, from_me),
+        message_uuid: whatsapp_message_uuid(source_id, chat_jid, key_id, from_me),
         author_id,
         author_display,
         // A NULL `timestamp` column is "we don't know when", which is a

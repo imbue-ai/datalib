@@ -404,7 +404,7 @@ impl IdClaims {
     /// a genuine cross-source clash.
     pub fn claim(
         &mut self,
-        source_name: &str,
+        source_id: &str,
         markdown_uuid: &str,
         rows: &[GridRow],
     ) -> Option<IdCollision> {
@@ -414,12 +414,12 @@ impl IdClaims {
                 id: markdown_uuid.to_string(),
                 first_source: prior.clone(),
                 first_markdown_uuid: markdown_uuid.to_string(),
-                second_source: source_name.to_string(),
+                second_source: source_id.to_string(),
                 second_markdown_uuid: markdown_uuid.to_string(),
             });
         }
         self.markdowns
-            .insert(markdown_uuid.to_string(), source_name.to_string());
+            .insert(markdown_uuid.to_string(), source_id.to_string());
 
         for row in rows {
             if let Some((prior_source, prior_md)) = self.rows.get(&row.uuid) {
@@ -428,13 +428,13 @@ impl IdClaims {
                     id: row.uuid.clone(),
                     first_source: prior_source.clone(),
                     first_markdown_uuid: prior_md.clone(),
-                    second_source: source_name.to_string(),
+                    second_source: source_id.to_string(),
                     second_markdown_uuid: markdown_uuid.to_string(),
                 });
             }
             self.rows.insert(
                 row.uuid.clone(),
-                (source_name.to_string(), markdown_uuid.to_string()),
+                (source_id.to_string(), markdown_uuid.to_string()),
             );
         }
         None
@@ -535,7 +535,7 @@ pub struct RenderedMarkdown {
     pub markdown_uuid: String,
     /// User-facing config name (e.g. `tiny-slack`), falling back to the
     /// provider string.
-    pub source_name: String,
+    pub source_id: String,
     pub source_fingerprint: String,
     /// A cheap probe the orchestrator can check *before* loading payloads to
     /// decide whether a markdown moved. Slack stamps each thread's
@@ -598,12 +598,12 @@ pub async fn build_grid_index(
     // An error rolls back, leaving the index exactly as it was.
     let write_lock = WriteLock::new(pool.clone());
     // One dir per source plus the reserved `system/`; the directory name IS
-    // the config-level source name. Cursors load before the write transaction
+    // the source's id. Cursors load before the write transaction
     // opens, because the index pool is one connection wide.
     let cursors = load_source_cursors(pool).await?;
 
     let mut docs: Vec<(String, RenderedMarkdown)> = Vec::new();
-    // `source_name → (new_head, documents_applied)` for the cursors this
+    // `source_id → (new_head, documents_applied)` for the cursors this
     // run will advance, and the ids each source dropped.
     let mut advanced: Vec<(String, String)> = Vec::new();
     let mut removed: Vec<(String, String)> = Vec::new();
@@ -729,11 +729,11 @@ pub async fn build_grid_index(
             .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339());
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
-        for (source_name, store_commit) in &advanced {
+        for (source_id, store_commit) in &advanced {
             write_source_cursor(
                 conn,
                 &SourceCursorRow {
-                    source_name: source_name.clone(),
+                    source_id: source_id.clone(),
                     store_commit: store_commit.clone(),
                     indexed_at: now.clone(),
                     documents_applied: summary.markdowns_loaded as i64,
@@ -774,8 +774,8 @@ async fn load_all_batch(
     // See [`IdClaims`]: catches two sources writing the same id.
     let mut claims = IdClaims::new();
     for (stanza, md) in docs {
-        // The stanza dir name is the config-level source name.
-        let source_name = if stanza.is_empty() {
+        // The stanza dir name is the source's id.
+        let source_id = if stanza.is_empty() {
             md.rows
                 .first()
                 .map(|r| r.provider.clone())
@@ -787,7 +787,7 @@ async fn load_all_batch(
         // Claim ids BEFORE the fingerprint skip, so an overlap between two
         // sources is still caught on a steady-state re-run where one of them
         // is unchanged and would never be looked at.
-        if let Some(collision) = claims.claim(&source_name, &md.markdown_uuid, &md.rows) {
+        if let Some(collision) = claims.claim(&source_id, &md.markdown_uuid, &md.rows) {
             return Err(anyhow::anyhow!("{collision}"))
                 .with_context(|| format!("load {} from {stanza}", md.markdown_uuid));
         }
@@ -799,7 +799,7 @@ async fn load_all_batch(
         // The stanza name is authoritative. Everything else comes through
         // from the store unchanged.
         let md = RenderedMarkdown {
-            source_name,
+            source_id,
             // Already rows in the store; re-applying would double-count.
             problems: Vec::new(),
             ..md.clone()
@@ -839,13 +839,13 @@ pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, Stri
 }
 
 pub async fn load_source_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows = sqlx::query("SELECT source_name, store_commit FROM source_cursors")
+    let rows = sqlx::query("SELECT source_id, store_commit FROM source_cursors")
         .fetch_all(pool)
         .await
         .context("load_source_cursors")?;
     let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
     for r in rows {
-        out.insert(r.try_get("source_name")?, r.try_get("store_commit")?);
+        out.insert(r.try_get("source_id")?, r.try_get("store_commit")?);
     }
     Ok(out)
 }
@@ -854,8 +854,8 @@ async fn write_source_cursor(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     row: &SourceCursorRow,
 ) -> Result<()> {
-    sqlx::query("DELETE FROM source_cursors WHERE source_name = ?")
-        .bind(&row.source_name)
+    sqlx::query("DELETE FROM source_cursors WHERE source_id = ?")
+        .bind(&row.source_id)
         .execute(&mut **conn)
         .await
         .context("clear prior source cursor")?;
@@ -864,7 +864,7 @@ async fn write_source_cursor(
     row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
         .execute(&mut **conn)
         .await
-        .with_context(|| format!("write source cursor {}", row.source_name))?;
+        .with_context(|| format!("write source cursor {}", row.source_id))?;
     Ok(())
 }
 
@@ -981,10 +981,10 @@ async fn upsert_markdown(
     let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
     // Fall back to the canonical row's provider when build_grid_index
     // rebuilds from disk without the config-level name.
-    let source_name = if md.source_name.is_empty() {
+    let source_id = if md.source_id.is_empty() {
         canonical.provider.clone()
     } else {
-        md.source_name.clone()
+        md.source_id.clone()
     };
 
     sqlx::query("DELETE FROM markdowns WHERE markdown_uuid = ?")
@@ -994,12 +994,12 @@ async fn upsert_markdown(
         .context("delete prior markdowns row")?;
     sqlx::query(
         "INSERT INTO markdowns \
-         (markdown_uuid, source_name, provider, kind, title, created_at, updated_at, \
+         (markdown_uuid, source_id, provider, kind, title, created_at, updated_at, \
           md_path, source_fingerprint, upstream_cursor, row_set_hash, renderer_version, rendered_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
-    .bind(&source_name)
+    .bind(&source_id)
     .bind(&canonical.provider)
     .bind(kind)
     .bind(&canonical.conversation_name)
@@ -1286,7 +1286,7 @@ mod id_claim_tests {
     /// account both key on Anthropic's `conversation_uuid`, so both
     /// documents carry the same `markdown_uuid`. Whichever applied
     /// second used to delete the other's rows and rewrite `md_path`
-    /// and `source_name` to its own — no error, no row-count delta.
+    /// and `source_id` to its own — no error, no row-count delta.
     #[test]
     fn same_markdown_uuid_from_two_sources_is_reported() {
         let mut claims = IdClaims::new();
@@ -1327,11 +1327,11 @@ mod id_claim_tests {
         assert_eq!(hit.second_markdown_uuid, "md-b");
     }
 
-    /// A source *rename* must stay legal: same ids, different `source_name`,
-    /// one claimant per id within the run. Run-scoping the tracker is
-    /// precisely what keeps this working.
+    /// Changing a source's id must stay legal: the same document and row
+    /// ids arrive under a new `source_id`, one claimant per id within the
+    /// run. Run-scoping the tracker is precisely what keeps this working.
     #[test]
-    fn a_renamed_source_reclaiming_its_own_ids_is_clean() {
+    fn a_source_that_changed_id_reclaiming_its_own_ids_is_clean() {
         let mut first_run = IdClaims::new();
         assert!(first_run
             .claim("slack", "md-a", &[row("r1", "md-a")])
@@ -1398,7 +1398,7 @@ mod write_lock_tests {
         };
         RenderedMarkdown {
             markdown_uuid: uuid.clone(),
-            source_name: "test".into(),
+            source_id: "test".into(),
             source_fingerprint: format!("fp-{uuid}"),
             upstream_cursor: None,
             md_path: PathBuf::from(format!("/tmp/{uuid}.md")),
@@ -1683,7 +1683,7 @@ mod schema_reconcile_tests {
             sqlx::query(*ddl).execute(pool).await.unwrap();
         }
         sqlx::query(
-            "INSERT INTO markdowns (markdown_uuid, source_name, provider, kind, source_fingerprint) \
+            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, source_fingerprint) \
              VALUES ('md-1', 'claude_web', 'claude', 'Chat', 'fp-1')",
         )
         .execute(pool)
@@ -1765,7 +1765,7 @@ mod schema_reconcile_tests {
         init_schema(&pool).await.expect("first init_schema");
 
         sqlx::query(
-            "INSERT INTO markdowns (markdown_uuid, source_name, provider, kind, source_fingerprint) \
+            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, source_fingerprint) \
              VALUES ('md-1', 'claude_web', 'claude', 'Chat', 'fp-1')",
         )
         .execute(&pool)
@@ -1835,7 +1835,7 @@ mod source_cursor_tests {
             .unwrap();
         RenderedMarkdown {
             markdown_uuid: uuid.to_string(),
-            source_name: source.to_string(),
+            source_id: source.to_string(),
             // Fingerprint follows the text, the way a renderer's does.
             source_fingerprint: format!("fp-{text}"),
             upstream_cursor: None,
@@ -2102,7 +2102,7 @@ mod source_cursor_tests {
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
         // A hash from no history anyone has.
-        sqlx::query("UPDATE source_cursors SET store_commit = ? WHERE source_name = 'src'")
+        sqlx::query("UPDATE source_cursors SET store_commit = ? WHERE source_id = 'src'")
             .bind("0123456789abcdef0123456789abcdef")
             .execute(&pool)
             .await

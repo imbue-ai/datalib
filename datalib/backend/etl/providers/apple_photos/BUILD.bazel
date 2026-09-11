@@ -1,0 +1,82 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# A small, Photos-shaped library fixture: a `.photoslibrary` bundle with
+# only its `database/Photos.sqlite`, minted by Python for the reasons
+# //datalib/backend/etl/sqlite_mirror:tng_catalog gives (a Rust tool here
+# cannot produce a plain SQLite file).
+genrule(
+    name = "tng_library",
+    srcs = ["//tests/fixtures:make_apple_photos_library.py"],
+    outs = ["tng_library/Tng.photoslibrary/database/Photos.sqlite"],
+    cmd = "python3 $(execpath //tests/fixtures:make_apple_photos_library.py) $@",
+    visibility = ["//datalib:__subpackages__"],
+)
+
+rust_library(
+    name = "datalib_etl_apple_photos",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_apple_photos",
+    edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/apple_photos_config:datalib_etl_apple_photos_config",
+        "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_binary(
+    name = "apple_photos_ingest",
+    srcs = ["src/bin/apple_photos_ingest.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_apple_photos",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/apple_photos_config:datalib_etl_apple_photos_config",
+        "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/source_common:datalib_source_common",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+# What the engine's own tests (against a Lightroom-shaped catalog) cannot
+# cover: the Core Data shapes — `ZUUID` indexed but never declared UNIQUE,
+# an R-tree virtual table with its shadow tables, the persistent-history
+# tables — and that the `skip_history` preset turns a run over an
+# untouched library into no commit.
+rust_test(
+    name = "photos_roundtrip",
+    size = "small",
+    srcs = ["tests/photos_roundtrip.rs"],
+    crate_name = "photos_roundtrip",
+    data = [":tng_library"],
+    edition = "2021",
+    env = {
+        "APPLE_PHOTOS_TNG_DB": "$(rootpath :tng_library)",
+    },
+    deps = [
+        ":datalib_etl_apple_photos",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/apple_photos_config:datalib_etl_apple_photos_config",
+        "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
+        "//datalib/backend/source_common:datalib_source_common",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

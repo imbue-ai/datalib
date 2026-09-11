@@ -59,10 +59,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 # cmake + perl + pkg-config + libssl-dev
 #                   protobuf-src's (and formerly boring-sys2's)
 #                   build-script deps.
-# clang + libclang-dev + llvm
-#                   bindgen (libsqlite3-sys's build script) dlopens
-#                   libclang to parse <sqlite3.h>. macOS gets clang
-#                   via Xcode CLT; on Ubuntu we install it explicitly.
 # lld               rustc on Linux still defaults to the deprecated
 #                   gold linker and warns; lld present means we can
 #                   opt in via RUSTFLAGS/--linkopt if we want to
@@ -85,14 +81,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # unzip + zip       rules_rust workspace setup occasionally pulls
 #                   these in; cheap to keep.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        clang \
         cmake \
         git \
-        libclang-dev \
         libsqlite3-0 \
         libssl-dev \
         lld \
-        llvm \
         perl \
         pkg-config \
         python3-pip \
@@ -205,27 +198,6 @@ RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
 # maps container uids back to the host user. On a native Linux host
 # (rare for devcontainer users today), the tree would need `sudo` to
 # clean up.
-
-# User-level .bazelrc that overrides the workspace .bazelrc's macOS-
-# default `LIBCLANG_PATH` with the path Ubuntu's apt install puts
-# libclang at. Without this, every bazel invocation inside the
-# container would have to remember to pass
-# `--action_env=LIBCLANG_PATH=...` on the command line — same friction
-# we removed for the CI workflow via bazelargs.
-#
-# `llvm-config --libdir` is run at image-build time and baked in;
-# rebuild the image after a major LLVM bump (e.g. 18 → 19).
-#
-# Both `--action_env` and `--host_action_env` are written so exec-config
-# ("[for tool]") bindgen build scripts — boring-sys2 was one, when an
-# exec-config tool in `//...` pulled in the HTTP stack — find libclang
-# too. (Nothing in Cargo.lock uses bindgen any more; see the note in
-# the workspace .bazelrc before removing this.) `--action_env` alone only covers target-config actions; the
-# missing host variant panicked bindgen with "Unable to find libclang"
-# on a cold BuildBuddy cache. See the matching note in the workspace
-# .bazelrc.
-RUN ldir="$(llvm-config --libdir)" \
-    && printf 'build --action_env=LIBCLANG_PATH=%s\nbuild --host_action_env=LIBCLANG_PATH=%s\n' "$ldir" "$ldir" > /root/.bazelrc
 
 WORKDIR /workspaces/datalib
 

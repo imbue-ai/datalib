@@ -102,14 +102,14 @@ impl Default for RenderOptions {
 pub fn render_all(
     parsed: &ParsedExport,
     root: &std::path::Path,
-    source_name: &str,
+    source_id: &str,
     options: RenderOptions,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
-        source = source_name,
+        source = source_id,
         scan_elapsed_ms = elapsed_ms,
         changed_buckets = parsed
             .scan
@@ -137,7 +137,7 @@ pub fn render_all(
         &profile(),
         &chats,
         root,
-        source_name,
+        source_id,
         &blobs_by_chat,
         progress,
         &no_priors,
@@ -161,7 +161,7 @@ pub fn render_all(
             &project_profile(),
             &project_chats,
             root,
-            source_name,
+            source_id,
             &no_blobs,
             progress,
             &no_priors,
@@ -171,7 +171,7 @@ pub fn render_all(
     }
 
     if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(root, source_name);
+        let cursor_path = render_cursor::cursor_path(root, source_id);
         render_cursor::write(&cursor_path, head, &render_cursor::no_params())
             .with_context(|| format!("write claude render cursor {}", cursor_path.display()))?;
     }

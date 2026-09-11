@@ -17,7 +17,7 @@ let unsubscribe: (() => void) | null = null;
 const count = computed(() => active.value.size);
 const tooltip = computed(() =>
   [...active.value.values()]
-    .map((j) => `${j.source_name || "all"} (${j.kind})`)
+    .map((j) => `${j.source_ids || "all"} (${j.kind})`)
     .join(", "),
 );
 

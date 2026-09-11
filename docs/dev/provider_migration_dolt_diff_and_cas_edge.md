@@ -145,7 +145,7 @@ Missing file → cold start → render everything.
 API (see `datalib/backend/etl/src/render_cursor.rs`):
 
 ```rust
-pub fn cursor_path(out_dir: &Path, provider: &str, source_name: &str) -> PathBuf;
+pub fn cursor_path(out_dir: &Path, provider: &str, source_id: &str) -> PathBuf;
 pub fn read(path: &Path) -> Result<Option<RenderCursor>>;
 pub fn write(path: &Path, hash: &str, scan_elapsed: Option<Duration>) -> Result<()>;
 ```
@@ -404,7 +404,7 @@ commit map roughly to:
 
 ### Phase 4: render — `render`
 
-1. `render_all(parsed, out_dir, source_name, progress,
+1. `render_all(parsed, out_dir, source_id, progress,
    on_doc_complete)` is fully sync — `BlobBundle::materialize_to_dir`
    on the bucket's pre-loaded bytes, no `Arc<dyn BlobReader>`.
 
@@ -419,7 +419,7 @@ commit map roughly to:
 
    ```rust
    if let Some(head) = parsed.scan.new_head.as_deref() {
-       let cursor_path = render_cursor::cursor_path(out_dir, "<provider>", source_name);
+       let cursor_path = render_cursor::cursor_path(out_dir, "<provider>", source_id);
        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)?;
    }
    ```

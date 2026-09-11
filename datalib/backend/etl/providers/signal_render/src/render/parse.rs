@@ -137,14 +137,14 @@ pub fn parse_raw_dir(input: &Path) -> Result<ParsedSignal> {
 pub fn parse(
     input: &Path,
     period: Period,
-    source_name: &str,
+    source_id: &str,
     last_render_hash: Option<&str>,
 ) -> Result<ParsedSignal> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(input);
     if !db_path.is_file() {
         return Ok(ParsedSignal::default());
     }
-    let _ = source_name; // currently unused; keep param for symmetry with whatsapp
+    let _ = source_id; // currently unused; keep param for symmetry with whatsapp
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
             .block_on(async move { parse_async(&db_path, period, last_render_hash).await })

@@ -30,18 +30,18 @@ pub static YOLINK_UUID_NS: Lazy<Uuid> = Lazy::new(|| {
 /// The page's `markdown_uuid`. Derived from the stanza name, not from
 /// anything upstream: there is exactly one page per stanza, and it must
 /// keep its identity across every re-render.
-pub fn document_uuid(source_name: &str) -> String {
+pub fn document_uuid(source_id: &str) -> String {
     Uuid::new_v5(
         &YOLINK_UUID_NS,
-        format!("yolink:{source_name}:timeseries").as_bytes(),
+        format!("yolink:{source_id}:timeseries").as_bytes(),
     )
     .to_string()
 }
 
-pub fn device_uuid(source_name: &str, device: &str) -> String {
+pub fn device_uuid(source_id: &str, device: &str) -> String {
     Uuid::new_v5(
         &YOLINK_UUID_NS,
-        format!("yolink:{source_name}:device:{device}").as_bytes(),
+        format!("yolink:{source_id}:device:{device}").as_bytes(),
     )
     .to_string()
 }
@@ -62,11 +62,11 @@ pub struct RenderSummary {
 pub fn render_all(
     parsed: &ParsedYolink,
     root: &Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let page_dir = datalib_etl::layout::render_markdown_root(root, source_name);
+    let page_dir = datalib_etl::layout::render_markdown_root(root, source_id);
     let plots_dir = page_dir.join("plots");
     fs::create_dir_all(&plots_dir).with_context(|| format!("mkdir -p {}", plots_dir.display()))?;
 
@@ -91,9 +91,9 @@ pub fn render_all(
         progress.inc(1);
     }
 
-    let m_uuid = document_uuid(source_name);
+    let m_uuid = document_uuid(source_id);
     let fingerprint = compute_fingerprint(parsed);
-    let body = render_markdown(parsed, source_name, &m_uuid, &fingerprint, &rendered_plots);
+    let body = render_markdown(parsed, source_id, &m_uuid, &fingerprint, &rendered_plots);
 
     let md_path = page_dir.join("index.md");
     fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
@@ -104,11 +104,11 @@ pub fn render_all(
         .to_string_lossy()
         .into_owned();
     let mut problems: Vec<RenderProblemRow> = Vec::new();
-    let rows = build_grid_rows(parsed, source_name, &m_uuid, &md_rel, &mut problems);
+    let rows = build_grid_rows(parsed, source_id, &m_uuid, &md_rel, &mut problems);
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
-        source_name: source_name.to_string(),
+        source_id: source_id.to_string(),
         source_fingerprint: fingerprint,
         upstream_cursor: parsed.head.clone(),
         md_path,
@@ -124,13 +124,13 @@ pub fn render_all(
     // the next run re-render, which is the harmless direction. Writing a
     // placeholder would make it skip forever.
     if let Some(head) = parsed.head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(root, source_name);
+        let cursor_path = render_cursor::cursor_path(root, source_id);
         render_cursor::write(&cursor_path, head, &cursor_params())
             .with_context(|| format!("write yolink render cursor {}", cursor_path.display()))?;
     } else {
         tracing::warn!(
             event = "yolink_render_no_head",
-            source = source_name,
+            source = source_id,
             "dolt_log() returned no HEAD; leaving the render cursor unwritten \
              (next run will re-render)"
         );
@@ -243,7 +243,7 @@ fn compute_fingerprint(parsed: &ParsedYolink) -> String {
 
 fn render_markdown(
     parsed: &ParsedYolink,
-    source_name: &str,
+    source_id: &str,
     m_uuid: &str,
     fingerprint: &str,
     plots: &[(&Quantity, PlotFacts)],
@@ -254,9 +254,9 @@ fn render_markdown(
     out.push_str("---\n");
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
     let _ = writeln!(out, "source_fingerprint: {fingerprint}");
-    let _ = writeln!(out, "source_name: {source_name}");
+    let _ = writeln!(out, "source_id: {source_id}");
     out.push_str("provider: yolink\n");
-    let _ = writeln!(out, "title: {}", yaml_safe(&page_title(source_name)));
+    let _ = writeln!(out, "title: {}", yaml_safe(&page_title(source_id)));
     if let Some(ts) = &when_ts {
         let _ = writeln!(out, "when_ts: {}", yaml_safe(ts));
     }
@@ -265,7 +265,7 @@ fn render_markdown(
     out.push_str(
         &Title {
             suffix: None,
-            text: &page_title(source_name),
+            text: &page_title(source_id),
             markdown_uuid: Some(m_uuid),
             source_url: None,
         }
@@ -290,7 +290,7 @@ fn render_markdown(
     );
 
     render_plot_sections(&mut out, plots);
-    render_device_sections(&mut out, parsed, source_name);
+    render_device_sections(&mut out, parsed, source_id);
     render_store_section(&mut out, parsed);
     out
 }
@@ -335,7 +335,7 @@ fn render_plot_sections(out: &mut String, plots: &[(&Quantity, PlotFacts)]) {
     }
 }
 
-fn render_device_sections(out: &mut String, parsed: &ParsedYolink, source_name: &str) {
+fn render_device_sections(out: &mut String, parsed: &ParsedYolink, source_id: &str) {
     out.push_str("## Devices\n\n");
     if parsed.devices.is_empty() {
         out.push_str("*(no devices configured)*\n\n");
@@ -351,7 +351,7 @@ fn render_device_sections(out: &mut String, parsed: &ParsedYolink, source_name: 
 
     let by_device = parsed.series_by_device();
     for (idx, dev) in parsed.devices.iter().enumerate() {
-        let uuid = device_uuid(source_name, &dev.name);
+        let uuid = device_uuid(source_id, &dev.name);
         let _ = writeln!(
             out,
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--yolink\">\n"
@@ -475,12 +475,12 @@ fn render_store_section(out: &mut String, parsed: &ParsedYolink) {
 /// `GridRowBuilder::build_or_record`.
 fn build_grid_rows(
     parsed: &ParsedYolink,
-    source_name: &str,
+    source_id: &str,
     m_uuid: &str,
     md_rel: &str,
     problems: &mut Vec<RenderProblemRow>,
 ) -> Vec<GridRow> {
-    let title = page_title(source_name);
+    let title = page_title(source_id);
     let by_device = parsed.series_by_device();
 
     let mut doc_text = format!(
@@ -505,12 +505,12 @@ fn build_grid_rows(
         .text(doc_text)
         .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(m_uuid.to_string()))
-        .build_or_record(source_name, m_uuid, RENDER_VERSION, problems)
+        .build_or_record(source_id, m_uuid, RENDER_VERSION, problems)
         .into_iter()
         .collect();
 
     for (idx, dev) in parsed.devices.iter().enumerate() {
-        let uuid = device_uuid(source_name, &dev.name);
+        let uuid = device_uuid(source_id, &dev.name);
         let series = by_device.get(dev.name.as_str());
         let mut text = format!("{} ({})", dev.name, dev.kind);
         if let Some(list) = series {
@@ -541,7 +541,7 @@ fn build_grid_rows(
                 .upstream_id(Some(dev.kind.clone()))
                 .upstream_entity_kind(Some("device".to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
-                .build_or_record(source_name, m_uuid, RENDER_VERSION, problems),
+                .build_or_record(source_id, m_uuid, RENDER_VERSION, problems),
         );
     }
     rows
@@ -549,8 +549,8 @@ fn build_grid_rows(
 
 // ---------------------------------------------------------------- helpers
 
-fn page_title(source_name: &str) -> String {
-    format!("YoLink sensors — {source_name}")
+fn page_title(source_id: &str) -> String {
+    format!("YoLink sensors — {source_id}")
 }
 
 fn iso(ms: i64) -> Option<String> {
@@ -623,8 +623,8 @@ fn yaml_safe(s: &str) -> String {
     }
 }
 
-pub fn output_paths(root: &Path, source_name: &str) -> (PathBuf, PathBuf) {
-    let dir = datalib_etl::layout::render_markdown_root(root, source_name);
+pub fn output_paths(root: &Path, source_id: &str) -> (PathBuf, PathBuf) {
+    let dir = datalib_etl::layout::render_markdown_root(root, source_id);
     (dir.join("index.md"), dir.join("plots"))
 }
 

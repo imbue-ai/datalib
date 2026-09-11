@@ -33,14 +33,18 @@ pub struct SearchRow {
     pub entire_chat: String,
     /// The provider's human label ("Slack", "Claude") — a property of
     /// the source *type*, not of the configured source. Two Slack
-    /// workspaces both say "Slack" here; `source_name` is what tells
-    /// them apart.
+    /// workspaces both say "Slack" here; `source_id` is what tells them
+    /// apart.
     pub source: String,
-    /// The configured source this row came from: the first path segment
-    /// of the row's `qmd_path`, which is the stanza directory under the
-    /// data root and the name the config gives it (`slack/raw` →
+    /// The **id** of the configured source this row came from: the
+    /// first path segment of the row's `qmd_path`, which is the group's
+    /// directory under the data root (`slack/render_markdown/…` →
     /// `slack`). Empty when the row carries no `qmd_path`.
-    pub source_name: String,
+    ///
+    /// Never the group's display name. The grid's "Source" column shows
+    /// the name, resolved client-side from the config; this is what it
+    /// resolves *from*, and what a `source_id:` filter matches.
+    pub source_id: String,
     pub kind: String,
     pub author: String,
     /// Slack channel display name for Slack rows; empty otherwise.

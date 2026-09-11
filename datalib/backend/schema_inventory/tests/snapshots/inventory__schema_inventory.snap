@@ -1322,7 +1322,7 @@ grid_rows
     item_count
 markdowns
     markdown_uuid
-    source_name
+    source_id
     provider
     kind
     title
@@ -1338,7 +1338,7 @@ render_problems
     uuid
     scope_key
     scope_kind
-    source_name
+    source_id
     stage
     outcome
     problems
@@ -1346,7 +1346,7 @@ render_problems
     last_seen_at
     render_version
 source_cursors
-    source_name
+    source_id
     store_commit
     indexed_at
     documents_applied
@@ -1374,7 +1374,7 @@ feedback
     notes
 sync_jobs
     id
-    source_name
+    source_ids
     kind
     parent_job_id
     state

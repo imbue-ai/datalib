@@ -1,7 +1,5 @@
-//! Download (ingest) side of the `lightroom` source.
-
-pub mod mirror;
-pub mod plan;
+//! Download (ingest) side of the `lightroom` source: the shared
+//! SQLite→doltlite mirror engine, pointed at a `.lrcat`.
 
 use std::path::PathBuf;
 
@@ -10,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::progress::Progress;
 
-pub use mirror::{MirrorOptions, MirrorStats};
+pub use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 
 /// Everything one ingest run needs. Mirrors the shape of the other
 /// providers' `FetchOptions`.

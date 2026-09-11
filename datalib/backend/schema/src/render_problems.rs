@@ -219,9 +219,10 @@ pub struct RenderProblemRow {
     /// `scope_key` is.
     #[col(sql = "VARCHAR(16)")]
     pub scope_kind: String,
-    /// The source that produced this, matching `markdowns.source_name`.
+    /// The id of the source that produced this, matching
+    /// `markdowns.source_id`.
     #[col(sql = "VARCHAR(64)")]
-    pub source_name: String,
+    pub source_id: String,
     /// A [`Stage`], as its `as_str`.
     #[col(sql = "VARCHAR(16)")]
     pub stage: String,

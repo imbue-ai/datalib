@@ -1,12 +1,12 @@
 # Setup every bazel job in this repo needs, in one place: point bazel at the
-# BuildBuddy cache and resolve the LIBCLANG_PATH the image's bindgen actions
-# want. Both `test.yml` jobs use it; `release.yml`'s matrix legs do their own
-# thing because they run on bare runners rather than in the devcontainer.
+# BuildBuddy cache. Both `test.yml` jobs use it; `release.yml`'s matrix legs
+# do their own thing because they run on bare runners rather than in the
+# devcontainer.
 #
 # Callers must run `actions/checkout` first — a local composite action is
 # loaded from the checked-out workspace, so it cannot check itself out.
 name: Prepare bazel environment
-description: Configure the BuildBuddy remote cache and resolve LIBCLANG_PATH.
+description: Configure the BuildBuddy remote cache.
 
 inputs:
   buildbuddy-api-key:
@@ -16,11 +16,6 @@ inputs:
       bazel runs everything locally.
     required: false
     default: ""
-
-outputs:
-  libclang-path:
-    description: Directory holding libclang, for --action_env=LIBCLANG_PATH.
-    value: ${{ steps.libclang.outputs.path }}
 
 runs:
   using: composite
@@ -47,35 +42,6 @@ runs:
         else
             echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
         fi
-
-    # Standing CI accommodation, NOT a republish bridge — this looked like
-    # one for a while, so: the devcontainer image does bake both
-    # `--action_env` and `--host_action_env=LIBCLANG_PATH` into
-    # `/root/.bazelrc` (verified against `:latest`). Bazel never reads that
-    # file here, because bazel's user rc is `$HOME/.bazelrc` and GitHub
-    # forces `HOME=/github/home` for container jobs, where no rc exists.
-    # So the values have to reach bazel on the command line regardless of
-    # how recently the image was republished. Same root cause as the qmd
-    # model mount in `test.yml`.
-    #
-    # Both configs need it: only `--host_action_env` reaches exec-config
-    # (`[for tool]`) bindgen actions — boring-sys2 was one, pulled in when
-    # an exec-config tool needed the HTTP stack — and only `--action_env`
-    # reaches target-config ones. Computing the path from `llvm-config`
-    # (the same source the image uses) keeps CI correct whichever image
-    # `:latest` points at. Mirrors `release.yml`'s `bazelargs` step.
-    - name: Resolve LIBCLANG_PATH
-      id: libclang
-      shell: bash
-      run: |
-        set -euo pipefail
-        libdir="$(llvm-config --libdir)"
-        if [[ -z "${libdir}" || ! -d "${libdir}" ]]; then
-            echo "ERROR: llvm-config --libdir returned '${libdir}' (not a dir)." >&2
-            exit 1
-        fi
-        echo "path=${libdir}" >> "${GITHUB_OUTPUT}"
-        echo "Resolved LIBCLANG_PATH=${libdir}"
 
     - name: Show toolchain versions
       shell: bash

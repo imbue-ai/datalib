@@ -56,13 +56,13 @@ fn profile() -> RenderProfile {
 pub fn render_all(
     parsed: &ParsedChatGPTApi,
     root: &std::path::Path,
-    source_name: &str,
+    source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
-        source = source_name,
+        source = source_id,
         scan_elapsed_ms = elapsed_ms,
         changed_conversations = parsed
             .scan
@@ -89,7 +89,7 @@ pub fn render_all(
         &profile(),
         &chats,
         root,
-        source_name,
+        source_id,
         &blobs_by_chat,
         progress,
         &no_priors,
@@ -98,7 +98,7 @@ pub fn render_all(
     .context("chatgpt chat-common render")?;
 
     if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(root, source_name);
+        let cursor_path = render_cursor::cursor_path(root, source_id);
         render_cursor::write(&cursor_path, head, &render_cursor::no_params())
             .with_context(|| format!("write chatgpt render cursor {}", cursor_path.display()))?;
     }

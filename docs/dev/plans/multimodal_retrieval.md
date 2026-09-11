@@ -58,7 +58,7 @@ Every friction point traces back to its origin as a personal-notes tool:
 | QMD assumption | Why it fails here |
 |---|---|
 | Documents are files on disk; the only indexing entry point is `update()`, which scans the filesystem | Forecloses ever *not* materializing markdown (§4.5), and forces 250k emails to exist as files before they can be indexed |
-| Filtering is collection-scoped | One collection per source now buys us `source_name:`; anything else — an author, a date range — is still unexpressible |
+| Filtering is collection-scoped | One collection per source now buys us `source_id:`; anything else — an author, a date range — is still unexpressible |
 | One global `vectors_vec` table keyed `hash_seq` | Cannot hold two vector spaces |
 | `vec0` is brute-force with no ANN index | Every query scans the full float32 corpus |
 | Stores the document body twice internally (§4.2) | 2.2× the source text before a single posting is written |
@@ -181,7 +181,7 @@ producing false-empty results even though each collection matched on its
 own. Any selective filter applied after retrieval hits the same wall.
 
 Datalib had exactly that bug until per-source collections landed: one
-`mirror` collection held every source, so `source_name:x <text>` asked
+`mirror` collection held every source, so `source_id:x <text>` asked
 qmd for a global top-N and *then* filtered it in SQL. The fix — one
 collection per group, pushed down as qmd's `collections` argument — is
 the coarse-shard version of this section, and it is only that. A
@@ -615,7 +615,7 @@ those never need to run on a user's machine. Resolve before M3.
 Extend the existing grammar rather than inventing a second one.
 `GET /applet/unified_index/search` already implements a Gmail-flavored
 language: `field:value`, `-field:value`, quoted values, with `source:`,
-`source_name:`, `kind:`, `channel:`, `author:`, `account:`, `project:`,
+`source_id:`, `kind:`, `channel:`, `author:`, `account:`, `project:`,
 `before:`/`after:`, `convo:`.
 
 Field terms compile to the `grid_rows` prefilter; free text goes to the

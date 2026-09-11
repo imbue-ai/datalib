@@ -63,8 +63,8 @@ job pointing at
 A dedicated job to run the suite early was tried and removed. It is not
 worth its own bazel invocation: a second invocation only shares the
 remote cache if its configuration matches the gate's exactly (`-c opt
---config=release --config=ci`, `--action_env=LIBCLANG_PATH=…`, the qmd
-mount pair), and one that does match is redundant with the gate the
+--config=release --config=ci`, the qmd mount pair), and one that does
+match is redundant with the gate the
 moment e2e rejoins it. The version that did not match rebuilt 2664
 actions with zero cache hits, took 999s against the gate's 143s, and
 then failed building `boring-sys2` for want of `LIBCLANG_PATH`.

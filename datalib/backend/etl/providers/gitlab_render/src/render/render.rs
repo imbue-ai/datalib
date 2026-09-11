@@ -310,7 +310,7 @@ pub fn render_gitlab(
         let rows = rows_for_mr(stanza, mr, &notes, &mut problems);
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: mr.uuid.clone(),
-            source_name: String::new(),
+            source_id: String::new(),
             source_fingerprint: fingerprint,
             upstream_cursor: None,
             md_path: md_path.clone(),

@@ -133,7 +133,7 @@ impl AppRepo for AppStore {
         only_active: bool,
         limit: usize,
     ) -> Result<Vec<SyncJobRow>, RepoError> {
-        let base = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
+        let base = "SELECT id, source_ids, kind, parent_job_id, state, created_at, \
                            started_at, finished_at, error, pid, progress_pct, progress_msg \
                     FROM sync_jobs";
         let sql = if only_active {
@@ -166,7 +166,7 @@ impl AppRepo for AppStore {
         Ok(out)
     }
     async fn get_job(&self, job_id: &str) -> Result<Option<SyncJobRow>, RepoError> {
-        let sql = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
+        let sql = "SELECT id, source_ids, kind, parent_job_id, state, created_at, \
                           started_at, finished_at, error, pid, progress_pct, progress_msg \
                    FROM sync_jobs WHERE id = ? LIMIT 1";
         let row = sqlx::query(sql)
@@ -179,13 +179,13 @@ impl AppRepo for AppStore {
     async fn enqueue_job(
         &self,
         kind: JobKind,
-        source_name: Option<&str>,
+        source_ids: Option<&str>,
     ) -> Result<SyncJobRow, RepoError> {
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let row = SyncJobRow {
             id: id.clone(),
-            source_name: source_name.map(|s| s.to_string()),
+            source_ids: source_ids.map(|s| s.to_string()),
             kind: kind.as_str().to_string(),
             parent_job_id: None,
             state: JobState::Pending.as_str().to_string(),
@@ -204,12 +204,12 @@ impl AppRepo for AppStore {
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
         sqlx::query(
             "INSERT INTO sync_jobs \
-             (id, source_name, kind, parent_job_id, state, created_at, \
+             (id, source_ids, kind, parent_job_id, state, created_at, \
               started_at, finished_at, error, pid, progress_pct, progress_msg) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
-        .bind(&row.source_name)
+        .bind(&row.source_ids)
         .bind(&row.kind)
         .bind(&row.parent_job_id)
         .bind(&row.state)
@@ -280,7 +280,7 @@ impl AppRepo for AppStore {
         .map_err(|e| RepoError::Internal(format!("claim update: {e}")))?;
         // No DOLT_COMMIT — see the note in `enqueue_job`.
         // Re-read so the caller gets the row exactly as persisted.
-        let sql = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
+        let sql = "SELECT id, source_ids, kind, parent_job_id, state, created_at, \
                           started_at, finished_at, error, pid, progress_pct, progress_msg \
                    FROM sync_jobs WHERE id = ? LIMIT 1";
         let row = sqlx::query(sql)
@@ -435,7 +435,7 @@ async fn probe_dolt_extensions(pool: &SqlitePool) -> bool {
 fn row_to_sync_job(r: &sqlx::sqlite::SqliteRow) -> SyncJobRow {
     SyncJobRow {
         id: r.try_get("id").unwrap_or_default(),
-        source_name: r.try_get("source_name").ok(),
+        source_ids: r.try_get("source_ids").ok(),
         kind: r.try_get("kind").unwrap_or_default(),
         parent_job_id: r.try_get("parent_job_id").ok(),
         state: r.try_get("state").unwrap_or_default(),

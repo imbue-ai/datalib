@@ -26,8 +26,8 @@ const BATCH_SIZE: usize = 2_000;
 
 pub struct FetchOptions {
     pub db: RawDb,
-    /// Source name from config, used as the `pdf_scan_meta` key.
-    pub source_name: String,
+    /// The source's id, used as the `pdf_scan_meta` key.
+    pub source_id: String,
     /// Tree to scan.
     pub root: PathBuf,
     pub ignore: Vec<String>,
@@ -76,7 +76,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // render step able to find the tree.
     opts.db
         .write_scan_meta(&PdfScanMetaRow {
-            id: opts.source_name.clone(),
+            id: opts.source_id.clone(),
             abs_root: opts.root.to_string_lossy().to_string(),
             scanned_at: opts.now.clone(),
         })

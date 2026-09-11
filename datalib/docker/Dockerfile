@@ -38,8 +38,8 @@
 # so everything below (apt + Node + latchkey + qmd models +
 # bind-mount dirs) is carried into the devcontainer for free
 # — no Dockerfile mirroring, no double download. The devcontainer
-# just adds the Bazel build toolchain (clang/cmake/llvm/lld/bun/
-# bazelisk + the `ubuntu` non-root user) on top. When this Dockerfile
+# just adds the Bazel build toolchain (cmake/lld/bun/bazelisk + the
+# `ubuntu` non-root user) on top. When this Dockerfile
 # changes in a way the devcontainer should pick up, bump the
 # `PROD_IMAGE_TAG` ARG in `.devcontainer/Dockerfile` to the next
 # published tag.

@@ -129,15 +129,15 @@ probe goes — and where the macOS permission check below wants to live
 too, since both are "look at the path now, in this process, rather than
 during a sync days later".
 
-## Open: what the picker buys us in macOS permissions
+## What the picker buys us in macOS permissions
 
-**Unresolved, worth following up.** On macOS, choosing a path in the
-standard open panel normally grants the app access to it — which would
-make the picker a permissions fix as well as a typo fix. Whether we
-actually get that benefit here is not established, and nothing in this
-repo has ever mentioned macOS file permissions.
+On macOS, choosing a path in the standard open panel grants the app
+access to it, and — measured on 2026-09-11 — that grant reaches the
+processes that do the reading. So the picker is a permissions fix as
+well as a typo fix, and for one source it is the *only* way in short of
+Full Disk Access.
 
-What *is* established, by reading the tree:
+What is established by reading the tree:
 
 - **The app is not sandboxed.** No `.entitlements` file exists;
   `build-signed-app.sh` signs with Developer ID and `--options runtime`
@@ -150,9 +150,11 @@ What *is* established, by reading the tree:
   bookmarks here**; they are the answer to a question this app does not
   ask.
 - **TCC still applies.** Even unsandboxed, macOS gates `~/Desktop`,
-  `~/Documents`, `~/Downloads`, iCloud Drive, and removable/network
-  volumes. Phone backups land in exactly those places, so this is a
-  live case: typing `~/Documents/WhatsApp` into the field can earn an
+  `~/Documents`, `~/Downloads`, iCloud Drive, removable/network
+  volumes, and a short list of application data stores — the one that
+  matters here is `~/Pictures/Photos Library.photoslibrary`, which the
+  `apple_photos` source reads. Phone backups land in the first group,
+  so typing `~/Documents/WhatsApp` into the field can earn an
   "Operation not permitted" that choosing the same folder would not.
 - **The picking process is not the reading process.** The panel opens
   in the shell; the file is opened four processes down and much later:
@@ -160,30 +162,33 @@ What *is* established, by reading the tree:
   → `datalib-dag` (`http/src/worker.rs`) → `datalib-step`
   (`dag/src/subprocess.rs`), when a sync is queued rather than when the
   folder is chosen. TCC attributes a child to its responsible process,
-  normally the app, so an in-app sync plausibly inherits the grant —
-  but the same `config.toml` is explicitly meant to run outside the app
-  too (`datalib-dag <config>` from a terminal, `datalib-http`
-  standalone), where the responsible process is the terminal and the
-  app's consent is irrelevant.
+  normally the app.
 
-Weak evidence that the inheritance does work: `~/Documents/Datalib` is
-the default new data root, and `datalib-http` reads and writes it as a
-spawned child today.
+What was measured, against the Photos library — the most locked-down
+path any source here reads. The experiment used `osascript` under an
+app with no Full Disk Access (a shell spawned by it got `Operation not
+permitted` on a plain `ls` of the bundle beforehand), so the app under
+test was in Datalib.app's position:
 
-**What has not been tested is the part that matters** — whether a grant
-from the panel survives four levels of spawn and a deferred sync. The
-tree cannot answer it; it needs a run against a folder in a protected
-location, watching whether the step fails and whether the prompt names
-Datalib.
+| step | result |
+|---|---|
+| a *folder* chooser | cannot select the bundle: the panel shows a `.photoslibrary` package as a file, so the nearest pick is `~/Pictures/` |
+| a *file* chooser, picking the bundle, then `ls database/` from a **child** of the panel process | reads it |
+| `ls database/` from an unrelated process of the same app, one that never showed a panel | reads it — the grant is recorded against the app, not the process that showed the panel |
 
-The likely fix if it doesn't hold is not exotic: **`readdir` the chosen
-path in the shell process, right after picking**, and say so
-immediately when it fails. That turns a deferred, cryptic sync failure
-into a sentence at the moment of choosing — and it is the same hook the
-design already wants for the `inspect` probe ("4,182 PDFs, 3.1 GB, 96
-need OCR"), so the two should land together. A Full Disk Access
-instruction is the fallback for anyone whose backups sit somewhere the
-panel cannot cover.
+Two consequences for a descriptor whose path is a macOS package: it
+must say `picks: "file"`, and the grant it earns does carry down the
+spawn chain above. What is **not** measured is whether the grant
+survives quitting and relaunching the app; the TCC database that would
+say so is itself protected. Until it is, the wizard's help text for
+such a source names Full Disk Access as the durable fallback, and the
+right place to notice a lapse is the `inspect` probe: **`readdir` the
+chosen path in the shell process, right after picking**, and say so
+immediately when it fails, rather than during a sync days later.
+
+None of this reaches the CLI. `datalib-dag <config>` from a terminal is
+attributed to the terminal, which has its own grants or prompts for
+them; the app's consent is irrelevant there.
 
 ## Corrections this doc made
 
