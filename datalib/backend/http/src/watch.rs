@@ -205,7 +205,6 @@ mod tests {
             "system/jobs.doltlite_db",
             "system/feedback.doltlite_db",
             "system/api-token",
-            "system/job-logs/abc.log",
             "slack/raw/blobs.doltlite_db",
             "config.yaml",
         ] {

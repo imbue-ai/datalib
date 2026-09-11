@@ -1509,9 +1509,10 @@ Two rules for the boundary:
 
 - **`parse` returns `Option`, never a guess.** A store written by a
   newer build, or a third-party step, can name a value this binary does
-  not have. The caller decides what that means — see `TaskState::for_run_state`,
-  which maps an unknown status to `Failed` *deliberately*, with a
-  sentence saying why.
+  not have. The caller decides what that means — the Manage screen
+  shows a status word it does not know as the bare word, deliberately,
+  rather than drawing nothing (`Manager2View.vue`'s Status renderer
+  says why).
 - **Add a test that strum and serde agree** when a type derives both.
   They are independent derives producing independent strings, so the
   agreement is a real check, not a tautology. One `#[test]` over
@@ -1552,7 +1553,6 @@ One enum per vocabulary, living with whoever mints it:
 | why a step failed | `FailureKind` | `dag/src/step.rs` |
 | what the run store itself names | `LiveState` | `runs/src/lib.rs` |
 | a sync job's lifecycle | `JobState`, `JobKind` | `app_schema/src/sync_jobs.rs` |
-| a task board row | `TaskState` | `http/src/worker.rs` |
 | a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what render could not do | `Outcome`, `Reason`, `ScopeKind`, `Stage` | `schema/src/render_problems.rs` |
@@ -1560,7 +1560,7 @@ One enum per vocabulary, living with whoever mints it:
 | whether an ingest method reaches a live service or reads files on disk | `Reach` | `source_common/src/lib.rs`, declared per method by each `<p>_config` crate |
 
 The TypeScript side mirrors these as string-literal unions in
-`datalib/ui/src/api.ts` (`DagRunState`, `SyncTaskState`, `SyncJobState`,
+`datalib/ui/src/api.ts` (`DagRunState`, `SyncJobState`,
 `ConnectState`). They are hand-kept in step with the Rust — there is no
 generator — so change both halves together.
 

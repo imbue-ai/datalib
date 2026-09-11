@@ -184,7 +184,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/jobs/all", get(sync_jobs_all))
         .route("/api/sync/jobs/{id}", get(sync_job_get))
         .route("/api/sync/jobs/{id}/cancel", post(sync_job_cancel))
-        .route("/api/sync/jobs/{id}/log", get(sync_job_log))
+        .route("/api/runs", get(runs_list))
+        .route("/api/runs/{run}/steps", get(run_steps))
+        .route("/api/runs/{run}/log", get(run_log))
         .route("/api/sync/stream", get(sync_stream))
         .route("/api/frontend", get(get_frontend))
         // Component code, addressed by content. Flat across every
@@ -974,12 +976,49 @@ pub struct DagStepProgress {
     /// the two the runner derives for a step that reports the simple
     /// `progress_length` / `progress_inc` form.
     pub metrics: std::collections::BTreeMap<String, i64>,
+    /// `warn` and `error` log lines so far this run.
+    pub errors: i64,
     pub updated_at: String,
+}
+
+/// A run's per-step numbers, keyed by step, from a store snapshot.
+fn progress_by_step(
+    snap: &datalib_runs::Snapshot,
+) -> std::collections::HashMap<String, DagStepProgress> {
+    let mut by_step: std::collections::HashMap<String, DagStepProgress> = snap
+        .steps
+        .iter()
+        .map(|p| {
+            (
+                p.step.clone(),
+                DagStepProgress {
+                    msg: p.msg.clone(),
+                    metrics: Default::default(),
+                    errors: snap.errors.get(&p.step).copied().unwrap_or(0),
+                    updated_at: p.updated_at.clone(),
+                },
+            )
+        })
+        .collect();
+    for m in &snap.metrics {
+        let key = if m.labels.is_empty() {
+            m.name.clone()
+        } else {
+            format!("{}{{{}}}", m.name, m.labels)
+        };
+        if let Some(p) = by_step.get_mut(&m.step) {
+            p.metrics.insert(key, m.value);
+        }
+    }
+    by_step
 }
 
 /// A step's last outcome, mirroring `datalib_dag::state::LastRun`.
 #[derive(Debug, Serialize)]
 pub struct DagStepRun {
+    /// The run it happened in — what to pass to `/api/runs/{run}/log`
+    /// for its log. Empty for a record written before runs had ids.
+    pub run_id: String,
     pub started_at: String,
     pub finished_at: Option<String>,
     pub status: String,
@@ -1042,33 +1081,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
     // steps is worse than showing none at all.
     let store = datalib_runs::snapshot(&s.root).await;
     let progress: std::collections::HashMap<String, DagStepProgress> = match (&run, &store.run_id) {
-        (Some(r), Some(store_run)) if &r.run_id == store_run => {
-            let mut by_step: std::collections::HashMap<String, DagStepProgress> = store
-                .steps
-                .into_iter()
-                .map(|p| {
-                    (
-                        p.step,
-                        DagStepProgress {
-                            msg: p.msg,
-                            metrics: Default::default(),
-                            updated_at: p.updated_at,
-                        },
-                    )
-                })
-                .collect();
-            for m in store.metrics {
-                let key = if m.labels.is_empty() {
-                    m.name
-                } else {
-                    format!("{}{{{}}}", m.name, m.labels)
-                };
-                if let Some(p) = by_step.get_mut(&m.step) {
-                    p.metrics.insert(key, m.value);
-                }
-            }
-            by_step
-        }
+        (Some(r), Some(store_run)) if &r.run_id == store_run => progress_by_step(&store),
         _ => Default::default(),
     };
 
@@ -1118,6 +1131,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                         // step for real.
                         .filter(|r| r.status != "not_selected")
                         .map(|r| DagStepRun {
+                            run_id: r.run_id.clone(),
                             started_at: r.started_at.clone(),
                             finished_at: r.finished_at.clone(),
                             status: r.status.clone(),
@@ -1128,6 +1142,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                     progress: progress.get(&sp.id).map(|p| DagStepProgress {
                         msg: p.msg.clone(),
                         metrics: p.metrics.clone(),
+                        errors: p.errors,
                         updated_at: p.updated_at.clone(),
                     }),
                 }
@@ -1304,9 +1319,7 @@ async fn sync_enqueue(
         kind: row.kind.clone(),
         source_ids: row.source_ids.clone(),
         state: row.job_state().unwrap_or(JobState::Pending),
-        progress_pct: row.progress_pct,
         progress_msg: row.progress_msg.clone(),
-        tasks: None,
     });
     Ok(Json(row))
 }
@@ -1365,47 +1378,160 @@ async fn sync_job_cancel(
         kind: String::new(),
         source_ids: None,
         state: JobState::Canceled,
-        progress_pct: None,
         progress_msg: None,
-        tasks: None,
     });
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Tail the per-job log written by the worker at
-/// `<root>/system/job-logs/{id}.log`.
-/// 404 when the file doesn't exist yet — the UI polls `/jobs/{id}` for state
-/// and only follows the log link once it appears.
-async fn sync_job_log(
+#[derive(Debug, Deserialize)]
+struct RunsParams {
+    /// Only runs this step took part in.
+    #[serde(default)]
+    step: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// `GET /api/runs` — recent runs from `system/runs.sqlite`, newest first.
+async fn runs_list(State(s): State<AppState>, Query(p): Query<RunsParams>) -> Json<Vec<RunInfo>> {
+    let limit = p.limit.unwrap_or(50).clamp(1, 1000);
+    Json(
+        datalib_runs::runs(&s.root, p.step.as_deref(), limit)
+            .await
+            .into_iter()
+            .map(|r| RunInfo {
+                run_id: r.run_id,
+                started_at: r.started_at,
+                finished_at: r.finished_at,
+            })
+            .collect(),
+    )
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunInfo {
+    pub run_id: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
+/// One step in one run: its state and what it reported.
+#[derive(Debug, Serialize)]
+pub struct RunStepInfo {
+    pub step: String,
+    pub state: String,
+    pub attempt: u32,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub error: Option<String>,
+    pub progress: DagStepProgress,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunStepsResponse {
+    pub run: Option<RunInfo>,
+    pub steps: Vec<RunStepInfo>,
+}
+
+/// `GET /api/runs/{run}/steps` — every step's state and numbers for one
+/// run, past or in flight. `run: null` for a run the store does not have.
+async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<RunStepsResponse> {
+    let snap = datalib_runs::snapshot_of(&s.root, Some(&run)).await;
+    let Some(run_id) = snap.run_id.clone() else {
+        return Json(RunStepsResponse {
+            run: None,
+            steps: Vec::new(),
+        });
+    };
+    let mut progress = progress_by_step(&snap);
+    let steps = snap
+        .steps
+        .iter()
+        .map(|st| RunStepInfo {
+            step: st.step.clone(),
+            state: st.state.clone(),
+            attempt: st.attempt,
+            started_at: st.started_at.clone(),
+            finished_at: st.finished_at.clone(),
+            error: st.error.clone(),
+            progress: progress.remove(&st.step).unwrap_or(DagStepProgress {
+                msg: None,
+                metrics: Default::default(),
+                errors: 0,
+                updated_at: st.updated_at.clone(),
+            }),
+        })
+        .collect();
+    Json(RunStepsResponse {
+        run: Some(RunInfo {
+            run_id,
+            started_at: snap.started_at.unwrap_or_default(),
+            finished_at: snap.finished_at,
+        }),
+        steps,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct RunLogParams {
+    /// Only this step's lines; omit for the whole run.
+    #[serde(default)]
+    step: Option<String>,
+    /// Only lines after this `seq` — how a client tails: remember the
+    /// last `seq` it saw and ask again on the next `dag_changed` frame.
+    #[serde(default)]
+    after_seq: Option<i64>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// One log line, as `system/runs.sqlite` holds it.
+#[derive(Debug, Serialize)]
+pub struct RunLogLine {
+    pub seq: i64,
+    pub step: Option<String>,
+    pub attempt: u32,
+    pub ts: String,
+    pub stream: Option<String>,
+    pub level: String,
+    pub target: Option<String>,
+    pub thread: Option<String>,
+    pub msg: String,
+    /// A JSON object, as text, when the line carried structured fields.
+    pub fields: Option<String>,
+}
+
+/// `GET /api/runs/{run}/log` — the run's log lines, oldest first.
+async fn run_log(
     State(s): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<
-    (
-        StatusCode,
-        [(axum::http::HeaderName, &'static str); 1],
-        String,
-    ),
-    StatusCode,
-> {
-    // Defensive: reject anything that could traverse outside the logs dir.
-    if id.contains('/') || id.contains('\\') || id.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let path = datalib_core::layout::system_dir(&s.root)
-        .join("job-logs")
-        .join(format!("{id}.log"));
-    match std::fs::read_to_string(&path) {
-        Ok(body) => Ok((
-            StatusCode::OK,
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/plain; charset=utf-8",
-            )],
-            body,
-        )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
+    Path(run): Path<String>,
+    Query(p): Query<RunLogParams>,
+) -> Json<Vec<RunLogLine>> {
+    let limit = p.limit.unwrap_or(2000).clamp(1, 20_000);
+    Json(
+        datalib_runs::log_after(
+            &s.root,
+            &run,
+            p.step.as_deref(),
+            p.after_seq.unwrap_or(0),
+            limit,
+        )
+        .await
+        .into_iter()
+        .map(|l| RunLogLine {
+            seq: l.seq,
+            step: l.step,
+            attempt: l.attempt,
+            ts: l.ts,
+            stream: l.stream,
+            level: l.level,
+            target: l.target,
+            thread: l.thread,
+            msg: l.msg,
+            fields: l.fields,
+        })
+        .collect(),
+    )
 }
 
 fn repo_err_to_status(e: RepoError) -> StatusCode {
