@@ -3,23 +3,25 @@
 
 use anyhow::{Context, Result};
 
-pub async fn run(source_type: &str, params: &serde_json::Value) -> Result<serde_json::Value> {
+use crate::source_type::SourceType;
+
+pub async fn run(source_type: SourceType, params: &serde_json::Value) -> Result<serde_json::Value> {
     match source_type {
-        "email" => {
+        SourceType::Email => {
             let config: datalib_etl_email_config::EmailConfig =
                 serde_json::from_value(params.clone())
                     .context("parse --params as an email download config")?;
             let report = datalib_etl_email::probe::probe(&config).await?;
             Ok(serde_json::to_value(report)?)
         }
-        "claude" => {
+        SourceType::Claude => {
             let config: datalib_etl_claude_config::ClaudeConfig =
                 serde_json::from_value(params.clone())
                     .context("parse --params as a claude download config")?;
             let report = datalib_etl_claude::probe::probe(&config).await?;
             Ok(serde_json::to_value(report)?)
         }
-        "slack" => {
+        SourceType::Slack => {
             let config: datalib_etl_slack_config::SlackConfig =
                 serde_json::from_value(params.clone())
                     .context("parse --params as a slack download config")?;
@@ -27,7 +29,7 @@ pub async fn run(source_type: &str, params: &serde_json::Value) -> Result<serde_
             Ok(serde_json::to_value(report)?)
         }
         other => anyhow::bail!(
-            "no probe for source type {other:?}. Probing means asking a live service what an \
+            "no probe for source type `{other}`. Probing means asking a live service what an \
              account can reach; only `email`, `claude` and `slack` implement it so far."
         ),
     }
@@ -39,6 +41,12 @@ pub async fn run(source_type: &str, params: &serde_json::Value) -> Result<serde_
 #[allow(clippy::disallowed_macros)]
 pub async fn run_cli(source_type: &str, params_flag: Option<&str>) -> ! {
     let report = async {
+        let source_type = SourceType::parse(source_type).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown source type {source_type:?}; known types: {}",
+                SourceType::known_list()
+            )
+        })?;
         let params = crate::source::parse_params(params_flag)?;
         run(source_type, &params).await
     }
