@@ -230,6 +230,23 @@ reference doc it relates to.
 - [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md)
   — the live recipe for porting the remaining providers to CAS blobs +
   incremental render.
+- [`docs/dev/plans/render_inputs.md`](docs/dev/plans/render_inputs.md)
+  — *proposal (2026-09-11)*, nothing built: a `render_inputs` table in
+  each render store recording which raw rows every bucket was rendered
+  from, so "which documents does this changed row reach?" and "which
+  documents are gone?" are both one reverse lookup. Read it before
+  adding a `global_fanout_tables` entry, a `bucket_query`, or another
+  guard around `retain_documents` — it inventories the five guards that
+  exist today and the routes by which a document gets deleted and
+  added back, and says which of those it fixes and which (a checkpoint
+  taken mid-wipe) it cannot.
+  [`deletion_record_audit_2026_09_11.md`](docs/dev/plans/deletion_record_audit_2026_09_11.md)
+  is that proposal's first two conditions checked against the tree —
+  measurement, not intent. Read it before touching `discard_tree`,
+  `_render_cursor.json`, the Ctrl-C checkpoint hook, or
+  `rescue_dirty_working_tree`: each is a way the deletion record is
+  lost or a torn commit lands in history, and it says which are
+  reachable through the runner (none) and by hand (two).
 - [`docs/dev/plans/multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md)
   — *proposal*, nothing built: replacing the `qmd_index` step with a
   retrieval layer that takes an arbitrary `grid_rows` metadata
