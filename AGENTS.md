@@ -827,9 +827,12 @@ measured for what a pinned pass issues — `dolt_hashof`, `sqlite_master`,
 `pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_` views,
 `dolt_diff_*` — and is false for `dolt_status`. Issued from a read-only
 connection while the writer commits, it fails that commit with the same
-`commit conflict`, about once per hundred commits in
-`a_churning_reader_never_makes_the_writers_commit_fail`. That was #400:
-`grid_index` asking every render store whether it was dirty, each
+`commit conflict` for as long as the statement is running, and the rows
+the writer inserted before each failed commit are gone afterwards
+(dolthub/doltlite#2832, with a stock-CLI reproducer: 1500 inserts, 772
+rows left). `a_churning_reader_never_makes_the_writers_commit_fail` sees
+about one commit in a hundred only because its reader is fast. That was
+#400: `grid_index` asking every render store whether it was dirty, each
 streaming pass, while a render step was sealing. **So a consumer never
 runs `dolt_status`**, and the same goes for a hand-run
 `datalib-doltlite -readonly … dolt_status` against a store a sync is

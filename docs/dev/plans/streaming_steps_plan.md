@@ -257,9 +257,11 @@ and with nothing else changed (#400). The peer was the consumer: on every
 pass, `install_views` asked each render store `SELECT count(*) FROM
 dolt_status` so it could warn about uncommitted rows, and that one
 statement, from a read-only connection, fails a writer's overlapping
-`dolt_commit` — in doltlite 0.50.3 the vtab's filter ends in
-`chunkStorePut`, staging the working catalog regardless of how the
-connection was opened. Under streaming the store is dirty *by design*
+`dolt_commit` and discards the rows behind it — a doltlite bug,
+reported with a stock-CLI reproducer as dolthub/doltlite#2832; in
+0.50.3 the vtab's filter ends in `chunkStorePut`, staging the working
+catalog regardless of how the connection was opened. Under streaming
+the store is dirty *by design*
 while the consumer reads, so the warning was noise as well as a
 hazard; it is gone. `a_churning_reader_never_makes_the_writers_commit_fail`
 in `etl/tests/doltlite_two_process.rs` now runs a pinned pass in a loop
