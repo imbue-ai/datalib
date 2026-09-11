@@ -233,7 +233,7 @@ resolve against". A source with no login at all (a PDF folder, a
 | gitlab | — | `merge_request.references.full`, else `project_path` | — |
 | notion | — | — | — |
 | beeper | `rooms.account_id`, Beeper's bridge-account id (`local-signal_ba_…`) — still opaque | — | — |
-| whatsapp | — | — | `wa_chat.subject` for groups; for 1:1, `wa_lid_display_name`, else the phone behind `wa_jid_map`, else the JID label |
+| whatsapp | — | — | `chat.subject` for groups; for 1:1, `lid_display_name`, else the phone behind `jid_map`, else the JID label (msgstore's own tables, mirrored) |
 | signal | — | — | `recipients.display_name`, else phone number |
 
 `org_uuid` / `org_name` are the organization a login lives inside:

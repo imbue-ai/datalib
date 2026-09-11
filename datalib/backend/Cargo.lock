@@ -1954,7 +1954,7 @@ version = "0.31.1"
 dependencies = [
  "anyhow",
  "datalib-etl",
- "datalib-etl-render",
+ "datalib-etl-sqlite-mirror",
  "datalib-time",
  "datalib-whatsapp-backup",
  "serde",

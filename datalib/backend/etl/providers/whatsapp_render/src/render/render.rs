@@ -16,13 +16,13 @@ use datalib_etl_chat_common::{
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::providers::Provider;
-use sqlx::Row;
 
 /// Bump when the rendered markdown / grid_rows layout changes enough
-/// that we need every existing WhatsApp doc rebuilt. v5: an `@lid` chat
-/// or sender reads as its display name or phone number when msgstore's
-/// `lid_display_name` / `jid_map` know one.
-pub const RENDER_VERSION: u32 = 5;
+/// that we need every existing WhatsApp doc rebuilt. v6: the raw store
+/// is msgstore mirrored table for table, and the render cursor of a
+/// store written the old way (`wa_*` tables) names a commit nothing can
+/// diff against.
+pub const RENDER_VERSION: u32 = 6;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 
@@ -54,82 +54,62 @@ pub fn render_all(
     progress: &Progress,
     _prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Chat JIDs the diff named that no `wa_chat` row still carries. The
+    // Chat JIDs the diff named that no `chat` row still carries. The
     // scan happens in here rather than in `parse`, so the caller learns
     // about them the same way it learns about documents.
     on_chat_gone: &mut dyn FnMut(&str) -> Result<()>,
 ) -> Result<RenderSummary> {
     // Incremental gate: if a render cursor exists at the root of this
     // source's render directory, ask doltlite which chats changed
-    // between that hash and HEAD via `dolt_diff_wa_<table>`. Skip the
-    // rest. Cold start (no cursor) or no doltlite db on disk renders
-    // every chat.
+    // between that hash and HEAD. Skip the rest. Cold start (no cursor)
+    // or no doltlite db on disk renders every chat.
     let cursor_path = render_cursor::cursor_path(out_dir, source_name);
     let prior = render_cursor::read_for_params(&cursor_path, &render_cursor::no_params())?;
     let db_path = doltlite_raw::db_path_for(raw_dir);
 
-    let (filtered_owned, new_head): (Option<Vec<NormalizedChat>>, Option<String>) =
-        if db_path.exists() {
-            let (changed, head, elapsed) = tokio::task::block_in_place(|| {
-                let h = tokio::runtime::Handle::try_current();
-                match h {
-                    Ok(h) => h.block_on(scan_diff(
-                        &db_path,
-                        prior.as_ref().map(|c| c.last_rendered_hash.as_str()),
-                    )),
-                    Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(
-                        &db_path,
-                        prior.as_ref().map(|c| c.last_rendered_hash.as_str()),
-                    )),
-                }
-            })?;
-            let filtered = changed.as_ref().map(|set| {
-                chats
-                    .iter()
-                    .filter(|c| set.contains(&c.id))
-                    .cloned()
-                    .collect::<Vec<_>>()
-            });
-            tracing::info!(
-                source = source_name,
-                scan_elapsed_ms = elapsed.map(|d| d.as_millis() as u64),
-                changed_chats = changed.as_ref().map(|s| s.len() as i64).unwrap_or(-1),
-                cold_start = changed.is_none(),
-                "[render] whatsapp dolt_diff scan"
-            );
-            // Every backup is a full snapshot (the ingest truncates first), so
-            // a chat the diff named that `wa_chat` no longer carries is one the
-            // phone deleted.
-            if let Some(set) = changed.as_ref() {
-                let pool = tokio::task::block_in_place(|| {
-                    let h = tokio::runtime::Handle::current();
-                    h.block_on(datalib_etl::doltlite_raw::open_reader(&db_path))
-                })?;
-                // Its own pool, so its own pin: this asks which chats are gone at
-                // a commit, not in whatever the writer is part-way through.
-                let gone = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
-                            return Ok::<_, anyhow::Error>(Vec::new());
-                        };
-                        datalib_etl::pin::install_views(&pool, &pin).await?;
-                        doltlite_raw::buckets_without_rows(
-                            &pool,
-                            datalib_etl::pin::Reads::At(&pin),
-                            set,
-                            &[("wa_chat", "chat_jid")],
-                        )
-                        .await
-                    })
-                })?;
-                for jid in &gone {
-                    on_chat_gone(jid)?;
-                }
+    let (filtered_owned, new_head): (Option<Vec<NormalizedChat>>, Option<String>) = if db_path
+        .exists()
+    {
+        let last = prior.as_ref().map(|c| c.last_rendered_hash.as_str());
+        let scan = tokio::task::block_in_place(|| match tokio::runtime::Handle::try_current() {
+            Ok(h) => h.block_on(scan_diff(&db_path, last)),
+            Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(&db_path, last)),
+        })?;
+        let filtered = scan.changed.as_ref().map(|c| {
+            chats
+                .iter()
+                .filter(|chat| c.live.contains(&chat.id))
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        tracing::info!(
+            source = source_name,
+            scan_elapsed_ms = scan.elapsed.map(|d| d.as_millis() as u64),
+            changed_chats = scan
+                .changed
+                .as_ref()
+                .map(|c| c.live.len() as i64)
+                .unwrap_or(-1),
+            gone_chats = scan
+                .changed
+                .as_ref()
+                .map(|c| c.gone.len() as i64)
+                .unwrap_or(-1),
+            cold_start = scan.changed.is_none(),
+            "[render] whatsapp dolt_diff scan"
+        );
+        // Every backup is a full snapshot (the mirror drops and refills),
+        // so a chat the diff named that HEAD no longer carries is one the
+        // phone deleted.
+        if let Some(c) = &scan.changed {
+            for jid in &c.gone {
+                on_chat_gone(jid)?;
             }
-            (filtered, head)
-        } else {
-            (None, None)
-        };
+        }
+        (filtered, scan.head)
+    } else {
+        (None, None)
+    };
     let to_render: &[NormalizedChat] = filtered_owned.as_deref().unwrap_or(chats);
 
     let empty_fingerprints: HashMap<String, String> = HashMap::new();
@@ -150,82 +130,195 @@ pub fn render_all(
     Ok(summary)
 }
 
-/// Ask doltlite: what chats changed since `last_hash`, and what's the
-/// current HEAD? Returns `(changed_chat_jids, new_head)`. `None` for
-/// changed means "no filter — render everything" (cold start). `None`
-/// for new_head means we couldn't read HEAD (non-doltlite sqlite); the
-/// cursor stays unwritten and next run is another cold start.
-async fn scan_diff(
-    db_path: &Path,
-    last_hash: Option<&str>,
-) -> Result<(
-    Option<HashSet<String>>,
-    Option<String>,
-    Option<std::time::Duration>,
-)> {
-    let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
+/// What changed between two commits, as chat JIDs: the ones HEAD still
+/// carries (re-render) and the ones it does not (gone upstream).
+#[derive(Debug, Default)]
+struct ChangedChats {
+    live: HashSet<String>,
+    gone: Vec<String>,
+}
 
-    let new_head: Option<String> = datalib_etl::pin::head(&pool)
-        .await?
-        .map(|p| p.commit().to_string());
+struct DiffScan {
+    /// `None` is "no filter — render everything" (cold start).
+    changed: Option<ChangedChats>,
+    /// `None` means HEAD could not be read (non-doltlite sqlite); the
+    /// cursor stays unwritten and next run is another cold start.
+    head: Option<String>,
+    elapsed: Option<std::time::Duration>,
+}
+
+/// The tables whose rows carry a `chat_row_id`, and the ones that reach
+/// a chat through a `message` or `message_add_on` rowid. Every mirrored
+/// table is a rowid graph, so "which chat did this row belong to" is a
+/// walk up that graph — at HEAD for a row that still exists, at the
+/// previous commit for one that was removed.
+const CHAT_ROWID_TABLES: &[&str] = &["message", "message_add_on"];
+const MESSAGE_ROWID_TABLES: &[&str] = &["message_text", "message_media"];
+
+/// Ask doltlite what changed since `last_hash`, resolved to chat JIDs.
+async fn scan_diff(db_path: &Path, last_hash: Option<&str>) -> Result<DiffScan> {
+    let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
+    let head = datalib_etl::pin::head(&pool).await?;
 
     // Both refs, or neither: with no commit to scan *to* there is nothing
     // committed to diff against, and cold-starting is the only honest answer.
     // Scanning to the sampled hash rather than to the symbolic `HEAD` keeps
     // this diff and the reads that follow it naming one commit even while a
     // producer is still committing — see `datalib_etl::pin`.
-    let (changed, elapsed) = match (last_hash, new_head.as_deref()) {
-        (None, _) | (_, None) => (None, None),
-        (Some(from_ref), Some(to_ref)) => {
-            // One union across the per-table dolt_diff vtabs. The
-            // `chat_jid` column lives on every wa_message_* table, so a
-            // single COALESCE(to, from) projects the natural bucket key
-            // across added/modified/removed rows. wa_jid and
-            // wa_media_files don't carry chat_jid and so are omitted;
-            // attachment changes propagate via wa_message_media.
-            let sql = "
-                SELECT DISTINCT chat_jid FROM (
-                    SELECT coalesce(to_chat_jid, from_chat_jid) AS chat_jid
-                      FROM dolt_diff_wa_chat
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    UNION
-                    SELECT coalesce(to_chat_jid, from_chat_jid)
-                      FROM dolt_diff_wa_message
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    UNION
-                    SELECT coalesce(to_chat_jid, from_chat_jid)
-                      FROM dolt_diff_wa_message_text
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    UNION
-                    SELECT coalesce(to_chat_jid, from_chat_jid)
-                      FROM dolt_diff_wa_message_media
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    UNION
-                    SELECT coalesce(to_chat_jid, from_chat_jid)
-                      FROM dolt_diff_wa_message_add_on
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    UNION
-                    SELECT coalesce(to_chat_jid, from_chat_jid)
-                      FROM dolt_diff_wa_message_add_on_reaction
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                )
-                WHERE chat_jid IS NOT NULL
-            ";
+    let scan = match (last_hash, head.as_ref()) {
+        (Some(from), Some(to)) => {
+            let from = datalib_etl::pin::Pin::at(from).context("render cursor")?;
             let started = std::time::Instant::now();
-            let rows = sqlx::query(sql)
-                .bind(from_ref)
-                .bind(to_ref)
-                .fetch_all(&pool)
-                .await
-                .context("query dolt_diff_wa_* changed chats")?;
-            let elapsed = started.elapsed();
-            let set: HashSet<String> = rows.iter().map(|r| r.get::<String, _>(0)).collect();
-            (Some(set), Some(elapsed))
+            let changed = changed_chats(&pool, &from, to).await?;
+            DiffScan {
+                changed: Some(changed),
+                head: Some(to.commit().to_string()),
+                elapsed: Some(started.elapsed()),
+            }
         }
+        _ => DiffScan {
+            changed: None,
+            head: head.as_ref().map(|p| p.commit().to_string()),
+            elapsed: None,
+        },
     };
-
     pool.close().await;
-    Ok((changed, new_head, elapsed))
+    Ok(scan)
+}
+
+type Pin = datalib_etl::pin::Pin;
+
+async fn changed_chats(pool: &sqlx::SqlitePool, from: &Pin, to: &Pin) -> Result<ChangedChats> {
+    let mut chat_rowids: HashSet<i64> = HashSet::new();
+
+    chat_rowids.extend(diff_column::<i64>(pool, "chat", "_id", from, to).await?);
+    for table in CHAT_ROWID_TABLES {
+        chat_rowids.extend(diff_column::<i64>(pool, table, "chat_row_id", from, to).await?);
+    }
+
+    let mut message_rowids: HashSet<i64> = HashSet::new();
+    for table in MESSAGE_ROWID_TABLES {
+        message_rowids.extend(diff_column::<i64>(pool, table, "message_row_id", from, to).await?);
+    }
+    // A media file arriving after its message (a `Media/` tree copied on a
+    // later run) changes only the registry; find its messages by path.
+    let paths = diff_column::<String>(pool, "wa_media_files", "relative_path", from, to).await?;
+    for pin in [to, from] {
+        message_rowids
+            .extend(in_list::<String, i64>(pool, MESSAGE_BY_PATH_SQL, &paths, pin).await?);
+    }
+    let addon_rowids = diff_column::<i64>(
+        pool,
+        "message_add_on_reaction",
+        "message_add_on_row_id",
+        from,
+        to,
+    )
+    .await?;
+    // Rows that still exist resolve at `to`; rows the diff removed only
+    // resolve at `from`. A rowid is the same row at either.
+    for pin in [to, from] {
+        chat_rowids.extend(in_list::<i64, i64>(pool, CHAT_BY_ADDON_SQL, &addon_rowids, pin).await?);
+    }
+    let message_rowids: Vec<i64> = message_rowids.into_iter().collect();
+    for pin in [to, from] {
+        chat_rowids
+            .extend(in_list::<i64, i64>(pool, CHAT_BY_MESSAGE_SQL, &message_rowids, pin).await?);
+    }
+
+    // A chat HEAD still names is live; one only the previous commit can
+    // name is gone.
+    let rowids: Vec<i64> = chat_rowids.into_iter().collect();
+    let live: HashSet<String> = in_list::<i64, String>(pool, JID_BY_CHAT_SQL, &rowids, to)
+        .await?
+        .into_iter()
+        .collect();
+    let mut gone: Vec<String> = in_list::<i64, String>(pool, JID_BY_CHAT_SQL, &rowids, from)
+        .await?
+        .into_iter()
+        .filter(|jid| !live.contains(jid))
+        .collect();
+    gone.sort();
+    gone.dedup();
+    Ok(ChangedChats { live, gone })
+}
+
+const MESSAGE_BY_PATH_SQL: &str =
+    "SELECT message_row_id FROM dolt_at_message_media('{pin}') WHERE file_path IN ({placeholders})";
+const CHAT_BY_ADDON_SQL: &str =
+    "SELECT chat_row_id FROM dolt_at_message_add_on('{pin}') WHERE _id IN ({placeholders})";
+const CHAT_BY_MESSAGE_SQL: &str =
+    "SELECT chat_row_id FROM dolt_at_message('{pin}') WHERE _id IN ({placeholders})";
+const JID_BY_CHAT_SQL: &str = "SELECT coalesce(j.raw_string, j.user || '@' || j.server) \
+     FROM dolt_at_chat('{pin}') c JOIN dolt_at_jid('{pin}') j ON j._id = c.jid_row_id \
+     WHERE c._id IN ({placeholders})";
+
+/// The `column` of every row `table` gained, lost or changed between the
+/// two commits — from whichever side of the diff carries it.
+async fn diff_column<T>(
+    pool: &sqlx::SqlitePool,
+    table: &str,
+    column: &str,
+    from: &Pin,
+    to: &Pin,
+) -> Result<Vec<T>>
+where
+    T: for<'r> sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite> + Send + Unpin,
+{
+    // Audited: `table` and `column` are `&'static str` at every callsite;
+    // the commit hashes are bound.
+    let sql = format!(
+        "SELECT coalesce(to_{column}, from_{column}) FROM dolt_diff_{table} \
+         WHERE from_ref = ? AND to_ref = ? AND diff_type != 'unchanged' \
+           AND coalesce(to_{column}, from_{column}) IS NOT NULL"
+    );
+    sqlx::query_scalar::<_, T>(sqlx::AssertSqlSafe(sql))
+        .bind(from.commit().to_string())
+        .bind(to.commit().to_string())
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("dolt_diff_{table}"))
+}
+
+/// Run `template` (holes: `{pin}`, `{placeholders}`) against the tables
+/// as they were at `pin`, binding `ids` into the IN-list.
+async fn in_list<T, R>(
+    pool: &sqlx::SqlitePool,
+    template: &'static str,
+    ids: &[T],
+    pin: &Pin,
+) -> Result<Vec<R>>
+where
+    T: for<'q> sqlx::Encode<'q, sqlx::Sqlite>
+        + sqlx::Type<sqlx::Sqlite>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    R: for<'r> sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite> + Send + Unpin,
+{
+    let mut out = Vec::new();
+    for chunk in ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
+        let mut placeholders = String::new();
+        datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
+        // Audited: `template` is one of the `&'static str` consts above,
+        // `pin` is a validated 40-hex commit hash (`Pin::at`), and the
+        // IN-list is a placeholder run sized from the chunk with every id
+        // bound.
+        let sql = template
+            .replace("{pin}", pin.commit())
+            .replace("{placeholders}", &placeholders);
+        let mut q = sqlx::query_scalar::<_, R>(sqlx::AssertSqlSafe(sql));
+        for id in chunk {
+            q = q.bind(id.clone());
+        }
+        out.extend(
+            q.fetch_all(pool)
+                .await
+                .with_context(|| format!("resolve rowids at {}", pin.commit()))?,
+        );
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -234,8 +327,24 @@ mod tests {
     use crate::render::parse::parse;
     use datalib_etl::doltlite_raw::{commit_run, has_dolt_extensions, open as open_doltlite};
     use datalib_etl::periodize::Period;
-    use datalib_etl_whatsapp::schema_raw::ALL_DDL;
     use sqlx::sqlite::SqlitePool;
+
+    /// The slice of msgstore's schema render reads, as the mirror engine
+    /// would lay it down: rowid keys, rowid foreign keys.
+    const MSGSTORE_DDL: &[&str] = &[
+        "CREATE TABLE IF NOT EXISTS jid (_id INTEGER PRIMARY KEY, user TEXT, server TEXT, raw_string TEXT)",
+        "CREATE TABLE IF NOT EXISTS chat (_id INTEGER PRIMARY KEY, jid_row_id INTEGER, subject TEXT, group_type INTEGER)",
+        "CREATE TABLE IF NOT EXISTS message (_id INTEGER PRIMARY KEY, chat_row_id INTEGER, key_id TEXT, \
+            from_me INTEGER, sender_jid_row_id INTEGER, timestamp INTEGER, message_type INTEGER, \
+            text_data TEXT, sort_id INTEGER)",
+        "CREATE TABLE IF NOT EXISTS message_media (message_row_id INTEGER PRIMARY KEY, file_path TEXT, \
+            mime_type TEXT, file_size INTEGER, media_caption TEXT, media_name TEXT)",
+        "CREATE TABLE IF NOT EXISTS message_add_on (_id INTEGER PRIMARY KEY, chat_row_id INTEGER, key_id TEXT, \
+            from_me INTEGER, sender_jid_row_id INTEGER, parent_message_row_id INTEGER, timestamp INTEGER)",
+        "CREATE TABLE IF NOT EXISTS message_add_on_reaction (message_add_on_row_id INTEGER PRIMARY KEY, reaction TEXT)",
+        "CREATE TABLE IF NOT EXISTS message_text (message_row_id INTEGER PRIMARY KEY, description TEXT)",
+        datalib_etl_whatsapp::schema_raw::WA_MEDIA_FILES_DDL,
+    ];
 
     /// Full incremental-render loop end-to-end:
     ///   1. populate a fresh raw doltlite db with two chats, commit
@@ -244,6 +353,8 @@ mod tests {
     ///      dolt_diff filter sees an empty changed set)
     ///   4. modify a message in chat A, commit
     ///   5. render → expect only chat A's bucket(s) re-rendered
+    ///   6. delete chat B outright, commit
+    ///   7. render → nothing re-rendered, chat B reported gone
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dolt_diff_drives_incremental_render() {
         let td = tempfile::tempdir().expect("tempdir");
@@ -252,7 +363,7 @@ mod tests {
         let out_dir = td.path().join("out");
         let db_path = datalib_etl::doltlite_raw::db_path_for(&raw_dir);
 
-        let pool = open_doltlite(&db_path, ALL_DDL)
+        let pool = open_doltlite(&db_path, MSGSTORE_DDL)
             .await
             .expect("open doltlite");
         if !has_dolt_extensions(&pool).await {
@@ -281,8 +392,8 @@ mod tests {
         // Two chats, one message each. Period::All puts every message
         // into a single bucket per chat so the rendered-doc count is
         // exactly the chat count — easier to assert against.
-        seed_chat(&pool, "alice@s.whatsapp.net", "k_a1", "hi from alice").await;
-        seed_chat(&pool, "bob@s.whatsapp.net", "k_b1", "hi from bob").await;
+        seed_chat(&pool, 1, "alice@s.whatsapp.net", "k_a1", "hi from alice").await;
+        seed_chat(&pool, 2, "bob@s.whatsapp.net", "k_b1", "hi from bob").await;
         let _hash1 = commit_run(&pool, "seed two chats")
             .await
             .expect("commit_run")
@@ -291,7 +402,7 @@ mod tests {
 
         // First render — cold start (no cursor). Both chats should
         // render, cursor file should appear.
-        let docs1 = render_capture(&raw_dir, &out_dir).await;
+        let (docs1, _) = render_capture(&raw_dir, &out_dir).await;
         assert_eq!(
             docs1.len(),
             2,
@@ -308,19 +419,18 @@ mod tests {
 
         // Second render — no DB changes since first cursor. dolt_diff
         // should report zero changed chats → zero docs rendered.
-        let docs2 = render_capture(&raw_dir, &out_dir).await;
+        let (docs2, _) = render_capture(&raw_dir, &out_dir).await;
         assert!(
             docs2.is_empty(),
             "no-op rerun should render zero docs, got {docs2:?}"
         );
 
         // Modify alice's message and commit.
-        let pool = open_doltlite(&db_path, ALL_DDL)
+        let pool = open_doltlite(&db_path, MSGSTORE_DDL)
             .await
             .expect("reopen doltlite");
-        sqlx::query("UPDATE wa_message SET text_data = ? WHERE chat_jid = ?")
+        sqlx::query("UPDATE message SET text_data = ? WHERE chat_row_id = 1")
             .bind("hi from alice (edited)")
-            .bind("alice@s.whatsapp.net")
             .execute(&pool)
             .await
             .expect("update alice message");
@@ -331,12 +441,13 @@ mod tests {
         pool.close().await;
 
         // Third render — only alice's chat should be in the changed set.
-        let docs3 = render_capture(&raw_dir, &out_dir).await;
+        let (docs3, gone3) = render_capture(&raw_dir, &out_dir).await;
         assert_eq!(
             docs3.len(),
             1,
             "after modifying one chat, render should emit exactly one doc, got {docs3:?}"
         );
+        assert!(gone3.is_empty(), "nothing was deleted, got {gone3:?}");
         let alice_chat_uuid = crate::render::whatsapp_chat_uuid("test", "alice@s.whatsapp.net");
         let expected = crate::render::whatsapp_markdown_uuid(&alice_chat_uuid, "all");
         assert_eq!(
@@ -352,37 +463,68 @@ mod tests {
             third_cursor.last_rendered_hash, first_cursor.last_rendered_hash,
             "cursor should advance after a committed change"
         );
+
+        // Delete bob's chat the way a backup does: the rows are simply not
+        // there any more. The only trace is on the `from` side of the diff,
+        // where the rowid still resolves to a JID.
+        let pool = open_doltlite(&db_path, MSGSTORE_DDL)
+            .await
+            .expect("reopen doltlite");
+        for q in [
+            "DELETE FROM message WHERE chat_row_id = 2",
+            "DELETE FROM chat WHERE _id = 2",
+            "DELETE FROM jid WHERE _id = 2",
+        ] {
+            sqlx::query(q).execute(&pool).await.expect("delete bob");
+        }
+        commit_run(&pool, "delete bob")
+            .await
+            .expect("commit_run")
+            .expect("doltlite returned no hash on delete");
+        pool.close().await;
+
+        let (docs4, gone4) = render_capture(&raw_dir, &out_dir).await;
+        assert!(
+            docs4.is_empty(),
+            "a deletion re-renders nothing, got {docs4:?}"
+        );
+        assert_eq!(gone4, vec!["bob@s.whatsapp.net".to_string()]);
     }
 
-    async fn seed_chat(pool: &SqlitePool, chat_jid: &str, key_id: &str, text: &str) {
+    /// One jid, chat and message, all sharing `rowid` — the shape the
+    /// mirror engine lays down from a real msgstore.
+    async fn seed_chat(pool: &SqlitePool, rowid: i64, chat_jid: &str, key_id: &str, text: &str) {
         sqlx::query(
-            "INSERT INTO wa_jid (raw_string, user, server) \
-             VALUES (?, ?, 's.whatsapp.net')",
+            "INSERT INTO jid (_id, user, server, raw_string) VALUES (?, ?, 's.whatsapp.net', ?)",
         )
-        .bind(chat_jid)
+        .bind(rowid)
         .bind(chat_jid.split('@').next().unwrap())
+        .bind(chat_jid)
         .execute(pool)
         .await
-        .expect("insert wa_jid");
-        sqlx::query("INSERT INTO wa_chat (chat_jid, subject) VALUES (?, NULL)")
-            .bind(chat_jid)
+        .expect("insert jid");
+        sqlx::query("INSERT INTO chat (_id, jid_row_id, subject) VALUES (?, ?, NULL)")
+            .bind(rowid)
+            .bind(rowid)
             .execute(pool)
             .await
-            .expect("insert wa_chat");
+            .expect("insert chat");
         sqlx::query(
-            "INSERT INTO wa_message (chat_jid, key_id, from_me, timestamp, \
+            "INSERT INTO message (_id, chat_row_id, key_id, from_me, timestamp, \
                 message_type, text_data, sort_id) \
-             VALUES (?, ?, 0, 1700000000000, 0, ?, 1)",
+             VALUES (?, ?, ?, 0, 1700000000000, 0, ?, 1)",
         )
-        .bind(chat_jid)
+        .bind(rowid)
+        .bind(rowid)
         .bind(key_id)
         .bind(text)
         .execute(pool)
         .await
-        .expect("insert wa_message");
+        .expect("insert message");
     }
 
-    async fn render_capture(raw_dir: &Path, out_dir: &Path) -> Vec<String> {
+    /// Rendered markdown uuids, and the chat JIDs reported gone.
+    async fn render_capture(raw_dir: &Path, out_dir: &Path) -> (Vec<String>, Vec<String>) {
         let raw_dir = raw_dir.to_path_buf();
         let out_dir = out_dir.to_path_buf();
         // parse + render are sync but call into tokio::task::block_in_place,
@@ -390,6 +532,7 @@ mod tests {
         tokio::task::spawn_blocking(move || {
             let parsed = parse(&raw_dir, Period::All, "test").expect("parse");
             let mut emitted: Vec<String> = Vec::new();
+            let mut gone: Vec<String> = Vec::new();
             let progress = datalib_etl::progress::Progress::noop();
             let prior: HashMap<String, String> = HashMap::new();
             let mut on_complete =
@@ -397,7 +540,10 @@ mod tests {
                     emitted.push(md.markdown_uuid);
                     Ok(())
                 };
-            let mut on_chat_gone = |_: &str| -> Result<()> { Ok(()) };
+            let mut on_chat_gone = |jid: &str| -> Result<()> {
+                gone.push(jid.to_string());
+                Ok(())
+            };
             render_all(
                 &parsed.chats,
                 &parsed.blobs_by_chat,
@@ -410,7 +556,7 @@ mod tests {
                 &mut on_chat_gone,
             )
             .expect("render_all");
-            emitted
+            (emitted, gone)
         })
         .await
         .expect("spawn_blocking joined")

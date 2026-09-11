@@ -7,23 +7,68 @@ use std::path::PathBuf;
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
+/// Tables folded out by [`WhatsappConfig::skip_churn`]. `props` is the
+/// app's own key/value settings, which WhatsApp rewrites (and renumbers)
+/// between backups; `backup_changes` is its "what changed since the last
+/// backup" log, which the mirror's `dolt_log` supersedes; `frequent` is
+/// per-contact usage counters. Measured on two real backups a week
+/// apart, these were everything that moved without a message doing so.
+pub const CHURN_TABLE_PATTERNS: &[&str] = &["props", "backup_changes", "frequent"];
+
 /// The whatsapp-owned slice of a `whatsapp` source. `backup` (the
 /// decrypt+mirror path) is its one way in; an `ingest` step without it is
-/// refused (`IngestMethods` below).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// refused (`IngestMethods` below). The rest are the mirror engine's
+/// knobs, the same ones `apple_photos` exposes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct WhatsappConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by
     /// the orchestrator's `normalize()`.
-    #[serde(default)]
     pub common: SourceCommon,
-    #[serde(default)]
     pub backup: Option<WhatsAppSync>,
+
+    /// Table-name globs to mirror. Default `["*"]` — every table in
+    /// msgstore. `*` and `?` are the only metacharacters.
+    pub include_tables: Vec<String>,
+    /// Table-name globs to skip, applied after [`Self::include_tables`].
+    pub exclude_tables: Vec<String>,
+    /// `Table.column` globs to drop from the mirror.
+    pub exclude_columns: Vec<String>,
+    /// Fold [`CHURN_TABLE_PATTERNS`] into the exclusions. On by default:
+    /// with it off, a backup nobody messaged in still commits every run.
+    pub skip_churn: bool,
+    /// Collect unreachable chunks (`dolt_gc()`) at the start of each run.
+    pub gc: bool,
+}
+
+impl Default for WhatsappConfig {
+    fn default() -> Self {
+        Self {
+            common: SourceCommon::default(),
+            backup: None,
+            include_tables: vec!["*".to_string()],
+            exclude_tables: Vec::new(),
+            exclude_columns: Vec::new(),
+            skip_churn: true,
+            gc: false,
+        }
+    }
 }
 
 impl WhatsappConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.include_tables.is_empty() {
+            anyhow::bail!("include_tables is empty: nothing would be mirrored");
+        }
         Ok(())
+    }
+
+    pub fn effective_excluded_tables(&self) -> Vec<String> {
+        let mut out = self.exclude_tables.clone();
+        if self.skip_churn {
+            out.extend(CHURN_TABLE_PATTERNS.iter().map(|s| s.to_string()));
+        }
+        out
     }
 }
 

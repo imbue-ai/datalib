@@ -29,6 +29,7 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",
+        "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
         "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",

@@ -58,6 +58,7 @@ impl Store {
                 stable_key_columns: vec!["id_global".to_string()],
                 primary_keys: BTreeMap::new(),
                 gc: false,
+                sidecar_tables: Vec::new(),
             },
             progress: Progress::noop(),
         })

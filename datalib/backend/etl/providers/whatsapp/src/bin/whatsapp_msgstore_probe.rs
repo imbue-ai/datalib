@@ -8,6 +8,8 @@
 //! Usage: `WHATSAPP_BACKUP_DECRYPTION_KEY=… whatsapp_msgstore_probe <a.crypt15> [<b.crypt15>]`
 //! With two files it joins `message`, `chat` and `jid` across them on their
 //! natural keys and counts rows whose `_id` differs.
+//! `--decrypt <in.crypt15> <out.db>` just writes the plaintext, for
+//! pointing other tools (the mirror engine's CLI, `sqlite3`) at it.
 
 use std::path::{Path, PathBuf};
 
@@ -26,15 +28,26 @@ macro_rules! out {
 }
 
 fn main() -> Result<()> {
-    let paths: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
-    if paths.is_empty() || paths.len() > 2 {
-        return Err(anyhow!(
-            "usage: whatsapp_msgstore_probe <a.crypt15> [<b.crypt15>]"
-        ));
-    }
     let key_hex = std::env::var("WHATSAPP_BACKUP_DECRYPTION_KEY")
         .context("WHATSAPP_BACKUP_DECRYPTION_KEY must be set")?;
     let key = decode_hex_key(&key_hex)?;
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [flag, input, output] = args.as_slice() {
+        if flag == "--decrypt" {
+            let bytes =
+                decrypt_file(Path::new(input), &key).with_context(|| format!("decrypt {input}"))?;
+            std::fs::write(output, &bytes).with_context(|| format!("write {output}"))?;
+            out!("{output}: {} bytes", bytes.len());
+            return Ok(());
+        }
+    }
+    let paths: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
+    if paths.is_empty() || paths.len() > 2 {
+        return Err(anyhow!(
+            "usage: whatsapp_msgstore_probe <a.crypt15> [<b.crypt15>] | --decrypt <in.crypt15> <out.db>"
+        ));
+    }
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
