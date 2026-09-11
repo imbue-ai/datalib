@@ -214,10 +214,11 @@ pub struct NormalizedChat {
     /// still comes from `display`. `None` falls back to the derived
     /// heading — the default for anything that doesn't set it.
     pub title: Option<String>,
-    /// Optional account scope (Beeper's account_id, slack's team_id),
-    /// surfaced in the chat-level grid_row's `account` column. Whose
-    /// mirror this is, never who wrote the thing: a page someone else
-    /// created still belongs to the account that downloaded it.
+    /// Whose mirror this is, surfaced in the chat-level grid_row's
+    /// `account` column: the login's email where the raw store has it
+    /// (see [`crate::account_label`]), never who wrote the thing — a
+    /// page someone else created still belongs to the account that
+    /// downloaded it. `None` for a source with no login at all.
     pub account: Option<String>,
     /// Who the page is by, where it has a single author (a Claude
     /// project's creator). Surfaced in the chat-level grid_row's
@@ -244,9 +245,10 @@ pub struct NormalizedChat {
     /// the default for anything that doesn't set it.
     pub source_url: Option<String>,
     /// Optional owning-org identity, surfaced in every grid_row's
-    /// `org_uuid` / `org_name` columns. Today only Anthropic sets these
-    /// (a Claude account can span a personal plan + Team workspaces).
-    /// `None` for everything else — the default.
+    /// `org_uuid` / `org_name` columns: the organization a login lives
+    /// inside — Claude's Anthropic org (a personal plan or a Team
+    /// workspace), Slack's workspace. `None` for everything else — the
+    /// default.
     pub org_uuid: Option<String>,
     pub org_name: Option<String>,
     /// Extra path segment between `render_markdown/` and the chat's own

@@ -74,9 +74,15 @@ export type Field =
       /// Offer a picker built from `POST /api/probe`, alongside the
       /// comma-separated box. Names *which* of the probe's items this
       /// field takes: every label, only the ones a render filter can
-      /// match, or an account's conversations.
-      probe?: "labels" | "mailboxes" | "conversations";
+      /// match, an account's conversations (a Claude chat, a Slack
+      /// DM), or a workspace's channels.
+      probe?: ProbeNoun;
     });
+
+/// What a `probe:` field is a picker *of*. The value is the word the
+/// wizard uses around the picker — "pick from this account's real
+/// folders" — so it has to read as one.
+export type ProbeNoun = "labels" | "mailboxes" | "conversations" | "channels";
 
 export type CatalogEntry = {
   /// The group's `type`: the thing mirrored (`slack`, `email`, …).
@@ -173,15 +179,17 @@ export const CATALOG: CatalogEntry[] = [
     nameHint: "Work Slack",
     wizard: true,
     credentialService: "slack",
+    canProbe: true,
     fields: [
       {
         kind: "string_list",
+        probe: "channels",
         target: "api.channels",
         label: "Channels",
         placeholder: "general, engineering",
         help:
           "Channel names without the #. Leave empty for every channel you're a member of. " +
-          "A live picker replaces this once the probe endpoint exists.",
+          "A channel named here is mirrored whether or not you're a member of it.",
       },
       {
         kind: "date",
@@ -229,14 +237,15 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "string_list",
-        target: "api.dm_users",
+        probe: "conversations",
+        target: "api.dm_conversations",
         requires: "api.dms",
-        label: "Only DMs with these people",
-        placeholder: "@riker, Jean-Luc Picard, U024BE7LH",
+        label: "Only these DMs",
+        placeholder: "D024BE7LH, https://….slack.com/archives/G0ABC12DE",
         help:
-          "Names a person, not a conversation — a Slack handle, display name, real name or " +
-          "user id, with or without the @. A group DM counts as a conversation with everyone " +
-          "in it. Leave empty for every DM.",
+          "Slack's id for each conversation, or a link to it — right-click a DM in Slack's " +
+          "sidebar and Copy link, or copy the address bar with the DM open. Both 1:1 and " +
+          "group DMs. Leave empty for every DM.",
       },
       {
         kind: "int",

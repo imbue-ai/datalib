@@ -4,7 +4,6 @@
 use datalib_etl_render::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
@@ -18,10 +17,14 @@ use serde_json::Value;
 
 use datalib_etl_linkedin::ingest::schema_raw::{message_tables, ns_id as uuid5};
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
+
+use crate::processor::Source;
 use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
-pub const RENDER_VERSION: u32 = 2;
+/// v3: `account` is the export owner's primary email (else profile
+/// name) on every row, in place of the source name on connections.
+pub const RENDER_VERSION: u32 = 3;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -41,9 +44,7 @@ fn profile() -> RenderProfile {
 /// it's missing or empty. Conversations from different feeds keep
 /// distinct ids (namespaced by table) so they never collide.
 pub fn render(
-    raw_dir: &Path,
-    out_dir: &Path,
-    source_name: &str,
+    source: &Source<'_>,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -52,6 +53,12 @@ pub fn render(
     // the store holds and this does not name.
     seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderPass> {
+    let Source {
+        raw_dir,
+        out_dir,
+        name: source_name,
+        account,
+    } = *source;
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(RenderPass::Skipped);
@@ -96,7 +103,7 @@ pub fn render(
 
     let mut chats: Vec<NormalizedChat> = Vec::new();
     for (table, payloads) in &by_table {
-        chats.extend(build_chats(table, payloads));
+        chats.extend(build_chats(table, payloads, account));
     }
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
@@ -114,7 +121,7 @@ pub fn render(
     Ok(RenderPass::Walked)
 }
 
-fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
+fn build_chats(table: &str, payloads: &[Value], account: Option<&str>) -> Vec<NormalizedChat> {
     // BTreeMap keeps conversation order stable across runs.
     let mut by_conv: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
     for p in payloads {
@@ -162,7 +169,7 @@ fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
             display,
             title: None,
             author: None,
-            account: None,
+            account: account.map(str::to_string),
             project: None,
             external_id: Some(conv.clone()),
             // No public per-conversation URL in the message export.
@@ -247,7 +254,7 @@ mod tests {
             msg("c1", "B", "A", "2026-06-16 04:58:21 UTC", "first"),
             msg("c2", "A", "C", "2026-01-01 00:00:00 UTC", "other"),
         ];
-        let chats = build_chats("messages", &payloads);
+        let chats = build_chats("messages", &payloads, None);
         assert_eq!(chats.len(), 2);
         let c1 = chats.iter().find(|c| c.id == "messages:c1").unwrap();
         assert_eq!(c1.buckets[0].items.len(), 2);
@@ -285,7 +292,7 @@ mod tests {
     #[test]
     fn undated_message_gets_a_null_timestamp() {
         let payloads = vec![msg("c1", "A", "B", "", "undated")];
-        let chats = build_chats("messages", &payloads);
+        let chats = build_chats("messages", &payloads, None);
         assert_eq!(chats[0].buckets[0].items[0].date_ms, None);
     }
 }

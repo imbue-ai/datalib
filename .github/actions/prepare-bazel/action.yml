@@ -59,8 +59,8 @@ runs:
     # model mount in `test.yml`.
     #
     # Both configs need it: only `--host_action_env` reaches exec-config
-    # (`[for tool]`) bindgen actions — e.g. boring-sys2, pulled in when an
-    # exec-config tool needs the HTTP stack — and only `--action_env`
+    # (`[for tool]`) bindgen actions — boring-sys2 was one, pulled in when
+    # an exec-config tool needed the HTTP stack — and only `--action_env`
     # reaches target-config ones. Computing the path from `llvm-config`
     # (the same source the image uses) keeps CI correct whichever image
     # `:latest` points at. Mirrors `release.yml`'s `bazelargs` step.

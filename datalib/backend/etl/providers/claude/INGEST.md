@@ -44,26 +44,24 @@ out to [`latchkey curl`](https://github.com/imbue-ai/latchkey), which
 injects the cookies registered under the `claude-ai` service.
 
 `claude.ai` is fronted by Cloudflare's managed-challenge system. To
-clear the challenge, point `LATCHKEY_CURL` at a Chrome-impersonating
-curl. The simplest option is the in-tree `latchkey-curl-impersonate` bin
-(a `wreq`-backed shim, mirror of
-`src/ingest/latchkey_curl_impersonate.py`):
+clear the challenge, requests go out through a Chrome-impersonating
+curl — the bundled `curl-impersonate`, reached via the dispatch curl
+(`docs/dev/curl_impersonate.md`). Leave `LATCHKEY_CURL` unset and the
+downloader finds the dispatch itself; to set it by hand, point it at
+the **dispatch**, which brings the impersonator along as a sibling:
 
 ```sh
-bazelisk build //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate"
+bazelisk build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch"
 claude-ingest --out ~/backups/claude_api
 ```
-
-A standalone `curl-impersonate` binary works too — point
-`LATCHKEY_CURL` at it instead.
 
 ### Why no `cf_clearance` cookie?
 
 Cloudflare gates clients in two layers: the TLS fingerprint (JA3/JA4)
 and, when that looks suspect, a JS challenge that issues a
-`cf_clearance` cookie. The shim's Chrome 131 handshake (boring-ssl
-with real-Chrome cipher ordering / ALPN / extensions) keeps us on
+`cf_clearance` cookie. `curl-impersonate`'s Chrome handshake (patched
+BoringSSL with real-Chrome cipher ordering / ALPN / extensions) keeps us on
 the green path, so `cf_clearance` is never issued — and not needed
 in the latchkey credential set. The `sessionKey` cookie is the full
 auth surface. If a future CF tightening flips us into challenge

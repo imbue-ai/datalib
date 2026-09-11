@@ -36,7 +36,7 @@ fn insert_eml(bundle: &mut BlobBundle, ref_id: &str, body: &[u8]) {
 }
 
 fn make_loaded() -> ParsedEmail {
-    let account = json!({"id": "A1", "name": "thad@example.com", "isPersonal": true});
+    let account = json!({"name": "thad@example.com", "isPersonal": true});
     let mailbox = json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"});
     let thread = json!({"id": "T1", "emailIds": ["E1", "E2"]});
 
@@ -108,7 +108,7 @@ fn make_loaded() -> ParsedEmail {
     );
 
     ParsedEmail {
-        accounts: vec![account],
+        accounts: vec![("A1".into(), account)],
         mailboxes: vec![mailbox],
         threads: vec![thread],
         docs: vec![EmailThreadBucket {
@@ -204,6 +204,15 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
     assert_eq!(rows[2].kind, "Email");
     assert_eq!(rows[0].provider, "email");
     assert_eq!(rows[0].source_label, "Mail");
+    // The JMAP account id (`A1`) resolves to the address in the account
+    // object's `name`; the object itself carries no `id`, so this has to
+    // come from the row's key.
+    assert!(
+        rows.iter()
+            .all(|r| r.account.as_deref() == Some("thad@example.com")),
+        "every row names the mailbox's address: {:?}",
+        rows.iter().map(|r| r.account.clone()).collect::<Vec<_>>()
+    );
 }
 
 fn find_one(root: &std::path::Path, suffix: &str) -> PathBuf {
@@ -286,7 +295,7 @@ fn make_invite() -> ParsedEmail {
 }
 
 fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> ParsedEmail {
-    let account = json!({"id": "A1", "name": "thad@example.com", "isPersonal": true});
+    let account = json!({"name": "thad@example.com", "isPersonal": true});
     let mailbox = json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"});
     let thread = json!({"id": "T9", "emailIds": ["E9"]});
 
@@ -335,7 +344,7 @@ fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> 
     );
 
     ParsedEmail {
-        accounts: vec![account],
+        accounts: vec![("A1".into(), account)],
         mailboxes: vec![mailbox],
         threads: vec![thread],
         docs: vec![EmailThreadBucket {

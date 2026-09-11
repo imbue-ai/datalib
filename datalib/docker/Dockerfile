@@ -50,10 +50,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Runtime deps only:
 #   ca-certificates  TLS roots for HTTPS calls the binaries make
-#   curl             debugging + healthchecks; the `latchkey curl` codepath
-#                    invokes our bundled `latchkey-curl-impersonate`
-#                    rather than this, but having curl present is useful
-#                    for `docker exec` poking
+#   curl             debugging + healthchecks, and the system curl the
+#                    dispatch curl execs for hosts that need no
+#                    impersonation (the others go to our bundled
+#                    `latchkey-curl-impersonate`)
 #   tini             PID 1 that reaps zombies and forwards signals; the
 #                    Rust binaries don't fork, but the pipeline
 #                    spawns `npx`/`node` subprocesses for the qmd indexer
@@ -262,8 +262,9 @@ RUN set -eux; \
 # LATCHKEY_CURL points latchkey at the dispatch curl (which routes
 # marked requests to the impersonator sibling; datalib-step also sets
 # this internally via sibling resolution, but exporting it means a user
-# running `latchkey curl ...` directly inside the container gets CF
-# impersonation too).
+# running `latchkey curl ...` directly inside the container goes
+# through the same curl — add `-H 'X-Imbue-Impersonate: 1'` to make
+# such a request impersonate).
 ENV LATCHKEY_CURL=/usr/local/bin/latchkey-curl-dispatch
 
 WORKDIR /data

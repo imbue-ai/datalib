@@ -8,4 +8,5 @@ export const CONFIG_MUTATING = [
   "sources-view",
   "wizard-select",
   "wizard-email",
+  "wizard-slack",
 ] as const;

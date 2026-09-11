@@ -435,28 +435,28 @@ mod tests {
         .expect("a pre-dms config must still parse");
         let api = cfg.api.expect("api");
         assert!(!api.dms, "an upgrade must not start mirroring DMs");
-        assert!(api.dm_users.is_none());
+        assert!(api.dm_conversations.is_none());
     }
 
     /// The one combination the provider refuses, refused where the
     /// step actually reads its params — `plan` is what calls
     /// `validate`, and a rule that isn't wired into it is not enforced.
     #[test]
-    fn slack_dm_users_without_dms_fails_at_plan_time() {
+    fn slack_dm_conversations_without_dms_fails_at_plan_time() {
         let td = tempfile::tempdir().unwrap();
         let err = plan(
             "slack",
             Phase::Ingest,
             "slack",
             raw_dir(td.path(), "slack", Phase::Ingest),
-            serde_json::json!({"api": {"dm_users": ["@riker"]}}),
+            serde_json::json!({"api": {"dm_conversations": ["D0123ABCD"]}}),
         )
         .unwrap_err();
         // `{:#}` walks the cause chain, which is what `main.rs` prints
         // (one line per `e.chain()` entry) — the bare `to_string()` is
         // only the outermost "source ... (type=slack)" context.
         let err = format!("{err:#}");
-        assert!(err.contains("dm_users"), "{err}");
+        assert!(err.contains("dm_conversations"), "{err}");
         assert!(err.contains("dms = true"), "{err}");
 
         // …and is accepted with the switch on.
@@ -465,7 +465,7 @@ mod tests {
             Phase::Ingest,
             "slack",
             raw_dir(td.path(), "slack", Phase::Ingest),
-            serde_json::json!({"api": {"dms": true, "dm_users": ["@riker"]}}),
+            serde_json::json!({"api": {"dms": true, "dm_conversations": ["D0123ABCD"]}}),
         )
         .expect("dms = true with an allowlist is the supported shape");
     }

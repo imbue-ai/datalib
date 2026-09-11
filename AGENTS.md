@@ -60,8 +60,10 @@ reference doc it relates to.
   under a chevron, the group row reading status, last-synced and bytes
   off its own folder and its children (`ui/src/config/groupRows.ts`
   holds the rules), and the wizard is one dialog that writes and edits
-  a source as a group plus both its steps, with the render step's
-  settings under a "Rendering" heading (`SourceWizard.vue`,
+  a source as a group plus both its steps — the group's `name` and
+  its `description` (free text nothing reads yet; #409 says why not
+  qmd) edited in place — with the render step's settings under a
+  "Rendering" heading (`SourceWizard.vue`,
   `ui/src/config/sourceSteps.ts`). Nothing in the UI splits a step id
   any more: phase is read off `function`, the source column off the
   group. Every ingest method a provider accepts declares itself
@@ -272,6 +274,14 @@ reference doc it relates to.
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and
   run from source.
+- [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the
+  Chrome-impersonating curl that Cloudflare-fronted hosts are fetched
+  through: upstream `curl-impersonate`, built from source by our own
+  workflow and pinned by sha256. **Read before touching
+  `latchkey_curl_dispatch.rs`, `LATCHKEY_CURL` in any doc, or the pin**:
+  why `LATCHKEY_CURL` must point at the dispatch and never at the
+  impersonator, and the bump procedure (read the upstream patch diff
+  first — it is the whole delta over curl and BoringSSL).
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites;
   [`docs/dev/coverage.md`](docs/dev/coverage.md) — coverage runs.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
@@ -843,6 +853,23 @@ overlapping *open* fails inside `open` itself, reported as `commit schema
 after DDL`. `two_live_pools_on_one_store_break_each_others_commits` in
 `doltlite_raw.rs` pins this half.
 
+**A reader can be the peer.** "Read-only costs the writer nothing" is
+measured for what a pinned pass issues — `dolt_hashof`, `sqlite_master`,
+`pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_` views,
+`dolt_diff_*` — and is false for `dolt_status`. Issued from a read-only
+connection while the writer commits, it fails that commit with the same
+`commit conflict` for as long as the statement is running, and the rows
+the writer inserted before each failed commit are gone afterwards
+(dolthub/doltlite#2832, with a stock-CLI reproducer: 1500 inserts, 772
+rows left). `a_churning_reader_never_makes_the_writers_commit_fail` sees
+about one commit in a hundred only because its reader is fast. That was
+#400: `grid_index` asking every render store whether it was dirty, each
+streaming pass, while a render step was sealing. **So a consumer never
+runs `dolt_status`**, and the same goes for a hand-run
+`datalib-doltlite -readonly … dolt_status` against a store a sync is
+writing. Any other statement a reader adds is presumed guilty until that
+test has run with it.
+
 Three rules follow, and none is optional:
 
 - **Open the store once per pass.** If a stage needs to load rows, run a
@@ -884,6 +911,22 @@ the history intact and is cheap to read with `git log --first-parent`.
 
 In practice: `git pull` (default merge), not `git pull --rebase`. Force-
 push is off the table on shared branches.
+
+## Push early, open the PR early, and watch CI
+
+**Push the branch and open a PR as soon as there is something to test,
+even if nobody asked for one** — CI's runners are free and a full
+`//...` run takes minutes, so starting it early is starting it for free.
+Push again as the work goes; each push restarts the run.
+
+After pushing, check that the PR is mergeable (`gh pr view <n> --json
+mergeable,mergeStateStatus`) and follow the run to its end rather than
+leaving it. If it fails, read the failure and fix it; if the failed
+target looks like a flake (the doltlite-timing ones above, or anything
+`scripts/flaky_tests.py` already lists), re-run the failed jobs once
+before digging in. Before pushing a follow-up, confirm the PR is still
+open — a merged PR does not reopen for a later push, and the commit
+reaches nobody.
 
 ## Python deps: pyproject.toml → requirements.txt → Bazel
 
@@ -1031,10 +1074,11 @@ bazel run //datalib/backend/unified_index:fixture_db_snapshot_test.update
 bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_render.update
 bazel run //datalib/backend/etl/providers/slack:slack_translate.update
 
-# Live tests — need LATCHKEY_CURL on the host (same as cargo). Builds
-# the shim once:
-bazel build //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_impersonate"
+# Live tests — need LATCHKEY_CURL on the host (same as cargo), pointed
+# at the dispatch curl (never at the impersonator itself — see
+# docs/dev/curl_impersonate.md). Builds both once:
+bazel build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
+export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch"
 bazel run //datalib/backend/etl/providers/claude:claude_live.update
 ```
 
@@ -1527,7 +1571,9 @@ the longest offset-suffixed form including microseconds.
 
 The Rust downloaders under `datalib/backend/etl/providers/*/src/ingest/`
 read the `sessionKey` cookie out of `latchkey curl -v` stderr and then
-issue the actual requests via the `latchkey-curl-impersonate` so Cloudflare's
-JA3 wall passes. If the cookie is missing or expired,
+issue the actual requests via `latchkey-curl-dispatch`, which routes
+Cloudflare-fronted hosts to the bundled `curl-impersonate` so the
+TLS-fingerprint wall passes (`docs/dev/curl_impersonate.md`). If the
+cookie is missing or expired,
 `latchkey auth set claude-ai` fixes it; if Cloudflare still 403s, the
 IP/UA may be flagged — wait it out or swap networks.

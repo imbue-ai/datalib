@@ -197,20 +197,21 @@ dms = true               # also mirror direct messages, 1:1 and group.
                          # OFF unless you set it — DMs are the most
                          # private thing in a workspace, so mirroring
                          # them is opt-in.
-dm_users = ["@riker", "Jean-Luc Picard"]
-                         # optional: restrict DMs to conversations with
-                         # these people. Names a *person*, not a
-                         # conversation — a handle, display name, real
-                         # name or user id (`U024BE7LH`), with or
-                         # without the `@`. A group DM counts as a
-                         # conversation with everyone in it. Omit to
-                         # mirror every DM. Requires `dms = true`;
-                         # setting it with `dms = false` is an error
-                         # rather than a silent no-op.
+dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12DE"]
+                         # optional: restrict DMs to just these, by
+                         # Slack's id for each (`D…` for a 1:1, `G…` or
+                         # `C…` for a group DM) or a pasted link to it —
+                         # right-click the DM in Slack's sidebar and
+                         # "Copy link". The Add/Edit dialog offers a
+                         # picker, filled from the live workspace, so
+                         # nothing has to be typed. Omit to mirror every
+                         # DM. Requires `dms = true`; setting it with
+                         # `dms = false` is an error rather than a
+                         # silent no-op.
                          #
                          # This is a separate list from `channels` on
-                         # purpose: `channels` is the `#` namespace and
-                         # this is the `@` one. A DM has no channel
+                         # purpose: `channels` names channels by name,
+                         # this names DMs by id. A DM has no channel
                          # name, so one shared list would drop them all.
 # refresh_window_days = 30  # re-fetch the trailing 30 days of channels that
                             # already have history, to pick up edits and

@@ -57,7 +57,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # deltas makes the dev-vs-prod surface visible.
 #
 # cmake + perl + pkg-config + libssl-dev
-#                   boring-sys2 + openssl-sys build-script deps.
+#                   protobuf-src's (and formerly boring-sys2's)
+#                   build-script deps.
 # clang + libclang-dev + llvm
 #                   bindgen (libsqlite3-sys's build script) dlopens
 #                   libclang to parse <sqlite3.h>. macOS gets clang
@@ -216,9 +217,10 @@ RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
 # rebuild the image after a major LLVM bump (e.g. 18 → 19).
 #
 # Both `--action_env` and `--host_action_env` are written so exec-config
-# ("[for tool]") bindgen build scripts — e.g. boring-sys2 when an
-# exec-config tool in `//...` pulls in the HTTP stack — find libclang
-# too. `--action_env` alone only covers target-config actions; the
+# ("[for tool]") bindgen build scripts — boring-sys2 was one, when an
+# exec-config tool in `//...` pulled in the HTTP stack — find libclang
+# too. (Nothing in Cargo.lock uses bindgen any more; see the note in
+# the workspace .bazelrc before removing this.) `--action_env` alone only covers target-config actions; the
 # missing host variant panicked bindgen with "Unable to find libclang"
 # on a cold BuildBuddy cache. See the matching note in the workspace
 # .bazelrc.
@@ -232,14 +234,14 @@ WORKDIR /workspaces/datalib
 # bzlmod graph + every external repo + crate_universe dependency tree
 # (the genuinely cold-and-slow parts of a first build) and writes the
 # results into the repository cache and external repo dirs. It does
-# NOT compile anything — which means we skip ~20 min of boring-sys2 /
-# tokio / sqlx Rust compilation that would otherwise need to fit
+# NOT compile anything — which means we skip ~20 min of tokio / sqlx /
+# doltlite compilation that would otherwise need to fit
 # inside BuildKit's RUN container.
 #
 # Subsequent contributor `bazelisk build` invocations inside the
 # devcontainer reuse the resolved repo state and skip straight to
 # action execution — the long pole on cold builds is the external
-# dep fetches (BoringSSL git clones, crate downloads) not the
+# dep fetches (crate downloads, the doltlite amalgamation) not the
 # compile, so this captures most of the warm-cache win.
 #
 # The workspace source is bind-mounted ephemerally via BuildKit
@@ -281,8 +283,8 @@ ARG WARM_BAZEL_CACHE=true
 # the action graph.
 
 # Step 1: fetch — resolves bzlmod graph + crate_universe + every
-# external repo (BoringSSL git clone, doltlite amalgamation download,
-# rules_rust toolchains, etc.), writes them into
+# external repo (doltlite amalgamation download, the curl-impersonate
+# archives, rules_rust toolchains, etc.), writes them into
 # /root/.cache/bazel/_bazel_root/<hash>/external/.
 RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
     if [ "${WARM_BAZEL_CACHE}" = "true" ]; then \

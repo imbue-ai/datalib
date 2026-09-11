@@ -70,7 +70,22 @@ pub struct ParsedSlack {
     pub vanished_buckets: Vec<String>,
 }
 
-impl ParsedSlack {}
+impl ParsedSlack {
+    /// What the grid's Account column shows: the login `auth.test`
+    /// named, resolved through its own `users` row — email, else real
+    /// name, else handle, else the bare user id. `None` when the store
+    /// has no workspace row at all.
+    pub fn account_label(&self) -> Option<String> {
+        let ws = self.workspace.as_ref()?;
+        let self_id = ws.self_user_id.as_deref()?;
+        let user = self.users.get(self_id);
+        datalib_etl_chat_common::account_label(
+            self_id,
+            user.and_then(|u| u.email.as_deref()),
+            user.map(|u| u.label()).as_deref(),
+        )
+    }
+}
 
 pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedSlack> {
     let db_path = db_path_for(path);
@@ -312,6 +327,7 @@ async fn load_users(pool: &SqlitePool) -> Result<BTreeMap<String, User>> {
                 real_name: opt_str(&v, "real_name")
                     .or_else(|| profile.and_then(|p| opt_str(p, "real_name"))),
                 display_name: profile.and_then(|p| opt_str(p, "display_name")),
+                email: profile.and_then(|p| opt_str(p, "email")),
             },
         );
     }
@@ -653,6 +669,7 @@ fn ingest_user(u: &Value, default_team_id: &str, out: &mut BTreeMap<String, User
             real_name: opt_str(u, "real_name")
                 .or_else(|| profile.and_then(|p| opt_str(p, "real_name"))),
             display_name: profile.and_then(|p| opt_str(p, "display_name")),
+            email: profile.and_then(|p| opt_str(p, "email")),
         },
     );
 }
