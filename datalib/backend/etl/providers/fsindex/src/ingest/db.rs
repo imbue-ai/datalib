@@ -150,7 +150,7 @@ impl RawDb {
     pub async fn commit(&self, msg: &str) -> Result<std::time::Duration> {
         let started = std::time::Instant::now();
         sqlx::query("SELECT dolt_commit('-Am', ?)")
-            .bind(msg)
+            .bind(datalib_etl::doltlite_raw::stamp_run(msg))
             .execute(&self.pool)
             .await
             .context("dolt_commit")?;

@@ -242,7 +242,10 @@ never reaches for the layout directly. The division of labour:
   string), ← → back/forward buttons over the card's own source
   history (each `setSource` — a gallery pick, an agent hand-off, a
   source edit — is a step; navigating replays the source with fresh
-  state), an ↗ "open this card alone" link, and a ✕ close button.
+  state), an ↗ "open this card alone" link — a new browser tab, or in
+  the desktop app a second native window of the app (the shell's
+  `on_new_window` handler in `datalib/tauri/src/main.rs`), so a card
+  can live on another screen — and a ✕ close button.
   Anything past that — resize handles, drag grips, add buttons,
   dividers, tab bars — is layout-specific furniture, invisible to the
   card. The layout also decides what `openCard` placement means, what

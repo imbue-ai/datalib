@@ -8,10 +8,11 @@
  * those mostly do the right thing on their own. In the Tauri app both
  * shapes are broken, in opposite directions:
  *
- * - `target="_blank"` (what the `↗` carries) does **nothing**. The app
- *   has one webview and no tab strip, and Tauri does not implement
- *   `window.open`, so the click is silently swallowed — a link that
- *   looks like a link and isn't.
+ * - `target="_blank"` (what the `↗` carries) reaches the shell's
+ *   `on_new_window` handler (`datalib/tauri/src/main.rs`), which opens
+ *   a same-origin URL as a second window of the app and hands anything
+ *   else to the OS browser. Before that handler existed the click was
+ *   silently swallowed — a webview has no tab strip.
  * - a plain `<a href="https://…">` **navigates the app window** onto
  *   that site. The whole UI is replaced by someone's marketing page,
  *   with no back button in the chrome to return from it.

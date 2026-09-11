@@ -6,9 +6,11 @@ mod launcher;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::{NewWindowFeatures, NewWindowResponse};
+use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 
@@ -280,26 +282,14 @@ async fn boot(app: AppHandle, root: PathBuf) {
     // not re-exported by tauri, and naming it would mean adding a
     // direct `url` dependency for one comparison.
     let app_origin = url.origin().ascii_serialization();
-    let nav_app = app.clone();
-    let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(url))
-        .title("Datalib")
-        .inner_size(1280.0, 800.0)
-        // The app window shows the app, never someone else's website.
-        // Rendered documents carry links we did not author — the `↗`
-        // outlink, and every `<a>` that came out of the source content
-        // (a "Sent via Superhuman" footer, a newsletter's tracking
-        // link). Following one in place replaces the whole UI with a
-        // marketing page and leaves no chrome to come back from.
-        .on_navigation(move |next| {
-            if !leaves_the_app(next, &app_origin) {
-                return true;
-            }
-            if let Err(e) = nav_app.opener().open_url(next.as_str(), None::<&str>) {
-                eprintln!("could not open {next} externally: {e}");
-            }
-            false
-        })
-        .build();
+    let window = app_window(
+        WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(url))
+            .title("Datalib")
+            .inner_size(1280.0, 800.0),
+        &app,
+        &app_origin,
+    )
+    .build();
     if let Err(e) = window {
         return boot_failed(&app, format!("could not open the main window: {e}"));
     }
@@ -332,6 +322,78 @@ fn remember(app: &AppHandle, root: &Path) {
     let Some(home) = home_dir(app) else { return };
     if let Err(e) = launcher::record_recent(&launcher::recents_file(&home), root) {
         eprintln!("could not record the recent data root: {e}");
+    }
+}
+
+/// Windows the app opened on itself, numbered so their labels never
+/// collide. `card-*` is what the capability files grant, so a window
+/// opened this way can reveal files and pick paths like the main one.
+static OPENED_WINDOWS: AtomicUsize = AtomicUsize::new(0);
+
+/// The two rules every window of the app follows.
+///
+/// **A window shows the app, never someone else's website.** Rendered
+/// documents carry links we did not author — the `↗` outlink, and every
+/// `<a>` that came out of the source content (a "Sent via Superhuman"
+/// footer, a newsletter's tracking link). Following one in place would
+/// replace the whole UI with a marketing page and leave no chrome to
+/// come back from, so an off-origin navigation goes to the OS browser.
+///
+/// **A `target="_blank"` link opens a window.** A webview has no tab
+/// strip, so without this the card chrome's "open this card alone" ↗
+/// and the grid's double-click were dead in the app. Same origin gets a
+/// second window of the app, under the same rules; anything else goes
+/// to the OS browser, as above.
+fn app_window<'a>(
+    builder: WebviewWindowBuilder<'a, Wry, AppHandle>,
+    app: &AppHandle,
+    app_origin: &str,
+) -> WebviewWindowBuilder<'a, Wry, AppHandle> {
+    let nav_app = app.clone();
+    let nav_origin = app_origin.to_string();
+    let new_app = app.clone();
+    let new_origin = app_origin.to_string();
+    builder
+        .on_navigation(move |next| {
+            if !leaves_the_app(next, &nav_origin) {
+                return true;
+            }
+            open_externally(&nav_app, next);
+            false
+        })
+        .on_new_window(move |url, features: NewWindowFeatures| {
+            if leaves_the_app(&url, &new_origin) {
+                open_externally(&new_app, &url);
+                return NewWindowResponse::Deny;
+            }
+            let label = format!("card-{}", OPENED_WINDOWS.fetch_add(1, Ordering::Relaxed));
+            // `about:blank`: the opener drives the load, as `window.open`
+            // does in a browser. `window_features` hands the new webview
+            // the opener's configuration, which macOS requires and which
+            // is also what makes the two share the session cookie.
+            let blank: Url = "about:blank".parse().expect("about:blank parses");
+            let built = app_window(
+                WebviewWindowBuilder::new(&new_app, &label, WebviewUrl::External(blank))
+                    .title("Datalib")
+                    .inner_size(1100.0, 760.0)
+                    .window_features(features),
+                &new_app,
+                &new_origin,
+            )
+            .build();
+            match built {
+                Ok(window) => NewWindowResponse::Create { window },
+                Err(e) => {
+                    eprintln!("could not open a window for {url}: {e}");
+                    NewWindowResponse::Deny
+                }
+            }
+        })
+}
+
+fn open_externally(app: &AppHandle, url: &Url) {
+    if let Err(e) = app.opener().open_url(url.as_str(), None::<&str>) {
+        eprintln!("could not open {url} externally: {e}");
     }
 }
 

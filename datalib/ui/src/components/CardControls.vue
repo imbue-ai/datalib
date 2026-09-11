@@ -107,7 +107,7 @@ function goForward() {
     :href="aloneHref"
     target="_blank"
     rel="noopener"
-    title="open this card alone"
+    title="open this card alone, in a new tab or window"
     >↗</a
   >
   <button
