@@ -95,6 +95,25 @@ Linux binaries read the host's CA store (`/etc/ssl/certs`), the way
 the system curl does; `SSL_CERT_FILE` overrides it. macOS binaries use
 the system trust store through Apple's Security framework.
 
+**The musl legs are reproducible.** The `aarch64-unknown-linux-musl`
+binary in release `curl-impersonate-v2.2.2-1`, built on a GitHub arm64
+runner, is byte-for-byte identical (sha256 `adafa92f…dc28e7`) to one
+built the same way in Docker on a Mac. So the pin is checkable by
+anyone, not only trusted:
+
+```sh
+git clone --depth 1 --branch v2.2.2 https://github.com/lexiforest/curl-impersonate.git upstream
+docker run --rm -v "$PWD:/work" -w /work -e UPSTREAM_COMMIT=<commit from pin.env> alpine:3.21 sh -c '
+    apk add --no-cache bash ninja cmake make patch linux-headers build-base perl go file tar >/dev/null
+    third-party/curl-impersonate/build.sh aarch64-unknown-linux-musl upstream out'
+sha256sum out/curl-impersonate-aarch64-unknown-linux-musl/curl-impersonate   # compare with the release's
+```
+
+The Alpine image tag is what pins the compiler; a new `alpine:3.21`
+point release could move the bytes. The darwin and linux-gnu legs
+were not checked for this and are not expected to reproduce (Xcode and
+Ubuntu toolchains move with the runner image).
+
 ## Bumping the pin
 
 Chrome moves, and a stale profile eventually stops being camouflage.

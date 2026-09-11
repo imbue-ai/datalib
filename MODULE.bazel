@@ -141,12 +141,12 @@ CURL_IMPERSONATE_RELEASE = "curl-impersonate-v2.2.2-1"
         build_file_content = 'exports_files(["curl-impersonate"])',
     )
     for triple, sha in [
-        ("aarch64-apple-darwin", "SHA256_PLACEHOLDER_AARCH64_APPLE_DARWIN"),
-        ("x86_64-apple-darwin", "SHA256_PLACEHOLDER_X86_64_APPLE_DARWIN"),
-        ("x86_64-unknown-linux-gnu", "SHA256_PLACEHOLDER_X86_64_UNKNOWN_LINUX_GNU"),
-        ("aarch64-unknown-linux-gnu", "SHA256_PLACEHOLDER_AARCH64_UNKNOWN_LINUX_GNU"),
-        ("x86_64-unknown-linux-musl", "SHA256_PLACEHOLDER_X86_64_UNKNOWN_LINUX_MUSL"),
-        ("aarch64-unknown-linux-musl", "SHA256_PLACEHOLDER_AARCH64_UNKNOWN_LINUX_MUSL"),
+        ("aarch64-apple-darwin", "3df522dcdcbc922bf730ab4044ee9e4589c0d5082f05dea0ed2e6594e5505e2d"),
+        ("x86_64-apple-darwin", "8b4271c1b98efa7e9cbc8e093e5927ca5f88cd5663db7f5750becd8a7aaa8d95"),
+        ("x86_64-unknown-linux-gnu", "908b1e3c0cdcd645e29d157a43845b1df22ce482478d62d07df5c02c28ea1dfc"),
+        ("aarch64-unknown-linux-gnu", "9098cb004d74e028ea159abf1224a45696f9359dec16b999e5749e14ee674018"),
+        ("x86_64-unknown-linux-musl", "eef9c448b0f9e4d0d67924969ae9afe9d84b0e7f43275b5a132b1dba77116d71"),
+        ("aarch64-unknown-linux-musl", "c2bb9bd8caa1c5aafaa3a04f7be30bf166b7a98290aba83427323255b8bc582f"),
     ]
 ]
 
