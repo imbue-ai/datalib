@@ -135,7 +135,10 @@ impl ProgressSink for EmitterSink {
             step: self.step.clone(),
             level: LogLevel::Info,
             msg: format!("finish: {msg}"),
+            ts: None,
+            stream: None,
             target: None,
+            thread: None,
             fields: None,
         });
     }

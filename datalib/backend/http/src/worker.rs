@@ -446,6 +446,9 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
 
     let mut command = Command::new(dag_bin);
     command.arg(&config_path);
+    // The job id is the run id: one identity for the queue's row, the
+    // runner's record and every row the run store writes.
+    command.arg("--run-id").arg(&job.id);
     if let Some(binary_dir) = cfg.binary_dir.as_ref() {
         command.arg("--binary-dir").arg(binary_dir);
     }
