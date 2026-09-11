@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use datalib_dirtree_diff::analyze;
-use datalib_dirtree_diff::analyze::group_duplicates;
+use datalib_dirtree_diff::analyze::{explained_subtrees, group_duplicates, Explained};
 use datalib_dirtree_diff::model::{Diff, DiffResult, Entry, Inputs, Side, SideInput, Status};
 
 // Digests are only ever compared for equality, so the tests use short
@@ -23,6 +23,7 @@ fn sized_file(path: &str, digest: &str, size: i64) -> Entry {
         kind: "file".into(),
         size,
         digest: digest.into(),
+        entries: 0,
     }
 }
 
@@ -30,12 +31,24 @@ fn dir(path: &str, digest: &str) -> Entry {
     sized_dir(path, digest, 100)
 }
 
+/// A directory whose interior is spelled out in the same case, so its
+/// own `entries` count is left at zero and the rollup counts the rows.
 fn sized_dir(path: &str, digest: &str, size: i64) -> Entry {
     Entry {
         path: path.into(),
         kind: "dir".into(),
         size,
         digest: digest.into(),
+        entries: 0,
+    }
+}
+
+/// A directory the way the store reads it when it skipped the interior:
+/// the row itself says how much is beneath it.
+fn dir_holding(path: &str, digest: &str, entries: i64) -> Entry {
+    Entry {
+        entries,
+        ..dir(path, digest)
     }
 }
 
@@ -207,6 +220,26 @@ fn the_survivor_counts_what_it_absorbed() {
     assert_eq!(r.summary.rolled_up, 2);
 }
 
+/// The store leaves the interior of a moved directory out of the file
+/// diff, so the directory row alone has to carry the count.
+#[test]
+fn a_move_whose_interior_was_never_fetched_still_counts_it() {
+    let r = Case {
+        removed: vec![dir_holding("docs", ALPHA, 2)],
+        added: vec![dir_holding("archive", ALPHA, 2)],
+        ..Default::default()
+    }
+    .run();
+    assert_eq!(
+        statuses(&r, Side::Left),
+        vec![("docs".to_string(), Status::MovedOut)]
+    );
+    assert_eq!(r.node(Side::Left, "docs").unwrap().rolled_up, 2);
+    assert_eq!(r.summary.moves, 1);
+    assert_eq!(r.summary.moved_entries, 3);
+    assert_eq!(r.summary.rolled_up, 2);
+}
+
 #[test]
 fn a_descendant_that_moved_somewhere_else_survives_the_rollup() {
     // Only entries making the *same* journey get absorbed.
@@ -224,6 +257,42 @@ fn a_descendant_that_moved_somewhere_else_survives_the_rollup() {
         ]
     );
     assert_eq!(r.node(Side::Left, "docs").unwrap().rolled_up, 0);
+}
+
+/// What the store may leave out of the file diff: only subtrees the
+/// directory rows fully explain, outermost only, biggest first.
+#[test]
+fn explained_subtrees_are_the_outermost_moves_and_copies() {
+    let diff = Diff {
+        removed: vec![
+            dir_holding("docs", ALPHA, 2),
+            dir_holding("docs/reports", BETA, 1),
+            dir_holding("big", GAMMA, 900),
+            dir_holding("old_theme", DELTA, 3),
+        ],
+        added: vec![
+            dir_holding("archive", ALPHA, 2),
+            dir_holding("archive/reports", BETA, 1),
+            dir_holding("moved_big", GAMMA, 900),
+            dir_holding("theme_backup", "EEEE", 4),
+            // Changed content: nothing about it is explained.
+            dir_holding("fresh", "FFFF", 7),
+        ],
+        modified: vec![(dir("src", "1111"), dir("src", "2222"))],
+    };
+    let copies_right = [(DELTA.to_string(), "keep/theme".to_string())].into();
+    let copies_left = [("EEEE".to_string(), "theme".to_string())].into();
+    assert_eq!(
+        explained_subtrees(&diff, &copies_right, &copies_left),
+        Explained {
+            moves: vec![
+                ("big".into(), "moved_big".into()),
+                ("docs".into(), "archive".into()),
+            ],
+            left_copies: vec!["old_theme".into()],
+            right_copies: vec!["theme_backup".into()],
+        }
+    );
 }
 
 // deletes and copies

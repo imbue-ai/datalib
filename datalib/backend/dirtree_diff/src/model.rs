@@ -40,7 +40,7 @@ impl Status {
     }
 }
 
-/// One row of `files`, on one side.
+/// One row of `files` or `dirs`, on one side.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub path: String,
@@ -49,6 +49,11 @@ pub struct Entry {
     /// Hex digest as doltlite's `hex()` renders it. Only ever compared
     /// for equality.
     pub digest: String,
+    /// For a directory, everything beneath it, recursively — what a
+    /// rollup of this directory absorbs, whether or not those rows
+    /// were fetched. Zero for a file.
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub entries: i64,
 }
 
 impl Entry {
@@ -216,7 +221,7 @@ pub struct SideResult {
 pub struct Summary {
     /// Top-level moves, after the subtree rollup.
     pub moves: usize,
-    /// Matched pairs before the rollup.
+    /// Every entry that moved, those inside a moved directory included.
     pub moved_entries: usize,
     /// Entries absorbed by a rollup, across moves, copies and dups.
     pub rolled_up: u32,

@@ -78,6 +78,8 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_dirtree_diff",
+        "//datalib/backend/etl/providers/fsindex:datalib_etl_fsindex",
+        "@datalib_crates//:anyhow",
         "@datalib_crates//:hex",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",

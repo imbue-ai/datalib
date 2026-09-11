@@ -2,27 +2,20 @@
 
 use std::path::Path;
 
-use datalib_dirtree_diff::store::{self, Commit};
+use datalib_dirtree_diff::analyze::Explained;
+use datalib_dirtree_diff::store::{self, Commit, Skip, Table};
+use datalib_etl_fsindex::ingest::schema_raw::{DIRS_DDL, FILES_DDL};
 
+/// A store with fsindex's own two tables. A `dir` row lands in `dirs`
+/// (its `size` doubling as `entries`, which these tests never read
+/// back), anything else in `files`.
 async fn make_scan(path: &Path, rows: &[(&str, &str, i64, &str)]) -> Commit {
     let pool = store::open(path).await.unwrap();
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS files (
-            id TEXT PRIMARY KEY, kind TEXT NOT NULL,
-            size INTEGER NOT NULL, blake3 BLOB NOT NULL)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    for ddl in [FILES_DDL, DIRS_DDL] {
+        sqlx::query(ddl).execute(&pool).await.unwrap();
+    }
     for (id, kind, size, digest) in rows {
-        sqlx::query("INSERT INTO files (id, kind, size, blake3) VALUES (?,?,?,?)")
-            .bind(id)
-            .bind(kind)
-            .bind(size)
-            .bind(hex::decode(digest).unwrap())
-            .execute(&pool)
-            .await
-            .unwrap();
+        insert(&pool, id, kind, *size, digest).await;
     }
     sqlx::query("SELECT dolt_commit('-Am','scan')")
         .execute(&pool)
@@ -31,6 +24,39 @@ async fn make_scan(path: &Path, rows: &[(&str, &str, i64, &str)]) -> Commit {
     let commit = store::resolve_ref(&pool, "HEAD").await.unwrap();
     pool.close().await;
     commit
+}
+
+async fn insert(pool: &sqlx::SqlitePool, id: &str, kind: &str, size: i64, digest: &str) {
+    let blake3 = hex::decode(digest).unwrap();
+    let query = if kind == "dir" {
+        sqlx::query("INSERT INTO dirs (id, size, entries, blake3) VALUES (?,?,?,?)")
+            .bind(id)
+            .bind(size)
+            .bind(size)
+            .bind(blake3)
+    } else {
+        sqlx::query("INSERT INTO files (id, kind, size, blake3) VALUES (?,?,?,?)")
+            .bind(id)
+            .bind(kind)
+            .bind(size)
+            .bind(blake3)
+    };
+    query.execute(pool).await.unwrap();
+}
+
+/// Both tables' diffs, concatenated, the way the binary assembles them
+/// when nothing is skipped.
+async fn fetch_both(
+    pool: &sqlx::SqlitePool,
+    from: &Commit,
+    to: &Commit,
+) -> anyhow::Result<datalib_dirtree_diff::model::Diff> {
+    let mut diff = store::fetch_diff(pool, Table::Dirs, from, to, &Skip::default()).await?;
+    let files = store::fetch_diff(pool, Table::Files, from, to, &Skip::default()).await?;
+    diff.removed.extend(files.removed);
+    diff.added.extend(files.added);
+    diff.modified.extend(files.modified);
+    Ok(diff)
 }
 
 fn digest(byte: u8) -> String {
@@ -72,7 +98,7 @@ async fn two_independent_files_unify_and_diff() {
         .unwrap();
     let pool = store::open(&unified).await.unwrap();
 
-    let diff = store::fetch_diff(&pool, &left, &right).await.unwrap();
+    let diff = fetch_both(&pool, &left, &right).await.unwrap();
     let mut removed: Vec<&str> = diff.removed.iter().map(|e| e.path.as_str()).collect();
     let mut added: Vec<&str> = diff.added.iter().map(|e| e.path.as_str()).collect();
     removed.sort_unstable();
@@ -86,6 +112,35 @@ async fn two_independent_files_unify_and_diff() {
     assert_eq!(
         moved_out.digest, moved_in.digest,
         "a moved directory must keep its tree-hash across the unify"
+    );
+    assert_eq!(moved_in.kind, "dir", "a `dirs` row reads back as kind dir");
+    assert_eq!(moved_in.entries, 30, "a `dirs` row carries its entry count");
+
+    // The directory-level diff alone already tells the move story, and
+    // the file diff can then leave the moved interior out.
+    let dirs_only = store::fetch_diff(&pool, Table::Dirs, &left, &right, &Skip::default())
+        .await
+        .unwrap();
+    assert_eq!(dirs_only.removed.len(), 1);
+    assert_eq!(dirs_only.added.len(), 1);
+    let skip = Skip::new(&Explained {
+        moves: vec![("docs".into(), "archive".into())],
+        ..Default::default()
+    });
+    let files_only = store::fetch_diff(&pool, Table::Files, &left, &right, &skip)
+        .await
+        .unwrap();
+    let removed: Vec<&str> = files_only.removed.iter().map(|e| e.path.as_str()).collect();
+    let added: Vec<&str> = files_only.added.iter().map(|e| e.path.as_str()).collect();
+    assert_eq!(
+        removed,
+        vec!["gone.txt"],
+        "docs/q3.txt is implied by the move"
+    );
+    assert_eq!(
+        added,
+        vec!["fresh.txt"],
+        "archive/q3.txt is implied by the move"
     );
     pool.close().await;
 }
@@ -117,7 +172,7 @@ async fn the_fetching_connection_cannot_see_what_it_fetched() {
             .unwrap();
     }
 
-    let on_fetching_connection = store::fetch_diff(&pool, &left, &right).await;
+    let on_fetching_connection = fetch_both(&pool, &left, &right).await;
     assert!(
         on_fetching_connection.is_err(),
         "the fetching connection unexpectedly saw `files` — if doltlite now \
@@ -127,7 +182,7 @@ async fn the_fetching_connection_cannot_see_what_it_fetched() {
 
     // The same file, a new connection: fine.
     let reopened = store::open(&scratch).await.unwrap();
-    let diff = store::fetch_diff(&reopened, &left, &right).await.unwrap();
+    let diff = fetch_both(&reopened, &left, &right).await.unwrap();
     assert_eq!(diff.removed.len(), 1);
     assert_eq!(diff.added.len(), 1);
     reopened.close().await;
@@ -152,7 +207,7 @@ async fn two_commits_in_one_file_diff_directly() {
         .unwrap();
     let second = store::resolve_ref(&pool, "HEAD").await.unwrap();
 
-    let diff = store::fetch_diff(&pool, &first, &second).await.unwrap();
+    let diff = fetch_both(&pool, &first, &second).await.unwrap();
     assert_eq!(diff.added.len(), 1);
     assert_eq!(diff.added[0].path, "b.txt");
     assert!(diff.removed.is_empty());
@@ -199,8 +254,9 @@ async fn digest_lookup_finds_surviving_copies() {
     .await;
 
     let pool = store::open(&path).await.unwrap();
-    let want = [digest(0x44).to_uppercase(), digest(0x99).to_uppercase()]
+    let want = [digest(0x44), digest(0x99)]
         .into_iter()
+        .map(|d| ("file".to_string(), d.to_uppercase()))
         .collect();
     let found = store::lookup_digests(&pool, &commit, &want).await.unwrap();
     assert_eq!(
