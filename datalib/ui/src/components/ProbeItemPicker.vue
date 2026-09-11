@@ -21,7 +21,7 @@ import {
   type GridReadyEvent,
   type ValueGetterParams,
 } from "ag-grid-community";
-import type { ProbeItem } from "@/api";
+import type { ProbeItem, ProbeItemKind } from "@/api";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
@@ -44,18 +44,25 @@ const byTitle = (p: ValueGetterParams<ProbeItem>) => p.data?.title || p.data?.pa
 const byDate = (p: ValueGetterParams<ProbeItem>) => p.data?.updated_at?.slice(0, 10) ?? "";
 const idTooltip = (p: { data?: ProbeItem }) => p.data?.path ?? "";
 
-/// One column set per item kind. A mailbox is named by the very string
-/// the filter matches, so it needs no second column for it; a
-/// conversation is named by a title over an opaque id.
-const COLUMNS: Record<string, { placeholder: string; columns: ColDef<ProbeItem>[] }> = {
-  mailbox: {
-    placeholder: "Search these labels…",
-    columns: [
-      { headerName: "Label", field: "path", flex: 1, minWidth: 200 },
-      { headerName: "Role", field: "role", width: 110 },
-      { headerName: "Messages", field: "messages", width: 110, type: "numericColumn" },
-    ],
-  },
+type Layout = { placeholder: string; columns: ColDef<ProbeItem>[] };
+
+/// A mailbox is named by the very string the filter matches, so it
+/// needs no second column for it. A keyword sits in the same list — a
+/// Gmail flag reads as a label — so it shares the layout.
+const LABELS: Layout = {
+  placeholder: "Search these labels…",
+  columns: [
+    { headerName: "Label", field: "path", flex: 1, minWidth: 200 },
+    { headerName: "Role", field: "role", width: 110 },
+    { headerName: "Messages", field: "messages", width: 110, type: "numericColumn" },
+  ],
+};
+
+/// One column set per item kind; a conversation is named by a title
+/// over an opaque id.
+const COLUMNS: Record<ProbeItemKind, Layout> = {
+  mailbox: LABELS,
+  keyword: LABELS,
   conversation: {
     placeholder: "Search these conversations…",
     columns: [
@@ -88,15 +95,13 @@ const COLUMNS: Record<string, { placeholder: string; columns: ColDef<ProbeItem>[
   },
 };
 
-/// Every list a probe returns is one kind throughout, `labels` being
-/// the exception: it mixes mailboxes with keywords, and both read as a
-/// label. So the first item's kind decides, and a keyword reads as a
-/// mailbox. A column for a field no row fills in — Gmail's message
-/// counts, a Claude chat's head-count — is dropped rather than shown
-/// blank.
+/// Every list a probe returns is one kind throughout (`labels` mixes
+/// mailboxes with keywords, and those share a layout), so the first
+/// item's kind decides. A column for a field no row fills in — Gmail's
+/// message counts, a Claude chat's head-count — is dropped rather than
+/// shown blank.
 const layout = computed(() => {
-  const kind = props.items[0]?.kind ?? "mailbox";
-  const { placeholder, columns } = COLUMNS[kind === "keyword" ? "mailbox" : kind] ?? COLUMNS.mailbox;
+  const { placeholder, columns } = COLUMNS[props.items[0]?.kind ?? "mailbox"] ?? LABELS;
   const filled = (field: keyof ProbeItem) =>
     props.items.some((i) => i[field] !== null && i[field] !== undefined);
   return {

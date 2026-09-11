@@ -51,6 +51,7 @@ import {
   startLatchkeyConnect,
   latchkeyConnectStatus,
   type ProbeItem,
+  type ProbeItemKind,
   type ProbeReport,
   type StoredAccount,
 } from "@/api";
@@ -610,7 +611,7 @@ const probeDetail = computed(() => probe.value.message.split("\n").slice(1).join
 /// Which of a report's item kinds each `probe:` noun takes. A render
 /// filter matches only what emails are filed in, never a Gmail flag,
 /// which is why `mailboxes` is narrower than `labels`.
-const PROBE_KINDS: Record<ProbeNoun, string[]> = {
+const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
   labels: ["mailbox", "keyword"],
   mailboxes: ["mailbox"],
   conversations: ["conversation"],
@@ -668,7 +669,7 @@ const PROBE_NOUNS: Record<ProbeNoun, string> = {
 };
 
 /// The noun each item kind is counted under in the "Reached …" line.
-const KIND_NOUNS: Record<string, ProbeNoun> = {
+const KIND_NOUNS: Record<ProbeItemKind, ProbeNoun> = {
   mailbox: "labels",
   keyword: "labels",
   conversation: "conversations",
@@ -681,6 +682,8 @@ const KIND_NOUNS: Record<string, ProbeNoun> = {
 const probeSummary = computed(() => {
   const counts = new Map<ProbeNoun, number>();
   for (const item of probe.value.report?.items ?? []) {
+    // A backend newer than this build may name a kind it lacks; the
+    // item still counts, as the plainest noun.
     const noun = KIND_NOUNS[item.kind] ?? "labels";
     counts.set(noun, (counts.get(noun) ?? 0) + 1);
   }

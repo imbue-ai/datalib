@@ -847,17 +847,21 @@ export type ServiceRegistration = {
   login_flow_params: Record<string, unknown>;
 };
 
+/// What one probe item is. Mirrors `ProbeItemKind` in
+/// datalib/backend/source_common/src/probe.rs, hand-kept in step:
+/// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
+/// downloadable, but never matched by the render-side filter),
+/// `conversation` (one chat thread — a Claude chat, a Slack DM) or
+/// `channel` (a Slack channel).
+export type ProbeItemKind = "mailbox" | "keyword" | "conversation" | "channel";
+
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
 /// datalib/backend/source_common/src/probe.rs.
 export type ProbeItem = {
   /// The exact string to put in the filter — a label path, a
   /// conversation uuid.
   path: string;
-  /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
-  /// downloadable, but never matched by the render-side filter),
-  /// `conversation` (one chat thread — a Claude chat, a Slack DM) or
-  /// `channel` (a Slack channel).
-  kind: string;
+  kind: ProbeItemKind;
   /// A human name, when `path` is an opaque id.
   title: string | null;
   /// A short tag: a mailbox's role, a channel's `private`, a DM's
