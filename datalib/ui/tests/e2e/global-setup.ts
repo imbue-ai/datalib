@@ -37,6 +37,38 @@ function assertOnlyKnownSpecsWriteTheConfig(dir: string): void {
   }
 }
 
+type Server = { name: string; url: string; log: string };
+
+/// A backend announces its URL as soon as it has bound a port, which is
+/// several seconds before it can answer anything — so this is where the
+/// suite waits for the servers `playwright.config.ts` started. It is
+/// what Playwright's `webServer` readiness probe would do, if the
+/// servers could be run under `webServer` at all.
+async function awaitHealthy(servers: Server[], token: string): Promise<void> {
+  const deadline = Date.now() + 60_000;
+  for (const server of servers) {
+    const ctx = await request.newContext({ baseURL: server.url });
+    try {
+      for (;;) {
+        const ok = await ctx
+          .get(`/api/health?token=${token}`)
+          .then((res) => res.ok())
+          .catch(() => false);
+        if (ok) break;
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `backend ${server.name} (${server.url}) never answered ` +
+              `/api/health — its output is in ${server.log}`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    } finally {
+      await ctx.dispose();
+    }
+  }
+}
+
 /// Spawn each sandbox backend's `unified_index` applet before its spec
 /// asks for it.
 ///
@@ -68,11 +100,16 @@ export default async function globalSetup(): Promise<void> {
   assertOnlyKnownSpecsWriteTheConfig(
     decodeURIComponent(new URL(".", import.meta.url).pathname),
   );
+  const token = process.env.DATALIB_TOKEN ?? "";
+  await awaitHealthy(
+    JSON.parse(process.env.FW_E2E_SERVERS ?? "[]") as Server[],
+    token,
+  );
   const sandboxes = JSON.parse(process.env.FW_E2E_SANDBOXES ?? "[]") as {
     url: string;
   }[];
   await warmApplets(
     sandboxes.map((s) => s.url),
-    process.env.DATALIB_TOKEN ?? "",
+    token,
   );
 }
