@@ -1,9 +1,9 @@
-//! Decrypt → mirror → commit for a single WhatsApp backup directory.
+//! Decrypt → mirror → register media, for a single WhatsApp backup directory.
 //!
-//! [`ingest`] takes `backup_dir`, the 32-byte root key and a target
-//! `wa_raw.doltlite_db`: it decrypts the message store to a tempfile, walks
-//! the curated tables into the target (drop-and-rebuild), registers media by
-//! blake3, and issues one `dolt_commit`.
+//! [`fetch`] decrypts `Databases/msgstore.db.crypt15` to a tempfile, hands
+//! that file to the shared SQLite mirror engine (every table, drop-and-
+//! refill, doltlite dedups), then walks `Media/` into the sidecar CAS and
+//! the `wa_media_files` registry. The caller commits.
 //!
 //! No plaintext ever reaches a user-visible path — the decrypted msgstore is a
 //! `NamedTempFile` dropped at the end, and media are read in place from
@@ -11,53 +11,72 @@
 
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use std::time::Duration;
+use std::collections::HashSet;
+use std::path::Path;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::blob_cas::{self, BlobCas, CasInsert};
 use datalib_etl::doltlite_raw;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
+use datalib_etl::progress::Progress;
+use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 use datalib_whatsapp_backup::decrypt_file;
 
-use crate::schema_raw::{ALL_DDL, DATA_TABLES};
+use crate::schema_raw::{ALL_DDL, WA_MEDIA_FILES};
+
+/// The plaintext attachment tree inside a WhatsApp backup, and the prefix
+/// msgstore puts on every `message_media.file_path`.
+const MEDIA_DIR: &str = "Media";
+
+/// How many bytes of media may sit in memory before a CAS flush.
+const PUT_BATCH_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Default)]
 pub struct IngestSummary {
-    pub jids: u64,
-    pub jid_map: u64,
-    pub lid_display_names: u64,
-    pub chats: u64,
-    pub messages: u64,
-    pub message_text: u64,
-    pub message_media: u64,
-    pub message_add_on: u64,
-    pub message_add_on_reaction: u64,
+    pub mirror: MirrorStats,
     pub media_files: u64,
-    /// `dolt_commit` returned a non-empty hash (something actually
-    /// changed). False on a clean re-run of the same backup — drop-and-
-    /// rebuild produces an empty commit and we skip it.
-    pub committed: bool,
+}
+
+impl IngestSummary {
+    pub fn summary(&self) -> String {
+        format!("{} media_files={}", self.mirror.summary(), self.media_files)
+    }
+}
+
+/// The mirror engine's knobs, minus the source path (that is the tempfile
+/// [`fetch`] decrypts into) and minus `snapshot` (a tempfile nobody else
+/// has open needs none).
+#[derive(Debug, Clone, Default)]
+pub struct MirrorKnobs {
+    pub include_tables: Vec<String>,
+    pub exclude_tables: Vec<String>,
+    pub exclude_columns: Vec<String>,
+    pub gc: bool,
+}
+
+impl MirrorKnobs {
+    pub fn everything() -> Self {
+        Self {
+            include_tables: vec!["*".to_string()],
+            ..Default::default()
+        }
+    }
 }
 
 /// Thin wrapper over the doltlite raw-store pool, mirroring the
 /// `RawDb` pattern every other provider uses. Lets the sync
-/// orchestrator open the pool once at the start of an download run
+/// orchestrator open the pool once at the start of an ingest run
 /// (so SIGINT can flush in-flight stores) and pass the same handle
-/// into `ingest`.
+/// into `fetch`.
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
     /// Media bytes. Opened with the handle rather than from a path
     /// further down, so there is one opener per store and `close_all`
-    /// reaches it — the handle used to carry the *path* instead, and
-    /// the open happened three call levels away.
+    /// reaches it.
     cas: BlobCas,
 }
 
@@ -83,6 +102,8 @@ impl RawDb {
     }
 }
 
+/// Standalone: open, fetch, commit, close. The DAG step goes through
+/// [`fetch`] with a store the orchestrator opened.
 pub async fn ingest(
     backup_dir: &Path,
     root_key: &[u8; 32],
@@ -90,43 +111,32 @@ pub async fn ingest(
     cache: &FingerprintCache,
 ) -> Result<IngestSummary> {
     let db = RawDb::open(target_db_path).await?;
-    let out = fetch(backup_dir, root_key, &db, cache).await;
-    // This opened the handle, so this closes it.
+    let out = fetch(
+        backup_dir,
+        root_key,
+        &db,
+        cache,
+        &MirrorKnobs::everything(),
+        &Progress::noop(),
+    )
+    .await;
+    if out.is_ok() {
+        doltlite_raw::commit_run(db.pool(), "whatsapp ingest").await?;
+    }
     db.close().await;
     out
 }
 
-/// Variant of [`ingest`] that takes an already-open [`RawDb`]. Used by
-/// the sync orchestrator, which opens the pool up front (so SIGINT can
-/// flush) and threads it through.
 pub async fn fetch(
     backup_dir: &Path,
     root_key: &[u8; 32],
     db: &RawDb,
     cache: &FingerprintCache,
+    knobs: &MirrorKnobs,
+    progress: &Progress,
 ) -> Result<IngestSummary> {
-    fetch_with_pool(backup_dir, root_key, db.pool().clone(), db.cas(), cache).await
-}
-
-async fn fetch_with_pool(
-    backup_dir: &Path,
-    root_key: &[u8; 32],
-    dst_pool: SqlitePool,
-    cas: &BlobCas,
-    cache: &FingerprintCache,
-) -> Result<IngestSummary> {
-    // `backup_dir` lives inside the `sync:` block (not on
-    // SourceCommon.input_path), so core's load-time tilde expansion
-    // doesn't touch it — it lands here as a literal `~/...` if the
-    // user wrote `backup_dir: ~/backups/WhatsApp` in YAML. Expand
-    // here, same way signal handles `snapshot_dir`.
-    let backup_dir = expand_tilde(backup_dir);
-    let backup_dir = backup_dir.as_path();
     let crypt_path = backup_dir.join("Databases").join("msgstore.db.crypt15");
-    tracing::info!(
-        crypt_path = %crypt_path.display(),
-        "whatsapp::ingest start"
-    );
+    tracing::info!(crypt_path = %crypt_path.display(), "whatsapp::ingest start");
 
     let plaintext = decrypt_file(&crypt_path, root_key)
         .with_context(|| format!("decrypt {}", crypt_path.display()))?;
@@ -134,42 +144,34 @@ async fn fetch_with_pool(
         decrypted_bytes = plaintext.len(),
         "whatsapp::ingest: msgstore decrypted"
     );
-
     let tmp = tempfile::Builder::new()
         .prefix("wa-msgstore-")
         .suffix(".db")
         .tempfile()
         .context("create tempfile for decrypted msgstore")?;
     std::fs::write(tmp.path(), &plaintext).context("write decrypted msgstore to tempfile")?;
-    // Free the heap copy — the file on disk is the working source now.
     drop(plaintext);
 
-    let src_pool = open_source_sqlite(tmp.path()).await?;
-
-    truncate_wa_tables(&dst_pool).await?;
-
-    let mut summary = IngestSummary::default();
-    let jid_map = mirror_jid(&src_pool, &dst_pool, &mut summary).await?;
-    mirror_jid_map(&src_pool, &dst_pool, &jid_map, &mut summary).await?;
-    mirror_lid_display_name(&src_pool, &dst_pool, &jid_map, &mut summary).await?;
-    let chat_map = mirror_chat(&src_pool, &dst_pool, &jid_map, &mut summary).await?;
-    let msg_map = mirror_message(&src_pool, &dst_pool, &jid_map, &chat_map, &mut summary).await?;
-    mirror_message_text(&src_pool, &dst_pool, &msg_map, &mut summary).await?;
-    mirror_message_media(&src_pool, &dst_pool, &msg_map, &mut summary).await?;
-    let addon_map = mirror_message_add_on(
-        &src_pool,
-        &dst_pool,
-        &jid_map,
-        &chat_map,
-        &msg_map,
-        &mut summary,
-    )
-    .await?;
-    mirror_message_add_on_reaction(&src_pool, &dst_pool, &addon_map, &mut summary).await?;
+    let options = MirrorOptions {
+        source_path: tmp.path().to_path_buf(),
+        snapshot: false,
+        include_tables: knobs.include_tables.clone(),
+        exclude_tables: knobs.exclude_tables.clone(),
+        exclude_columns: knobs.exclude_columns.clone(),
+        stable_key_columns: Vec::new(),
+        primary_keys: Default::default(),
+        gc: knobs.gc,
+        sidecar_tables: vec![WA_MEDIA_FILES.to_string()],
+    };
+    let mut summary = IngestSummary {
+        mirror: mirror::run(db.pool(), &options, progress).await?,
+        media_files: 0,
+    };
+    drop(tmp);
 
     let media_root = backup_dir.join(MEDIA_DIR);
     if media_root.is_dir() {
-        mirror_media_files(&dst_pool, cas, &media_root, cache, &mut summary).await?;
+        mirror_media_files(db.pool(), db.cas(), &media_root, cache, &mut summary).await?;
     } else {
         tracing::info!(
             media_root = %media_root.display(),
@@ -177,691 +179,13 @@ async fn fetch_with_pool(
         );
     }
 
-    summary.committed = commit_if_dirty(&dst_pool).await?;
-
-    tracing::info!(?summary, "whatsapp::ingest done");
+    tracing::info!(summary = %summary.summary(), "whatsapp::ingest done");
     Ok(summary)
-}
-
-async fn open_source_sqlite(path: &Path) -> Result<SqlitePool> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .with_context(|| format!("sqlite uri for {}", path.display()))?
-        .read_only(true);
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_secs(60))
-        .connect_with(opts)
-        .await
-        .with_context(|| format!("open source sqlite at {}", path.display()))
-}
-
-async fn truncate_wa_tables(pool: &SqlitePool) -> Result<()> {
-    let mut tx = pool.begin().await.context("begin truncate tx")?;
-    for table in DATA_TABLES {
-        let sql = format!("DELETE FROM {table}");
-        // Audited: `table` iterates a `&'static str` const array of our own
-        // table names; no runtime data reaches the statement.
-        sqlx::query(sqlx::AssertSqlSafe(sql))
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("truncate {table}"))?;
-    }
-    tx.commit().await.context("commit truncate tx")?;
-    Ok(())
-}
-
-// Per-table mirrors
-
-async fn mirror_jid(
-    src: &SqlitePool,
-    dst: &SqlitePool,
-    summary: &mut IngestSummary,
-) -> Result<HashMap<i64, String>> {
-    let rows = sqlx::query("SELECT _id, user, server, agent, device, type, raw_string FROM jid")
-        .fetch_all(src)
-        .await
-        .context("select jid")?;
-    let mut map = HashMap::with_capacity(rows.len());
-    let mut tx = dst.begin().await.context("begin wa_jid tx")?;
-    for r in &rows {
-        let id: i64 = r.get("_id");
-        let user: String = r.get("user");
-        let server: String = r.get("server");
-        let agent: Option<i64> = r.get("agent");
-        let device: Option<i64> = r.get("device");
-        let ty: Option<i64> = r.get("type");
-        let raw_string: Option<String> = r.get("raw_string");
-        // Some seed rows in jid have NULL raw_string (synthetic
-        // placeholders). Synthesize from user@server so we never store
-        // a NULL PK and the map still resolves to *some* stable key.
-        let raw_string = raw_string.unwrap_or_else(|| format!("{user}@{server}"));
-        sqlx::query(
-            "INSERT INTO wa_jid (raw_string, user, server, agent, device, type) \
-             VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&raw_string)
-        .bind(&user)
-        .bind(&server)
-        .bind(agent)
-        .bind(device)
-        .bind(ty)
-        .execute(&mut *tx)
-        .await
-        .context("insert wa_jid")?;
-        map.insert(id, raw_string);
-    }
-    tx.commit().await.context("commit wa_jid tx")?;
-    summary.jids = rows.len() as u64;
-    Ok(map)
-}
-
-/// Older msgstore versions have neither of the two LID tables. Absent is
-/// "nothing to map", not a failed ingest.
-async fn source_has_table(src: &SqlitePool, table: &str) -> Result<bool> {
-    let n: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
-            .bind(table)
-            .fetch_one(src)
-            .await
-            .with_context(|| format!("probe for {table}"))?;
-    Ok(n > 0)
-}
-
-async fn mirror_jid_map(
-    src: &SqlitePool,
-    dst: &SqlitePool,
-    jid_map: &HashMap<i64, String>,
-    summary: &mut IngestSummary,
-) -> Result<()> {
-    if !source_has_table(src, "jid_map").await? {
-        tracing::info!(
-            "whatsapp::ingest: msgstore has no jid_map table; @lid chats keep their raw ids"
-        );
-        return Ok(());
-    }
-    let rows = sqlx::query("SELECT lid_row_id, jid_row_id, sort_id FROM jid_map")
-        .fetch_all(src)
-        .await
-        .context("select jid_map")?;
-    let mut tx = dst.begin().await.context("begin wa_jid_map tx")?;
-    let mut n = 0u64;
-    for r in &rows {
-        let lid_row_id: i64 = r.get("lid_row_id");
-        let jid_row_id: i64 = r.get("jid_row_id");
-        let sort_id: Option<i64> = r.get("sort_id");
-        let (Some(lid), Some(jid)) = (jid_map.get(&lid_row_id), jid_map.get(&jid_row_id)) else {
-            tracing::warn!(
-                lid_row_id,
-                jid_row_id,
-                "jid_map: row id not in jid; dropping row"
-            );
-            continue;
-        };
-        sqlx::query("INSERT INTO wa_jid_map (lid_jid, jid, sort_id) VALUES (?, ?, ?)")
-            .bind(lid)
-            .bind(jid)
-            .bind(sort_id)
-            .execute(&mut *tx)
-            .await
-            .context("insert wa_jid_map")?;
-        n += 1;
-    }
-    tx.commit().await.context("commit wa_jid_map tx")?;
-    summary.jid_map = n;
-    Ok(())
-}
-
-async fn mirror_lid_display_name(
-    src: &SqlitePool,
-    dst: &SqlitePool,
-    jid_map: &HashMap<i64, String>,
-    summary: &mut IngestSummary,
-) -> Result<()> {
-    if !source_has_table(src, "lid_display_name").await? {
-        return Ok(());
-    }
-    let rows = sqlx::query("SELECT lid_row_id, display_name, username FROM lid_display_name")
-        .fetch_all(src)
-        .await
-        .context("select lid_display_name")?;
-    let mut tx = dst.begin().await.context("begin wa_lid_display_name tx")?;
-    let mut n = 0u64;
-    for r in &rows {
-        let lid_row_id: i64 = r.get("lid_row_id");
-        let display_name: String = r.get("display_name");
-        let username: Option<String> = r.get("username");
-        let Some(lid) = jid_map.get(&lid_row_id) else {
-            tracing::warn!(
-                lid_row_id,
-                "lid_display_name: row id not in jid; dropping row"
-            );
-            continue;
-        };
-        sqlx::query(
-            "INSERT INTO wa_lid_display_name (lid_jid, display_name, username) VALUES (?, ?, ?)",
-        )
-        .bind(lid)
-        .bind(&display_name)
-        .bind(&username)
-        .execute(&mut *tx)
-        .await
-        .context("insert wa_lid_display_name")?;
-        n += 1;
-    }
-    tx.commit().await.context("commit wa_lid_display_name tx")?;
-    summary.lid_display_names = n;
-    Ok(())
-}
-
-async fn mirror_chat(
-    src: &SqlitePool,
-    dst: &SqlitePool,
-    jid_map: &HashMap<i64, String>,
-    summary: &mut IngestSummary,
-) -> Result<HashMap<i64, String>> {
-    let rows = sqlx::query(
-        "SELECT _id, jid_row_id, hidden, subject, created_timestamp, archived, sort_timestamp, \
-                mod_tag, gen, spam_detection, unseen_earliest_message_received_time, \
-                unseen_message_count, unseen_missed_calls_count, unseen_row_count, \
-                plaintext_disabled, vcard_ui_dismissed, show_group_description, \
-                ephemeral_expiration, ephemeral_setting_timestamp, ephemeral_displayed_exemptions, \
-                ephemeral_disappearing_messages_initiator, unseen_important_message_count, \
-                group_type, unseen_message_reaction_count, unseen_comment_message_count, \
-                growth_lock_level, growth_lock_expiration_ts, \
-                has_new_community_admin_dialog_been_acknowledged, history_sync_progress, \
-                chat_lock, chat_origin, participation_status, account_jid_row_id, \
-                chat_encryption_state, group_member_count, limited_sharing, \
-                limited_sharing_setting_timestamp, is_contact, ephemeral_after_read_duration, \
-                business_chat_state \
-         FROM chat",
-    )
-    .fetch_all(src)
-    .await
-    .context("select chat")?;
-    let mut map = HashMap::with_capacity(rows.len());
-    let mut tx = dst.begin().await.context("begin wa_chat tx")?;
-    for r in &rows {
-        let id: i64 = r.get("_id");
-        let jid_row_id: Option<i64> = r.get("jid_row_id");
-        let Some(chat_jid) = jid_row_id.and_then(|i| jid_map.get(&i).cloned()) else {
-            tracing::warn!(
-                chat_id = id,
-                "wa_chat: jid_row_id not in jid map; dropping row"
-            );
-            continue;
-        };
-        let account_jid_row_id: Option<i64> = r.get("account_jid_row_id");
-        let account_jid = account_jid_row_id.and_then(|i| jid_map.get(&i).cloned());
-        sqlx::query(
-            "INSERT INTO wa_chat (chat_jid, hidden, subject, created_timestamp, archived, \
-                sort_timestamp, mod_tag, gen, spam_detection, \
-                unseen_earliest_message_received_time, unseen_message_count, \
-                unseen_missed_calls_count, unseen_row_count, plaintext_disabled, \
-                vcard_ui_dismissed, show_group_description, ephemeral_expiration, \
-                ephemeral_setting_timestamp, ephemeral_displayed_exemptions, \
-                ephemeral_disappearing_messages_initiator, unseen_important_message_count, \
-                group_type, unseen_message_reaction_count, unseen_comment_message_count, \
-                growth_lock_level, growth_lock_expiration_ts, \
-                has_new_community_admin_dialog_been_acknowledged, history_sync_progress, \
-                chat_lock, chat_origin, participation_status, account_jid, \
-                chat_encryption_state, group_member_count, limited_sharing, \
-                limited_sharing_setting_timestamp, is_contact, ephemeral_after_read_duration, \
-                business_chat_state) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&chat_jid)
-        .bind(r.get::<Option<i64>, _>("hidden"))
-        .bind(r.get::<Option<String>, _>("subject"))
-        .bind(r.get::<Option<i64>, _>("created_timestamp"))
-        .bind(r.get::<Option<i64>, _>("archived"))
-        .bind(r.get::<Option<i64>, _>("sort_timestamp"))
-        .bind(r.get::<Option<i64>, _>("mod_tag"))
-        .bind(r.get::<Option<f64>, _>("gen"))
-        .bind(r.get::<Option<i64>, _>("spam_detection"))
-        .bind(r.get::<Option<i64>, _>("unseen_earliest_message_received_time"))
-        .bind(r.get::<Option<i64>, _>("unseen_message_count"))
-        .bind(r.get::<Option<i64>, _>("unseen_missed_calls_count"))
-        .bind(r.get::<Option<i64>, _>("unseen_row_count"))
-        .bind(r.get::<Option<i64>, _>("plaintext_disabled"))
-        .bind(r.get::<Option<i64>, _>("vcard_ui_dismissed"))
-        .bind(r.get::<Option<i64>, _>("show_group_description"))
-        .bind(r.get::<Option<i64>, _>("ephemeral_expiration"))
-        .bind(r.get::<Option<i64>, _>("ephemeral_setting_timestamp"))
-        .bind(r.get::<Option<i64>, _>("ephemeral_displayed_exemptions"))
-        .bind(r.get::<Option<i64>, _>("ephemeral_disappearing_messages_initiator"))
-        .bind(r.get::<Option<i64>, _>("unseen_important_message_count"))
-        .bind(r.get::<Option<i64>, _>("group_type"))
-        .bind(r.get::<Option<i64>, _>("unseen_message_reaction_count"))
-        .bind(r.get::<Option<i64>, _>("unseen_comment_message_count"))
-        .bind(r.get::<Option<i64>, _>("growth_lock_level"))
-        .bind(r.get::<Option<i64>, _>("growth_lock_expiration_ts"))
-        .bind(r.get::<Option<i64>, _>("has_new_community_admin_dialog_been_acknowledged"))
-        .bind(r.get::<Option<i64>, _>("history_sync_progress"))
-        .bind(r.get::<Option<i64>, _>("chat_lock"))
-        .bind(r.get::<Option<String>, _>("chat_origin"))
-        .bind(r.get::<Option<i64>, _>("participation_status"))
-        .bind(account_jid)
-        .bind(r.get::<Option<i64>, _>("chat_encryption_state"))
-        .bind(r.get::<Option<i64>, _>("group_member_count"))
-        .bind(r.get::<Option<i64>, _>("limited_sharing"))
-        .bind(r.get::<Option<i64>, _>("limited_sharing_setting_timestamp"))
-        .bind(r.get::<Option<i64>, _>("is_contact"))
-        .bind(r.get::<Option<i64>, _>("ephemeral_after_read_duration"))
-        .bind(r.get::<Option<i64>, _>("business_chat_state"))
-        .execute(&mut *tx)
-        .await
-        .context("insert wa_chat")?;
-        map.insert(id, chat_jid);
-    }
-    tx.commit().await.context("commit wa_chat tx")?;
-    summary.chats = map.len() as u64;
-    Ok(map)
-}
-
-/// Triple identifying a message in the rekeyed schema.
-#[derive(Debug, Clone)]
-pub struct MsgKey {
-    pub chat_jid: String,
-    pub key_id: String,
-    pub from_me: i64,
-}
-
-async fn mirror_message(
-    src: &SqlitePool,
-    dst: &SqlitePool,
-    jid_map: &HashMap<i64, String>,
-    chat_map: &HashMap<i64, String>,
-    summary: &mut IngestSummary,
-) -> Result<HashMap<i64, MsgKey>> {
-    let rows = sqlx::query(
-        "SELECT _id, chat_row_id, from_me, key_id, sender_jid_row_id, status, broadcast, \
-                recipient_count, participant_hash, origination_flags, origin, timestamp, \
-                received_timestamp, receipt_server_timestamp, message_type, text_data, starred, \
-                lookup_tables, message_add_on_flags, view_mode, sort_id, translated_text, \
-                server_sts \
-         FROM message",
-    )
-    .fetch_all(src)
-    .await
-    .context("select message")?;
-    let mut map = HashMap::with_capacity(rows.len());
-    let mut tx = dst.begin().await.context("begin wa_message tx")?;
-    for r in &rows {
-        let id: i64 = r.get("_id");
-        let chat_row_id: i64 = r.get("chat_row_id");
-        let from_me: i64 = r.get("from_me");
-        let key_id: String = r.get("key_id");
-        let Some(chat_jid) = chat_map.get(&chat_row_id).cloned() else {
-            // Every msgstore ships a synthetic seed row at `_id=1` — an
-            // Android schema artifact, not a message. Other orphan rows
-            // still WARN, since a pruned chat or a corrupt source is worth
-            // flagging.
-            if chat_row_id == -1 && key_id == "-1" {
-                tracing::debug!(message_id = id, "wa_message: dropping msgstore seed row");
-            } else {
-                tracing::warn!(
-                    message_id = id,
-                    chat_row_id,
-                    key_id,
-                    "wa_message: chat_row_id not in chat map; dropping row"
-                );
-            }
-            continue;
-        };
-        let sender_jid_row_id: Option<i64> = r.get("sender_jid_row_id");
-        let sender_jid = sender_jid_row_id.and_then(|i| jid_map.get(&i).cloned());
-        sqlx::query(
-            "INSERT OR IGNORE INTO wa_message (chat_jid, key_id, from_me, sender_jid, status, \
-                broadcast, recipient_count, participant_hash, origination_flags, origin, \
-                timestamp, received_timestamp, receipt_server_timestamp, message_type, \
-                text_data, starred, lookup_tables, message_add_on_flags, view_mode, sort_id, \
-                translated_text, server_sts) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&chat_jid)
-        .bind(&key_id)
-        .bind(from_me)
-        .bind(sender_jid)
-        .bind(r.get::<Option<i64>, _>("status"))
-        .bind(r.get::<Option<i64>, _>("broadcast"))
-        .bind(r.get::<Option<i64>, _>("recipient_count"))
-        .bind(r.get::<Option<String>, _>("participant_hash"))
-        .bind(r.get::<Option<i64>, _>("origination_flags"))
-        .bind(r.get::<Option<i64>, _>("origin"))
-        .bind(r.get::<Option<i64>, _>("timestamp"))
-        .bind(r.get::<Option<i64>, _>("received_timestamp"))
-        .bind(r.get::<Option<i64>, _>("receipt_server_timestamp"))
-        .bind(r.get::<Option<i64>, _>("message_type"))
-        .bind(r.get::<Option<String>, _>("text_data"))
-        .bind(r.get::<Option<i64>, _>("starred"))
-        .bind(r.get::<Option<i64>, _>("lookup_tables"))
-        .bind(r.get::<Option<i64>, _>("message_add_on_flags"))
-        .bind(r.get::<Option<i64>, _>("view_mode"))
-        .bind(r.get::<i64, _>("sort_id"))
-        .bind(r.get::<Option<String>, _>("translated_text"))
-        .bind(r.get::<Option<i64>, _>("server_sts"))
-        .execute(&mut *tx)
-        .await
-        .context("insert wa_message")?;
-        map.insert(
-            id,
-            MsgKey {
-                chat_jid,
-                key_id,
-                from_me,
-            },
-        );
-    }
-    tx.commit().await.context("commit wa_message tx")?;
-    summary.messages = map.len() as u64;
-    Ok(map)
-}
-
-async fn mirror_message_text(
-    src: &SqlitePool,
-    dst: &SqlitePool,
-    msg_map: &HashMap<i64, MsgKey>,
-    summary: &mut IngestSummary,
-) -> Result<()> {
-    let rows = sqlx::query(
-        "SELECT message_row_id, description, page_title, url, font_style, text_color, \
-                background_color, preview_type, invite_link_group_type, counter_abuse_token, \
-                fb_experiment_id, social_media_post_type, link_media_duration_seconds, \
-                link_end_index \
-         FROM message_text",
-    )
-    .fetch_all(src)
-    .await
-    .context("select message_text")?;
-    let mut tx = dst.begin().await.context("begin wa_message_text tx")?;
-    let mut n = 0u64;
-    for r in &rows {
-        let message_row_id: i64 = r.get("message_row_id");
-        let Some(k) = msg_map.get(&message_row_id) else {
-            continue;
-        };
-        sqlx::query(
-            "INSERT OR IGNORE INTO wa_message_text (chat_jid, key_id, from_me, description, \
-                page_title, url, font_style, text_color, background_color, preview_type, \
-                invite_link_group_type, counter_abuse_token, fb_experiment_id, \
-                social_media_post_type, link_media_duration_seconds, link_end_index) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&k.chat_jid)
-        .bind(&k.key_id)
-        .bind(k.from_me)
-        .bind(r.get::<Option<String>, _>("description"))
-        .bind(r.get::<Option<String>, _>("page_title"))
-        .bind(r.get::<Option<String>, _>("url"))
-        .bind(r.get::<Option<i64>, _>("font_style"))
-        .bind(r.get::<Option<i64>, _>("text_color"))
-        .bind(r.get::<Option<i64>, _>("background_color"))
-        .bind(r.get::<Option<i64>, _>("preview_type"))
-        .bind(r.get::<Option<i64>, _>("invite_link_group_type"))
-        .bind(r.get::<Option<String>, _>("counter_abuse_token"))
-        .bind(r.get::<Option<i64>, _>("fb_experiment_id"))
-        .bind(r.get::<Option<i64>, _>("social_media_post_type"))
-        .bind(r.get::<Option<i64>, _>("link_media_duration_seconds"))
-        .bind(r.get::<Option<i64>, _>("link_end_index"))
-        .execute(&mut *tx)
-        .await
-        .context("insert wa_message_text")?;
-        n += 1;
-    }
-    tx.commit().await.context("commit wa_message_text tx")?;
-    summary.message_text = n;
-    Ok(())
-}
-
-async fn mirror_message_media(
-    src: &SqlitePool,
-    dst: &SqlitePool,
-    msg_map: &HashMap<i64, MsgKey>,
-    summary: &mut IngestSummary,
-) -> Result<()> {
-    let rows = sqlx::query(
-        "SELECT message_row_id, autotransfer_retry_enabled, transferred, face_x, face_y, \
-                has_streaming_sidecar, page_count, thumbnail_height_width_ratio, \
-                first_scan_sidecar, first_scan_length, message_url, media_upload_handle, \
-                sticker_flags, raw_transcription_text, first_viewed_timestamp, \
-                is_animated_sticker, premium_message, media_caption, metadata_url, \
-                motion_photo_presentation_offset_ms, qr_url, media_key_domain, e2ee_media_key, \
-                emoji_tags, multicast_id, media_job_uuid, transcoded, file_path, file_size, \
-                suspicious_content, trim_from, trim_to, media_key, media_key_timestamp, width, \
-                height, gif_attribution, direct_path, mime_type, file_length, media_name, \
-                file_hash, media_duration, enc_file_hash, partial_media_hash, \
-                partial_media_enc_hash, original_file_hash, mute_video, doodle_id, \
-                media_source_type, accessibility_label, media_transcode_quality, is_offloaded \
-         FROM message_media",
-    )
-    .fetch_all(src)
-    .await
-    .context("select message_media")?;
-    let mut tx = dst.begin().await.context("begin wa_message_media tx")?;
-    let mut n = 0u64;
-    for r in &rows {
-        let message_row_id: i64 = r.get("message_row_id");
-        let Some(k) = msg_map.get(&message_row_id) else {
-            continue;
-        };
-        sqlx::query(
-            "INSERT OR IGNORE INTO wa_message_media (chat_jid, key_id, from_me, \
-                autotransfer_retry_enabled, transferred, face_x, face_y, has_streaming_sidecar, \
-                page_count, thumbnail_height_width_ratio, first_scan_sidecar, first_scan_length, \
-                message_url, media_upload_handle, sticker_flags, raw_transcription_text, \
-                first_viewed_timestamp, is_animated_sticker, premium_message, media_caption, \
-                metadata_url, motion_photo_presentation_offset_ms, qr_url, media_key_domain, \
-                e2ee_media_key, emoji_tags, multicast_id, media_job_uuid, transcoded, file_path, \
-                file_size, suspicious_content, trim_from, trim_to, media_key, \
-                media_key_timestamp, width, height, gif_attribution, direct_path, mime_type, \
-                file_length, media_name, file_hash, media_duration, enc_file_hash, \
-                partial_media_hash, partial_media_enc_hash, original_file_hash, mute_video, \
-                doodle_id, media_source_type, accessibility_label, media_transcode_quality, \
-                is_offloaded) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-                     ?, ?, ?, ?, ?)",
-        )
-        .bind(&k.chat_jid)
-        .bind(&k.key_id)
-        .bind(k.from_me)
-        .bind(r.get::<Option<i64>, _>("autotransfer_retry_enabled"))
-        .bind(r.get::<Option<i64>, _>("transferred"))
-        .bind(r.get::<Option<i64>, _>("face_x"))
-        .bind(r.get::<Option<i64>, _>("face_y"))
-        .bind(r.get::<Option<i64>, _>("has_streaming_sidecar"))
-        .bind(r.get::<Option<i64>, _>("page_count"))
-        .bind(r.get::<Option<f64>, _>("thumbnail_height_width_ratio"))
-        .bind(r.get::<Option<Vec<u8>>, _>("first_scan_sidecar"))
-        .bind(r.get::<Option<i64>, _>("first_scan_length"))
-        .bind(r.get::<Option<String>, _>("message_url"))
-        .bind(r.get::<Option<String>, _>("media_upload_handle"))
-        .bind(r.get::<Option<i64>, _>("sticker_flags"))
-        .bind(r.get::<Option<String>, _>("raw_transcription_text"))
-        .bind(r.get::<Option<i64>, _>("first_viewed_timestamp"))
-        .bind(r.get::<Option<i64>, _>("is_animated_sticker"))
-        .bind(r.get::<Option<i64>, _>("premium_message"))
-        .bind(r.get::<Option<String>, _>("media_caption"))
-        .bind(r.get::<Option<String>, _>("metadata_url"))
-        .bind(r.get::<Option<i64>, _>("motion_photo_presentation_offset_ms"))
-        .bind(r.get::<Option<String>, _>("qr_url"))
-        .bind(r.get::<Option<i64>, _>("media_key_domain"))
-        .bind(r.get::<Option<Vec<u8>>, _>("e2ee_media_key"))
-        .bind(r.get::<Option<String>, _>("emoji_tags"))
-        .bind(r.get::<Option<String>, _>("multicast_id"))
-        .bind(r.get::<Option<String>, _>("media_job_uuid"))
-        .bind(r.get::<Option<i64>, _>("transcoded"))
-        .bind(r.get::<Option<String>, _>("file_path"))
-        .bind(r.get::<Option<i64>, _>("file_size"))
-        .bind(r.get::<Option<i64>, _>("suspicious_content"))
-        .bind(r.get::<Option<i64>, _>("trim_from"))
-        .bind(r.get::<Option<i64>, _>("trim_to"))
-        .bind(r.get::<Option<Vec<u8>>, _>("media_key"))
-        .bind(r.get::<Option<i64>, _>("media_key_timestamp"))
-        .bind(r.get::<Option<i64>, _>("width"))
-        .bind(r.get::<Option<i64>, _>("height"))
-        .bind(r.get::<Option<i64>, _>("gif_attribution"))
-        .bind(r.get::<Option<String>, _>("direct_path"))
-        .bind(r.get::<Option<String>, _>("mime_type"))
-        .bind(r.get::<Option<i64>, _>("file_length"))
-        .bind(r.get::<Option<String>, _>("media_name"))
-        .bind(r.get::<Option<String>, _>("file_hash"))
-        .bind(r.get::<Option<i64>, _>("media_duration"))
-        .bind(r.get::<Option<String>, _>("enc_file_hash"))
-        .bind(r.get::<Option<String>, _>("partial_media_hash"))
-        .bind(r.get::<Option<String>, _>("partial_media_enc_hash"))
-        .bind(r.get::<Option<String>, _>("original_file_hash"))
-        .bind(r.get::<Option<i64>, _>("mute_video"))
-        .bind(r.get::<Option<String>, _>("doodle_id"))
-        .bind(r.get::<Option<i64>, _>("media_source_type"))
-        .bind(r.get::<Option<String>, _>("accessibility_label"))
-        .bind(r.get::<Option<i64>, _>("media_transcode_quality"))
-        .bind(r.get::<Option<i64>, _>("is_offloaded"))
-        .execute(&mut *tx)
-        .await
-        .context("insert wa_message_media")?;
-        n += 1;
-    }
-    tx.commit().await.context("commit wa_message_media tx")?;
-    summary.message_media = n;
-    Ok(())
-}
-
-async fn mirror_message_add_on(
-    src: &SqlitePool,
-    dst: &SqlitePool,
-    jid_map: &HashMap<i64, String>,
-    chat_map: &HashMap<i64, String>,
-    msg_map: &HashMap<i64, MsgKey>,
-    summary: &mut IngestSummary,
-) -> Result<HashMap<i64, MsgKey>> {
-    let rows = sqlx::query(
-        "SELECT _id, chat_row_id, from_me, key_id, sender_jid_row_id, parent_message_row_id, \
-                timestamp, status, message_add_on_type, received_timestamp, \
-                expiry_duration_in_secs, server_timestamp, expiry_timestamp, expiry_type \
-         FROM message_add_on",
-    )
-    .fetch_all(src)
-    .await
-    .context("select message_add_on")?;
-    let mut tx = dst.begin().await.context("begin wa_message_add_on tx")?;
-    let mut addon_map = HashMap::with_capacity(rows.len());
-    let mut n = 0u64;
-    for r in &rows {
-        let id: i64 = r.get("_id");
-        let chat_row_id: Option<i64> = r.get("chat_row_id");
-        let from_me: Option<i64> = r.get("from_me");
-        let key_id: String = r.get("key_id");
-        let Some(chat_jid) = chat_row_id.and_then(|i| chat_map.get(&i).cloned()) else {
-            tracing::warn!(
-                add_on_id = id,
-                "wa_message_add_on: chat_row_id not in chat map; dropping row"
-            );
-            continue;
-        };
-        let from_me = from_me.unwrap_or(0);
-        let sender_jid = r
-            .get::<Option<i64>, _>("sender_jid_row_id")
-            .and_then(|i| jid_map.get(&i).cloned());
-        let parent_key = r
-            .get::<Option<i64>, _>("parent_message_row_id")
-            .and_then(|i| msg_map.get(&i));
-        let (parent_chat_jid, parent_key_id, parent_from_me) = match parent_key {
-            Some(k) => (
-                Some(k.chat_jid.clone()),
-                Some(k.key_id.clone()),
-                Some(k.from_me),
-            ),
-            None => (None, None, None),
-        };
-        sqlx::query(
-            "INSERT OR IGNORE INTO wa_message_add_on (chat_jid, key_id, from_me, sender_jid, \
-                parent_chat_jid, parent_key_id, parent_from_me, timestamp, status, \
-                message_add_on_type, received_timestamp, expiry_duration_in_secs, \
-                server_timestamp, expiry_timestamp, expiry_type) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&chat_jid)
-        .bind(&key_id)
-        .bind(from_me)
-        .bind(sender_jid)
-        .bind(parent_chat_jid)
-        .bind(parent_key_id)
-        .bind(parent_from_me)
-        .bind(r.get::<Option<i64>, _>("timestamp"))
-        .bind(r.get::<Option<i64>, _>("status"))
-        .bind(r.get::<Option<i64>, _>("message_add_on_type"))
-        .bind(r.get::<Option<i64>, _>("received_timestamp"))
-        .bind(r.get::<Option<i64>, _>("expiry_duration_in_secs"))
-        .bind(r.get::<Option<i64>, _>("server_timestamp"))
-        .bind(r.get::<Option<i64>, _>("expiry_timestamp"))
-        .bind(r.get::<Option<i64>, _>("expiry_type"))
-        .execute(&mut *tx)
-        .await
-        .context("insert wa_message_add_on")?;
-        addon_map.insert(
-            id,
-            MsgKey {
-                chat_jid,
-                key_id,
-                from_me,
-            },
-        );
-        n += 1;
-    }
-    tx.commit().await.context("commit wa_message_add_on tx")?;
-    summary.message_add_on = n;
-    Ok(addon_map)
-}
-
-async fn mirror_message_add_on_reaction(
-    src: &SqlitePool,
-    dst: &SqlitePool,
-    addon_map: &HashMap<i64, MsgKey>,
-    summary: &mut IngestSummary,
-) -> Result<()> {
-    let rows = sqlx::query(
-        "SELECT message_add_on_row_id, reaction, sender_timestamp FROM message_add_on_reaction",
-    )
-    .fetch_all(src)
-    .await
-    .context("select message_add_on_reaction")?;
-    let mut tx = dst
-        .begin()
-        .await
-        .context("begin wa_message_add_on_reaction tx")?;
-    let mut n = 0u64;
-    for r in &rows {
-        let add_on_row_id: i64 = r.get("message_add_on_row_id");
-        let Some(k) = addon_map.get(&add_on_row_id) else {
-            continue;
-        };
-        sqlx::query(
-            "INSERT OR IGNORE INTO wa_message_add_on_reaction (chat_jid, key_id, from_me, \
-                reaction, sender_timestamp) \
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(&k.chat_jid)
-        .bind(&k.key_id)
-        .bind(k.from_me)
-        .bind(r.get::<Option<String>, _>("reaction"))
-        .bind(r.get::<Option<i64>, _>("sender_timestamp"))
-        .execute(&mut *tx)
-        .await
-        .context("insert wa_message_add_on_reaction")?;
-        n += 1;
-    }
-    tx.commit()
-        .await
-        .context("commit wa_message_add_on_reaction tx")?;
-    summary.message_add_on_reaction = n;
-    Ok(())
 }
 
 /// Register every media file in `wa_media_files` and make sure its bytes are
 /// in the sibling blob CAS, keyed by blake3. Render joins
-/// `wa_message_media.file_path` → `wa_media_files.relative_path` and uses that
+/// `message_media.file_path` → `wa_media_files.relative_path` and uses that
 /// row's blake3 as the CAS key.
 ///
 /// **`relative_path` is relative to the backup root, not to `Media/`.** That is
@@ -902,8 +226,14 @@ async fn mirror_media_files(
         );
     }
 
-    // Metadata rows, straight from the scan.
+    // Drop-and-refill, like the mirrored tables: a byte-identical refill
+    // is not a change to doltlite, and a file gone from `Media/` goes
+    // from the registry.
     let mut tx = dst.begin().await.context("begin wa_media_files tx")?;
+    sqlx::query("DELETE FROM wa_media_files")
+        .execute(&mut *tx)
+        .await
+        .context("clear wa_media_files")?;
     for f in &scan.files {
         sqlx::query(
             "INSERT OR IGNORE INTO wa_media_files \
@@ -962,13 +292,6 @@ async fn mirror_media_files(
     Ok(())
 }
 
-/// The plaintext attachment tree inside a WhatsApp backup, and the prefix
-/// msgstore puts on every `message_media.file_path`.
-const MEDIA_DIR: &str = "Media";
-
-/// How many bytes of media may sit in memory before a CAS flush.
-const PUT_BATCH_BYTES: u64 = 64 * 1024 * 1024;
-
 async fn put_media_batch(cas: &BlobCas, items: &[(String, Vec<u8>, Option<String>)]) -> Result<()> {
     if items.is_empty() {
         return Ok(());
@@ -1005,41 +328,13 @@ fn mime_from_ext(path: &Path) -> Option<String> {
     })
 }
 
-fn expand_tilde(p: &Path) -> PathBuf {
-    if let Ok(rest) = p.strip_prefix("~") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    p.to_path_buf()
-}
-
-/// Stamp the doltlite db with one `dolt_commit('-Am', '…')`. Returns
-/// true if a commit hash came back (= something changed). No-op + false
-/// when the linked libsqlite3 isn't doltlite (e.g. plain `cargo test`
-/// against the bundled `libsqlite3-sys` amalgamation) or when the
-/// working tree is clean.
-async fn commit_if_dirty(pool: &SqlitePool) -> Result<bool> {
-    let hash = doltlite_raw::commit_run(pool, "whatsapp ingest").await?;
-    match hash {
-        Some(h) => {
-            tracing::info!(commit_hash = %h, "whatsapp::ingest committed");
-            Ok(true)
-        }
-        None => {
-            tracing::info!("whatsapp::ingest: no commit (clean tree or non-doltlite sqlite)");
-            Ok(false)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// The media registry and msgstore have to spell an attachment's path
     /// the same way, because render's only link between a message and its
-    /// bytes is `wa_message_media.file_path = wa_media_files.relative_path`.
+    /// bytes is `message_media.file_path = wa_media_files.relative_path`.
     /// Registering the path below `Media/` made that join match nothing, so
     /// every WhatsApp attachment rendered as "(not yet fetched)" while its
     /// bytes sat in the CAS.
@@ -1079,10 +374,7 @@ mod tests {
     }
 
     /// End-to-end against the developer's real WhatsApp backup.
-    /// Marked `#[ignore]` so `cargo test` doesn't fail on CI / on
-    /// boxes that don't have the backup or the env var. Run with
-    /// `cargo test -p datalib-etl-whatsapp -- --ignored \
-    ///  --nocapture real_backup`.
+    /// `#[ignore]`d: needs the backup and WHATSAPP_BACKUP_DECRYPTION_KEY.
     #[tokio::test]
     #[ignore]
     async fn real_backup() {
@@ -1102,16 +394,7 @@ mod tests {
         let summary = ingest(&backup_dir, &root, &target, &cache)
             .await
             .expect("ingest ok");
-        // Test-only diagnostic. `disallowed-macros` would forbid this
-        // in production code; the integration test is `#[ignore]`'d so
-        // it never runs without `--nocapture`, and the user explicitly
-        // wants the summary on the terminal when they invoke it.
-        #[allow(clippy::disallowed_macros)]
-        {
-            eprintln!("summary: {summary:?}");
-        }
-        assert!(summary.jids > 0);
-        assert!(summary.chats > 0);
-        assert!(summary.messages > 0);
+        assert!(summary.mirror.tables > 0);
+        assert!(summary.mirror.rows > 0);
     }
 }

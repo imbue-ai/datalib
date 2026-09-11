@@ -93,6 +93,7 @@ async fn main() -> Result<()> {
         },
         primary_keys: BTreeMap::new(),
         gc: args.gc,
+        sidecar_tables: Vec::new(),
     };
 
     let pool = mirror::open_mirror(&args.db).await?;

@@ -637,7 +637,9 @@ period = "month"   # month (default) | day | year | all — span of each rendere
 
 # Points at the `WhatsApp/` dir pulled off the phone (containing
 # `Databases/msgstore.db.crypt15` and a `Media/` tree). The 32-byte root
-# key is hex-encoded in the named env var.
+# key is hex-encoded in the named env var. The decrypted database is
+# mirrored table for table (the same engine as lightroom / apple_photos),
+# so the knobs are theirs; see providers/whatsapp/INGEST.md.
 [[groups]]
 id = "whatsapp"
 type = "whatsapp"
@@ -645,6 +647,11 @@ type = "whatsapp"
 [[steps]]
 group = "whatsapp"
 function = "ingest"
+[steps.params]
+# skip_churn = true        # default; drops props / backup_changes / frequent
+# exclude_tables = []      # table-name globs, on top of skip_churn
+# exclude_columns = []     # `Table.column` globs
+# gc = false               # dolt_gc() at the start of each run
 [steps.params.backup]
 path = "~/backups/WhatsApp"
 key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"   # default if omitted

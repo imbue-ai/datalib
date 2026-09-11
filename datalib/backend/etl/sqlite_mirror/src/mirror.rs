@@ -42,6 +42,17 @@ pub struct MirrorOptions {
     pub primary_keys: BTreeMap<String, Vec<String>>,
     /// Run `dolt_gc()` at the start of the run. See [`run`].
     pub gc: bool,
+    /// Tables the provider keeps in the same store beside the mirror
+    /// (whatsapp's media registry). Never dropped by the per-run
+    /// rebuild, and a source table with one of these names is an error,
+    /// the same as [`RESERVED_TABLES`].
+    pub sidecar_tables: Vec<String>,
+}
+
+impl MirrorOptions {
+    fn is_kept(&self, name: &str) -> bool {
+        RESERVED_TABLES.contains(&name) || self.sidecar_tables.iter().any(|t| t == name)
+    }
 }
 
 /// What one mirror run did. Feeds the run summary and the tests.
@@ -261,7 +272,7 @@ async fn mirror_attached(
     // including tables the source no longer has — see
     // [`drop_all_mirror_tables`].
     progress.set_message("clearing");
-    let dropped = drop_all_mirror_tables(&mut *conn).await?;
+    let dropped = drop_all_mirror_tables(&mut *conn, opts).await?;
     let wanted: BTreeSet<&str> = specs.iter().map(|s| s.name.as_str()).collect();
     // For the run summary only. The drop above doesn't care whether a
     // table is stale, but "the catalog lost a table since last run" is
@@ -293,9 +304,9 @@ async fn build_specs(
         if !wants_table(opts, &name) {
             continue;
         }
-        if RESERVED_TABLES.contains(&name.as_str()) {
+        if opts.is_kept(&name) {
             bail!(
-                "source table {name:?} collides with the raw store's own bookkeeping table; \
+                "source table {name:?} collides with a table the store keeps for itself; \
                  exclude it with exclude_tables = [{name:?}]"
             );
         }
@@ -508,12 +519,15 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
     Ok(n as u64)
 }
 
-async fn drop_all_mirror_tables(conn: &mut SqliteConnection) -> Result<Vec<String>> {
+async fn drop_all_mirror_tables(
+    conn: &mut SqliteConnection,
+    opts: &MirrorOptions,
+) -> Result<Vec<String>> {
     let existing = plan::table_names(&mut *conn, "main").await?;
     let mut tx = conn.begin().await.context("begin drop-all tx")?;
     let mut dropped = Vec::new();
     for name in existing {
-        if RESERVED_TABLES.contains(&name.as_str()) {
+        if opts.is_kept(&name) {
             continue;
         }
         sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -561,6 +575,7 @@ mod tests {
             stable_key_columns: vec!["id_global".into()],
             primary_keys: BTreeMap::new(),
             gc: false,
+            sidecar_tables: Vec::new(),
         }
     }
 

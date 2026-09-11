@@ -267,8 +267,10 @@ populating the backpointer.
 All four source-name-keyed providers wanted an upstream identity.
 Three now have a route, and none is blocked on a decision any more:
 
-- **whatsapp** — `wa_chat.account_jid` is already in the raw store,
-  just not surfaced by `parse`. `Upstream(account_jid)`.
+- **whatsapp** — `chat.account_jid_row_id` is already in the raw store
+  (msgstore mirrored as-is), a rowid into `jid`; `parse` already
+  resolves that graph and just does not surface this column.
+  `Upstream(jid.raw_string)`.
 - **signal** — the blocker was that `chat_id` and `author_id` are
   autoincrements local to one backup file. `ParsedRecipient.identifier`
   is the e164 or ACI, and both chats and messages resolve to a

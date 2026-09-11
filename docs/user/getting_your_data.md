@@ -280,6 +280,12 @@ the whole backup directory instead:
 adb pull /sdcard/Android/media/com.whatsapp/WhatsApp/ ~/backups/WhatsApp/
 ```
 
+The whole decrypted database is kept — every table, versioned across
+backups, the way the Lightroom and Apple Photos sources keep theirs —
+so a message you delete on the phone is still in an earlier commit of
+the store. Three tables of app bookkeeping are left out by default
+(`skip_churn`); `providers/whatsapp/INGEST.md` says which and why.
+
 ## SMS & calls (SMS Backup & Restore)
 
 Android texts and call logs come from the free **SMS Backup & Restore**

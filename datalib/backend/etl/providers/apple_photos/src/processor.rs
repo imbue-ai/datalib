@@ -28,6 +28,7 @@ pub fn mirror_options(config: &ApplePhotosConfig) -> Result<MirrorOptions> {
         stable_key_columns: config.stable_key_columns.clone(),
         primary_keys: config.primary_keys.clone(),
         gc: config.gc,
+        sidecar_tables: Vec::new(),
     })
 }
 
