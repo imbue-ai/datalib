@@ -11,8 +11,8 @@
 # BuildBuddy instead sidesteps the GHA-cache-shape mismatch entirely.
 #
 # Why the devcontainer image: `bazel test //...` needs the full Bazel
-# build toolchain — clang, cmake, llvm, libclang-dev, lld, perl,
-# pkg-config, libssl-dev — that the prod image deliberately omits. The
+# build toolchain — cmake, lld, perl, pkg-config, libssl-dev — that the
+# prod image deliberately omits. The
 # devcontainer image carries that toolchain on top of the prod image's
 # qmd model cache, latchkey, doltlite CLI, etc. Re-installing it via apt
 # at the start of each job (the pattern `release.yml`'s build matrix
@@ -66,7 +66,7 @@ concurrency:
 # separate runners. Neither is a `needs:` of the other, and both are
 # merge gates, so a musl regression doesn't mask a test failure.
 #
-# Their common setup — the BuildBuddy key and LIBCLANG_PATH — lives in
+# Their common setup — the BuildBuddy key — lives in
 # `.github/actions/prepare-bazel` so the two jobs cannot drift apart.
 #
 # --------------------------------------------------------------------
@@ -155,8 +155,7 @@ jobs:
           # same repo state this one tested.
           fetch-depth: 0
 
-      - id: env
-        uses: ./.github/actions/prepare-bazel
+      - uses: ./.github/actions/prepare-bazel
         with:
           buildbuddy-api-key: ${{ secrets.BUILD_BUDDY_API_KEY }}
 
@@ -191,16 +190,12 @@ jobs:
 
       # This step is the merge gate: a non-zero `bazel test` exit must
       # fail the job. It previously carried `continue-on-error: true` to
-      # hide a red cross while the CI-only failures were triaged — the
-      # two known causes (the old `precommit_test` shelling out to a host
-      # `cargo` the devcontainer doesn't ship, and exec-config bindgen
-      # missing `--host_action_env=LIBCLANG_PATH`) are now fixed at the
-      # source — the first by replacing that target with the hermetic
-      # `//:lint` suite — so the suppression is removed and real failures
-      # gate merges again.
+      # hide a red cross while CI-only failures were triaged (the old
+      # `precommit_test` shelling out to a host `cargo` the devcontainer
+      # doesn't ship, since replaced by the hermetic `//:lint` suite);
+      # the suppression is removed and real failures gate merges again.
       - name: bazel test //...
         run: |
-          libdir="${{ steps.env.outputs.libclang-path }}"
           # `//datalib/ui:e2e_test` (Playwright) IS in this gate. It was
           # excluded for a long time behind a FIXME whose stated
           # precondition — a published image carrying `rsync` and both
@@ -310,8 +305,6 @@ jobs:
           fi
           bazel test -c opt --config=release --config=ci --nostamp "${mode[@]}" \
             --build_metadata=ROLE=CI \
-            --action_env=LIBCLANG_PATH="${libdir}" \
-            --host_action_env=LIBCLANG_PATH="${libdir}" \
             --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
             //...
 
@@ -327,10 +320,7 @@ jobs:
         if: success()
         run: |
           set -euo pipefail
-          libdir="${{ steps.env.outputs.libclang-path }}"
-          flags=(-c opt --config=release --config=ci --nostamp \
-                 --action_env=LIBCLANG_PATH="${libdir}" \
-                 --host_action_env=LIBCLANG_PATH="${libdir}")
+          flags=(-c opt --config=release --config=ci --nostamp)
           if [[ "${{ inputs.remote_execution }}" == "true" ]]; then
               mode=(--config=remote)
           else
@@ -386,19 +376,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - id: env
-        uses: ./.github/actions/prepare-bazel
+      - uses: ./.github/actions/prepare-bazel
         with:
           buildbuddy-api-key: ${{ secrets.BUILD_BUDDY_API_KEY }}
 
       - name: bazel build //datalib/backend:dist (musl static)
         run: |
-          libdir="${{ steps.env.outputs.libclang-path }}"
           bazel build -c opt --config=release --config=musl-x86_64 \
             --nostamp --jobs=16 \
             --build_metadata=ROLE=CI \
-            --action_env=LIBCLANG_PATH="${libdir}" \
-            --host_action_env=LIBCLANG_PATH="${libdir}" \
             //datalib/backend:dist
           for bin in \
               bazel-bin/datalib/backend/dag/datalib_dag_bin \
@@ -429,10 +415,7 @@ jobs:
       - name: doltlite_link_test against the musl binaries
         run: |
           set -euo pipefail
-          libdir="${{ steps.env.outputs.libclang-path }}"
-          flags=(-c opt --config=release --config=musl-x86_64 --nostamp \
-                 --action_env=LIBCLANG_PATH="${libdir}" \
-                 --host_action_env=LIBCLANG_PATH="${libdir}")
+          flags=(-c opt --config=release --config=musl-x86_64 --nostamp)
           bazel build "${flags[@]}" --jobs=16 --build_metadata=ROLE=CI //datalib/backend:bin
           DATALIB_BIN_DIR="$(bazel info bazel-bin "${flags[@]}")/datalib/backend/bin" \
           DATALIB_VCF_DIR="datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng" \
