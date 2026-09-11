@@ -444,6 +444,8 @@ export type DagStep = {
 export type DagStepProgress = {
   msg: string | null;
   metrics: Record<string, number>;
+  // `warn` and `error` log lines so far this run.
+  errors: number;
   updated_at: string;
 };
 
@@ -474,6 +476,9 @@ export type DagRunState =
   | "failed";
 
 export type DagStepRun = {
+  // The run it happened in — what `/api/runs/{run}/log` takes. Empty
+  // for a record written before runs had ids.
+  run_id: string;
   started_at: string;
   finished_at: string | null;
   // Empty while the step is still running.
@@ -675,45 +680,18 @@ export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
   return getJson<SyncSource[]>("/api/sync/sources", signal);
 }
 
-// One DAG task's state on a job's task board: the runner's
-// `DagRunState` with `todo` added for a step the scheduler has not
-// reached, and shorter words for two of the outcomes. The translation
-// lives in `TaskState::for_run_state`
-// (datalib/backend/http/src/worker.rs); keep this union in step with it.
-export type SyncTaskState =
-  // In the plan, not yet reached.
-  | "todo"
-  | "running"
-  // Ran to completion.
-  | "done"
-  // Checked, and already up to date.
-  | "skipped"
-  // Outside this run's subgraph, so it was never considered (a
-  // per-source sync leaves most of the graph here).
-  | "not_selected"
-  | "failed"
-  // Something upstream failed, so this was not invoked.
-  | "blocked";
-
-export type SyncTask = {
-  id: string;
-  state: SyncTaskState;
-  detail?: string | null;
-};
-
 // One push update for a job: an *unnamed* frame on
 // `GET /api/sync/stream`. The worker + enqueue/cancel handlers emit
 // these the instant they write a job's state, so the UI updates without
-// polling. `tasks` is the per-task board (also recoverable from
-// `progress_msg`, which carries it as JSON — see src/sync/progress.ts).
+// polling. What a running job's steps are doing is not here: the runner
+// writes that to the run store, and its writes arrive as `dag_changed`
+// root frames, on which the page refetches `/api/dag`.
 export type JobProgressEvent = {
   id: string;
   kind: string;
   source_ids: string | null;
   state: SyncJobState;
-  progress_pct: number | null;
   progress_msg: string | null;
-  tasks?: SyncTask[] | null;
 };
 
 // The stream itself is opened by `@/live`, not here: it multiplexes one
@@ -761,10 +739,61 @@ export async function cancelJob(id: string, signal?: AbortSignal): Promise<void>
   }
 }
 
-export async function fetchJobLog(id: string, signal?: AbortSignal): Promise<string> {
-  const r = await fetch(`/api/sync/jobs/${encodeURIComponent(id)}/log`, { signal });
-  if (!r.ok) throw new Error(`GET /api/sync/jobs/${id}/log → ${r.status}`);
-  return await r.text();
+// --- The run store -----------------------------------------------------------
+
+// One run, as `system/runs.sqlite` lists it. A job started from the app
+// has the job's id as its run id.
+export type RunInfo = {
+  run_id: string;
+  started_at: string;
+  finished_at: string | null;
+};
+
+// One log line, as the run store holds it.
+export type RunLogLine = {
+  // Monotone within the store; the tail cursor.
+  seq: number;
+  step: string | null;
+  attempt: number;
+  ts: string;
+  // Which pipe of the step it came from; null for a line the runner wrote.
+  stream: "stdout" | "stderr" | null;
+  level: "info" | "warn" | "error";
+  target: string | null;
+  thread: string | null;
+  msg: string;
+  // A JSON object, as text, when the line carried structured fields.
+  fields: string | null;
+};
+
+// Recent runs, newest first; with `step`, only the runs it took part in.
+export function fetchRuns(
+  opts: { step?: string; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<RunInfo[]> {
+  const params = new URLSearchParams();
+  if (opts.step) params.set("step", opts.step);
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  const q = params.toString();
+  return getJson<RunInfo[]>(`/api/runs${q ? `?${q}` : ""}`, signal);
+}
+
+// A run's log lines, oldest first. Tail by remembering the last `seq`
+// seen and passing it as `afterSeq` on the next `dag_changed` frame.
+export function fetchRunLog(
+  run: string,
+  opts: { step?: string; afterSeq?: number; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<RunLogLine[]> {
+  const params = new URLSearchParams();
+  if (opts.step) params.set("step", opts.step);
+  if (opts.afterSeq != null) params.set("after_seq", String(opts.afterSeq));
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  const q = params.toString();
+  return getJson<RunLogLine[]>(
+    `/api/runs/${encodeURIComponent(run)}/log${q ? `?${q}` : ""}`,
+    signal,
+  );
 }
 
 // --- Authoring the `user` namespace ----------------------------------------

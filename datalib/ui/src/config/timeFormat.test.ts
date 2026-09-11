@@ -1,7 +1,7 @@
 // The relative-time formatter behind the "Last synced" column.
 
 import { describe, expect, it } from "vitest";
-import { compareStamps, formatRelative, formatStamp } from "./timeFormat";
+import { compareStamps, formatRelative, formatStamp, formatTimeOfDay } from "./timeFormat";
 
 /// A fixed "now" so the tests don't race the clock. Every case below
 /// is expressed as an offset from it.
@@ -156,5 +156,21 @@ describe("ordering by when, not by how it reads", () => {
     // Neither is older than the other; whatever secondary order the
     // grid settles on is not this function's business.
     expect(compareStamps(null, null)).toBe(0);
+  });
+});
+
+describe("the time of day", () => {
+  it("shows one clock for stamps written in different zones", () => {
+    // The same instant, as a step's tracing line (UTC) and the runner's
+    // arrival stamp (an offset) would write it: one string on screen.
+    const utc = formatTimeOfDay("2026-09-11T15:10:41.113Z");
+    const local = formatTimeOfDay("2026-09-11T17:10:41.113+02:00");
+    expect(utc).toBe(local);
+    expect(utc).toMatch(/^\d\d:\d\d:41\.113$/);
+  });
+
+  it("passes an unreadable stamp through, and says nothing for none", () => {
+    expect(formatTimeOfDay("not a date")).toBe("not a date");
+    expect(formatTimeOfDay(null)).toBe("");
   });
 });

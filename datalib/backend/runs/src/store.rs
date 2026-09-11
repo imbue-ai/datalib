@@ -208,7 +208,15 @@ pub fn canonical_labels(labels: &BTreeMap<String, String>) -> String {
         .join(",")
 }
 
-/// The newest run in the store, as a reader sees it.
+/// One run, as the `runs` table lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunRow {
+    pub run_id: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
+/// One run in the store, as a reader sees it.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Snapshot {
     /// Which run these rows describe. `None` for an empty or absent
@@ -219,9 +227,17 @@ pub struct Snapshot {
     pub finished_at: Option<String>,
     pub steps: Vec<StepRow>,
     pub metrics: Vec<MetricRow>,
+    /// `warn` and `error` log rows per step — the E of USE.
+    pub errors: BTreeMap<String, i64>,
 }
 
+/// The newest run.
 pub async fn snapshot(data_root: &Path) -> Snapshot {
+    snapshot_of(data_root, None).await
+}
+
+/// One run by id, or the newest when `run_id` is `None`.
+pub async fn snapshot_of(data_root: &Path, run_id: Option<&str>) -> Snapshot {
     let path = runs_path(data_root);
     if !path.exists() {
         return Snapshot::default();
@@ -229,15 +245,50 @@ pub async fn snapshot(data_root: &Path) -> Snapshot {
     let Ok(pool) = open_existing(&path).await else {
         return Snapshot::default();
     };
-    let out = read_snapshot(&pool).await.unwrap_or_default();
+    let out = read_snapshot(&pool, run_id).await.unwrap_or_default();
     pool.close().await;
     out
 }
 
-async fn read_snapshot(pool: &SqlitePool) -> Result<Snapshot, sqlx::Error> {
-    let Some(run) = sqlx::query(
-        "SELECT run_id, started_at, finished_at FROM runs ORDER BY started_at DESC LIMIT 1",
+/// Recent runs, newest first. With `step`, only the runs that step took
+/// part in — how a reader finds the run a step's log is in.
+pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT r.run_id, r.started_at, r.finished_at FROM runs r \
+         WHERE ? IS NULL OR EXISTS \
+           (SELECT 1 FROM step_runs s WHERE s.run_id = r.run_id AND s.step = ?) \
+         ORDER BY r.started_at DESC LIMIT ?",
     )
+    .bind(step)
+    .bind(step)
+    .bind(limit)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| RunRow {
+            run_id: r.get("run_id"),
+            started_at: r.get("started_at"),
+            finished_at: r.get("finished_at"),
+        })
+        .collect()
+}
+
+async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
+    let Some(run) = sqlx::query(
+        "SELECT run_id, started_at, finished_at FROM runs \
+         WHERE ? IS NULL OR run_id = ? ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(run_id)
+    .bind(run_id)
     .fetch_optional(pool)
     .await?
     else {
@@ -279,12 +330,23 @@ async fn read_snapshot(pool: &SqlitePool) -> Result<Snapshot, sqlx::Error> {
         updated_at: r.get("updated_at"),
     })
     .collect();
+    let errors = sqlx::query(
+        "SELECT step, COUNT(*) AS n FROM log \
+         WHERE run_id = ? AND step IS NOT NULL AND level IN ('warn', 'error') GROUP BY step",
+    )
+    .bind(&run_id)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| (r.get::<String, _>("step"), r.get::<i64, _>("n")))
+    .collect();
     Ok(Snapshot {
         run_id: Some(run_id),
         started_at: run.get("started_at"),
         finished_at: run.get("finished_at"),
         steps,
         metrics,
+        errors,
     })
 }
 

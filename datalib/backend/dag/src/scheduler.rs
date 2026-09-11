@@ -935,11 +935,18 @@ impl Runner {
         // per-source sync walks the whole graph to publish output
         // versions and reaches every step it isn't running.
         if st != StepStatus::NotSelected {
+            let run_id = state
+                .current_run
+                .as_ref()
+                .map(|r| r.run_id.clone())
+                .unwrap_or_default();
             let entry = state.steps.entry(id.clone()).or_default();
             let last = entry.last_run.get_or_insert_with(|| LastRun {
+                run_id: run_id.clone(),
                 started_at: stamp.clone(),
                 ..Default::default()
             });
+            last.run_id = run_id;
             last.finished_at = Some(stamp);
             last.status = st.state().as_str().to_string();
             last.attempts = attempts;
@@ -960,7 +967,13 @@ fn mark_running(state: &mut DagState, id: &StepId, stamp: &str) {
         run.states
             .insert(id.clone(), RunState::Running.as_str().to_string());
     }
+    let run_id = state
+        .current_run
+        .as_ref()
+        .map(|r| r.run_id.clone())
+        .unwrap_or_default();
     state.steps.entry(id.clone()).or_default().last_run = Some(LastRun {
+        run_id,
         started_at: stamp.to_string(),
         finished_at: None,
         status: String::new(),

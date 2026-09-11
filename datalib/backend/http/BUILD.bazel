@@ -188,6 +188,23 @@ rust_test(
     ],
 )
 
+# The run endpoints read what the runner wrote to `system/runs.sqlite`.
+rust_test(
+    name = "runs_endpoints_test",
+    srcs = ["tests/runs_endpoints.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/runs:datalib_runs",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
 # Regression guard for issue #138: the token gate that fronts every
 # route (`src/auth.rs`).
 rust_test(

@@ -14,7 +14,7 @@ import {
   saveConfig,
   fetchSyncSources,
   fetchAllJobs,
-  fetchJobLog,
+  fetchRunLog,
   enqueueJob,
   cancelJob,
   type SyncSource,
@@ -22,6 +22,7 @@ import {
   type JobProgressEvent,
 } from "@/api";
 import { subscribeLive } from "@/live";
+import { formatTimeOfDay } from "@/config/timeFormat";
 import StepProgress from "@/components/StepProgress.vue";
 import DagPanel from "@/components/DagPanel.vue";
 import { listSources, type SourceRow } from "@/config/configSources";
@@ -228,31 +229,12 @@ const selectedSyncable = computed(() =>
 );
 
 // Per-job log viewer. `expandedId` is the job whose detail row is open;
-// `logText`/`logError` hold the fetched tail. The backend serves it from
-// `<root>/state/job-logs/<id>.log` via GET /api/sync/jobs/{id}/log.
+// `logLines`/`logError` hold what the run store has for it. A job's id
+// is its run id, so GET /api/runs/{job}/log is the whole answer.
 const expandedId = ref<string | null>(null);
-const logText = ref("");
+const logLines = ref<{ text: string; cls: string }[]>([]);
 const logError = ref<string | null>(null);
 const logLoading = ref(false);
-
-// Log lines with a severity class for the structured-JSON ones (the
-// tracing subscriber emits NDJSON with a top-level `level`); qmd's and
-// other plain-text lines pass through unhighlighted.
-const logLines = computed(() =>
-  logText.value.split("\n").map((text) => {
-    let cls = "";
-    if (text.startsWith("{")) {
-      try {
-        const level = JSON.parse(text)?.level;
-        if (level === "ERROR") cls = "log-line-error";
-        else if (level === "WARN") cls = "log-line-warn";
-      } catch {
-        // Not valid JSON after all — leave unhighlighted.
-      }
-    }
-    return { text, cls };
-  }),
-);
 
 let unsubscribe: (() => void) | null = null;
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -282,7 +264,6 @@ function onProgress(ev: JobProgressEvent) {
   const terminal = ev.state === "done" || ev.state === "failed" || ev.state === "canceled";
   if (j) {
     j.state = ev.state;
-    j.progress_pct = ev.progress_pct;
     j.progress_msg = ev.progress_msg;
     // Terminal rows need server-stamped finished_at/error: reload soon.
     if (terminal) scheduleReload();
@@ -357,13 +338,15 @@ async function loadLog(id: string) {
   logLoading.value = true;
   logError.value = null;
   try {
-    logText.value = await fetchJobLog(id);
+    const rows = await fetchRunLog(id, { limit: 5000 });
+    logLines.value = rows.map((l) => ({
+      text: `${formatTimeOfDay(l.ts)} ${l.step ?? ""} ${l.msg}`,
+      cls: l.level === "error" ? "log-line-error" : l.level === "warn" ? "log-line-warn" : "",
+    }));
+    if (rows.length === 0) logError.value = "no log yet — the run has not written anything.";
   } catch (e) {
-    // 404 = worker hasn't created the log file yet (job still pending).
-    logText.value = "";
-    logError.value = (e as Error).message.includes("404")
-      ? "no log yet — the job hasn't started running."
-      : (e as Error).message;
+    logLines.value = [];
+    logError.value = (e as Error).message;
   } finally {
     logLoading.value = false;
   }
@@ -640,14 +623,14 @@ onUnmounted(() => {
                 <strong>error:</strong> {{ j.error }}
               </div>
               <div class="log-head">
-                <span>log <code>state/job-logs/{{ j.id }}.log</code></span>
+                <span>log · run <code>{{ j.id }}</code></span>
                 <button class="btn btn-mini" :disabled="logLoading" @click="loadLog(j.id)">
                   {{ logLoading ? "…" : "Refresh" }}
                 </button>
               </div>
               <p v-if="logError" class="log-empty">{{ logError }}</p>
               <pre
-                v-else-if="logText"
+                v-else-if="logLines.length > 0"
                 class="log-body"
               ><span v-for="(l, i) in logLines" :key="i" :class="l.cls">{{ l.text + "\n" }}</span></pre>
               <p v-else class="log-empty">(empty)</p>

@@ -7,8 +7,8 @@
 pub mod store;
 
 pub use store::{
-    canonical_labels, log_after, open_or_create, snapshot, LogRow, MetricRow, RunWriter, Snapshot,
-    StepRow,
+    canonical_labels, log_after, open_or_create, runs, snapshot, snapshot_of, LogRow, MetricRow,
+    RunRow, RunWriter, Snapshot, StepRow,
 };
 
 use std::path::{Path, PathBuf};

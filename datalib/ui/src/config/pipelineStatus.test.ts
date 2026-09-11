@@ -11,22 +11,19 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  boardWentTerminal,
   claimedBy,
   effectiveRun,
-  pushedOverlay,
   sourcesFeeding,
   statusFloor,
   stepStatus,
   STATUS_LABEL,
   STATUS_RANK,
   waitingOn,
-  withOverlay,
-  type Overlay,
+  stepForRun,
   type StatusView,
 } from "./pipelineStatus";
 import type { ConfiguredStep } from "./sourceSteps";
-import type { DagRun, DagStep, SyncJob, SyncTask } from "@/api";
+import type { DagRun, DagStep, SyncJob } from "@/api";
 
 /// A two-source graph with a shared fan-in, which is the shape every
 /// real config has: `a/ingest → a/render_markdown → unified_index/grid`, and
@@ -165,6 +162,7 @@ describe("what a single snapshot means", () => {
             id: "b/ingest",
             current_state: "not_selected",
             last_run: {
+              run_id: "r",
               started_at: T.yesterday,
               finished_at: T.yesterday,
               status: "succeeded",
@@ -214,8 +212,8 @@ const TIMELINE: { note: string; frame: Frame }[] = [
       dag: {
         "a/ingest": dagStep({
           current_state: "running",
-          last_run: { started_at: T.runStart, finished_at: null, status: "", attempts: 0, error: null },
-          progress: { msg: "page 3", metrics: { done: 3, queued: 7 }, updated_at: T.runStart },
+          last_run: { run_id: "r", started_at: T.runStart, finished_at: null, status: "", attempts: 0, error: null },
+          progress: { msg: "page 3", metrics: { done: 3, queued: 7 }, errors: 0, updated_at: T.runStart },
         }),
       },
     },
@@ -228,7 +226,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
       dag: {
         "a/ingest": dagStep({
           current_state: "succeeded",
-          last_run: { started_at: T.runStart, finished_at: T.aDone, status: "succeeded", attempts: 1, error: null },
+          last_run: { run_id: "r", started_at: T.runStart, finished_at: T.aDone, status: "succeeded", attempts: 1, error: null },
         }),
       },
     },
@@ -241,7 +239,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
       dag: {
         "a/ingest": dagStep({
           current_state: "succeeded",
-          last_run: { started_at: T.runStart, finished_at: T.aDone, status: "succeeded", attempts: 1, error: null },
+          last_run: { run_id: "r", started_at: T.runStart, finished_at: T.aDone, status: "succeeded", attempts: 1, error: null },
         }),
       },
     },
@@ -254,7 +252,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
       dag: {
         "a/ingest": dagStep({
           current_state: "succeeded",
-          last_run: { started_at: T.runStart, finished_at: T.aDone, status: "succeeded", attempts: 1, error: null },
+          last_run: { run_id: "r", started_at: T.runStart, finished_at: T.aDone, status: "succeeded", attempts: 1, error: null },
         }),
       },
     },
@@ -319,10 +317,11 @@ describe("the sequence a sync actually produces", () => {
   });
 });
 
-// The pushed sequence: what arrives over `GET /api/sync/stream`, in the
-// order the worker sends it, with NO `/api/dag` poll landing in
-// between.
-describe("the pushed sequence, with the polled record still stale", () => {
+// The live sequence: a job frame arrives over `GET /api/sync/stream`,
+// then the runner's record — `/api/dag`, refetched on each `dag_changed`
+// frame — catches up. The job's id is the run id, which is what lets the
+// page tell "the record is about this run" from "still about the last".
+describe("the live sequence, while the fetched record is still stale", () => {
   // Last run's record: closed, and about a different run entirely.
   const stalePoll: DagRun = {
     run_id: "yesterday",
@@ -330,95 +329,105 @@ describe("the pushed sequence, with the polled record still stale", () => {
     finished_at: T.yesterday,
     live: false,
   };
+  const thisRun: DagRun = {
+    run_id: "job-1",
+    started_at: T.runStart,
+    finished_at: null,
+    live: true,
+  };
 
-  const frames: { note: string; state: SyncJob["state"]; tasks: SyncTask[] }[] = [
+  const frames: {
+    note: string;
+    state: SyncJob["state"];
+    fetched: DagRun;
+    step: DagStep | undefined;
+  }[] = [
     {
       note: "enqueue handler publishes the moment the row is written",
       state: "pending",
-      tasks: [],
+      fetched: stalePoll,
+      step: undefined,
     },
     {
-      note: "worker claimed it; the plan is known, nothing dispatched",
+      note: "worker claimed it; the record still describes yesterday",
       state: "running",
-      tasks: [
-        { id: "a/ingest", state: "todo" },
-        { id: "a/render_markdown", state: "todo" },
-      ],
+      fetched: stalePoll,
+      step: dagStep({ current_state: "succeeded" }),
     },
     {
-      note: "the step is dispatched — this is the frame that has to say Running",
+      note: "the runner's record for this run lands, the step dispatched",
       state: "running",
-      tasks: [
-        { id: "a/ingest", state: "running", detail: "3/10 page 3" },
-        { id: "a/render_markdown", state: "todo" },
-      ],
+      fetched: thisRun,
+      step: dagStep({
+        current_state: "running",
+        progress: {
+          msg: "page 3",
+          metrics: { done: 3, queued: 7 },
+          errors: 0,
+          updated_at: T.runStart,
+        },
+      }),
     },
     {
       note: "further into the same step",
       state: "running",
-      tasks: [
-        { id: "a/ingest", state: "running", detail: "7/10 page 7" },
-        { id: "a/render_markdown", state: "todo" },
-      ],
+      fetched: thisRun,
+      step: dagStep({
+        current_state: "running",
+        progress: {
+          msg: "page 7",
+          metrics: { done: 7, queued: 3 },
+          errors: 0,
+          updated_at: T.runStart,
+        },
+      }),
     },
   ];
 
-  /// Fold one pushed frame the way `onJobEvent` does, then read the row.
-  function readPushed(frame: (typeof frames)[number], id: string) {
+  /// Compose one frame the way the view does, then read the row.
+  function read(frame: (typeof frames)[number], id: string) {
     const active = frame.state === "pending" || frame.state === "running";
-    const overlay = active ? pushedOverlay(frame.tasks, T.runStart) : {};
     const j = job({ state: frame.state, started_at: active ? T.jobStart : null });
+    const run = effectiveRun(frame.fetched, frame.state === "running" ? j : undefined);
     return stepStatus({
       id,
-      step: withOverlay(undefined, id, overlay[id]),
-      run: effectiveRun(stalePoll, frame.state === "running" ? j : undefined),
+      step: stepForRun(frame.step, !!run?.synthesized),
+      run,
       claim: claimedBy(steps(), [j]).get(id),
     });
   }
 
   it("says Queued from the enqueue frame — before any runner exists", () => {
-    expect(readPushed(frames[0], "a/ingest").key).toBe("queued");
+    expect(read(frames[0], "a/ingest").key).toBe("queued");
   });
 
-  it("says Queued while the plan is known but nothing is dispatched", () => {
-    expect(readPushed(frames[1], "a/ingest").key).toBe("queued");
+  it("says Queued while the record is still about yesterday", () => {
+    // The stale record says Succeeded. That is yesterday's answer, and
+    // `stepForRun` drops it: a synthesized run means the runner has
+    // written nothing about this run yet.
+    expect(read(frames[1], "a/ingest").key).toBe("queued");
   });
 
-  it("says Running on the dispatch frame, without waiting for a poll", () => {
-    // The property that makes this push rather than poll. A stale
-    // polled record must not be able to veto it: `effectiveRun` is what
-    // stops a closed `finished_at` from forcing this back to Queued.
-    const s = readPushed(frames[2], "a/ingest");
-    expect(s.key).toBe("running");
+  it("says Running once the record for this run lands", () => {
+    expect(read(frames[2], "a/ingest").key).toBe("running");
   });
 
-  it("carries the step's own words while it runs", () => {
-    const overlay = pushedOverlay(frames[2].tasks, T.runStart);
-    expect(overlay["a/ingest"].progress?.msg).toBe("3/10 page 3");
+  it("recognises the record by the job's id, whatever the queue says", () => {
+    // The record for this run is the truth even while the queue row
+    // still says the job is running after the runner closed the run.
+    const closed = { ...thisRun, finished_at: T.runEnd, live: false };
+    const run = effectiveRun(closed, job({ state: "running" }));
+    expect(run).toBe(closed);
+    expect(run?.synthesized).toBeUndefined();
   });
 
-  it("never goes backwards across the pushed sequence either", () => {
+  it("never goes backwards across the live sequence", () => {
     const rank: Record<string, number> = { queued: 0, running: 1, succeeded: 2 };
-    const seq = frames.map((f) => readPushed(f, "a/ingest").key);
+    const seq = frames.map((f) => read(f, "a/ingest").key);
     expect(seq).toEqual(["queued", "queued", "running", "running"]);
     for (let i = 1; i < seq.length; i++) {
       expect(rank[seq[i]]).toBeGreaterThanOrEqual(rank[seq[i - 1]]);
     }
-  });
-
-  it("leaves the downstream step queued, not running", () => {
-    // One step running does not make its consumer running. The board
-    // says `todo` for it, which must produce no overlay at all.
-    expect(readPushed(frames[2], "a/render_markdown").key).toBe("queued");
-  });
-
-  it("asks the runner's record only when a step goes terminal", () => {
-    // The board cannot supply a finish time or an error, so those are
-    // the transitions that cost a fetch — and the only ones.
-    expect(boardWentTerminal(frames[1].tasks)).toBe(false);
-    expect(boardWentTerminal(frames[2].tasks)).toBe(false);
-    expect(boardWentTerminal([{ id: "a/ingest", state: "done" }])).toBe(true);
-    expect(boardWentTerminal([{ id: "a/ingest", state: "failed" }])).toBe(true);
   });
 
   it("does not invent a live run when nothing is running", () => {
@@ -428,16 +437,22 @@ describe("the pushed sequence, with the polled record still stale", () => {
     expect(effectiveRun(stalePoll, job({ state: "pending" }))).toBe(stalePoll);
   });
 
-  it("keeps a polled numeric bar rather than letting a pushed message erase it", () => {
-    const polled = dagStep({
-      current_state: "running",
-      progress: { msg: "polled", metrics: { done: 5, queued: 5 }, updated_at: T.runStart },
+  it("keeps last_run while dropping a stale current_state", () => {
+    const step = dagStep({
+      current_state: "succeeded",
+      last_run: {
+        run_id: "yesterday",
+        started_at: T.yesterday,
+        finished_at: T.yesterday,
+        status: "succeeded",
+        attempts: 1,
+        error: null,
+      },
     });
-    const merged = withOverlay(polled, "a/ingest", {
-      current_state: "running",
-      progress: { msg: "pushed", metrics: {}, updated_at: T.runStart },
-    });
-    expect(merged?.progress?.metrics).toMatchObject({ done: 5, queued: 5 });
+    const fresh = stepForRun(step, true);
+    expect(fresh?.current_state).toBeNull();
+    expect(fresh?.last_run?.status).toBe("succeeded");
+    expect(stepForRun(step, false)).toBe(step);
   });
 });
 
@@ -515,10 +530,17 @@ describe("a second sync of a row that has already run", () => {
     finished_at: T.yesterday,
     live: false,
   };
+  const THIS: DagRun = {
+    run_id: "job-1",
+    started_at: T.runStart,
+    finished_at: null,
+    live: true,
+  };
   const alreadySucceeded = dagStep({
     // The previous run's leftovers, both of them.
     current_state: "succeeded",
     last_run: {
+      run_id: T.yesterday,
       started_at: T.yesterday,
       finished_at: T.yesterday,
       status: "succeeded",
@@ -528,59 +550,49 @@ describe("a second sync of a row that has already run", () => {
   });
 
   /// The grid's own composition, which is what the view does per row:
-  /// pick the run to judge against, then fold the pushed board over the
-  /// fetched record.
-  function paint(jobs: SyncJob[], overlay: Record<string, Overlay>): StatusView {
+  /// pick the run to judge against, then drop what the fetched record
+  /// says about a run it has not caught up with.
+  function paint(jobs: SyncJob[], fetched: DagRun, step: DagStep): StatusView {
     const live = jobs.find((j) => j.state === "running");
-    const run = effectiveRun(PREVIOUS, live);
+    const run = effectiveRun(fetched, live);
     return stepStatus({
       id: "a/ingest",
-      step: withOverlay(alreadySucceeded, "a/ingest", overlay["a/ingest"], !!run?.synthesized),
+      step: stepForRun(step, !!run?.synthesized),
       run,
       claim: claimedBy(steps(), jobs).get("a/ingest"),
     });
   }
 
   it("is queued the moment the job is, not still showing the last run", () => {
-    expect(paint([job({ state: "pending", started_at: null })], {}).key).toBe("queued");
+    expect(
+      paint([job({ state: "pending", started_at: null })], PREVIOUS, alreadySucceeded).key,
+    ).toBe("queued");
   });
 
   it("stays queued once the worker starts it, before the record catches up", () => {
     // The failing frame. The job is running; `/api/dag` has not been
     // rewritten yet, so everything it says is about yesterday.
-    expect(paint([job({ state: "running" })], {}).key).toBe("queued");
+    expect(paint([job({ state: "running" })], PREVIOUS, alreadySucceeded).key).toBe("queued");
   });
 
-  it("reaches Running on the pushed board, without waiting for the fetch", () => {
-    const overlay = pushedOverlay([{ id: "a/ingest", state: "running" }], T.jobStart);
-    expect(paint([job({ state: "running" })], overlay).key).toBe("running");
-  });
-
-  it("does not fall back to Queued when the board says it finished", () => {
-    // The second backwards frame, found by repeating the e2e run: the
-    // board drops a step from `running` the moment it is done, so
-    // between that board and `/api/dag` catching up there was no
-    // evidence left that the step had ever been reached — and the row
-    // went back to Queued.
-    const done = pushedOverlay([{ id: "a/ingest", state: "done" }], T.jobStart);
-    expect(paint([job({ state: "running" })], done).key).not.toBe("queued");
+  it("reaches Running when the record for this run lands", () => {
+    const running = dagStep({ ...alreadySucceeded, current_state: "running" });
+    expect(paint([job({ state: "running" })], THIS, running).key).toBe("running");
   });
 
   it("never goes backwards across the whole re-sync", () => {
-    const board = pushedOverlay([{ id: "a/ingest", state: "running" }], T.jobStart);
-    const finished = pushedOverlay([{ id: "a/ingest", state: "done" }], T.jobStart);
+    const running = dagStep({ ...alreadySucceeded, current_state: "running" });
     const seen = [
-      paint([job({ state: "pending", started_at: null })], {}),
-      paint([job({ state: "running" })], {}),
-      paint([job({ state: "running" })], board),
-      // The board moves on before the fetch does.
-      paint([job({ state: "running" })], finished),
-      // The record finally lands, describing the run that just ended.
+      paint([job({ state: "pending", started_at: null })], PREVIOUS, alreadySucceeded),
+      paint([job({ state: "running" })], PREVIOUS, alreadySucceeded),
+      paint([job({ state: "running" })], THIS, running),
+      // The record lands, describing the run that just ended.
       stepStatus({
         id: "a/ingest",
         step: dagStep({
           current_state: "succeeded",
           last_run: {
+            run_id: "job-1",
             started_at: T.runStart,
             finished_at: T.aDone,
             status: "succeeded",
@@ -588,7 +600,7 @@ describe("a second sync of a row that has already run", () => {
             error: null,
           },
         }),
-        run: { ...liveRun, finished_at: T.runEnd, live: false },
+        run: { ...THIS, finished_at: T.runEnd, live: false },
         claim: undefined,
       }),
     ].map((s) => s.key);

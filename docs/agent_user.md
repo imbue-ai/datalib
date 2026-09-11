@@ -132,9 +132,14 @@ failed step blocks only its downstream subtree. Ctrl-C is graceful:
 steps checkpoint-commit partial progress and the next run resumes.
 Syncs are incremental and idempotent — re-running is always safe.
 
-Via the server instead: `POST /api/sync/jobs` enqueues, `GET
-/api/sync/stream` streams the same events, `/api/sync/jobs/{id}/log`
-and `/cancel` do what they say.
+Via the server instead: `POST /api/sync/jobs` enqueues and
+`/api/sync/jobs/{id}/cancel` cancels; `GET /api/sync/stream` pushes a
+frame when a job starts or ends and whenever the run store moves. The
+run store is what to read for what happened: `GET /api/runs` lists
+runs (a job's id is its run id), `/api/runs/{run}/steps` gives every
+step's state and metrics, and `/api/runs/{run}/log?step=&after_seq=`
+is the log, tailable by `seq`. All of it is `system/runs.sqlite`,
+plain SQLite, so `sqlite3` reads it directly too.
 
 ## Reading the mirrored data
 

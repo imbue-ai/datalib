@@ -1,8 +1,10 @@
-//! In-process sync worker.
+//! In-process sync worker: claims a job, runs `datalib-dag` with the
+//! job's id as the run id, and records how it ended. Everything the run
+//! said on the way — step states, log lines, metrics — the runner writes
+//! to `system/runs.sqlite` itself; this file never reads it.
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Write};
+use std::collections::VecDeque;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -10,15 +12,14 @@ use std::time::{Duration, Instant};
 
 use app_schema::sync_jobs::{JobState, SyncJobRow};
 use datalib_core::repo::DynAppRepo;
-use datalib_dag::RunState;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
 /// A push update for one job, fanned out to SSE subscribers
 /// (`GET /api/sync/stream`) the instant the worker writes it — so the UI
-/// reflects progress without polling. Carries just enough for the client
-/// to patch its job list in place; terminal states prompt it to refetch
-/// the row for finished-at timestamps.
+/// reflects a job starting or ending without polling. What the run is
+/// doing in between reaches the UI another way: the runner's writes to
+/// `system/runs.sqlite` are pushed as `dag_changed` root frames.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProgressEvent {
     pub id: String,
@@ -27,70 +28,7 @@ pub struct ProgressEvent {
     /// [`SyncJobRow::source_ids`].
     pub source_ids: Option<String>,
     pub state: JobState,
-    pub progress_pct: Option<f64>,
     pub progress_msg: Option<String>,
-    /// Per-task board, in plan order. `None` until the runner has
-    /// announced its plan.
-    pub tasks: Option<Vec<Task>>,
-}
-
-/// One DAG task's state as shown to the UI: the runner's [`RunState`]
-/// with `todo` added for a task the scheduler has not reached, and with
-/// `succeeded` / `skipped_up_to_date` renamed to the shorter words the
-/// board displays. The board is the only place these two vocabularies
-/// meet, so [`TaskState::for_run_state`] is the only translation.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::IntoStaticStr, strum::VariantArray,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum TaskState {
-    /// In the plan, not yet reached.
-    Todo,
-    Running,
-    /// Ran to completion.
-    Done,
-    /// Checked, and already up to date.
-    Skipped,
-    /// Outside this run's subgraph, so it was never considered — a
-    /// per-source sync leaves most of the graph here.
-    NotSelected,
-    Failed,
-    /// Something upstream failed, so this was not invoked.
-    Blocked,
-}
-
-impl TaskState {
-    /// How the board shows a step the runner reported. A status this
-    /// build cannot name is shown as `Failed`: the run said something
-    /// happened and we would rather flag it than quietly drop it.
-    fn for_run_state(status: Option<RunState>) -> TaskState {
-        match status {
-            Some(RunState::Running) => TaskState::Running,
-            Some(RunState::Succeeded) => TaskState::Done,
-            Some(RunState::SkippedUpToDate) => TaskState::Skipped,
-            Some(RunState::NotSelected) => TaskState::NotSelected,
-            Some(RunState::Blocked) => TaskState::Blocked,
-            Some(RunState::Failed) | None => TaskState::Failed,
-        }
-    }
-
-    /// Whether the task is finished, for the fraction the progress bar
-    /// draws.
-    const fn is_terminal(self) -> bool {
-        !matches!(self, TaskState::Todo | TaskState::Running)
-    }
-}
-
-/// One row of the task board the UI draws.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Task {
-    pub id: String,
-    pub state: TaskState,
-    /// Live sub-progress for running tasks ("123/456 fetching …");
-    /// empty otherwise.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
 }
 
 /// Broadcast sender shared by the worker and the HTTP enqueue/cancel
@@ -98,161 +36,11 @@ pub struct Task {
 /// subscribers is a no-op (returns `Err`), which we ignore.
 pub type ProgressTx = broadcast::Sender<ProgressEvent>;
 
-/// The live task board, built from the runner's NDJSON events. Shared
-/// between the pipe-reader threads (writers) and the async job loop
-/// (reader).
-#[derive(Default)]
-struct TaskBoard {
-    /// Plan order (from `run_plan`); tasks discovered later (defensive)
-    /// append.
-    order: Vec<String>,
-    tasks: HashMap<String, TaskEntry>,
-}
-
-struct TaskEntry {
-    state: TaskState,
-    total: Option<u64>,
-    pos: u64,
-    msg: Option<String>,
-}
-
-impl TaskBoard {
-    fn entry(&mut self, id: &str) -> &mut TaskEntry {
-        if !self.tasks.contains_key(id) {
-            self.order.push(id.to_string());
-            self.tasks.insert(
-                id.to_string(),
-                TaskEntry {
-                    state: TaskState::Todo,
-                    total: None,
-                    pos: 0,
-                    msg: None,
-                },
-            );
-        }
-        self.tasks.get_mut(id).unwrap()
-    }
-
-    fn apply_line(&mut self, line: &str) {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            return;
-        };
-        let Some(event) = v.get("event").and_then(|e| e.as_str()) else {
-            return;
-        };
-        let step = v.get("step").and_then(|s| s.as_str());
-        match (event, step) {
-            ("run_plan", _) => {
-                if let Some(steps) = v.get("steps").and_then(|s| s.as_array()) {
-                    for s in steps {
-                        if let Some(id) = s.as_str() {
-                            self.entry(id);
-                        }
-                    }
-                }
-            }
-            ("step_start", Some(id)) => {
-                let e = self.entry(id);
-                e.state = TaskState::Running;
-            }
-            ("step_finish", Some(id)) => {
-                let status = v
-                    .get("status")
-                    .and_then(|s| s.as_str())
-                    .and_then(RunState::parse);
-                let e = self.entry(id);
-                e.state = TaskState::for_run_state(status);
-                e.msg = None;
-            }
-            ("progress_length", Some(id)) => {
-                let e = self.entry(id);
-                e.total = v.get("total").and_then(|t| t.as_u64());
-                e.pos = 0;
-            }
-            ("progress_inc", Some(id)) => {
-                let delta = v.get("delta").and_then(|d| d.as_u64()).unwrap_or(0);
-                let e = self.entry(id);
-                e.pos += delta;
-            }
-            ("progress_message", Some(id)) => {
-                let msg = v.get("msg").and_then(|m| m.as_str()).unwrap_or("");
-                let e = self.entry(id);
-                e.msg = Some(msg.to_string());
-            }
-            ("run_summary", _) => {
-                // Authoritative final states (covers anything the
-                // per-step events missed, e.g. after a mid-run kill).
-                if let Some(steps) = v.get("steps").and_then(|s| s.as_array()) {
-                    for s in steps {
-                        let (Some(id), Some(status)) = (
-                            s.get("step").and_then(|x| x.as_str()),
-                            s.get("status").and_then(|x| x.as_str()),
-                        ) else {
-                            continue;
-                        };
-                        let e = self.entry(id);
-                        e.state = TaskState::for_run_state(RunState::parse(status));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn snapshot(&self) -> Vec<Task> {
-        self.order
-            .iter()
-            .filter_map(|id| {
-                let e = self.tasks.get(id)?;
-                let detail = if e.state == TaskState::Running {
-                    let counts = e.total.map(|t| format!("{}/{}", e.pos, t));
-                    match (counts, &e.msg) {
-                        (Some(c), Some(m)) => Some(format!("{c} {m}")),
-                        (Some(c), None) => Some(c),
-                        (None, Some(m)) => Some(m.clone()),
-                        (None, None) => None,
-                    }
-                } else {
-                    None
-                };
-                Some(Task {
-                    id: id.clone(),
-                    state: e.state,
-                    detail,
-                })
-            })
-            .collect()
-    }
-
-    /// Render to the `(progress_pct, progress_msg)` pair stored on the
-    /// job row. `progress_pct` is the terminal-task fraction;
-    /// `progress_msg` is the task board as JSON (`{"v":1,"tasks":…}`)
-    /// so the row alone can rebuild the cell bar after a refetch.
-    /// `(None, None, [])` until the plan is known, so the UI shows an
-    /// indeterminate bar meanwhile.
-    fn render(&self) -> (Option<f64>, Option<String>, Vec<Task>) {
-        let tasks = self.snapshot();
-        if tasks.is_empty() {
-            return (None, None, tasks);
-        }
-        let terminal = tasks.iter().filter(|t| t.state.is_terminal()).count();
-        let pct = terminal as f64 / tasks.len() as f64;
-        let msg = serde_json::json!({"v": 1, "tasks": tasks}).to_string();
-        (Some(pct), Some(msg), tasks)
-    }
-
-    fn failed_ids(&self) -> Vec<String> {
-        self.order
-            .iter()
-            .filter(|id| {
-                self.tasks
-                    .get(*id)
-                    .is_some_and(|e| e.state == TaskState::Failed)
-            })
-            .cloned()
-            .collect()
-    }
-}
+/// How many of the runner's last lines to keep for the failure message.
+/// The run store has everything a step said; this is for what the
+/// *runner* said when it could not get as far as a run — a config it
+/// refused, a binary it could not find.
+const TAIL_LINES: usize = 40;
 
 /// Everything the worker needs that isn't the repo: where the data root
 /// is (for the per-job log dir and the config the runner is driven
@@ -275,9 +63,7 @@ pub struct WorkerConfig {
 
 /// Idle queue poll cadence.
 const POLL_IDLE: Duration = Duration::from_millis(1000);
-/// While a child is running, how often we flush the latest progress to
-/// the DB and re-check for a cancel request. Kept short so the UI (which
-/// polls active jobs) sees progress move in ~real time.
+/// While a child is running, how often we re-check for a cancel request.
 const POLL_RUNNING: Duration = Duration::from_millis(400);
 /// After a cancel's SIGTERM, how long to let steps checkpoint before
 /// SIGKILL.
@@ -382,9 +168,7 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
                         kind: String::new(),
                         source_ids: None,
                         state: JobState::Failed,
-                        progress_pct: None,
                         progress_msg: Some(msg),
-                        tasks: None,
                     });
                 }
             }
@@ -397,22 +181,13 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
     }
 }
 
-fn emit(
-    tx: &ProgressTx,
-    job: &SyncJobRow,
-    state: JobState,
-    pct: Option<f64>,
-    msg: Option<&str>,
-    tasks: Option<Vec<Task>>,
-) {
+fn emit(tx: &ProgressTx, job: &SyncJobRow, state: JobState, msg: Option<&str>) {
     let _ = tx.send(ProgressEvent {
         id: job.id.clone(),
         kind: job.kind.clone(),
         source_ids: job.source_ids.clone(),
         state,
-        progress_pct: pct,
         progress_msg: msg.map(str::to_string),
-        tasks,
     });
 }
 
@@ -437,12 +212,6 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
             config_path.display()
         );
     }
-
-    // Per-job log file the UI tails via /api/sync/jobs/{id}/log.
-    let log_dir = datalib_core::layout::system_dir(&cfg.root).join("job-logs");
-    std::fs::create_dir_all(&log_dir)?;
-    let log_path = log_dir.join(format!("{}.log", job.id));
-    let log_file = File::create(&log_path)?;
 
     let mut command = Command::new(dag_bin);
     command.arg(&config_path);
@@ -477,8 +246,8 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
             command.env("PATH", joined);
         }
     }
-    // Pipe stdout+stderr so reader threads can both tee them to the log
-    // file AND parse the runner's NDJSON events for live progress.
+    // Both pipes are drained, and only their tail is kept: the runner
+    // records everything a run says in the store itself.
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -489,14 +258,7 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
     repo.update_job_progress(&job.id, None, Some(&starting))
         .await
         .ok();
-    emit(
-        &cfg.progress_tx,
-        &job,
-        JobState::Running,
-        None,
-        Some(&starting),
-        None,
-    );
+    emit(&cfg.progress_tx, &job, JobState::Running, Some(&starting));
 
     let mut child = command
         .spawn()
@@ -504,11 +266,7 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
     let pid = child.id();
     repo.set_job_pid(&job.id, pid as i64).await.ok();
 
-    // Drain both pipes on dedicated threads: each line is appended to
-    // the log file and fed to the task board (runner events arrive on
-    // stderr; stdout is the final report — both are teed).
-    let board = Arc::new(Mutex::new(TaskBoard::default()));
-    let log = Arc::new(Mutex::new(log_file));
+    let tail = Arc::new(Mutex::new(VecDeque::with_capacity(TAIL_LINES)));
     let mut readers = Vec::new();
     let mut streams: Vec<Box<dyn Read + Send>> = Vec::new();
     if let Some(o) = child.stdout.take() {
@@ -518,35 +276,14 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
         streams.push(Box::new(e));
     }
     for stream in streams {
-        let log = log.clone();
-        let board = board.clone();
-        readers.push(std::thread::spawn(move || pump(stream, &log, &board)));
+        let tail = tail.clone();
+        readers.push(std::thread::spawn(move || pump(stream, &tail)));
     }
 
-    let mut last: Option<Option<String>> = None;
     let mut term_sent: Option<Instant> = None;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
-        }
-        // Flush the latest board to the DB + SSE if it changed.
-        let (pct, msg, tasks) = {
-            let b = board.lock().unwrap_or_else(|e| e.into_inner());
-            b.render()
-        };
-        if msg.is_some() && last.as_ref() != Some(&msg) {
-            repo.update_job_progress(&job.id, pct, msg.as_deref())
-                .await
-                .ok();
-            emit(
-                &cfg.progress_tx,
-                &job,
-                JobState::Running,
-                pct,
-                msg.as_deref(),
-                Some(tasks),
-            );
-            last = Some(msg);
         }
         // Cooperative cancel: the HTTP handler flips state to
         // `canceled`; we send SIGTERM (graceful — steps checkpoint),
@@ -569,81 +306,60 @@ async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyh
         tokio::time::sleep(POLL_RUNNING).await;
     };
 
-    // Child has exited; join readers so the log file + final board
-    // reflect every last line before we record the outcome.
+    // Child has exited; join readers so the tail holds its last words
+    // before we record the outcome.
     for h in readers {
         let _ = h.join();
     }
-    let (pct, msg, tasks) = {
-        let b = board.lock().unwrap_or_else(|e| e.into_inner());
-        b.render()
-    };
     if term_sent.is_some() {
-        repo.update_job_progress(&job.id, pct, msg.as_deref())
-            .await
-            .ok();
         repo.finish_job(&job.id, JobState::Canceled, Some("canceled by user"))
             .await?;
         emit(
             &cfg.progress_tx,
             &job,
             JobState::Canceled,
-            pct,
             Some("canceled by user"),
-            Some(tasks),
         );
         return Ok(());
     }
     if status.success() {
-        repo.update_job_progress(&job.id, Some(1.0), msg.as_deref())
+        repo.update_job_progress(&job.id, Some(1.0), None)
             .await
             .ok();
         repo.finish_job(&job.id, JobState::Done, None).await?;
-        emit(
-            &cfg.progress_tx,
-            &job,
-            JobState::Done,
-            Some(1.0),
-            msg.as_deref(),
-            Some(tasks),
-        );
+        emit(&cfg.progress_tx, &job, JobState::Done, None);
     } else {
-        // Blame the failed tasks by name; the full log is one click
-        // away.
-        let failed = {
-            let b = board.lock().unwrap_or_else(|e| e.into_inner());
-            b.failed_ids()
-        };
-        let summary = if failed.is_empty() {
-            format!("datalib-dag exited with {status}")
-        } else {
-            format!(
-                "datalib-dag exited with {status} (failed: {})",
-                failed.join(", ")
-            )
-        };
-        repo.update_job_progress(&job.id, pct, msg.as_deref())
-            .await
-            .ok();
+        // The per-step story is in the run store. What is not is
+        // anything the runner said before or instead of a run — a
+        // config it refused, a step it could not spawn — and that is
+        // what the tail carries.
+        let summary = failure_summary(status, &tail.lock().unwrap_or_else(|e| e.into_inner()));
         repo.finish_job(&job.id, JobState::Failed, Some(&summary))
             .await?;
-        emit(
-            &cfg.progress_tx,
-            &job,
-            JobState::Failed,
-            pct,
-            Some(&summary),
-            Some(tasks),
-        );
+        emit(&cfg.progress_tx, &job, JobState::Failed, Some(&summary));
     }
     Ok(())
 }
 
+fn failure_summary(status: std::process::ExitStatus, tail: &VecDeque<String>) -> String {
+    // The runner's event lines are already in the store; only what a
+    // person could not find there belongs in the message.
+    let plain: Vec<&str> = tail
+        .iter()
+        .map(String::as_str)
+        .filter(|l| !l.starts_with('{'))
+        .collect();
+    if plain.is_empty() {
+        format!("datalib-dag exited with {status}")
+    } else {
+        format!("datalib-dag exited with {status}:\n{}", plain.join("\n"))
+    }
+}
+
 /// Read a child pipe to EOF, splitting on `\n` *and* `\r` (the latter so
-/// `\r`-updated bars from wrapped tools stream too). Every segment is
-/// appended to the shared log file (so the UI's live tail keeps working)
-/// and fed to the shared [`TaskBoard`].
-fn pump(mut rd: Box<dyn Read + Send>, log: &Mutex<File>, board: &Mutex<TaskBoard>) {
+/// `\r`-updated bars from wrapped tools stream too), keeping the last
+/// [`TAIL_LINES`] segments.
+fn pump(mut rd: Box<dyn Read + Send>, tail: &Mutex<VecDeque<String>>) {
     let mut buf = [0u8; 8192];
     let mut seg: Vec<u8> = Vec::with_capacity(256);
     loop {
@@ -652,7 +368,7 @@ fn pump(mut rd: Box<dyn Read + Send>, log: &Mutex<File>, board: &Mutex<TaskBoard
             Ok(n) => {
                 for &b in &buf[..n] {
                     if b == b'\n' || b == b'\r' {
-                        flush_segment(&seg, log, board);
+                        push_segment(&seg, tail);
                         seg.clear();
                     } else {
                         seg.push(b);
@@ -662,155 +378,57 @@ fn pump(mut rd: Box<dyn Read + Send>, log: &Mutex<File>, board: &Mutex<TaskBoard
             Err(_) => break,
         }
     }
-    flush_segment(&seg, log, board);
+    push_segment(&seg, tail);
 }
 
-fn flush_segment(seg: &[u8], log: &Mutex<File>, board: &Mutex<TaskBoard>) {
+fn push_segment(seg: &[u8], tail: &Mutex<VecDeque<String>>) {
     if seg.is_empty() {
         return;
     }
-    let text = String::from_utf8_lossy(seg);
-    if let Ok(mut f) = log.lock() {
-        let _ = writeln!(f, "{text}");
+    let mut t = tail.lock().unwrap_or_else(|e| e.into_inner());
+    if t.len() == TAIL_LINES {
+        t.pop_front();
     }
-    let mut b = board.lock().unwrap_or_else(|e| e.into_inner());
-    b.apply_line(&text);
+    t.push_back(String::from_utf8_lossy(seg).into_owned());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strum::VariantArray;
 
-    fn feed(board: &mut TaskBoard, lines: &[&str]) {
-        for l in lines {
-            board.apply_line(l);
-        }
+    fn tail_of(lines: &[&str]) -> VecDeque<String> {
+        lines.iter().map(|l| l.to_string()).collect()
     }
 
+    /// The runner's own words survive into the job's error; its event
+    /// stream, which the store already holds, does not.
     #[test]
-    fn board_follows_runner_events() {
-        let mut b = TaskBoard::default();
-        feed(
-            &mut b,
-            &[
-                r#"{"event":"run_plan","steps":["slack.download","slack.render","index"]}"#,
-                r#"{"event":"step_start","step":"slack.download","attempt":1}"#,
-                r#"{"event":"progress_length","step":"slack.download","total":10}"#,
-                r#"{"event":"progress_inc","step":"slack.download","delta":3}"#,
-                r#"{"event":"progress_message","step":"slack.download","msg":"conversations.list"}"#,
-                "not json at all",
-                r#"{"timestamp":"t","level":"INFO","fields":{}}"#,
-            ],
-        );
-        let (pct, msg, tasks) = b.render();
-        assert_eq!(pct, Some(0.0));
-        assert_eq!(tasks.len(), 3);
-        assert_eq!(tasks[0].state, TaskState::Running);
-        assert_eq!(tasks[0].detail.as_deref(), Some("3/10 conversations.list"));
-        assert_eq!(tasks[1].state, TaskState::Todo);
-        // The stored msg is self-contained JSON the UI can rebuild from.
-        let v: serde_json::Value = serde_json::from_str(&msg.unwrap()).unwrap();
-        assert_eq!(v["v"], 1);
-        assert_eq!(v["tasks"][0]["id"], "slack.download");
+    fn failure_summary_keeps_plain_lines_and_drops_events() {
+        use std::os::unix::process::ExitStatusExt;
+        let status = std::process::ExitStatus::from_raw(2 << 8);
+        let tail = tail_of(&[
+            r#"{"event":"step_finish","step":"a","status":"failed"}"#,
+            "config.toml: [[steps]] #2: unknown key `foo`",
+        ]);
+        let s = failure_summary(status, &tail);
+        assert!(s.contains("unknown key `foo`"), "{s}");
+        assert!(!s.contains("step_finish"), "{s}");
 
-        feed(
-            &mut b,
-            &[
-                r#"{"event":"step_finish","step":"slack.download","status":"succeeded"}"#,
-                r#"{"event":"step_start","step":"slack.render","attempt":1}"#,
-                r#"{"event":"step_finish","step":"slack.render","status":"failed","error":"boom"}"#,
-                r#"{"event":"step_finish","step":"index","status":"blocked"}"#,
-            ],
-        );
-        let (pct, _, tasks) = b.render();
-        assert_eq!(pct, Some(1.0));
-        assert_eq!(tasks[0].state, TaskState::Done);
-        assert_eq!(tasks[0].detail, None, "terminal tasks carry no detail");
-        assert_eq!(tasks[1].state, TaskState::Failed);
-        assert_eq!(tasks[2].state, TaskState::Blocked);
-        assert_eq!(b.failed_ids(), vec!["slack.render".to_string()]);
+        let s = failure_summary(status, &VecDeque::new());
+        assert_eq!(s, "datalib-dag exited with exit status: 2");
     }
 
+    /// The tail is bounded: a chatty run must not turn into an
+    /// unbounded buffer in the worker.
     #[test]
-    fn empty_board_renders_indeterminate() {
-        let b = TaskBoard::default();
-        assert_eq!(b.render().0, None);
-        assert_eq!(b.render().1, None);
-    }
-
-    #[test]
-    fn run_summary_is_authoritative() {
-        let mut b = TaskBoard::default();
-        feed(
-            &mut b,
-            &[
-                r#"{"event":"run_plan","steps":["a","b"]}"#,
-                r#"{"event":"step_start","step":"a","attempt":1}"#,
-                // No step_finish for "a" (e.g. output raced a kill) —
-                // the summary still settles it.
-                r#"{"event":"run_summary","steps":[{"step":"a","status":"failed","attempts":1,"outputs":[]},{"step":"b","status":"skipped_up_to_date","attempts":0,"outputs":[]}]}"#,
-            ],
-        );
-        let tasks = b.snapshot();
-        assert_eq!(tasks[0].state, TaskState::Failed);
-        assert_eq!(tasks[1].state, TaskState::Skipped);
-    }
-
-    /// `not_selected` (a step outside a `--sync` run's subgraph) must
-    /// survive both paths into the board. Neither may fall through to
-    /// the catch-all, which would show an untouched step as failed.
-    #[test]
-    fn not_selected_survives_both_the_step_and_summary_paths() {
-        for line in [
-            r#"{"event":"step_finish","step":"a","status":"not_selected"}"#,
-            r#"{"event":"run_summary","steps":[{"step":"a","status":"not_selected","attempts":0,"outputs":[]}]}"#,
-        ] {
-            let mut b = TaskBoard::default();
-            feed(&mut b, &[r#"{"event":"run_plan","steps":["a"]}"#, line]);
-            assert_eq!(
-                b.snapshot()[0].state,
-                TaskState::NotSelected,
-                "an unmapped status reads as failed: {line}"
-            );
-        }
-        // And it counts as terminal, so a sync of one source doesn't
-        // sit at "in progress" forever because of the steps it skipped.
-        assert!(TaskState::NotSelected.is_terminal());
-    }
-
-    /// Every task state the board can produce has to serialize as the
-    /// word the UI switches on. serde and strum spell these
-    /// independently, so this is a real check, not a tautology.
-    #[test]
-    fn task_state_serializes_as_the_word_the_ui_switches_on() {
-        for &v in TaskState::VARIANTS {
-            let json = serde_json::to_string(&v).unwrap();
-            let strum: &'static str = v.into();
-            assert_eq!(json, format!("\"{strum}\""), "{v:?}");
-        }
-    }
-
-    /// The runner's vocabulary and the board's are different words for
-    /// the same six facts, and every one of them must map to a state
-    /// that is not `Failed` unless the run actually failed.
-    #[test]
-    fn every_run_state_maps_to_a_distinct_task_state() {
-        let mapped: Vec<TaskState> = RunState::VARIANTS
-            .iter()
-            .map(|&s| TaskState::for_run_state(Some(s)))
+    fn pump_keeps_only_the_last_lines() {
+        let text: String = (0..(TAIL_LINES * 3))
+            .map(|i| format!("line {i}\n"))
             .collect();
-        assert_eq!(
-            mapped,
-            vec![
-                TaskState::Running,
-                TaskState::Done,
-                TaskState::Skipped,
-                TaskState::NotSelected,
-                TaskState::Blocked,
-                TaskState::Failed,
-            ]
-        );
-        assert_eq!(TaskState::for_run_state(None), TaskState::Failed);
+        let tail = Mutex::new(VecDeque::new());
+        pump(Box::new(std::io::Cursor::new(text.into_bytes())), &tail);
+        let t = tail.into_inner().unwrap();
+        assert_eq!(t.len(), TAIL_LINES);
+        assert_eq!(t.back().map(String::as_str), Some("line 119"));
     }
 }

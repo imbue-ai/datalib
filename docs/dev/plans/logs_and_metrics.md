@@ -225,9 +225,20 @@ Each slice is one PR that leaves the tree green.
    and `line_number` stay in `fields`. `PYTHONUNBUFFERED=1` on every
    child. `PRAGMA user_version` gates the schema: a store from another
    version is remade.
-2. **Delete the other two paths and repoint the UI** — the worker,
-   the endpoints, the log grid, the three cells. #161 and #164 close
-   here.
+2. ~~**Delete the other two paths and repoint the UI**~~ **Done.** The
+   worker spawns, waits and records (`TaskBoard`, the log tee and the
+   `progress_msg` board are gone; only a bounded tail of the runner's
+   own lines survives, into the job's error). `GET /api/runs`,
+   `/api/runs/{run}/steps`, `/api/runs/{run}/log?step=&after_seq=`
+   replace `/api/sync/jobs/{id}/log`. `LastRun` records its run id.
+   Manager2 reads everything from `/api/dag` on `dag_changed` (the
+   pushed-board overlay in `pipelineStatus.ts` is gone; `stepForRun`
+   is what is left), double-click opens `RunLogPanel.vue` — an AG Grid
+   over the run log, tailing by `seq` while the run is live — and an
+   **Activity** column shows `queued`, every metric, and the warn/error
+   count. `StepProgress.vue` is one bar; `sync/progress.ts` and
+   `stepLog.ts` are deleted. The old `/sources` tab keeps working on
+   the new endpoints. Closes #161 and #164.
 3. **Queue depth between steps** — `rows` on `checkpoint`, the
    runner's per-consumer sum, `queued` published for consumers.
 4. **Rates and flatlines** — `metric_samples` drawn as rates; a step

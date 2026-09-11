@@ -1,126 +1,23 @@
 // What a pipeline row's Status column says, and why.
 
 import type { ConfiguredStep } from "@/config/sourceSteps";
-import type {
-  DagRun,
-  DagRunState,
-  DagStep,
-  DagStepProgress,
-  Diagnostic,
-  SyncJob,
-  SyncTask,
-  SyncTaskState,
-} from "@/api";
+import type { DagRun, DagRunState, DagStep, Diagnostic, SyncJob } from "@/api";
 import { formatStamp } from "@/config/timeFormat";
 
-/// What the pushed task board contributes to a row.
+/// What the last fetch of the runner's record knew about a step, as it
+/// applies to the run now in flight.
 ///
-/// Only the live half is taken: a terminal board state carries neither the
-/// timestamp nor the error the row has to show, so a step going terminal is a
-/// signal to refetch rather than something to paint from here.
-export type Overlay = {
-  current_state: DagRunState | null;
-  progress: DagStepProgress | null;
-};
-
-/// Board states that mean "this step is finished, one way or another".
-/// Mirrors `TaskState::is_terminal` in the backend's worker.
-const TERMINAL_BOARD = new Set<SyncTaskState>([
-  "done",
-  "skipped",
-  "not_selected",
-  "failed",
-  "blocked",
-]);
-
-/// The board's word for a step, back in the runner's vocabulary — the
-/// inverse of `TaskState::for_run_state`. `todo` has no run state: it
-/// means the scheduler has not reached the step.
-const BOARD_TO_RUN_STATE: Record<SyncTaskState, DagRunState | null> = {
-  todo: null,
-  running: "running",
-  done: "succeeded",
-  skipped: "skipped_up_to_date",
-  not_selected: "not_selected",
-  failed: "failed",
-  blocked: "blocked",
-};
-
-/// Fold one pushed task board into per-step overlays.
-///
-/// A step the board reports as **terminal** does produce one, and must.
-/// `todo` means "not reached", which the queued branch already says; terminal
-/// means "reached, and finished in *this* run", which nothing else on screen
-/// knows until `/api/dag` catches up. Dropping it sent a row that had just
-/// been Running back to Queued for the length of that fetch.
-export function pushedOverlay(
-  tasks: SyncTask[],
-  now: string,
-): Record<string, Overlay> {
-  const out: Record<string, Overlay> = {};
-  for (const t of tasks) {
-    if (TERMINAL_BOARD.has(t.state)) {
-      // No progress: a finished step's last progress line is not news,
-      // and `withOverlay` keeps whatever the fetch had.
-      out[t.id] = { current_state: BOARD_TO_RUN_STATE[t.state], progress: null };
-      continue;
-    }
-    if (t.state !== "running") continue;
-    out[t.id] = {
-      current_state: "running",
-      // The board's `detail` is "<done>/<total> <msg>" — rendered for a
-      // person, not parsed back. Carrying it as the message keeps the
-      // tooltip live; the numeric bar stays with `/api/dag`, which has
-      // the counts as numbers.
-      progress: t.detail ? { msg: t.detail, metrics: {}, updated_at: now } : null,
-    };
-  }
-  return out;
-}
-
-/// Did any step on this board just reach a terminal state? That is when
-/// the runner's record has something the board cannot supply.
-export function boardWentTerminal(tasks: SyncTask[]): boolean {
-  return tasks.some((t) => TERMINAL_BOARD.has(t.state));
-}
-
-/// Apply an overlay to what the last fetch of the runner's record knew
-/// about a step.
-export function withOverlay(
+/// `baseStateIsStale` is true when that fetch describes a *previous* run,
+/// so its `current_state` is about different work and is dropped.
+/// `last_run` is deliberately untouched: that is the row's history, it is
+/// still correct, and blanking it would send the row to "Never run", which
+/// ranks below Queued and so is its own way of going backwards.
+export function stepForRun(
   step: DagStep | undefined,
-  id: string,
-  overlay: Overlay | undefined,
-  /// True when the fetched record describes a *previous* run, so its
-  /// `current_state` is about different work and only the board can speak for
-  /// now. `last_run` is deliberately untouched: that is this row's history, it
-  /// is still correct, and blanking it would send the row to "Never run",
-  /// which ranks below Queued and so is its own way of going backwards.
-  baseStateIsStale = false,
+  baseStateIsStale: boolean,
 ): DagStep | undefined {
-  if (!overlay && !baseStateIsStale) return step;
-  if (!overlay && !step) return step;
-  const base: DagStep = step ?? {
-    id,
-    command: "",
-    inputs: [],
-    outputs: [],
-    deps: [],
-    last_run: null,
-    current_state: null,
-    progress: null,
-  };
-  return {
-    ...base,
-    current_state:
-      overlay?.current_state ?? (baseStateIsStale ? null : base.current_state),
-    // The fetched progress has real numbers; the pushed one has only a
-    // message. Prefer whichever is more informative rather than letting
-    // the newer one erase a bar.
-    progress:
-      base.progress && Object.keys(base.progress.metrics).length > 0
-        ? base.progress
-        : (overlay?.progress ?? base.progress),
-  };
+  if (!step || !baseStateIsStale) return step;
+  return { ...step, current_state: null, progress: null };
 }
 
 /// The run a row should be judged against.
@@ -134,9 +31,8 @@ export type EffectiveRun = DagRun & {
   /// per-step `current_state` in the fetched record still belongs to
   /// the run before it. Reading one then is reading the wrong run's
   /// answer, which is exactly how a re-synced row painted the previous
-  /// run's Succeeded between Queued and Running. `withOverlay` takes
-  /// this flag and drops the stale state; the pushed board is the only
-  /// source that can speak for a run this new.
+  /// run's Succeeded between Queued and Running. `stepForRun` takes
+  /// this flag and drops the stale state.
   synthesized?: boolean;
 };
 
@@ -145,10 +41,13 @@ export function effectiveRun(
   liveJob: SyncJob | undefined,
 ): EffectiveRun | null {
   if (!liveJob || liveJob.state !== "running") return fetched;
-  if (fetched && !fetched.finished_at) return fetched;
+  // The job's id *is* the run id (the worker passes it as `--run-id`),
+  // so a fetched record for this job's run is the real thing even if
+  // the queue and the record disagree on whether it has finished.
+  if (fetched && (fetched.run_id === liveJob.id || !fetched.finished_at)) return fetched;
   const started = liveJob.started_at ?? liveJob.created_at;
   return {
-    run_id: started,
+    run_id: liveJob.id,
     started_at: started,
     finished_at: null,
     live: true,

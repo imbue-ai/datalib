@@ -45,7 +45,6 @@ function onProgress(ev: JobProgressEvent) {
     const prev = m.get(ev.id);
     if (prev) {
       prev.state = ev.state;
-      prev.progress_pct = ev.progress_pct;
       prev.progress_msg = ev.progress_msg;
     } else {
       // Newly-started job we haven't seen: pull the full active set so it
