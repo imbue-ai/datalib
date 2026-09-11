@@ -14,10 +14,20 @@ use datalib_etl_linkedin::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_linkedin::synthesize::LinkedinSynth;
 use datalib_etl_linkedin_render::connections;
 use datalib_etl_linkedin_render::posts;
+use datalib_etl_linkedin_render::processor::Source;
 use datalib_etl_linkedin_render::render;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 
 fn build_export(root: &Path) -> Result<()> {
+    // Who the export belongs to. The primary address is deliberately not
+    // the first row.
+    fs::write(
+        root.join("Email Addresses.csv"),
+        "Email Address,Confirmed,Primary,Updated On\n\
+         data.soong@starfleet.gov,Yes,No,Not Available\n\
+         data@enterprise.starfleet.test,Yes,Yes,Not Available\n",
+    )?;
+
     // Connections.csv with the Notes: preamble we strip, and the real
     // column shape (URL is the natural key → uuid identity).
     fs::write(
@@ -127,8 +137,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // committed state only.
         datalib_etl::doltlite_raw::commit_run(db.pool(), "test: linkedin fetch").await?;
 
-        // 6 CSVs + 1 articles batch = 7 "files".
-        assert_eq!(summary.files, 7, "files (6 csv + articles)");
+        // 7 CSVs + 1 articles batch = 8 "files".
+        assert_eq!(summary.files, 8, "files (7 csv + articles)");
         assert_eq!(summary.parse_errors, 0, "no parse errors");
 
         // Member-id suffix stripped: table is `comments`, not
@@ -166,6 +176,16 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // spawn_blocking thread.
         let out_dir = tmp.path().join("out");
         fs::create_dir_all(&out_dir)?;
+        // The export names its owner in `Email Addresses.csv`; every row
+        // of every feed carries that on `account`.
+        let account = datalib_etl_linkedin_render::account::load_account(&raw_dir)?;
+        assert_eq!(account.as_deref(), Some("data@enterprise.starfleet.test"));
+        let source = Source {
+            raw_dir: &raw_dir,
+            out_dir: &out_dir,
+            name: "linkedin",
+            account: account.as_deref(),
+        };
         let mut docs: Vec<RenderedMarkdown> = Vec::new();
         {
             let mut on_doc = |d: RenderedMarkdown| {
@@ -173,9 +193,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 Ok(())
             };
             render::render(
-                &raw_dir,
-                &out_dir,
-                "linkedin",
+                &source,
                 &Progress::noop(),
                 &HashMap::new(),
                 &mut on_doc,
@@ -191,6 +209,12 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             "rendered at least 3 docs, got {}",
             docs.len()
         );
+        assert!(
+            docs.iter()
+                .flat_map(|d| d.rows.iter())
+                .all(|r| r.account.as_deref() == Some("data@enterprise.starfleet.test")),
+            "every message row names the export's owner as its account"
+        );
 
         // ── shares + comments → one thread per post ──────────────
         let mut post_docs: Vec<RenderedMarkdown> = Vec::new();
@@ -200,9 +224,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 Ok(())
             };
             posts::render_posts(
-                &raw_dir,
-                &out_dir,
-                "linkedin",
+                &source,
                 &Progress::noop(),
                 &HashMap::new(),
                 &mut on_doc,
@@ -311,9 +333,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 Ok(())
             };
             connections::render_connections(
-                &raw_dir,
-                &out_dir,
-                "linkedin",
+                &source,
                 &Progress::noop(),
                 &HashMap::new(),
                 &mut on_doc,
@@ -373,6 +393,10 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // Re-render: the contact markdown now embeds the photo blob.
         let out2 = tmp.path().join("out2");
         fs::create_dir_all(&out2)?;
+        let source2 = Source {
+            out_dir: &out2,
+            ..source
+        };
         let mut with_photo: Vec<RenderedMarkdown> = Vec::new();
         {
             let mut on_doc = |d: RenderedMarkdown| {
@@ -380,9 +404,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 Ok(())
             };
             connections::render_connections(
-                &raw_dir,
-                &out2,
-                "linkedin",
+                &source2,
                 &Progress::noop(),
                 &HashMap::new(),
                 &mut on_doc,

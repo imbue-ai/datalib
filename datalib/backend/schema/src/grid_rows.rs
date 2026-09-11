@@ -54,20 +54,24 @@ pub struct GridRow {
     /// account for user input, the real name for Slack.
     #[col(sql = "VARCHAR(255)")]
     pub author: Option<String>,
-    /// Provider-native account identifier; drives the `account:` filter.
+    /// Whose mirror this row came from — the login's email where the
+    /// source stores one, else its name, else the provider's own id.
+    /// Null for a source with no login (a PDF folder, an address book).
+    /// Drives the `account:` filter.
     #[col(sql = "VARCHAR(96)")]
     pub account: Option<String>,
     /// Claude project name, or the repo full name for github/gitlab. Null
     /// for providers with no notion of a project.
     #[col(sql = "VARCHAR(96)")]
     pub project: Option<String>,
-    /// Claude only. The owning Anthropic organization, which disambiguates
-    /// conversations that share a login but live in different orgs (a
-    /// personal Max plan vs a Team workspace). Opaque and stable; pair with
-    /// `org_name` for display.
+    /// The organization a login lives inside: Claude's Anthropic org,
+    /// which disambiguates conversations that share a login but live in
+    /// different orgs (a personal Max plan vs a Team workspace), or
+    /// Slack's workspace (`T…`). Opaque and stable; pair with `org_name`
+    /// for display. Null for every other provider.
     #[col(sql = "VARCHAR(96)")]
     pub org_uuid: Option<String>,
-    /// Claude only. Display name for `org_uuid`, shown in the Org column.
+    /// Display name for `org_uuid`, shown in the Org column.
     #[col(sql = "VARCHAR(255)")]
     pub org_name: Option<String>,
     /// Slack channel, or a chat's display name (group subject, 1:1

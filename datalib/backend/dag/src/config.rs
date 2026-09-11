@@ -115,6 +115,12 @@ pub struct GroupEntry {
     /// nothing, such as the unified index.
     #[serde(default)]
     pub r#type: Option<String>,
+    /// What this source is to the person who owns it — "work Slack, mostly
+    /// infra channels". Free text, and like `name`: never forwarded to a
+    /// step and never fingerprinted. Nothing reads it yet; imbue-ai/datalib#409
+    /// is the plan for making search use it.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// One applet instance. Deliberately a subset of [`StepEntry`]: an applet
@@ -1619,6 +1625,46 @@ mod tests {
         assert_ne!(untyped.fingerprint_material(), email.fingerprint_material());
         assert_ne!(email.fingerprint_material(), slack.fingerprint_material());
         assert_eq!(email.fingerprint_material(), named.fingerprint_material());
+    }
+
+    /// Like `name`, a description is display text: it is not part of what
+    /// any step is, so editing one re-runs nothing.
+    #[test]
+    fn a_groups_description_moves_no_fingerprint() {
+        let with = |description_line: &str| {
+            let cfg: DagConfig = toml::from_str(&format!(
+                r#"
+                [[groups]]
+                id = "mail"
+                type = "email"
+                {description_line}
+
+                [[groups]]
+                id = "unified_index"
+
+                [[steps]]
+                group = "mail"
+                function = "ingest"
+                command = "my-fetcher"
+
+                [[steps]]
+                group = "unified_index"
+                function = "qmd_index"
+                command = "my-indexer"
+                inputs = ["mail/ingest"]
+                "#
+            ))
+            .expect("parse");
+            to_specs(&cfg).expect("to_specs")
+        };
+        let bare = with("");
+        let described = with(r#"description = "Fastmail, mostly receipts""#);
+        for i in 0..2 {
+            assert_eq!(
+                bare[i].fingerprint_material(),
+                described[i].fingerprint_material()
+            );
+        }
     }
 
     #[test]

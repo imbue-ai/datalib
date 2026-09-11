@@ -1,5 +1,6 @@
 //! One side of a two-process doltlite concurrency test: a writer that
-//! commits, a reader that pins, or a probe that reports a store's committed
+//! commits, a reader that pins, a reader that keeps re-opening and pinning
+//! the way `grid_index` does, or a probe that reports a store's committed
 //! state. Driven by `tests/doltlite_two_process.rs`, which is where the
 //! scenarios and the assertions live.
 //!
@@ -20,7 +21,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_etl::doltlite_raw;
-use datalib_etl::pin::{install_views, Pin};
+use datalib_etl::pin::{head, install_views, Pin};
 use serde_json::{json, Value};
 
 const TABLE_DDL: &str = "CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT NULL)";
@@ -42,6 +43,7 @@ async fn main() -> Result<()> {
         "write" => write(&args).await,
         "double-open" => double_open(&args).await,
         "read" => read(&args).await,
+        "churn" => churn(&args).await,
         "probe" => probe(&args).await,
         other => bail!("unknown role {other:?}"),
     }?;
@@ -88,7 +90,7 @@ async fn write(args: &Args) -> Result<Value> {
         }
         match commit_a_chunk(&pool, i).await {
             Ok(hash) => commits.push(json!({ "hash": hash, "at_ms": now_ms() })),
-            Err(e) => errors.push(e.to_string()),
+            Err(e) => errors.push(format!("{e:#}")),
         }
         tokio::time::sleep(interval).await;
     }
@@ -130,7 +132,7 @@ async fn read(args: &Args) -> Result<Value> {
             .await
         {
             Ok(n) => samples.push(json!({ "count": n, "at_ms": now_ms() })),
-            Err(e) => errors.push(e.to_string()),
+            Err(e) => errors.push(format!("{e:#}")),
         }
         tokio::time::sleep(interval).await;
     }
@@ -144,6 +146,72 @@ async fn read(args: &Args) -> Result<Value> {
         "samples": samples,
         "errors": errors,
     }))
+}
+
+/// What `grid_index` does to a render store on every streaming pass, in a
+/// loop: open read-only, pin HEAD, install the views, diff, read through the
+/// views, close. Every step is a read, so none of it should cost a writer
+/// anything -- this is the role that finds out.
+async fn churn(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let until = args.opt_path("until");
+    let rounds = args.num("rounds", 300) as usize;
+    let mut errors: Vec<String> = Vec::new();
+    let mut samples: Vec<Value> = Vec::new();
+    let mut opened = 0usize;
+    let mut pinned = 0usize;
+    // The commit the previous round read to, as `grid_index` keeps a cursor.
+    let mut cursor: Option<String> = None;
+    for round in 0..rounds {
+        if until.as_deref().is_some_and(Path::exists) {
+            break;
+        }
+        samples.push(json!({ "at_ms": now_ms() }));
+        let pool = match doltlite_raw::open_reader(&db).await {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(format!("round {round}: open: {e:#}"));
+                continue;
+            }
+        };
+        opened += 1;
+        match one_pinned_pass(&pool, cursor.as_deref()).await {
+            Ok(Some(head)) => {
+                pinned += 1;
+                cursor = Some(head);
+            }
+            Ok(None) => {}
+            Err(e) => errors.push(format!("round {round}: {e:#}")),
+        }
+        pool.close().await;
+    }
+    Ok(json!({
+        "role": "churn",
+        "opened": opened,
+        "pinned": pinned,
+        "samples": samples,
+        "errors": errors,
+    }))
+}
+
+/// The commit this pass read at; `None` when the store had nothing to pin.
+async fn one_pinned_pass(pool: &sqlx::SqlitePool, cursor: Option<&str>) -> Result<Option<String>> {
+    let Some(pin) = head(pool).await? else {
+        return Ok(None);
+    };
+    install_views(pool, &pin).await?;
+    let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_entities")
+        .fetch_one(pool)
+        .await?;
+    let _changed: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM dolt_diff_entities \
+          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
+    )
+    .bind(cursor.unwrap_or(pin.commit()))
+    .bind(pin.commit())
+    .fetch_one(pool)
+    .await?;
+    Ok(Some(pin.commit().to_string()))
 }
 
 /// Two read-write pools on one file inside ONE process — the shape

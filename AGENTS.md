@@ -60,8 +60,10 @@ reference doc it relates to.
   under a chevron, the group row reading status, last-synced and bytes
   off its own folder and its children (`ui/src/config/groupRows.ts`
   holds the rules), and the wizard is one dialog that writes and edits
-  a source as a group plus both its steps, with the render step's
-  settings under a "Rendering" heading (`SourceWizard.vue`,
+  a source as a group plus both its steps — the group's `name` and
+  its `description` (free text nothing reads yet; #409 says why not
+  qmd) edited in place — with the render step's settings under a
+  "Rendering" heading (`SourceWizard.vue`,
   `ui/src/config/sourceSteps.ts`). Nothing in the UI splits a step id
   any more: phase is read off `function`, the source column off the
   group. Every ingest method a provider accepts declares itself
@@ -830,6 +832,23 @@ overlapping *open* fails inside `open` itself, reported as `commit schema
 after DDL`. `two_live_pools_on_one_store_break_each_others_commits` in
 `doltlite_raw.rs` pins this half.
 
+**A reader can be the peer.** "Read-only costs the writer nothing" is
+measured for what a pinned pass issues — `dolt_hashof`, `sqlite_master`,
+`pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_` views,
+`dolt_diff_*` — and is false for `dolt_status`. Issued from a read-only
+connection while the writer commits, it fails that commit with the same
+`commit conflict` for as long as the statement is running, and the rows
+the writer inserted before each failed commit are gone afterwards
+(dolthub/doltlite#2832, with a stock-CLI reproducer: 1500 inserts, 772
+rows left). `a_churning_reader_never_makes_the_writers_commit_fail` sees
+about one commit in a hundred only because its reader is fast. That was
+#400: `grid_index` asking every render store whether it was dirty, each
+streaming pass, while a render step was sealing. **So a consumer never
+runs `dolt_status`**, and the same goes for a hand-run
+`datalib-doltlite -readonly … dolt_status` against a store a sync is
+writing. Any other statement a reader adds is presumed guilty until that
+test has run with it.
+
 Three rules follow, and none is optional:
 
 - **Open the store once per pass.** If a stage needs to load rows, run a
@@ -871,6 +890,22 @@ the history intact and is cheap to read with `git log --first-parent`.
 
 In practice: `git pull` (default merge), not `git pull --rebase`. Force-
 push is off the table on shared branches.
+
+## Push early, open the PR early, and watch CI
+
+**Push the branch and open a PR as soon as there is something to test,
+even if nobody asked for one** — CI's runners are free and a full
+`//...` run takes minutes, so starting it early is starting it for free.
+Push again as the work goes; each push restarts the run.
+
+After pushing, check that the PR is mergeable (`gh pr view <n> --json
+mergeable,mergeStateStatus`) and follow the run to its end rather than
+leaving it. If it fails, read the failure and fix it; if the failed
+target looks like a flake (the doltlite-timing ones above, or anything
+`scripts/flaky_tests.py` already lists), re-run the failed jobs once
+before digging in. Before pushing a follow-up, confirm the PR is still
+open — a merged PR does not reopen for a later push, and the commit
+reaches nobody.
 
 ## Python deps: pyproject.toml → requirements.txt → Bazel
 

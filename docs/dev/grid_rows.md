@@ -202,8 +202,8 @@ they sit beside the shared blob store.
 | claude.project | `projects.payload.creator.full_name` — who made the project, which in a Team workspace is often not the account that downloaded it |
 | claude.message.human | the capitalized `chat_messages[].sender` ("Human") |
 | claude.message.assistant | `conversation.raw_json.model`, else `sender` |
-| chatgpt.message.user | `account_id` |
-| chatgpt.message.assistant | `model_slug`, else `role` |
+| chatgpt.message.user | `User` |
+| chatgpt.message.assistant | `model_slug`, else `Assistant` |
 | slack.message | `users.real_name`, else `users.name` |
 | github | `comment.user.login`, else `pull_request.user.login` |
 | gitlab | `note.author.username`, else `merge_request.author.username` |
@@ -213,19 +213,35 @@ they sit beside the shared blob store.
 
 ### `account`, `project`, `channel`
 
+`account` says whose mirror the row came from, resolved the same way
+everywhere (`datalib_etl_chat_common::account_label`): the login's
+email where the raw store has one, else its name, else the provider's
+own id — so grouping by Account groups one person's data across
+sources, and a raw id in the column means "this login has no row to
+resolve against". A source with no login at all (a PDF folder, a
+`.vcf` file, YoLink) leaves it null; the source name is on
+`source_name`, not here.
+
 | provider | account | project | channel |
 |---|---|---|---|
 | claude | the `users` row's `email_address` (else `full_name`, else the bare UUID) for `conversations.payload.account.uuid`; a project page carries the downloading account, not its creator | the `projects.name` of the conversation's project (bare UUID when projects aren't mirrored) | — |
-| chatgpt | `me.id` | — | — |
-| slack | `workspaces.id` | — | `channels.name` |
-| github | `self_identity.viewer.login` | `pull_request.base.repo.full_name` | — |
-| gitlab | `self_identity.current_user.username` | `merge_request.references.full`, else `project_path` | — |
-| notion | `notion_space.name` | — | — |
-| whatsapp | — | — | `wa_chat.subject` for groups, JID label for 1:1 |
+| chatgpt | the `me` row's `email` (else `name`, else `me.id`) | — | — |
+| slack | the `users` row for `workspaces.self_user_id`: `profile.email`, else real name, else handle, else the bare `U…` id | — | `channels.name` |
+| email | the `accounts` row: `emailAddress` (mbox), `email` (Gmail), else JMAP's `name` — which RFC 8620 defines as the owner's address — else the account id | — | — |
+| linkedin | the `Primary` row of `email_addresses` (else the first, else `profile`'s first + last name); every row of the export, connections included | — | `Connections` for a contact |
+| github | — | `pull_request.base.repo.full_name` | — |
+| gitlab | — | `merge_request.references.full`, else `project_path` | — |
+| notion | — | — | — |
+| beeper | `rooms.account_id`, Beeper's bridge-account id (`local-signal_ba_…`) — still opaque | — | — |
+| whatsapp | — | — | `wa_chat.subject` for groups; for 1:1, `wa_lid_display_name`, else the phone behind `wa_jid_map`, else the JID label |
 | signal | — | — | `recipients.display_name`, else phone number |
 
-`org_uuid` / `org_name` are Claude-only, from
-`conversations._source`.
+`org_uuid` / `org_name` are the organization a login lives inside:
+Claude's Anthropic org (from `conversations._source`) and Slack's
+workspace (`workspaces.id` / `team_name`). Null elsewhere. GitHub,
+GitLab and Notion all mirror a self-identity row and could fill
+`account` from it; their render diff deliberately does not fan out on
+that table, so that is a small design change rather than a one-liner.
 
 ### `conversation_name`, `conversation_uuid`, `text`
 

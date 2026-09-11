@@ -30,6 +30,7 @@ import {
   filterCatalog,
   type CatalogEntry,
   type Field,
+  type ProbeNoun,
 } from "@/config/catalog";
 import {
   buildSource,
@@ -82,6 +83,8 @@ const emit = defineEmits<{
       /// The group's name as typed. The caller writes it on the group —
       /// as part of `groupBody` when creating, by renaming when editing.
       name: string;
+      /// The group's description as typed, written the same two ways.
+      description: string;
       entry: CatalogEntry;
       /// The `[[groups]]` block, when this dialog is creating a source.
       /// Null when editing: the group already exists.
@@ -109,6 +112,9 @@ const chosen = ref<CatalogEntry | null>(props.editing?.entry ?? null);
 /// clearing the box removes the key. Nothing is ever pre-filled here;
 /// see [`nameHint`] for what the box shows instead.
 const name = ref(props.editing?.group.name ?? "");
+/// What the source is to this person. Blank removes the key, like the
+/// name.
+const description = ref(props.editing?.group.description ?? "");
 /// The group's id: the directory its steps write under. Typed while
 /// creating, fixed while editing.
 const id = ref(props.editing?.group.id ?? "");
@@ -293,6 +299,7 @@ const source = computed(() =>
         entry: chosen.value,
         group: groupId.value,
         name: name.value,
+        description: description.value,
         values: values.value,
         withGroup: mode.value === "create",
         renders: renders.value,
@@ -600,20 +607,22 @@ const probeHeadline = computed(() => probe.value.message.split("\n")[0] ?? "");
 /// it, and reflowing it into a paragraph is what made it unreadable.
 const probeDetail = computed(() => probe.value.message.split("\n").slice(1).join("\n").trim());
 
+/// Which of a report's item kinds each `probe:` noun takes. A render
+/// filter matches only what emails are filed in, never a Gmail flag,
+/// which is why `mailboxes` is narrower than `labels`.
+const PROBE_KINDS: Record<ProbeNoun, string[]> = {
+  labels: ["mailbox", "keyword"],
+  mailboxes: ["mailbox"],
+  conversations: ["conversation"],
+  channels: ["channel"],
+};
+
 /// What a `probe:` field should offer, given what came back.
 function probeOptions(field: Field): ProbeItem[] {
   const report = probe.value.report;
   if (!report || field.kind !== "string_list" || !field.probe) return [];
-  switch (field.probe) {
-    // A render filter matches only what emails are filed in, never a
-    // Gmail flag.
-    case "mailboxes":
-      return report.items.filter((i) => i.kind === "mailbox");
-    case "conversations":
-      return report.items.filter((i) => i.kind === "conversation");
-    default:
-      return report.items.filter((i) => i.kind !== "conversation");
-  }
+  const kinds = PROBE_KINDS[field.probe];
+  return report.items.filter((i) => kinds.includes(i.kind));
 }
 
 /// What the field holds today, as the array the picker binds to.
@@ -622,29 +631,61 @@ function chosenValues(field: Field): string[] {
   return Array.isArray(v) ? (v as string[]) : [];
 }
 
+/// Does a typed value name this item, the way the provider will read
+/// it? Exact on the path, except where the downloader itself is looser:
+/// Slack drops a leading `#` from a channel name, and every chat source
+/// takes a pasted link to a conversation as well as its bare id — so a
+/// value that *ends* in the id, after a `/`, counts.
+function namesItem(value: string, item: ProbeItem): boolean {
+  const v = value.trim();
+  if (v === item.path) return true;
+  switch (item.kind) {
+    case "channel":
+      return v.replace(/^#/, "") === item.path;
+    case "conversation":
+      return v.split(/[?#]/)[0]?.split("/").includes(item.path) ?? false;
+    default:
+      return false;
+  }
+}
+
 /// Chosen values the probed account does not have.
 function unknownValues(field: Field): string[] {
   const options = probeOptions(field);
   if (options.length === 0) return [];
-  const known = new Set(options.map((i) => i.path));
-  return chosenValues(field).filter((p) => !known.has(p));
+  return chosenValues(field).filter((v) => !options.some((i) => namesItem(v, i)));
 }
 
 /// What a field's picker is a picker *of*, for the sentences around it.
 /// An email account has folders and labels, a Claude account has
-/// conversations, and calling any of them "labels" reads as a bug.
-const PROBE_NOUNS = {
+/// conversations, a Slack workspace has channels and DMs — and calling
+/// any of them "labels" reads as a bug.
+const PROBE_NOUNS: Record<ProbeNoun, string> = {
   labels: "labels",
   mailboxes: "folders",
   conversations: "conversations",
-} as const;
+  channels: "channels",
+};
 
-/// The same word for what the probe actually came back with.
-const probedNoun = computed(() => {
-  const items = probe.value.report?.items ?? [];
-  return items.some((i) => i.kind === "conversation")
-    ? PROBE_NOUNS.conversations
-    : PROBE_NOUNS.labels;
+/// The noun each item kind is counted under in the "Reached …" line.
+const KIND_NOUNS: Record<string, ProbeNoun> = {
+  mailbox: "labels",
+  keyword: "labels",
+  conversation: "conversations",
+  channel: "channels",
+};
+
+/// What the probe came back with, counted by kind: "3 channels, 2
+/// conversations". A report with nothing in it says so in words, since
+/// there is no one noun to count zero of.
+const probeSummary = computed(() => {
+  const counts = new Map<ProbeNoun, number>();
+  for (const item of probe.value.report?.items ?? []) {
+    const noun = KIND_NOUNS[item.kind] ?? "labels";
+    counts.set(noun, (counts.get(noun) ?? 0) + 1);
+  }
+  if (counts.size === 0) return "nothing to pick from";
+  return [...counts].map(([noun, n]) => `${n} ${PROBE_NOUNS[noun]}`).join(", ");
 });
 
 // Load the account list as soon as there is a service to load it for:
@@ -662,6 +703,7 @@ function submit() {
   emit("submit", {
     id: groupId.value,
     name: name.value.trim(),
+    description: description.value.trim(),
     entry: chosen.value,
     groupBody: source.value.groupBody,
     stepsBody: source.value.stepsBody,
@@ -840,18 +882,25 @@ function submit() {
             class="wiz-help wiz-conn-note wiz-probe-note"
           >
             Reached
-            <b>{{ probe.report.account.address || probe.report.account.id }}</b
+            <b>{{
+              probe.report.account.address ||
+              probe.report.account.display_name ||
+              probe.report.account.id
+            }}</b
             ><!-- A message estimate is only shown when the provider gave
                   one for free: Gmail's profile carries it, JMAP's
                   session does not. --><template
               v-if="probe.report.account.message_estimate"
             >
               — about {{ probe.report.account.message_estimate.toLocaleString() }} messages,
-              {{ probe.report.items.length }} {{ probedNoun }}.</template
-            ><template v-else>
-              — {{ probe.report.items.length }} {{ probedNoun }}.</template
-            >
+              {{ probeSummary }}.</template
+            ><template v-else> — {{ probeSummary }}.</template>
             The pickers below are filled in from it.
+            <!-- What the provider wanted said alongside a success:
+                 "the 500 most recent are listed", "counts are blank". -->
+            <span v-for="note in probe.report.notes" :key="note" class="wiz-probe-aside">{{
+              note
+            }}</span>
           </p>
         </section>
 
@@ -863,6 +912,21 @@ function submit() {
             included, and <b>{{ nameHint }}</b> is only an example. Change it whenever you
             like: nothing on disk moves and no step re-runs. Leave it blank to be shown as
             <code>{{ groupId || "…" }}</code>.
+          </small>
+        </label>
+
+        <label class="wiz-field">
+          <span class="wiz-label">Description</span>
+          <input
+            v-model="description"
+            class="wiz-input"
+            placeholder="Work Slack, mostly the infra and on-call channels"
+          />
+          <small class="wiz-help">
+            Optional. A sentence on what this source holds and what it is to you — "the
+            company Slack, mostly the on-call channels". Kept with the source's settings.
+            It could help search tell similar sources apart one day, but nothing reads it
+            yet. Change it whenever you like: nothing re-runs.
           </small>
         </label>
 
@@ -1022,9 +1086,9 @@ function submit() {
                 @update:model-value="values[f.target] = $event"
               />
               <small v-if="f.probe && unknownValues(f).length" class="wiz-error">
-                Not on this account: {{ unknownValues(f).join(", ") }}. A download filter naming a
-                label the account doesn’t have fails the run; a render filter naming one renders
-                nothing.
+                Not on this account: {{ unknownValues(f).join(", ") }}. Nothing can be mirrored
+                for a name the account doesn’t have — check the spelling, or tick it in the
+                list.
               </small>
               <small v-else-if="f.probe && !probe.report" class="wiz-help">
                 Run “Test connection” to pick from this account’s real
@@ -1210,6 +1274,7 @@ function submit() {
 .wiz-help { color: var(--datalib-muted); font-size: 11.5px; line-height: 1.45; }
 .wiz-error { color: #b8481a; font-size: 11.5px; }
 .wiz-probe-headline { margin: 0 0 4px; }
+.wiz-probe-aside { display: block; margin-top: 2px; }
 /* The step's recipe, in the shape it was written: numbered steps and
    shell commands, which reflowed into a paragraph are unreadable. */
 .wiz-probe-detail {

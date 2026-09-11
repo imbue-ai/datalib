@@ -15,5 +15,6 @@ pub mod units;
 /// row shape changes enough that an existing `index.md` must be
 /// re-rendered. Stamped onto the `markdowns` row AND into the render
 /// cursor's `params` (see [`render::cursor_params`]), so a bump
-/// invalidates the "HEAD unchanged → skip" fast path too.
-pub const RENDER_VERSION: u32 = 2;
+/// invalidates the "HEAD unchanged → skip" fast path too. v3: `account`
+/// stopped carrying the source name.
+pub const RENDER_VERSION: u32 = 3;

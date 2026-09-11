@@ -26,6 +26,8 @@ pub const DATA_TABLES: &[&str] = &[
     "wa_message_text",
     "wa_message",
     "wa_chat",
+    "wa_lid_display_name",
+    "wa_jid_map",
     "wa_jid",
     "wa_media_files",
 ];
@@ -37,6 +39,25 @@ pub const WA_JID_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_jid (
     agent INTEGER,
     device INTEGER,
     type INTEGER
+);";
+
+/// Which phone number a linked id (`…@lid`) belongs to. Both columns are
+/// `jid.raw_string` values. Not every `@lid` has a row — 1 of 6 in the
+/// backup this was measured against did not — so a reader keeps the raw
+/// JID as its fallback.
+pub const WA_JID_MAP_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_jid_map (
+    lid_jid TEXT PRIMARY KEY,
+    jid TEXT NOT NULL,
+    sort_id INTEGER
+);";
+
+/// A display name WhatsApp has learned for a linked id. Empty in the
+/// backup this was measured against; mirrored because a phone that fills
+/// it in gets real names for free.
+pub const WA_LID_DISPLAY_NAME_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_lid_display_name (
+    lid_jid TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    username TEXT
 );";
 
 pub const WA_CHAT_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_chat (
@@ -237,6 +258,8 @@ pub const WA_MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_media_files 
 /// All DDL statements in dependency-safe creation order.
 pub const ALL_DDL: &[&str] = &[
     WA_JID_DDL,
+    WA_JID_MAP_DDL,
+    WA_LID_DISPLAY_NAME_DDL,
     WA_CHAT_DDL,
     WA_MESSAGE_DDL,
     WA_MESSAGE_TEXT_DDL,

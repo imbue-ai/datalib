@@ -31,6 +31,8 @@ use crate::schema_raw::{ALL_DDL, DATA_TABLES};
 #[derive(Debug, Clone, Default)]
 pub struct IngestSummary {
     pub jids: u64,
+    pub jid_map: u64,
+    pub lid_display_names: u64,
     pub chats: u64,
     pub messages: u64,
     pub message_text: u64,
@@ -148,6 +150,8 @@ async fn fetch_with_pool(
 
     let mut summary = IngestSummary::default();
     let jid_map = mirror_jid(&src_pool, &dst_pool, &mut summary).await?;
+    mirror_jid_map(&src_pool, &dst_pool, &jid_map, &mut summary).await?;
+    mirror_lid_display_name(&src_pool, &dst_pool, &jid_map, &mut summary).await?;
     let chat_map = mirror_chat(&src_pool, &dst_pool, &jid_map, &mut summary).await?;
     let msg_map = mirror_message(&src_pool, &dst_pool, &jid_map, &chat_map, &mut summary).await?;
     mirror_message_text(&src_pool, &dst_pool, &msg_map, &mut summary).await?;
@@ -249,6 +253,104 @@ async fn mirror_jid(
     tx.commit().await.context("commit wa_jid tx")?;
     summary.jids = rows.len() as u64;
     Ok(map)
+}
+
+/// Older msgstore versions have neither of the two LID tables. Absent is
+/// "nothing to map", not a failed ingest.
+async fn source_has_table(src: &SqlitePool, table: &str) -> Result<bool> {
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
+            .bind(table)
+            .fetch_one(src)
+            .await
+            .with_context(|| format!("probe for {table}"))?;
+    Ok(n > 0)
+}
+
+async fn mirror_jid_map(
+    src: &SqlitePool,
+    dst: &SqlitePool,
+    jid_map: &HashMap<i64, String>,
+    summary: &mut IngestSummary,
+) -> Result<()> {
+    if !source_has_table(src, "jid_map").await? {
+        tracing::info!(
+            "whatsapp::ingest: msgstore has no jid_map table; @lid chats keep their raw ids"
+        );
+        return Ok(());
+    }
+    let rows = sqlx::query("SELECT lid_row_id, jid_row_id, sort_id FROM jid_map")
+        .fetch_all(src)
+        .await
+        .context("select jid_map")?;
+    let mut tx = dst.begin().await.context("begin wa_jid_map tx")?;
+    let mut n = 0u64;
+    for r in &rows {
+        let lid_row_id: i64 = r.get("lid_row_id");
+        let jid_row_id: i64 = r.get("jid_row_id");
+        let sort_id: Option<i64> = r.get("sort_id");
+        let (Some(lid), Some(jid)) = (jid_map.get(&lid_row_id), jid_map.get(&jid_row_id)) else {
+            tracing::warn!(
+                lid_row_id,
+                jid_row_id,
+                "jid_map: row id not in jid; dropping row"
+            );
+            continue;
+        };
+        sqlx::query("INSERT INTO wa_jid_map (lid_jid, jid, sort_id) VALUES (?, ?, ?)")
+            .bind(lid)
+            .bind(jid)
+            .bind(sort_id)
+            .execute(&mut *tx)
+            .await
+            .context("insert wa_jid_map")?;
+        n += 1;
+    }
+    tx.commit().await.context("commit wa_jid_map tx")?;
+    summary.jid_map = n;
+    Ok(())
+}
+
+async fn mirror_lid_display_name(
+    src: &SqlitePool,
+    dst: &SqlitePool,
+    jid_map: &HashMap<i64, String>,
+    summary: &mut IngestSummary,
+) -> Result<()> {
+    if !source_has_table(src, "lid_display_name").await? {
+        return Ok(());
+    }
+    let rows = sqlx::query("SELECT lid_row_id, display_name, username FROM lid_display_name")
+        .fetch_all(src)
+        .await
+        .context("select lid_display_name")?;
+    let mut tx = dst.begin().await.context("begin wa_lid_display_name tx")?;
+    let mut n = 0u64;
+    for r in &rows {
+        let lid_row_id: i64 = r.get("lid_row_id");
+        let display_name: String = r.get("display_name");
+        let username: Option<String> = r.get("username");
+        let Some(lid) = jid_map.get(&lid_row_id) else {
+            tracing::warn!(
+                lid_row_id,
+                "lid_display_name: row id not in jid; dropping row"
+            );
+            continue;
+        };
+        sqlx::query(
+            "INSERT INTO wa_lid_display_name (lid_jid, display_name, username) VALUES (?, ?, ?)",
+        )
+        .bind(lid)
+        .bind(&display_name)
+        .bind(&username)
+        .execute(&mut *tx)
+        .await
+        .context("insert wa_lid_display_name")?;
+        n += 1;
+    }
+    tx.commit().await.context("commit wa_lid_display_name tx")?;
+    summary.lid_display_names = n;
+    Ok(())
 }
 
 async fn mirror_chat(

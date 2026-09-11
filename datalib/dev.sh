@@ -63,9 +63,11 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 # Default to ephemeral ports for both Vite and the backend so multiple
-# concurrent dev runs don't collide. Same ephemeral-port trick as
-# datalib/ui/playwright.config.ts: bind to :0, read back, close. Small
-# race between close() and the real listener's bind() — fine in practice.
+# concurrent dev runs don't collide: bind to :0, read the port back,
+# close. The gap before the real listener binds is a race; losing it
+# costs a restart, which is why it is fine here and not in the test
+# suite — datalib/ui/playwright.config.ts takes each port from the
+# server's own `--url-file` instead.
 free_port() {
   python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'
 }

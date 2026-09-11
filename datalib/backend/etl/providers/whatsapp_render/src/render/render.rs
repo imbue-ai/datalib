@@ -19,8 +19,10 @@ use datalib_schema::providers::Provider;
 use sqlx::Row;
 
 /// Bump when the rendered markdown / grid_rows layout changes enough
-/// that we need every existing WhatsApp doc rebuilt.
-pub const RENDER_VERSION: u32 = 4;
+/// that we need every existing WhatsApp doc rebuilt. v5: an `@lid` chat
+/// or sender reads as its display name or phone number when msgstore's
+/// `lid_display_name` / `jid_map` know one.
+pub const RENDER_VERSION: u32 = 5;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 

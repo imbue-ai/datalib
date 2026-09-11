@@ -164,6 +164,75 @@ fn a_writer_opens_and_commits_under_a_reader_that_is_already_open() {
     assert_eq!(errors(&writer), Vec::<String>::new(), "writer errors");
 }
 
+/// A reader that keeps re-opening — the shape `grid_index` has under
+/// streaming, one open/pin/diff/read/close per source per pass — for as long
+/// as a writer commits as fast as it can. Every reader step is a read, so the
+/// writer must never see `commit conflict`.
+///
+/// It did (#400): `install_views` used to ask `dolt_status` whether the store
+/// was dirty, and that one statement, issued from a read-only connection,
+/// failed about one in a hundred of the writer's overlapping commits here.
+/// The writer is the bounded side, because every commit grows the file and a
+/// reader's open reads all of it: bounding the reader instead let a fast
+/// writer turn this into minutes of ever-slower opens.
+#[test]
+fn a_churning_reader_never_makes_the_writers_commit_fail() {
+    let t = Scratch::new();
+    let mut writer = t.spawn(&[
+        "write",
+        "--db",
+        &t.db(),
+        "--seed",
+        "--pin-out",
+        &t.path("pin"),
+        "--max-commits",
+        "2000",
+        "--interval-ms",
+        "0",
+        "--out",
+        &t.path("writer.json"),
+    ]);
+    t.await_file("pin", &mut writer);
+
+    let mut reader = t.spawn(&[
+        "churn",
+        "--db",
+        &t.db(),
+        "--until",
+        &t.path("writer.json"),
+        "--rounds",
+        "100000",
+        "--out",
+        &t.path("churn.json"),
+    ]);
+    t.wait("writer", &mut writer);
+    t.wait("reader", &mut reader);
+
+    let writer = t.report("writer.json");
+    if writer["dolt"] == Value::Bool(false) {
+        return;
+    }
+    let reader = t.report("churn.json");
+    let commits = writer["commits"].as_array().map_or(0, Vec::len);
+    assert_eq!(
+        errors(&reader),
+        Vec::<String>::new(),
+        "reader errors (writer commits={commits})"
+    );
+    assert_eq!(
+        errors(&writer),
+        Vec::<String>::new(),
+        "writer errors (writer commits={commits}, reader opened={} pinned={})",
+        reader["opened"],
+        reader["pinned"]
+    );
+    assert!(
+        reader["pinned"].as_u64().unwrap_or(0) > 0,
+        "the reader never pinned anything, so it never read: {reader:?}"
+    );
+    assert_committed_throughout(&writer, &reader);
+}
+
 /// The shape `AGENTS.md`'s "One open per doltlite file" rule warns about, and
 /// the one neither scenario above reaches: two read-write pools on one file
 /// inside a single process. The rule is worth keeping — a second pool shares
