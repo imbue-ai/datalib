@@ -1,34 +1,18 @@
 import { defineConfig } from "@playwright/test";
-import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import {
+  closeSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG_MUTATING } from "./tests/e2e/config-mutating";
-
-  // Ask the kernel for a free ephemeral port, via a Node one-liner so we stay
-  // synchronous (Playwright's config module isn't async). The small race
-  // between close() here and the real listener binding is the standard
-  // ephemeral-port pattern, and it lets parallel runs coexist.
-function freePort(): number {
-  const out = execFileSync("node", [
-    "-e",
-    "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{process.stdout.write(String(s.address().port));s.close()});",
-  ]).toString();
-  return Number.parseInt(out, 10);
-}
-
-// Playwright reloads this config in each worker subprocess; freePort()
-// must therefore be idempotent across reloads or each worker will point
-// at ports nobody is listening on. Inherit from env when present so the
-// values minted in the parent process flow into the workers.
-function cachedPort(envVar: string): number {
-  const existing = process.env[envVar];
-  if (existing) return Number.parseInt(existing, 10);
-  const port = freePort();
-  process.env[envVar] = String(port);
-  return port;
-}
 
 // Materialize the bazel-built fixture once, before any worker starts.
 // Tests share the resulting data root via FW_E2E_FIXTURE_ROOT — cached
@@ -42,10 +26,10 @@ const workspaceDir = path.resolve(here, "..", "..");
 // the roots below land somewhere bounded. Bare `tmpdir()` is the
 // `pnpm exec playwright test` path, where nobody reclaims them at all:
 // bazel exports TEST_TMPDIR but never TMPDIR.
+const scratchParent =
+  process.env.FW_E2E_RUN_DIR || process.env.TEST_TMPDIR || tmpdir();
 function mintRoot(prefix: string): string {
-  const parent =
-    process.env.FW_E2E_RUN_DIR || process.env.TEST_TMPDIR || tmpdir();
-  return mkdtempSync(path.join(parent, prefix));
+  return mkdtempSync(path.join(scratchParent, prefix));
 }
 function materializeRoot(prefix: string): string {
   const materializer =
@@ -64,11 +48,6 @@ function ensureFixtureRoot(): string {
 }
 const fixtureRoot = ensureFixtureRoot();
 
-// Ephemeral port so concurrent runs (`bazel test --runs_per_test=N`,
-// two devs on one machine) don't collide on a fixed port.
-const BACKEND_PORT = cachedPort("FW_E2E_BACKEND_PORT");
-const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
-
   // A second backend on an empty data root, for the first-run onboarding spec.
   // It has to be its own server: the onboarding screen is gated on the root
   // having no `config.toml`, and there is no way back to that state from a
@@ -85,9 +64,6 @@ function emptyRoot(): string {
   return root;
 }
 const EMPTY_ROOT = emptyRoot();
-const EMPTY_PORT = cachedPort("FW_E2E_EMPTY_PORT");
-const EMPTY_URL = `http://127.0.0.1:${EMPTY_PORT}`;
-process.env.FW_E2E_EMPTY_URL = EMPTY_URL;
 
   // A third backend on a third empty root: `first-run.spec.ts` already owns
   // EMPTY_ROOT and initializes it, and onboarding is one-shot — a root with a
@@ -100,9 +76,6 @@ function onboardingRoot(): string {
   return root;
 }
 const ONBOARDING_ROOT = onboardingRoot();
-const ONBOARDING_PORT = cachedPort("FW_E2E_ONBOARDING_PORT");
-const ONBOARDING_URL = `http://127.0.0.1:${ONBOARDING_PORT}`;
-process.env.FW_E2E_ONBOARDING_URL = ONBOARDING_URL;
 
 const binDir =
   process.env.FW_E2E_BIN_DIR ||
@@ -151,27 +124,24 @@ function signalBackupDir(): string | undefined {
 signalBackupDir();
 
 // ── the config-mutating specs, one data root each ────────────────────
-type Sandbox = { spec: string; root: string; port: number; url: string };
+type Sandbox = { spec: string; root: string; url: string };
 
-/// Cached in env like the ports and the fixture root: worker
-/// subprocesses re-import this config and must attach to what the
-/// parent minted rather than minting their own.
-function sandboxes(): Sandbox[] {
+/// Cached in env like the fixture root: worker subprocesses re-import
+/// this config and must attach to what the parent materialized rather
+/// than building their own. `url` is filled in below, once the backend
+/// on this root has said which port it got.
+function sandboxRoots(): Sandbox[] {
   const existing = process.env.FW_E2E_SANDBOXES;
   if (existing) return JSON.parse(existing) as Sandbox[];
-  const made = CONFIG_MUTATING.map((spec) => {
-    const port = freePort();
-    return {
-      spec,
-      root: materializeRoot(`datalib-e2e-${spec}-`),
-      port,
-      url: `http://127.0.0.1:${port}`,
-    };
-  });
+  const made = CONFIG_MUTATING.map((spec) => ({
+    spec,
+    root: materializeRoot(`datalib-e2e-${spec}-`),
+    url: "",
+  }));
   process.env.FW_E2E_SANDBOXES = JSON.stringify(made);
   return made;
 }
-const SANDBOXES = sandboxes();
+const SANDBOX_ROOTS = sandboxRoots();
 
   // The backend requires its API token on every route, so pin one via
   // DATALIB_TOKEN rather than reading back a random one. `use.extraHTTPHeaders`
@@ -181,7 +151,7 @@ const SANDBOXES = sandboxes();
 function cachedToken(): string {
   const existing = process.env.DATALIB_TOKEN;
   if (existing) return existing;
-  const token = `e2e-${BACKEND_PORT}-${process.pid}`;
+  const token = `e2e-${process.pid}`;
   process.env.DATALIB_TOKEN = token;
   return token;
 }
@@ -195,6 +165,164 @@ const backendBin =
     workspaceDir,
     "bazel-bin/datalib/backend/http/datalib_http_bin",
   );
+
+// ── the backends ─────────────────────────────────────────────────────
+// Every backend binds `127.0.0.1:0` and announces the port the kernel
+// gave it through `--url-file`; nothing here picks one. A port picked in
+// advance belongs to whoever binds it first, and the roots above take
+// tens of seconds to materialize before any server starts, so there is
+// no honest way to hold one. Binding is the only claim there is.
+//
+// The price is Playwright's `webServer`, which needs the URL before the
+// server exists: spawning, readiness and teardown are ours instead.
+// Readiness is the health poll in `tests/e2e/global-setup.ts` — the
+// url-file lands right after `bind()`, several seconds before the
+// backend finishes assembling. `start_backend` in
+// `datalib/tauri/src/main.rs` is the same handshake for the desktop app.
+type Server = { name: string; url: string; pid: number; log: string };
+type Pending = { name: string; child: ChildProcess; urlFile: string; log: string };
+
+const ANNOUNCE_TIMEOUT_MS = 30_000;
+
+// Playwright's config module can't be async, so the wait for the
+// announcements below is a blocking one.
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function logTail(file: string, lines = 30): string {
+  try {
+    return readFileSync(file, "utf8").split("\n").slice(-lines).join("\n").trim();
+  } catch {
+    return "(no output)";
+  }
+}
+
+function spawnBackend(
+  name: string,
+  root: string,
+  env: Record<string, string> = {},
+): Pending {
+  const dir = path.join(scratchParent, "servers");
+  mkdirSync(dir, { recursive: true });
+  const urlFile = path.join(dir, `${name}.url`);
+  const log = path.join(dir, `${name}.log`);
+  rmSync(urlFile, { force: true });
+  const fd = openSync(log, "w");
+  const child = spawn(
+    backendBin,
+    [root, "--no-open", "--url-file", urlFile],
+    {
+      stdio: ["ignore", fd, fd],
+      env: {
+        ...process.env,
+        DATALIB_BIND: "127.0.0.1:0",
+        DATALIB_TOKEN: API_TOKEN,
+        ...env,
+      },
+    },
+  );
+  closeSync(fd);
+  return { name, child, urlFile, log };
+}
+
+// The announced URL is `<origin>/?token=<DATALIB_TOKEN>`; the specs want
+// the origin. Absent, empty and short of the whole token all read the
+// same way here — as "not yet", so a torn read is one more turn of the
+// poll rather than a truncated port number that parses.
+function announcedOrigin(urlFile: string): string | undefined {
+  try {
+    const url = new URL(readFileSync(urlFile, "utf8").trim());
+    return url.searchParams.get("token") === API_TOKEN ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function awaitAnnouncements(pending: Pending[]): Server[] {
+  const deadline = Date.now() + ANNOUNCE_TIMEOUT_MS;
+  const urls = new Map<string, string>();
+  for (;;) {
+    for (const p of pending) {
+      if (urls.has(p.name)) continue;
+      const url = announcedOrigin(p.urlFile);
+      if (url) urls.set(p.name, url);
+    }
+    if (urls.size === pending.length) break;
+    if (Date.now() >= deadline) {
+      const stuck = pending
+        .filter((p) => !urls.has(p.name))
+        .map((p) => `── ${p.name} (${p.log}):\n${logTail(p.log)}`)
+        .join("\n\n");
+      throw new Error(
+        `datalib-http did not announce a URL within ` +
+          `${ANNOUNCE_TIMEOUT_MS / 1000}s:\n\n${stuck}`,
+      );
+    }
+    sleepSync(25);
+  }
+  return pending.map((p) => ({
+    name: p.name,
+    url: urls.get(p.name) as string,
+    pid: p.child.pid as number,
+    log: p.log,
+  }));
+}
+
+/// Cached in env like everything else the parent process builds: a
+/// worker re-importing this config must attach to the running backends,
+/// not start a second set of its own.
+function servers(): Server[] {
+  const existing = process.env.FW_E2E_SERVERS;
+  if (existing) return JSON.parse(existing) as Server[];
+  const pending = [
+    spawnBackend("fixture", fixtureRoot),
+    spawnBackend("empty", EMPTY_ROOT),
+      // The one server whose PATH carries the dash-named binaries. The
+      // scaffold config names `datalib-dag`, its steps and the
+      // `unified_index` applet bare, so PATH is how all three are found —
+      // the installed-user arrangement, which the other two never exercise.
+    spawnBackend("onboarding", ONBOARDING_ROOT, {
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      // Signal's download step reads its passphrase from the
+      // environment — the wizard writes the *name* of the variable,
+      // never the secret. The step inherits this from the runner, which
+      // inherits it from this server, which is the same chain a real
+      // install has from the user's shell.
+      SIGNAL_BACKUP_PASSPHRASE: FIXTURE_SIGNAL_AEP,
+    }),
+    ...SANDBOX_ROOTS.map((s) => spawnBackend(`sandbox-${s.spec}`, s.root)),
+  ];
+  let started: Server[];
+  try {
+    started = awaitAnnouncements(pending);
+  } catch (err) {
+    // globalTeardown never runs if this config throws, so the ones that
+    // did come up have to be cleaned up here or they outlive the run.
+    for (const p of pending) p.child.kill("SIGKILL");
+    throw err;
+  }
+  process.env.FW_E2E_SERVERS = JSON.stringify(started);
+  return started;
+}
+const SERVERS = servers();
+
+function serverUrl(name: string): string {
+  const found = SERVERS.find((s) => s.name === name);
+  if (!found) throw new Error(`no backend named ${name}`);
+  return found.url;
+}
+
+const BACKEND_URL = serverUrl("fixture");
+const EMPTY_URL = serverUrl("empty");
+process.env.FW_E2E_EMPTY_URL = EMPTY_URL;
+const ONBOARDING_URL = serverUrl("onboarding");
+process.env.FW_E2E_ONBOARDING_URL = ONBOARDING_URL;
+const SANDBOXES: Sandbox[] = SANDBOX_ROOTS.map((s) => ({
+  ...s,
+  url: serverUrl(`sandbox-${s.spec}`),
+}));
+process.env.FW_E2E_SANDBOXES = JSON.stringify(SANDBOXES);
 
 // ── where the recordings go ──────────────────────────────────────────
 const REPORT_DIR = process.env.TEST_UNDECLARED_OUTPUTS_DIR
@@ -214,6 +342,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 4,
   globalSetup: "./tests/e2e/global-setup.ts",
+  globalTeardown: "./tests/e2e/global-teardown.ts",
   outputDir: ARTIFACT_DIR,
   // `list` is what a person watching the terminal reads. `html` is the
   // artifact: a self-contained report that embeds each test's video and
@@ -294,79 +423,5 @@ export default defineConfig({
         /manager2-grid\.spec\.ts/,
       ],
     },
-  ],
-  webServer: [
-    {
-        // The data root is the only positional arg; the bind address comes
-        // from DATALIB_BIND so each run claims its own port. `--no-open` keeps
-        // a second browser tab from fighting Playwright's for focus.
-      command: `${JSON.stringify(backendBin)} ${JSON.stringify(fixtureRoot)} --no-open`,
-      // Playwright's own readiness probe doesn't go through
-      // `use.extraHTTPHeaders`, so the token rides the query string here.
-      url: `${BACKEND_URL}/api/health?token=${API_TOKEN}`,
-      reuseExistingServer: false,
-      timeout: 30_000,
-      env: {
-        DATALIB_BIND: `127.0.0.1:${BACKEND_PORT}`,
-        DATALIB_TOKEN: API_TOKEN,
-          // The sync worker shells out to `datalib-dag`, which under bazel
-          // lives in the runfiles rather than beside the server binary, so the
-          // worker's own fallbacks both miss it. run_e2e.sh resolves it.
-        ...(process.env.DATALIB_DAG_BIN
-          ? { DATALIB_DAG_BIN: process.env.DATALIB_DAG_BIN }
-          : {}),
-      },
-    },
-    {
-      // The empty-root backend behind `first-run.spec.ts`. Same binary,
-      // same token (so `use.extraHTTPHeaders` authenticates both), a
-      // data root the backend creates on demand and never populates.
-      command: `${JSON.stringify(backendBin)} ${JSON.stringify(EMPTY_ROOT)} --no-open`,
-      url: `${EMPTY_URL}/api/health?token=${API_TOKEN}`,
-      reuseExistingServer: false,
-      timeout: 30_000,
-      env: {
-        DATALIB_BIND: `127.0.0.1:${EMPTY_PORT}`,
-        DATALIB_TOKEN: API_TOKEN,
-      },
-    },
-    {
-        // The onboarding backend: a third empty root, and the one server here
-        // whose PATH carries the dash-named binaries. The scaffold config names
-        // `datalib-dag`, its steps and the `unified_index` applet bare, so PATH
-        // is how all three are found — the installed-user arrangement, which
-        // the other two servers never exercise.
-      command: `${JSON.stringify(backendBin)} ${JSON.stringify(ONBOARDING_ROOT)} --no-open`,
-      url: `${ONBOARDING_URL}/api/health?token=${API_TOKEN}`,
-      reuseExistingServer: false,
-      timeout: 30_000,
-      env: {
-        DATALIB_BIND: `127.0.0.1:${ONBOARDING_PORT}`,
-        DATALIB_TOKEN: API_TOKEN,
-        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-        // Signal's download step reads its passphrase from the
-        // environment — the wizard writes the *name* of the variable,
-        // never the secret. The step inherits this from the runner,
-        // which inherits it from this server, which is the same chain a
-        // real install has from the user's shell.
-        SIGNAL_BACKUP_PASSPHRASE: FIXTURE_SIGNAL_AEP,
-      },
-    },
-    // A backend apiece for the config-mutating specs. Same binary and
-    // same token as the shared one; the data root is the only thing
-    // that differs, which is the whole point.
-    ...SANDBOXES.map((s) => ({
-      command: `${JSON.stringify(backendBin)} ${JSON.stringify(s.root)} --no-open`,
-      url: `${s.url}/api/health?token=${API_TOKEN}`,
-      reuseExistingServer: false,
-      timeout: 30_000,
-      env: {
-        DATALIB_BIND: `127.0.0.1:${s.port}`,
-        DATALIB_TOKEN: API_TOKEN,
-        ...(process.env.DATALIB_DAG_BIN
-          ? { DATALIB_DAG_BIN: process.env.DATALIB_DAG_BIN }
-          : {}),
-      },
-    })),
   ],
 });

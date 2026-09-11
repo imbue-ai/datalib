@@ -32,9 +32,10 @@ fi
 
 # Default to an ephemeral port so concurrent `serve_dev.sh` runs (e.g. one
 # agent per checkout) don't fight over a hardcoded 8731. Honor a caller-
-# supplied DATALIB_BIND verbatim. Same ephemeral-port trick as
-# datalib/ui/playwright.config.ts — small race between close() and the
-# binary's listen() but good enough for parallel local runs.
+# supplied DATALIB_BIND verbatim. Bind :0, read the port back, close — a
+# race with the binary's own listen(), good enough for a local run you
+# can restart. A run that cannot afford to lose it takes the port from
+# the server's `--url-file` (datalib/ui/playwright.config.ts).
 free_port() {
   python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'
 }
