@@ -194,6 +194,12 @@ reference doc it relates to.
   measured against, the R-tree and its shadow tables, and the macOS
   permission the library sits behind. It also records why Apple Music
   is *not* the same case (`Library.musicdb` is not SQLite).
+  [`whatsapp/INGEST.md`](datalib/backend/etl/providers/whatsapp/INGEST.md)
+  is the third, and the first that renders: why the mirror keys on
+  rowids (measured stable between backups of one phone), the
+  `skip_churn` preset, the `Media/` registry the engine does not do,
+  and how render resolves the rowid graph to the natural keys the
+  uuids are minted from.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
   — the `email` source's three download modes (JMAP, Gmail API, mbox),
   what keeps them writing one deduped schema, and why an IMAP mode was
@@ -447,14 +453,16 @@ datalib/
                    etl/src/fswalk.rs (blake3 + Unison's rescan cursor):
                    fsindex (path-keyed, no render), pdf and media (both
                    content-keyed; media has no render side either).
-                   Two mirror a SQLite file through etl/sqlite_mirror/
-                   (lightroom, apple_photos). fsindex, media, lightroom
-                   and apple_photos have no <p>_render.
+                   Three mirror a SQLite file through etl/sqlite_mirror/
+                   (lightroom, apple_photos, whatsapp — the last after
+                   decrypting it). fsindex, media, lightroom and
+                   apple_photos have no <p>_render.
     etl/sqlite_mirror/ `datalib_etl_sqlite_mirror`: the table-for-table
-                   SQLite→doltlite mirror engine behind lightroom and
-                   apple_photos. Its own crate, not part of datalib_etl,
-                   so an engine change rebuilds two providers rather
-                   than everything downstream of the shared crate.
+                   SQLite→doltlite mirror engine behind lightroom,
+                   apple_photos and whatsapp. Its own crate, not part of
+                   datalib_etl, so an engine change rebuilds three
+                   providers rather than everything downstream of the
+                   shared crate.
     table/         `datalib_table`: the `BulkUpsertable` row-write
                    contract, alone, with `sqlx` as its only dependency.
     migrate_config/ `datalib-migrate-config`: rewrites a `config.toml`

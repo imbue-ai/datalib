@@ -535,8 +535,11 @@ def _unpinned_reads(root: Path, rel: str) -> list[tuple[int, str]]:
     if rel in _RENDER_REACHABLE_LOADERS:
         return _loader_reads(text, _RENDER_REACHABLE_LOADERS[rel])
 
+    # Test modules seed the stores they then render from, and a seed is
+    # the writer's `DELETE FROM` / `INSERT`, not a render read.
+    body = text.split("#[cfg(test)]")[0]
     out: list[tuple[int, str]] = []
-    for lineno, line in enumerate(text.splitlines(), 1):
+    for lineno, line in enumerate(body.splitlines(), 1):
         for table in _TABLE_READ.findall(line):
             if (
                 not table.startswith(_PINNED_OK_PREFIXES)

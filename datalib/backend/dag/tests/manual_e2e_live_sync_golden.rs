@@ -212,18 +212,20 @@ const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[("sync_scope_config", &["updat
 
 /// Stores dumped as one row count per table instead of row by row. A
 /// mirror source's store is every table of an application's own
-/// database — 78 for Photos, 113 for Lightroom — and whether the copy is
-/// faithful is not this test's question: `sqlite_mirror`'s roundtrip
-/// tests, `lightroom`'s `real_catalogs` and `apple_photos`'s
-/// `photos_roundtrip` pin that, byte for byte. What this golden has to
-/// show is that the step ran and what it produced, and for that the set
-/// of tables and their sizes is the whole story: a table gone from the
-/// schema, a shadow table let back in, or a count that moved all diff,
-/// without twenty thousand lines around them.
+/// database — 78 for Photos, 113 for Lightroom, ~275 for WhatsApp — and
+/// whether the copy is faithful is not this test's question:
+/// `sqlite_mirror`'s roundtrip tests, `lightroom`'s `real_catalogs` and
+/// `apple_photos`'s `photos_roundtrip` pin that, byte for byte. What this
+/// golden has to show is that the step ran and what it produced, and for
+/// that the set of tables and their sizes is the whole story: a table
+/// gone from the schema, a shadow table let back in, or a count that
+/// moved all diff, without twenty thousand lines around them. WhatsApp's
+/// message content still lands in the golden — through its
+/// `render_markdown` tree.
 ///
 /// Keyed by stanza (the group id in dag.toml), which is also what names
 /// the snapshot directory. A store not listed is dumped in full.
-const ROW_COUNT_ONLY_STANZAS: &[&str] = &["apple_photos", "lightroom"];
+const ROW_COUNT_ONLY_STANZAS: &[&str] = &["apple_photos", "lightroom", "whatsapp"];
 
 /// The stanza a store belongs to: `<data_root>/<stanza>/<sub>/<file>`.
 fn stanza_of(path: &Path) -> Option<String> {

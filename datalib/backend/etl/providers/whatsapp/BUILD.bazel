@@ -29,6 +29,7 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",
+        "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
         "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
@@ -64,5 +65,20 @@ rust_test(
     deps = [
         "@datalib_crates//:tokio",
         "@datalib_crates//:tempfile",
+    ],
+)
+
+# Diagnostic: inventory a real msgstore and measure rowid stability across
+# two backups. Not shipped; see the file header.
+rust_binary(
+    name = "whatsapp_msgstore_probe",
+    srcs = ["src/bin/whatsapp_msgstore_probe.rs"],
+    edition = "2021",
+    deps = [
+        "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )
