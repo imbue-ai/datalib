@@ -32,6 +32,8 @@ const EML_PROJECTION_SQL: &str = "
 pub struct ScanResult {
     /// `Some(set)` → load only threads whose `(account_id, thread_id)`
     /// is in `set`. `None` → cold start, render every thread.
+    pub render: Option<HashSet<(String, String)>>,
+    /// The threads the diff named, for the removal probe.
     pub changed_threads: Option<HashSet<(String, String)>>,
     /// The HEAD commit hash at scan time. `None` if `dolt_log()` was
     /// unavailable (non-doltlite sqlite); cursor stays unwritten.
@@ -127,7 +129,7 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
     // ── Phase 1: which threads changed since last_render_hash? ────
     let scan = scan_diff(&pool, last_render_hash, &pin).await?;
 
-    let (to_load, docs_skipped) = match &scan.changed_threads {
+    let (to_load, docs_skipped) = match &scan.render {
         None => {
             // Cold start — load every thread with at least one email.
             let all = load_all_thread_keys(&pool).await?;
@@ -348,16 +350,17 @@ async fn scan_diff(
         },
     )
     .await?;
-    let changed_threads = scan.changed_buckets.map(|set| {
+    let split = |set: HashSet<String>| {
         set.into_iter()
             .filter_map(|key| {
                 let (a, t) = key.split_once('|')?;
                 Some((a.to_string(), t.to_string()))
             })
             .collect::<HashSet<(String, String)>>()
-    });
+    };
     Ok(ScanResult {
-        changed_threads,
+        render: scan.render.map(split),
+        changed_threads: scan.changed_buckets.map(split),
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })

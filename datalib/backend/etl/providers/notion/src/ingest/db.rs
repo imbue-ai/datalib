@@ -741,7 +741,7 @@ pub fn block_on_load_all(db_path: &Path, last_render_hash: Option<&str>) -> Resu
                     None => (Vec::new(), Vec::new()),
                 };
 
-                let keep = scan.changed_buckets.clone();
+                let keep = scan.render.clone();
                 let in_scope = |id: &str| keep.as_ref().is_none_or(|k| k.contains(id));
 
                 // The two lookup maps stay whole: any page being rendered

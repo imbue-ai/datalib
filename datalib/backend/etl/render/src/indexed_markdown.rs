@@ -549,6 +549,37 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Pin one commit of this store, HEAD or earlier, and install the
+    /// views over it. What a consumer does to read a checkpoint after
+    /// the fact — and what a test does to ask whether every commit a
+    /// render made was one a consumer may read.
+    pub fn pin_at(&self, commit: &str) -> Result<datalib_etl::pin::Pin> {
+        blocking(async {
+            let pin = datalib_etl::pin::Pin::at(commit.to_string())?;
+            datalib_etl::pin::install_views(&self.pool, &pin)
+                .await
+                .context("install pinned views over the render store")?;
+            Ok(pin)
+        })
+    }
+
+    /// Every commit in this store as `(hash, message)`, newest first.
+    /// Empty without doltlite.
+    pub fn log(&self) -> Result<Vec<(String, String)>> {
+        blocking(async {
+            if !datalib_etl::doltlite_raw::has_dolt_extensions(&self.pool).await {
+                return Ok(Vec::new());
+            }
+            let rows = sqlx::query("SELECT commit_hash, message FROM dolt_log()")
+                .fetch_all(&self.pool)
+                .await
+                .context("read dolt_log")?;
+            rows.into_iter()
+                .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
+                .collect()
+        })
+    }
+
     pub fn documents(
         &self,
         out_dir: &Path,

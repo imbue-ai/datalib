@@ -120,6 +120,7 @@ fn make_loaded() -> ParsedEmail {
         }],
         docs_skipped: 0,
         scan: ScanResult {
+            render: None,
             changed_threads: None,
             new_head: None,
             scan_elapsed: None,
@@ -356,6 +357,7 @@ fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> 
         }],
         docs_skipped: 0,
         scan: ScanResult {
+            render: None,
             changed_threads: None,
             new_head: None,
             scan_elapsed: None,

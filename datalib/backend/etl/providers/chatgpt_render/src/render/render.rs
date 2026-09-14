@@ -69,7 +69,7 @@ pub fn render_all(
             .as_ref()
             .map(|s| s.len() as i64)
             .unwrap_or(-1),
-        cold_start = parsed.scan.changed_conversations.is_none(),
+        cold_start = parsed.scan.render.is_none(),
         "[render] chatgpt dolt_diff scan"
     );
 

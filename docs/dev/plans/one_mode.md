@@ -348,6 +348,15 @@ real source keeps its side of the bargain.
 
 ### Layer 1: the framework, with a synthetic provider
 
+*Built (2026-09-14): `datalib_step/src/render_model_test.rs`, driving
+the real `render_source`, `IndexedMarkdownStore`, `scan_buckets` and
+`build_grid_index`; the only fake is the provider. Its first run found
+a real hole: a `global_fanout_tables` hit made the scan return "render
+everything" and the providers then probed nothing for removal, so a
+conversation deleted in the same range as a user rename stayed in the
+store for good — in every diff-narrowed provider. `DiffScan` now
+carries the set to render and the set the diff named separately.*
+
 The runner's tests build a graph of three fake steps and drive it. The
 render framework's equivalent is one fake provider and a driver loop.
 
@@ -412,10 +421,15 @@ of the fixture build rather than by any test). None of those is
 visible from a provider's tests, and none needs a provider to
 reproduce.
 
-**Cost.** One test crate, one synthetic provider, the dump/compare
-helper below, and a generator. `proptest` is not a workspace
-dependency; a hand-rolled seeded generator (`rand` with a printed
-seed) is enough and keeps the crate list short.
+**What it is.** A `#[cfg(test)]` module in `datalib_step`, since the
+driver's core (`render_source`, split from the step shell for exactly
+this) lives there. Twelve seeds, ten runs each, one to three commits
+of one to five mutations per run, a version bump or a param change one
+run in six, a failure one run in four, the checkpoint cadence at zero
+half the time so every document is a checkpoint, the index run after
+half the runs and at the end. About five seconds. A failure prints the
+seed and the whole history. The generator is a seeded xorshift; no
+new dependency.
 
 ### Layer 2: the provider contract
 

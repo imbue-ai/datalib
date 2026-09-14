@@ -154,9 +154,12 @@ pub struct ShreddedConversation {
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → render only the conversations and projects whose
-    /// UUID is in `set`. `None` → cold start. Conversation and project
-    /// UUIDs share one set because they are drawn from disjoint
+    /// UUID is in `set`. `None` → render everything. Conversation and
+    /// project UUIDs share one set because they are drawn from disjoint
     /// upstream id spaces, so a membership test can't confuse them.
+    pub render: Option<HashSet<String>>,
+    /// The buckets the diff named, for the removal probe — still a set
+    /// when `render` is `None` because a fan-out table changed.
     pub changed_buckets: Option<HashSet<String>>,
     pub new_head: Option<String>,
     pub scan_elapsed: Option<Duration>,
@@ -284,7 +287,7 @@ async fn parse_doltlite_async(
     let all_convs = db::load_conversations_from(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     let total = all_convs.len();
 
-    let (filtered, docs_skipped) = match &scan.changed_buckets {
+    let (filtered, docs_skipped) = match &scan.render {
         None => (all_convs, 0usize),
         Some(changed) => {
             let kept: Vec<LoadedConversation> = all_convs
@@ -311,7 +314,7 @@ async fn parse_doltlite_async(
     // in its bucket moved) still has to resolve its project's name.
     let all_projects = load_project_rows(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     parsed.project_name_by_uuid = name_index(&all_projects);
-    parsed.projects = match &scan.changed_buckets {
+    parsed.projects = match &scan.render {
         None => all_projects,
         Some(changed) => {
             let before = all_projects.len();
@@ -499,6 +502,7 @@ async fn scan_diff(
     )
     .await?;
     Ok(ScanResult {
+        render: scan.render,
         changed_buckets: scan.changed_buckets,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,

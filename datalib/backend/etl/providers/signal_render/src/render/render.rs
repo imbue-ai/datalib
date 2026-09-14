@@ -78,7 +78,7 @@ pub fn render_all(
             .as_ref()
             .map(|s| s.len() as i64)
             .unwrap_or(-1),
-        cold_start = parsed.scan.changed_chats.is_none(),
+        cold_start = parsed.scan.render.is_none(),
         "[render] signal dolt_diff scan"
     );
 

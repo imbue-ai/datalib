@@ -120,16 +120,18 @@ pub fn render(
         scan_elapsed: scan.scan_elapsed,
         ..Default::default()
     };
-    let chats: Vec<NormalizedChat> = match &scan.changed_buckets {
+    // A conversation key the diff named that no chat carries any more:
+    // every message and call for that number is gone.
+    if let Some(changed) = &scan.changed_buckets {
+        let present: std::collections::HashSet<&str> =
+            all_chats.iter().map(|c| c.id.as_str()).collect();
+        for gone in changed.iter().filter(|k| !present.contains(k.as_str())) {
+            outcome.vanished.push(uuid5(&format!("chat:{gone}")));
+        }
+    }
+    let chats: Vec<NormalizedChat> = match &scan.render {
         None => all_chats,
         Some(changed) => {
-            let present: std::collections::HashSet<&str> =
-                all_chats.iter().map(|c| c.id.as_str()).collect();
-            // A conversation key the diff named that no chat carries any
-            // more: every message and call for that number is gone.
-            for gone in changed.iter().filter(|k| !present.contains(k.as_str())) {
-                outcome.vanished.push(uuid5(&format!("chat:{gone}")));
-            }
             let before = all_chats.len();
             let kept: Vec<NormalizedChat> = all_chats
                 .into_iter()

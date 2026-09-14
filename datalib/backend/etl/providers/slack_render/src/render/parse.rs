@@ -33,7 +33,11 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → render only threads whose `thread_root_uuid` is
-    /// in `set`. `None` → cold start, render everything.
+    /// in `set`. `None` → render everything.
+    pub render: Option<HashSet<String>>,
+    /// The threads the diff named, for the removal probe — still a set
+    /// when `render` is `None` because a workspace, user or channel
+    /// changed.
     pub changed_threads: Option<HashSet<String>>,
     /// HEAD commit hash at scan time, ready to stamp into the render
     /// cursor on success.
@@ -154,7 +158,7 @@ async fn parse_doltlite_async(
     // Load messages. When the scan narrowed the set, load only those
     // threads' messages; otherwise load everything.
     let total_threads = thread_count(&pool).await?;
-    let (messages, docs_skipped) = match &scan.changed_threads {
+    let (messages, docs_skipped) = match &scan.render {
         None => (load_all_messages(&pool).await?, 0usize),
         Some(changed) => {
             let kept = load_messages_for_threads(&pool, changed).await?;
@@ -263,6 +267,7 @@ async fn scan_diff(
     )
     .await?;
     Ok(ScanResult {
+        render: scan.render,
         changed_threads: scan.changed_buckets,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,

@@ -277,7 +277,7 @@ pub fn render_gitlab(
             .unwrap_or(-1),
         mrs = parsed.merge_requests.len(),
         skipped = parsed.docs_skipped,
-        cold_start = parsed.scan.changed_buckets.is_none(),
+        cold_start = parsed.scan.render.is_none(),
         "[render] gitlab dolt_diff scan"
     );
     let mut summary = RenderSummary::default();

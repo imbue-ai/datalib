@@ -1093,11 +1093,21 @@ async fn set_volatile_payloads_in_tx(
 // ── dolt_diff incremental-render scan ───────────────────────────────
 
 /// Result of a [`scan_buckets`] scan.
+///
+/// Two sets, because "what to render" and "what the diff named" part ways
+/// when a fan-out table changed: then every bucket renders, but the ones
+/// the diff named are still the only ones that can have vanished, and a
+/// provider that stopped probing them left every document deleted in
+/// that range in the store for good.
 #[derive(Debug, Clone, Default)]
 pub struct DiffScan {
-    /// `Some(set)` → render only these buckets. `None` → cold start (no
-    /// cursor, a globally-fanning table changed, the query errored, or no
-    /// doltlite extension). Render everything.
+    /// The buckets to load and render. `None` → every bucket: no cursor,
+    /// a cursor this store cannot resolve, a `global_fanout_tables` row
+    /// changed, or no doltlite extension.
+    pub render: Option<std::collections::HashSet<String>>,
+    /// The buckets the diff named as added, modified or removed since
+    /// the cursor — the ones to probe for removal. `None` only when there
+    /// is no range to diff over.
     pub changed_buckets: Option<std::collections::HashSet<String>>,
     /// HEAD at scan time, to stamp into the render cursor on success. `None`
     /// leaves the cursor unwritten so the next run cold-starts again.
@@ -1223,12 +1233,14 @@ pub async fn scan_buckets(
 
     let Some(from_ref) = last_render_hash else {
         return Ok(DiffScan {
+            render: None,
             changed_buckets: None,
             new_head,
             scan_elapsed: None,
         });
     };
 
+    let mut fanout_changed = false;
     for table in spec.global_fanout_tables {
         let sql = format!(
             "SELECT 1 FROM dolt_diff_{table} \
@@ -1243,11 +1255,8 @@ pub async fn scan_buckets(
             .ok()
             .flatten();
         if any.is_some() {
-            return Ok(DiffScan {
-                changed_buckets: None,
-                new_head,
-                scan_elapsed: None,
-            });
+            fanout_changed = true;
+            break;
         }
     }
 
@@ -1295,6 +1304,7 @@ pub async fn scan_buckets(
                 "dolt_diff scan could not use this cursor — cold-starting (render everything)"
             );
             return Ok(DiffScan {
+                render: None,
                 changed_buckets: None,
                 new_head,
                 scan_elapsed: Some(elapsed),
@@ -1305,6 +1315,11 @@ pub async fn scan_buckets(
     let set: std::collections::HashSet<String> =
         rows.iter().map(|r| r.get::<String, _>(0)).collect();
     Ok(DiffScan {
+        render: if fanout_changed {
+            None
+        } else {
+            Some(set.clone())
+        },
         changed_buckets: Some(set),
         new_head,
         scan_elapsed: Some(elapsed),
@@ -2346,6 +2361,64 @@ mod tests {
 
     /// What the setting above defends against: a *different* connection to
     /// the same file does not inherit the active branch.
+    /// A fan-out hit renders everything and *still* names what the diff
+    /// saw: a bucket deleted in the same range as a fan-out row is
+    /// probed for removal, not lost. Found by the render model test on
+    /// its first seed — every diff-narrowed provider had the hole.
+    #[tokio::test]
+    async fn a_fanout_hit_renders_everything_but_keeps_the_named_buckets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = open(
+            &tmp.path().join("scan.doltlite_db"),
+            &[
+                "CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, bucket TEXT)",
+                "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT)",
+            ],
+        )
+        .await
+        .unwrap();
+        if !has_dolt_extensions(&pool).await {
+            return;
+        }
+        for sql in [
+            "INSERT INTO notes VALUES ('n1', 'b1')",
+            "INSERT INTO notes VALUES ('n2', 'b2')",
+            "INSERT INTO users VALUES ('u1', 'ann')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        let first = commit_run(&pool, "two notes").await.unwrap().unwrap();
+        for sql in [
+            "DELETE FROM notes WHERE id = 'n2'",
+            "UPDATE users SET name = 'anne' WHERE id = 'u1'",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        let second = commit_run(&pool, "n2 gone, ann renamed")
+            .await
+            .unwrap()
+            .unwrap();
+        let pin = crate::pin::Pin::at(&second).unwrap();
+        let spec = DiffScanSpec {
+            global_fanout_tables: &["users"],
+            bucket_query: "SELECT DISTINCT coalesce(to_bucket, from_bucket) FROM dolt_diff_notes \
+                           WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
+        };
+        let scan = scan_buckets(&pool, Some(&first), &pin, &spec)
+            .await
+            .unwrap();
+        assert!(scan.render.is_none(), "a user changed: every note renders");
+        let named = scan
+            .changed_buckets
+            .expect("the range is still there to probe");
+        assert_eq!(
+            named,
+            ["b2".to_string()].into_iter().collect(),
+            "the deleted note's bucket is still named for the removal probe"
+        );
+        pool.close().await;
+    }
+
     /// A bucket query naming a table that does not exist must fail, where a
     /// cursor naming a commit that does not exist must cold-start. Both used
     /// to cold-start, which is how a query broken by a table rename rendered
@@ -2380,8 +2453,8 @@ mod tests {
             .await
             .expect("a stale cursor cold-starts rather than failing");
         assert!(
-            scan.changed_buckets.is_none(),
-            "cold start means `None`, i.e. render everything"
+            scan.render.is_none() && scan.changed_buckets.is_none(),
+            "cold start means `None`, i.e. render everything, and no range to probe"
         );
 
         let broken = DiffScanSpec {

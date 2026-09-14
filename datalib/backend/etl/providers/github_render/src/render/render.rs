@@ -320,7 +320,7 @@ pub fn render_github(
             .unwrap_or(-1),
         prs = parsed.pull_requests.len(),
         skipped = parsed.docs_skipped,
-        cold_start = parsed.scan.changed_buckets.is_none(),
+        cold_start = parsed.scan.render.is_none(),
         "[render] github dolt_diff scan"
     );
     // Group comments by PR.

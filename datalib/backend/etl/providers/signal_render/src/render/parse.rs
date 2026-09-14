@@ -30,6 +30,9 @@ pub struct ScanResult {
     /// cold start, render every chat. (First run, or no on-disk
     /// doltlite, or `dolt_diff_<table>` unavailable, or no prior
     /// cursor.)
+    pub render: Option<HashSet<String>>,
+    /// The chats the diff named, for the removal probe — still a set
+    /// when `render` is `None` because a recipient changed.
     pub changed_chats: Option<HashSet<String>>,
     /// The HEAD commit hash at scan time, ready to stamp into the
     /// render cursor on success. `None` if we couldn't read HEAD —
@@ -191,7 +194,7 @@ async fn parse_async(
     let scan = scan_diff(&pool, last_render_hash, &pin).await?;
 
     // Decide the load set.
-    let (to_load_chats, docs_skipped) = match &scan.changed_chats {
+    let (to_load_chats, docs_skipped) = match &scan.render {
         None => {
             let ids = load_all_chat_ids(&pool).await?;
             (ids, 0usize)
@@ -356,6 +359,7 @@ async fn scan_diff(
     )
     .await?;
     Ok(ScanResult {
+        render: scan.render,
         changed_chats: scan.changed_buckets,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
