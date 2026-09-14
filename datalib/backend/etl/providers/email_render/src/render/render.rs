@@ -223,8 +223,6 @@ pub fn render_all(
         blobs_by_chat.insert(chat.id.clone(), bundle);
         chats.push(chat);
     }
-
-    let no_priors: HashMap<String, String> = HashMap::new();
     let summary = cc_render_all(
         &profile(),
         &chats,
@@ -232,7 +230,6 @@ pub fn render_all(
         source_id,
         &blobs_by_chat,
         progress,
-        &no_priors,
         on_doc_complete,
     )
     .context("email chat-common render")?;

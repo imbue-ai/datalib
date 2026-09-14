@@ -16,7 +16,6 @@ use datalib_id::{entity_id_str, IdNamespace, Scope};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
-use sha2::{Digest, Sha256};
 
 use super::parse::{ParsedAirvisual, Series};
 use super::units::{self, series_label, spec_for, Quantity, QUANTITIES};
@@ -90,8 +89,7 @@ pub fn render_all(
     }
 
     let m_uuid = document_uuid(source_id);
-    let fingerprint = compute_fingerprint(parsed);
-    let body = render_markdown(parsed, source_id, &m_uuid, &fingerprint, &rendered_plots);
+    let body = render_markdown(parsed, source_id, &m_uuid, &rendered_plots);
 
     let md_path = page_dir.join("index.md");
     fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
@@ -107,13 +105,13 @@ pub fn render_all(
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
-        source_fingerprint: fingerprint,
         upstream_cursor: parsed.head.clone(),
         md_path,
         render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
         problems,
+        bucket_key: None,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
     progress.inc(1);
@@ -202,36 +200,12 @@ fn metric_spec(metric: &str) -> Result<&'static units::MetricSpec> {
     })
 }
 
-fn compute_fingerprint(parsed: &ParsedAirvisual) -> String {
-    let mut h = Sha256::new();
-    h.update(RENDER_VERSION.to_be_bytes());
-    h.update(b"|samples:");
-    h.update(parsed.sample_count.to_be_bytes());
-    for s in &parsed.series {
-        h.update(b"\n");
-        h.update(s.device.as_bytes());
-        h.update(b"/");
-        h.update(s.metric.as_bytes());
-        h.update(b"=");
-        h.update((s.len() as u64).to_be_bytes());
-        for (ts, v) in s.ts_ms.iter().zip(&s.values) {
-            h.update(ts.to_be_bytes());
-            h.update(v.to_be_bytes());
-        }
-    }
-    h.finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>()
-}
-
 // ---------------------------------------------------------------- markdown
 
 fn render_markdown(
     parsed: &ParsedAirvisual,
     source_id: &str,
     m_uuid: &str,
-    fingerprint: &str,
     plots: &[(&Quantity, PlotFacts)],
 ) -> String {
     let mut out = String::with_capacity(8 * 1024);
@@ -239,7 +213,6 @@ fn render_markdown(
 
     out.push_str("---\n");
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
-    let _ = writeln!(out, "source_fingerprint: {fingerprint}");
     let _ = writeln!(out, "source_id: {source_id}");
     out.push_str("provider: airvisual\n");
     let _ = writeln!(out, "title: {}", yaml_safe(&page_title(source_id)));

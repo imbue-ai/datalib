@@ -243,19 +243,16 @@ silently invalidates every offset. So the fingerprint must also cover:
 
 - **`renderer_version`** — the renderer that produced the bytes the
   offsets point into.
-- **`row_set_hash`** — the per-document content key.
 
-Both columns exist on `markdowns`, and both are **write-only today.**
-`compute_row_set_hash` runs at
-[`grid_index.rs:777`](../../../datalib/backend/etl/render/src/grid_index.rs) and
-`format!("{RENDERER_VERSION}.{}", md.render_version)` at `:778`; both are
-`INSERT`ed at `:796` and never selected again outside tests. The only
-render-skip reader is `load_fingerprints` (`:676`), which selects
-`source_fingerprint` alone — a **provider-supplied** value that does not
-move when the renderer changes. `pdf` patches around this locally by
-folding its own `RENDER_VERSION` into `render_fingerprint`; no other
-provider does. This is **imbue-ai/datalib#172**, and the schema's own
-doc comment asserting the opposite is what that issue is about.
+The column exists on `markdowns` and, when this was measured, was
+**write-only**: `format!("{RENDERER_VERSION}.{}", md.render_version)`
+was `INSERT`ed and never selected again outside tests. (The render
+skip then keyed on a provider-supplied
+`source_fingerprint` that did not move when the renderer changed —
+**imbue-ai/datalib#172**. That column is gone as of 2026-09-14: render
+writes every document and doltlite's content-addressed tables settle
+"unchanged"; a renderer version change goes through
+`RenderProcessor::render_version` and re-renders everything.)
 
 So: we are not "keeping a freshness key that exists" — we are building
 one. The columns are the right shape and the values are already computed;
@@ -462,11 +459,8 @@ This is the question the previous draft did not ask. Taking it seriously:
 
 **The shape of the enabler exists; the mechanism does not.** Rendering
 *is* a deterministic function of the raw rows plus the renderer, and
-`markdowns` already carries the two columns that would express it
-(`row_set_hash`, `renderer_version`). But per §3.5 those columns are
-written and never read: the render-skip in force keys on
-`source_fingerprint`, which is provider-supplied and does not move when
-the renderer changes (**#172**).
+`markdowns` carries `renderer_version` to say which renderer. But per
+§3.5 nothing in retrieval reads it.
 
 That matters more here than it looks. "Render on the fly" is the same
 cache with capacity zero — but a capacity-zero cache is only correct if
@@ -711,9 +705,10 @@ to the full corpus.**
 **M0 — Verify.** §7 item 4 (ingest a real mailbox and measure) and item
 5. Item 1–3 are done. No new code.
 
-**M0.1 — Fix imbue-ai/datalib#172.** `markdowns.renderer_version` and
-`row_set_hash` are written and never read, so a renderer change
-invalidates nothing. Everything downstream of D1 stores offsets into
+**M0.1 — Fix imbue-ai/datalib#172.** (Since fixed: a renderer change
+goes through `RenderProcessor::render_version` and re-renders
+everything; `row_set_hash` was dropped as write-only.) Everything
+downstream of D1 stores offsets into
 rendered markdown, and offsets against a stale render fail *silently*
 (§3.5, §4.5). This is the one prerequisite that is not measurement.
 

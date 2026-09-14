@@ -23,7 +23,6 @@ rust_library(
         "//datalib/backend/id:datalib_id",
         "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",

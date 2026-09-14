@@ -90,7 +90,7 @@ impl RunHistory {
 }
 
 /// The latency/history tradeoff, in seconds, as a person writes it in
-/// `config.toml`.
+/// `config.toml`: at most this long between a step's checkpoints.
 ///
 /// Plain numbers rather than the `etl` type they become: the runner does not
 /// link `etl`, and does not need to — it forwards this to the step, which
@@ -98,37 +98,24 @@ impl RunHistory {
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckpointCadence {
-    /// Seal once writes have been quiet this long.
-    pub quiet_for_secs: f64,
-    /// Seal anyway once this long has passed since the last commit, however
-    /// busy the writer is.
     pub at_most_every_secs: f64,
 }
 
 impl CheckpointCadence {
-    /// The wire form: `"<quiet>,<ceiling>"`, seconds. One env var rather
-    /// than two, so a step reads the pair or neither.
+    /// The wire form: the seconds, as text.
     pub fn encode(&self) -> String {
-        format!("{},{}", self.quiet_for_secs, self.at_most_every_secs)
+        self.at_most_every_secs.to_string()
     }
 
     /// `None` for anything this build cannot read — a malformed value from a
     /// newer config is not a reason to fail the run, and the step's default
     /// cadence is a safe answer.
     pub fn decode(s: &str) -> Option<Self> {
-        let (q, c) = s.split_once(',')?;
-        let quiet_for_secs: f64 = q.trim().parse().ok()?;
-        let at_most_every_secs: f64 = c.trim().parse().ok()?;
-        if !(quiet_for_secs.is_finite() && at_most_every_secs.is_finite())
-            || quiet_for_secs < 0.0
-            || at_most_every_secs < 0.0
-        {
+        let at_most_every_secs: f64 = s.trim().parse().ok()?;
+        if !at_most_every_secs.is_finite() || at_most_every_secs < 0.0 {
             return None;
         }
-        Some(Self {
-            quiet_for_secs,
-            at_most_every_secs,
-        })
+        Some(Self { at_most_every_secs })
     }
 }
 
@@ -1474,8 +1461,7 @@ mod cadence_tests {
     #[test]
     fn a_cadence_survives_the_trip_through_the_env_var() {
         let c = CheckpointCadence {
-            quiet_for_secs: 2.5,
-            at_most_every_secs: 15.0,
+            at_most_every_secs: 15.5,
         };
         assert_eq!(CheckpointCadence::decode(&c.encode()), Some(c));
     }
@@ -1485,17 +1471,7 @@ mod cadence_tests {
     /// a cadence nobody asked for.
     #[test]
     fn an_unreadable_cadence_is_none() {
-        for bad in [
-            "",
-            "2",
-            "2,",
-            ",15",
-            "two,fifteen",
-            "-1,15",
-            "2,-1",
-            "nan,15",
-            "inf,15",
-        ] {
+        for bad in ["", "fifteen", "-1", "nan", "inf", "2,15"] {
             assert_eq!(
                 CheckpointCadence::decode(bad),
                 None,

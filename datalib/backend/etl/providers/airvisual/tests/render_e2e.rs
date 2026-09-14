@@ -206,7 +206,6 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
         "the doltlite commit log is back in the rendered page, which makes the render nondeterministic:\n{md}"
     );
 
-    let fingerprint_1 = doc.source_fingerprint.clone();
     let md_1 = md.clone();
 
     // ---- second render, nothing appended ------------------------------
@@ -242,7 +241,6 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
         "the store moved, so the cursor must too"
     );
     assert_eq!(emitted.len(), 1, "an appended sample must re-render");
-    assert_ne!(emitted[0].source_fingerprint, fingerprint_1);
     assert!(
         std::fs::read_to_string(plots.join("co2.html"))
             .unwrap()

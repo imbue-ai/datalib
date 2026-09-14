@@ -6,8 +6,10 @@
 //! every source's store into the unified index, which is the `grid_index` DAG
 //! step's whole job.
 //!
-//! Writes are delete-then-insert, gated on `markdowns.source_fingerprint`, so
-//! a re-render replaces a document's rows rather than accumulating them.
+//! Writes are delete-then-insert, so a re-render replaces a document's rows
+//! rather than accumulating them. Nothing here decides whether a document
+//! changed: doltlite's content-addressed storage makes rewriting an
+//! identical row free, and `dolt_diff` reports only what actually moved.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -23,7 +25,6 @@ use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use tokio::sync::Mutex;
@@ -226,8 +227,6 @@ impl Drop for WriteLockGuard<'_> {
 }
 
 /// Per-rendered-markdown metadata: one row per `.md` file.
-/// `source_fingerprint` is the renderer's input hash, compared on later runs
-/// to decide whether to re-render.
 ///
 /// `markdown_uuid` is the canonical addressing primitive for rendered output.
 /// A sharded render (beeper writes one file per period) maps one upstream
@@ -240,7 +239,6 @@ pub const MARKDOWNS_DDL: &str = MARKDOWNS_TABLE_DDL[0].1;
 pub struct GridIndexSummary {
     pub markdowns_total: usize,
     pub markdowns_loaded: usize,
-    pub markdowns_skipped: usize,
     pub rows_inserted: usize,
     /// Documents dropped because the source that owned them stopped holding
     /// them. Only a cursor-driven run can be non-zero here.
@@ -270,11 +268,11 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// opposite of [`datalib_etl::doltlite_raw::open`]'s policy, because every row here
 /// is a pure function of a row in a source's render store, so a rebuild costs
 /// one local scan. It is also the only answer that yields correct values:
-/// `ADD COLUMN` leaves existing rows NULL, and the fingerprint skip then makes
-/// those NULLs permanent.
+/// `ADD COLUMN` leaves existing rows NULL, and the cursor then never
+/// revisits them.
 ///
-/// All three tables go together even when only one drifted, because
-/// `markdowns` holds the fingerprints that drive that skip.
+/// Every table goes together even when only one drifted — see the note on
+/// `source_cursors` in [`index_ddl`].
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for ddl in index_ddl() {
         sqlx::query(ddl)
@@ -351,9 +349,9 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// Bump when the canonical-tuple shape in `compute_row_set_hash` or the
-/// rendered `.md` layout changes: every `documents.row_set_hash` is
-/// invalidated and the next ingest re-renders.
+/// The index side of `markdowns.renderer_version` (`"<index>.<render>"`).
+/// Bump when the rendered `.md` layout changes for every provider at
+/// once: every document's version then differs from its store's.
 pub const RENDERER_VERSION: &str = "rust-v1";
 
 // ── Cross-source id collision detection ─────────────────────────────
@@ -404,9 +402,7 @@ impl std::fmt::Display for IdCollision {
 /// an error naming neither source. This makes both loud, and names both sides.
 ///
 /// Run-scoped on purpose — checking ids already in the database would flag a
-/// source *rename*, which is legitimate. Claims are recorded before the
-/// fingerprint skip, so an overlap is caught even when one sidecar is
-/// unchanged.
+/// source *rename*, which is legitimate.
 #[derive(Debug, Default)]
 pub struct IdClaims {
     /// markdown_uuid → source that claimed it.
@@ -485,69 +481,6 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
     }
 }
 
-/// SHA-256 over the canonical per-row tuple, sorted by `(when_ts, uuid)` so
-/// the hash is independent of producer order. The encoding is
-/// length-prefixed and `\0`-delimited, so it is stable across Rust versions
-/// in a way `Debug` is not.
-pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
-    let mut sorted: Vec<&GridRow> = rows.iter().collect();
-    sorted.sort_by(|a, b| a.when_ts.cmp(&b.when_ts).then_with(|| a.uuid.cmp(&b.uuid)));
-    let mut h = Sha256::new();
-    let push = |h: &mut Sha256, v: Option<&str>| {
-        match v {
-            Some(s) => {
-                h.update(b"S");
-                h.update((s.len() as u64).to_le_bytes());
-                h.update(s.as_bytes());
-            }
-            None => h.update(b"N"),
-        }
-        h.update(b"\x00");
-    };
-    let push_i = |h: &mut Sha256, v: Option<i64>| {
-        match v {
-            Some(n) => {
-                h.update(b"I");
-                h.update(n.to_le_bytes());
-            }
-            None => h.update(b"N"),
-        }
-        h.update(b"\x00");
-    };
-    for r in sorted {
-        push(&mut h, Some(&r.uuid));
-        push(&mut h, Some(&r.kind));
-        push(&mut h, r.when_ts.as_deref());
-        push(&mut h, r.author.as_deref());
-        push_i(&mut h, r.message_index);
-        push(&mut h, Some(&r.text));
-        push(&mut h, r.source_url.as_deref());
-        push(&mut h, r.slack_link.as_deref());
-        push(&mut h, r.git_sha.as_deref());
-        push(&mut h, r.upstream_id.as_deref());
-        push(&mut h, r.upstream_entity_kind.as_deref());
-        push(&mut h, r.upstream_scope.as_deref());
-        push(&mut h, r.notion_page_uuid.as_deref());
-        push(&mut h, r.notion_block_uuid.as_deref());
-        // `item_count` but deliberately NOT `byte_size`. This hash is a
-        // staleness decision — it is the markdown cache key — and a
-        // doltlite store's size is not stable across rebuilds of
-        // identical data: measured over the TNG fixture, five of its
-        // sixteen sources moved by 1–22 bytes on a re-bake of the same
-        // inputs. Hashing that would churn the goldens on every backend
-        // change and re-render documents nothing touched. Same rule as
-        // the storage report's own fingerprint: bytes are reported,
-        // never used to decide whether something changed.
-        push_i(&mut h, r.item_count);
-    }
-    let digest = h.finalize();
-    let mut s = String::with_capacity(64);
-    for b in digest {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
-}
-
 /// One markdown's payload as handed from render to the indexer,
 /// constructed once the md and its blobs are durably on disk so that render
 /// and index commit per-document atomically.
@@ -557,12 +490,14 @@ pub struct RenderedMarkdown {
     /// User-facing config name (e.g. `tiny-slack`), falling back to the
     /// provider string.
     pub source_id: String,
-    pub source_fingerprint: String,
     /// A cheap probe the orchestrator can check *before* loading payloads to
     /// decide whether a markdown moved. Slack stamps each thread's
-    /// `MAX(fetched_at_utc)`. None when the provider has nothing cheaper than the
-    /// fingerprint.
+    /// `MAX(fetched_at_utc)`. None when the provider has nothing cheap.
     pub upstream_cursor: Option<String>,
+    /// The bucket this document was rendered from — the same key the
+    /// provider declares through `RenderCtx::declare_bucket`. `None`
+    /// from a renderer that does not declare buckets yet.
+    pub bucket_key: Option<String>,
     /// Absolute path to the rendered `.md`; `qmd_path` is this with the
     /// out-dir prefix stripped.
     pub md_path: PathBuf,
@@ -579,14 +514,12 @@ pub struct RenderedMarkdown {
     pub problems: Vec<datalib_schema::render_problems::RenderProblemRow>,
 }
 
-/// Write one rendered document into the index unconditionally. The caller
-/// has already applied the fingerprint skip. `out_dir` is stripped off
-/// `md_path` to produce a portable `qmd_path`.
+/// Write one rendered document into the index unconditionally. `out_dir`
+/// is stripped off `md_path` to produce a portable `qmd_path`.
 pub async fn apply_one(
     write_lock: &WriteLock,
     out_dir: &Path,
     md: &RenderedMarkdown,
-    now_override: Option<&str>,
 ) -> Result<usize> {
     let qmd_rel = md
         .md_path
@@ -594,7 +527,7 @@ pub async fn apply_one(
         .unwrap_or(&md.md_path)
         .to_string_lossy()
         .to_string();
-    apply_markdown(write_lock, md, &qmd_rel, now_override).await
+    apply_markdown(write_lock, md, &qmd_rel).await
 }
 
 /// Stack every source's render store into the unified index — the
@@ -605,9 +538,6 @@ pub async fn apply_one(
 /// Two things fall out of that: a document a source stopped holding can be
 /// named and deleted, and the cursor advances inside the write transaction,
 /// so it can never claim more than the index holds.
-///
-/// The fingerprint skip is still not redundant — the cold path reads whole
-/// stores, and the skip is what makes that cheap.
 pub async fn build_grid_index(
     pool: &SqlitePool,
     out_dir: &Path,
@@ -735,11 +665,6 @@ pub async fn build_grid_index(
         ..Default::default()
     };
 
-    // Loaded before the write transaction opens: the index pool is one
-    // connection wide, so a read while the transaction holds that connection
-    // would deadlock.
-    let prior_fingerprints = load_fingerprints(pool).await?;
-
     write_lock
         .begin_transaction()
         .await
@@ -751,16 +676,7 @@ pub async fn build_grid_index(
                 .with_context(|| format!("delete {gone} dropped by {stanza}"))?;
             summary.markdowns_removed += 1;
         }
-        load_all_batch(
-            &write_lock,
-            &prior_fingerprints,
-            out_dir,
-            &docs,
-            &progress,
-            now_override,
-            &mut summary,
-        )
-        .await?;
+        load_all_batch(&write_lock, out_dir, &docs, &progress, &mut summary).await?;
         // Cursors last and in the same transaction: a failure above rolls
         // back to both the old rows and the old cursors.
         let now = run_stamp(now_override);
@@ -802,11 +718,9 @@ pub async fn build_grid_index(
 /// can wrap it in one transaction.
 async fn load_all_batch(
     write_lock: &WriteLock,
-    prior_fingerprints: &HashMap<String, String>,
     out_dir: &Path,
     docs: &[(String, RenderedMarkdown)],
     progress: &impl Fn(&str),
-    now_override: Option<&str>,
     summary: &mut GridIndexSummary,
 ) -> Result<()> {
     // See [`IdClaims`]: catches two sources writing the same id.
@@ -822,18 +736,13 @@ async fn load_all_batch(
             stanza.clone()
         };
 
-        // Claim ids BEFORE the fingerprint skip, so an overlap between two
-        // sources is still caught on a steady-state re-run where one of them
-        // is unchanged and would never be looked at.
         if let Some(collision) = claims.claim(&source_id, &md.markdown_uuid, &md.rows) {
             return Err(anyhow::anyhow!("{collision}"))
                 .with_context(|| format!("load {} from {stanza}", md.markdown_uuid));
         }
-
-        if prior_fingerprints.get(&md.markdown_uuid) == Some(&md.source_fingerprint) {
-            summary.markdowns_skipped += 1;
-            continue;
-        }
+        // Every document the diff named is applied. One whose rows come
+        // out identical writes identical rows, and doltlite's tables are
+        // content-addressed: the next commit carries no diff for it.
         // The stanza name is authoritative. Everything else comes through
         // from the store unchanged.
         let md = RenderedMarkdown {
@@ -842,38 +751,17 @@ async fn load_all_batch(
             problems: Vec::new(),
             ..md.clone()
         };
-        let inserted = apply_one(write_lock, out_dir, &md, now_override)
+        let inserted = apply_one(write_lock, out_dir, &md)
             .await
             .with_context(|| format!("load {} from {stanza}", md.markdown_uuid))?;
         summary.rows_inserted += inserted;
         summary.markdowns_loaded += 1;
         progress(&format!(
             "loaded {}/{}",
-            summary.markdowns_loaded + summary.markdowns_skipped,
-            summary.markdowns_total
+            summary.markdowns_loaded, summary.markdowns_total
         ));
     }
     Ok(())
-}
-
-/// Bulk fingerprint snapshot, read once per sync into the map every
-/// renderer consults at per-markdown skip time. NULL fingerprints are
-/// omitted, so the caller treats them as "not rendered".
-pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows = sqlx::query(
-        "SELECT markdown_uuid, source_fingerprint \
-         FROM markdowns WHERE source_fingerprint IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await
-    .context("load_fingerprints")?;
-    let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
-    for r in rows {
-        let uuid: String = r.try_get("markdown_uuid")?;
-        let fp: String = r.try_get("source_fingerprint")?;
-        out.insert(uuid, fp);
-    }
-    Ok(out)
 }
 
 async fn load_markdown_uuids_by_source(
@@ -964,7 +852,6 @@ async fn apply_markdown(
     write_lock: &WriteLock,
     md: &RenderedMarkdown,
     qmd_path: &str,
-    now_override: Option<&str>,
 ) -> Result<usize> {
     // Inside `begin_transaction` every guard hands back the same connection,
     // so the per-doc statements accumulate in one batch; otherwise each takes
@@ -994,7 +881,7 @@ async fn apply_markdown(
         insert_edge(conn, edge).await?;
     }
 
-    upsert_markdown(conn, md, qmd_path, &run_stamp(now_override))
+    upsert_markdown(conn, md, qmd_path)
         .await
         .context("upsert markdowns")?;
     write_lock.note_written(&md.markdown_uuid);
@@ -1031,7 +918,6 @@ async fn upsert_markdown(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     md: &RenderedMarkdown,
     qmd_path: &str,
-    rendered_at: &datalib_time::StoredStamp,
 ) -> Result<()> {
     let Some(canonical) = pick_canonical(&md.rows, &md.markdown_uuid) else {
         return Ok(());
@@ -1044,7 +930,6 @@ async fn upsert_markdown(
         .collect();
     let created_at = timestamps.iter().min().copied();
     let updated_at = timestamps.iter().max().copied();
-    let row_set_hash = compute_row_set_hash(&md.rows);
     let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
     // Fall back to the canonical row's provider when build_grid_index
     // rebuilds from disk without the config-level name.
@@ -1062,9 +947,8 @@ async fn upsert_markdown(
     sqlx::query(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, updated_at, \
-          md_path, source_fingerprint, upstream_cursor, row_set_hash, renderer_version, \
-          rendered_at_utc, tz_offset) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          md_path, upstream_cursor, renderer_version, bucket_key) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&source_id)
@@ -1074,12 +958,9 @@ async fn upsert_markdown(
     .bind(created_at)
     .bind(updated_at)
     .bind(qmd_path)
-    .bind(&md.source_fingerprint)
     .bind(md.upstream_cursor.as_deref())
-    .bind(&row_set_hash)
     .bind(&version_str)
-    .bind(&rendered_at.utc)
-    .bind(&rendered_at.tz_offset)
+    .bind(&md.bucket_key)
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
@@ -1230,35 +1111,6 @@ mod insert_round_trip_tests {
             byte_size: Some(4_096),
             item_count: Some(17),
         }
-    }
-
-    /// `byte_size` must not reach the markdown cache key, and
-    /// `item_count` must. A doltlite store's size is not stable across
-    /// rebuilds of identical data, so hashing it re-renders documents
-    /// nothing touched and churns every golden that carries a
-    /// `row_set_hash`.
-    #[test]
-    fn the_row_set_hash_ignores_bytes_and_notices_counts() {
-        let base = fully_populated_row();
-        let bigger = GridRow {
-            byte_size: base.byte_size.map(|n| n + 22),
-            ..base.clone()
-        };
-        let more = GridRow {
-            item_count: base.item_count.map(|n| n + 1),
-            ..base.clone()
-        };
-        let rows = std::slice::from_ref(&base);
-        assert_eq!(
-            compute_row_set_hash(rows),
-            compute_row_set_hash(std::slice::from_ref(&bigger)),
-            "a store that only grew must not invalidate the document"
-        );
-        assert_ne!(
-            compute_row_set_hash(rows),
-            compute_row_set_hash(std::slice::from_ref(&more)),
-            "a row appearing in a measured table must invalidate it"
-        );
     }
 
     #[tokio::test]
@@ -1498,8 +1350,8 @@ mod write_lock_tests {
         RenderedMarkdown {
             markdown_uuid: uuid.clone(),
             source_id: "test".into(),
-            source_fingerprint: format!("fp-{uuid}"),
             upstream_cursor: None,
+            bucket_key: None,
             md_path: PathBuf::from(format!("/tmp/{uuid}.md")),
             render_version: 1,
             rows: vec![row],
@@ -1551,7 +1403,7 @@ mod write_lock_tests {
             handles.push(tokio::spawn(async move {
                 for idx in 0..PER_TASK {
                     let md = mk_md(task, idx);
-                    apply_one(lock.as_ref(), &out_dir, &md, None)
+                    apply_one(lock.as_ref(), &out_dir, &md)
                         .await
                         .unwrap_or_else(|e| panic!("apply_one task={task} idx={idx}: {e:#}"));
                 }
@@ -1614,7 +1466,7 @@ mod write_lock_tests {
             handles.push(tokio::spawn(async move {
                 for idx in 0..PER_TASK {
                     let md = mk_md(task, idx);
-                    apply_one(lock.as_ref(), &out_dir, &md, None)
+                    apply_one(lock.as_ref(), &out_dir, &md)
                         .await
                         .unwrap_or_else(|e| panic!("apply_one task={task} idx={idx}: {e:#}"));
                 }
@@ -1672,9 +1524,7 @@ mod write_lock_tests {
 
         lock.begin_transaction().await.unwrap();
         for idx in 0..5 {
-            apply_one(&lock, &out_dir, &mk_md(0, idx), None)
-                .await
-                .unwrap();
+            apply_one(&lock, &out_dir, &mk_md(0, idx)).await.unwrap();
         }
         lock.rollback_transaction().await.unwrap();
 
@@ -1782,8 +1632,8 @@ mod schema_reconcile_tests {
             sqlx::query(*ddl).execute(pool).await.unwrap();
         }
         sqlx::query(
-            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, source_fingerprint) \
-             VALUES ('md-1', 'claude_web', 'claude', 'Chat', 'fp-1')",
+            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind) \
+             VALUES ('md-1', 'claude_web', 'claude', 'Chat')",
         )
         .execute(pool)
         .await
@@ -1800,12 +1650,12 @@ mod schema_reconcile_tests {
     }
 
     /// An index written before #216 is brought to the current schema, and its
-    /// fingerprints are cleared so the rebuild actually runs.
+    /// `markdowns` rows are cleared so the rebuild actually runs.
     ///
     /// The `markdowns` assertion is the load-bearing half: recreating
     /// `grid_rows` alone satisfies every "does the column exist" check while
-    /// leaving the fingerprints in place, and `build_grid_index` skips a
-    /// document whose fingerprint still matches — so the index would stay
+    /// leaving the cursors in place, and `build_grid_index` reads nothing
+    /// from a store its cursor already covers — so the index would stay
     /// empty until something upstream changed.
     #[tokio::test]
     async fn an_index_predating_a_column_rename_is_rebuilt() {
@@ -1826,8 +1676,8 @@ mod schema_reconcile_tests {
         assert_eq!(
             count(&pool, "markdowns").await,
             0,
-            "fingerprints must be cleared, or build_grid_index skips every \
-             document and the rebuilt index stays empty"
+            "markdowns must be cleared, or build_grid_index reads nothing \
+             and the rebuilt index stays empty"
         );
         assert_eq!(count(&pool, "grid_rows").await, 0);
     }
@@ -1864,8 +1714,8 @@ mod schema_reconcile_tests {
         init_schema(&pool).await.expect("first init_schema");
 
         sqlx::query(
-            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, source_fingerprint) \
-             VALUES ('md-1', 'claude_web', 'claude', 'Chat', 'fp-1')",
+            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind) \
+             VALUES ('md-1', 'claude_web', 'claude', 'Chat')",
         )
         .execute(&pool)
         .await
@@ -1876,8 +1726,8 @@ mod schema_reconcile_tests {
         assert_eq!(
             count(&pool, "markdowns").await,
             1,
-            "a matching schema must not be rebuilt; the fingerprints that make \
-             the index incremental would be thrown away on every run"
+            "a matching schema must not be rebuilt; the rows that make the \
+             index incremental would be thrown away on every run"
         );
     }
 }
@@ -1887,8 +1737,8 @@ mod source_cursor_tests {
     //! What the cursor buys, and the trap in testing it.
     //!
     //! Before the cursor, a steady-state re-index still *read* every document
-    //! and dropped the unchanged ones by fingerprint. Nothing was written
-    //! either way, so "nothing was loaded" proves nothing. `markdowns_total`
+    //! and dropped the unchanged ones. Nothing was written either way, so
+    //! "nothing was loaded" proves nothing. `markdowns_total`
     //! — documents actually read — is the field that separates the two, and
     //! every test here asserts on it.
 
@@ -1936,8 +1786,8 @@ mod source_cursor_tests {
             markdown_uuid: uuid.to_string(),
             source_id: source.to_string(),
             // Fingerprint follows the text, the way a renderer's does.
-            source_fingerprint: format!("fp-{text}"),
             upstream_cursor: None,
+            bucket_key: None,
             md_path: rendered_root(root, source).join(format!("{uuid}.md")),
             render_version: 1,
             rows: vec![row],
@@ -2073,7 +1923,7 @@ mod source_cursor_tests {
             second.markdowns_total, 0,
             "nothing changed, so nothing should have been READ — a non-zero \
              count here means the cursor was ignored and the run fell back to \
-             reading the store and comparing fingerprints"
+             reading the whole store"
         );
         assert_eq!(second.markdowns_loaded, 0);
         assert_eq!(index_row_count(&pool).await, 2, "and the rows are intact");

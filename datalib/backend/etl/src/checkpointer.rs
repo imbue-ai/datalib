@@ -9,13 +9,14 @@
 
 use std::time::{Duration, Instant};
 
-/// How often a producer seals what it has written.
+/// How often a producer seals what it has written: at most this long
+/// between commits, asked at the producer's own consistent points.
 ///
-/// **A debounce with a ceiling, not a period.** A fixed interval makes a
-/// source that finishes a burst sit on its rows for the rest of it; a pure
-/// debounce never fires at all under a steady writer. Taking whichever comes
-/// first gets the good half of each: a burst that ends is published promptly,
-/// and a continuous writer still publishes regularly.
+/// There is no debounce half. A "seal once writes have been quiet" rule
+/// cannot fire from a producer that only asks *as* it writes, and every
+/// producer here does — so the dial existed and turned nothing. A burst that
+/// ends is published by the next write past the ceiling, or by the run
+/// finishing, which is the last seal.
 ///
 /// The dial is the user's. How much latency to trade for how much `dolt_log`
 /// is exactly the kind of call a person should get to make — what is *not*
@@ -23,17 +24,12 @@ use std::time::{Duration, Instant};
 /// fact about the step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cadence {
-    /// Seal once writes have been quiet this long.
-    pub quiet_for: Duration,
-    /// Seal anyway once this long has passed since the last commit, however
-    /// busy the writer is.
     pub at_most_every: Duration,
 }
 
 impl Default for Cadence {
     fn default() -> Self {
         Self {
-            quiet_for: Duration::from_secs(2),
             at_most_every: Duration::from_secs(15),
         }
     }
@@ -69,7 +65,6 @@ pub enum Policy {
 pub struct Checkpointer {
     policy: Policy,
     last_commit: Instant,
-    last_write: Instant,
     /// Rows written since the last commit. Zero means there is nothing to
     /// seal, and committing anyway would fill `dolt_log` with empty commits
     /// and wake every consumer to discover nothing moved.
@@ -82,17 +77,13 @@ impl Checkpointer {
         Self {
             policy,
             last_commit: now,
-            last_write: now,
             pending: 0,
         }
     }
 
     /// Tell it work landed. Cheap enough to call per row.
     pub fn wrote(&mut self, rows: u64) {
-        if rows > 0 {
-            self.pending += rows;
-            self.last_write = Instant::now();
-        }
+        self.pending += rows;
     }
 
     /// Whether to seal now. Says yes at most once per batch of writes: the
@@ -108,8 +99,7 @@ impl Checkpointer {
         if self.pending == 0 {
             return false;
         }
-        now.duration_since(self.last_write) >= cadence.quiet_for
-            || now.duration_since(self.last_commit) >= cadence.at_most_every
+        now.duration_since(self.last_commit) >= cadence.at_most_every
     }
 
     /// Record that the caller committed.
@@ -131,26 +121,12 @@ mod tests {
         c.should_seal_at(c.last_commit + after)
     }
 
-    /// The ceiling: a writer that never goes quiet still publishes.
     #[test]
-    fn a_busy_writer_seals_on_the_ceiling() {
+    fn a_writer_seals_once_the_ceiling_has_passed() {
         let mut c = Checkpointer::new(Policy::Every(Cadence::default()));
         c.wrote(1);
-        assert!(!at(&c, Duration::from_secs(1)), "too soon, and still busy");
-        assert!(at(&c, Duration::from_secs(16)), "the ceiling fires anyway");
-    }
-
-    /// The debounce: a burst that ends publishes without waiting out the
-    /// ceiling, which is the whole reason this is not a fixed interval.
-    #[test]
-    fn a_burst_that_ends_seals_on_the_quiet() {
-        let mut c = Checkpointer::new(Policy::Every(Cadence::default()));
-        c.wrote(100);
-        c.last_write = c.last_commit; // the burst ended immediately
-        assert!(
-            at(&c, Duration::from_secs(3)),
-            "quiet for longer than `quiet_for`, so seal — not at 15s"
-        );
+        assert!(!at(&c, Duration::from_secs(1)), "too soon");
+        assert!(at(&c, Duration::from_secs(16)));
     }
 
     /// Nothing written means nothing to seal. Without this a long quiet

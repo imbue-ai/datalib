@@ -133,6 +133,60 @@ so the default budget made `bazelisk test //...` flaky in a way that
 pointed at nothing. Bazel enforces the ceiling but does not wait for it,
 so the larger budget costs nothing.
 
+## Watching a sync stream
+
+[`manager2-streaming.spec.ts`](/datalib/ui/tests/e2e/manager2-streaming.spec.ts)
+is the one spec that watches a sync *while it runs*, and the place to
+look when the question is "does streaming actually reach the screen".
+Two API-backed sources (`chatgpt`, `claude`) replay playback tapes with a
+delay on every request, so each download lasts about ten seconds and
+seals checkpoints on the way. The spec records the Pipeline table frame
+by frame and asserts that a download's render and the index behind it
+read Running *while the download is still Running*, and that the Explore
+grid — opened before the sync and never touched again — shows rows before
+the download that produced them has finished. Its console output is the
+table's every frame, so a run can be read without the trace viewer:
+
+```bash
+bazelisk run //datalib/ui:e2e -- --project chromium-manager2-streaming
+```
+
+Three pieces make that possible, and each is small:
+
+* `DATALIB_HTTP_PLAYBACK_DELAY_MS` beside `DATALIB_HTTP_PLAYBACK`
+  ([`http.rs`](/datalib/backend/etl/src/http.rs)): a replayed request
+  waits that long before it answers. Playback only; a fixture that
+  answers instantly hides everything that depends on a download taking
+  time.
+* The tapes come from `datalib-step synthesize`, run by `run_e2e.sh` at
+  startup over the checked-in `chatgpt_api` / `claude_export` fixtures —
+  the same call `tests/fixtures/run_sync_pipeline.py` makes.
+* The spec's root is **not** the materialized TNG fixture: those tapes
+  hold the same conversations the fixture already indexed under
+  `chatgpt-api` / `claude-api`, and entity ids are provider-global, so
+  against that root the index sees every one as already indexed and
+  skips it. `playwright.config.ts` writes it a bare root instead — the
+  index group and the applet, no data.
+
+To watch the same thing by hand, against any root, run the runner
+directly with the two variables set and a short cadence in the config:
+
+```bash
+bazelisk build //datalib/backend:bin //datalib/backend/datalib_step:datalib_step
+step=bazel-bin/datalib/backend/datalib_step/datalib_step
+$step synthesize chatgpt --name chatgpt \
+  --params '{"fixture_path": "'$PWD'/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api"}' \
+  --out /tmp/tapes
+DATALIB_HTTP_PLAYBACK=/tmp/tapes DATALIB_HTTP_PLAYBACK_DELAY_MS=1500 \
+  bazel-bin/datalib/backend/bin/datalib-dag <root>/config.toml
+```
+
+with `[checkpoint_cadence] at_most_every_secs = 2` at the top of that
+config and a `chatgpt` group whose ingest step's params are
+`[steps.params.api]`. The NDJSON on stderr shows the chain: a
+`checkpoint` from the ingest, a `step_start` for its render within
+milliseconds, and one for `unified_index/grid_index` right after.
+
 ## Bazel-fetched test data (`lightroom`)
 
 `//datalib/backend/etl/providers/lightroom:real_catalogs` ingests four real

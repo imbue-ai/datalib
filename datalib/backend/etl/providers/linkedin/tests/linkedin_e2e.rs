@@ -1,6 +1,5 @@
 //! End-to-end test for the LinkedIn export ingester.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -195,7 +194,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             render::render(
                 &source,
                 &Progress::noop(),
-                &HashMap::new(),
                 &mut on_doc,
                 &mut std::collections::HashSet::new(),
             )
@@ -226,7 +224,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             posts::render_posts(
                 &source,
                 &Progress::noop(),
-                &HashMap::new(),
                 &mut on_doc,
                 &mut std::collections::HashSet::new(),
             )
@@ -335,7 +332,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             connections::render_connections(
                 &source,
                 &Progress::noop(),
-                &HashMap::new(),
                 &mut on_doc,
                 &mut std::collections::HashSet::new(),
             )
@@ -406,7 +402,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             connections::render_connections(
                 &source2,
                 &Progress::noop(),
-                &HashMap::new(),
                 &mut on_doc,
                 &mut std::collections::HashSet::new(),
             )

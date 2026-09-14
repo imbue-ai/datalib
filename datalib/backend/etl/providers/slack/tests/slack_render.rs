@@ -74,10 +74,6 @@ fn renders_tng_fixture() {
     // it checks what it hands to its callback — which is what both the
     // store and the index consume.
     assert_eq!(docs.len(), 11, "one document per rendered thread");
-    assert!(
-        !docs[0].source_fingerprint.is_empty(),
-        "a document carries the fingerprint its skip check needs"
-    );
     assert!(!docs[0].rows.is_empty(), "and the rows it projected");
 }
 

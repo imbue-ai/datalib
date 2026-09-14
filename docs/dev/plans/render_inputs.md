@@ -1,8 +1,28 @@
 # Render inputs: record what each document was rendered from
 
-**Status: proposal (2026-09-11), nothing built.** The measurements and
-file pointers below were checked against the tree on that date; the
-design has not been tried.
+**Status: proposal (2026-09-11); the store and the driver's half are
+built (2026-09-14), the providers' half is not.** Built, of §"Order of
+work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
+render store with `markdowns.bucket_key`, `RenderedMarkdown.bucket_key`,
+`RenderCtx::declare_bucket(bucket_key, inputs)`; the driver's scan —
+`render::reverse_lookup` diffs every table `render_inputs` mentions
+between the cursor and HEAD, reverse-looks-up the stale buckets, and
+hands the provider the pin (`RenderCtx::raw_pin`) and the set
+(`RenderCtx::stale_buckets`); the driver's sweep of a declared bucket's
+documents by `bucket_key`; and **the fingerprint is gone** — every
+emitted document is written, and doltlite's content-addressed tables
+are what make an unchanged rewrite free (see "Does the fingerprint
+still earn its place?" below), so `prior_fingerprints`,
+`source_fingerprint` and every `compute_fingerprint` have left the
+tree (#27). The synthetic provider in
+`datalib_step/src/render_model_test.rs` is fully on it — no fan-out
+table, no removal probe — and the model test proves the point: an
+author rename renders that author's parents and nothing else. Every
+real provider declares its buckets with *no inputs yet*, so their
+scans are unchanged; step 4 (chat-common declares for ten providers)
+and step 5 (drop `global_fanout_tables` and `buckets_without_rows` one
+provider at a time) are the next PRs, with `tests/fixtures/
+render_contract_test.py` as the check that each move is right.
 
 **Read [`one_mode.md`](one_mode.md) first (2026-09-14).** This document
 is now the render-side mechanism for that design's rule 2 ("prune at
@@ -273,12 +293,13 @@ pub struct Input {
 ```
 
 `prior_fingerprints` leaves every provider signature. A renderer
-always emits what it rendered; the driver compares
-`source_fingerprint` against the store and skips the write when nothing
-changed, exactly as `load_all_batch` in `grid_index` already does for
-the index. That is #27's acceptance criterion, and this is what makes
-it possible: the "considered" set that the whole-store renderers were
-using the fingerprint map to build no longer exists.
+always emits what it rendered, and the driver always writes it: an
+unchanged document writes identical rows, which doltlite's
+content-addressed tables store as no change and `dolt_diff` never
+reports, so nothing downstream re-reads it. That is #27's acceptance
+criterion, and this is what makes it possible: the "considered" set
+that the whole-store renderers were using the fingerprint map to build
+no longer exists.
 
 ### The scan, done by the driver
 
@@ -363,7 +384,8 @@ parent joins; a `global_fanout_tables` list; a call to
 `buckets_without_rows`; a loop over the result calling
 `remove_conversation`; or, instead of the last two, a "considered" set
 threaded through the render and handed to `retain_documents`; and a
-`prior_fingerprints` compare inside the render loop.
+`prior_fingerprints` compare inside the render loop, with a
+`source_fingerprint` hashed per provider to feed it.
 
 After: a `bucket_query` over `to_` columns of `added`/`modified` rows
 in its primary and child tables; a `bucket_key` on each emitted
@@ -431,18 +453,36 @@ table without one is not diffable today either, so nothing regresses.
 paths, which the fan-in table can hold (`input_table = 'file'`) but
 nothing diffs. Out of scope; it is out of scope for #27 too.
 
-**The fingerprint is a content hash everywhere.** The migration recipe
-says `source_fingerprint` "is now the bucket UUID"; that is stale. Every
-renderer in the tree hashes what it rendered (`compute_fingerprint` in
-chat-common, `fingerprint_for_pr`, `render_fingerprint(&blake3)`, …),
-which is what makes the skip below worth keeping.
+**Does the fingerprint still earn its place?** No — and this was
+settled the hard way (2026-09-14). The worry was a `users` row whose
+only change is a field we do not render: it re-renders every thread
+that user touched, to identical output, and a fingerprint would skip
+those writes. But the skip was already being done by something better.
+doltlite's tables are content-addressed, so writing a row identical to
+the one stored *is* no write — the commit carries no diff for it,
+`dolt_diff` never names it, and `grid_index` and `qmd_index` never see
+it. A fingerprint on top of that is a second answer to a question the
+store already answers, and a worse one on both sides it was tried:
 
-**Does the fingerprint still earn its place?** A bucket re-renders only
-when a declared input changed, so its output nearly always changed too.
-"Nearly": a `users` row whose only change is a field we do not render
-re-renders every thread that user touched, to identical output. The
-compare stays, in the driver, so those writes — and the grid and qmd
-work downstream of them — are skipped. It costs one map load.
+- Trusting the *provider's* fingerprint (a hash of its inputs) skipped
+  documents that had changed. chat-common's left out the author names
+  it resolves from `users` at render time, so a rename skipped every
+  thread it should have rewritten, across every fan-out table of every
+  provider — the contract harness found all eighteen at once.
+- Hashing the *output* in the driver was correct but bought nothing
+  doltlite was not already doing, and it put a per-run column on
+  `markdowns` that had to be kept out of the row's identity by hand.
+
+So there is no fingerprint anywhere in render now. The one rule that
+replaces it is the one `datalib_schema`'s
+`markdowns_carries_no_per_run_stamp` test pins: **nothing per-run may
+be written into a row whose content did not change.** `rendered_at_utc`
+went for the same reason. The storage report, whose body carries byte
+counts that wobble run to run, is the one document the driver still
+decides about itself — it compares the row *counts* it measured against
+the last report and writes a new one only when a count moved
+(`introspect::counts_unchanged`), because there the wobble is in the
+inputs, not the store.
 
 ## Order of work
 
@@ -482,8 +522,8 @@ work downstream of them — are skipped. It costs one map load.
    off the old deletion path in the same commit that its declarations
    become complete.
 6. **Delete** the five guards, the two callbacks, `RenderPass`,
-   `buckets_without_rows`, `prior_fingerprints` from every provider
-   signature. Close #27.
+   `buckets_without_rows`. (`prior_fingerprints` is already gone from
+   every provider signature, with the fingerprint itself.) Close #27.
 7. **contacts.** Port it; it was the provider that could not be.
 
 ## Relation to other documents

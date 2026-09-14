@@ -362,7 +362,6 @@ pub fn render_notion(
         let PageDocument {
             page_uuid,
             page_title,
-            source_fingerprint,
             ..
         } = doc;
         let page_dir = pages_root.join(page_dir_segment(page_uuid));
@@ -392,8 +391,8 @@ pub fn render_notion(
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: page_uuid.clone(),
             source_id: String::new(),
-            source_fingerprint: source_fingerprint.clone(),
             upstream_cursor: None,
+            bucket_key: None,
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows: doc.rows.clone(),
@@ -417,7 +416,6 @@ pub fn render_notion(
             discussion_uuid,
             page_uuid,
             page_title,
-            source_fingerprint,
             ..
         } = doc;
         let thread_path = root.join(thread_qmd_path_rel(stanza, page_uuid, discussion_uuid));
@@ -436,8 +434,8 @@ pub fn render_notion(
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: discussion_uuid.clone(),
             source_id: String::new(),
-            source_fingerprint: source_fingerprint.clone(),
             upstream_cursor: None,
+            bucket_key: None,
             md_path: p,
             render_version: RENDER_VERSION,
             rows: doc.rows.clone(),

@@ -97,8 +97,7 @@ expression: docs_bundle(&docs)
       "uuid": "0bdf2176-0b10-5cc3-b955-0a31599f6495",
       "when_ts": "2369-04-15T08:30:45+00:00"
     }
-  ],
-  "source_fingerprint": "fcfd3d6838c83dbfb8eef9e64f91d3aad7df0ef215125e0aaad2455217427a8d"
+  ]
 }
 === 2efdd321-ada2-5000-911f-feb635f27954 ===
 {
@@ -225,8 +224,7 @@ expression: docs_bundle(&docs)
       "uuid": "0e22c340-4082-5e2f-8d9a-553feb522f41",
       "when_ts": null
     }
-  ],
-  "source_fingerprint": "d10df2535a8af8c12a968804ccb640ab08168c0ef3d9cf97b5a27f50d83dd8a5"
+  ]
 }
 === bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0 ===
 {
@@ -383,8 +381,7 @@ expression: docs_bundle(&docs)
       "uuid": "d734b686-97ce-5e76-9ae0-02fbb6dfe60b",
       "when_ts": "2364-03-02T11:30:00+00:00"
     }
-  ],
-  "source_fingerprint": "e5dcbed691f42106f9004f66bd7c887724598fbcd57ebc35adab40b065384392"
+  ]
 }
 === ecb57e3b-24ce-546b-9201-61bf610b0783 ===
 {
@@ -601,8 +598,7 @@ expression: docs_bundle(&docs)
       "uuid": "455f3019-2de0-5b4c-ad87-68e8f1003e6b",
       "when_ts": "2369-04-16T09:01:30+00:00"
     }
-  ],
-  "source_fingerprint": "623e8731321f2c941f70afc3eedfd50fcddc7584c721b5749b310f53d612a7d1"
+  ]
 }
 === f6cad624-37b7-5673-af29-80ba9aac61a5 ===
 {
@@ -819,6 +815,5 @@ expression: docs_bundle(&docs)
       "uuid": "66adb1c8-8e2e-5b04-b2c5-5838f3b3ab9f",
       "when_ts": "2369-04-14T10:02:00+00:00"
     }
-  ],
-  "source_fingerprint": "b6d81dd5f8a3dad5a8e0e4a731f4201a19bdb002427f12eeb1acd1a10849a78b"
+  ]
 }

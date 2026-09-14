@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_google_takeout_config::GoogleTakeoutRenderConfig;
 use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Render wave: always present (renders whatever is in the raw store).
@@ -39,10 +38,13 @@ impl RenderProcessor for GoogleTakeoutRender {
         Some(crate::render::RENDER_VERSION)
     }
 
+    fn render_params(&self) -> serde_json::Value {
+        datalib_etl_chat_common::render::layout_params()
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         // Only the chat-shaped feeds (Google Chat / Google Voice) render; the
         // other feeds stay queryable in the raw store.
-        let prior: &HashMap<String, String> = ctx.prior_fingerprints;
         // This renderer walks the whole raw store every run, so the set it
         // considered is the complete one: anything else the render store
         // holds is a document whose source is gone. The driver sweeps.
@@ -53,7 +55,6 @@ impl RenderProcessor for GoogleTakeoutRender {
             ctx.root,
             &self.name,
             ctx.progress,
-            prior,
             &mut on_doc,
             &mut seen,
         )?;

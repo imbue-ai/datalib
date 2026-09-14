@@ -264,13 +264,6 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         doc.rows.iter().map(|r| &r.channel).collect::<Vec<_>>()
     );
 
-    // The projection rides on the emitted document rather than in a
-    // file beside the markdown.
-    assert!(
-        !doc.source_fingerprint.is_empty(),
-        "the document carries the fingerprint its skip check needs"
-    );
-
     // ── Second pass: prove the docs_skipped path works ─────────────
     // The commit the first pass pinned is what the render step records
     // as the cursor; the second pass diffs from it.

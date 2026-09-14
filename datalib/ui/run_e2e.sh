@@ -237,6 +237,10 @@ export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
 BIN_STAGE="$FW_E2E_RUN_DIR/bin"
 mkdir -p "$BIN_STAGE"
 APPLET_BIN_RUNFILE="$(need_runfile "${FW_E2E_APPLET_BIN_RLOC:-}" -x)"
+# The streaming spec's root is written by playwright.config.ts rather
+# than materialized, and its config names the applet by absolute path
+# the way materialize_tng_root.sh does.
+export FW_E2E_DATALIB_APPLET="$APPLET_BIN_RUNFILE"
 for pair in \
   "datalib-step:$STEP_BIN_RUNFILE" \
   "datalib-dag:$DAG_BIN_RUNFILE" \
@@ -260,6 +264,27 @@ SIGNAL_FIXTURE_BIN="$(need_runfile _main/datalib/backend/signal-backup/signal_ma
 export FW_E2E_SIGNAL_MAKE_FIXTURE="$SIGNAL_FIXTURE_BIN"
 SIGNAL_SPEC="$(need_runfile _main/datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json -f)"
 export FW_E2E_SIGNAL_SPEC="$SIGNAL_SPEC"
+
+# Playback tapes for the streaming spec: one directory of replayable
+# responses per source, written by the same `datalib-step synthesize`
+# the fixture pipeline runs (`tests/fixtures/run_sync_pipeline.py`).
+# Anchored off one file in each checked-in fixture, like the PDF corpus.
+# The spec's backend gets `DATALIB_HTTP_PLAYBACK` pointed here, so every
+# step it spawns replays instead of fetching.
+PLAYBACK_STAGE="$FW_E2E_RUN_DIR/playback"
+mkdir -p "$PLAYBACK_STAGE"
+for pair in \
+  "chatgpt:_main/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api/conversations.json" \
+  "claude:_main/datalib/backend/etl/providers/claude/tests/fixtures/claude_export/conversations.json"; do
+  type="${pair%%:*}"
+  anchor="$(need_runfile "${pair#*:}" -f)"
+  "$STEP_BIN_RUNFILE" synthesize "$type" \
+    --name "$type" \
+    --params "{\"fixture_path\": \"$(dirname "$anchor")\"}" \
+    --out "$PLAYBACK_STAGE" > "$PLAYBACK_STAGE/synthesize-$type.log" 2>&1 \
+    || { echo "ERROR: datalib-step synthesize $type failed; see $PLAYBACK_STAGE/synthesize-$type.log" >&2; exit 1; }
+done
+export FW_E2E_PLAYBACK_DIR="$PLAYBACK_STAGE"
 
 # --- the Node that runs qmd ------------------------------------------
 #

@@ -24,7 +24,7 @@
 //! growing but *not reproducible*: rebuilding the TNG fixture from
 //! byte-identical inputs moves six of its sixteen sources by 1-22
 //! bytes, in a different direction each time — so bytes stay out of
-//! the fingerprint here and out of `compute_row_set_hash` too.
+//! the comparison (`counts_unchanged`) and out of `grid_rows.text`.
 //! Otherwise every run rewrites a report nothing asked for and
 //! `grid_index` never gets to skip a source.
 
@@ -85,8 +85,8 @@ impl Subject {
     /// report's body line.
     /// `grid_rows.text`. **Carries no byte figure**, on purpose.
     ///
-    /// `text` is hashed into `compute_row_set_hash`, the markdown cache
-    /// key — and a doltlite store's size is not reproducible. It drifts
+    /// `text` is a stored row, and a doltlite store's size is not
+    /// reproducible. It drifts
     /// 1-22 bytes between rebuilds on one machine, and differs outright
     /// between machines: CI's Linux runner and a developer's Mac
     /// produce different sizes for byte-identical inputs, which made
@@ -184,8 +184,8 @@ fn table_name_in(ddl: &str) -> Option<&str> {
 /// information.
 ///
 /// The load-bearing half is `sync_runs`: it gains a row on every run,
-/// so counting it would move the report's fingerprint on a pipeline
-/// where nothing changed and hand `grid_index` work forever.
+/// so counting it would change the report on a pipeline where nothing
+/// changed and hand `grid_index` work forever.
 fn is_datalib_bookkeeping(table: &str) -> bool {
     table.ends_with(BOOKKEEPING_SUFFIX)
         || datalib_etl::doltlite_raw::SHARED_DDL
@@ -321,41 +321,6 @@ impl Measured {
     }
 }
 
-/// A digest of what the source *contains*, so the report re-renders
-/// when the contents move.
-///
-/// **Byte sizes are deliberately not in here.** A doltlite store grows
-/// a little on every run that touches it at all — a bookkeeping
-/// `last_attempt_at_utc` mutation rewrites chunks even though no row was
-/// added — so a fingerprint over bytes never settles: every run would
-/// find a new number, rewrite the report, and give `grid_index` work to
-/// do on a pipeline where nothing changed. Row and file counts are
-/// properties of the data and hold still when the data does.
-///
-/// So `byte_size` reads as **how big the raw store was the last time
-/// this source's contents changed** — not how big it is now. On a
-/// source that has stopped changing, the number stops with it, however
-/// many times the pipeline runs afterwards. For bytes on their own
-/// cadence, `system/usage.doltlite_db` keeps a per-step series and
-/// commits nothing, which is what lets it sample freely.
-fn fingerprint(subjects: &[Subject]) -> String {
-    let mut h = blake3::Hasher::new();
-    // The version is in here because nothing else would re-render an
-    // old report: the store's version check deliberately skips these
-    // documents, so this fingerprint is the only thing that notices a
-    // format change.
-    h.update(&RENDER_VERSION.to_le_bytes());
-    for s in subjects {
-        h.update(s.path.as_bytes());
-        h.update(b"\x1f");
-        h.update(s.kind.as_str().as_bytes());
-        h.update(b"\x1f");
-        h.update(s.items.unwrap_or(-1).to_le_bytes().as_slice());
-        h.update(b"\x1e");
-    }
-    h.finalize().to_hex().to_string()
-}
-
 fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
     let mut out = format!(
         "---\ntitle: {source_id} storage\nsource: {source_id}\nmeasured_at: {now}\n---\n\n\
@@ -468,8 +433,8 @@ pub fn plan(
         doc: RenderedMarkdown {
             markdown_uuid,
             source_id: source_id.to_string(),
-            source_fingerprint: fingerprint(&subjects),
             upstream_cursor: None,
+            bucket_key: None,
             md_path,
             render_version: RENDER_VERSION,
             rows,
@@ -479,6 +444,26 @@ pub fn plan(
         samples,
         body: report_body(source_id, &subjects, now),
     }))
+}
+
+/// Whether the report would say what it said last time: the same
+/// subjects, each with the same count. `previous` is the newest sample
+/// per subject in `source_measurements`.
+///
+/// **Counts, never bytes.** A doltlite store's size is not reproducible:
+/// rebuilding the TNG fixture from byte-identical inputs moves six of
+/// its sixteen sources by 1-22 bytes, in a different direction each
+/// time, and a bookkeeping mutation rewrites chunks with no row added.
+/// Comparing bytes would rewrite a report nothing asked for on every
+/// run, and hand `grid_index` a diff to read forever.
+pub fn counts_unchanged(
+    previous: &std::collections::HashMap<String, Option<i64>>,
+    samples: &[SourceMeasurementRow],
+) -> bool {
+    previous.len() == samples.len()
+        && samples
+            .iter()
+            .all(|s| previous.get(&s.subject) == Some(&s.items))
 }
 
 #[cfg(test)]
@@ -565,10 +550,28 @@ mod tests {
         assert_eq!(recomputed, row.uuid);
     }
 
-    /// The fingerprint is what decides whether the report is written
-    /// again, so it has to move when the source's contents move.
+    fn previous(subjects: &[Subject]) -> std::collections::HashMap<String, Option<i64>> {
+        subjects.iter().map(|s| (s.path.clone(), s.items)).collect()
+    }
+
+    fn samples(subjects: &[Subject]) -> Vec<SourceMeasurementRow> {
+        subjects
+            .iter()
+            .map(|s| SourceMeasurementRow {
+                subject: s.path.clone(),
+                kind: s.kind.as_str().into(),
+                measured_at_utc: "2026-01-01T00:00:00.000000Z".into(),
+                tz_offset: Some("+00:00".into()),
+                bytes: s.bytes,
+                items: s.items,
+            })
+            .collect()
+    }
+
+    /// The comparison is what decides whether the report is written
+    /// again, so it has to notice when the source's contents move.
     #[test]
-    fn the_fingerprint_tracks_the_counts() {
+    fn the_comparison_tracks_the_counts() {
         let a = vec![subject(
             "s/ingest",
             MeasurementKind::Tree,
@@ -581,8 +584,8 @@ mod tests {
             Some(10),
             Some(2),
         )];
-        assert_ne!(fingerprint(&a), fingerprint(&b));
-        assert_eq!(fingerprint(&a), fingerprint(&a.clone()));
+        assert!(!counts_unchanged(&previous(&a), &samples(&b)));
+        assert!(counts_unchanged(&previous(&a), &samples(&a)));
     }
 
     /// A store that only got *bigger* must not re-render the report.
@@ -590,7 +593,7 @@ mod tests {
     /// This is the regression `ingested_tng_test`'s "run 2 reads 0
     /// documents" assertion caught: a doltlite store grows on any run
     /// that touches it — a bookkeeping `last_attempt_at_utc` mutation
-    /// rewrites chunks with no row added — so a fingerprint over bytes
+    /// rewrites chunks with no row added — so a comparison over bytes
     /// never settles, and `grid_index` gets work to do forever on a
     /// pipeline where nothing changed.
     #[test]
@@ -613,15 +616,14 @@ mod tests {
                 Some(7),
             ),
         ];
-        assert_eq!(
-            fingerprint(&before),
-            fingerprint(&after),
+        assert!(
+            counts_unchanged(&previous(&before), &samples(&after)),
             "bytes moved but nothing was added; the report must not be rewritten"
         );
     }
 
     /// A new table with no rows yet is still a change: the subject set
-    /// is part of the fingerprint, not just the counts in it.
+    /// is compared, not just the counts in it.
     #[test]
     fn a_new_subject_re_renders_even_with_nothing_in_it() {
         let before = vec![subject(
@@ -639,7 +641,7 @@ mod tests {
                 Some(0),
             ),
         ];
-        assert_ne!(fingerprint(&before), fingerprint(&after));
+        assert!(!counts_unchanged(&previous(&before), &samples(&after)));
     }
 
     /// A source with no raw store yet is not an error and not an empty
@@ -738,7 +740,7 @@ mod tests {
     /// the assertion.
     ///
     /// The one that matters is `sync_runs`: it gains a row every run,
-    /// so counting it would move the fingerprint on a pipeline where
+    /// so counting it would re-render the report on a pipeline where
     /// nothing changed — the regression `ingested_tng_test`'s "run 2
     /// reads 0 documents" assertion caught.
     #[tokio::test]
@@ -793,10 +795,10 @@ mod tests {
 
     /// The exclusion has to survive a *second* run. This is the shape
     /// of the bug that shipped: run once, run again with no new data,
-    /// and the report must fingerprint identically — which it only does
-    /// if the run counter never reached it.
+    /// and the counts must compare equal — which they only do if the
+    /// run counter never reached them.
     #[tokio::test]
-    async fn a_second_run_over_unchanged_data_fingerprints_identically() {
+    async fn a_second_run_over_unchanged_data_measures_the_same() {
         let td = tempdir().unwrap();
         let raw = td.path().join("src/ingest");
         let db = raw.join("entities.doltlite_db");
@@ -819,7 +821,7 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
-        let first = fingerprint(&scan(td.path(), "src/ingest").await.unwrap());
+        let first = scan(td.path(), "src/ingest").await.unwrap();
 
         // A second run: another `sync_runs` row, no new content.
         let pool = open().await.expect("second run");
@@ -830,10 +832,9 @@ mod tests {
         .await
         .unwrap();
         pool.close().await;
-        let second = fingerprint(&scan(td.path(), "src/ingest").await.unwrap());
-
-        assert_eq!(
-            first, second,
+        let second = scan(td.path(), "src/ingest").await.unwrap();
+        assert!(
+            counts_unchanged(&previous(&first), &samples(&second)),
             "a run that added nothing but a run-log row must not re-render the report"
         );
 
@@ -844,9 +845,9 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
-        assert_ne!(
-            first,
-            fingerprint(&scan(td.path(), "src/ingest").await.unwrap()),
+        let third = scan(td.path(), "src/ingest").await.unwrap();
+        assert!(
+            !counts_unchanged(&previous(&first), &samples(&third)),
             "a real row must still re-render it"
         );
     }
@@ -982,8 +983,8 @@ mod tests {
     }
 
     /// The size must reach the row and the report, but never
-    /// `grid_rows.text` — which `compute_row_set_hash` covers. A
-    /// doltlite store's size differs between machines, so a byte
+    /// `grid_rows.text`. A doltlite store's size differs between
+    /// machines, so a byte
     /// figure in that string made the fixture golden unable to pass on
     /// CI and a developer's machine at once.
     #[test]

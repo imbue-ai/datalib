@@ -38,6 +38,10 @@ impl RenderProcessor for ChatgptRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
+    fn render_params(&self) -> serde_json::Value {
+        datalib_etl_chat_common::render::layout_params()
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let parsed = parse(&self.raw_path, ctx.raw_cursor)
@@ -53,10 +57,10 @@ impl RenderProcessor for ChatgptRender {
         let buckets = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("chatgpt render_all")?;
         for conv_id in parsed.scan.changed_conversations.iter().flatten() {
-            ctx.declare_bucket(&crate::render::ids::conversation(conv_id).uuid, &[]);
+            ctx.declare_bucket(&crate::render::ids::conversation(conv_id).uuid, &[])?;
         }
-        for (bucket, documents) in &buckets {
-            ctx.declare_bucket(bucket, documents);
+        for bucket in &buckets {
+            ctx.declare_bucket(bucket, &[])?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);

@@ -584,14 +584,17 @@ A shared `Checkpointer` in `etl` the producer *asks* at its natural
 batch boundary. Three refinements over the obvious fixed interval, all
 from review:
 
-**It is a debounce with a ceiling, not a period.** Commit when writes
-have been quiet for `debounce` (default ~2s), or when `max_interval`
-(default ~15s) has passed since the last commit, whichever comes first.
-A fixed period makes a source that finishes a burst sit on its rows for
-the rest of the interval; a pure debounce never fires under a steady
-stream. Debounce-with-ceiling gets the good half of each: a burst that
-ends is published promptly, and a continuous writer still publishes
-every `max_interval`.
+**A ceiling, asked at the producer's consistent points** — at most
+`at_most_every` (default 15s) between commits. This was first built as
+a debounce with a ceiling, the debounce meant to publish a burst that
+ends without waiting out the interval. It never fired: a producer asks
+"should I seal?" in the same breath as it records a write, so "quiet
+for N seconds" is measured as zero at the only moment anyone asks, and
+`quiet_for_secs` in `config.toml` was a dial that turned nothing. It was
+removed (2026-09-14) rather than made to work, because nothing polls
+a producer between writes and the case it was for is covered anyway:
+a burst that ends is sealed by the next write past the ceiling, or by
+the run finishing, which is the last seal.
 
 **Nothing changed means no commit.** Check `dolt_status` before
 committing and skip when the store is clean, and emit no `checkpoint`
@@ -794,7 +797,7 @@ Each of these is a reviewable PR that leaves the tree green.
    cannot stream.
 
 
-3. **Producer checkpoints.** `Checkpointer` (debounce + ceiling, skip
+3. **Producer checkpoints.** `Checkpointer` (a ceiling, skip
    when clean, cadence from config), the two commit seams with **blobs
    committed before entities**, checkpointing disabled for
    wipe-and-re-ingest runs, the `checkpoint` event, `subprocess.rs`
@@ -859,6 +862,29 @@ Each of these is a reviewable PR that leaves the tree green.
    **What is still not measured is latency.** The fixture shows work
    arriving incrementally; it does not say what that is worth on a real
    mirror, which is what should be known before `download -> render`.
+
+   **An early pass is a seal for the next hop (2026-09-14).** Once
+   `download -> render` streamed too, the chain turned out to stream one
+   hop only: `render` ran on every `ingest` checkpoint, but an early
+   render pass that finished inside the cadence never checkpointed, and
+   the scheduler only woke a consumer on a checkpoint or a *terminal*
+   finish — so `grid_index` heard nothing until `render` went terminal,
+   after the download was over, and no row reached the grid mid-sync.
+   An early pass that produced new output now enqueues its consumers the
+   way a checkpoint does
+   (`an_early_pass_that_produced_output_dispatches_its_own_consumers`).
+
+   **A seal that lands mid-pass is owed one pass, not dropped.** The
+   in-flight guard used to drop the notification outright, on the
+   argument that the next seal or the final pass subsumes it. True, and
+   with two sources feeding one index that meant rows sealed while the
+   index was busy with the other source waited for the *next* seal from
+   anyone — up to a full cadence. The consumer is now marked as owed one
+   streaming pass, dispatched when the current one lands; one however
+   many seals arrived, since the next pass reads everything sealed so
+   far (`a_seal_arriving_mid_pass_gets_one_more_pass_after_it`). The
+   held-back *final* pass a producer's terminal finish owes was already
+   handled the same way.
 7. **`download → render`.** Turned on for claude, chatgpt, slack and
    email (JMAP/Fastmail + the Gmail API). A download declares
    `DataProcessor::streams_output` and seals at its own consistent
@@ -890,7 +916,30 @@ Each of these is a reviewable PR that leaves the tree green.
 
    Still off: everything else, and mbox inside email (no seam wired, so
    it commits once at the end — latency, never correctness).
-8. **The UI frame.**
+8. ~~**The UI frame.**~~ **Done (2026-09-14)**, and not the shape
+   proposed above. No `checkpoint` frame on the relay: the grid does not
+   care which step sealed, only whether the store it is served from
+   moved. `datalib-http`'s root watcher, which already pushes
+   `dag_changed` when the runner's record moves, now watches
+   `unified_index/grid_index/` too and pushes `index_changed` when
+   `db.doltlite_db` is written — a `grid_index` pass per checkpoint,
+   under streaming — and `GridCard` drops its search cache and re-runs
+   the shown query on it. Armed lazily: the directory belongs to the
+   steps and the applet, so the server never creates it, and a root that
+   has never synced gets the watch on the first `dag_changed` after the
+   directory appears.
+
+   The Manage screen needed nothing: it already refetched the runner's
+   record on `dag_changed`, and the run store's `checkpoints` and
+   `queued{from=…}` metrics were already drawn as Activity chips. What
+   it *did* need was for those to be right — a subprocess step's seal
+   reached the event stream twice (forwarded off the wire, and again
+   from the scheduler), so every download's checkpoint count read
+   double.
+
+   **Watched end to end** by `manager2-streaming.spec.ts`; see
+   `docs/dev/testing.md` §"Watching a sync stream". Both fixes above
+   were watched failing it before they were kept.
 
 Steps 1–4 carry no scheduling risk at all, and 3 is independently
 useful, so if this stalls partway it stalls somewhere useful.
@@ -944,4 +993,6 @@ judge the idea by before committing to the wide half.
   bounded work rather than a fetch. If a root with many sources turns
   out to keep a fan-in permanently behind, the answer is to raise that
   number rather than to reach into `parallelism` — but nobody has
-  measured it. Revisit after step 5 has run against a real root.
+  measured it. Revisit after step 5 has run against a real root. Note
+  that with the whole chain streaming, every render's early passes and
+  every `grid_index` pass share that one slot.

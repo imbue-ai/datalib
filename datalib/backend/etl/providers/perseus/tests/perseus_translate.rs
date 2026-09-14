@@ -6,7 +6,7 @@
 //! or the renderer flips a UUID derivation, this fails before bad data
 //! hits a user's root.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use datalib_etl::progress::Progress;
@@ -36,7 +36,6 @@ fn render_fixture(
         out,
         "perseus",
         &Progress::noop(),
-        &HashMap::new(),
         &mut |r: RenderedMarkdown| {
             emitted.push(r);
             Ok(())
@@ -66,7 +65,6 @@ fn renders_all_books_chapters_and_editions() {
     // 2 books + 4 chapters × 2 editions = 10 docs.
     assert_eq!(summary.markdowns_total, 10);
     assert_eq!(summary.markdowns_rendered, 10);
-    assert_eq!(summary.markdowns_skipped, 0);
     assert_eq!(emitted.len(), 10);
 
     let book1 = out
@@ -116,7 +114,6 @@ fn documents_carry_stable_uuids_and_provider_metadata() {
         .iter()
         .find(|d| d.markdown_uuid == expected)
         .expect("the grc chapter was emitted");
-    assert!(!chapter.source_fingerprint.is_empty());
     assert!(chapter.render_version > 0);
 
     let row = &chapter.rows[0];
@@ -202,40 +199,4 @@ fn unaligned_corpus_emits_no_edges() {
             d.markdown_uuid
         );
     }
-}
-
-#[test]
-fn second_run_is_a_no_op_when_fingerprints_match() {
-    let out = tempfile::tempdir().unwrap();
-    let parsed = parse::parse(&fixture_dir()).unwrap();
-
-    let mut prior: HashMap<String, String> = HashMap::new();
-    render::render_all(
-        &parsed,
-        &PerseusAlignments::default(),
-        out.path(),
-        "perseus",
-        &Progress::noop(),
-        &HashMap::new(),
-        &mut |r| {
-            prior.insert(r.markdown_uuid.clone(), r.source_fingerprint.clone());
-            Ok(())
-        },
-        &mut HashSet::new(),
-    )
-    .unwrap();
-
-    let summary = render::render_all(
-        &parsed,
-        &PerseusAlignments::default(),
-        out.path(),
-        "perseus",
-        &Progress::noop(),
-        &prior,
-        &mut |_| Ok(()),
-        &mut HashSet::new(),
-    )
-    .unwrap();
-    assert_eq!(summary.markdowns_rendered, 0);
-    assert_eq!(summary.markdowns_skipped, summary.markdowns_total);
 }

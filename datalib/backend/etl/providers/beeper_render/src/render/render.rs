@@ -20,15 +20,13 @@ use super::parse::ParsedBeeper;
 
 /// Bump when Beeper's own contribution to the rendered output changes.
 /// The shared layout has its own number — see
-/// `datalib_etl_chat_common::LAYOUT_VERSION`, which is folded into every
-/// fingerprint alongside this one.
+/// `datalib_etl_chat_common::LAYOUT_VERSION`.
 pub const RENDER_VERSION: u32 = 2;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
     pub docs_total: usize,
     pub docs_rendered: usize,
-    pub docs_skipped: usize,
     pub blobs_materialized: usize,
     /// Every document considered, rendered and skipped alike — what the
     /// processor hands to `RenderCtx::retain_documents`.
@@ -42,7 +40,6 @@ pub fn render_all(
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     raw_db_path: &Path,
 ) -> Result<RenderSummary> {
@@ -65,11 +62,9 @@ pub fn render_all(
             source_id,
             &blobs_by_chat,
             progress,
-            prior_fingerprints,
             on_doc_complete,
         )?;
         summary.docs_rendered += s.docs_rendered;
-        summary.docs_skipped += s.docs_skipped;
         summary.documents.extend(s.documents);
     }
     Ok(summary)

@@ -113,11 +113,6 @@ const VOLATILE_KEYS: &[&str] = &[
     // a relative "updated N seconds ago" — none of which reproduce
     // across runs. Snapshot presence, not contents.
     "qmd_status",
-    // Renderer-derived hash. Stable inputs produce a stable value, but
-    // any volatile field upstream (which we redact above) would flip it,
-    // so redact here too — a real algorithm change will surface as
-    // every document's header churning at once.
-    "source_fingerprint",
     // Per-row bookkeeping in the doltlite raw stores. Stamped to
     // "now" on every fetch attempt, so they churn on every run even
     // when the upstream payload is byte-identical.
@@ -1030,7 +1025,7 @@ fn summarize_file(path: &Path) -> SnapValue {
         }
     } else if name.ends_with(".md") {
         let text = std::fs::read_to_string(path).unwrap_or_default();
-        SnapValue::Text(normalize_str(&redact_markdown(&text)))
+        SnapValue::Text(normalize_str(&text))
     } else {
         // Try text first, fall back to a size marker for binary.
         match std::fs::read_to_string(path) {
@@ -1128,28 +1123,6 @@ fn canonicalize_path(rel: &Path) -> String {
         })
         .collect();
     parts.join("/")
-}
-
-fn redact_markdown(text: &str) -> String {
-    let prefixes = ["source_fingerprint:"];
-    let mut out = text
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim_start();
-            for p in &prefixes {
-                if trimmed.starts_with(p) {
-                    let indent = &line[..line.len() - trimmed.len()];
-                    return format!("{indent}{p} [redacted]");
-                }
-            }
-            line.to_string()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if text.ends_with('\n') {
-        out.push('\n');
-    }
-    out
 }
 
 fn dump_doltlite_db(path: &Path) -> Value {
@@ -1418,7 +1391,6 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         "duration_secs",
         "data_root",
         "qmd_status",
-        "source_fingerprint",
         "last_attempt_at_utc",
         "first_seen_at_utc",
         "last_finished_at_utc",

@@ -266,8 +266,8 @@ and small.
    `RenderCtx::raw_cursor`, declares its knobs through
    `RenderProcessor::render_params`, and reports the commit it pinned
    through `RenderCtx::consumed`; `discard_tree` is gone, and a
-   version or param change is "render everything, fingerprints off,
-   sweep what the walk did not produce" — the sweep runs only when
+   version or param change is "render everything, sweep what the walk
+   did not produce" — the sweep runs only when
    every processor reported a consumed commit, since one that read no
    store said nothing about what should exist. The step reports the
    store's HEAD as its output version. Closes 1.1–1.4.
@@ -314,8 +314,8 @@ built.
 
 Every mechanism in incremental render — the cursor, the `dolt_diff`
 scan, `global_fanout_tables`, `remove_conversation`,
-`retain_documents`, the fingerprint skip, the end-of-run sweep,
-checkpoints — exists so that a run does *less* work than rendering
+`retain_documents`, the end-of-run sweep, checkpoints — exists so
+that a run does *less* work than rendering
 from scratch. It is correct exactly when doing less work does not
 change the answer:
 
@@ -443,12 +443,15 @@ documents drops the extras, through `RenderCtx::declare_bucket`;
 beeper had no deletion path at all and now retains like
 google_takeout) and two in bucket queries (claude never named a
 deleted project; email never named an account or mailbox edit). The
-other 21 are listed by name in the test's `KNOWN_GAPS`, each with why,
+other 21 were listed by name in the test's `KNOWN_GAPS`, each with why,
 and the list is exact — an entry that stops failing fails the run
-until it is removed. Most are fingerprint gaps in whole-store
-renderers (clause 4), the rest tables a scan does not name (clause 2);
-pdf's is the one worth knowing: its fingerprint is the file's blake3,
-so text re-extracted at ingest never re-renders.*
+until it is removed. Removing the fingerprint skip altogether
+(2026-09-14, the `render_inputs` PR) closed nine of those at once —
+every one where a provider's input hash had left out something it
+rendered, so a change was hashed as "same" — and the twelve that
+remain are all tables a scan does not name (clause 2). pdf's is the
+one worth knowing: its bucket is the file's blake3, so text
+re-extracted at ingest never re-renders.*
 
 A real provider is correct under the property if it keeps five
 promises. Written as a contract, so a provider author has a list and
@@ -468,11 +471,12 @@ a harness has something to check:
 3. **Removals are named or the set is complete.** A diff-narrowed
    renderer calls `remove_conversation` for every named bucket whose
    entity is gone (`buckets_without_rows`); a whole-store renderer's
-   `retain_documents` set is what it *considered*, skipped documents
+   `retain_documents` set is what it *considered*, failed documents
    included, and it returns `Skipped` when it did not look.
 4. **Byte-stable.** Rendering the same bucket from the same commit
-   twice produces identical output, so the fingerprint is a real
-   signal and a steady-state run writes nothing.
+   twice produces identical rows, so doltlite stores the second render
+   as no change and a steady-state run moves nothing. Nothing per-run
+   — no timestamp, no hash of the run — goes into a document's rows.
 5. **`consumed` iff it read.** It reports the commit it pinned when it
    read the store and says nothing when it could not — the driver's
    sweep on a full render trusts this.
@@ -536,8 +540,7 @@ carries a byte-count history, so it is a function of the run.
 One function: `render_store::logical_dump(path) → String`, sorted
 rows of the four tables with the volatile columns dropped, plus the
 `.md` tree as `(relative path, blake3)`. `fixture_db_snapshot_test`
-does most of this for the index (`stable_row_set_hash`,
-`stable_source_url`); lift it into `datalib_etl_render` as a test
+does most of this for the index (`stable_source_url`); lift it into `datalib_etl_render` as a test
 utility so both layers and that snapshot share one notion of
 "the same".
 

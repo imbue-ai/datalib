@@ -26,6 +26,7 @@ use datalib_schema::grid_rows::DDL as GRID_ROWS_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::measurements::{SourceMeasurementRow, DDL as MEASUREMENTS_DDL};
 use datalib_schema::render_cursor::{RenderCursorRow, DDL as RENDER_CURSOR_DDL};
+use datalib_schema::render_inputs::{DDL as RENDER_INPUTS_DDL, INDEX_DDL as RENDER_INPUTS_INDEX};
 use datalib_schema::render_problems::{RenderProblemRow, ScopeKind, DDL as RENDER_PROBLEMS_DDL};
 
 use crate::grid_index::{RenderedMarkdown, WriteLock};
@@ -50,8 +51,35 @@ fn store_ddl() -> Vec<&'static str> {
         .chain(RENDER_PROBLEMS_DDL.iter())
         .chain(MEASUREMENTS_DDL.iter())
         .chain(RENDER_CURSOR_DDL.iter())
+        .chain(RENDER_INPUTS_DDL.iter())
         .map(|(_table, ddl)| *ddl)
+        .chain(std::iter::once(RENDER_INPUTS_INDEX))
         .collect()
+}
+
+/// One raw row a bucket's render asked for, found or not.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Input {
+    /// A table of the raw store, bare name.
+    pub table: String,
+    /// Its primary key as text; a composite key's columns in
+    /// `pragma_table_info` order, joined by `|` — see [`join_key`].
+    pub id: String,
+}
+
+impl Input {
+    pub fn new(table: impl Into<String>, id: impl Into<String>) -> Self {
+        Self {
+            table: table.into(),
+            id: id.into(),
+        }
+    }
+}
+
+/// How a composite primary key is rendered as one `input_id`, on both
+/// sides: the provider declaring it and the driver reading the diff.
+pub fn join_key(parts: &[String]) -> String {
+    parts.join("|")
 }
 
 /// A source's render output store, open for writing.
@@ -132,23 +160,6 @@ impl IndexedMarkdownStore {
         &self.path
     }
 
-    pub fn prior_fingerprints(&self) -> Result<HashMap<String, String>> {
-        blocking(async {
-            let rows = sqlx::query(
-                "SELECT markdown_uuid, source_fingerprint FROM markdowns \
-                 WHERE source_fingerprint IS NOT NULL",
-            )
-            .fetch_all(&self.pool)
-            .await
-            .context("read prior fingerprints")?;
-            let mut out = HashMap::with_capacity(rows.len());
-            for r in rows {
-                out.insert(r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?);
-            }
-            Ok(out)
-        })
-    }
-
     /// The renderer versions the provider's own documents carry.
     ///
     /// The storage report is excluded: datalib renders it, not any of
@@ -216,15 +227,14 @@ impl IndexedMarkdownStore {
         }
     }
 
+    /// Store `md`, replacing what the store held for it. Always: a
+    /// document whose rows and file come out unchanged writes identical
+    /// rows, and doltlite's content-addressed tables then carry no diff
+    /// for it — that, and nothing here, is how "unchanged" is decided.
     pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
-        // `markdowns.rendered_at_utc` is one of the times `--now` is
-        // documented to pin, and the pinned value is already in hand.
-        // Left to sample its own clock, every document in a run
-        // disagreed with every other by microseconds.
-        let now = (!self.now.is_empty()).then_some(self.now.as_str());
         self.transaction(|| {
             blocking(async {
-                crate::grid_index::apply_one(&self.write_lock, out_dir, md, now)
+                crate::grid_index::apply_one(&self.write_lock, out_dir, md)
                     .await
                     .with_context(|| format!("apply {}", md.markdown_uuid))?;
                 self.sweep_problems(&md.markdown_uuid, &md.problems).await
@@ -277,6 +287,159 @@ impl IndexedMarkdownStore {
             unlink_rendered(out_dir, &rel);
         }
         Ok(())
+    }
+
+    /// Record what `bucket_key` was rendered from, replacing what it
+    /// declared last time. Joins the open batch, so a bucket's documents
+    /// and its inputs reach the store together.
+    pub fn put_inputs(&self, bucket_key: &str, inputs: &[Input]) -> Result<()> {
+        self.transaction(|| {
+            blocking(async {
+                let mut guard = self.write_lock.acquire().await?;
+                let conn = guard.conn();
+                sqlx::query("DELETE FROM render_inputs WHERE bucket_key = ?")
+                    .bind(bucket_key)
+                    .execute(&mut **conn)
+                    .await
+                    .context("clear prior render_inputs")?;
+                for chunk in inputs.chunks(datalib_etl::bulk::SQL_CHUNK / 3) {
+                    let mut sql = String::from(
+                        "INSERT OR IGNORE INTO render_inputs (bucket_key, input_table, input_id) VALUES ",
+                    );
+                    for (i, _) in chunk.iter().enumerate() {
+                        if i > 0 {
+                            sql.push_str(", ");
+                        }
+                        sql.push_str("(?, ?, ?)");
+                    }
+                    // Audited: a placeholder run sized from the chunk; every
+                    // value is bound.
+                    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+                    for input in chunk {
+                        q = q.bind(bucket_key).bind(&input.table).bind(&input.id);
+                    }
+                    q.execute(&mut **conn)
+                        .await
+                        .with_context(|| format!("write render_inputs for {bucket_key}"))?;
+                }
+                Ok(())
+            })
+        })
+    }
+
+    /// Every raw table any bucket declared an input from.
+    pub fn input_tables(&self) -> Result<Vec<String>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            sqlx::query_scalar(
+                "SELECT DISTINCT input_table FROM render_inputs ORDER BY input_table",
+            )
+            .fetch_all(&mut **guard.conn())
+            .await
+            .context("read render_inputs tables")
+        })
+    }
+
+    /// The buckets that declared any of `changed` as an input — the
+    /// reverse lookup. `changed` is `(table, id)` as the diff named them.
+    pub fn buckets_reading(&self, changed: &[Input]) -> Result<HashSet<String>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let mut out = HashSet::new();
+            for chunk in changed.chunks(datalib_etl::bulk::SQL_CHUNK / 2) {
+                let mut sql = String::from(
+                    "SELECT DISTINCT bucket_key FROM render_inputs WHERE (input_table, input_id) IN (",
+                );
+                for (i, _) in chunk.iter().enumerate() {
+                    if i > 0 {
+                        sql.push_str(", ");
+                    }
+                    sql.push_str("(?, ?)");
+                }
+                sql.push(')');
+                // Audited: a placeholder run sized from the chunk; every
+                // value is bound.
+                let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+                for input in chunk {
+                    q = q.bind(&input.table).bind(&input.id);
+                }
+                out.extend(
+                    q.fetch_all(&mut **guard.conn())
+                        .await
+                        .context("reverse lookup in render_inputs")?,
+                );
+            }
+            Ok(out)
+        })
+    }
+
+    /// Every document rendered under any of `bucket_keys`, as
+    /// `(bucket, document)`. One chunked query rather than one per
+    /// bucket — a run declares as many buckets as it rendered.
+    pub fn documents_for_buckets(&self, bucket_keys: &[&str]) -> Result<Vec<(String, String)>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let mut out = Vec::new();
+            for chunk in bucket_keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
+                let mut sql = String::from(
+                    "SELECT bucket_key, markdown_uuid FROM markdowns WHERE bucket_key IN (",
+                );
+                datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
+                sql.push(')');
+                // Audited: a placeholder run sized from the chunk; every
+                // key is bound.
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+                for key in chunk {
+                    q = q.bind(*key);
+                }
+                let rows = q
+                    .fetch_all(&mut **guard.conn())
+                    .await
+                    .context("documents for buckets")?;
+                for r in rows {
+                    out.push((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?));
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    /// The newest `items` sample per subject in `source_measurements`:
+    /// what the storage report compares its counts against to decide
+    /// whether anything moved.
+    pub fn latest_items(&self) -> Result<HashMap<String, Option<i64>>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let rows = sqlx::query(
+                "SELECT subject, items FROM source_measurements m \
+                  WHERE measured_at_utc = (SELECT MAX(measured_at_utc) FROM source_measurements \
+                                            WHERE subject = m.subject)",
+            )
+            .fetch_all(&mut **guard.conn())
+            .await
+            .context("read latest measurements")?;
+            let mut out = HashMap::with_capacity(rows.len());
+            for r in rows {
+                out.insert(r.try_get::<String, _>(0)?, r.try_get::<Option<i64>, _>(1)?);
+            }
+            Ok(out)
+        })
+    }
+
+    /// The renderer version a stored document carries, if it is there.
+    pub fn document_version(&self, markdown_uuid: &str) -> Result<Option<u32>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let v: Option<Option<String>> = sqlx::query_scalar(
+                "SELECT renderer_version FROM markdowns WHERE markdown_uuid = ?",
+            )
+            .bind(markdown_uuid)
+            .fetch_optional(&mut **guard.conn())
+            .await
+            .context("read a document's version")?;
+            Ok(v.flatten()
+                .and_then(|v| v.rsplit('.').next().and_then(|s| s.parse::<u32>().ok())))
+        })
     }
 
     /// Where the last render left off, if it recorded it.
@@ -334,42 +497,6 @@ impl IndexedMarkdownStore {
             rows.into_iter()
                 .map(|r| r.try_get::<String, _>(0).map_err(Into::into))
                 .collect()
-        })
-    }
-
-    /// [`Self::documents_for_conversation`] for many at once: every
-    /// document under any of `conversation_uuids`, as `(conversation,
-    /// document)`. One chunked query rather than one per bucket — a run
-    /// declares as many buckets as it rendered.
-    pub fn documents_for_conversations(
-        &self,
-        conversation_uuids: &[&str],
-    ) -> Result<Vec<(String, String)>> {
-        blocking(async {
-            let mut guard = self.write_lock.acquire().await?;
-            let mut out = Vec::new();
-            for chunk in conversation_uuids.chunks(datalib_etl::bulk::SQL_CHUNK) {
-                let mut sql = String::from(
-                    "SELECT DISTINCT conversation_uuid, markdown_uuid FROM grid_rows \
-                     WHERE markdown_uuid IS NOT NULL AND conversation_uuid IN (",
-                );
-                datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
-                sql.push(')');
-                // Audited: a placeholder run sized from the chunk; every
-                // uuid is bound.
-                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-                for uuid in chunk {
-                    q = q.bind(*uuid);
-                }
-                let rows = q
-                    .fetch_all(&mut **guard.conn())
-                    .await
-                    .context("documents for conversations")?;
-                for r in rows {
-                    out.push((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?));
-                }
-            }
-            Ok(out)
         })
     }
 
@@ -720,8 +847,8 @@ impl IndexedMarkdownStore {
                 out.push(RenderedMarkdown {
                     markdown_uuid: md.markdown_uuid.clone(),
                     source_id: md.source_id.clone(),
-                    source_fingerprint: md.source_fingerprint.clone().unwrap_or_default(),
                     upstream_cursor: md.upstream_cursor.clone(),
+                    bucket_key: md.bucket_key.clone(),
                     md_path: match md.md_path.as_deref() {
                         Some(rel) => out_dir.join(rel),
                         None => PathBuf::from(&md.markdown_uuid),
@@ -793,21 +920,21 @@ mod tests {
             .expect("row")
     }
 
-    fn doc(dir: &Path, markdown_uuid: &str, fingerprint: &str) -> RenderedMarkdown {
-        doc_with(dir, markdown_uuid, fingerprint, Vec::new())
+    fn doc(dir: &Path, markdown_uuid: &str, label: &str) -> RenderedMarkdown {
+        doc_with(dir, markdown_uuid, label, Vec::new())
     }
 
     fn doc_with(
         dir: &Path,
         markdown_uuid: &str,
-        fingerprint: &str,
+        _label: &str,
         problems: Vec<RenderProblemRow>,
     ) -> RenderedMarkdown {
         RenderedMarkdown {
             markdown_uuid: markdown_uuid.to_string(),
             source_id: "src".into(),
-            source_fingerprint: fingerprint.into(),
             upstream_cursor: None,
+            bucket_key: None,
             md_path: dir.join(format!("{markdown_uuid}.md")),
             render_version: 7,
             rows: vec![row(markdown_uuid, markdown_uuid)],
@@ -1004,17 +1131,24 @@ mod tests {
         }
     }
 
+    /// The write path has no skip of its own: the same document written
+    /// twice is the same row twice, and doltlite reports nothing between
+    /// the two commits. The store-level check is `dolt_diff` staying
+    /// empty; here, that the second write is accepted and the row is one.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_document_round_trips_and_its_fingerprint_comes_back() {
+    async fn writing_the_same_document_twice_is_one_row() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        assert!(s.prior_fingerprints().unwrap().is_empty(), "fresh store");
-
         s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
-
-        let fps = s.prior_fingerprints().unwrap();
-        assert_eq!(fps.get("md-1").map(String::as_str), Some("fp-1"));
+        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
+        let n: i64 = blocking(async {
+            sqlx::query_scalar("SELECT COUNT(*) FROM markdowns")
+                .fetch_one(&s.pool)
+                .await
+        })
+        .unwrap();
+        assert_eq!(n, 1);
         assert_eq!(s.render_versions().unwrap(), [7].into_iter().collect());
     }
 
@@ -1035,14 +1169,6 @@ mod tests {
         })
         .unwrap();
         assert_eq!(n, 1, "one row, not two");
-        assert_eq!(
-            s.prior_fingerprints()
-                .unwrap()
-                .get("md-1")
-                .map(String::as_str),
-            Some("fp-2"),
-            "the fingerprint moves with the re-render"
-        );
     }
 
     fn doc_in(dir: &Path, markdown_uuid: &str, row_uuid: &str, fp: &str) -> RenderedMarkdown {

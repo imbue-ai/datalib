@@ -40,6 +40,10 @@ impl RenderProcessor for SmsRender {
         Some(crate::render::RENDER_VERSION)
     }
 
+    fn render_params(&self) -> serde_json::Value {
+        datalib_etl_chat_common::render::layout_params()
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         let mut on_doc = |md| ctx.emit_doc(md);
         let outcome = crate::render::render(
@@ -47,7 +51,6 @@ impl RenderProcessor for SmsRender {
             ctx.root,
             &self.name,
             ctx.progress,
-            ctx.prior_fingerprints,
             &mut on_doc,
             ctx.raw_cursor,
         )
@@ -59,8 +62,8 @@ impl RenderProcessor for SmsRender {
         for chat_uuid in &outcome.vanished {
             dropped += ctx.remove_conversation(chat_uuid)?;
         }
-        for (bucket, documents) in &outcome.buckets {
-            ctx.declare_bucket(bucket, documents);
+        for bucket in &outcome.buckets {
+            ctx.declare_bucket(bucket, &[])?;
         }
 
         if let Some(head) = outcome.new_head.as_deref() {

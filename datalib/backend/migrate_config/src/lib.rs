@@ -280,7 +280,7 @@ inputs = ["slack/render_markdown"]
     #[test]
     fn top_level_tables_survive_the_rewrite() {
         let text = format!(
-            "{UNGROUPED}\n[checkpoint_cadence]\nquiet_for_secs = 2.0\nat_most_every_secs = 30.0\n\n[run_history]\nmax_runs = 7\nmax_age_days = 3\n"
+            "{UNGROUPED}\n[checkpoint_cadence]\nat_most_every_secs = 30.0\n\n[run_history]\nmax_runs = 7\nmax_age_days = 3\n"
         );
         let out = convert(&text).unwrap();
         let cfg: datalib_dag::config::DagConfig = toml::from_str(&out).unwrap();
@@ -291,7 +291,10 @@ inputs = ["slack/render_markdown"]
                 max_age_days: 3
             })
         );
-        assert_eq!(cfg.checkpoint_cadence.map(|c| c.quiet_for_secs), Some(2.0));
+        assert_eq!(
+            cfg.checkpoint_cadence.map(|c| c.at_most_every_secs),
+            Some(30.0)
+        );
     }
 
     #[test]

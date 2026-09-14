@@ -100,9 +100,10 @@ database per source, at
 four tables —
 
   - `markdowns` — one row per rendered document: its `markdown_uuid`
-    (the primary key for the `.md`), its `source_fingerprint` (a hash
-    of the upstream payload), its `renderer_version`, its `md_path`,
-    and the `row_set_hash` over the rows below.
+    (the primary key for the `.md`), its `renderer_version`, its
+    `md_path` and the `bucket_key` it was rendered from. Nothing on it is
+    stamped per
+    run — a re-render of an unchanged document writes an identical row.
   - `grid_rows` — the document's projected rows.
   - `edges` — its outgoing links.
   - `render_problems` — what render could not do getting there (§4).
@@ -123,25 +124,26 @@ markdown is for humans; the store is the machine-readable projection.
 This part of the pipeline aspires to the same properties as download:
 
   - **Monitorable**: same `obs` flags, same progress-bar contract.
-  - **Incremental, twice.** Render skips a document whose
-    `source_fingerprint` already matches the one in its own store. The
-    index then asks each store `dolt_diff` between the commit it last
-    consumed (`source_cursors`, in the index database) and that store's
-    HEAD — so a steady-state run reads no documents at all, rather than
-    reading them and discarding them. The two are not redundant: the
-    cursor decides *which documents to read*, the fingerprint decides
-    *whether a document that was read needs writing*, and the cold path
-    (no cursor, or a cursor the store's history no longer holds) needs
-    the second one.
-  - **Resumable in the steady state**: a render pass re-run after
-    producing N of M documents skips those N via the fingerprint check
-    and continues. The rows are committed once per run, so a document's
-    rows and its `render_problems` can never disagree about which run
-    they came from — but the `.md` files are still plain files, so a
-    partial one left by a SIGKILL during a write may not match its
-    recorded fingerprint. It is regenerated next run. That is good
-    enough for our use case but is not a separately engineered
-    property.
+  - **Incremental, by diff alone.** Render asks the raw store
+    `dolt_diff` between the commit its `render_cursor` row names and
+    HEAD, and renders only the buckets that moved. Every document it
+    renders is written; there is no fingerprint deciding whether a
+    write is needed, because doltlite's tables are content-addressed —
+    a row identical to the stored one is no change, carries no diff,
+    and is never seen by the index. The index then asks each render
+    store `dolt_diff` between the commit it last consumed
+    (`source_cursors`, in the index database) and that store's HEAD, so
+    a steady-state run reads no documents at all. The one rule that
+    keeps this true: nothing per-run may be written into a row whose
+    content did not change (`markdowns_carries_no_per_run_stamp` in
+    `datalib_schema` pins it).
+  - **Resumable at every checkpoint**: render commits the store after
+    every batch of documents, and each commit leaves a store a consumer
+    can read. A run killed after N of M documents has N of them
+    committed; the next run diffs from the cursor it last *sealed*, so
+    it re-renders the range once more — to identical rows, which cost
+    nothing — and continues. The `.md` files are plain files, so a
+    partial one left by a SIGKILL mid-write is rewritten next run.
 
 Less attention has been paid to render-side observability and to
 making partial-progress visible to the user than to the same on
@@ -165,8 +167,9 @@ format — is deleted.
 
 Everything the argument below predicted it would buy, it bought:
 
-- The two tree walks are two indexed queries
-  (`IndexedMarkdownStore::prior_fingerprints` / `render_versions`).
+- The two tree walks are gone: what a run needs to know about the
+  store it reads through indexed queries, and what it needs to know
+  about the raw store it reads through `dolt_diff`.
 - The unreadable-sidecar failure class is gone; there is no file to
   fail to parse.
 - Render commits once per run, so a document's rows and its
@@ -182,13 +185,20 @@ Everything the argument below predicted it would buy, it bought:
   this a deleted conversation stayed in the grid until someone wiped
   the file.
 
-One thing the list below got wrong, worth recording because it is the
-kind of claim this repo warns about believing: the fingerprint compare
-did **not** get replaced by the cursor. Both are in the tree and both
-earn their place — the cursor decides *which documents to read*, the
-fingerprint decides *whether a document that was read needs writing*,
-and the cold path (no cursor, or a cursor the store's history no
-longer contains) still needs the second one.
+One thing worth recording, because this section changed its mind
+twice and the repo warns about believing well-argued prose: the
+fingerprint compare **was** replaced by the cursor in the end
+(2026-09-14), after a year of both being in the tree and this section
+arguing they answered different questions. They did — "which documents
+to read" and "whether a read document needs writing" — but the second
+question is one doltlite answers on its own: writing an unchanged row
+to a content-addressed table is not a write. Keeping a fingerprint
+beside that was a second mechanism for one question, and it went wrong
+in both directions it was tried (a provider's input hash skipped
+changed documents; the driver's output hash bought nothing and put a
+per-run column on `markdowns`). See
+[`plans/render_inputs.md`](plans/render_inputs.md) §"Does the
+fingerprint still earn its place?" for the record.
 
 Deletion on the render side is now wired, and the shape it took is worth
 knowing before you port a renderer to it. "Not re-emitted this run" is
@@ -219,8 +229,9 @@ change — it already learns of a removal from this store's diff.
 Which one a renderer uses follows from whether it is incremental, and
 that split is worth knowing on its own — **only 6 of the 17 renderers
 ask `dolt_diff` what changed** (checked 2026-09-07). The rest re-derive
-every document from their whole raw store on every run, and skip only
-the *write* on an unchanged fingerprint. That is a real cost the
+every document from their whole raw store on every run and write it
+again; doltlite stores the unchanged ones as no change, but the
+re-derivation is paid in full. That is a real cost the
 [provider migration recipe](provider_migration_dolt_diff_and_cas_edge.md)
 exists to pay down; it is not what the deletion work fixes.
 
@@ -235,11 +246,10 @@ the complete set they considered and the driver sweeps the rest. No diff
 needed, and it cannot miss a deletion the diff failed to mention.
 
 The retain form has one trap, and it is the reason the set is "considered"
-rather than "emitted": a whole-store renderer *skips emitting* a document
-whose fingerprint is unchanged. Report only what was re-rendered and the
-sweep deletes the source's entire steady state. Documents whose render
-*failed* belong in the set too — that is a document we could not rewrite,
-not one the source lost.
+rather than "emitted": documents whose render *failed* belong in the set
+too — that is a document we could not rewrite, not one the source lost.
+Report only what rendered cleanly and one bad payload deletes a document
+the source still holds.
 
 Not wired: **notion** (being reworked) and **beeper** (poorly supported;
 its `index.db` evicts, so absence there is not deletion). **yolink** is
@@ -287,11 +297,11 @@ doltlite database with a single writer, the problem table belongs in
 dropped or nulled getting them there commit in one transaction, and can
 never disagree about which run they came from.
 
-[`data_architecture_ingestion.md`](data_architecture_ingestion.md) says
-the `source_fingerprint` compare stays, and this section used to claim
-it would be superseded by the cursor. **The ingestion doc was right.**
-Both shipped, and they answer different questions — see the correction
-above.
+[`data_architecture_ingestion.md`](data_architecture_ingestion.md) said
+the `source_fingerprint` compare stays, and this section claimed it
+would be superseded by the cursor. Both shipped, this section then
+conceded, and the compare was finally removed anyway — for the reason
+in the correction above, not the one this section first gave.
 
 Step 1 was close to free, and that is worth saying plainly: **nothing
 outside our own code ever read a `.grid_rows.json`.** It was a machine
@@ -725,7 +735,7 @@ they stay in the grid index.
 
 ## 5. Incrementality and progress
 
-Render skips what it can, by four mechanisms:
+Render skips what it can, by three mechanisms:
 
 - **What changed since last render** —
   [dolt_diff supersedes per-bucket fingerprints](data_architecture_ingestion.md#dolt_diff-supersedes-per-bucket-fingerprints).
@@ -733,9 +743,9 @@ Render skips what it can, by four mechanisms:
   render consumed; the next run diffs from it. The render step driver
   writes the row in the same transaction as the run's last work.
 - **Whether a document needs re-loading** — `source_cursors` in the
-  index database names the store commit `grid_index` last consumed, and
-  the `source_fingerprint` on the `markdowns` row settles anything the
-  diff surfaces.
+  index database names the store commit `grid_index` last consumed; a
+  document render rewrote identically is not in that diff, because
+  doltlite stored it as no change.
 - **Forcing a rebake** — `RENDER_VERSION` in each provider's
   `render/render.rs`.
 - **When a render param changes** — below.
@@ -750,8 +760,7 @@ nothing new and changing `period` re-buckets only the chats that moved.
 
 The cursor therefore records the render params too — each processor
 declares its knobs through `RenderProcessor::render_params` — and when
-they differ the driver renders every bucket again, ignoring the
-fingerprints, and keeps the range. Render re-renders *wholesale* where
+they differ the driver renders every bucket again and keeps the range. Render re-renders *wholesale* where
 download reacts proportionally — it's local work over an on-disk
 store, so there's no rate limit to ration and the simpler rule is
 easier to trust. A renderer version bump takes the same path.
@@ -765,8 +774,8 @@ land in one transaction, and the deletions reach the grid index
 through the store's own `dolt_diff`. A run in which a processor read
 no store (none on disk, nothing committed) sweeps nothing: it said
 nothing about what should exist. A `global_fanout_tables` hit (a
-`users` row changed, say) renders everything with the fingerprints
-on, and still probes the buckets the diff named for removal:
+`users` row changed, say) renders everything, and still probes the
+buckets the diff named for removal:
 `DiffScan` carries the two sets separately, so a conversation deleted
 in the same range as a rename does not outlive it in the store.
 
@@ -778,9 +787,9 @@ every document — must be as monitorable and as stoppable-resumable as
 download is. The user sees "rendered 12,347 / 89,201" with an ETA;
 ^C-then-rerun resumes from 12,347 not 0.
 
-**Open**: the fingerprint-skip *does* give resumability in the steady
-state (see §2), but render-side progress reporting is less developed
-than download-side. Worth measuring.
+**Open**: the per-batch checkpoints *do* give resumability (see §2),
+but render-side progress reporting is less developed than
+download-side. Worth measuring.
 
 ## 6. Timestamps
 

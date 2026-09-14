@@ -18,7 +18,7 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
-        "@datalib_crates//:sha2",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:tracing",
     ],
 )
@@ -28,9 +28,6 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_chat_common",
     edition = "2021",
-    deps = [
-        "@datalib_crates//:serde_json",
-    ],
 )
 
 # Renders the `samples` corpus to `.md` for `//datalib/ui:chat_preview`
