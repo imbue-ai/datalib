@@ -27,6 +27,20 @@ export function formatStamp(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? iso : STAMP_FMT.format(d);
 }
 
+/// The time of day to the millisecond, in the viewer's own zone. For a
+/// column where every row is the same day and the offsets differ — a
+/// step's own tracing lines are stamped in UTC, the runner's in local
+/// time — showing the digits as written would interleave two clocks.
+export function formatTimeOfDay(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${String(
+    d.getMilliseconds(),
+  ).padStart(3, "0")}`;
+}
+
 /// Order two stamps by the instant they name.
 ///
 /// That makes this a plain total order, which is the point: reversing

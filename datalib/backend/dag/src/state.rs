@@ -60,6 +60,11 @@ impl CurrentRun {
 /// date", this answers "what happened, and when".
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LastRun {
+    /// The run this happened in — the key into `system/runs.sqlite`,
+    /// where the step's log lines and metrics for it live. Empty for a
+    /// record written before runs had ids.
+    #[serde(default)]
+    pub run_id: String,
     pub started_at: String,
     /// `None` while it is running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,6 +166,7 @@ mod tests {
                 succeeded: true,
                 fingerprint: "fp-1".into(),
                 last_run: Some(LastRun {
+                    run_id: "run-1".into(),
                     started_at: "2026-08-31T10:00:00+01:00".into(),
                     finished_at: Some("2026-08-31T10:00:09+01:00".into()),
                     status: "succeeded".into(),

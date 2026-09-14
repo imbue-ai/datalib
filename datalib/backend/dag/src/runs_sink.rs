@@ -9,15 +9,18 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
-use datalib_runs::{canonical_labels, LiveState, LogRow, MetricRow, Retention, RunWriter, StepRow};
+use datalib_runs::store::{now_split, split_stamp};
+use datalib_runs::{
+    canonical_labels, LiveState, LogRow, MetricRow, Retention, RunWriter, StepRunRow,
+};
 
-use crate::events::{Event, EventSink};
+use crate::events::{Event, EventSink, LogLevel};
 use crate::step::StepId;
 
 /// What we know about one step right now.
 #[derive(Default, Clone)]
 struct Acc {
-    row: StepRow,
+    row: StepRunRow,
     /// The sugar accumulators: increments so far, and the announced total.
     done: u64,
     total: Option<u64>,
@@ -30,8 +33,9 @@ pub struct RunStoreSink {
     steps: Mutex<HashMap<StepId, Acc>>,
 }
 
-fn now() -> String {
-    datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339()
+/// The store's clock: UTC, with the runner's offset beside it.
+fn now() -> (String, Option<String>) {
+    now_split()
 }
 
 impl RunStoreSink {
@@ -57,23 +61,28 @@ impl RunStoreSink {
             let acc = steps.entry(step.clone()).or_default();
             f(acc);
             acc.row.step = step.clone();
-            acc.row.updated_at = now();
+            let (at, offset) = now();
+            acc.row.updated_at = at;
+            acc.row.tz_offset = offset;
             acc.row.clone()
         };
         self.writer.step(row);
     }
 
     fn metric(&self, step: &StepId, name: &str, labels: &BTreeMap<String, String>, value: i64) {
+        let (updated_at, tz_offset) = now();
         self.writer.metric(MetricRow {
             step: step.clone(),
             name: name.to_string(),
             labels: canonical_labels(labels),
             value,
-            updated_at: now(),
+            updated_at,
+            tz_offset,
+            ..Default::default()
         });
     }
 
-    fn attempt_of(&self, step: &StepId) -> u32 {
+    fn attempt_of(&self, step: &StepId) -> i64 {
         self.steps
             .lock()
             .expect("run store sink mutex")
@@ -114,10 +123,10 @@ impl EventSink for RunStoreSink {
             // wherever attempt 1 died.
             Event::StepStart { step, attempt } => self.update(step, |a| {
                 *a = Acc {
-                    row: StepRow {
+                    row: StepRunRow {
                         state: LiveState::Running.as_str().into(),
-                        attempt: *attempt,
-                        started_at: Some(now()),
+                        attempt: *attempt as i64,
+                        started_at: Some(now().0),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -129,7 +138,7 @@ impl EventSink for RunStoreSink {
                 error,
             } => self.update(step, |a| {
                 a.row.state = status.as_str().into();
-                a.row.finished_at = Some(now());
+                a.row.finished_at = Some(now().0);
                 a.row.error = error.clone();
             }),
             Event::Metric {
@@ -159,11 +168,13 @@ impl EventSink for RunStoreSink {
                     acc.checkpoints
                 };
                 self.metric(step, "checkpoints", &BTreeMap::new(), n as i64);
+                let (ts, tz_offset) = now();
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
                     attempt: self.attempt_of(step),
-                    ts: now(),
-                    level: "info".into(),
+                    ts,
+                    tz_offset,
+                    level: LogLevel::Info.as_str().into(),
                     msg: "sealed a checkpoint".into(),
                     fields: Some(serde_json::json!({ "version": version }).to_string()),
                     ..Default::default()
@@ -178,31 +189,42 @@ impl EventSink for RunStoreSink {
                 target,
                 thread,
                 fields,
-            } => self.writer.log(LogRow {
-                step: Some(step.clone()),
-                attempt: self.attempt_of(step),
+            } => {
                 // The line's own clock when it has one — that is when the
                 // step wrote it, where ours is when we read it.
-                ts: ts.clone().unwrap_or_else(now),
-                stream: stream.map(|s| s.as_str().to_string()),
-                level: level.as_str().into(),
-                target: target.clone(),
-                thread: thread.clone(),
-                msg: msg.clone(),
-                fields: fields
-                    .as_ref()
-                    .map(|f| serde_json::Value::Object(f.clone()).to_string()),
-                ..Default::default()
-            }),
-            Event::Hint { step, msg } => self.writer.log(LogRow {
-                step: Some(step.clone()),
-                attempt: self.attempt_of(step),
-                ts: now(),
-                level: "warn".into(),
-                msg: msg.clone(),
-                fields: Some(r#"{"hint":true}"#.into()),
-                ..Default::default()
-            }),
+                let (ts, tz_offset) = match ts {
+                    Some(own) => split_stamp(own),
+                    None => now(),
+                };
+                self.writer.log(LogRow {
+                    step: Some(step.clone()),
+                    attempt: self.attempt_of(step),
+                    ts,
+                    tz_offset,
+                    stream: stream.map(|s| s.as_str().to_string()),
+                    level: level.as_str().into(),
+                    target: target.clone(),
+                    thread: thread.clone(),
+                    msg: msg.clone(),
+                    fields: fields
+                        .as_ref()
+                        .map(|f| serde_json::Value::Object(f.clone()).to_string()),
+                    ..Default::default()
+                })
+            }
+            Event::Hint { step, msg } => {
+                let (ts, tz_offset) = now();
+                self.writer.log(LogRow {
+                    step: Some(step.clone()),
+                    attempt: self.attempt_of(step),
+                    ts,
+                    tz_offset,
+                    level: LogLevel::Warn.as_str().into(),
+                    msg: msg.clone(),
+                    fields: Some(r#"{"hint":true}"#.into()),
+                    ..Default::default()
+                })
+            }
             // Nothing to record: a capability is about what the step
             // *can* do, and the summary repeats what `StepFinish` said.
             Event::Capabilities { .. } | Event::RunSummary { .. } => {}
@@ -431,9 +453,10 @@ mod tests {
         assert_eq!(log.len(), 3, "{log:?}");
         assert_eq!(log[0].level, "warn");
         assert_eq!(
-            log[0].ts, "2026-09-11T08:00:00Z",
-            "the line's own clock wins"
+            log[0].ts, "2026-09-11T08:00:00.000000+00:00",
+            "the line's own clock wins, kept as UTC"
         );
+        assert_eq!(log[0].tz_offset.as_deref(), Some("+00:00"));
         assert_eq!(log[0].stream.as_deref(), Some("stderr"));
         assert_eq!(log[0].thread.as_deref(), Some("tokio-runtime-worker"));
         assert_eq!(log[0].target.as_deref(), Some("slack::http"));

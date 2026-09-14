@@ -37,10 +37,10 @@ import {
   saveConfig,
   fetchAllJobs,
   fetchDag,
-  fetchJobLog,
+  fetchRuns,
+  type RunInfo,
   fetchPipelineStorage,
   fetchTreeHistory,
-  fetchJob,
   fetchFrontend,
   enqueueJob,
   cancelJob,
@@ -51,7 +51,6 @@ import {
   type Diagnostic,
   type SyncJob,
   type SyncJobState,
-  type SyncTask,
   type JobProgressEvent,
   type OutputStorage,
   type PipelineStorage,
@@ -90,7 +89,7 @@ import { iconUrl } from "@/config/icons";
 import { browseColumns, browseQuery } from "@/config/browsePresets";
 import { encodeColumns } from "@/router/columns";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
-import { stepLogLines, type StepLogLine } from "@/config/stepLog";
+import RunLogPanel from "@/components/RunLogPanel.vue";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
@@ -99,13 +98,10 @@ import {
   sourcesFeeding as sourcesFeedingIn,
   stepStatus as statusOf,
   waitingOn,
-  pushedOverlay,
-  boardWentTerminal,
-  withOverlay,
+  stepForRun,
   effectiveRun,
   statusFloor,
   STATUS_LABEL,
-  type Overlay,
   type StatusView,
 } from "@/config/pipelineStatus";
 import { subscribeLive } from "@/live";
@@ -339,9 +335,12 @@ type Row = {
   /// The step to call the job off through — this step, or for a group
   /// the child that holds the claim.
   stopTarget: string | null;
-  /// Live position in the run currently in flight, from the progress
-  /// bus. Null when the step isn't running or hasn't reported anything.
+  /// What the step has reported in the run in flight, from the run
+  /// store. Null when it isn't running or hasn't reported anything.
   progress: DagStepProgress | null;
+  /// The run the step's `last_run` happened in — where its log is.
+  /// Empty when it has never run, or ran before runs had ids.
+  lastRunId: string;
   /// Null when nothing is on disk yet — rendered as "—", not "0 B",
   /// which would read as "ran, and produced nothing".
   bytes: number | null;
@@ -403,21 +402,17 @@ function notInPipeline(d: Diagnostic): string {
 /// `config/pipelineStatus.ts`, where it is testable without a grid.
 const claimedBy = computed(() => claimedByJob(sources.value, jobs.value));
 
-/// Per-step state from the newest pushed task board, overlaid on what
-/// the last `/api/dag` fetch knew.
-const liveTasks = ref<Record<string, Overlay>>({});
-
-/// The job the pushed board belongs to. Only one job runs at a time
-/// (the worker claims them one by one), so this is unambiguous.
+/// The job in flight. Only one job runs at a time (the worker claims
+/// them one by one), so this is unambiguous — and its id is the run id.
 const liveJob = computed(() => jobs.value.find((j) => j.state === "running"));
 
 /// The runner's record for one step, as it applies to the run in
-/// flight: the pushed board folded over the last `/api/dag`, with the
-/// fetched `current_state` dropped when that fetch still describes a
-/// *previous* run (`run.synthesized` — see `withOverlay`).
+/// flight: the last `/api/dag`, with its `current_state` dropped when
+/// that fetch still describes a *previous* run (`run.synthesized` — see
+/// `stepForRun`).
 function stepNow(id: string): DagStep | undefined {
   const run = effectiveRun(dagRun.value, liveJob.value);
-  return withOverlay(dagSteps.value[id], id, liveTasks.value[id], !!run?.synthesized);
+  return stepForRun(dagSteps.value[id], !!run?.synthesized);
 }
 
 /// Has this step reached a terminal state in the run now in flight?
@@ -586,7 +581,8 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
     segments: null,
     stopJobId,
     stopTarget: stopJobId ? s.id : null,
-    progress: s.kind === "applet" ? null : (dagSteps.value[s.id]?.progress ?? null),
+    progress: s.kind === "applet" ? null : (stepNow(s.id)?.progress ?? null),
+    lastRunId: s.kind === "applet" ? "" : (dagSteps.value[s.id]?.last_run?.run_id ?? ""),
     bytes: onDisk.length ? trees.reduce((n, o) => n + o.bytes, 0) : null,
     history: trees[0]?.history ?? [],
     outputs: trees,
@@ -730,6 +726,9 @@ function groupRow(g: ConfiguredGroup, children: Row[]): Row {
     stopJobId: claimed?.stopJobId ?? null,
     stopTarget: claimed?.id ?? null,
     progress: ordered.find((r) => r.status.key === "running")?.progress ?? null,
+    // A group's log is a child's; `statusFrom` names which. See the
+    // double-click handler.
+    lastRunId: "",
     bytes: onDisk ? tree!.bytes : null,
     history: tree?.history ?? [],
     // The children's trees, for the tooltip's breakdown; the total is
@@ -917,6 +916,44 @@ class ActionsRenderer implements ICellRendererComp<Row> {
   }
 }
 
+/// The chips the Activity cell draws: `queued` first, because it is the
+/// one that says whether the step is keeping up; then every other
+/// series the step reported; then the warn/error count when there is one.
+function activityChips(
+  p: DagStepProgress,
+): { kind: string; text: string; title: string }[] {
+  const chips: { kind: string; text: string; title: string }[] = [];
+  const queued = p.metrics.queued;
+  if (queued != null) {
+    chips.push({
+      kind: queued > 0 ? "queued" : "idle",
+      text: `${queued.toLocaleString()} queued`,
+      title: "Work the step says is still ahead of it",
+    });
+  }
+  for (const [name, value] of Object.entries(p.metrics)) {
+    if (name === "queued") continue;
+    chips.push({
+      kind: "metric",
+      text: `${name} ${value.toLocaleString()}`,
+      title: `${name} = ${value.toLocaleString()} so far this run`,
+    });
+  }
+  if (p.errors > 0) {
+    chips.push({
+      kind: "errors",
+      text: `${p.errors.toLocaleString()} ⚠`,
+      title: `${p.errors} warning${p.errors === 1 ? "" : "s"} or error${p.errors === 1 ? "" : "s"} logged this run — double-click Status to read them`,
+    });
+  }
+  return chips;
+}
+
+/// The cell's sortable, filterable value: the chips as text.
+function activityText(p: DagStepProgress | null): string {
+  return p ? activityChips(p).map((c) => c.text).join("  ") : "";
+}
+
 const columnDefs: ColDef<Row>[] = [
   {
     headerName: "Name",
@@ -1098,6 +1135,34 @@ const columnDefs: ColDef<Row>[] = [
     },
   },
   {
+    // What the step has reported in the run in flight, as numbers: how
+    // much is queued in front of it, what it has counted so far, and how
+    // many warnings and errors it has logged — the three USE questions,
+    // per step. Empty for a step that is not running or has said nothing.
+    headerName: "Activity",
+    colId: "activity",
+    width: 260,
+    minWidth: 160,
+    valueGetter: (p: ValueGetterParams<Row>) => activityText(p.data?.progress ?? null),
+    cellRenderer: (p: ICellRendererParams<Row>) => {
+      const wrap = document.createElement("span");
+      wrap.className = "m2-activity";
+      // The chips are cut at the column's edge; the whole row of them
+      // is one hover away.
+      wrap.title = activityText(p.data?.progress ?? null);
+      const prog = p.data?.progress;
+      if (!prog) return wrap;
+      for (const chip of activityChips(prog)) {
+        const el = document.createElement("span");
+        el.className = `m2-chip ${chip.kind}`;
+        el.textContent = chip.text;
+        el.title = chip.title;
+        wrap.appendChild(el);
+      }
+      return wrap;
+    },
+  },
+  {
     headerName: "Last synced",
     field: "lastSynced",
     width: 150,
@@ -1228,61 +1293,64 @@ function freshest<T>(commit: (value: T) => void) {
 }
 
   // ── One step's log. A red Status says *that* a step failed; the next
-  // question is always what it was doing, and the only answer used to be the
-  // whole job log with every step interleaved. Double-clicking the cell
-  // narrows it to the one step, unwrapped — see `config/stepLog.ts`.
+  // question is always what it was doing. Double-clicking the cell opens
+  // the run store's lines for that step, in the run it last took part in
+  // — or the one in flight — as a grid that follows the run while it goes.
 
-/// The row whose log is open, or null when the panel is closed.
-const logFor = ref<Row | null>(null);
-const logLines = ref<StepLogLine[]>([]);
-const logBusy = ref(false);
-/// Which job's log is on screen. Shown, because "this step's last run"
-/// is only meaningful if you can tell *which* run.
-const logJob = ref<SyncJob | null>(null);
+/// What the log panel is showing, or null when it is closed.
+const logFor = ref<{ row: Row; runId: string; live: boolean; startedAt: string | null } | null>(
+  null,
+);
 const logError = ref<string | null>(null);
+/// The run the panel was opened on. Its picker can move to another run,
+/// which updates `logFor` for the header but must not remount the panel.
+const logOpenedOn = ref("");
 
-/// How far back to look for a job whose log mentions this step. The newest job
-/// is very nearly always the answer; the walk exists for a step added since, or
-/// one whose last real work was several syncs ago. Bounded, because each miss
-/// is a fetch of a whole log file.
-const LOG_SEARCH_DEPTH = 8;
+/// The picker in the panel moved: say so in the header.
+function onLogRunChanged(run: RunInfo) {
+  if (!logFor.value) return;
+  logFor.value = {
+    ...logFor.value,
+    runId: run.run_id,
+    live: run.finished_at == null,
+    startedAt: run.started_at,
+  };
+}
 
-/// With `job`, the log of that one run; without, the newest run whose
-/// log mentions the step.
-async function openStepLog(row: Row, job: SyncJob | null = null) {
-  logFor.value = row;
-  logLines.value = [];
-  logJob.value = null;
+/// The run whose log answers "what was this step doing": the one in
+/// flight if the step is in it, else the one its record names, else —
+/// for a record from before runs had ids — the newest run the store says
+/// it took part in.
+async function runFor(row: Row): Promise<{ runId: string; live: boolean; startedAt: string | null } | null> {
+  const run = effectiveRun(dagRun.value, liveJob.value);
+  if (run && !run.finished_at && stepNow(row.id)?.current_state) {
+    return { runId: run.run_id, live: true, startedAt: run.started_at };
+  }
+  if (row.lastRunId) {
+    return { runId: row.lastRunId, live: false, startedAt: row.lastSynced };
+  }
+  const [newest] = await fetchRuns({ step: row.id, limit: 1 });
+  return newest ? { runId: newest.run_id, live: !newest.finished_at, startedAt: newest.started_at } : null;
+}
+
+/// With `runId`, the log of that one run; without, the run in flight if
+/// the step is in it, else the one it last took part in.
+async function openStepLog(row: Row, runId: string | null = null) {
   logError.value = null;
-  logBusy.value = true;
   try {
-    // Newest first. `fetchAllJobs` returns them that way, but sorting
-    // here means this doesn't quietly depend on that.
-    const recent = job
-      ? [job]
-      : [...jobs.value]
-          .sort((a, b) => compareStamps(b.created_at_utc, a.created_at_utc))
-          .slice(0, LOG_SEARCH_DEPTH);
-    for (const job of recent) {
-      let text: string;
-      try {
-        text = await fetchJobLog(job.id);
-      } catch {
-        // 404 while the worker has claimed the job but not yet opened
-        // the file, or a log already cleaned up. Neither is this
-        // step's problem; keep looking.
-        continue;
-      }
-      const lines = stepLogLines(text, row.id);
-      if (lines.length === 0) continue;
-      logLines.value = lines;
-      logJob.value = job;
+    const run = runId
+      ? { runId, live: liveJob.value?.id === runId, startedAt: null }
+      : await runFor(row);
+    if (!run) {
+      logError.value = "This step has not taken part in any run the store remembers.";
+      logFor.value = { row, runId: "", live: false, startedAt: null };
       return;
     }
+    logFor.value = { row, ...run };
+    logOpenedOn.value = run.runId;
   } catch (e) {
     logError.value = (e as Error).message;
-  } finally {
-    logBusy.value = false;
+    logFor.value = { row, runId: "", live: false, startedAt: null };
   }
 }
 
@@ -1451,27 +1519,16 @@ const historyStoreNote = computed(() => {
   return row.kind === "group" ? `every store under ${row.id}/` : `the stores in ${row.id}/`;
 });
 
-/// A commit's run is a job when the app ran it, and that job's log is
-/// the "how" behind the commit's "what". Filtered to the step that
-/// writes the store, as the Status double-click does.
-async function openRunLog(row: HistoryRow) {
+/// A commit names its run, and that run's log is the "how" behind the
+/// commit's "what" — from the run store, so a run started from a
+/// terminal has one too. Filtered to the step that writes the store,
+/// as the Status double-click does.
+function openRunLog(row: HistoryRow) {
   if (!row.run) return;
   const step = rows.value.find((r) => r.kind !== "group" && r.id === row.stepId);
   if (!step) return;
-  const job = jobs.value.find((j) => j.id === row.run) ?? (await fetchJob(row.run));
   historyFor.value = [];
-  if (!job) {
-    // A run the app did not start — a terminal `datalib-dag`, or a job
-    // long since cleaned up — has no log here. Say so rather than
-    // showing some other run's.
-    logFor.value = step;
-    logLines.value = [];
-    logJob.value = null;
-    logBusy.value = false;
-    logError.value = `Run ${row.run} was not started from this app, so there is no job log for it here.`;
-    return;
-  }
-  void openStepLog(step, job);
+  void openStepLog(step, row.run);
 }
 
 // ── The right-click menu. Every action a row offers, in one place,
@@ -2312,13 +2369,11 @@ async function stopSource(id: string) {
 function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
   retireBanner(e.id, e.state);
-  const tasks: SyncTask[] = e.tasks ?? [];
   const active = e.state === "pending" || e.state === "running";
-  liveTasks.value = active ? pushedOverlay(tasks, new Date().toISOString()) : {};
   repaint();
-  // A step finishing is exactly when its record moves — and the record
-  // is the only place its finish time and error live.
-  if (!active || boardWentTerminal(tasks)) {
+  // A job ending is exactly when its record settles — and the record
+  // is the only place a step's finish time and error live.
+  if (!active) {
     void loadDag();
     // A step that just finished is exactly when the size on screen is
     // about to be read and is about to be wrong — so this one asks for
@@ -2339,7 +2394,6 @@ function mergeJob(e: JobProgressEvent) {
     const next: SyncJob = {
       ...prev,
       state: e.state,
-      progress_pct: e.progress_pct,
       progress_msg: e.progress_msg,
       started_at_utc: prev.started_at_utc ?? (e.state === "running" ? now : null),
       finished_at_utc:
@@ -2355,7 +2409,7 @@ function mergeJob(e: JobProgressEvent) {
       kind: e.kind,
       source_ids: e.source_ids,
       state: e.state,
-      progress_pct: e.progress_pct,
+      progress_pct: null,
       progress_msg: e.progress_msg,
       error: null,
       created_at_utc: now,
@@ -2644,8 +2698,11 @@ onUnmounted(() => {
           <p>
             <b>Type</b> and <b>Status</b> are icons, and the mark after a step’s name says what
             it does — hover any of them for the word. <b>Double-click a Status</b> to read that
-            step's log from the run it last took part in; on a group row, the log of the step
-            its status came from.
+            step's log — from the run in flight while it runs, else from the run it last took
+            part in, with a picker for its other runs — as a grid you can sort, filter and
+            search; on a group row, the log of the step its status came from.
+            <b>Activity</b> is what a running step has reported: how much is queued ahead of
+            it, what it has counted so far, and how many warnings and errors it has logged.
           </p>
           <p>
             <b>Right-click a row</b> for everything it can do — browse, edit, reveal, remove, the
@@ -2683,38 +2740,32 @@ onUnmounted(() => {
     </div>
 
     <div v-if="logFor" class="m2-logs-backdrop" @click.self="logFor = null">
-      <div class="m2-logs" role="dialog" aria-modal="true" aria-label="Step log">
+      <div class="m2-logs m2-runlog" role="dialog" aria-modal="true" aria-label="Step log">
         <header class="m2-logs-head">
           <div>
-            <h3>{{ logFor.name }}</h3>
+            <h3>{{ logFor.row.name }}</h3>
             <p>
-              <code>{{ logFor.id }}</code>
-              <span v-if="logJob">
-                · from the sync of
-                <b>{{ logJob.source_ids || "everything" }}</b>
-                <span :title="formatStamp(logJob.created_at_utc)">
-                  {{ formatRelative(logJob.created_at_utc, Date.now()) }}</span>
+              <code>{{ logFor.row.id }}</code>
+              <span v-if="logFor.runId">
+                · {{ logFor.live ? "a run in flight" : "a past run" }}<span
+                  v-if="logFor.startedAt"
+                  :title="formatStamp(logFor.startedAt)"
+                >, started {{ formatRelative(logFor.startedAt, Date.now()) }}</span>
+                · run <code>{{ logFor.runId }}</code>
               </span>
             </p>
           </div>
           <button class="m2-btn" @click="logFor = null">Close</button>
         </header>
-
-        <p v-if="logBusy" class="m2-logs-note">Reading the job logs…</p>
-        <p v-else-if="logError" class="m2-logs-note bad">{{ logError }}</p>
-        <p v-else-if="logLines.length === 0" class="m2-logs-note">
-          Nothing found for this step in the last {{ LOG_SEARCH_DEPTH }} syncs this app ran.
-          A run started from a terminal writes no job log here, and a step that has never
-          run has nothing to say yet.
-        </p>
-        <ol v-else class="m2-logs-body">
-          <li v-for="(l, i) in logLines" :key="i" :class="`m2-log-${l.level}`">
-            <span v-if="l.ts" class="m2-log-ts" :title="formatStamp(l.ts)">{{
-              l.ts.slice(11, 23)
-            }}</span>
-            <span class="m2-log-text">{{ l.text }}</span>
-          </li>
-        </ol>
+        <p v-if="logError" class="m2-logs-note bad">{{ logError }}</p>
+        <RunLogPanel
+          v-else-if="logFor.runId"
+          :key="logOpenedOn + '/' + logFor.row.id"
+          :run-id="logOpenedOn"
+          :step="logFor.row.id"
+          :live="logFor.live"
+          @run-changed="onLogRunChanged"
+        />
       </div>
     </div>
 
@@ -3018,6 +3069,9 @@ onUnmounted(() => {
   flex-direction: column;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
 }
+/* The log panel is a grid and wants the room: wide for its columns,
+   tall enough that following a run is not a keyhole. */
+.m2-runlog { width: min(1400px, 100%); height: min(85vh, 100%); }
 .m2-logs-head {
   display: flex;
   align-items: flex-start;
@@ -3031,35 +3085,12 @@ onUnmounted(() => {
 .m2-logs-head button { margin-left: auto; }
 .m2-logs-note { margin: 0; padding: 16px; font-size: 13px; color: var(--datalib-muted); max-width: 70ch; }
 .m2-logs-note.bad { color: var(--datalib-log-error); }
-/* Monospace and scrolling on its own: a log line is not prose, and the
-   long ones (a path, a serialized error) must not reflow the panel. */
-.m2-logs-body {
-  margin: 0;
-  padding: 10px 16px 16px;
-  list-style: none;
-  overflow: auto;
-  flex: 1 1 auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-}
-.m2-logs-body li {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
 /* The history panel is a grid rather than a list, and wider than the
    log: nine columns, and the table list is the one worth the room. */
 .m2-history { width: min(1400px, 100%); height: min(720px, 100%); }
 /* `position: relative`, because `.m2-ag` is absolutely placed — see the
    WebKit note above it. */
 .m2-history-grid { position: relative; flex: 1 1 auto; min-height: 0; margin: 0 16px 16px; }
-.m2-log-ts { color: var(--datalib-muted); flex: 0 0 auto; }
-.m2-log-text { flex: 1 1 auto; }
-.m2-log-warn .m2-log-text { color: var(--datalib-log-warn); }
-.m2-log-error .m2-log-text { color: var(--datalib-log-error); }
 </style>
 
 <style>
@@ -3242,6 +3273,29 @@ onUnmounted(() => {
   height: 100%;
   background: currentColor;
 }
+
+/* Activity: one chip per number the step reported. `queued` is the one
+   that says whether it is keeping up, so it leads and is the one that
+   gets a colour; a count of warnings and errors closes the row. */
+.m2-activity {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow: hidden;
+  max-width: 100%;
+}
+.m2-chip {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--datalib-muted);
+}
+.m2-chip.queued { color: var(--datalib-log-warn); }
+.m2-chip.idle { color: var(--datalib-log-ok); }
+.m2-chip.errors { color: var(--datalib-log-error); }
 
 /* Bytes on disk: the recent history against the largest row, with the
    size centred over it and the per-output breakdown on `title`. */

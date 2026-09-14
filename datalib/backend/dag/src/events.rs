@@ -159,57 +159,8 @@ pub struct OutputSummary {
     pub changed: bool,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    strum::EnumString,
-    strum::IntoStaticStr,
-    strum::VariantArray,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum LogLevel {
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-}
-
-/// Which of a subprocess's two pipes a log line arrived on.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    strum::EnumString,
-    strum::IntoStaticStr,
-    strum::VariantArray,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum Stream {
-    Stdout,
-    Stderr,
-}
-
-impl Stream {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-}
+/// The vocabularies the run store keeps, named once, in the schema crate.
+pub use app_schema::runs::{LogLevel, Stream};
 
 /// Where events go. Object-safe so the orchestrator can fan out to a
 /// terminal renderer + an NDJSON file + tests' recorders.
@@ -393,24 +344,6 @@ mod tests {
                 assert_eq!(value, 7);
             }
             other => panic!("wrong variant: {other:?}"),
-        }
-    }
-
-    /// strum and serde spell the levels independently; the store writes
-    /// the strum one and a reader matches the serde one.
-    #[test]
-    fn log_level_strum_and_serde_agree() {
-        for &l in <LogLevel as strum::VariantArray>::VARIANTS {
-            assert_eq!(
-                serde_json::to_string(&l).unwrap(),
-                format!("\"{}\"", l.as_str())
-            );
-        }
-        for &s in <Stream as strum::VariantArray>::VARIANTS {
-            assert_eq!(
-                serde_json::to_string(&s).unwrap(),
-                format!("\"{}\"", s.as_str())
-            );
         }
     }
 

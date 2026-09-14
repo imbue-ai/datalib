@@ -25,6 +25,7 @@ rust_library(
         # Only for stamping emitted events with a wall-clock `ts` (see
         # events.rs). Keeps the timestamp format identical to the rest of
         # the tree's logs; the binary already depended on it.
+        "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
