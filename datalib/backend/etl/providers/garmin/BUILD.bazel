@@ -1,0 +1,69 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# The TNG account, expanded into playback fixtures by the synthesizer.
+# Consumed by `//tests/fixtures:ingested_tng`.
+filegroup(
+    name = "tng_fixture",
+    srcs = ["tests/fixtures/garmin_tng/tng.json"],
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_garmin",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_garmin",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:base64",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:hmac",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha1",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:urlencoding",
+        "@datalib_crates//:uuid",
+        "@datalib_crates//:zip",
+    ],
+)
+
+rust_test(
+    name = "garmin_unittests",
+    size = "small",
+    crate = ":datalib_etl_garmin",
+    edition = "2021",
+)
+
+# Spec → playback fixtures → the real ingest walk → the store, read back.
+rust_test(
+    name = "garmin_playback_roundtrip",
+    size = "medium",
+    srcs = ["tests/playback_roundtrip.rs"],
+    data = [":tng_fixture"],
+    edition = "2021",
+    deps = [
+        ":datalib_etl_garmin",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

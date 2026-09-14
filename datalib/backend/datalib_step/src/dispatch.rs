@@ -291,6 +291,12 @@ pub fn plan(
             datalib_etl_perseus,
             datalib_etl_perseus_render
         ),
+        SourceType::Garmin => arm!(
+            datalib_etl_garmin_config::GarminConfig,
+            datalib_etl_garmin_config::GarminRenderConfig,
+            datalib_etl_garmin,
+            datalib_etl_garmin_render
+        ),
         SourceType::Yolink => arm!(
             datalib_etl_yolink_config::YolinkConfig,
             datalib_etl_yolink_config::YolinkRenderConfig,

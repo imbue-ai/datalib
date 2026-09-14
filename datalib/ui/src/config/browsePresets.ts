@@ -55,6 +55,8 @@ const EXTRA: Record<string, BrowseColumn[]> = {
   notion: ["account", "author"],
   perseus: ["author"],
   yolink: ["channel"],
+  // The device rows: `channel` is the device name.
+  garmin: ["channel", "author"],
 
   // The one source with a real per-row size and count: a document's
   // bytes, and its page count. Everywhere else those two are non-null

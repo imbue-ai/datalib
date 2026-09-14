@@ -153,6 +153,10 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
             "yolink/raw",
             datalib_etl_yolink::ingest::schema_raw::full_ddl(),
         ),
+        (
+            "garmin/raw",
+            datalib_etl_garmin::ingest::schema_raw::full_ddl(),
+        ),
         // The shared render/index and app stores, from `PortableTable`.
         (
             "unified_index/grid",

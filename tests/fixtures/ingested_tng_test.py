@@ -173,6 +173,9 @@ EXPECTED_PROVIDERS = frozenset(
         # the render step ran over that store — see
         # run_sync_pipeline.py's PRESEEDED_RAW.
         "yolink",
+        # Ingested through playback like the chat providers; the weight
+        # page and the device row are what land in the grid.
+        "garmin",
     }
 )
 

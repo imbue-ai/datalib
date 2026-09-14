@@ -95,6 +95,7 @@ type that is not one product spells its sources out — email's are
 | SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
 | YoLink | `yolink` | Web API | Per-device sensor CSV history, rendered as one page of interactive plots |
+| Garmin | `garmin` | Web API (its own login, not latchkey) | Per-day health metrics (sleep, heart rate, stress, body battery, HRV, SpO2, …), weigh-ins, activities + original FIT files, devices, records, gear, badges, workouts, goals; the weigh-ins rendered as one page with an interactive plot |
 | Perseus | `perseus` | Public download | TEI editions of Greek and Latin texts from PerseusDL |
 | PDFs | `pdf` | Local directory tree | Every PDF under it, converted to markdown and keyed on content hash (no OCR yet) |
 | Music / photos / video | `media` | Local directory tree | Every audio, image and video file with its metadata, plus `.m3u` playlists; download-only, no rendered markdown |

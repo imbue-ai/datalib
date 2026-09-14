@@ -1366,6 +1366,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-etl-garmin"
+version = "0.31.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "datalib-etl",
+ "datalib-etl-macros",
+ "datalib-time",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "urlencoding",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "datalib-etl-garmin-render"
+version = "0.31.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "datalib-etl",
+ "datalib-etl-garmin",
+ "datalib-etl-render",
+ "datalib-schema",
+ "datalib-time",
+ "once_cell",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "datalib-etl-github"
 version = "0.31.1"
 dependencies = [
@@ -7141,6 +7188,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
 dependencies = [
  "crc32fast",
+ "flate2",
  "indexmap 2.14.1",
  "memchr",
  "typed-path",

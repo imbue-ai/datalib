@@ -1,0 +1,268 @@
+//! Doltlite-backed raw store for the `garmin` provider.
+
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use sqlx::sqlite::SqlitePool;
+use sqlx::Row;
+
+use datalib_etl::blob_cas::BlobCas;
+use datalib_etl::doltlite_raw::{self as dr};
+use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_macros::RawStoreHandle;
+
+use super::schema_raw::{full_ddl, DATA_TABLES};
+
+pub use datalib_etl::doltlite_raw::db_path_for;
+
+#[derive(Clone, Debug, RawStoreHandle)]
+pub struct RawDb {
+    pool: SqlitePool,
+    cas: BlobCas,
+}
+
+impl RawDb {
+    pub async fn open(db_path: &Path) -> Result<Self> {
+        let owned = full_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let pool = dr::open(db_path, &slices).await?;
+        let cas = BlobCas::open(&datalib_etl::blob_cas::cas_path_for(db_path)).await?;
+        Ok(Self { pool, cas })
+    }
+
+    /// Release every store this handle opened, and wait for the
+    /// connections to go away. Dropping only schedules that.
+    pub async fn close(self) {
+        self.close_all().await;
+    }
+
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    pub fn cas(&self) -> &BlobCas {
+        &self.cas
+    }
+
+    /// Every data table, and the walk cursors with them: a reset that
+    /// kept the cursors would refill the store from a week before today
+    /// and call the rest of the history done.
+    pub async fn reset(&self) -> Result<()> {
+        dr::truncate_data_tables(&self.pool, DATA_TABLES).await?;
+        sqlx::query("DELETE FROM sync_scope_state WHERE scope LIKE 'garmin:%'")
+            .execute(&self.pool)
+            .await
+            .context("clear garmin cursors")?;
+        Ok(())
+    }
+
+    pub async fn clear_blob_hashes(&self) -> Result<()> {
+        for table in ["garmin_activity_files", "garmin_wellness_files"] {
+            // Audited: `table` is one of two literals.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET blake3 = NULL"
+            )))
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("clear {table}.blake3"))?;
+        }
+        Ok(())
+    }
+
+    /// `(id → payload text)` for every id listed, from one table. Ids
+    /// absent from the table are absent from the map.
+    pub async fn payloads_of(&self, table: &str, ids: &[&str]) -> Result<HashMap<String, String>> {
+        let mut out = HashMap::with_capacity(ids.len());
+        for chunk in ids.chunks(500) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            // Audited: `table` is a literal at every callsite; `placeholders`
+            // is a `?,?,?` run sized from the chunk and each id is bound.
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT id, json(payload) AS payload FROM {table} \
+                 WHERE id IN ({placeholders}) AND payload IS NOT NULL"
+            )));
+            for id in chunk {
+                q = q.bind(*id);
+            }
+            for r in q
+                .fetch_all(&self.pool)
+                .await
+                .with_context(|| format!("payloads_of {table}"))?
+            {
+                let id: String = r.try_get("id").unwrap_or_default();
+                let payload: String = r.try_get("payload").unwrap_or_default();
+                out.insert(id, payload);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Ids in `table` whose id is not in `keep`, optionally only those
+    /// matching `filter_sql` (a `&'static str` predicate over the
+    /// table's own columns, with its bound values in `binds`).
+    async fn ids_not_in(
+        &self,
+        table: &'static str,
+        filter_sql: &'static str,
+        binds: &[&str],
+        keep: &HashSet<&str>,
+    ) -> Result<Vec<String>> {
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT id FROM {table} WHERE {filter_sql}"
+        )));
+        for b in binds {
+            q = q.bind(*b);
+        }
+        let rows = q
+            .fetch_all(&self.pool)
+            .await
+            .with_context(|| format!("scan {table} for pruning"))?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.try_get::<String, _>("id").ok())
+            .filter(|id| !keep.contains(id.as_str()))
+            .collect())
+    }
+
+    async fn delete_ids(&self, table: &'static str, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for chunk in ids.chunks(500) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            for stmt in [
+                format!("DELETE FROM {table} WHERE id IN ({placeholders})"),
+                format!("DELETE FROM {table}_bookkeeping WHERE id IN ({placeholders})"),
+            ] {
+                // Audited: `table` is `&'static str`; every id is bound.
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(stmt));
+                for id in chunk {
+                    q = q.bind(id);
+                }
+                q.execute(&mut *tx).await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Delete the rows of one `garmin_items` kind that the latest
+    /// complete listing did not name.
+    pub async fn prune_items(&self, kind: &str, keep: &HashSet<&str>) -> Result<usize> {
+        let gone = self
+            .ids_not_in("garmin_items", "kind = ?", &[kind], keep)
+            .await?;
+        self.delete_ids("garmin_items", &gone).await?;
+        Ok(gone.len())
+    }
+
+    /// Delete the devices the registration listing no longer names.
+    pub async fn prune_devices(&self, keep: &HashSet<&str>) -> Result<usize> {
+        let gone = self
+            .ids_not_in("garmin_devices", "1 = 1", &[], keep)
+            .await?;
+        self.delete_ids("garmin_devices", &gone).await?;
+        Ok(gone.len())
+    }
+
+    /// Delete weigh-ins dated inside `[start, end]` that the range
+    /// listing for that window did not name. Scoped to the window
+    /// because only that window was listed completely.
+    pub async fn prune_weigh_ins(
+        &self,
+        start: &str,
+        end: &str,
+        keep: &HashSet<&str>,
+    ) -> Result<usize> {
+        let gone = self
+            .ids_not_in(
+                "garmin_weigh_ins",
+                "calendar_date >= ? AND calendar_date <= ?",
+                &[start, end],
+                keep,
+            )
+            .await?;
+        self.delete_ids("garmin_weigh_ins", &gone).await?;
+        Ok(gone.len())
+    }
+
+    /// Delete activities that started at or after `start_gmt` which the
+    /// listing walked from that instant did not name, with their
+    /// details and file edges.
+    pub async fn prune_activities(&self, start_gmt: &str, keep: &HashSet<&str>) -> Result<usize> {
+        let gone = self
+            .ids_not_in(
+                "garmin_activities",
+                "start_time_gmt >= ?",
+                &[start_gmt],
+                keep,
+            )
+            .await?;
+        self.delete_ids("garmin_activities", &gone).await?;
+        self.delete_ids("garmin_activity_details", &gone).await?;
+        let edges: Vec<String> = gone
+            .iter()
+            .map(|id| format!("{id}#{}", super::schema_raw::FILE_KIND_FIT))
+            .collect();
+        self.delete_ids("garmin_activity_files", &edges).await?;
+        Ok(gone.len())
+    }
+
+    /// `activity_id → blake3` for every activity whose FIT file is in
+    /// the CAS. An edge with a NULL hash (a failed fetch) is absent, so
+    /// it is retried.
+    pub async fn stored_activity_files(&self) -> Result<HashMap<String, String>> {
+        let rows = sqlx::query(
+            "SELECT activity_id, blake3 FROM garmin_activity_files WHERE blake3 IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("select garmin_activity_files")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                Some((
+                    r.try_get::<String, _>("activity_id").ok()?,
+                    r.try_get::<String, _>("blake3").ok()?,
+                ))
+            })
+            .collect())
+    }
+
+    pub async fn stored_wellness_files(&self) -> Result<HashMap<String, String>> {
+        let rows = sqlx::query(
+            "SELECT calendar_date, blake3 FROM garmin_wellness_files WHERE blake3 IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("select garmin_wellness_files")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                Some((
+                    r.try_get::<String, _>("calendar_date").ok()?,
+                    r.try_get::<String, _>("blake3").ok()?,
+                ))
+            })
+            .collect())
+    }
+
+    pub async fn cursor(&self, scope: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
+            .bind(scope)
+            .fetch_optional(&self.pool)
+            .await
+            .with_context(|| format!("select cursor {scope}"))?;
+        Ok(row.and_then(|r| r.try_get::<String, _>("last_seen_at_utc").ok()))
+    }
+
+    pub async fn set_cursor(&self, scope: &str, value: &str) -> Result<()> {
+        dr::upsert_scope_state(&self.pool, scope, value).await
+    }
+}

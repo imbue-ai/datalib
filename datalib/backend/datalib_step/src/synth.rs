@@ -65,6 +65,11 @@ pub fn run(
         Some(SourceType::Beeper) => Box::new(datalib_etl_beeper::synthesize::BeeperSynth::new(
             input.clone(),
         )),
+        // Garmin's fixture is one spec file, not a tree: `fixture_path`
+        // names the JSON.
+        Some(SourceType::Garmin) => Box::new(datalib_etl_garmin::synthesize::GarminSynth::new(
+            input.clone(),
+        )),
         // LinkedIn is file-backed except the optional connection-photo
         // fetch; there are playback fixtures to synthesize iff that's
         // enabled.

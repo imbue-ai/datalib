@@ -246,6 +246,24 @@ service and routes to it by URL host:
 
 See datalib/backend/etl/providers/email/INGEST.md for details."
         }
+        SourceType::Garmin => {
+            "\
+Garmin Connect refused the credential, or there is none.
+
+Garmin is not a latchkey service: the ingest step mints its own bearer
+from an OAuth1 token that a login writes under `api.token_dir`
+(default ~/.garth), and that token lasts about a year.
+
+  1. Sign in again (prompts for email, password and the emailed MFA
+     code; nothing is stored but the resulting tokens):
+       datalib-step login garmin
+  2. Re-run the sync.
+
+A token produced by garth (`garth login`, then
+`garth.client.dump(\"~/.garth\")`) works too — the files are the same.
+
+See datalib/backend/etl/providers/garmin/INGEST.md for details."
+        }
         SourceType::Beeper => {
             "\
 beeper download reads Beeper Texts' on-disk SQLite. No auth dance.

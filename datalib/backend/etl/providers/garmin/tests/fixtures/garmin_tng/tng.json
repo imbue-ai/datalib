@@ -1,0 +1,288 @@
+{
+  "since": "2369-04-01",
+  "today": "2369-04-15",
+  "social_profile": {
+    "id": 1701,
+    "profileId": 1701,
+    "garminGUID": "0a3f1701-0000-4000-8000-000000001701",
+    "displayName": "jean-luc.picard",
+    "fullName": "Jean-Luc Picard",
+    "userName": "jlpicard",
+    "location": "Enterprise-D, Bridge",
+    "primaryActivity": "running",
+    "favoriteActivityTypes": [
+      "running",
+      "hiking"
+    ]
+  },
+  "user_settings": {
+    "id": 1701,
+    "userData": {
+      "gender": "MALE",
+      "weight": 78000.0,
+      "height": 178.0,
+      "measurementSystem": "metric",
+      "birthDate": "2305-07-13",
+      "vo2MaxRunning": 52.0
+    },
+    "userSleep": {
+      "sleepTime": 79200,
+      "wakeTime": 21600
+    }
+  },
+  "devices": [
+    {
+      "deviceId": 3654926501,
+      "productDisplayName": "Forerunner 265",
+      "displayName": "Forerunner 265",
+      "serialNumber": "NCC-1701-D",
+      "softwareVersion": "22.31",
+      "lastSyncTimestampGMT": "2369-04-15T05:12:44.0",
+      "primary": true
+    }
+  ],
+  "daily": {
+    "daily_summary": {
+      "2369-04-13": {
+        "userProfileId": 1701,
+        "calendarDate": "2369-04-13",
+        "totalSteps": 9120,
+        "totalKilocalories": 2410.0,
+        "restingHeartRate": 49,
+        "minHeartRate": 45,
+        "maxHeartRate": 162,
+        "averageStressLevel": 24,
+        "bodyBatteryHighestValue": 96,
+        "bodyBatteryLowestValue": 31,
+        "floorsAscended": 14.0
+      },
+      "2369-04-14": {
+        "userProfileId": 1701,
+        "calendarDate": "2369-04-14",
+        "totalSteps": 14872,
+        "totalKilocalories": 2980.0,
+        "restingHeartRate": 48,
+        "minHeartRate": 44,
+        "maxHeartRate": 171,
+        "averageStressLevel": 29,
+        "bodyBatteryHighestValue": 94,
+        "bodyBatteryLowestValue": 18,
+        "floorsAscended": 22.0
+      }
+    },
+    "sleep": {
+      "2369-04-14": {
+        "dailySleepDTO": {
+          "id": 1701041401,
+          "userProfilePK": 1701,
+          "calendarDate": "2369-04-14",
+          "sleepTimeSeconds": 26400,
+          "deepSleepSeconds": 5400,
+          "lightSleepSeconds": 15000,
+          "remSleepSeconds": 5400,
+          "awakeSleepSeconds": 600,
+          "sleepScores": {
+            "overall": {
+              "value": 84,
+              "qualifierKey": "GOOD"
+            }
+          }
+        },
+        "restingHeartRate": 48
+      }
+    },
+    "hrv": {
+      "2369-04-14": {
+        "userProfilePk": 1701,
+        "hrvSummary": {
+          "calendarDate": "2369-04-14",
+          "weeklyAvg": 58,
+          "lastNightAvg": 61,
+          "lastNight5MinHigh": 79,
+          "status": "BALANCED"
+        }
+      }
+    },
+    "heart_rate": {
+      "2369-04-14": {
+        "userProfilePK": 1701,
+        "calendarDate": "2369-04-14",
+        "restingHeartRate": 48,
+        "maxHeartRate": 171,
+        "heartRateValues": [
+          [
+            12600144000000,
+            52
+          ],
+          [
+            12600144120000,
+            55
+          ],
+          [
+            12600144240000,
+            51
+          ]
+        ]
+      }
+    }
+  },
+  "weigh_ins": [
+    {
+      "samplePk": 236904020730,
+      "calendarDate": "2369-04-02",
+      "weight": 78400.0,
+      "bmi": 24.7,
+      "bodyFat": 15.2,
+      "timestampGMT": 12599131500000,
+      "date": 12599102700000,
+      "sourceType": "INDEX_SCALE",
+      "weightDelta": null
+    },
+    {
+      "samplePk": 236904050731,
+      "calendarDate": "2369-04-05",
+      "weight": 78100.0,
+      "bmi": 24.6,
+      "bodyFat": 15.0,
+      "timestampGMT": 12599390700000,
+      "date": 12599361900000,
+      "sourceType": "INDEX_SCALE",
+      "weightDelta": -300.0
+    },
+    {
+      "samplePk": 236904090732,
+      "calendarDate": "2369-04-09",
+      "weight": 77900.0,
+      "bmi": 24.6,
+      "bodyFat": 14.8,
+      "timestampGMT": 12599736300000,
+      "date": 12599707500000,
+      "sourceType": "INDEX_SCALE",
+      "weightDelta": -200.0
+    },
+    {
+      "samplePk": 236904140733,
+      "calendarDate": "2369-04-14",
+      "weight": 77600.0,
+      "bmi": 24.5,
+      "bodyFat": 14.6,
+      "timestampGMT": 12600168300000,
+      "date": 12600139500000,
+      "sourceType": "MANUAL",
+      "weightDelta": -300.0
+    }
+  ],
+  "activities": [
+    {
+      "listing": {
+        "activityId": 17010413001,
+        "activityName": "Holodeck run: Dixon Hill",
+        "startTimeLocal": "2369-04-13 06:30:00",
+        "startTimeGMT": "2369-04-13 06:30:00",
+        "activityType": {
+          "typeId": 1,
+          "typeKey": "running"
+        },
+        "distance": 8046.7,
+        "duration": 2412.0,
+        "averageHR": 148.0,
+        "maxHR": 171.0,
+        "calories": 612.0,
+        "deviceId": 3654926501
+      },
+      "detail": {
+        "activityId": 17010413001,
+        "activityName": "Holodeck run: Dixon Hill",
+        "summaryDTO": {
+          "distance": 8046.7,
+          "duration": 2412.0,
+          "averageHR": 148.0,
+          "trainingEffect": 3.4
+        },
+        "metadataDTO": {
+          "deviceApplicationInstallationId": 3654926501,
+          "gcj02": false
+        },
+        "activityTypeDTO": {
+          "typeKey": "running"
+        }
+      }
+    },
+    {
+      "listing": {
+        "activityId": 17010414002,
+        "activityName": "Cycling: Deck 12 to Engineering",
+        "startTimeLocal": "2369-04-14 17:05:00",
+        "startTimeGMT": "2369-04-14 17:05:00",
+        "activityType": {
+          "typeId": 2,
+          "typeKey": "cycling"
+        },
+        "distance": 24140.0,
+        "duration": 3600.0,
+        "averageHR": 131.0,
+        "maxHR": 158.0,
+        "calories": 780.0,
+        "deviceId": 3654926501
+      },
+      "detail": {
+        "activityId": 17010414002,
+        "activityName": "Cycling: Deck 12 to Engineering",
+        "summaryDTO": {
+          "distance": 24140.0,
+          "duration": 3600.0,
+          "averageHR": 131.0,
+          "trainingEffect": 2.9
+        },
+        "metadataDTO": {
+          "deviceApplicationInstallationId": 3654926501,
+          "gcj02": false
+        },
+        "activityTypeDTO": {
+          "typeKey": "cycling"
+        }
+      },
+      "fit": ".FIT ride of 2369-04-14"
+    }
+  ],
+  "items": {
+    "personal_records": [
+      {
+        "id": 90001,
+        "typeId": 3,
+        "activityType": "running",
+        "value": 1290.0,
+        "activityId": 17010413001,
+        "prStartTimeGmt": 12600081000000
+      }
+    ],
+    "gear": [
+      {
+        "gearPk": 7001,
+        "uuid": "9c3e0b1a-7001-4c1d-9f4e-000000007001",
+        "displayName": "Starfleet issue trainers",
+        "gearTypeName": "Shoes",
+        "maximumMeters": 800000.0
+      }
+    ],
+    "badges": [
+      {
+        "badgeId": 5,
+        "badgeUuid": "b0000005",
+        "badgeName": "First Marathon",
+        "badgeEarnedDate": "2368-11-02T09:00:00.0"
+      }
+    ],
+    "workouts": [
+      {
+        "workoutId": 4001,
+        "workoutName": "Tempo intervals",
+        "sportType": {
+          "sportTypeKey": "running"
+        },
+        "estimatedDurationInSecs": 2700
+      }
+    ],
+    "goals": []
+  }
+}

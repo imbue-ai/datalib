@@ -107,6 +107,7 @@ filegroup(
         "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
         "//datalib/backend/etl/providers/yolink:tng_fixture",
         "//datalib/backend/etl/providers/pdf:pdf_fixture",
+        "//datalib/backend/etl/providers/garmin:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -201,6 +202,8 @@ genrule(
             "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
             # PDF corpus (arg 23, appended for the same reason as 21-22).
             "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng",
+            # Garmin (arg 24): the JSON spec the synthesizer expands.
+            "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         # It lives under the `unified_index/` tree the index steps own
@@ -269,6 +272,8 @@ py_test(
         "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
         # PDF corpus (arg 23, appended for the same reason as 21-22).
         "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng",
+        # Garmin (arg 24): the JSON spec the synthesizer expands.
+        "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
     ],
     data = [
         "run_sync_pipeline.py",
@@ -323,6 +328,8 @@ py_test(
         "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
         # PDF corpus (arg 23, appended for the same reason as 21-22).
         "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng",
+        # Garmin (arg 24): the JSON spec the synthesizer expands.
+        "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
     ],
     data = [
         "run_sync_pipeline.py",

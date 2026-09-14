@@ -175,6 +175,7 @@ pub async fn propfind(
         timeout: std::time::Duration::from_secs(60),
         bypass_latchkey: false,
         latchkey: latchkey.clone(),
+        bearer: None,
     };
     let resp = latchkey_curl(&req).await?;
     expect_dav_status(&req.method, &req.url, &resp)?;
@@ -203,6 +204,7 @@ pub async fn report(
         timeout: std::time::Duration::from_secs(120),
         bypass_latchkey: false,
         latchkey: latchkey.clone(),
+        bearer: None,
     };
     let resp = latchkey_curl(&req).await?;
     expect_dav_status(&req.method, &req.url, &resp)?;

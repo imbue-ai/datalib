@@ -80,6 +80,10 @@ pub enum HttpService {
     Carddav,
     Chatgpt,
     Claude,
+    /// Garmin Connect (`connectapi.garmin.com`). Not a latchkey service:
+    /// the provider mints its own bearer from a stored OAuth1 token and
+    /// sends it through [`HttpRequest::bearer`].
+    Garmin,
     Github,
     Gitlab,
     /// The Gmail API, one of the `email` source's three download modes.
@@ -143,6 +147,13 @@ pub struct HttpRequest {
     /// stored account to run as, but providers pass the struct rather
     /// than the field so a new knob reaches all of them at once.
     pub latchkey: LatchkeySettings,
+    /// A bearer token the provider holds itself, for a service latchkey
+    /// does not (Garmin mints one per hour from a stored OAuth1 token).
+    /// Sent as `Authorization: Bearer …` on the wire and deliberately
+    /// **not** part of [`fixture_key`]: it rotates, and a playback
+    /// fixture must match the request regardless of which token was
+    /// live when it was recorded.
+    pub bearer: Option<String>,
 }
 
 impl HttpRequest {
@@ -156,6 +167,7 @@ impl HttpRequest {
             timeout: Duration::from_secs(60),
             bypass_latchkey: false,
             latchkey: LatchkeySettings::default(),
+            bearer: None,
         }
     }
 
@@ -171,6 +183,7 @@ impl HttpRequest {
             timeout: Duration::from_secs(60),
             bypass_latchkey: false,
             latchkey: LatchkeySettings::default(),
+            bearer: None,
         }
     }
 
@@ -191,6 +204,11 @@ impl HttpRequest {
 
     pub fn latchkey(mut self, settings: LatchkeySettings) -> Self {
         self.latchkey = settings;
+        self
+    }
+
+    pub fn bearer(mut self, token: impl Into<String>) -> Self {
+        self.bearer = Some(token.into());
         self
     }
 }
@@ -509,6 +527,9 @@ mod live {
         }
         for (k, v) in &req.headers {
             cmd.arg("-H").arg(format!("{}: {}", k, v));
+        }
+        if let Some(token) = &req.bearer {
+            cmd.arg("-H").arg(format!("Authorization: Bearer {token}"));
         }
         // Route CF-fronted providers to the impersonating curl via the
         // dispatch curl's marker header. Only on the latchkey path -- a
@@ -925,6 +946,18 @@ mod tests {
             b"{\"q\":\"b\"}".to_vec(),
         );
         assert_ne!(fixture_key(&a), fixture_key(&b));
+    }
+
+    /// A rotating bearer must not move the fixture key, or every playback
+    /// fixture recorded for a self-authenticating provider would miss once
+    /// its token expired.
+    #[test]
+    fn fixture_key_ignores_the_bearer() {
+        let a = HttpRequest::get(HttpService::Garmin, "https://connectapi.garmin.com/x");
+        let b = a.clone().bearer("token-1");
+        let c = a.clone().bearer("token-2");
+        assert_eq!(fixture_key(&a), fixture_key(&b));
+        assert_eq!(fixture_key(&b), fixture_key(&c));
     }
 
     #[tokio::test]
