@@ -18,6 +18,12 @@ pub trait ProgressSink: Send + Sync {
     /// the result. Distinct from the progress calls above: those say how far
     /// along the work is, this says a consumer could start on it.
     fn checkpoint(&self, _version: &str) {}
+    /// A seal that says how many rows it added over the one before.
+    /// The runner keeps each consumer's queue depth from these, so a
+    /// producer that knows the number should use this form.
+    fn checkpoint_rows(&self, version: &str, _rows: u64) {
+        self.checkpoint(version);
+    }
     /// The current value of one named number — rows written, requests
     /// made, items queued. Always the whole value, never a delta: the
     /// runner's store coalesces to the newest, and a dropped position
@@ -62,6 +68,9 @@ impl Progress {
     }
     pub fn checkpoint(&self, version: &str) {
         self.sink.checkpoint(version);
+    }
+    pub fn checkpoint_rows(&self, version: &str, rows: u64) {
+        self.sink.checkpoint_rows(version, rows);
     }
     pub fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
         self.sink.metric(name, labels, value);
@@ -134,6 +143,14 @@ impl ProgressSink for TracingSink {
             version = %version,
         );
     }
+    fn checkpoint_rows(&self, version: &str, rows: u64) {
+        tracing::info!(
+            event = "progress.checkpoint",
+            source = %self.source,
+            version = %version,
+            rows = rows,
+        );
+    }
     fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
         tracing::trace!(
             event = "progress.metric",
@@ -179,6 +196,11 @@ impl ProgressSink for FanOut {
     fn checkpoint(&self, version: &str) {
         for s in &self.sinks {
             s.checkpoint(version);
+        }
+    }
+    fn checkpoint_rows(&self, version: &str, rows: u64) {
+        for s in &self.sinks {
+            s.checkpoint_rows(version, rows);
         }
     }
     fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
@@ -241,6 +263,12 @@ mod tests {
         fn checkpoint(&self, version: &str) {
             self.checkpoints.lock().unwrap().push(version.to_string());
         }
+        fn checkpoint_rows(&self, version: &str, rows: u64) {
+            self.checkpoints
+                .lock()
+                .unwrap()
+                .push(format!("{version}+{rows}"));
+        }
         fn metric(&self, name: &str, _labels: &[(&str, &str)], value: i64) {
             self.metrics.lock().unwrap().push((name.to_string(), value));
         }
@@ -299,6 +327,18 @@ mod tests {
             vec!["deadbeef".to_string()],
             "FanOut must forward checkpoint to its second sink",
         );
+    }
+
+    /// A seal with a row count must reach the leaf *as* that form, not
+    /// fall through to the plain one — the default trait method does
+    /// exactly that fall-through, so a `FanOut` that forgot to forward
+    /// would silently drop every row count.
+    #[test]
+    fn fanout_forwards_checkpoint_rows_as_itself() {
+        let a = Arc::new(RecordingSink::default());
+        let sinks: Vec<Arc<dyn ProgressSink>> = vec![a.clone()];
+        FanOut::new(sinks).checkpoint_rows("abc", 12);
+        assert_eq!(*a.checkpoints.lock().unwrap(), vec!["abc+12".to_string()]);
     }
 
     /// One method later again: a metric that stops at `FanOut` never

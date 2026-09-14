@@ -102,6 +102,10 @@ pub async fn run(
         Ok(Some(version)) => Ok(vec![OutputClaim {
             path: tree_rel.to_string(),
             version,
+            // The last segment's size is inside the session that sealed
+            // it; a consumer's queue from a download reads the seals
+            // and treats the finish as "nothing more to come".
+            rows: None,
         }]),
         // Stock-sqlite dev build, or nothing materialized yet: no
         // version we can vouch for, so let the runner hash instead.

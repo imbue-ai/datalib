@@ -255,8 +255,19 @@ Each slice is one PR that leaves the tree green.
    run the step took part in, not only the last; the worker's failure
    tail is checked end to end against the real runner
    (`worker_failure_tail_test`).
-3. **Queue depth between steps** — `rows` on `checkpoint`, the
-   runner's per-consumer sum, `queued` published for consumers.
+3. ~~**Queue depth between steps**~~ **Done.** `rows` on `checkpoint`
+   and on each `outcome` output; `QueueLedger` in `scheduler.rs` keeps,
+   per consumer and producer, the seals not yet read and publishes
+   `queued{from=<producer>}` — rising on a seal, drained when a pass
+   that read up to that version completes, cleared when the consumer
+   is found up to date. Two rules the test found: a re-announced seal
+   counts once, and a checkpoint arriving after the producer's outcome
+   is ignored (it would otherwise rewind the output's version — a
+   hazard that predates this slice). Render and the raw store count
+   rows at each seal; render's outcome carries its last segment, the
+   download's does not yet (the count lives inside the session that
+   sealed it). The Activity chip sums every `queued` series and shows
+   the per-producer breakdown on hover.
 4. **Rates and flatlines** — `metric_samples` drawn as rates; a step
    whose `metrics` stopped moving while `log` did not, flagged. Closes
    the "progress-flatline" item of #136.

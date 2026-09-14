@@ -104,8 +104,8 @@ pub async fn run(
     // Render is synchronous work driven by `futures`' executor (NOT
     // tokio's — providers block_on their own internal futures); run it
     // on a blocking thread.
-    let versions_after =
-        tokio::task::spawn_blocking(move || -> Result<(BTreeSet<u32>, HashMap<String, i64>)> {
+    let versions_after = tokio::task::spawn_blocking(
+        move || -> Result<(BTreeSet<u32>, HashMap<String, i64>, u64)> {
             // The user's latency/history dial, the same one downloads take.
             let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(
                 datalib_etl::checkpointer::Policy::Every(control_cadence.unwrap_or_default()),
@@ -139,11 +139,12 @@ pub async fn run(
                         planned_name,
                         docs_in.load(Ordering::SeqCst)
                     ))?;
+                    let rows = checkpointer.pending();
                     checkpointer.sealed();
                     // `None` means nothing was dirty after all, so no
                     // version moved and there is nothing to announce.
                     if let Some(hash) = sealed {
-                        progress.checkpoint(&hash);
+                        progress.checkpoint_rows(&hash, rows);
                     }
                 }
                 Ok(())
@@ -282,12 +283,16 @@ pub async fn run(
             let after = store.render_versions()?;
             let problems = store.problem_counts()?;
             store.close();
-            Ok((after, problems))
-        })
-        .await
-        .context("render task panicked")??;
+            // What the final commit sealed beyond the last checkpoint —
+            // the last segment of a consumer's queue.
+            let unsealed = checkpointer.pending();
+            Ok((after, problems, unsealed))
+        },
+    )
+    .await
+    .context("render task panicked")??;
 
-    let (versions_on_disk, problem_counts) = versions_after;
+    let (versions_on_disk, problem_counts, rows_in_final_commit) = versions_after;
     let docs = docs.load(Ordering::SeqCst);
     let removed = removed.load(Ordering::SeqCst);
     tracing::info!(docs, removed, "render: docs (re)rendered");
@@ -333,6 +338,7 @@ pub async fn run(
         Some(version) => Ok(vec![OutputClaim {
             path: out_rel,
             version,
+            rows: Some(rows_in_final_commit),
         }]),
         // No cursor: a provider that hasn't been ported to the
         // dolt-diff render path, so we have nothing content-derived to
