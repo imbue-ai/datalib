@@ -12,6 +12,7 @@ use datalib_etl_chat_common::render::{
 };
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::Lookup;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 use uuid::Uuid;
 
@@ -142,9 +143,9 @@ pub fn render_all(
     tracing::info!(
         source = source_id,
         scan_elapsed_ms = elapsed_ms,
-        changed_threads = parsed
+        threads_to_render = parsed
             .scan
-            .changed_threads
+            .render
             .as_ref()
             .map(|s| s.len() as i64)
             .unwrap_or(-1),
@@ -253,6 +254,10 @@ fn build_chat(
 ) -> (NormalizedChat, BlobBundle) {
     let account_id = &bucket.account_id;
     let tuid = thread_uuid(account_id, &bucket.thread_id);
+    // The account row and each mailbox row are looked up per thread,
+    // and declared as they are.
+    let mailbox_name = bucket.inputs.lookup("mailboxes", mailbox_name);
+    let account_label = bucket.inputs.lookup("accounts", account_label);
     let subject = bucket
         .emails
         .first()
@@ -432,7 +437,7 @@ fn build_chat(
 
     // The thread's title `↗` points at the root (first) email's outlink.
     let thread_source_url = items.first().and_then(|i| i.source_url.clone());
-    let chat = NormalizedChat {
+    let mut chat = NormalizedChat {
         inputs: Vec::new(),
         path_prefix: None,
         id: tuid.clone(),
@@ -459,13 +464,15 @@ fn build_chat(
             items,
         }],
     };
+    // After the account lookup above, so it is declared too.
+    chat.inputs = bucket.inputs.declared();
     (chat, render_bundle)
 }
 
 fn labels_for_email(
     em: &LoadedEmail,
     bucket: &super::parse::EmailThreadBucket,
-    mailbox_name: &HashMap<String, String>,
+    mailbox_name: Lookup<'_, HashMap<String, String>>,
 ) -> Vec<String> {
     bucket
         .joins

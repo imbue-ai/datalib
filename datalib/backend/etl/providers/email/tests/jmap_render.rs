@@ -117,15 +117,15 @@ fn make_loaded() -> ParsedEmail {
             emails,
             joins,
             blobs: bundle,
+            inputs: Default::default(),
         }],
         docs_skipped: 0,
         scan: ScanResult {
             render: None,
-            changed_threads: None,
+            gone: Vec::new(),
             new_head: None,
             scan_elapsed: None,
         },
-        vanished_threads: Vec::new(),
     }
 }
 
@@ -354,15 +354,15 @@ fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> 
             emails,
             joins,
             blobs: bundle,
+            inputs: Default::default(),
         }],
         docs_skipped: 0,
         scan: ScanResult {
             render: None,
-            changed_threads: None,
+            gone: Vec::new(),
             new_head: None,
             scan_elapsed: None,
         },
-        vanished_threads: Vec::new(),
     }
 }
 
