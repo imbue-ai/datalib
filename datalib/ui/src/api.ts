@@ -741,24 +741,33 @@ export async function cancelJob(id: string, signal?: AbortSignal): Promise<void>
 
 // --- The run store -----------------------------------------------------------
 
-// One run, as `system/runs.sqlite` lists it. A job started from the app
-// has the job's id as its run id.
+// The rows of `system/runs.sqlite`, mirroring `app_schema::runs` in
+// datalib/backend/app_schema/src/runs/ — hand-kept in step, like the
+// other vocabularies here. Every stamp is UTC (`…+00:00`), with the
+// offset it was written in beside it as `tz_offset` (`+02:00`).
+
+// One run. A job started from the app has the job's id as its run id.
 export type RunInfo = {
   run_id: string;
   started_at: string;
   finished_at: string | null;
+  tz_offset: string | null;
 };
 
-// One log line, as the run store holds it.
+// One log line.
 export type RunLogLine = {
-  // Monotone within the store; the tail cursor.
+  // Assigned by the store, monotone within it; the tail cursor.
   seq: number;
+  run_id: string;
   step: string | null;
   attempt: number;
+  // The line's own clock when it carried one, else when the runner read it.
   ts: string;
+  tz_offset: string | null;
   // Which pipe of the step it came from; null for a line the runner wrote.
   stream: "stdout" | "stderr" | null;
-  level: "info" | "warn" | "error";
+  // A word this build may not know: the store keeps what was written.
+  level: "info" | "warn" | "error" | string;
   target: string | null;
   thread: string | null;
   msg: string;

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // One run's log, as a grid: every line the run store holds for it,
-// sortable and filterable by AG Grid, appended to as the run goes.
+// sortable and filterable by AG Grid, appended to as the run goes — and
+// a picker for the other runs the step took part in, since "what did
+// it do last time" is the question right after "what is it doing".
 //
 // The tail is a cursor, not a stream: the store assigns each line a
 // monotone `seq`, and each `dag_changed` frame (the runner touched the
@@ -20,21 +22,45 @@ import {
   type ITooltipParams,
   type ValueFormatterParams,
 } from "ag-grid-community";
-import { fetchRunLog, type RunLogLine } from "@/api";
+import { fetchRunLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
 import { subscribeLive } from "@/live";
-import { compareStamps, formatStamp, formatTimeOfDay } from "@/config/timeFormat";
+import {
+  compareStamps,
+  formatRelative,
+  formatStamp,
+  formatTimeOfDay,
+} from "@/config/timeFormat";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const props = defineProps<{
+  /// The run the panel opens on.
   runId: string;
   /// The step the panel opens narrowed to. Cleared from the panel to see
   /// the whole run.
   step: string | null;
-  /// Whether the run may still be writing: tail while true.
+  /// Whether that run may still be writing: tail while true.
   live: boolean;
 }>();
+
+const emit = defineEmits<{
+  /// The picker moved to another run, so the caller can say which.
+  (e: "run-changed", run: RunInfo): void;
+}>();
+
+/// The run on screen; starts as the one opened, moves with the picker.
+const runId = ref(props.runId);
+/// The runs the picker offers: the ones this step took part in, newest
+/// first, or every recent run when the panel is not about one step.
+const runs = ref<RunInfo[]>([]);
+/// Whether the run on screen may still be writing. The opened run says
+/// so by prop; a picked one by whether the store has closed it.
+const live = computed(() => {
+  if (runId.value === props.runId) return props.live;
+  const r = runs.value.find((x) => x.run_id === runId.value);
+  return !!r && r.finished_at == null;
+});
 
 const stepOnly = ref(true);
 const lines = shallowRef<RunLogLine[]>([]);
@@ -63,7 +89,7 @@ async function load(fresh: boolean) {
   }
   error.value = null;
   try {
-    const got = await fetchRunLog(props.runId, { step: stepFilter(), afterSeq: lastSeq });
+    const got = await fetchRunLog(runId.value, { step: stepFilter(), afterSeq: lastSeq });
     if (got.length > 0) {
       lastSeq = got[got.length - 1].seq;
       lines.value = fresh ? got : [...lines.value, ...got];
@@ -94,6 +120,28 @@ function onBodyScrollEnd() {
 function toggleScope() {
   stepOnly.value = !stepOnly.value;
   void load(true);
+}
+
+async function loadRuns() {
+  try {
+    runs.value = await fetchRuns({ step: props.step ?? undefined, limit: 30 });
+  } catch {
+    // The picker is a convenience; the opened run still shows.
+  }
+}
+
+function pickRun(ev: Event) {
+  runId.value = (ev.target as HTMLSelectElement).value;
+  const picked = runs.value.find((r) => r.run_id === runId.value);
+  if (picked) emit("run-changed", picked);
+  void load(true);
+}
+
+/// How a run reads in the picker: when it started, and whether it is
+/// still going — the id itself is in the header for whoever needs it.
+function runLabel(r: RunInfo): string {
+  const when = formatRelative(r.started_at, Date.now());
+  return r.finished_at == null ? `${when} · running` : when;
 }
 
 function levelClass(p: CellClassParams<RunLogLine>): string {
@@ -163,14 +211,16 @@ function onQuickFilter(ev: Event) {
 
 onMounted(() => {
   void load(true);
-  if (props.live) {
-    unsubscribe = subscribeLive({
-      root: (e) => {
-        if (e.kind === "dag_changed") void load(false);
-      },
-      resync: () => void load(false),
-    });
-  }
+  void loadRuns();
+  unsubscribe = subscribeLive({
+    root: (e) => {
+      if (e.kind === "dag_changed" && live.value) void load(false);
+    },
+    resync: () => {
+      void loadRuns();
+      if (live.value) void load(false);
+    },
+  });
 });
 
 onUnmounted(() => {
@@ -192,9 +242,20 @@ onUnmounted(() => {
       <button v-if="props.step" class="m2-btn" @click="toggleScope">
         {{ stepOnly ? "Show the whole run" : "Only this step" }}
       </button>
+      <select
+        v-if="runs.length > 1"
+        class="rl-run"
+        :value="runId"
+        aria-label="Which run"
+        @change="pickRun"
+      >
+        <option v-for="r in runs" :key="r.run_id" :value="r.run_id">
+          {{ runLabel(r) }}
+        </option>
+      </select>
       <span class="rl-count">
         {{ lines.length }} line{{ lines.length === 1 ? "" : "s" }}
-        <span v-if="props.live"> · following</span>
+        <span v-if="live"> · following</span>
       </span>
     </div>
     <p v-if="error" class="rl-note bad">{{ error }}</p>
@@ -239,6 +300,15 @@ onUnmounted(() => {
 .rl-search {
   flex: 1 1 auto;
   min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  background: var(--datalib-bg);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+.rl-run {
   padding: 4px 8px;
   border: 1px solid var(--datalib-border);
   border-radius: 4px;

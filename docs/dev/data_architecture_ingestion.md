@@ -430,6 +430,12 @@ Detection is available, not delivered. See [`TODO.md`](/TODO.md).
 
 ## Timestamps: one clock, no fabrication
 
+> **Direction (2026-09-14, #427):** the convention below keeps the
+> source's offset *inside* the stamp. New stores keep it *beside* the
+> stamp instead — a UTC column plus a `tz_offset` column, so text order
+> is instant order. `system/runs.sqlite` is the first; the stores this
+> section describes have not moved yet.
+
 What goes in `GridRow.when_ts` — the global-ordering policy, the
 microsecond-bump recipe for sub-items, no-fabricated-timestamps, and
 which entity kinds legitimately have none — is a projection concern and

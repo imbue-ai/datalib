@@ -102,7 +102,7 @@ class RunStoreEndToEnd(unittest.TestCase):
         con = sqlite3.connect(f"file:{self.store}?mode=ro", uri=True)
         try:
             runs = con.execute(
-                "SELECT run_id, started_at, finished_at FROM runs"
+                "SELECT run_id, started_at, finished_at, tz_offset FROM runs"
             ).fetchall()
             steps = {
                 r[0]: r
@@ -118,7 +118,7 @@ class RunStoreEndToEnd(unittest.TestCase):
                 )
             }
             log = con.execute(
-                "SELECT step, attempt, stream, level, thread, ts, msg, fields "
+                "SELECT step, attempt, stream, level, thread, ts, msg, fields, tz_offset "
                 "FROM log WHERE run_id = ? ORDER BY seq",
                 (RUN_ID,),
             ).fetchall()
@@ -126,8 +126,15 @@ class RunStoreEndToEnd(unittest.TestCase):
         finally:
             con.close()
 
-        self.assertEqual([(r[0], r[1]) for r in runs], [(RUN_ID, NOW)])
+        # Stamps are kept in UTC with microseconds, the offset they were
+        # written in beside them; `--now` was given in UTC, so its
+        # offset column says so.
+        self.assertEqual(
+            [(r[0], r[1], r[3]) for r in runs],
+            [(RUN_ID, "2369-04-15T00:00:00.000000+00:00", "+00:00")],
+        )
         self.assertIsNotNone(runs[0][2], "a finished run has a finish time")
+        self.assertTrue(runs[0][2].endswith("+00:00"), runs[0][2])
         self.assertGreater(version, 0, "the store names its schema version")
         self.assertEqual(
             sorted(steps),
@@ -148,7 +155,7 @@ class RunStoreEndToEnd(unittest.TestCase):
                 self.assertEqual(metrics[(step, "rows_upserted", "table=t")], 12)
                 lines = {
                     (msg, stream, level, thread, fields)
-                    for (s, _, stream, level, thread, _, msg, fields) in log
+                    for (s, _, stream, level, thread, _, msg, fields, _) in log
                     if s == step
                 }
                 # Both pipes are captured, each line saying which it
@@ -165,8 +172,17 @@ class RunStoreEndToEnd(unittest.TestCase):
                 slow = next(r for r in log if r[0] == step and r[6] == "slow")
                 self.assertEqual(slow[1], 1, "the line names its attempt")
                 self.assertEqual(
-                    slow[5], "2369-04-15T00:00:01Z", "a line's own clock is kept"
+                    (slow[5], slow[8]),
+                    ("2369-04-15T00:00:01.000000+00:00", "+00:00"),
+                    "a line's own clock is kept, as UTC plus the offset it wrote",
                 )
+                # A plain line is stamped by the runner, in the runner's
+                # own zone — whatever that is on this machine.
+                plain = next(
+                    r for r in log if r[0] == step and r[6] == "a plain line on stderr"
+                )
+                self.assertTrue(plain[5].endswith("+00:00"), plain[5])
+                self.assertRegex(plain[8], r"^[+-]\d\d:\d\d$")
 
     def test_the_store_leaves_no_doltlite_lock_sidecar(self) -> None:
         # A `.<name>-lock` file is doltlite's tell. Its absence is how we

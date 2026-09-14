@@ -2,7 +2,7 @@
 //! *process's* position sees it, and the coalescing and retention rules
 //! hold.
 
-use datalib_runs::{log_after, snapshot, LogRow, MetricRow, Retention, RunWriter, StepRow};
+use datalib_runs::{log_after, snapshot, LogRow, MetricRow, Retention, RunWriter, StepRunRow};
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
 
@@ -10,8 +10,8 @@ fn start(root: &std::path::Path, run_id: &str) -> RunWriter {
     RunWriter::start(root, run_id, run_id, Retention::default()).expect("start the store")
 }
 
-fn at(step: &str, state: &str, msg: &str) -> StepRow {
-    StepRow {
+fn at(step: &str, state: &str, msg: &str) -> StepRunRow {
+    StepRunRow {
         step: step.into(),
         state: state.into(),
         attempt: 1,
@@ -28,6 +28,7 @@ fn metric(step: &str, name: &str, value: i64) -> MetricRow {
         labels: String::new(),
         value,
         updated_at: T0.into(),
+        ..Default::default()
     }
 }
 
@@ -59,6 +60,11 @@ async fn what_is_published_is_readable() {
     assert!(
         snap.finished_at.is_some(),
         "a dropped writer closes the run"
+    );
+    assert!(
+        snap.finished_at.as_deref().unwrap().ends_with("+00:00"),
+        "stamps are stored in UTC: {:?}",
+        snap.finished_at
     );
     assert_eq!(snap.steps.len(), 2, "{snap:?}");
     let fetch = snap.steps.iter().find(|r| r.step == "slack/raw").unwrap();

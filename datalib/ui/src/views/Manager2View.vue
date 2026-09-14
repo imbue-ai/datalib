@@ -36,6 +36,7 @@ import {
   fetchAllJobs,
   fetchDag,
   fetchRuns,
+  type RunInfo,
   fetchPipelineStorage,
   fetchTreeHistory,
   fetchFrontend,
@@ -1329,6 +1330,20 @@ const logFor = ref<{ row: Row; runId: string; live: boolean; startedAt: string |
   null,
 );
 const logError = ref<string | null>(null);
+/// The run the panel was opened on. Its picker can move to another run,
+/// which updates `logFor` for the header but must not remount the panel.
+const logOpenedOn = ref("");
+
+/// The picker in the panel moved: say so in the header.
+function onLogRunChanged(run: RunInfo) {
+  if (!logFor.value) return;
+  logFor.value = {
+    ...logFor.value,
+    runId: run.run_id,
+    live: run.finished_at == null,
+    startedAt: run.started_at,
+  };
+}
 
 /// The run whose log answers "what was this step doing": the one in
 /// flight if the step is in it, else the one its record names, else —
@@ -1356,6 +1371,7 @@ async function openStepLog(row: Row) {
       return;
     }
     logFor.value = { row, ...run };
+    logOpenedOn.value = run.runId;
   } catch (e) {
     logError.value = (e as Error).message;
     logFor.value = { row, runId: "", live: false, startedAt: null };
@@ -2527,7 +2543,7 @@ onUnmounted(() => {
             <p>
               <code>{{ logFor.row.id }}</code>
               <span v-if="logFor.runId">
-                · {{ logFor.live ? "the run in flight" : "its last run" }}<span
+                · {{ logFor.live ? "a run in flight" : "a past run" }}<span
                   v-if="logFor.startedAt"
                   :title="formatStamp(logFor.startedAt)"
                 >, started {{ formatRelative(logFor.startedAt, Date.now()) }}</span>
@@ -2540,10 +2556,11 @@ onUnmounted(() => {
         <p v-if="logError" class="m2-logs-note bad">{{ logError }}</p>
         <RunLogPanel
           v-else-if="logFor.runId"
-          :key="logFor.runId + '/' + logFor.row.id"
-          :run-id="logFor.runId"
+          :key="logOpenedOn + '/' + logFor.row.id"
+          :run-id="logOpenedOn"
           :step="logFor.row.id"
           :live="logFor.live"
+          @run-changed="onLogRunChanged"
         />
       </div>
     </div>

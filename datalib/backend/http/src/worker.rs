@@ -199,7 +199,11 @@ fn terminate(pid: u32) {
     }
 }
 
-async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow::Result<()> {
+pub async fn run_job(
+    repo: &DynAppRepo,
+    cfg: &WorkerConfig,
+    job: SyncJobRow,
+) -> anyhow::Result<()> {
     let Some(dag_bin) = cfg.dag_bin.as_ref() else {
         anyhow::bail!("datalib-dag binary not found — set $DATALIB_DAG_BIN to its path");
     };

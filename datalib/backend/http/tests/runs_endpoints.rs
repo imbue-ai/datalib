@@ -6,7 +6,7 @@ use axum::http::{Request, StatusCode};
 use datalib_core::app_store::AppStore;
 use datalib_http::applets::AppletRegistry;
 use datalib_http::{router, ApiToken, AppState};
-use datalib_runs::{LogRow, MetricRow, Retention, RunWriter, StepRow};
+use datalib_runs::{LogRow, MetricRow, Retention, RunWriter, StepRunRow};
 use std::path::Path;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -56,7 +56,7 @@ fn write_two_runs(root: &Path) {
     let t = "2026-09-11T10:00:00+01:00";
     {
         let w = RunWriter::start(root, "run-1", "2026-09-10T10:00:00+01:00", keep).unwrap();
-        w.step(StepRow {
+        w.step(StepRunRow {
             step: "slack/ingest".into(),
             state: "succeeded".into(),
             attempt: 1,
@@ -73,7 +73,7 @@ fn write_two_runs(root: &Path) {
     }
     {
         let w = RunWriter::start(root, "run-2", "2026-09-11T10:00:00+01:00", keep).unwrap();
-        w.step(StepRow {
+        w.step(StepRunRow {
             step: "slack/ingest".into(),
             state: "running".into(),
             attempt: 1,
@@ -81,7 +81,7 @@ fn write_two_runs(root: &Path) {
             updated_at: t.into(),
             ..Default::default()
         });
-        w.step(StepRow {
+        w.step(StepRunRow {
             step: "slack/render_markdown".into(),
             state: "pending".into(),
             updated_at: t.into(),
@@ -93,6 +93,7 @@ fn write_two_runs(root: &Path) {
             labels: "table=slack_messages".into(),
             value: 42,
             updated_at: t.into(),
+            ..Default::default()
         });
         w.metric(MetricRow {
             step: "slack/ingest".into(),
@@ -100,6 +101,7 @@ fn write_two_runs(root: &Path) {
             labels: String::new(),
             value: 7,
             updated_at: t.into(),
+            ..Default::default()
         });
         for (level, msg) in [("info", "hello"), ("warn", "slow"), ("info", "still here")] {
             w.log(LogRow {

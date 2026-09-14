@@ -205,6 +205,27 @@ rust_test(
     ],
 )
 
+# The worker's failure tail, against the real runner: a config the
+# runner refuses is only ever said on its stderr, and that has to land
+# in the job's error.
+rust_test(
+    name = "worker_failure_tail_test",
+    srcs = ["tests/worker_failure_tail.rs"],
+    data = ["//datalib/backend/dag:datalib_dag_bin"],
+    edition = "2021",
+    env = {
+        "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+    },
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/runs:datalib_runs",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 # Regression guard for issue #138: the token gate that fronts every
 # route (`src/auth.rs`).
 rust_test(

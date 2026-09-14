@@ -77,16 +77,29 @@ accumulate until a retention rule removes them, so "what did this step
 log last Tuesday" is an ordinary query and the log panel stops walking
 eight files.
 
-Tables:
+Tables — declared as `#[derive(PortableTable)]` rows in
+`app_schema::runs` (`datalib/backend/app_schema/src/runs/`), one file
+per table, so the DDL comes from the struct and the http endpoints
+serve the same rows:
 
 ```
-runs           run_id, started_at, finished_at
+runs           run_id, started_at, finished_at, tz_offset
 step_runs      run_id, step, state, attempt, started_at, finished_at,
-               error, msg, updated_at
-log            seq (rowid), run_id, step, ts, level, target, msg, fields
-metrics        run_id, step, name, labels, value, updated_at
-metric_samples run_id, step, name, labels, ts, value
+               error, msg, updated_at, tz_offset
+log            seq (rowid), run_id, step, attempt, ts, tz_offset, stream,
+               level, target, thread, msg, fields
+metrics        run_id, step, name, labels, value, updated_at, tz_offset
+metric_samples run_id, step, name, labels, ts, tz_offset, value
 ```
+
+Every stamp is **UTC** (`…+00:00`, microseconds) with the offset it was
+written in beside it — a step's own tracing line keeps its zone, the
+runner's arrival stamps keep the runner's. That is the shape #427
+moves the rest of the tree towards; here it is what makes text order
+instant order, so a reader sorts a `ts` column without parsing it.
+`level` and `stream` are text columns written through the `LogLevel`
+and `Stream` enums beside the row; `PortableTable` binds scalars only,
+and a reader keeps a word this build does not know rather than guessing.
 
 `step_runs` is today's `step_progress` with history and without
 `done`/`total` (those become metrics, below). `log.fields` is a JSON
@@ -238,7 +251,10 @@ Each slice is one PR that leaves the tree green.
    **Activity** column shows `queued`, every metric, and the warn/error
    count. `StepProgress.vue` is one bar; `sync/progress.ts` and
    `stepLog.ts` are deleted. The old `/sources` tab keeps working on
-   the new endpoints. Closes #161 and #164.
+   the new endpoints. Closes #161 and #164. The log panel offers every
+   run the step took part in, not only the last; the worker's failure
+   tail is checked end to end against the real runner
+   (`worker_failure_tail_test`).
 3. **Queue depth between steps** — `rows` on `checkpoint`, the
    runner's per-consumer sum, `queued` published for consumers.
 4. **Rates and flatlines** — `metric_samples` drawn as rates; a step

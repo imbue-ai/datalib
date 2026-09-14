@@ -1567,6 +1567,7 @@ One enum per vocabulary, living with whoever mints it:
 | what a step is doing in a run | `RunState` | `dag/src/run_state.rs` |
 | why a step failed | `FailureKind` | `dag/src/step.rs` |
 | what the run store itself names | `LiveState` | `runs/src/lib.rs` |
+| a log line's severity, and which pipe it came from | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |
 | a sync job's lifecycle | `JobState`, `JobKind` | `app_schema/src/sync_jobs.rs` |
 | a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
@@ -1651,6 +1652,15 @@ timezone offset present in the source**.
 If you find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop and
 use `isoformat()` instead. The columns are `VARCHAR(40)`, wide enough for
 the longest offset-suffixed form including microseconds.
+
+**The direction is changing**, one store at a time (#427): keep the
+offset, but in its own column. `system/runs.sqlite` (`app_schema::runs`)
+is the first — every stamp there is UTC (`…+00:00`) and each table
+carries a `tz_offset` (`+02:00`) beside it — so that text order is
+instant order and `ORDER BY` a timestamp is correct without parsing.
+`IsoOffsetTimestamp::to_utc_and_offset()` is the helper. A new table
+should follow that shape; the rules above still describe every other
+store until #427 moves it.
 
 ## Auth (web API)
 

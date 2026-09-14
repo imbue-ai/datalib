@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
-use crate::{is_terminal, runs_path, Retention, SCHEMA, SCHEMA_VERSION};
+use crate::{is_terminal, runs_path, Retention, INDEXES, SCHEMA_VERSION};
+use app_schema::runs::{LogRow, MetricRow, MetricSampleRow, RunRow, StepRunRow};
 
 /// How often the writer thread flushes. 200ms is under the threshold
 /// where a progress display reads as laggy, and far above the cost of
@@ -135,7 +136,12 @@ async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
 }
 
 async fn install_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    sqlx::raw_sql(SCHEMA).execute(pool).await?;
+    for ddl in app_schema::runs::ddl()
+        .into_iter()
+        .chain(INDEXES.iter().copied())
+    {
+        sqlx::query(ddl).execute(pool).await?;
+    }
     // Safe: a compile-time integer, not input.
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "PRAGMA user_version = {SCHEMA_VERSION}"
@@ -143,59 +149,6 @@ async fn install_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
     Ok(())
-}
-
-/// One step's state in one run, as a reader sees it.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct StepRow {
-    pub step: String,
-    /// A [`crate::LiveState`], or the terminal status the scheduler gave it.
-    pub state: String,
-    /// Invocations so far this run; 0 before the first.
-    pub attempt: u32,
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
-    pub error: Option<String>,
-    /// The step's own words: "conversations.list", "3 of 9 channels".
-    pub msg: Option<String>,
-    pub updated_at: String,
-}
-
-/// One log line. `seq` is assigned by the store; a writer leaves it 0.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct LogRow {
-    pub seq: i64,
-    /// `None` for a line about the run rather than one step.
-    pub step: Option<String>,
-    /// Which invocation of the step within the run; 0 when unknown.
-    pub attempt: u32,
-    /// The line's own timestamp when it carried one, else when the
-    /// runner saw it.
-    pub ts: String,
-    /// `stdout` or `stderr` for a subprocess's line; `None` for one the
-    /// runner wrote.
-    pub stream: Option<String>,
-    pub level: String,
-    /// The tracing target, when the line was structured tracing output.
-    pub target: Option<String>,
-    /// The thread that wrote it, when the line said.
-    pub thread: Option<String>,
-    pub msg: String,
-    /// A JSON object of the structured fields beyond the message, when
-    /// there were any.
-    pub fields: Option<String>,
-}
-
-/// The current value of one metric series.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct MetricRow {
-    pub step: String,
-    pub name: String,
-    /// The labels canonicalized to one string (`table=slack_messages`),
-    /// empty for a series with none. See [`canonical_labels`].
-    pub labels: String,
-    pub value: i64,
-    pub updated_at: String,
 }
 
 /// `k=v` pairs joined with `,`, in key order — one spelling per label
@@ -208,14 +161,6 @@ pub fn canonical_labels(labels: &BTreeMap<String, String>) -> String {
         .join(",")
 }
 
-/// One run, as the `runs` table lists it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RunRow {
-    pub run_id: String,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-}
-
 /// One run in the store, as a reader sees it.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Snapshot {
@@ -225,7 +170,8 @@ pub struct Snapshot {
     pub run_id: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
-    pub steps: Vec<StepRow>,
+    pub tz_offset: Option<String>,
+    pub steps: Vec<StepRunRow>,
     pub metrics: Vec<MetricRow>,
     /// `warn` and `error` log rows per step — the E of USE.
     pub errors: BTreeMap<String, i64>,
@@ -261,7 +207,7 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT r.run_id, r.started_at, r.finished_at FROM runs r \
+        "SELECT r.run_id, r.started_at, r.finished_at, r.tz_offset FROM runs r \
          WHERE ? IS NULL OR EXISTS \
            (SELECT 1 FROM step_runs s WHERE s.run_id = r.run_id AND s.step = ?) \
          ORDER BY r.started_at DESC LIMIT ?",
@@ -278,13 +224,14 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
             run_id: r.get("run_id"),
             started_at: r.get("started_at"),
             finished_at: r.get("finished_at"),
+            tz_offset: r.get("tz_offset"),
         })
         .collect()
 }
 
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
     let Some(run) = sqlx::query(
-        "SELECT run_id, started_at, finished_at FROM runs \
+        "SELECT run_id, started_at, finished_at, tz_offset FROM runs \
          WHERE ? IS NULL OR run_id = ? ORDER BY started_at DESC LIMIT 1",
     )
     .bind(run_id)
@@ -296,26 +243,28 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     };
     let run_id: String = run.get("run_id");
     let steps = sqlx::query(
-        "SELECT step, state, attempt, started_at, finished_at, error, msg, updated_at \
+        "SELECT step, state, attempt, started_at, finished_at, error, msg, updated_at, tz_offset \
          FROM step_runs WHERE run_id = ? ORDER BY step",
     )
     .bind(&run_id)
     .fetch_all(pool)
     .await?
     .iter()
-    .map(|r| StepRow {
+    .map(|r| StepRunRow {
+        run_id: run_id.clone(),
         step: r.get("step"),
         state: r.get("state"),
-        attempt: r.get::<i64, _>("attempt") as u32,
+        attempt: r.get("attempt"),
         started_at: r.get("started_at"),
         finished_at: r.get("finished_at"),
         error: r.get("error"),
         msg: r.get("msg"),
         updated_at: r.get("updated_at"),
+        tz_offset: r.get("tz_offset"),
     })
     .collect();
     let metrics = sqlx::query(
-        "SELECT step, name, labels, value, updated_at FROM metrics \
+        "SELECT step, name, labels, value, updated_at, tz_offset FROM metrics \
          WHERE run_id = ? ORDER BY step, name, labels",
     )
     .bind(&run_id)
@@ -323,11 +272,13 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     .await?
     .iter()
     .map(|r| MetricRow {
+        run_id: run_id.clone(),
         step: r.get("step"),
         name: r.get("name"),
         labels: r.get("labels"),
         value: r.get("value"),
         updated_at: r.get("updated_at"),
+        tz_offset: r.get("tz_offset"),
     })
     .collect();
     let errors = sqlx::query(
@@ -344,6 +295,7 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         run_id: Some(run_id),
         started_at: run.get("started_at"),
         finished_at: run.get("finished_at"),
+        tz_offset: run.get("tz_offset"),
         steps,
         metrics,
         errors,
@@ -368,8 +320,8 @@ pub async fn log_after(
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT seq, step, attempt, ts, stream, level, target, thread, msg, fields FROM log \
-         WHERE run_id = ? AND seq > ? AND (? IS NULL OR step = ?) \
+        "SELECT seq, step, attempt, ts, tz_offset, stream, level, target, thread, msg, fields \
+         FROM log WHERE run_id = ? AND seq > ? AND (? IS NULL OR step = ?) \
          ORDER BY seq LIMIT ?",
     )
     .bind(run_id)
@@ -384,9 +336,11 @@ pub async fn log_after(
     rows.iter()
         .map(|r| LogRow {
             seq: r.get("seq"),
+            run_id: run_id.to_string(),
             step: r.get("step"),
-            attempt: r.get::<i64, _>("attempt") as u32,
+            attempt: r.get("attempt"),
             ts: r.get("ts"),
+            tz_offset: r.get("tz_offset"),
             stream: r.get("stream"),
             level: r.get("level"),
             target: r.get("target"),
@@ -401,7 +355,7 @@ pub async fn log_after(
 /// coalesce to the newest; log lines never do.
 #[derive(Default)]
 struct Pending {
-    steps: BTreeMap<String, StepRow>,
+    steps: BTreeMap<String, StepRunRow>,
     logs: Vec<LogRow>,
     metrics: BTreeMap<(String, String, String), MetricRow>,
 }
@@ -434,9 +388,13 @@ impl RunWriter {
             .name("run-store".into())
             .spawn({
                 let pending = pending.clone();
+                // The start stamp arrives as the runner wrote it, offset
+                // and all; the store keeps UTC and the offset apart.
+                let (started_at, tz_offset) = split_stamp(started_at);
                 let run = RunInfo {
                     run_id: run_id.to_string(),
-                    started_at: started_at.to_string(),
+                    started_at,
+                    tz_offset,
                     retention,
                 };
                 move || writer_loop(path, run, pending, rx)
@@ -458,7 +416,9 @@ impl RunWriter {
         }
     }
 
-    pub fn step(&self, next: StepRow) {
+    /// The row's `run_id` is ignored: every row this writer takes belongs
+    /// to the run it was started for, and it binds that.
+    pub fn step(&self, next: StepRunRow) {
         let mut p = self.pending.lock().expect("run store mutex");
         // A terminal state latches: a tick that was already in flight
         // when the step finished must not resurrect it as running.
@@ -495,6 +455,7 @@ impl Drop for RunWriter {
 struct RunInfo {
     run_id: String,
     started_at: String,
+    tz_offset: Option<String>,
     retention: Retention,
 }
 
@@ -551,8 +512,23 @@ fn writer_loop(path: PathBuf, run: RunInfo, pending: Shared, stop: mpsc::Receive
     rt.block_on(pool.close());
 }
 
-fn now_rfc3339() -> String {
-    datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339()
+/// An ISO stamp with an offset, as UTC plus that offset. A stamp that
+/// will not parse is kept as written, with no offset — better a line
+/// with an odd clock than a line lost.
+pub fn split_stamp(iso: &str) -> (String, Option<String>) {
+    match datalib_time::parse_strict(iso) {
+        Ok(t) => {
+            let (utc, offset) = t.to_utc_and_offset();
+            (utc, Some(offset))
+        }
+        Err(_) => (iso.to_string(), None),
+    }
+}
+
+/// Now, as the store keeps it.
+pub fn now_split() -> (String, Option<String>) {
+    let (utc, offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    (utc, Some(offset))
 }
 
 /// Record this run and apply retention. The run's own row goes in first
@@ -560,16 +536,19 @@ fn now_rfc3339() -> String {
 async fn begin_run(pool: &SqlitePool, run: &RunInfo) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     sqlx::query(
-        "INSERT INTO runs (run_id, started_at) VALUES (?, ?) \
-         ON CONFLICT(run_id) DO UPDATE SET started_at = excluded.started_at, finished_at = NULL",
+        "INSERT INTO runs (run_id, started_at, tz_offset) VALUES (?, ?, ?) \
+         ON CONFLICT(run_id) DO UPDATE SET started_at = excluded.started_at, \
+           tz_offset = excluded.tz_offset, finished_at = NULL",
     )
     .bind(&run.run_id)
     .bind(&run.started_at)
+    .bind(&run.tz_offset)
     .execute(&mut *tx)
     .await?;
-    let cutoff = datalib_time::IsoOffsetTimestamp::now_local()
+    // Text order is instant order, now that every stamp is UTC.
+    let (cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
         .bump_micros(-(run.retention.max_age_days as i64) * 86_400 * 1_000_000)
-        .to_rfc3339();
+        .to_utc_and_offset();
     sqlx::query("DELETE FROM runs WHERE started_at < ? AND run_id != ?")
         .bind(&cutoff)
         .bind(&run.run_id)
@@ -594,8 +573,9 @@ async fn begin_run(pool: &SqlitePool, run: &RunInfo) -> Result<(), sqlx::Error> 
 }
 
 async fn end_run(pool: &SqlitePool, run_id: &str) -> Result<(), sqlx::Error> {
+    let (finished_at, _) = now_split();
     sqlx::query("UPDATE runs SET finished_at = ? WHERE run_id = ?")
-        .bind(now_rfc3339())
+        .bind(finished_at)
         .bind(run_id)
         .execute(pool)
         .await?;
@@ -617,35 +597,39 @@ async fn flush(
     for s in batch.steps.into_values() {
         sqlx::query(
             "INSERT INTO step_runs \
-               (run_id, step, state, attempt, started_at, finished_at, error, msg, updated_at) \
-             VALUES (?,?,?,?,?,?,?,?,?) \
+               (run_id, step, state, attempt, started_at, finished_at, error, msg, updated_at, \
+                tz_offset) \
+             VALUES (?,?,?,?,?,?,?,?,?,?) \
              ON CONFLICT(run_id, step) DO UPDATE SET \
                state=excluded.state, attempt=excluded.attempt, \
                started_at=COALESCE(excluded.started_at, step_runs.started_at), \
                finished_at=excluded.finished_at, error=excluded.error, \
-               msg=excluded.msg, updated_at=excluded.updated_at",
+               msg=excluded.msg, updated_at=excluded.updated_at, tz_offset=excluded.tz_offset",
         )
         .bind(run_id)
         .bind(&s.step)
         .bind(&s.state)
-        .bind(s.attempt as i64)
+        .bind(s.attempt)
         .bind(&s.started_at)
         .bind(&s.finished_at)
         .bind(&s.error)
         .bind(&s.msg)
         .bind(&s.updated_at)
+        .bind(&s.tz_offset)
         .execute(&mut *tx)
         .await?;
     }
     for l in &batch.logs {
         sqlx::query(
-            "INSERT INTO log (run_id, step, attempt, ts, stream, level, target, thread, msg, fields) \
-             VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO log (run_id, step, attempt, ts, tz_offset, stream, level, target, thread, \
+                              msg, fields) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(run_id)
         .bind(&l.step)
-        .bind(l.attempt as i64)
+        .bind(l.attempt)
         .bind(&l.ts)
+        .bind(&l.tz_offset)
         .bind(&l.stream)
         .bind(&l.level)
         .bind(&l.target)
@@ -658,10 +642,10 @@ async fn flush(
     let now = Instant::now();
     for (key, m) in batch.metrics {
         sqlx::query(
-            "INSERT INTO metrics (run_id, step, name, labels, value, updated_at) \
-             VALUES (?,?,?,?,?,?) \
+            "INSERT INTO metrics (run_id, step, name, labels, value, updated_at, tz_offset) \
+             VALUES (?,?,?,?,?,?,?) \
              ON CONFLICT(run_id, step, name, labels) DO UPDATE SET \
-               value=excluded.value, updated_at=excluded.updated_at",
+               value=excluded.value, updated_at=excluded.updated_at, tz_offset=excluded.tz_offset",
         )
         .bind(run_id)
         .bind(&m.step)
@@ -669,6 +653,7 @@ async fn flush(
         .bind(&m.labels)
         .bind(m.value)
         .bind(&m.updated_at)
+        .bind(&m.tz_offset)
         .execute(&mut *tx)
         .await?;
         let due = match series.get(&key) {
@@ -707,15 +692,26 @@ async fn insert_sample(
     run_id: &str,
     m: &MetricRow,
 ) -> Result<(), sqlx::Error> {
+    let sample = MetricSampleRow {
+        run_id: run_id.to_string(),
+        step: m.step.clone(),
+        name: m.name.clone(),
+        labels: m.labels.clone(),
+        ts: m.updated_at.clone(),
+        tz_offset: m.tz_offset.clone(),
+        value: m.value,
+    };
     sqlx::query(
-        "INSERT INTO metric_samples (run_id, step, name, labels, ts, value) VALUES (?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO metric_samples (run_id, step, name, labels, ts, tz_offset, value) \
+         VALUES (?,?,?,?,?,?,?)",
     )
-    .bind(run_id)
-    .bind(&m.step)
-    .bind(&m.name)
-    .bind(&m.labels)
-    .bind(&m.updated_at)
-    .bind(m.value)
+    .bind(&sample.run_id)
+    .bind(&sample.step)
+    .bind(&sample.name)
+    .bind(&sample.labels)
+    .bind(&sample.ts)
+    .bind(&sample.tz_offset)
+    .bind(sample.value)
     .execute(&mut **tx)
     .await?;
     Ok(())

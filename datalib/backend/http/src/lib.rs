@@ -1394,44 +1394,27 @@ struct RunsParams {
     limit: Option<i64>,
 }
 
-/// `GET /api/runs` — recent runs from `system/runs.sqlite`, newest first.
-async fn runs_list(State(s): State<AppState>, Query(p): Query<RunsParams>) -> Json<Vec<RunInfo>> {
+/// `GET /api/runs` — recent runs from `system/runs.sqlite`, newest first,
+/// as `app_schema::runs::RunRow`.
+async fn runs_list(
+    State(s): State<AppState>,
+    Query(p): Query<RunsParams>,
+) -> Json<Vec<datalib_runs::RunRow>> {
     let limit = p.limit.unwrap_or(50).clamp(1, 1000);
-    Json(
-        datalib_runs::runs(&s.root, p.step.as_deref(), limit)
-            .await
-            .into_iter()
-            .map(|r| RunInfo {
-                run_id: r.run_id,
-                started_at: r.started_at,
-                finished_at: r.finished_at,
-            })
-            .collect(),
-    )
+    Json(datalib_runs::runs(&s.root, p.step.as_deref(), limit).await)
 }
 
-#[derive(Debug, Serialize)]
-pub struct RunInfo {
-    pub run_id: String,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-}
-
-/// One step in one run: its state and what it reported.
+/// One step in one run: its row, and what it reported.
 #[derive(Debug, Serialize)]
 pub struct RunStepInfo {
-    pub step: String,
-    pub state: String,
-    pub attempt: u32,
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
-    pub error: Option<String>,
+    #[serde(flatten)]
+    pub row: datalib_runs::StepRunRow,
     pub progress: DagStepProgress,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RunStepsResponse {
-    pub run: Option<RunInfo>,
+    pub run: Option<datalib_runs::RunRow>,
     pub steps: Vec<RunStepInfo>,
 }
 
@@ -1450,12 +1433,7 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
         .steps
         .iter()
         .map(|st| RunStepInfo {
-            step: st.step.clone(),
-            state: st.state.clone(),
-            attempt: st.attempt,
-            started_at: st.started_at.clone(),
-            finished_at: st.finished_at.clone(),
-            error: st.error.clone(),
+            row: st.clone(),
             progress: progress.remove(&st.step).unwrap_or(DagStepProgress {
                 msg: None,
                 metrics: Default::default(),
@@ -1465,10 +1443,11 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
         })
         .collect();
     Json(RunStepsResponse {
-        run: Some(RunInfo {
+        run: Some(datalib_runs::RunRow {
             run_id,
             started_at: snap.started_at.unwrap_or_default(),
             finished_at: snap.finished_at,
+            tz_offset: snap.tz_offset,
         }),
         steps,
     })
@@ -1487,28 +1466,13 @@ struct RunLogParams {
     limit: Option<i64>,
 }
 
-/// One log line, as `system/runs.sqlite` holds it.
-#[derive(Debug, Serialize)]
-pub struct RunLogLine {
-    pub seq: i64,
-    pub step: Option<String>,
-    pub attempt: u32,
-    pub ts: String,
-    pub stream: Option<String>,
-    pub level: String,
-    pub target: Option<String>,
-    pub thread: Option<String>,
-    pub msg: String,
-    /// A JSON object, as text, when the line carried structured fields.
-    pub fields: Option<String>,
-}
-
-/// `GET /api/runs/{run}/log` — the run's log lines, oldest first.
+/// `GET /api/runs/{run}/log` — the run's log lines, oldest first, as
+/// `app_schema::runs::LogRow`.
 async fn run_log(
     State(s): State<AppState>,
     Path(run): Path<String>,
     Query(p): Query<RunLogParams>,
-) -> Json<Vec<RunLogLine>> {
+) -> Json<Vec<datalib_runs::LogRow>> {
     let limit = p.limit.unwrap_or(2000).clamp(1, 20_000);
     Json(
         datalib_runs::log_after(
@@ -1518,21 +1482,7 @@ async fn run_log(
             p.after_seq.unwrap_or(0),
             limit,
         )
-        .await
-        .into_iter()
-        .map(|l| RunLogLine {
-            seq: l.seq,
-            step: l.step,
-            attempt: l.attempt,
-            ts: l.ts,
-            stream: l.stream,
-            level: l.level,
-            target: l.target,
-            thread: l.thread,
-            msg: l.msg,
-            fields: l.fields,
-        })
-        .collect(),
+        .await,
     )
 }
 
