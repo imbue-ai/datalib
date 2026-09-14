@@ -2,11 +2,10 @@
 //! the step id names and read from the raw store its input names.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 use datalib_schema::render_cursor::RenderCursorRow;
@@ -42,10 +41,141 @@ pub async fn run(
     // The providers write under `render_markdown_root(data_root, name)`;
     // `StepEnv::from_env` checked that this is the same tree as the id.
     let rendered_root = data_root.join(&env.step);
-    let declared = declared_render_versions(&processors);
-    let declared_params = declared_render_params(&processors);
+    // What the source's mirror weighs. Measured out here because the
+    // scan is async and `blocking()` cannot drive a future from inside
+    // the `spawn_blocking` thread below.
+    let measured = crate::introspect::scan(data_root, raw_rel)
+        .await
+        .with_context(|| format!("measure {}", name))?;
+    // Every source gets a storage report, including the ones that
+    // render no documents of their own — for `fsindex` and `media` it
+    // is the only thing they put in the grid.
+    let storage = crate::introspect::plan(data_root, &name, &env.step, measured, now)?;
+
+    let source = RenderSource {
+        name: name.clone(),
+        data_root: data_root.to_path_buf(),
+        rendered_root: rendered_root.clone(),
+        // The run-pinned "now" (`--now` / `$DATALIB_DAG_NOW`), so every
+        // row this render stamps carries one timestamp rather than each
+        // renderer sampling its own clock.
+        now: now.to_string(),
+        cadence: control.checkpoint_cadence.unwrap_or_default(),
+        storage,
+        progress: progress.clone(),
+    };
+    // Render is synchronous work driven by `futures`' executor (NOT
+    // tokio's — providers block_on their own internal futures); run it
+    // on a blocking thread.
+    let report = tokio::task::spawn_blocking(move || render_source(&processors, source))
+        .await
+        .context("render task panicked")??;
+
+    tracing::info!(
+        docs = report.docs,
+        removed = report.removed,
+        "render: docs (re)rendered"
+    );
+    progress.metric("documents_removed", &[], report.removed as i64);
+    if report.removed > 0 {
+        progress.set_message(&format!(
+            "{} document(s) dropped — their source is gone upstream",
+            report.removed
+        ));
+    }
+    // Say out loud what the sink holds. A problem store nothing ever
+    // reads is indistinguishable from one that is empty because
+    // everything is fine — and the more dangerous of those two reads as
+    // success. These are whole-store counts, not this-run counts: a
+    // problem on a document this run skipped is still current, which is
+    // the point of the per-document sweep.
+    if !report.problems.is_empty() {
+        let total: i64 = report.problems.values().sum();
+        let dropped = report.problems.get("dropped").copied().unwrap_or(0);
+        let nulled = report.problems.get("nulled").copied().unwrap_or(0);
+        tracing::warn!(
+            source = %name,
+            total,
+            dropped,
+            nulled,
+            "render: rows this source could not fully project \
+             (see render_problems in its indexed_markdown.doltlite_db)"
+        );
+        progress.set_message(&format!(
+            "{total} row(s) with render problems ({dropped} dropped, {nulled} degraded)"
+        ));
+    }
+    // The whole tree re-renders from the raw store, so cache-aware
+    // backups (`restic --exclude-caches` etc.) may skip it. No-op until
+    // the first render materializes the dir.
+    datalib_core::layout::mark_derived_cache(&rendered_root);
+    // The store's HEAD is the tree's content version: doltlite advances
+    // it only when a commit changed something, so a run that rewrote
+    // nothing reports the same string. Without doltlite there is nothing
+    // content-derived to vouch for, and the runner hashes the tree.
+    Ok(report
+        .head
+        .map(|h| OutputClaim {
+            path: env.step.clone(),
+            version: format!("store:{h}"),
+            rows: Some(report.unsealed),
+        })
+        .into_iter()
+        .collect())
+}
+
+/// One source's render, as the core takes it: everything the step shell
+/// resolved from its environment, and nothing the step protocol knows.
+pub struct RenderSource {
+    pub name: String,
+    pub data_root: PathBuf,
+    /// The tree the store lives under — `<data_root>/<group>/render_markdown`.
+    pub rendered_root: PathBuf,
+    /// The run-pinned instant every stamp this render writes carries.
+    pub now: String,
+    /// The user's latency/history dial, the same one downloads take.
+    pub cadence: datalib_etl::checkpointer::Cadence,
+    /// The storage report to write beside the documents, if the source
+    /// has one.
+    pub storage: Option<crate::introspect::Measured>,
+    pub progress: Progress,
+}
+
+/// What a render left behind, for the shell to report.
+pub struct RenderReport {
+    pub docs: usize,
+    pub removed: usize,
+    /// Whole-store problem counts by outcome.
+    pub problems: HashMap<String, i64>,
+    /// The store's HEAD after the final commit. `None` without doltlite.
+    pub head: Option<String>,
+    /// Rows the final commit sealed beyond the last checkpoint — the
+    /// last segment of a consumer's queue.
+    pub unsealed: u64,
+}
+
+/// The render itself: decide whether to diff or render everything, run
+/// the processors with their documents batched into one transaction per
+/// checkpoint, sweep what a full walk did not produce, record the cursor,
+/// commit. Synchronous, and the whole of what the render step guarantees
+/// — the shell above adds only the step protocol around it.
+pub fn render_source(
+    processors: &[Box<dyn RenderProcessor>],
+    source: RenderSource,
+) -> Result<RenderReport> {
+    let RenderSource {
+        name,
+        data_root,
+        rendered_root,
+        now,
+        cadence,
+        storage,
+        progress,
+    } = source;
+    let declared = declared_render_versions(processors);
+    let declared_params = declared_render_params(processors);
     let store = IndexedMarkdownStore::open(&rendered_root)
-        .map(|s| s.with_now(now))
+        .map(|s| s.with_now(&now))
         .with_context(|| format!("open render store for {}", name))?;
     let on_disk = store.render_versions()?;
     let stored_cursor = store.cursor()?;
@@ -85,291 +215,179 @@ pub async fn run(
         "render: prior fingerprints from the store"
     );
 
-    // What the source's mirror weighs. Measured out here because the
-    // scan is async and `blocking()` cannot drive a future from inside
-    // the `spawn_blocking` thread below.
-    let measured = crate::introspect::scan(data_root, raw_rel)
-        .await
-        .with_context(|| format!("measure {}", name))?;
-
-    let docs = Arc::new(AtomicUsize::new(0));
-    let removed = Arc::new(AtomicUsize::new(0));
-    let out_rel = env.step.clone();
-    let rendered_rel = env.step.clone();
-    // `planned` moves into the render task below; the post-render check
-    // still needs the source's id for its message.
-    let source_id = name.clone();
-    let data_root = data_root.to_path_buf();
-    // Owned, not borrowed: the render runs on a blocking thread that
-    // outlives this frame.
-    let control = control.clone();
-    let control_cadence = control.checkpoint_cadence;
-    let planned_name = name.clone();
-    let docs_in = docs.clone();
-    let removed_in = removed.clone();
-    // `Progress` is a cheap clone; the render task takes one and this
-    // one stays behind to report the problem counts afterwards.
-    let progress_after = progress.clone();
-    // The run-pinned "now" (`--now` / `$DATALIB_DAG_NOW`), so every
-    // problem row this render writes carries one timestamp rather than
-    // each renderer sampling its own clock. This used to be `""`, which
-    // was harmless only for as long as nothing read `ctx.now` on the
-    // render side; the problem sink does.
-    let now = now.to_string();
-    // Render is synchronous work driven by `futures`' executor (NOT
-    // tokio's — providers block_on their own internal futures); run it
-    // on a blocking thread.
-    let versions_after = tokio::task::spawn_blocking(move || -> Result<RenderOutcome> {
-        // The user's latency/history dial, the same one downloads take.
-        let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(
-            datalib_etl::checkpointer::Policy::Every(control_cadence.unwrap_or_default()),
-        );
-        // Every document this run wrote. On a full render it is what the
-        // walk produced, and the sweep below keeps exactly this.
-        let mut emitted: BTreeSet<String> = BTreeSet::new();
-        // The documents between two checkpoints share one SQL transaction
-        // (the batch), and each is written whole inside it — rows, edges,
-        // markdown and problems together — so a commit landing between
-        // two documents never publishes a fraction of one. The providers
-        // hand us a `RenderedMarkdown` through `ctx.emit_doc`, the same
-        // value `grid_index::apply_one` consumes.
-        store.begin_batch()?;
-        let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
+    let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(
+        datalib_etl::checkpointer::Policy::Every(cadence),
+    );
+    let mut docs = 0usize;
+    let mut removed = 0usize;
+    // Every document this run wrote. On a full render it is what the
+    // walk produced, and the sweep below keeps exactly this.
+    let mut emitted: BTreeSet<String> = BTreeSet::new();
+    // The documents between two checkpoints share one SQL transaction
+    // (the batch), and each is written whole inside it — rows, edges,
+    // markdown and problems together — so a commit landing between
+    // two documents never publishes a fraction of one. The providers
+    // hand us a `RenderedMarkdown` through `ctx.emit_doc`, the same
+    // value `grid_index::apply_one` consumes.
+    store.begin_batch()?;
+    let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
+        store
+            .put_document(&data_root, &md)
+            .with_context(|| format!("store document {}", md.markdown_uuid))?;
+        emitted.insert(md.markdown_uuid);
+        docs += 1;
+        progress.metric("documents_rendered", &[], docs as i64);
+        // What a consumer reading a checkpoint may see is a document
+        // this run is about to sweep. That is stale, not torn: the
+        // sweep's deletions reach the consumer through the same diff
+        // on its next pass.
+        checkpointer.wrote(1);
+        if checkpointer.should_seal() {
+            store.commit_batch()?;
+            let sealed =
+                store.commit(&format!("render {name}: checkpoint at {docs} document(s)"))?;
+            let rows = checkpointer.pending();
+            checkpointer.sealed();
+            // `None` means nothing was dirty after all, so no
+            // version moved and there is nothing to announce.
+            if let Some(hash) = sealed {
+                progress.checkpoint_rows(&hash, rows);
+            }
+            store.begin_batch()?;
+        }
+        Ok(())
+    };
+    // The other half of the sink: a conversation the raw store no
+    // longer has takes its rendered documents with it. Without this
+    // the deletion stops at the raw store — the `.md` stays on disk
+    // and `grid_index`, which only ever learns of a removal from
+    // this store's own diff, never hears about it.
+    let mut on_remove = |conversation_uuid: &str| -> Result<usize> {
+        let gone = store.documents_for_conversation(conversation_uuid)?;
+        for uuid in &gone {
             store
-                .put_document(&data_root, &md)
-                .with_context(|| format!("store document {}", md.markdown_uuid))?;
-            emitted.insert(md.markdown_uuid);
-            let n = docs_in.fetch_add(1, Ordering::SeqCst) + 1;
-            progress.metric("documents_rendered", &[], n as i64);
-            // What a consumer reading a checkpoint may see is a document
-            // this run is about to sweep. That is stale, not torn: the
-            // sweep's deletions reach the consumer through the same diff
-            // on its next pass.
-            checkpointer.wrote(1);
-            if checkpointer.should_seal() {
-                store.commit_batch()?;
-                let sealed = store.commit(&format!(
-                    "render {}: checkpoint at {} document(s)",
-                    planned_name,
-                    docs_in.load(Ordering::SeqCst)
-                ))?;
-                let rows = checkpointer.pending();
-                checkpointer.sealed();
-                // `None` means nothing was dirty after all, so no
-                // version moved and there is nothing to announce.
-                if let Some(hash) = sealed {
-                    progress.checkpoint_rows(&hash, rows);
-                }
-                store.begin_batch()?;
-            }
-            Ok(())
-        };
-        // The other half of the sink: a conversation the raw store no
-        // longer has takes its rendered documents with it. Without this
-        // the deletion stops at the raw store — the `.md` stays on disk
-        // and `grid_index`, which only ever learns of a removal from
-        // this store's own diff, never hears about it.
-        let mut on_remove = |conversation_uuid: &str| -> Result<usize> {
-            let gone = store.documents_for_conversation(conversation_uuid)?;
-            for uuid in &gone {
-                store
-                    .remove_document(&data_root, uuid)
-                    .with_context(|| format!("remove document {uuid}"))?;
-            }
-            if !gone.is_empty() {
-                removed_in.fetch_add(gone.len(), Ordering::SeqCst);
-                tracing::info!(
-                    conversation = conversation_uuid,
-                    documents = gone.len(),
-                    "render: conversation is gone from the raw store; dropped its documents",
-                );
-            }
-            Ok(gone.len())
-        };
-        // A whole-store renderer declares the complete document set
-        // instead of naming vanished ids: `retained` accumulates across
-        // this source's processors and the sweep runs once, below.
-        let mut retained: Option<BTreeSet<String>> = None;
-        let mut on_retain = |seen: &std::collections::HashSet<String>| {
-            retained
-                .get_or_insert_with(BTreeSet::new)
-                .extend(seen.iter().cloned());
-        };
-        // The raw commit each processor rendered from, or `None` for one
-        // that read no store.
-        let mut consumed: Vec<Option<String>> = Vec::with_capacity(processors.len());
-        let ran = (|| -> Result<()> {
-            for proc in &processors {
-                let ctx = RenderCtx::new(
-                    &name,
-                    &data_root,
-                    &now,
-                    &progress,
-                    &prior,
-                    raw_cursor.as_deref(),
-                    &mut on_doc,
-                    &mut on_remove,
-                    &mut on_retain,
-                );
-                futures::executor::block_on(proc.run(&ctx))
-                    .with_context(|| format!("processor {}", proc.id()))?;
-                consumed.push(ctx.consumed_commit());
-            }
-            Ok(())
-        })();
-        // A failed processor takes the open batch with it: what it wrote
-        // since the last checkpoint is neither complete nor described by
-        // any cursor, and the next run renders it again.
-        if let Err(e) = ran {
-            let _ = store.rollback_batch();
-            return Err(e);
+                .remove_document(&data_root, uuid)
+                .with_context(|| format!("remove document {uuid}"))?;
         }
-        store.commit_batch()?;
-        let raw_commit = one_consumed_commit(&name, &consumed);
-
-        // A full render in which every processor read its store walked
-        // everything, so whatever it did not produce is gone. A processor
-        // that read nothing (no raw store on disk, nothing committed) says
-        // nothing about what should exist, and nothing is swept.
-        let full_walk =
-            render_everything && !consumed.is_empty() && consumed.iter().all(Option::is_some);
-        let sweep = retained.is_some() || full_walk;
-        let mut keep = retained.unwrap_or_default();
-        keep.extend(emitted);
-
-        // Every source gets a storage report, including the ones that
-        // render no documents of their own — for `fsindex` and `media`
-        // it is the only thing they put in the grid. Planned before the
-        // sweep so its id is in `keep`: the provider's processors know
-        // nothing about it, and the fingerprint skip would then decline
-        // to write it back on any run where no number moved.
-        let storage = crate::introspect::plan(&data_root, &name, &rendered_rel, measured, &now)?;
-        if let Some(m) = storage.as_ref() {
-            keep.insert(m.doc.markdown_uuid.clone());
+        if !gone.is_empty() {
+            removed += gone.len();
+            tracing::info!(
+                conversation = conversation_uuid,
+                documents = gone.len(),
+                "render: conversation is gone from the raw store; dropped its documents",
+            );
         }
+        Ok(gone.len())
+    };
+    // A whole-store renderer declares the complete document set
+    // instead of naming vanished ids: `retained` accumulates across
+    // this source's processors and the sweep runs once, below.
+    let mut retained: Option<BTreeSet<String>> = None;
+    let mut on_retain = |seen: &std::collections::HashSet<String>| {
+        retained
+            .get_or_insert_with(BTreeSet::new)
+            .extend(seen.iter().cloned());
+    };
+    // The raw commit each processor rendered from, or `None` for one
+    // that read no store.
+    let mut consumed: Vec<Option<String>> = Vec::with_capacity(processors.len());
+    let ran = (|| -> Result<()> {
+        for proc in processors {
+            let ctx = RenderCtx::new(
+                &name,
+                &data_root,
+                &now,
+                &progress,
+                &prior,
+                raw_cursor.as_deref(),
+                &mut on_doc,
+                &mut on_remove,
+                &mut on_retain,
+            );
+            futures::executor::block_on(proc.run(&ctx))
+                .with_context(|| format!("processor {}", proc.id()))?;
+            consumed.push(ctx.consumed_commit());
+        }
+        Ok(())
+    })();
+    // A failed processor takes the open batch with it: what it wrote
+    // since the last checkpoint is neither complete nor described by
+    // any cursor, and the next run renders it again.
+    if let Err(e) = ran {
+        let _ = store.rollback_batch();
+        return Err(e);
+    }
+    store.commit_batch()?;
+    let raw_commit = one_consumed_commit(&name, &consumed);
 
-        // The sweep runs only on a run that got through every processor
-        // — a render that failed partway named a fraction of what it
-        // holds, and `?` above already returned.
-        let sealed = seal_run(
-            &store,
-            &data_root,
-            RunEnd {
-                sweep: sweep.then_some(&keep),
-                storage,
-                prior: &prior,
-                cursor: raw_commit.map(|raw_commit| RenderCursorRow {
+    // A full render in which every processor read its store walked
+    // everything, so whatever it did not produce is gone. A processor
+    // that read nothing (no raw store on disk, nothing committed) says
+    // nothing about what should exist, and nothing is swept.
+    let full_walk =
+        render_everything && !consumed.is_empty() && consumed.iter().all(Option::is_some);
+    let sweep = retained.is_some() || full_walk;
+    let mut keep = retained.unwrap_or_default();
+    keep.extend(emitted);
+    // The storage report's id goes in `keep`: the provider's processors
+    // know nothing about it, and the fingerprint skip would then
+    // decline to write it back on any run where no number moved.
+    if let Some(m) = storage.as_ref() {
+        keep.insert(m.doc.markdown_uuid.clone());
+    }
+
+    // The sweep runs only on a run that got through every processor
+    // — a render that failed partway named a fraction of what it
+    // holds, and `?` above already returned.
+    let sealed = seal_run(
+        &store,
+        &data_root,
+        RunEnd {
+            sweep: sweep.then_some(&keep),
+            storage,
+            prior: &prior,
+            cursor: raw_commit.map(|raw_commit| {
+                let stamp = datalib_time::split_stamp(&now);
+                RenderCursorRow {
                     source_id: name.clone(),
                     raw_commit,
                     params: declared_params.to_string(),
-                    rendered_at: now.clone(),
-                }),
-            },
-        )?;
-        docs_in.fetch_add(sealed.stored, Ordering::SeqCst);
-        removed_in.fetch_add(sealed.removed, Ordering::SeqCst);
-
-        // One commit for the whole render. Per-document commits would
-        // put thousands of entries in `dolt_log` per run; committing
-        // once is also what makes `dolt_diff` over this store answer
-        // "what did this render change?".
-        let stored = docs_in.load(Ordering::SeqCst);
-        let dropped = removed_in.load(Ordering::SeqCst);
-        let msg = if dropped == 0 {
-            format!("render {}: {stored} document(s)", name)
-        } else {
-            format!(
-                "render {}: {stored} document(s), {dropped} removed upstream",
-                name
-            )
-        };
-        store
-            .commit(&msg)
-            .with_context(|| format!("commit render store for {}", name))?;
-        // The versions the tree now carries, read back from the store
-        // that just wrote them — the post-render check needs them, and
-        // the store is consumed by `close` here. Problem counts come
-        // back the same way, so the step can say what it dropped.
-        let outcome = RenderOutcome {
-            versions: store.render_versions()?,
-            problems: store.problem_counts()?,
-            head: store.head()?,
-            // What the final commit sealed beyond the last checkpoint —
-            // the last segment of a consumer's queue.
-            unsealed: checkpointer.pending(),
-        };
-        store.close();
-        Ok(outcome)
-    })
-    .await
-    .context("render task panicked")??;
-
-    let RenderOutcome {
-        versions: versions_on_disk,
-        problems: problem_counts,
-        head,
-        unsealed,
-    } = versions_after;
-    let docs = docs.load(Ordering::SeqCst);
-    let removed = removed.load(Ordering::SeqCst);
-    tracing::info!(docs, removed, "render: docs (re)rendered");
-    progress_after.metric("documents_removed", &[], removed as i64);
-    if removed > 0 {
-        progress_after.set_message(&format!(
-            "{removed} document(s) dropped — their source is gone upstream"
-        ));
-    }
-    // Say out loud what the sink holds. A problem store nothing ever
-    // reads is indistinguishable from one that is empty because
-    // everything is fine — and the more dangerous of those two reads as
-    // success. These are whole-store counts, not this-run counts: a
-    // problem on a document this run skipped is still current, which is
-    // the point of the per-document sweep.
-    if !problem_counts.is_empty() {
-        let total: i64 = problem_counts.values().sum();
-        let dropped = problem_counts.get("dropped").copied().unwrap_or(0);
-        let nulled = problem_counts.get("nulled").copied().unwrap_or(0);
-        tracing::warn!(
-            source = %source_id,
-            total,
-            dropped,
-            nulled,
-            "render: rows this source could not fully project \
-             (see render_problems in its indexed_markdown.doltlite_db)"
-        );
-        progress_after.set_message(&format!(
-            "{total} row(s) with render problems ({dropped} dropped, {nulled} degraded)"
-        ));
-    }
-    every_stored_version_must_be_declared(
-        &source_id,
-        &rendered_root,
-        &versions_on_disk,
-        declared.as_ref(),
+                    rendered_at_utc: stamp.utc,
+                    tz_offset: stamp.tz_offset,
+                }
+            }),
+        },
     )?;
-    // The whole tree re-renders from the raw store, so cache-aware
-    // backups (`restic --exclude-caches` etc.) may skip it. No-op until
-    // the first render materializes the dir.
-    datalib_core::layout::mark_derived_cache(&rendered_root);
-    // The store's HEAD is the tree's content version: doltlite advances
-    // it only when a commit changed something, so a run that rewrote
-    // nothing reports the same string. Without doltlite there is nothing
-    // content-derived to vouch for, and the runner hashes the tree.
-    Ok(head
-        .map(|h| OutputClaim {
-            path: out_rel,
-            version: format!("store:{h}"),
-            rows: Some(unsealed),
-        })
-        .into_iter()
-        .collect())
-}
+    docs += sealed.stored;
+    removed += sealed.removed;
 
-struct RenderOutcome {
-    versions: BTreeSet<u32>,
-    problems: HashMap<String, i64>,
-    head: Option<String>,
-    unsealed: u64,
+    // One commit for the whole render. Per-document commits would
+    // put thousands of entries in `dolt_log` per run; committing
+    // once is also what makes `dolt_diff` over this store answer
+    // "what did this render change?".
+    let msg = if removed == 0 {
+        format!("render {name}: {docs} document(s)")
+    } else {
+        format!("render {name}: {docs} document(s), {removed} removed upstream")
+    };
+    store
+        .commit(&msg)
+        .with_context(|| format!("commit render store for {}", name))?;
+    // Read back from the store that just wrote them, before `close`
+    // consumes it.
+    let versions = store.render_versions()?;
+    let problems = store.problem_counts()?;
+    let head = store.head()?;
+    store.close();
+    every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
+    Ok(RenderReport {
+        docs,
+        removed,
+        problems,
+        head,
+        // What the final commit sealed beyond the last checkpoint.
+        unsealed: checkpointer.pending(),
+    })
 }
 
 /// What closes a run: the sweep (`Some(keep)` deletes every document not
@@ -579,7 +597,8 @@ mod plan_tests {
             source_id: "src".into(),
             raw_commit: raw_commit.into(),
             params: params.to_string(),
-            rendered_at: "2026-01-01T00:00:00+00:00".into(),
+            rendered_at_utc: "2026-01-01T00:00:00.000000Z".into(),
+            tz_offset: Some("+00:00".into()),
         }
     }
 

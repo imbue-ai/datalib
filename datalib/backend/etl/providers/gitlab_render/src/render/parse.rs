@@ -115,7 +115,9 @@ pub struct ParsedGitlabApi {
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → render only these `"{project}!{iid}"` buckets.
-    /// `None` → cold start: render everything.
+    /// `None` → render everything.
+    pub render: Option<std::collections::HashSet<String>>,
+    /// The buckets the diff named, for the removal probe.
     pub changed_buckets: Option<std::collections::HashSet<String>>,
     pub new_head: Option<String>,
     pub scan_elapsed: Option<std::time::Duration>,
@@ -163,7 +165,8 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
     .with_context(|| format!("load gitlab db {}", db_path.display()))?;
 
     let mut parsed = parse_loaded(raw);
-    if let Some(changed) = scan.changed_buckets.as_ref() {
+    parsed.vanished_buckets = gone;
+    if let Some(changed) = scan.render.as_ref() {
         let before = parsed.merge_requests.len();
         parsed
             .merge_requests
@@ -174,7 +177,6 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
         parsed
             .notes
             .retain(|n| changed.contains(&mr_pk_recipe(&n.project_full_path, n.mr_iid)));
-        parsed.vanished_buckets = gone;
     }
     parsed.scan = scan;
     Ok(parsed)
@@ -218,6 +220,7 @@ async fn read_everything(
     Ok((
         raw,
         ScanResult {
+            render: scan.render,
             changed_buckets: scan.changed_buckets,
             new_head: scan.new_head,
             scan_elapsed: scan.scan_elapsed,

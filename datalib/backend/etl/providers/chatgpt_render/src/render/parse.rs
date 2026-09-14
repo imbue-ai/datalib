@@ -126,8 +126,11 @@ pub struct ShreddedConversation {
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → render only conversations whose id is in `set`.
-    /// `None` → cold start, render every conversation. (First run, or
-    /// non-doltlite db, or `dolt_diff_<table>` unavailable.)
+    /// `None` → render every conversation (first run, `me` changed, a
+    /// non-doltlite db, or `dolt_diff_<table>` unavailable).
+    pub render: Option<HashSet<String>>,
+    /// The conversations the diff named, for the removal probe — still
+    /// a set when `render` is `None` because `me` changed.
     pub changed_conversations: Option<HashSet<String>>,
     /// The HEAD commit hash at scan time, ready to stamp into the
     /// render cursor on success. `None` if `dolt_log()` was
@@ -523,18 +526,17 @@ async fn parse_doltlite_async(
     let all_convs = load_conversations(&pool).await?;
     let total_convs = all_convs.len();
 
-    let (filtered, docs_skipped): (Vec<LoadedConversation>, usize) =
-        match &scan.changed_conversations {
-            None => (all_convs, 0usize),
-            Some(changed) => {
-                let kept: Vec<LoadedConversation> = all_convs
-                    .into_iter()
-                    .filter(|c| changed.contains(&c.id))
-                    .collect();
-                let skipped = total_convs.saturating_sub(kept.len());
-                (kept, skipped)
-            }
-        };
+    let (filtered, docs_skipped): (Vec<LoadedConversation>, usize) = match &scan.render {
+        None => (all_convs, 0usize),
+        Some(changed) => {
+            let kept: Vec<LoadedConversation> = all_convs
+                .into_iter()
+                .filter(|c| changed.contains(&c.id))
+                .collect();
+            let skipped = total_convs.saturating_sub(kept.len());
+            (kept, skipped)
+        }
+    };
 
     let raw = LoadedRaw {
         me,
@@ -704,6 +706,7 @@ async fn scan_diff(
     )
     .await?;
     Ok(ScanResult {
+        render: scan.render,
         changed_conversations: scan.changed_buckets,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,

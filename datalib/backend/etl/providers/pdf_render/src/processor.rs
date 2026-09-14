@@ -60,15 +60,17 @@ impl RenderProcessor for PdfRender {
         // there still a row", because a `pdf_documents` row outlives the
         // paths pointing at it.
         let mut dropped = 0usize;
-        let (to_render, skipped) = match &scan.changed {
+        if let Some(changed) = &scan.changed {
+            let present: std::collections::HashSet<&str> =
+                targets.iter().map(|t| t.blake3.as_str()).collect();
+            for gone in changed.iter().filter(|b| !present.contains(b.as_str())) {
+                dropped +=
+                    ctx.remove_conversation(&crate::render::grid_rows::document_uuid(gone))?;
+            }
+        }
+        let (to_render, skipped) = match &scan.render {
             None => (targets, 0usize),
             Some(changed) => {
-                let present: std::collections::HashSet<&str> =
-                    targets.iter().map(|t| t.blake3.as_str()).collect();
-                for gone in changed.iter().filter(|b| !present.contains(b.as_str())) {
-                    dropped +=
-                        ctx.remove_conversation(&crate::render::grid_rows::document_uuid(gone))?;
-                }
                 let before = targets.len();
                 let kept: Vec<_> = targets
                     .into_iter()
@@ -83,7 +85,7 @@ impl RenderProcessor for PdfRender {
             scan_elapsed_ms = scan.elapsed.map(|d| d.as_millis() as u64),
             convert = to_render.len(),
             skipped,
-            cold_start = scan.changed.is_none(),
+            cold_start = scan.render.is_none(),
             "[render] pdf dolt_diff scan"
         );
 

@@ -760,11 +760,11 @@ the old recipe — is gone. The sweep, the storage report and the cursor
 land in one transaction, and the deletions reach the grid index
 through the store's own `dolt_diff`. A run in which a processor read
 no store (none on disk, nothing committed) sweeps nothing: it said
-nothing about what should exist. The remaining gap is the ordinary
-incremental run: a raw row that changed in a `global_fanout_tables`
-table renders everything with the fingerprints on and asks nothing
-about removals — `docs/dev/plans/render_inputs.md` is the design that
-closes it.
+nothing about what should exist. A `global_fanout_tables` hit (a
+`users` row changed, say) renders everything with the fingerprints
+on, and still probes the buckets the diff named for removal:
+`DiffScan` carries the two sets separately, so a conversation deleted
+in the same range as a rename does not outlive it in the store.
 
 ### Render-side partial-progress visibility
 

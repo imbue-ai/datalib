@@ -118,7 +118,7 @@ pub fn render_all(
             .unwrap_or(-1),
         conversations = parsed.conversations.len(),
         projects = parsed.projects.len(),
-        cold_start = parsed.scan.changed_buckets.is_none(),
+        cold_start = parsed.scan.render.is_none(),
         "[render] claude dolt_diff scan"
     );
 

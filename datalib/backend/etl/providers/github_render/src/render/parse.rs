@@ -144,7 +144,9 @@ pub struct ParsedGithubApi {
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → render only these `"{repo}#{num}"` buckets. `None` →
-    /// cold start (no cursor, or the diff was unusable): render everything.
+    /// render everything (no cursor, or the diff was unusable).
+    pub render: Option<std::collections::HashSet<String>>,
+    /// The buckets the diff named, for the removal probe.
     pub changed_buckets: Option<std::collections::HashSet<String>>,
     /// HEAD at scan time, to stamp into the render cursor on success.
     pub new_head: Option<String>,
@@ -200,7 +202,8 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
     .with_context(|| format!("load github db {}", db_path.display()))?;
 
     let mut parsed = parse_loaded(raw);
-    if let Some(changed) = scan.changed_buckets.as_ref() {
+    parsed.vanished_buckets = gone;
+    if let Some(changed) = scan.render.as_ref() {
         let before = parsed.pull_requests.len();
         parsed
             .pull_requests
@@ -211,7 +214,6 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
         parsed
             .comments
             .retain(|c| changed.contains(&pr_pk(&c.repo_full_name, c.pr_number)));
-        parsed.vanished_buckets = gone;
     }
     parsed.scan = scan;
     Ok(parsed)
@@ -257,6 +259,7 @@ async fn read_everything(
     Ok((
         raw,
         ScanResult {
+            render: scan.render,
             changed_buckets: scan.changed_buckets,
             new_head: scan.new_head,
             scan_elapsed: scan.scan_elapsed,

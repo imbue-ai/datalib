@@ -656,7 +656,7 @@ pub async fn build_grid_index(
             // Say which path was taken, every time: a cold start that fires
             // silently on every run looks exactly like a fast one from the
             // outside — it just does more work and still gets the right answer.
-            match (&scan.changed_buckets, cursor) {
+            match (&scan.render, cursor) {
                 (None, None) => tracing::info!(
                     source = %stanza,
                     "index: no cursor for this source; reading its whole store"
@@ -675,10 +675,10 @@ pub async fn build_grid_index(
                 ),
             }
             let found = store
-                .documents_matching(out_dir, scan.changed_buckets.as_ref(), &pin)
+                .documents_matching(out_dir, scan.render.as_ref(), &pin)
                 .with_context(|| format!("read documents from {stanza}"))?;
             let present: HashSet<&str> = found.iter().map(|d| d.markdown_uuid.as_str()).collect();
-            match &scan.changed_buckets {
+            match &scan.render {
                 // An id the diff named that the store no longer has is a
                 // deletion.
                 Some(changed) => {

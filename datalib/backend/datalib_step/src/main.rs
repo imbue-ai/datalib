@@ -17,6 +17,8 @@ mod methods;
 mod probe;
 mod qmd_index;
 mod render;
+#[cfg(test)]
+mod render_model_test;
 mod source;
 mod source_type;
 mod synth;

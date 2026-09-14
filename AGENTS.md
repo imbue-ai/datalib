@@ -1669,9 +1669,9 @@ check.
   sidecar.
 - One `tz_offset` per table, not per stamp. `sync_jobs` has three
   stamps and one offset, refreshed on each write.
-- A JSON file (`_render_cursor.json`, the event tapes, the NDJSON run
-  events, `dag_state.json`) keeps the single offset-bearing string.
-  Nothing sorts a column there, and one string is the transport form.
+- A JSON file (the event tapes, the NDJSON run events,
+  `dag_state.json`) keeps the single offset-bearing string. Nothing
+  sorts a column there, and one string is the transport form.
 
 **A stamp that belongs to the record stays as the source wrote it.**
 `grid_rows.when_ts`, `markdowns.created_at` / `updated_at`,

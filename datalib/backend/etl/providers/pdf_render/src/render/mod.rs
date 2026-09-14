@@ -301,7 +301,9 @@ mod tests {
 #[derive(Debug, Clone, Default)]
 pub struct PdfScan {
     /// `Some(set)` → convert only documents whose blake3 is in it.
-    /// `None` → cold start: convert everything the corpus holds.
+    /// `None` → convert everything the corpus holds.
+    pub render: Option<std::collections::HashSet<String>>,
+    /// The documents the diff named, for the removal probe.
     pub changed: Option<std::collections::HashSet<String>>,
     pub new_head: Option<String>,
     pub elapsed: Option<std::time::Duration>,
@@ -357,6 +359,7 @@ pub async fn scan_changed(raw_dir: &Path, last_render_hash: Option<&str>) -> Res
     db.close().await;
     let scan = scan?;
     Ok(PdfScan {
+        render: scan.render,
         changed: scan.changed_buckets,
         new_head: scan.new_head,
         elapsed: scan.scan_elapsed,
