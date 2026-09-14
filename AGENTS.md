@@ -1026,8 +1026,10 @@ So the complete local gate is the hygiene lint **and** the test suite:
 bazelisk run //:lint_repo && bazelisk test //...
 ```
 
-`bazelisk run //:precommit` runs the same lint plus clippy, and is the
-friendlier wrapper if you want everything. Both go through
+**The one command to run before pushing is `bazelisk run //:precommit`.**
+It is the hygiene lint, `//:lint`, a `bazelisk build //...` (which is
+what runs the rustfmt and clippy aspects over every crate), and every
+hermetic test. Both wrappers go through
 [`//:lint_repo`](BUILD.bazel), a `py_binary` — deliberately, so the
 script runs on Bazel's pinned Python rather than the host's. It needs
 `tomllib` (Python ≥3.11) and macOS still ships 3.9 as `python3`, which
@@ -1061,14 +1063,21 @@ not.** Measured on one warm mac:
 | loop | command | cost |
 |---|---|---|
 | lint + typecheck | `bazelisk test //:lint` | **~3s** |
+| everything a laptop can check | `bazelisk run //:precommit` | the row below plus a `build //...` for the fmt/clippy aspects |
 | every hermetic test | `bazelisk test //... --build_tests_only --test_tag_filters=-no-sandbox,-requires-network,-external,-manual` | **~106s** after edits to a shared crate, **~2s** when nothing moved; 133 of 146 targets |
 | the package you're editing | `bazelisk test //datalib/backend/etl/...` | varies |
 | the whole gate, e2e included | push, and read CI | ~3 min warm / ~20 min cold |
 
-Reach for the middle row before pushing. It drops the 13 targets that
-need a host, and `--build_tests_only` stops it building the rest of the
-tree to run them. **Those tag filters belong on that line and nowhere
-else** — never on the full run; the paragraph below says why.
+Reach for `//:precommit` before pushing. The test line under it drops
+the 13 targets that need a host, and `--build_tests_only` stops it
+building the rest of the tree to run them — **which is also why it
+does not check formatting**: the rustfmt and clippy aspects run only on
+the targets named on the command line, and with `--build_tests_only`
+those are the tests, not the libraries they link. A misformatted
+`worker.rs` passed that line and failed CI (2026-09-14); `//:precommit`'s
+`build //...` is the step that catches it. **Those tag filters belong
+on that line and nowhere else** — never on the full run; the paragraph
+below says why.
 
 Don't shell out to `cargo` / `pnpm` for any of these — they bypass the
 cache and can disagree with CI.
