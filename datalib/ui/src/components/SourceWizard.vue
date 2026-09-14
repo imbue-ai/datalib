@@ -918,21 +918,6 @@ function submit() {
           </small>
         </label>
 
-        <label class="wiz-field">
-          <span class="wiz-label">Description</span>
-          <input
-            v-model="description"
-            class="wiz-input"
-            placeholder="Work Slack, mostly the infra and on-call channels"
-          />
-          <small class="wiz-help">
-            Optional. A sentence on what this source holds and what it is to you — "the
-            company Slack, mostly the on-call channels". Kept with the source's settings.
-            It could help search tell similar sources apart one day, but nothing reads it
-            yet. Change it whenever you like: nothing re-runs.
-          </small>
-        </label>
-
         <!-- Only while creating. Editing cannot change the id without a
              migration, and a disabled box holding a value you cannot
              alter is a control that exists only to be refused. What it
@@ -942,8 +927,8 @@ function submit() {
           <span class="wiz-label">Id</span>
           <input v-model="id" class="wiz-input" spellcheck="false" @input="idTouched = true" />
           <small class="wiz-help">
-            Permanent, and suggested from the name — this is your last chance to change it.
-            Creates
+            <b class="wiz-permanent">Permanent — this is your last chance to change it.</b>
+            Suggested from the name. Creates
             <code>{{ stepIdFor(groupId || "…", "download") }}</code>
             <template v-if="renders">
               and <code>{{ stepIdFor(groupId || "…", "render") }}</code>
@@ -1115,6 +1100,21 @@ function submit() {
           </label>
         </template>
 
+        <label class="wiz-field">
+          <span class="wiz-label">Description</span>
+          <input
+            v-model="description"
+            class="wiz-input"
+            placeholder="Work Slack, mostly the infra and on-call channels"
+          />
+          <small class="wiz-help">
+            Optional. A sentence on what this source holds and what it is to you — "the
+            company Slack, mostly the on-call channels". Kept with the source's settings.
+            It could help search tell similar sources apart one day, but nothing reads it
+            yet. Change it whenever you like: nothing re-runs.
+          </small>
+        </label>
+
         <details class="wiz-review">
           <summary>Review the TOML this writes</summary>
           <pre>{{ preview }}</pre>
@@ -1276,6 +1276,7 @@ function submit() {
 .wiz-fixed-id { margin: 0 0 16px; }
 .wiz-help { color: var(--datalib-muted); font-size: 11.5px; line-height: 1.45; }
 .wiz-error { color: #b8481a; font-size: 11.5px; }
+.wiz-permanent { color: #b8481a; }
 .wiz-probe-headline { margin: 0 0 4px; }
 .wiz-probe-aside { display: block; margin-top: 2px; }
 /* The step's recipe, in the shape it was written: numbered steps and
