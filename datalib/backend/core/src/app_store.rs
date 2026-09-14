@@ -2,6 +2,7 @@
 //! sync job queue, and the bytes-on-disk timeseries, one doltlite file
 //! each.
 
+use crate::app_store_migrate::{migrate_stamps, DISK_USAGE, FEEDBACK, SYNC_JOBS};
 use crate::repo::{AppRepo, RepoError};
 use crate::store::open_pool;
 use app_schema::disk_usage::{DiskUsageRow, DDL as DISK_USAGE_DDL};
@@ -33,9 +34,10 @@ pub struct AppStore {
 }
 
 impl AppStore {
-    /// Open (or create) both stores for a data root and ensure their
-    /// tables exist. DDL is `CREATE TABLE IF NOT EXISTS`, so populated
-    /// files are untouched.
+    /// Open (or create) the stores for a data root and ensure their
+    /// tables exist. DDL is `CREATE TABLE IF NOT EXISTS`, so a populated
+    /// file is untouched — which is why a store from before a column
+    /// rename is migrated first (`app_store_migrate`).
     pub async fn open(root: &std::path::Path) -> Result<Self, sqlx::Error> {
         let feedback_pool = open_pool(&crate::layout::feedback_db(root)).await?;
         let jobs_pool = open_pool(&crate::layout::jobs_db(root)).await?;
@@ -47,6 +49,22 @@ impl AppStore {
             usage_pool,
             has_dolt,
         };
+        for (pool, spec) in [
+            (&store.feedback_pool, &FEEDBACK),
+            (&store.jobs_pool, &SYNC_JOBS),
+        ] {
+            if migrate_stamps(pool, spec).await? && has_dolt {
+                // The rewrite is a change to a versioned file; leaving it
+                // in the working set would fold it into whichever commit
+                // comes next.
+                sqlx::query("SELECT dolt_commit('-Am', ?)")
+                    .bind(format!("migrate {}: stamps to utc + tz_offset", spec.table))
+                    .execute(pool)
+                    .await?;
+            }
+        }
+        // Usage is the store nothing commits, by design.
+        migrate_stamps(&store.usage_pool, &DISK_USAGE).await?;
         store.init_feedback_table().await?;
         store.init_sync_jobs_table().await?;
         store.init_disk_usage_table().await?;
@@ -509,6 +527,127 @@ mod tests {
             .map(|r| r.bytes)
             .collect();
         assert_eq!(root, vec![180, 100]);
+    }
+
+    /// A data root from before the stamps moved to `<x>_at_utc` +
+    /// `tz_offset` (#427) still has the old column names, and
+    /// `CREATE TABLE IF NOT EXISTS` leaves them. Opening such a root
+    /// has to rename the columns and rewrite the stamps — every read of
+    /// the queue returned 500 on a real root before it did — and must
+    /// keep the rows: feedback is filed by a person and nothing
+    /// regenerates it.
+    #[tokio::test]
+    async fn a_store_from_before_the_utc_columns_is_migrated_on_open() {
+        let td = tempfile::tempdir().unwrap();
+        // The old shape, by hand, in all three stores.
+        {
+            let jobs = open_pool(&crate::layout::jobs_db(td.path())).await.unwrap();
+            sqlx::query(
+                "CREATE TABLE sync_jobs (id VARCHAR(36) NOT NULL, source_ids VARCHAR(64), \
+                 kind VARCHAR(16) NOT NULL, parent_job_id VARCHAR(36), state VARCHAR(16) NOT NULL, \
+                 created_at VARCHAR(40) NOT NULL, started_at VARCHAR(40), finished_at VARCHAR(40), \
+                 error TEXT, pid INT, progress_pct DOUBLE, progress_msg VARCHAR(512), \
+                 PRIMARY KEY (id))",
+            )
+            .execute(&jobs)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO sync_jobs (id, kind, state, created_at, started_at, finished_at) \
+                 VALUES ('job-1', 'all', 'done', '2026-09-10T10:00:00+02:00', \
+                         '2026-09-10T10:00:05+02:00', '2026-09-10T10:01:00+02:00'), \
+                        ('job-2', 'all', 'pending', '2026-09-11T09:00:00+02:00', NULL, NULL)",
+            )
+            .execute(&jobs)
+            .await
+            .unwrap();
+            jobs.close().await;
+
+            let feedback = open_pool(&crate::layout::feedback_db(td.path()))
+                .await
+                .unwrap();
+            sqlx::query(
+                "CREATE TABLE feedback (feedback_uuid VARCHAR(36) NOT NULL, \
+                 created_at VARCHAR(40) NOT NULL, sentiment VARCHAR(8), comment TEXT NOT NULL, \
+                 app_version VARCHAR(32) NOT NULL, git_hash VARCHAR(40) NOT NULL, \
+                 context_json JSON NOT NULL, fixed_in_git_hash VARCHAR(40), notes TEXT, \
+                 PRIMARY KEY (feedback_uuid))",
+            )
+            .execute(&feedback)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO feedback (feedback_uuid, created_at, comment, app_version, git_hash, \
+                 context_json) VALUES ('fb-1', '2026-09-01T08:30:00-07:00', 'the bar is bizarre', \
+                 '0.1', 'abc', '{}')",
+            )
+            .execute(&feedback)
+            .await
+            .unwrap();
+            feedback.close().await;
+
+            let usage = open_pool(&crate::layout::usage_db(td.path()))
+                .await
+                .unwrap();
+            sqlx::query(
+                "CREATE TABLE disk_usage (path VARCHAR(512) NOT NULL, \
+                 measured_at VARCHAR(40) NOT NULL, bytes BIGINT NOT NULL, \
+                 PRIMARY KEY (path, measured_at))",
+            )
+            .execute(&usage)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO disk_usage (path, measured_at, bytes) \
+                 VALUES ('.', '2026-09-10T10:00:00+02:00', 100)",
+            )
+            .execute(&usage)
+            .await
+            .unwrap();
+            usage.close().await;
+        }
+
+        let store = AppStore::open(td.path()).await.expect("open migrates");
+
+        let jobs = store.list_jobs(false, 10).await.unwrap();
+        assert_eq!(jobs.len(), 2, "{jobs:?}");
+        let done = jobs.iter().find(|j| j.id == "job-1").unwrap();
+        assert_eq!(done.created_at_utc, "2026-09-10T08:00:00.000000+00:00");
+        assert_eq!(
+            done.finished_at_utc.as_deref(),
+            Some("2026-09-10T08:01:00.000000+00:00")
+        );
+        assert_eq!(done.tz_offset.as_deref(), Some("+02:00"));
+        let pending = jobs.iter().find(|j| j.id == "job-2").unwrap();
+        assert_eq!(pending.tz_offset.as_deref(), Some("+02:00"));
+        // Asked in SQL rather than through the mapper, which reads a
+        // NULL text column as `Some("")` on doltlite.
+        let null_start: i64 =
+            sqlx::query_scalar("SELECT started_at_utc IS NULL FROM sync_jobs WHERE id = 'job-2'")
+                .fetch_one(&store.jobs_pool)
+                .await
+                .unwrap();
+        assert_eq!(null_start, 1, "a stamp that was NULL stays NULL");
+
+        // The feedback row is still there, and still readable by the
+        // current queries.
+        let n: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM feedback WHERE created_at_utc = '2026-09-01T15:30:00.000000+00:00' \
+             AND tz_offset = '-07:00'",
+        )
+        .fetch_one(store.feedback_pool())
+        .await
+        .unwrap();
+        assert_eq!(n, 1);
+
+        let usage = store.recent_disk_usage(10).await.unwrap();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].measured_at_utc, "2026-09-10T08:00:00.000000+00:00");
+
+        // Opening again is a no-op: nothing to rename, nothing rewritten.
+        drop(store);
+        let again = AppStore::open(td.path()).await.unwrap();
+        assert_eq!(again.list_jobs(false, 10).await.unwrap().len(), 2);
     }
 
     /// Re-recording the same (series, instant) overwrites rather than

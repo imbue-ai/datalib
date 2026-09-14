@@ -2,6 +2,7 @@
 //! the host-runtime helpers every binary shares.
 
 pub mod app_store;
+mod app_store_migrate;
 pub mod deeplink;
 pub mod disk;
 pub mod repo;
