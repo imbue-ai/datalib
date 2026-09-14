@@ -799,6 +799,44 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
+    type: "airvisual",
+    method: "export",
+    label: "AirVisual",
+    blurb: "An IQAir AirVisual Pro's own history, read off its network share.",
+    keywords: ["airvisual", "iqair", "air quality", "co2", "pm2.5", "sensor", "samba"],
+    kind: "local",
+    icon: null,
+    defaultName: "airvisual",
+    nameHint: "Kitchen air",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the mounted airvisual share",
+        required: true,
+        target: "export.path",
+        label: "Data folder",
+        placeholder: "/Volumes/airvisual",
+        help:
+          "The Pro's data folder: connect to smb://<its IP>/airvisual (user \"airvisual\", " +
+          "password under Settings › Network › Access Pro data on the device) and pick the " +
+          "mounted volume, or a copy of it. Every YYYYMM_AirVisual_values.txt under it is " +
+          "read, the archive folders included; a later sync re-reads only the month being " +
+          "written.",
+      },
+      {
+        kind: "text",
+        target: "export.device",
+        label: "Device name",
+        placeholder: "Cucina",
+        help:
+          "Keys every sample, so keep it stable. Leave it empty to use the name the device " +
+          "gives itself in latest_config_measurements.json.",
+      },
+    ],
+  },
+  {
     type: "lightroom",
     label: "Lightroom",
     blurb: "Mirror a Lightroom Classic catalog, with full history.",

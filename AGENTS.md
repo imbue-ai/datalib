@@ -201,12 +201,20 @@ reference doc it relates to.
   `skip_churn` preset, the `Media/` registry the engine does not do,
   and how render resolves the rowid graph to the natural keys the
   uuids are minted from.
-- [`docs/dev/plans/airvisual.md`](docs/dev/plans/airvisual.md) —
-  *investigation (2026-09-14)*, nothing built: IQAir AirVisual monitors
-  as the second time-series source beside `yolink`. The device API
-  (`device.iqair.com/v2/<id>`, no credential) was measured: four
-  trailing windows, no date range, so **the windows are the retention**.
-  Read it with `yolink/INGEST.md` before building either.
+- [`datalib/backend/etl/providers/airvisual/INGEST.md`](datalib/backend/etl/providers/airvisual/INGEST.md)
+  — the `airvisual` source: an IQAir AirVisual Pro's own history files,
+  read off its Samba share. **Read before touching how a time-series
+  provider stores samples**: one row per logged line with a REAL column
+  per measurement (not yolink's long form), what the share holds
+  (archives per clock change, `corrupt_`/`restored_` pairs, the 1970
+  file), and why pre-clock lines get their own table.
+  [`docs/dev/plans/airvisual.md`](docs/dev/plans/airvisual.md) is the
+  investigation behind it: the cloud routes measured on 2026-09-14
+  (the no-credential device API keeps only trailing windows — **the
+  windows are the retention** — and is closed to private devices), and
+  the `api` method still to build for a published outdoor unit.
+  `datalib/backend/etl/timeseries_render/` is what its render and
+  yolink's share.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
   — the `email` source's three download modes (JMAP, Gmail API, mbox),
   what keeps them writing one deduped schema, and why an IMAP mode was
@@ -454,6 +462,9 @@ datalib/
                    unified-index load, and `RenderCtx`. Everything in
                    the tree that knows `datalib_schema` sits here or
                    above; see "Download and render are separate crates".
+    etl/timeseries_render/ what the time-series providers' render
+                   crates (yolink, airvisual) share: the Plotly page,
+                   the quantity/metric vocabulary, the series type.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) per provider,
                    plus a <p>_config/ crate for the config schema.
                    Three providers scan local trees and share
@@ -462,8 +473,11 @@ datalib/
                    content-keyed; media has no render side either).
                    Three mirror a SQLite file through etl/sqlite_mirror/
                    (lightroom, apple_photos, whatsapp — the last after
-                   decrypting it). fsindex, media, lightroom and
-                   apple_photos have no <p>_render.
+                   decrypting it). Two are sensor time series (yolink
+                   over a signed-URL CSV API, airvisual off a device's
+                   Samba share) and render through etl/timeseries_render/.
+                   fsindex, media, lightroom and apple_photos have no
+                   <p>_render.
     etl/sqlite_mirror/ `datalib_etl_sqlite_mirror`: the table-for-table
                    SQLite→doltlite mirror engine behind lightroom,
                    apple_photos and whatsapp. Its own crate, not part of
