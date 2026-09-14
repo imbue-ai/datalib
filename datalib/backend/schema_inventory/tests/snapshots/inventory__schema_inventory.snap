@@ -1187,6 +1187,124 @@ yolink_readings_bookkeeping
     volatile_payload
     tz_offset
 
+== garmin/raw ==
+garmin_account
+    id
+    payload
+    display_name
+garmin_account_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+garmin_activities
+    id
+    payload
+    start_time_gmt
+    activity_type
+    name
+garmin_activities_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+garmin_activity_details
+    id
+    payload
+garmin_activity_details_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+garmin_activity_files
+    id
+    activity_id
+    file_kind
+    blake3
+garmin_activity_files_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+garmin_daily
+    id
+    payload
+    metric
+    calendar_date
+garmin_daily_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+garmin_devices
+    id
+    payload
+    product_display_name
+garmin_devices_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+garmin_items
+    id
+    payload
+    kind
+    upstream_id
+garmin_items_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+garmin_weigh_ins
+    id
+    payload
+    calendar_date
+    timestamp_gmt
+    weight_g
+    source_type
+garmin_weigh_ins_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+garmin_wellness_files
+    id
+    calendar_date
+    file_kind
+    blake3
+garmin_wellness_files_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+
 == unified_index/grid ==
 edges
     edge_uuid

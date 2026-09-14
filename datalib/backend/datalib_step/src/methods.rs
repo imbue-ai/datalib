@@ -21,6 +21,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         SourceType::Claude => datalib_etl_claude_config::ClaudeConfig::METHODS,
         SourceType::Email => datalib_etl_email_config::EmailConfig::METHODS,
         SourceType::Fsindex => datalib_etl_fsindex_config::FsindexConfig::METHODS,
+        SourceType::Garmin => datalib_etl_garmin_config::GarminConfig::METHODS,
         SourceType::Github => datalib_etl_github_config::GithubConfig::METHODS,
         SourceType::Gitlab => datalib_etl_gitlab_config::GitlabConfig::METHODS,
         SourceType::GoogleTakeout => {

@@ -57,6 +57,12 @@
       "reach": "local"
     }
   ],
+  "garmin": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
   "github": [
     {
       "path": "api",

@@ -365,3 +365,14 @@ These sources need nothing but a path on their ingest step:
 read secrets, written straight into the config; **Perseus** downloads
 public texts and needs no credentials. Both are documented in
 [`all_sources.toml`](config_examples/all_sources.toml).
+
+**Garmin** signs in on its own rather than through latchkey, because
+Garmin's API wants a bearer minted by a signed request that latchkey
+cannot make. Run `datalib-step login garmin` once — it asks for your
+Garmin email, password and the MFA code Garmin emails you, and writes a
+token that lasts about a year under `~/.garth` (a token from the
+`garth` Python tool works too). Then add the source from the wizard or
+from the `all_sources.toml` example; `since` says how far back to
+mirror. The first sync makes one request per metric per day since
+`since`, so a long history takes a while; later syncs re-read only the
+trailing week.
