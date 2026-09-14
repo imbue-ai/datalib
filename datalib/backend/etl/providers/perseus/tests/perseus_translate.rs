@@ -6,11 +6,10 @@
 //! or the renderer flips a UUID derivation, this fails before bad data
 //! hits a user's root.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use datalib_etl::progress::Progress;
-use datalib_etl_perseus::{book_uuid, chapter_uuid, paragraph_uuid};
+use datalib_etl_perseus::{book_uuid, chapter_uuid, paragraph_uuid, TLG_FILE_PREFIX};
 use datalib_etl_perseus_render::render::align::PerseusAlignments;
 use datalib_etl_perseus_render::render::{parse, render};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -40,7 +39,6 @@ fn render_fixture(
             emitted.push(r);
             Ok(())
         },
-        &mut HashSet::new(),
     )
     .expect("render");
     (summary, emitted)
@@ -66,6 +64,20 @@ fn renders_all_books_chapters_and_editions() {
     assert_eq!(summary.markdowns_total, 10);
     assert_eq!(summary.markdowns_rendered, 10);
     assert_eq!(emitted.len(), 10);
+    // One bucket for the whole tree, so the driver's sweep of what a
+    // run did not emit reaches every document; and the files it names
+    // are what the bucket declares as its inputs.
+    let bucket = render::bucket_key("perseus");
+    assert!(emitted
+        .iter()
+        .all(|d| d.bucket_key.as_deref() == Some(bucket.as_str())));
+    assert_eq!(
+        parsed.files,
+        [
+            format!("{TLG_FILE_PREFIX}{ENG}.xml"),
+            format!("{TLG_FILE_PREFIX}{GRC}.xml"),
+        ]
+    );
 
     let book1 = out
         .path()

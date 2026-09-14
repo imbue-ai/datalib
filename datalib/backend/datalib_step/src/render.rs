@@ -285,15 +285,6 @@ pub fn render_source(
         }
         Ok(gone.len())
     };
-    // A whole-store renderer declares the complete document set
-    // instead of naming vanished ids: `retained` accumulates across
-    // this source's processors and the sweep runs once, below.
-    let mut retained: Option<BTreeSet<String>> = None;
-    let mut on_retain = |seen: &std::collections::HashSet<String>| {
-        retained
-            .get_or_insert_with(BTreeSet::new)
-            .extend(seen.iter().cloned());
-    };
     // The buckets this run rendered. What the store holds under one of
     // them that this run did not emit is gone. Their inputs land in the
     // open batch beside their documents.
@@ -320,7 +311,6 @@ pub fn render_source(
                 stale_buckets.as_ref(),
                 &mut on_doc,
                 &mut on_remove,
-                &mut on_retain,
                 &mut on_declare,
             );
             futures::executor::block_on(proc.run(&ctx))
@@ -345,9 +335,7 @@ pub fn render_source(
     // nothing about what should exist, and nothing is swept.
     let full_walk =
         render_everything && !consumed.is_empty() && consumed.iter().all(Option::is_some);
-    let sweep = retained.is_some() || full_walk;
-    let mut keep = retained.unwrap_or_default();
-    keep.extend(emitted);
+    let mut keep = emitted;
     // The storage report's id goes in `keep`: the provider's processors
     // know nothing about it, and the sweep would otherwise drop it on
     // any run where no number moved.
@@ -362,7 +350,7 @@ pub fn render_source(
         &store,
         &data_root,
         RunEnd {
-            sweep,
+            sweep: full_walk,
             keep: &keep,
             declared: &buckets,
             storage,
@@ -432,7 +420,7 @@ struct RunEnd<'a> {
     /// Whether the run walked everything, so a document not in `keep` is
     /// one the source no longer produces.
     sweep: bool,
-    /// Every document this run emitted, retained or owns.
+    /// Every document this run emitted or owns.
     keep: &'a BTreeSet<String>,
     /// Buckets the run rendered: what the store holds under them beyond
     /// `keep` is gone.
@@ -763,9 +751,9 @@ mod plan_tests {
     }
 
     /// No cursor is not "render everything": a renderer that never
-    /// records one — the whole-store kind — sweeps for itself through
-    /// `retain_documents`, and the driver's full-walk sweep must not run
-    /// over it.
+    /// records one — perseus, reading files — sweeps through the bucket
+    /// it declares, and the driver's full-walk sweep must not run over
+    /// it.
     #[test]
     fn no_cursor_is_not_a_full_render() {
         assert_eq!(

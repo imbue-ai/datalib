@@ -264,10 +264,8 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
     //
     // No commit means the store cannot be read, which is *not* the same as
     // the source holding nothing; reading the working set instead would be
-    // worse than either. Claude never hands its rendered set to
-    // `retain_documents`, so returning an empty parse here deletes nothing —
-    // a provider that swept would have to skip instead. See the plan's
-    // "The sink contract".
+    // worse than either. An empty parse declares no bucket, so it deletes
+    // nothing. See the plan's "The sink contract".
 
     let Some(pin) = range.pin(&pool).await? else {
         return Ok(ParsedExport::default());
