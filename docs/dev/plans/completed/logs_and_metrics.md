@@ -1,13 +1,14 @@
 # Logs and metrics: one store, written by the runner
 
-**Status: agreed plan (2026-09-11), built in full (2026-09-14).** [Order of work](#order-of-work)
-is the checklist; update it as slices land, and treat anything it still
-lists as unbuilt. Per [`AGENTS.md`](../../../AGENTS.md), where this file
-says "today" that was checked against `5f589a59`; where it says "will",
-nothing exists yet.
+**Status: built in full (2026-09-14), kept as the record of what was
+decided.** Every slice in [Order of work](#order-of-work) landed
+(#419, #421, #425, #428, #431). Where this file says "today" it means
+`5f589a59`, the tree before any of it; the tables section is current
+and the rest is the argument. The open questions at the end are the
+loose ends, with what each costs.
 
 This supersedes §3 ("Pipeline state as a table") and §4 ("Run logs,
-beside the data") of [`data_centric_ui.md`](data_centric_ui.md). That
+beside the data") of [`data_centric_ui.md`](../data_centric_ui.md). That
 proposal put each step's log in a file under the step's own tree; the
 decision here is one file per data root, for the reasons in
 [§"One file, not one per step"](#one-file-not-one-per-step). Issues:
@@ -280,20 +281,36 @@ Each slice is one PR that leaves the tree green.
    but not advancing" — or silent. `metric_samples` is still bounded
    only by run retention; the plan's open question stands.
 
-## Open questions
+## Loose ends
 
-- **Joining a raw store's `sync_runs` row to the run.** Steps now
-  receive `DATALIB_DAG_RUN_ID`; nothing stamps it yet. A `dag_run_id`
-  column on `sync_runs` (and on the render cursor) is the obvious next
-  step, and would let the Manage screen link a log line to the commit
-  it produced.
+What did not land, with an honest weight on each. None blocks
+anything; the first is the only one worth doing soon.
+
+- **The rate query reads every sample of the run.** `snapshot_of`
+  takes the two newest samples per series with a window over all of
+  the run's `metric_samples`, and `/api/dag` calls it on every
+  `dag_changed` frame — several times a second while a run goes. At
+  one sample per changed series per five seconds a busy download
+  writes ~700 rows an hour per series, so a day-long run with twenty
+  series is a few hundred thousand rows read per frame. A `ts >
+  now - 10min` bound on that query is the fix; a cap on the table
+  itself can wait for a measurement. **Medium; cheap.**
+- **A download's outcome carries no `rows`.** The count of its last
+  segment lives inside the `RawStoreSession` that sealed it, and
+  `ingest.rs` builds the claim after the session is gone. A consumer's
+  queue from a download is exact for every checkpoint and reads the
+  finish as "nothing more to come"; it under-reports only between the
+  producer finishing and the consumer's final pass. **Low; cosmetic.**
+- **Nothing stamps `DATALIB_DAG_RUN_ID` into a raw store.** A
+  `dag_run_id` column on `sync_runs` (and on the render cursor) would
+  let a commit in the history panel be joined to the run — and the
+  log — that made it. The panel already names the run on each commit
+  from the commit message, so this is a join nobody has needed yet.
+  **Low; nice to have.**
 - **Bytes.** `DownloadMetrics` counts requests and rows; nothing counts
-  bytes fetched or bytes written. The HTTP chokepoint sees the response
-  body length, so `bytes_fetched` is a one-line addition there. Bytes
-  written per store is what `usage.doltlite_db` already samples, from
-  the outside; whether to also count it from the inside is not decided.
-- **Whether `metric_samples` wants a cap of its own.** At one sample per
-  changed series per five seconds a busy download writes ~700 rows an
-  hour per series; the run retention bounds it, but a run that lasts a
-  day with twenty series is a few hundred thousand rows. Measure before
-  deciding.
+  bytes fetched. The HTTP chokepoint sees the response body length, so
+  `bytes_fetched` is a one-line addition when someone wants it.
+  **Low.**
+- **Timestamps everywhere as UTC + `tz_offset`.** The run store is the
+  first table in that shape; the rest of the tree is #427, in
+  progress separately.

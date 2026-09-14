@@ -182,7 +182,7 @@ The event schema is essentially what TracingSink already emits:
 > sugar for a step that counts one thing, and `progress_message` (no
 > separate finish event — completion is a `log` line plus the step's
 > `outcome`). See `docs/dev/step_protocol.md` for the authoritative
-> wire format, and `docs/dev/plans/logs_and_metrics.md` for where the
+> wire format, and `docs/dev/plans/completed/logs_and_metrics.md` for where the
 > runner records them.
 
 Complementary channels, not either/or:
