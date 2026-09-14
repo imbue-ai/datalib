@@ -50,8 +50,16 @@ impl RenderProcessor for SlackRender {
             dropped += ctx.remove_conversation(thread_uuid)?;
         }
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
+        let summary = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("slack render_all")?;
+        // A thread the diff named that has no message left builds no
+        // chat, so chat-common never sees it; the named set goes first.
+        for thread_uuid in parsed.scan.changed_threads.iter().flatten() {
+            ctx.declare_bucket(thread_uuid, &[]);
+        }
+        for (bucket, documents) in &summary.buckets {
+            ctx.declare_bucket(bucket, documents);
+        }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }

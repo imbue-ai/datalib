@@ -337,6 +337,42 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// [`Self::documents_for_conversation`] for many at once: every
+    /// document under any of `conversation_uuids`, as `(conversation,
+    /// document)`. One chunked query rather than one per bucket — a run
+    /// declares as many buckets as it rendered.
+    pub fn documents_for_conversations(
+        &self,
+        conversation_uuids: &[&str],
+    ) -> Result<Vec<(String, String)>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let mut out = Vec::new();
+            for chunk in conversation_uuids.chunks(datalib_etl::bulk::SQL_CHUNK) {
+                let mut sql = String::from(
+                    "SELECT DISTINCT conversation_uuid, markdown_uuid FROM grid_rows \
+                     WHERE markdown_uuid IS NOT NULL AND conversation_uuid IN (",
+                );
+                datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
+                sql.push(')');
+                // Audited: a placeholder run sized from the chunk; every
+                // uuid is bound.
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+                for uuid in chunk {
+                    q = q.bind(*uuid);
+                }
+                let rows = q
+                    .fetch_all(&mut **guard.conn())
+                    .await
+                    .context("documents for conversations")?;
+                for r in rows {
+                    out.push((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?));
+                }
+            }
+            Ok(out)
+        })
+    }
+
     /// Every document this store holds. The other half of a sweep: a
     /// renderer that walked its whole raw store says what should be here,
     /// and whatever else is here is what the store lost.
@@ -1007,6 +1043,70 @@ mod tests {
             Some("fp-2"),
             "the fingerprint moves with the re-render"
         );
+    }
+
+    fn doc_in(dir: &Path, markdown_uuid: &str, row_uuid: &str, fp: &str) -> RenderedMarkdown {
+        let mut d = doc(dir, markdown_uuid, fp);
+        d.rows = vec![row(row_uuid, markdown_uuid)];
+        d
+    }
+
+    /// A row that moved between two documents of one source — a message
+    /// re-bucketed into another period, a chat whose document id is
+    /// minted from a name that changed — is taken over by the document
+    /// that now emits it, whichever of the two renders first. Found by
+    /// the provider contract harness on google_takeout: the incoming
+    /// document failed on `UNIQUE constraint failed: grid_rows.uuid`
+    /// while the old owner, rendered by an earlier run, still held it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_row_that_moved_between_documents_is_taken_over() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let earlier = store(root);
+        earlier
+            .put_document(root, &doc_in(root, "doc-a", "row-1", "fp-a"))
+            .unwrap();
+        earlier.close();
+
+        // A second open is a second run, whatever the clock says.
+        let later = store(root);
+        later
+            .put_document(root, &doc_in(root, "doc-b", "row-1", "fp-b"))
+            .expect("the row moves to doc-b");
+        let owner: String = blocking(async {
+            sqlx::query_scalar("SELECT markdown_uuid FROM grid_rows WHERE uuid = 'row-1'")
+                .fetch_one(&later.pool)
+                .await
+        })
+        .unwrap();
+        assert_eq!(owner, "doc-b");
+        // doc-a re-renders without the row: its delete-by-owner must not
+        // touch what doc-b now holds.
+        later
+            .put_document(root, &doc(root, "doc-a", "fp-a2"))
+            .unwrap();
+        let n: i64 = blocking(async {
+            sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows WHERE uuid = 'row-1'")
+                .fetch_one(&later.pool)
+                .await
+        })
+        .unwrap();
+        assert_eq!(n, 1, "the moved row survives its old owner's re-render");
+    }
+
+    /// Two documents of one run minting one row uuid is a finding, not a
+    /// move, and still fails.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_documents_in_one_run_minting_one_uuid_is_an_error() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let s = store(root);
+        s.put_document(root, &doc_in(root, "doc-a", "row-1", "fp-a"))
+            .unwrap();
+        let err = s
+            .put_document(root, &doc_in(root, "doc-b", "row-1", "fp-b"))
+            .expect_err("a same-run collision must fail");
+        assert!(format!("{err:#}").contains("written this run"), "{err:#}");
     }
 
     /// The sweep is scoped to the document reprocessed. A document that

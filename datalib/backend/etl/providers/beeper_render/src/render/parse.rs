@@ -93,6 +93,10 @@ pub struct ParsedBeeper {
     pub rooms: HashMap<String, Room>,
     /// `Vec<DocBucket>` ordered by `(room_uuid, period_key)`.
     pub docs: Vec<DocBucket>,
+    /// Whether the store was read at all. `false` for no store on disk
+    /// or nothing committed — then `docs` is empty because nobody
+    /// looked, and the render must not sweep on it.
+    pub walked: bool,
 }
 
 // Entry point
@@ -433,5 +437,9 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
         }
     }
 
-    Ok(ParsedBeeper { rooms, docs })
+    Ok(ParsedBeeper {
+        rooms,
+        docs,
+        walked: true,
+    })
 }

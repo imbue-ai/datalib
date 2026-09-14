@@ -57,7 +57,7 @@ impl RenderProcessor for ClaudeRender {
             dropped += ctx.remove_conversation(&crate::render::ids::project(bucket).uuid)?;
         }
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_all(
+        let buckets = render_all(
             &parsed,
             ctx.root,
             &self.name,
@@ -68,6 +68,15 @@ impl RenderProcessor for ClaudeRender {
             &mut on_doc,
         )
         .context("claude render_all")?;
+        // A named bucket is a conversation or a project; both uuids are
+        // declared, and the one that names nothing removes nothing.
+        for bucket in parsed.scan.changed_buckets.iter().flatten() {
+            ctx.declare_bucket(&crate::render::ids::conversation(bucket).uuid, &[]);
+            ctx.declare_bucket(&crate::render::ids::project(bucket).uuid, &[]);
+        }
+        for (bucket, documents) in &buckets {
+            ctx.declare_bucket(bucket, documents);
+        }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }

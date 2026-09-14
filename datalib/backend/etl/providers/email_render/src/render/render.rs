@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+    render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -137,7 +137,7 @@ pub fn render_all(
     only_labels: &[String],
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<()> {
+) -> Result<Buckets> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
         source = source_id,
@@ -225,7 +225,7 @@ pub fn render_all(
     }
 
     let no_priors: HashMap<String, String> = HashMap::new();
-    cc_render_all(
+    let summary = cc_render_all(
         &profile(),
         &chats,
         root,
@@ -236,7 +236,7 @@ pub fn render_all(
         on_doc_complete,
     )
     .context("email chat-common render")?;
-    Ok(())
+    Ok(summary.buckets)
 }
 
 /// The `accounts` row is a JMAP `Account` object, a Gmail stand-in

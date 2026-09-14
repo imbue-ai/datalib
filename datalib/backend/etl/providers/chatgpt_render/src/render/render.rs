@@ -8,7 +8,7 @@ use anyhow::{Context as _, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+    render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
@@ -58,7 +58,7 @@ pub fn render_all(
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<()> {
+) -> Result<Buckets> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
         source = source_id,
@@ -84,7 +84,7 @@ pub fn render_all(
 
     // Skip is driven upstream by dolt_diff; the fingerprint map is empty.
     let no_priors: HashMap<String, String> = HashMap::new();
-    cc_render_all(
+    let summary = cc_render_all(
         &profile(),
         &chats,
         root,
@@ -95,8 +95,7 @@ pub fn render_all(
         on_doc_complete,
     )
     .context("chatgpt chat-common render")?;
-
-    Ok(())
+    Ok(summary.buckets)
 }
 
 /// One [`NormalizedChat`] per conversation. Messages are ordered by the

@@ -1,7 +1,7 @@
 //! The render step driver: one source's render wave, written to the tree
 //! the step id names and read from the raw store its input names.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -288,6 +288,15 @@ pub fn render_source(
             .get_or_insert_with(BTreeSet::new)
             .extend(seen.iter().cloned());
     };
+    // The buckets this run rendered and the documents it considered for
+    // each. What the store holds under one of them beyond that is gone.
+    let mut buckets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut on_declare = |bucket: &str, documents: &[String]| {
+        buckets
+            .entry(bucket.to_string())
+            .or_default()
+            .extend(documents.iter().cloned());
+    };
     // The raw commit each processor rendered from, or `None` for one
     // that read no store.
     let mut consumed: Vec<Option<String>> = Vec::with_capacity(processors.len());
@@ -303,6 +312,7 @@ pub fn render_source(
                 &mut on_doc,
                 &mut on_remove,
                 &mut on_retain,
+                &mut on_declare,
             );
             futures::executor::block_on(proc.run(&ctx))
                 .with_context(|| format!("processor {}", proc.id()))?;
@@ -343,7 +353,9 @@ pub fn render_source(
         &store,
         &data_root,
         RunEnd {
-            sweep: sweep.then_some(&keep),
+            sweep,
+            keep: &keep,
+            declared: &buckets,
             storage,
             prior: &prior,
             cursor: raw_commit.map(|raw_commit| {
@@ -393,7 +405,13 @@ pub fn render_source(
 /// What closes a run: the sweep (`Some(keep)` deletes every document not
 /// in it), the storage report, and the cursor to record.
 struct RunEnd<'a> {
-    sweep: Option<&'a BTreeSet<String>>,
+    /// Whether the run walked everything, so a document not in `keep` is
+    /// one the source no longer produces.
+    sweep: bool,
+    /// Every document this run emitted, retained or owns.
+    keep: &'a BTreeSet<String>,
+    /// Buckets the run rendered, each with the documents it considered.
+    declared: &'a BTreeMap<String, BTreeSet<String>>,
     storage: Option<crate::introspect::Measured>,
     prior: &'a HashMap<String, String>,
     cursor: Option<RenderCursorRow>,
@@ -412,9 +430,9 @@ fn seal_run(store: &IndexedMarkdownStore, data_root: &Path, end: RunEnd<'_>) -> 
             stored: 0,
             removed: 0,
         };
-        if let Some(keep) = end.sweep {
+        if end.sweep {
             for uuid in store.all_document_uuids()? {
-                if keep.contains(&uuid) {
+                if end.keep.contains(&uuid) {
                     continue;
                 }
                 store
@@ -426,6 +444,26 @@ fn seal_run(store: &IndexedMarkdownStore, data_root: &Path, end: RunEnd<'_>) -> 
                     "render: this source no longer produces this document; dropped it",
                 );
             }
+        }
+        // A bucket the run rendered produces exactly the documents it
+        // considered; one the store still holds for it is from a period
+        // that emptied or a thread whose messages went. Positive evidence
+        // only: buckets the run never looked at are not here.
+        let buckets: Vec<&str> = end.declared.keys().map(String::as_str).collect();
+        for (bucket, uuid) in store.documents_for_conversations(&buckets)? {
+            let considered = end.declared.get(&bucket).is_some_and(|c| c.contains(&uuid));
+            if considered || end.keep.contains(&uuid) {
+                continue;
+            }
+            store
+                .remove_document(data_root, &uuid)
+                .with_context(|| format!("remove document {uuid}"))?;
+            sealed.removed += 1;
+            tracing::info!(
+                document = %uuid,
+                bucket,
+                "render: this bucket no longer produces this document; dropped it",
+            );
         }
         // The report is skipped whole when no number moved: it would be
         // byte-identical, and appending a sample saying "still the same"
@@ -695,7 +733,9 @@ mod plan_tests {
             &store,
             td.path(),
             RunEnd {
-                sweep: Some(&keep),
+                sweep: true,
+                keep: &keep,
+                declared: &BTreeMap::new(),
                 storage: None,
                 prior: &HashMap::new(),
                 cursor: Some(cursor("raw-head", json!({}))),
@@ -728,7 +768,9 @@ mod plan_tests {
             &store,
             td.path(),
             RunEnd {
-                sweep: None,
+                sweep: false,
+                keep: &BTreeSet::new(),
+                declared: &BTreeMap::new(),
                 storage: None,
                 prior: &HashMap::new(),
                 cursor: None,

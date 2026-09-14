@@ -433,6 +433,23 @@ new dependency.
 
 ### Layer 2: the provider contract
 
+*Built (2026-09-14): `tests/fixtures/render_contract_test.py`, a table
+at a time rather than a row at a time. Against every render provider's
+TNG store it runs 137 mutations and found 30 breaches, of which the
+run that built it fixed nine — three in the framework (a row that
+moves between documents of one source is taken over rather than
+failing on `grid_rows.uuid`; a bucket that re-renders to fewer
+documents drops the extras, through `RenderCtx::declare_bucket`;
+beeper had no deletion path at all and now retains like
+google_takeout) and two in bucket queries (claude never named a
+deleted project; email never named an account or mailbox edit). The
+other 21 are listed by name in the test's `KNOWN_GAPS`, each with why,
+and the list is exact — an entry that stops failing fails the run
+until it is removed. Most are fingerprint gaps in whole-store
+renderers (clause 4), the rest tables a scan does not name (clause 2);
+pdf's is the one worth knowing: its fingerprint is the file's blake3,
+so text re-extracted at ingest never re-renders.*
+
 A real provider is correct under the property if it keeps five
 promises. Written as a contract, so a provider author has a list and
 a harness has something to check:
@@ -501,7 +518,18 @@ the fixture's shape and incomplete for a shape the fixture lacks — a
 table the fixture never populates. `schema_inventory` lists every
 table; the harness should assert every table of the provider's store
 has at least one row in the fixture, or is on a per-provider "known
-empty" list, so a silent gap is at least a named gap.
+empty" list, so a silent gap is at least a named gap. (Not built: it
+skips empty tables silently today.)
+
+**What it mutates, and why not more.** A raw state ingest could never
+write is not an edit: the `id` inside a payload but not the row's,
+a promoted column but not the payload it was promoted from, a digest
+with a marker on it. So the tweak leaves identity-like keys and
+columns alone, edits only the payload of a table that has one, and
+skips hash columns; a provider that refuses the result on purpose (an
+enum value it does not know) passes when cold refuses it the same
+way. Datalib's own storage report is left out of the comparison — it
+carries a byte-count history, so it is a function of the run.
 
 ### The dump/compare helper both layers need
 
