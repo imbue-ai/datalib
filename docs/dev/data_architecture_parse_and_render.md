@@ -101,8 +101,8 @@ four tables —
 
   - `markdowns` — one row per rendered document: its `markdown_uuid`
     (the primary key for the `.md`), its `renderer_version`, its
-    `md_path`, the `bucket_key` it was rendered from, and the
-    `row_set_hash` over the rows below. Nothing on it is stamped per
+    `md_path` and the `bucket_key` it was rendered from. Nothing on it is
+    stamped per
     run — a re-render of an unchanged document writes an identical row.
   - `grid_rows` — the document's projected rows.
   - `edges` — its outgoing links.

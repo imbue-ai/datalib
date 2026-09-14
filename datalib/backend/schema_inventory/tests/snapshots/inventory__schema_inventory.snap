@@ -1236,7 +1236,6 @@ markdowns
     updated_at
     md_path
     upstream_cursor
-    row_set_hash
     renderer_version
     bucket_key
 render_cursor

@@ -25,7 +25,6 @@ use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use tokio::sync::Mutex;
@@ -350,9 +349,9 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// Bump when the canonical-tuple shape in `compute_row_set_hash` or the
-/// rendered `.md` layout changes: every `documents.row_set_hash` is
-/// invalidated and the next ingest re-renders.
+/// The index side of `markdowns.renderer_version` (`"<index>.<render>"`).
+/// Bump when the rendered `.md` layout changes for every provider at
+/// once: every document's version then differs from its store's.
 pub const RENDERER_VERSION: &str = "rust-v1";
 
 // ── Cross-source id collision detection ─────────────────────────────
@@ -480,69 +479,6 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
         "Source Size" => datalib_schema::measurements::DOC_KIND,
         _ => "chat",
     }
-}
-
-/// SHA-256 over the canonical per-row tuple, sorted by `(when_ts, uuid)` so
-/// the hash is independent of producer order. The encoding is
-/// length-prefixed and `\0`-delimited, so it is stable across Rust versions
-/// in a way `Debug` is not.
-pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
-    let mut sorted: Vec<&GridRow> = rows.iter().collect();
-    sorted.sort_by(|a, b| a.when_ts.cmp(&b.when_ts).then_with(|| a.uuid.cmp(&b.uuid)));
-    let mut h = Sha256::new();
-    let push = |h: &mut Sha256, v: Option<&str>| {
-        match v {
-            Some(s) => {
-                h.update(b"S");
-                h.update((s.len() as u64).to_le_bytes());
-                h.update(s.as_bytes());
-            }
-            None => h.update(b"N"),
-        }
-        h.update(b"\x00");
-    };
-    let push_i = |h: &mut Sha256, v: Option<i64>| {
-        match v {
-            Some(n) => {
-                h.update(b"I");
-                h.update(n.to_le_bytes());
-            }
-            None => h.update(b"N"),
-        }
-        h.update(b"\x00");
-    };
-    for r in sorted {
-        push(&mut h, Some(&r.uuid));
-        push(&mut h, Some(&r.kind));
-        push(&mut h, r.when_ts.as_deref());
-        push(&mut h, r.author.as_deref());
-        push_i(&mut h, r.message_index);
-        push(&mut h, Some(&r.text));
-        push(&mut h, r.source_url.as_deref());
-        push(&mut h, r.slack_link.as_deref());
-        push(&mut h, r.git_sha.as_deref());
-        push(&mut h, r.upstream_id.as_deref());
-        push(&mut h, r.upstream_entity_kind.as_deref());
-        push(&mut h, r.upstream_scope.as_deref());
-        push(&mut h, r.notion_page_uuid.as_deref());
-        push(&mut h, r.notion_block_uuid.as_deref());
-        // `item_count` but deliberately NOT `byte_size`. This hash is a
-        // staleness decision — it is the markdown cache key — and a
-        // doltlite store's size is not stable across rebuilds of
-        // identical data: measured over the TNG fixture, five of its
-        // sixteen sources moved by 1–22 bytes on a re-bake of the same
-        // inputs. Hashing that would churn the goldens on every backend
-        // change and re-render documents nothing touched. Same rule as
-        // the storage report's re-render check: bytes are reported,
-        // never used to decide whether something changed.
-        push_i(&mut h, r.item_count);
-    }
-    let digest = h.finalize();
-    let mut s = String::with_capacity(64);
-    for b in digest {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
 
 /// One markdown's payload as handed from render to the indexer,
@@ -994,7 +930,6 @@ async fn upsert_markdown(
         .collect();
     let created_at = timestamps.iter().min().copied();
     let updated_at = timestamps.iter().max().copied();
-    let row_set_hash = compute_row_set_hash(&md.rows);
     let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
     // Fall back to the canonical row's provider when build_grid_index
     // rebuilds from disk without the config-level name.
@@ -1012,8 +947,8 @@ async fn upsert_markdown(
     sqlx::query(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, updated_at, \
-          md_path, upstream_cursor, row_set_hash, renderer_version, bucket_key) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          md_path, upstream_cursor, renderer_version, bucket_key) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&source_id)
@@ -1024,7 +959,6 @@ async fn upsert_markdown(
     .bind(updated_at)
     .bind(qmd_path)
     .bind(md.upstream_cursor.as_deref())
-    .bind(&row_set_hash)
     .bind(&version_str)
     .bind(&md.bucket_key)
     .execute(&mut **conn)
@@ -1177,35 +1111,6 @@ mod insert_round_trip_tests {
             byte_size: Some(4_096),
             item_count: Some(17),
         }
-    }
-
-    /// `byte_size` must not reach the markdown cache key, and
-    /// `item_count` must. A doltlite store's size is not stable across
-    /// rebuilds of identical data, so hashing it re-renders documents
-    /// nothing touched and churns every golden that carries a
-    /// `row_set_hash`.
-    #[test]
-    fn the_row_set_hash_ignores_bytes_and_notices_counts() {
-        let base = fully_populated_row();
-        let bigger = GridRow {
-            byte_size: base.byte_size.map(|n| n + 22),
-            ..base.clone()
-        };
-        let more = GridRow {
-            item_count: base.item_count.map(|n| n + 1),
-            ..base.clone()
-        };
-        let rows = std::slice::from_ref(&base);
-        assert_eq!(
-            compute_row_set_hash(rows),
-            compute_row_set_hash(std::slice::from_ref(&bigger)),
-            "a store that only grew must not invalidate the document"
-        );
-        assert_ne!(
-            compute_row_set_hash(rows),
-            compute_row_set_hash(std::slice::from_ref(&more)),
-            "a row appearing in a measured table must invalidate it"
-        );
     }
 
     #[tokio::test]

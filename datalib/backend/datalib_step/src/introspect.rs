@@ -24,8 +24,8 @@
 //! growing but *not reproducible*: rebuilding the TNG fixture from
 //! byte-identical inputs moves six of its sixteen sources by 1-22
 //! bytes, in a different direction each time — so bytes stay out of
-//! the comparison (`counts_unchanged`) and out of `compute_row_set_hash`
-//! too. Otherwise every run rewrites a report nothing asked for and
+//! the comparison (`counts_unchanged`) and out of `grid_rows.text`.
+//! Otherwise every run rewrites a report nothing asked for and
 //! `grid_index` never gets to skip a source.
 
 use std::path::{Path, PathBuf};
@@ -85,8 +85,8 @@ impl Subject {
     /// report's body line.
     /// `grid_rows.text`. **Carries no byte figure**, on purpose.
     ///
-    /// `text` is hashed into `compute_row_set_hash`, the markdown cache
-    /// key — and a doltlite store's size is not reproducible. It drifts
+    /// `text` is a stored row, and a doltlite store's size is not
+    /// reproducible. It drifts
     /// 1-22 bytes between rebuilds on one machine, and differs outright
     /// between machines: CI's Linux runner and a developer's Mac
     /// produce different sizes for byte-identical inputs, which made
@@ -983,8 +983,8 @@ mod tests {
     }
 
     /// The size must reach the row and the report, but never
-    /// `grid_rows.text` — which `compute_row_set_hash` covers. A
-    /// doltlite store's size differs between machines, so a byte
+    /// `grid_rows.text`. A doltlite store's size differs between
+    /// machines, so a byte
     /// figure in that string made the fixture golden unable to pass on
     /// CI and a developer's machine at once.
     #[test]

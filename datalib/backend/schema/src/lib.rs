@@ -80,7 +80,7 @@ mod tests {
     /// drifts had already opened up while nothing read the struct — it
     /// was missing `upstream_cursor`, it
     /// declared `title` as `VARCHAR(512)` where the table had `TEXT`,
-    /// and it made `row_set_hash` / `renderer_version` NOT NULL where
+    /// and it made `renderer_version` NOT NULL where
     /// the table allows NULL, the last of which fails a write rather
     /// than merely reading wrong. Update the expectation when the
     /// change is deliberate; a re-index is the cost.
@@ -96,7 +96,6 @@ mod tests {
     updated_at VARCHAR(40),
     md_path VARCHAR(1024),
     upstream_cursor VARCHAR(64),
-    row_set_hash CHAR(64),
     renderer_version VARCHAR(32),
     bucket_key VARCHAR(256),
     PRIMARY KEY (markdown_uuid)
@@ -134,6 +133,5 @@ mod tests {
         assert_eq!(super::markdowns::DDL.len(), 1);
         let (_, cols) = super::markdowns::COLUMNS[0];
         assert!(cols.contains(&"markdown_uuid"));
-        assert!(cols.contains(&"row_set_hash"));
     }
 }

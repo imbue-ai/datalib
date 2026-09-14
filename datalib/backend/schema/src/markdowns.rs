@@ -1,8 +1,8 @@
 // Per-rendered-markdown metadata + render bookkeeping. One row per
 // `.md` file in `<root>/render_markdown/`. Owns the file's identity (UUID +
-// title + provenance) and the cache key (`row_set_hash` +
-// `renderer_version`) used by incremental ingest to decide whether to
-// re-emit the file. `grid_rows.markdown_uuid` is the FK pointing here;
+// title + provenance) and the `renderer_version` that produced it, which
+// is how a renderer bump is noticed. `grid_rows.markdown_uuid` is the FK
+// pointing here;
 // many grid rows can share one markdown file. Note that a single
 // 'conversation' upstream can shard into many markdowns when a provider
 // renders one file per period (beeper) — the `markdowns` table is keyed
@@ -74,18 +74,9 @@ pub struct MarkdownRow {
     /// providers with no such signal.
     #[col(sql = "VARCHAR(64)")]
     pub upstream_cursor: Option<String>,
-    /// SHA-256 (hex) over the canonical tuple list of grid_rows that feed
-    /// this markdown — message texts, authors, timestamps, attachments.
-    /// A summary of the rows, for anyone comparing two stores by hand.
-    /// Nullable: `grid_index` writes NULL here for a markdown it has
-    /// not hashed.
-    #[col(sql = "CHAR(64)")]
-    pub row_set_hash: Option<String>,
     /// Opaque version string for the renderer that produced `md_path`.
     /// Bumping this value (typically when the markdown layout or
-    /// templating changes) invalidates every markdowns row's cache and
-    /// forces a global re-render on the next ingest.
-    /// Nullable for the same reason as `row_set_hash`.
+    /// templating changes) forces a global re-render on the next run.
     #[col(sql = "VARCHAR(32)")]
     pub renderer_version: Option<String>,
     /// The bucket this document was rendered from — the unit the

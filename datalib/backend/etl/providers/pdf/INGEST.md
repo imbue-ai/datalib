@@ -201,17 +201,16 @@ Two things follow, both deliberate:
   `grid_index` — so this does not corrupt anything shared. But it does
   mean two machines indexing the same corpus produce different rows for
   the same document.
-- **Moving the corpus re-renders it.** `markdowns.row_set_hash` is a
-  hash over the grid rows, so a changed path changes the hash and the
-  document re-renders. That is arguably correct (the URL really did
-  change) and cheap at ~6 ms/page, but it is worth knowing before
-  relocating a large tree.
+- **Moving the corpus rewrites its rows.** The path is in every grid
+  row's `source_url`, so a changed path changes the row. That is
+  arguably correct (the URL really did change) and cheap at ~6 ms/page,
+  but it is worth knowing before relocating a large tree.
 
-The same property makes `row_set_hash` unstable across machines for
-this provider, which is why `fixture_db_snapshot` redacts it for `pdf`
-rows — see `stable_row_set_hash` there for why that costs almost no
-coverage. CI caught this after a first fix that normalized only the
-*displayed* `source_url` and left the hash derived from the real one.
+The same property made the rows differ between machines for this
+provider, which is why `fixture_db_snapshot` normalizes the displayed
+`source_url` (`stable_source_url`). CI caught this after a first fix
+that normalized only the displayed value and left a hash derived from
+the real one — that hash (`row_set_hash`) is gone since.
 
 ## Orphaned documents
 

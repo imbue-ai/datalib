@@ -540,8 +540,7 @@ carries a byte-count history, so it is a function of the run.
 One function: `render_store::logical_dump(path) → String`, sorted
 rows of the four tables with the volatile columns dropped, plus the
 `.md` tree as `(relative path, blake3)`. `fixture_db_snapshot_test`
-does most of this for the index (`stable_row_set_hash`,
-`stable_source_url`); lift it into `datalib_etl_render` as a test
+does most of this for the index (`stable_source_url`); lift it into `datalib_etl_render` as a test
 utility so both layers and that snapshot share one notion of
 "the same".
 

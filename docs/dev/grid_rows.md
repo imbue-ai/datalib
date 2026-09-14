@@ -55,8 +55,7 @@ grid_index step (the `grid_index` function of `datalib-step`; `build_grid_index`
 unified index: it asks each one `dolt_diff` between the commit the
 index last consumed (`source_cursors`) and that store's HEAD, applies
 each changed document's row set, and copies the corresponding
-`markdowns` row across (its `row_set_hash` is a digest of the rows,
-written for inspection and read by nothing).
+`markdowns` row across.
 
 ## Consumer side: `datalib/backend/unified_index/src/dolt_repo.rs`
 
@@ -403,11 +402,10 @@ of it is exposed to SQL or declared in the public header.
 fixture from byte-identical inputs moves six of its sixteen sources by
 1-22 bytes, in a different direction each time. That is a stronger
 property than "changes on every fetch" — it is the same input giving a
-different number — and it is why `byte_size` is kept out of *both*
-digests: `introspect::counts_unchanged`, which decides whether the
-storage report is rewritten, and `compute_row_set_hash`. Hashing it
-would rewrite the report on every run and churn every golden carrying
-a `row_set_hash` on any backend change. `fixture_db_snapshot.rs` scrubs
+different number — and it is why `byte_size` is kept out of the
+comparison that decides whether the storage report is rewritten
+(`introspect::counts_unchanged`). Comparing it would rewrite the
+report on every run. `fixture_db_snapshot.rs` scrubs
 the byte figure out of the text it digests for the same reason.
 
 This is the download side's *volatile field* idea arriving somewhere

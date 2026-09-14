@@ -96,13 +96,6 @@ fn provider_datalib() -> &'static str {
     datalib_schema::providers::Provider::Datalib.as_str()
 }
 
-fn stable_row_set_hash(provider: Option<&str>, v: Option<String>) -> Option<String> {
-    match provider {
-        Some("pdf") => Some("<machine-specific: rows embed an absolute path>".to_string()),
-        _ => v,
-    }
-}
-
 #[tokio::test]
 async fn snapshot_grid_rows_and_documents() {
     let db = fixture_db_path();
@@ -171,7 +164,7 @@ async fn snapshot_grid_rows_and_documents() {
     let drows = sqlx::query(
         "SELECT markdown_uuid, source_id, provider, kind, title, \
                 created_at, updated_at, md_path, bucket_key, \
-                row_set_hash, renderer_version \
+                renderer_version \
          FROM markdowns ORDER BY markdown_uuid",
     )
     .fetch_all(&pool)
@@ -191,10 +184,6 @@ async fn snapshot_grid_rows_and_documents() {
                 "updated_at": r.try_get::<Option<String>, _>("updated_at").ok().flatten(),
                 "md_path": r.try_get::<Option<String>, _>("md_path").ok().flatten(),
                 "bucket_key": r.try_get::<Option<String>, _>("bucket_key").ok().flatten(),
-                "row_set_hash": stable_row_set_hash(
-                    r.try_get::<String, _>("provider").ok().as_deref(),
-                    r.try_get::<Option<String>, _>("row_set_hash").ok().flatten(),
-                ),
                 "renderer_version": r.try_get::<Option<String>, _>("renderer_version").ok().flatten(),
             })
         })
