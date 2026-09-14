@@ -105,6 +105,16 @@ to `(mtime, size)`, and the worst case after a remount is a re-hash of
 Reset (`--reset-and-redownload`) empties the three tables and the
 cursor; the next run re-reads everything from the share.
 
+**Where the time goes is the share, not the parse.** Measured on
+2026-09-14 over two mounted Pros (91 files, 384,657 lines): a 1,400-line
+file costs read 0 ms, parse 18 ms, upsert 29 ms; the cold run's 3
+minutes were the scan hashing 24 MB over Wi-Fi. The same 31-file scan
+took 8.2 s, 16.7 s and 1.3 s on three consecutive warm runs, with
+nothing hashed — the unit on weaker Wi-Fi (41 ms ping, 20–100 KB/s
+reads when it was bad) — and 1.5 s then 0.1 s on the other. The
+`airvisual_scan` and `airvisual_file` events carry `scan_ms`,
+`read_ms`, `parse_ms` and `upsert_ms` so a slow run says which it was.
+
 ## Identity and name
 
 A device's **identity is its serial number** — IQAir issues one per

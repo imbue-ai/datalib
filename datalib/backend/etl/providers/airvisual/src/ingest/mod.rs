@@ -184,10 +184,12 @@ async fn fetch_device(
     s: &mut FetchSummary,
 ) -> Result<()> {
     let root = dev.path();
+    let started = std::time::Instant::now();
     let info = read_device_info(&root);
     let who = identify(dev, &info)?;
     upsert_device(db, &who, &info).await?;
     let scope = cursor_scope(&who.id);
+    let identified_ms = started.elapsed().as_millis();
 
     let scan = fsscan::scan(cache, &root, &fsscan::ScanOptions::default(), |p| {
         p.file_name()
@@ -195,6 +197,14 @@ async fn fetch_device(
             .is_some_and(|n| n.ends_with(HISTORY_SUFFIX))
     })
     .await?;
+    info!(
+        event = "airvisual_scan",
+        device = %who.id,
+        files = scan.files.len(),
+        hashed = scan.stats.hashed,
+        identified_ms,
+        scan_ms = started.elapsed().as_millis() - identified_ms,
+    );
     s.errors += scan.errors.len();
     for e in &scan.errors {
         warn!(event = "airvisual_walk_error", path = %e.path.display(), error = %e.error);
@@ -212,8 +222,9 @@ async fn fetch_device(
     let mut todo: Vec<&ScannedFile> = changes.needs_reading().collect();
     todo.sort_by(|a, b| a.rel.cmp(&b.rel));
     for f in todo {
+        let file_started = std::time::Instant::now();
         match ingest_one(db, &who.id, &scope, f).await {
-            Ok(stats) => {
+            Ok((stats, timing)) => {
                 s.lines += stats.lines;
                 s.samples += stats.samples;
                 s.sentinels += stats.sentinels;
@@ -227,6 +238,10 @@ async fn fetch_device(
                     samples = stats.samples,
                     clock_unset = stats.clock_unset,
                     bad_lines = stats.bad_lines,
+                    read_ms = timing.read_ms,
+                    parse_ms = timing.parse_ms,
+                    upsert_ms = timing.upsert_ms,
+                    total_ms = file_started.elapsed().as_millis(),
                 );
             }
             Err(e) => {
@@ -301,15 +316,25 @@ async fn upsert_device(db: &RawDb, who: &Identity, info: &DeviceInfo) -> Result<
 /// Parse one file and write its rows and its cursor stamp in one
 /// transaction, so a crash between the two cannot leave a stamp for
 /// rows that never landed.
+/// Where one file's time went, for the `airvisual_file` event.
+struct FileTiming {
+    read_ms: u128,
+    parse_ms: u128,
+    upsert_ms: u128,
+}
+
 async fn ingest_one(
     db: &RawDb,
     device: &str,
     scope: &str,
     f: &ScannedFile,
-) -> Result<parse::ParseStats> {
+) -> Result<(parse::ParseStats, FileTiming)> {
+    let t = std::time::Instant::now();
     let body =
         std::fs::read_to_string(&f.path).with_context(|| format!("read {}", f.path.display()))?;
+    let read_ms = t.elapsed().as_millis();
     let parsed = parse::parse(&body, &f.rel).with_context(|| format!("parse {}", f.rel))?;
+    let parse_ms = t.elapsed().as_millis() - read_ms;
     let rows: Vec<AirvisualSampleRow> = parsed
         .samples
         .into_iter()
@@ -335,7 +360,15 @@ async fn ingest_one(
     bulk_upsert_in_tx(&mut tx, &unplaced, &now).await?;
     file_checkpoint::record_file(&mut tx, scope, f).await?;
     tx.commit().await?;
-    Ok(parsed.stats)
+    let upsert_ms = t.elapsed().as_millis() - read_ms - parse_ms;
+    Ok((
+        parsed.stats,
+        FileTiming {
+            read_ms,
+            parse_ms,
+            upsert_ms,
+        },
+    ))
 }
 
 fn sample_row(device: &str, s: parse::Sample, source_file: &str) -> AirvisualSampleRow {
