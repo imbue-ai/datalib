@@ -17,6 +17,12 @@ use app_schema::runs::{LogRow, MetricRow, MetricSampleRow, RunRow, StepRunRow};
 /// the write (~0.3ms per row on a plain-SQLite file, measured).
 const FLUSH_EVERY: Duration = Duration::from_millis(200);
 
+/// How far back a snapshot looks for samples. A rate is a live
+/// question, and the snapshot is read on every `dag_changed` frame —
+/// several times a second during a run — so the window query must not
+/// scan a day-long run's every sample each time.
+const RATE_WINDOW: Duration = Duration::from_secs(10 * 60);
+
 /// The floor between two samples of one metric series. A series that
 /// changes every flush would otherwise write five rows a second for as
 /// long as the step runs; a rate drawn from five-second samples is the
@@ -306,16 +312,21 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     .iter()
     .map(|r| (r.get::<String, _>("step"), r.get::<String, _>("ts_utc")))
     .collect();
-    // The two newest per series, by a window over the whole run's
-    // samples. Text order is instant order, so `ts` sorts.
+    // The two newest per series, by a window over the run's recent
+    // samples only. Text order is instant order, so `ts` sorts and the
+    // cutoff is a plain comparison.
+    let (cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
+        .bump_micros(-(RATE_WINDOW.as_micros() as i64))
+        .to_utc_and_offset();
     let recent_samples = sqlx::query(
         "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
            SELECT *, ROW_NUMBER() OVER \
              (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE run_id = ?) \
+           FROM metric_samples WHERE run_id = ? AND ts_utc > ?) \
          WHERE rn <= 2 ORDER BY step, name, labels, ts_utc",
     )
     .bind(&run_id)
+    .bind(&cutoff)
     .fetch_all(pool)
     .await?
     .iter()

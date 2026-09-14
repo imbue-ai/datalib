@@ -90,7 +90,7 @@ reference doc it relates to.
   doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
-- [`docs/dev/plans/logs_and_metrics.md`](docs/dev/plans/logs_and_metrics.md)
+- [`docs/dev/plans/completed/logs_and_metrics.md`](docs/dev/plans/completed/logs_and_metrics.md)
   — *agreed plan (2026-09-11), built in full (2026-09-14)*: one
   plain-SQLite run store (`system/runs.sqlite`, tables in
   `app_schema::runs`) written by the runner alone, holding every run's

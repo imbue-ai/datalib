@@ -332,21 +332,30 @@ async fn a_store_from_another_schema_version_is_replaced() {
 /// changed and the floor between samples has passed, and always once
 /// more at the end — so a series that moved twice inside the floor still
 /// leaves its first and last values. The snapshot carries the newest two
-/// per series, oldest first, and when each step last logged.
+/// per series, oldest first, from the last few minutes only — a rate is
+/// a live question, and the query runs on every `dag_changed` frame —
+/// and when each step last logged.
 #[tokio::test]
-async fn the_snapshot_carries_two_samples_per_series_and_the_last_log_time() {
+async fn the_snapshot_carries_two_recent_samples_per_series_and_the_last_log_time() {
     let td = tempfile::tempdir().unwrap();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
+    let recent = |secs_ago: i64| now.bump_micros(-secs_ago * 1_000_000).to_utc_and_offset().0;
     {
         let w = start(td.path(), "run-1");
         w.metric(MetricRow {
-            updated_at_utc: "2026-09-14T10:00:00.000000+00:00".into(),
+            updated_at_utc: recent(30),
             ..metric("a", "rows", 1)
+        });
+        // A series that last moved an hour ago has no live rate to give.
+        w.metric(MetricRow {
+            updated_at_utc: recent(3600),
+            ..metric("a", "stale", 100)
         });
         w.log(line("a", "info", "first"));
         // Past the flush interval, inside the sample floor.
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         w.metric(MetricRow {
-            updated_at_utc: "2026-09-14T10:00:03.000000+00:00".into(),
+            updated_at_utc: recent(20),
             ..metric("a", "rows", 7)
         });
         w.log(LogRow {
@@ -355,8 +364,17 @@ async fn the_snapshot_carries_two_samples_per_series_and_the_last_log_time() {
         });
     }
     let snap = snapshot(td.path()).await;
-    let values: Vec<i64> = snap.recent_samples.iter().map(|s| s.value).collect();
-    assert_eq!(values, vec![1, 7], "{:?}", snap.recent_samples);
+    let values: Vec<(String, i64)> = snap
+        .recent_samples
+        .iter()
+        .map(|s| (s.name.clone(), s.value))
+        .collect();
+    assert_eq!(
+        values,
+        vec![("rows".to_string(), 1), ("rows".to_string(), 7)],
+        "{:?}",
+        snap.recent_samples
+    );
     assert_eq!(
         snap.last_log_at.get("a").map(String::as_str),
         Some("2026-09-14T10:00:03.500000+00:00")
