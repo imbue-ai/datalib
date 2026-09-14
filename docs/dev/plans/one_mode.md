@@ -75,9 +75,13 @@ follows the same five rules. There is no flag that switches any of
 them off.
 
 1. **Additive first.** Upsert; never delete a row you are about to
-   re-insert. Each unit of work — a page of an API listing, a mirrored
-   table, a rendered document with its rows and edges — is one SQL
-   transaction, so a document is replaced whole or not at all.
+   re-insert. A transaction boundary never falls *inside* a unit of
+   work — a page of an API listing, a mirrored table, a rendered
+   document with its rows and edges — so a document is replaced whole
+   or not at all. How many units sit between two boundaries is a
+   batching choice, made for throughput (doltlite's per-statement cost
+   makes big transactions the fast path), and it is not a correctness
+   choice: one unit per transaction and a thousand are both fine.
 2. **Prune at the end, scoped to what you enumerated.** In one
    transaction, delete what this run walked *completely* and did not
    see. The scope is the provider's to name: claude prunes an org's
@@ -140,6 +144,13 @@ requirement. It is a command — `datalib-step ingest --start-over`, and
 a button that says what it will do — never a config flag, because a
 flag that wipes on every run is the shape that needed `Never`.
 
+"Start over" touches the raw store only. The render store, the index
+and qmd empty by propagation — the same `dolt_diff` path as any other
+deletion — with one more commit in each history ("everything
+removed"). Render never learns the operation happened, which is the
+point: an operation only the ingest knows about is one that cannot be
+half-applied downstream.
+
 `always_clear_before_ingest` goes. It was "prune what this run did not
 see, every run", which under rule 2 is what every snapshot-shaped
 source (an export, an mbox, a mirror, a scan) does inherently, and
@@ -164,13 +175,25 @@ document with no rows. The units, per step:
 | render, end of run | the prune and the cursor | the prune is bare statements; the cursor is a file |
 | grid_index | the whole load, prune, cursors | already one transaction |
 
-A unit that spans tables leaves a cross-table partial state visible to
+A run that spans tables leaves a cross-table partial state visible to
 a consumer pinned mid-run: this run's messages against last run's
 chats, a thread whose replies are not in yet. That is already true of
 per-page ingest today, renderers already tolerate a dangling reference
 (`render_problems` records it), and "what the step believes so far" is
 a truthful description of it. Accepted, and said here so nobody
 re-litigates it as a bug.
+
+It can be made smaller by ordering, and providers should: **fetch the
+globally-joined tables first** — `users`, `orgs`, `workspaces`,
+`channels`, `recipients`, `me`, whatever every document's header
+reads — before the entities that reference them. Then a consumer
+pinned at any commit of the run sees new messages with their authors
+resolvable, rather than a wave of "unknown user" documents that
+re-render when the users land. It is a hint rather than a rule
+because some sources cannot honour it (a listing that yields authors
+only as it goes), and `render_inputs`' "record the lookup, not the
+hit" rule is what makes the other order merely wasteful rather than
+wrong.
 
 ## What this closes
 
@@ -267,12 +290,6 @@ and small.
   the column survives a crash and lets a resumed run continue a prune
   scope. Decide when building item 4; the mirror engine needs neither
   (its source table is the seen-set).
-- **Whether `start over` should also truncate the render store**, or
-  let propagation do it. Propagation gives the same end state with
-  one more commit in the render store's history ("everything
-  removed"). Prefer propagation unless it is measurably slower; it
-  keeps the render step ignorant of the operation, which is the
-  point.
 - **The UI during start over.** The grid will empty and refill. The
   Manage screen should say "starting over: N of M re-downloaded" rather
   than let the grid quietly go blank. Not a blocker for the backend
