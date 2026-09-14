@@ -258,11 +258,15 @@ pub async fn run(
                 sweep: sweep.then_some(&keep),
                 storage,
                 prior: &prior,
-                cursor: raw_commit.map(|raw_commit| RenderCursorRow {
-                    source_id: name.clone(),
-                    raw_commit,
-                    params: declared_params.to_string(),
-                    rendered_at: now.clone(),
+                cursor: raw_commit.map(|raw_commit| {
+                    let stamp = datalib_time::split_stamp(&now);
+                    RenderCursorRow {
+                        source_id: name.clone(),
+                        raw_commit,
+                        params: declared_params.to_string(),
+                        rendered_at_utc: stamp.utc,
+                        tz_offset: stamp.tz_offset,
+                    }
                 }),
             },
         )?;
@@ -579,7 +583,8 @@ mod plan_tests {
             source_id: "src".into(),
             raw_commit: raw_commit.into(),
             params: params.to_string(),
-            rendered_at: "2026-01-01T00:00:00+00:00".into(),
+            rendered_at_utc: "2026-01-01T00:00:00.000000Z".into(),
+            tz_offset: Some("+00:00".into()),
         }
     }
 

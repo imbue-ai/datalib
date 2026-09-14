@@ -1245,7 +1245,8 @@ render_cursor
     source_id
     raw_commit
     params
-    rendered_at
+    rendered_at_utc
+    tz_offset
 render_problems
     uuid
     scope_key

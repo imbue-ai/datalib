@@ -21,8 +21,11 @@ pub struct RenderCursorRow {
     /// `raw_commit` for the diff.
     #[col(sql = "TEXT")]
     pub params: String,
-    /// When this cursor was last advanced (ISO-8601 with explicit
-    /// offset, per AGENTS.md).
+    /// When this cursor was last advanced, in UTC.
     #[col(sql = "VARCHAR(40)")]
-    pub rendered_at: String,
+    pub rendered_at_utc: String,
+    /// The offset the render step's clock was in when it stamped
+    /// `rendered_at_utc`.
+    #[col(sql = "VARCHAR(8)")]
+    pub tz_offset: Option<String>,
 }

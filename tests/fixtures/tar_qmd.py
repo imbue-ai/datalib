@@ -31,7 +31,7 @@ its inputs, so any byte that can change without changing the action's
 OUTPUT is pure cache poison. The embedder opens nothing but `*.md`, and
 the excluded kind changes on literally every pipeline run — every
 `indexed_markdown.doltlite_db` chains its commit hashes off a wall-clock
-initial commit and carries the render cursor's `rendered_at`, and the
+initial commit and carries the render cursor's `rendered_at_utc`, and the
 pdf provider's rows carry a `source_url` holding the absolute bazel
 sandbox path (…/darwin-sandbox/4914/… vs …/5269/…). With
 those in the archive the ~90s CPU-only embed on CI re-ran for every
