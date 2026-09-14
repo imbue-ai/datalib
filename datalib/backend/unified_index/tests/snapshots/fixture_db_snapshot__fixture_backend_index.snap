@@ -17,7 +17,7 @@ expression: snapshot
       "updated_at": "2369-05-28T15:11:40+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "0f0339c4-f882-5ecb-a675-b52e412fc02f",
       "created_at": "2364-04-13T08:45:00-07:00",
       "kind": "document",
       "markdown_uuid": "0f0339c4-f882-5ecb-a675-b52e412fc02f",
@@ -197,7 +197,7 @@ expression: snapshot
       "updated_at": null
     },
     {
-      "bucket_key": null,
+      "bucket_key": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
       "created_at": null,
       "kind": "document",
       "markdown_uuid": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
@@ -401,7 +401,7 @@ expression: snapshot
       "updated_at": "2369-04-15T11:30:00Z"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "6a85fd49-403c-5b60-8694-94ee3893cd35",
       "created_at": null,
       "kind": "document",
       "markdown_uuid": "6a85fd49-403c-5b60-8694-94ee3893cd35",
@@ -569,7 +569,7 @@ expression: snapshot
       "updated_at": "2364-04-11T00:17:00+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
       "created_at": "2364-04-13T08:45:00-07:00",
       "kind": "document",
       "markdown_uuid": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",

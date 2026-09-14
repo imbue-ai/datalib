@@ -8,6 +8,7 @@ use datalib_etl_contacts::ingest::api::{
     vcard_all, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid, VcardProp,
 };
 use datalib_etl_contacts::ingest::db::{LoadedRawContact, RawDb};
+use datalib_etl_render::inputs::{changed_rows, Input, RawRange};
 
 /// One parsed vCard, with everything render cares about pulled
 /// out so render doesn't have to re-walk the text.
@@ -44,6 +45,9 @@ pub struct ParsedContact {
     /// `None` for URL-only photos (those go in `photo_url`).
     pub photo: Option<ContactPhoto>,
     pub photo_url: Option<String>,
+    /// The raw rows this card came from: its `contacts` row and the
+    /// `addressbooks` row its label is read off.
+    pub inputs: Vec<Input>,
 }
 
 /// Decoded photo bytes plus a content-type guess. Render writes
@@ -59,34 +63,50 @@ pub struct ContactPhoto {
 #[derive(Debug, Default)]
 pub struct ParsedContacts {
     pub contacts: Vec<ParsedContact>,
+    /// The rows the diff names as changed since the cursor, per table.
+    /// `None` when there is no cursor: everything renders. A changed row
+    /// maps to its cards through `ParsedContact::inputs`, which is how a
+    /// row holding several cards names each of them.
+    pub changed: Option<std::collections::HashMap<String, std::collections::HashSet<String>>>,
+    /// The commit this parse read.
+    pub head: Option<String>,
 }
 
 /// Load every contact from the raw doltlite store at `db_path` and parse each
-/// vCard. `None` when the store is absent — a render path must not fail hard
-/// because the download has not run yet.
-///
-/// **`None`, not an empty [`ParsedContacts`].** The caller sweeps every
-/// document this pass did not name, and an empty parse is indistinguishable
-/// at the sweep from a source that lost every contact it had.
-pub fn parse(db_path: &Path) -> Result<Option<ParsedContacts>> {
+/// vCard. `None` when the store is absent or cannot be read — a render
+/// path must not fail hard because the download has not run yet, and an
+/// unreadable store is not one that lost every contact it had.
+pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<ParsedContacts>> {
     if !db_path.exists() {
         return Ok(None);
     }
     let path = db_path.to_path_buf();
-    let rows = tokio::task::block_in_place(|| {
+    let loaded = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let Some(db) = RawDb::open_reader(&path).await? else {
+            let Some(db) = RawDb::open_reader_at(&path, range.pin).await? else {
                 return Ok(None);
             };
-            let rows = db.load_all_for_render_and_index_md().await;
+            let loaded = async {
+                let rows = db.load_all_for_render_and_index_md().await?;
+                let pin = db.pin().expect("open_reader returns a pinned handle");
+                let changed =
+                    changed_rows(db.pool(), range, pin, &["contacts", "addressbooks"]).await?;
+                Ok::<_, anyhow::Error>((rows, changed, pin.commit().to_string()))
+            }
+            .await;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             db.close().await;
-            rows.map(Some)
+            loaded.map(Some)
         })
     })?;
-    let Some(rows) = rows else { return Ok(None) };
-    Ok(Some(parse_loaded(rows)))
+    let Some((rows, changed, head)) = loaded else {
+        return Ok(None);
+    };
+    let mut parsed = parse_loaded(rows);
+    parsed.changed = changed;
+    parsed.head = Some(head);
+    Ok(Some(parsed))
 }
 
 pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
@@ -112,6 +132,10 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
                         } else {
                             format!("{}:{idx}", row.uid)
                         };
+                    }
+                    c.inputs.push(Input::new("contacts", &row.id));
+                    if let Some(book) = &row.addressbook_id {
+                        c.inputs.push(Input::new("addressbooks", book));
                     }
                     out.contacts.push(c);
                 }
@@ -193,6 +217,7 @@ fn parse_block(
     let photo = vcard_all(block, "PHOTO");
     let (photo, photo_url) = pick_photo(photo);
     Ok(ParsedContact {
+        inputs: Vec::new(),
         uid,
         addressbook: addressbook.to_string(),
         source_path: source_path.to_path_buf(),
@@ -286,6 +311,8 @@ mod tests {
 
     fn make_row(label: &str, uid: &str, vcard: &str) -> LoadedRawContact {
         LoadedRawContact {
+            id: format!("{label}:{uid}"),
+            addressbook_id: Some(label.into()),
             uid: uid.into(),
             href: format!("{label}.vcf"),
             addressbook_label: label.into(),
@@ -412,7 +439,11 @@ mod tests {
     /// every document this pass did not name, so "no store yet" and "the
     /// source lost every contact" must not look the same to it.
     fn parse_missing_db_reads_as_absent_not_empty() {
-        let parsed = parse(Path::new("/this/does/not/exist.doltlite_db")).unwrap();
+        let parsed = parse(
+            Path::new("/this/does/not/exist.doltlite_db"),
+            RawRange::cold(),
+        )
+        .unwrap();
         assert!(parsed.is_none());
     }
 }
