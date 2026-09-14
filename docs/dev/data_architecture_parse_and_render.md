@@ -408,9 +408,13 @@ Examples where schema and data handling should be unified:
   4. **Document-comment threads** — Notion. Very similar in shape to
      (3); may eventually share more than just `GridRow` projection.
   5. **Time-series sensor data** — yolink today; Garmin fitness and
-     IQ Air air quality planned. Per-device samples over time with a
-     small fixed set of value channels. Not yet projected to
-     `GridRow`; this family hasn't picked its shared schema yet.
+     IQ Air air quality planned ([`plans/airvisual.md`](plans/airvisual.md)
+     is the investigation). Per-device samples over time with a
+     small fixed set of value channels. yolink projects one `Sensor
+     Timeseries` row for its page plus a `Sensor Device` row per
+     device (`yolink_render/src/render/render.rs::build_grid_rows`);
+     the family's shared raw schema and render are still per-provider
+     copies, and the plan says when to extract them.
 
 A new provider that fits a family should at minimum project to the
 family's `GridRow` shape rather than inventing a new `kind` taxonomy.
