@@ -44,20 +44,19 @@ impl RenderProcessor for ChatgptRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(&self.raw_path, ctx.raw_cursor)
+        let parsed = parse(&self.raw_path, ctx.raw_range())
             .with_context(|| format!("chatgpt parse {}", self.raw_path.display()))?;
-        // Conversations ChatGPT no longer has: drop their pages before
-        // rendering, so an interrupted run has already let them go rather
-        // than leaving a document whose source is gone.
-        let mut dropped = 0usize;
-        for conv_id in &parsed.vanished_buckets {
-            dropped += ctx.remove_conversation(&crate::render::ids::conversation(conv_id).uuid)?;
-        }
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("chatgpt render_all")?;
-        for conv_id in parsed.scan.changed_conversations.iter().flatten() {
+        // A conversation this run looked at that builds no page is
+        // declared with nothing, so its page goes; the rendered ones
+        // follow and replace that.
+        for conv_id in parsed.scan.render.iter().flatten() {
             ctx.declare_bucket(&crate::render::ids::conversation(conv_id).uuid, &[])?;
+        }
+        for bucket in &parsed.scan.gone {
+            ctx.declare_bucket(bucket, &[])?;
         }
         for bucket in &buckets {
             ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
@@ -65,10 +64,6 @@ impl RenderProcessor for ChatgptRender {
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }
-        Ok(if dropped == 0 {
-            "rendered".into()
-        } else {
-            format!("rendered, {dropped} document(s) gone upstream")
-        })
+        Ok("rendered".into())
     }
 }
