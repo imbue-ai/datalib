@@ -1,8 +1,8 @@
 # Render inputs: record what each document was rendered from
 
-**Status: proposal (2026-09-11); the store, the driver's half and all
-ten chat providers are built (2026-09-14); contacts and the non-chat
-providers are not.** Built, of §"Order of work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
+**Status: proposal (2026-09-11); the store, the driver's half, all ten
+chat providers, pdf and contacts are built (2026-09-14); github,
+gitlab, notion, perseus, yolink and garmin are not.** Built, of §"Order of work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
 render store with `markdowns.bucket_key`, `RenderedMarkdown.bucket_key`,
 `RenderCtx::declare_bucket(bucket_key, inputs)`; the driver's scan —
 `render::reverse_lookup` diffs every table `render_inputs` mentions
@@ -45,8 +45,18 @@ inside the payload (linkedin, whose conversation id, profile URL and
 post link are all payload fields; `inputs::changed_rows`) — and no
 longer retains. A document that comes back at another path now loses
 the file at its old one (`put_document`), which a re-keyed beeper
-network was leaving behind. Next: contacts (step 7), then the non-chat
-providers.
+network was leaving behind. pdf and contacts followed: pdf reads its
+store once at the driver's pin and every document declares its row,
+every path that holds its bytes and the `pdf_scan_meta` row its
+absolute path is rooted at (its two gaps); contacts — the provider
+that could not be ported, because one `contacts` row can hold several
+cards — maps a changed row to its cards through the parse, each card
+declaring its row and its addressbook's. A document whose conversion
+failed is left undeclared, keeping its last page rather than losing it
+until its inputs move again; the harness records that as the one
+`KNOWN_GAPS` entry, a decision rather than a miss. Next: the non-chat
+diff-scanning providers (github, gitlab), then perseus, yolink,
+garmin (one document per store each) and notion.
 
 **Read [`one_mode.md`](one_mode.md) first (2026-09-14).** This document
 is now the render-side mechanism for that design's rule 2 ("prune at
@@ -557,7 +567,8 @@ inputs, not the store.
 6. **Delete** the five guards, the two callbacks, `RenderPass`,
    `buckets_without_rows`. (`prior_fingerprints` is already gone from
    every provider signature, with the fingerprint itself.) Close #27.
-7. **contacts.** Port it; it was the provider that could not be.
+7. **contacts.** Built (2026-09-14): the row-to-cards mapping goes
+   through the parse, which is what a diff row could never do alone.
 
 ## Relation to other documents
 

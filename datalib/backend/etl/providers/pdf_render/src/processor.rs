@@ -39,35 +39,19 @@ impl RenderProcessor for PdfRender {
         let out_dir = datalib_etl::layout::render_markdown_root(ctx.root, ctx.name);
         // Load first, render second: the document sink borrows `ctx`
         // and is not `Send`, so it must not be alive across an await.
-        // `None`, not an empty corpus: this list is the membership test the
-        // deletion below uses, so a store we could not read must stop the
-        // pass rather than look like a corpus that lost every document.
-        let Some(targets) = render::load_targets(&self.raw_path)
+        // `None`, not an empty corpus: a store we could not read must stop
+        // the pass rather than look like a corpus that lost every document.
+        let Some(render::Loaded {
+            targets,
+            scan_meta_id,
+            scan,
+        }) = render::load(&self.raw_path, ctx.raw_range())
             .await
             .context("pdf load render targets")?
         else {
             return Ok("skipped=store-unreadable".to_string());
         };
 
-        let scan = render::scan_changed(&self.raw_path, ctx.raw_cursor)
-            .await
-            .context("pdf dolt_diff scan")?;
-
-        // `load_targets` returns the whole corpus, so it doubles as the
-        // membership test the deletion needs: a bucket the diff named that
-        // no target carries is a document the corpus no longer reaches —
-        // its last file was deleted. That is a cleaner question than "is
-        // there still a row", because a `pdf_documents` row outlives the
-        // paths pointing at it.
-        let mut dropped = 0usize;
-        if let Some(changed) = &scan.changed {
-            let present: std::collections::HashSet<&str> =
-                targets.iter().map(|t| t.blake3.as_str()).collect();
-            for gone in changed.iter().filter(|b| !present.contains(b.as_str())) {
-                dropped +=
-                    ctx.remove_conversation(&crate::render::grid_rows::document_uuid(gone))?;
-            }
-        }
         let (to_render, skipped) = match &scan.render {
             None => (targets, 0usize),
             Some(changed) => {
@@ -93,12 +77,37 @@ impl RenderProcessor for PdfRender {
         let s = render::render_targets(&to_render, &out_dir, ctx.name, ctx.progress, &mut on_doc)
             .context("pdf render")?;
 
+        // Every document this run looked at is declared with nothing —
+        // one the corpus no longer reaches, because its last file was
+        // deleted, builds no page and its old one goes — and then the
+        // converted ones with what they read. One whose conversion failed
+        // is left out of both: its page is stale rather than gone, and a
+        // declared bucket keeps only what the run emitted.
+        let looked_at: Option<std::collections::HashSet<String>> =
+            scan.render.as_ref().map(|set| {
+                set.iter()
+                    .filter(|b| !s.failed_blake3s.contains(*b))
+                    .cloned()
+                    .collect()
+            });
+        let converted: Vec<_> = to_render
+            .iter()
+            .filter(|t| !s.failed_blake3s.contains(&t.blake3))
+            .cloned()
+            .collect();
+        for bucket in render::buckets_of(looked_at.as_ref(), &converted, scan_meta_id.as_deref()) {
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
+        }
+        for bucket in &scan.gone {
+            ctx.declare_bucket(bucket, &[])?;
+        }
+
         if let Some(head) = scan.new_head.as_deref() {
             ctx.consumed(head);
         }
         Ok(format!(
-            "converted={} skipped={} dropped={} failed={}",
-            s.converted, skipped, dropped, s.failed
+            "converted={} skipped={} failed={}",
+            s.converted, skipped, s.failed
         ))
     }
 }
