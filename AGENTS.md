@@ -201,6 +201,12 @@ reference doc it relates to.
   `skip_churn` preset, the `Media/` registry the engine does not do,
   and how render resolves the rowid graph to the natural keys the
   uuids are minted from.
+- [`docs/dev/plans/airvisual.md`](docs/dev/plans/airvisual.md) —
+  *investigation (2026-09-14)*, nothing built: IQAir AirVisual monitors
+  as the second time-series source beside `yolink`. The device API
+  (`device.iqair.com/v2/<id>`, no credential) was measured: four
+  trailing windows, no date range, so **the windows are the retention**.
+  Read it with `yolink/INGEST.md` before building either.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
   — the `email` source's three download modes (JMAP, Gmail API, mbox),
   what keeps them writing one deduped schema, and why an IMAP mode was
