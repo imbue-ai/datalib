@@ -24,13 +24,13 @@ per activity.
 
 ## Incrementality
 
-One page, so incrementality is the raw store's HEAD: an ingest that
-appended nothing leaves HEAD where it was and the render is a no-op.
-The document's `source_fingerprint` hashes what the page reads — the
-account name, every weigh-in's values, every device, the per-metric
-counts — so the index reloads it only when something it shows moved.
-`RENDER_VERSION` in `src/render/mod.rs` is the number to bump when the
-layout changes.
+One page, so incrementality is the raw store's HEAD: a run in which the
+ingest step did not run leaves HEAD where it was and the render is a
+no-op. An ingest that ran moves HEAD even when it fetched nothing new
+(its bookkeeping stamps alone see to that), so the page is rendered
+again; an unchanged page writes identical rows, which the render store
+records as no change and the index never sees. `RENDER_VERSION` in
+`src/render/mod.rs` is the number to bump when the layout changes.
 
 The plots load Plotly from cdn.plot.ly (pinned, with an SRI hash);
 viewing them needs network access, but the data is inlined and an

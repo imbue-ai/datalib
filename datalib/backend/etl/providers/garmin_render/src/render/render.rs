@@ -1,6 +1,5 @@
 //! Turn a Garmin raw store into one markdown page plus its weight plot.
 
-use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
@@ -13,7 +12,6 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::parse::ParsedGarmin;
@@ -52,25 +50,17 @@ pub struct RenderSummary {
     pub weigh_ins: usize,
     pub devices: usize,
     pub plots: usize,
-    /// Whether the page was handed to the store, or skipped on an
-    /// unchanged fingerprint.
-    pub emitted: bool,
-    /// Every document this walk considered — the one page — for the
-    /// driver's sweep.
-    pub seen: HashSet<String>,
 }
 
-/// `prior` is the store's fingerprint per document from the last run.
 /// The raw store's HEAD moves on every ingest (the bookkeeping stamps
-/// alone see to that), so HEAD cannot be the skip; the page is skipped
-/// when nothing it reads has changed, and the files on disk are
-/// rewritten either way, byte-identically.
+/// alone see to that), so the page is rendered on every run the ingest
+/// ran; an unchanged page writes identical rows, which the render store
+/// records as no change.
 pub fn render_all(
     parsed: &ParsedGarmin,
     root: &Path,
     source_id: &str,
     progress: &Progress,
-    prior: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let page_dir = datalib_etl::layout::render_markdown_root(root, source_id);
@@ -101,8 +91,7 @@ pub fn render_all(
     progress.inc(1);
 
     let m_uuid = document_uuid(source_id);
-    let fingerprint = compute_fingerprint(parsed);
-    let body = render_markdown(parsed, source_id, &m_uuid, &fingerprint, plot_file);
+    let body = render_markdown(parsed, source_id, &m_uuid, plot_file);
     let md_path = page_dir.join("index.md");
     fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
     let md_rel = md_path
@@ -111,22 +100,15 @@ pub fn render_all(
         .to_string_lossy()
         .into_owned();
 
-    summary.seen.insert(m_uuid.clone());
-    if prior.get(&m_uuid) == Some(&fingerprint) {
-        progress.inc(1);
-        return Ok(summary);
-    }
-    summary.emitted = true;
     let mut problems: Vec<RenderProblemRow> = Vec::new();
     let rows = build_grid_rows(parsed, source_id, &m_uuid, &md_rel, &mut problems);
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
-        source_fingerprint: fingerprint,
-        // Not the raw HEAD: the page is skipped on its fingerprint, so a
-        // kept row would name a commit older than the store it agrees
-        // with, and cold and incremental renders would then differ.
+        // Not the raw HEAD: it moves on every ingest, and a row whose
+        // content did not change may carry nothing per-run.
         upstream_cursor: None,
+        bucket_key: None,
         md_path,
         render_version: RENDER_VERSION,
         rows,
@@ -145,48 +127,10 @@ pub fn render_all(
     Ok(summary)
 }
 
-/// Hashes what the page shows, not the store it came from, so two
-/// stores with the same weigh-ins fingerprint alike.
-fn compute_fingerprint(parsed: &ParsedGarmin) -> String {
-    let mut h = Sha256::new();
-    h.update(RENDER_VERSION.to_be_bytes());
-    h.update(b"\na:");
-    h.update(parsed.display_name.as_deref().unwrap_or("").as_bytes());
-    h.update(b"|");
-    h.update(parsed.full_name.as_deref().unwrap_or("").as_bytes());
-    for w in &parsed.weigh_ins {
-        h.update(b"\nw:");
-        h.update(w.id.as_bytes());
-        h.update(w.timestamp_gmt_ms.to_be_bytes());
-        h.update(w.weight_kg.to_be_bytes());
-        h.update(w.body_fat_pct.unwrap_or(f64::NAN).to_be_bytes());
-        h.update(w.bmi.unwrap_or(f64::NAN).to_be_bytes());
-        h.update(w.source_type.as_deref().unwrap_or("").as_bytes());
-    }
-    for d in &parsed.devices {
-        h.update(b"\nd:");
-        h.update(d.id.as_bytes());
-        h.update(d.name.as_bytes());
-        h.update(d.last_sync.as_deref().unwrap_or("").as_bytes());
-    }
-    for m in &parsed.metrics {
-        h.update(b"\nm:");
-        h.update(m.metric.as_bytes());
-        h.update(m.days.to_be_bytes());
-        h.update(m.days_with_data.to_be_bytes());
-    }
-    h.update(b"\nc:");
-    h.update(parsed.activities.to_be_bytes());
-    h.update(parsed.activity_files.to_be_bytes());
-    h.update(parsed.items.to_be_bytes());
-    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
-}
-
 fn render_markdown(
     parsed: &ParsedGarmin,
     source_id: &str,
     m_uuid: &str,
-    fingerprint: &str,
     plot_file: Option<&str>,
 ) -> String {
     let mut out = String::with_capacity(8 * 1024);
@@ -197,7 +141,6 @@ fn render_markdown(
 
     out.push_str("---\n");
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
-    let _ = writeln!(out, "source_fingerprint: {fingerprint}");
     let _ = writeln!(out, "source_id: {source_id}");
     out.push_str("provider: garmin\n");
     let _ = writeln!(out, "title: {}", yaml_safe(&title));
@@ -448,28 +391,5 @@ mod tests {
             Some("2369-04-15T05:12:44+00:00")
         );
         assert_eq!(garmin_stamp_to_iso("yesterday"), None);
-    }
-
-    #[test]
-    fn the_fingerprint_moves_with_a_corrected_weight() {
-        let w = |kg: f64| super::super::parse::WeighIn {
-            id: "1".into(),
-            calendar_date: "2369-04-14".into(),
-            timestamp_gmt_ms: 1,
-            weight_kg: kg,
-            bmi: None,
-            body_fat_pct: None,
-            source_type: None,
-        };
-        let a = ParsedGarmin {
-            weigh_ins: vec![w(78.0)],
-            ..Default::default()
-        };
-        let b = ParsedGarmin {
-            weigh_ins: vec![w(78.1)],
-            ..Default::default()
-        };
-        assert_ne!(compute_fingerprint(&a), compute_fingerprint(&b));
-        assert_eq!(compute_fingerprint(&a), compute_fingerprint(&a.clone()));
     }
 }

@@ -2,7 +2,6 @@
 //! page: the weight plot, the table, the device rows, and that an
 //! unchanged store renders nothing the second time.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use datalib_etl::control::DownloadControl;
@@ -59,7 +58,6 @@ fn render_once(
     raw: &Path,
     root: &Path,
     cursor: Option<&str>,
-    prior: &HashMap<String, String>,
 ) -> (Vec<RenderedMarkdown>, Option<String>) {
     let mut emitted = Vec::new();
     let head = match parse(raw, cursor).unwrap() {
@@ -69,7 +67,7 @@ fn render_once(
                 emitted.push(md);
                 Ok(())
             };
-            render_all(&parsed, root, SOURCE, &Progress::noop(), prior, &mut on_doc).unwrap();
+            render_all(&parsed, root, SOURCE, &Progress::noop(), &mut on_doc).unwrap();
             parsed.head.clone()
         }
     };
@@ -84,7 +82,7 @@ async fn renders_the_weight_page_then_skips_an_unchanged_store() {
     std::fs::create_dir_all(&raw).unwrap();
     ingest(&raw, &root.join("playback")).await;
 
-    let (emitted, cursor) = render_once(&raw, root, None, &HashMap::new());
+    let (emitted, cursor) = render_once(&raw, root, None);
     assert_eq!(emitted.len(), 1, "the whole store is one page");
     let doc = &emitted[0];
     assert_eq!(doc.markdown_uuid, document_uuid(SOURCE));
@@ -134,18 +132,7 @@ async fn renders_the_weight_page_then_skips_an_unchanged_store() {
 
     // Unchanged store: the page is not rewritten.
     let cursor = cursor.expect("a successful render pins the commit it consumed");
-    let (again, cursor_2) = render_once(&raw, root, Some(&cursor), &HashMap::new());
+    let (again, cursor_2) = render_once(&raw, root, Some(&cursor));
     assert!(again.is_empty(), "HEAD did not move, nothing to render");
     assert_eq!(cursor_2.as_deref(), Some(cursor.as_str()));
-
-    // A store whose HEAD moved for reasons the page does not show (an
-    // ingest re-stamping its bookkeeping) is walked again but the page,
-    // fingerprinting the same, is not handed to the store.
-    let prior: HashMap<String, String> =
-        HashMap::from([(doc.markdown_uuid.clone(), doc.source_fingerprint.clone())]);
-    let (again, _) = render_once(&raw, root, None, &prior);
-    assert!(
-        again.is_empty(),
-        "an unchanged fingerprint must not re-emit the page"
-    );
 }

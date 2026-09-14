@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_garmin_config::GarminRenderConfig;
-use datalib_etl_render::processor::{RenderCtx, RenderPass, RenderProcessor};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 
 /// Always planned: the page's own HEAD-vs-cursor check decides whether
 /// there is work, at the cost of one `dolt_log()` query on a no-op run.
@@ -58,24 +58,14 @@ impl RenderProcessor for GarminRender {
             }
             Parsed::Fresh(parsed) => {
                 let mut on_doc = |md| ctx.emit_doc(md);
-                let s = render_all(
-                    &parsed,
-                    ctx.root,
-                    &self.name,
-                    ctx.progress,
-                    ctx.prior_fingerprints,
-                    &mut on_doc,
-                )
-                .context("garmin render_all")?;
-                // The whole store was read, so the set considered is the
-                // complete one; the driver sweeps what it does not name.
-                ctx.retain_documents(RenderPass::Walked, &s.seen);
+                let s = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
+                    .context("garmin render_all")?;
                 if let Some(head) = parsed.head.as_deref() {
                     ctx.consumed(head);
                 }
                 Ok(format!(
-                    "weigh_ins={} devices={} plots={} emitted={}",
-                    s.weigh_ins, s.devices, s.plots, s.emitted
+                    "weigh_ins={} devices={} plots={}",
+                    s.weigh_ins, s.devices, s.plots
                 ))
             }
         }
