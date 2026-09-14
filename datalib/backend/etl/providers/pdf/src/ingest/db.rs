@@ -56,10 +56,9 @@ impl RawDb {
     /// where that matters.
     /// **`None` means the store cannot be read**, not that the corpus is
     /// empty — no commit to pin, or a build without the dolt extensions.
-    /// The distinction is load-bearing here: `load_targets` doubles as the
-    /// membership test behind `remove_conversation`, so an empty result
-    /// deletes every document the diff named. See the plan's "The sink
-    /// contract".
+    /// The distinction is load-bearing here: a bucket the diff named
+    /// that `load_targets` comes back empty for is declared with nothing
+    /// and loses its document. See the plan's "The sink contract".
     pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
         Self::open_reader_at(db_path, None).await
     }

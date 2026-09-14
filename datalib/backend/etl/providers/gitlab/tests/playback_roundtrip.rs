@@ -13,6 +13,7 @@ use datalib_etl_gitlab::ingest::{
 };
 use datalib_etl_gitlab::synthesize::GitlabSynth;
 use datalib_etl_gitlab_render::render::parse_api_dir;
+use datalib_etl_render::inputs::RawRange;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 
@@ -91,7 +92,7 @@ async fn gitlab_synth_playback_extract_roundtrip() {
     // first would seal the store and hide a missing seal. gitlab had no
     // test crossing this seam at all, which is how `gitlab_live` came to
     // read an unsealed store and assert on zero rows.
-    let parsed = parse_api_dir(&out_db, None).expect("parse_api_dir");
+    let parsed = parse_api_dir(&out_db, RawRange::cold()).expect("parse_api_dir");
     assert_eq!(
         parsed.merge_requests.len(),
         1,

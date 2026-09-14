@@ -38,35 +38,23 @@ impl RenderProcessor for GithubRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render_github};
-        let parsed = parse_api_dir(&self.raw_path, ctx.raw_cursor)
+        let parsed = parse_api_dir(&self.raw_path, ctx.raw_range())
             .with_context(|| format!("github parse {}", self.raw_path.display()))?;
-
-        // Deletions are named, not swept. This renderer is narrowed by the
-        // diff above, so the documents it emitted are only the ones that
-        // *changed* — handing that set to `retain_documents` would delete
-        // every PR that merely held still. That swap is the load-bearing
-        // half of putting a renderer on a cursor, and getting it wrong
-        // empties the source on the first quiet run.
-        let mut dropped = 0usize;
-        for bucket in &parsed.vanished_buckets {
-            let Some((repo, num)) = bucket.rsplit_once('#') else {
-                continue;
-            };
-            let Ok(num) = num.parse::<u32>() else {
-                continue;
-            };
-            dropped += ctx.remove_conversation(&crate::render::parse::github_pr_uuid(repo, num))?;
+        // Every PR this run renders is declared first with nothing, so
+        // one whose row is gone loses its document; the render below
+        // re-declares the ones it produced.
+        for key in parsed.render.iter().flatten() {
+            ctx.declare_bucket(key, &[])?;
         }
-
         let mut on_doc = |md| ctx.emit_doc(md);
         let s = render_github(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
             .context("render_github")?;
-        if let Some(head) = parsed.scan.new_head.as_deref() {
+        for bucket in &s.buckets {
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
+        }
+        if let Some(head) = parsed.head.as_deref() {
             ctx.consumed(head);
         }
-        Ok(format!(
-            "rendered={} skipped={} dropped={}",
-            s.rendered, parsed.docs_skipped, dropped
-        ))
+        Ok(format!("rendered={}", s.rendered))
     }
 }

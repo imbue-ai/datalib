@@ -1,8 +1,7 @@
 # Render inputs: record what each document was rendered from
 
-**Status: proposal (2026-09-11); the store, the driver's half, all ten
-chat providers, pdf, contacts, yolink, garmin, perseus and notion are
-built (2026-09-14); github and gitlab are not.** Built, of §"Order of work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
+**Status: proposal (2026-09-11); built in full (2026-09-14) — the
+store, the driver's half, and every provider.** Built, of §"Order of work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
 render store with `markdowns.bucket_key`, `RenderedMarkdown.bucket_key`,
 `RenderCtx::declare_bucket(bucket_key, inputs)`; the driver's scan —
 `render::reverse_lookup` diffs every table `render_inputs` mentions
@@ -71,7 +70,14 @@ and threads are two bucket families with the raw id as key: a page
 declares its row, its body, its attachment rows and its author's
 `users` row; a thread its comments, its page (for the title) and its
 anchor block; a thread whose page Notion no longer has is not a
-document, cold or warm. Next: github and gitlab.
+document, cold or warm. github and gitlab were the last: a PR or MR
+declares its row and each child row (comments, reviews, discussions),
+and a changed PR row names its own bucket — the row id *is* the key —
+so a deleted one is rendered with no rows and declared empty. With them
+went `remove_conversation`, `buckets_without_rows` and
+`documents_for_conversation`; `scan_buckets` stays as the forward scan
+several providers still use, with an empty fan-out list everywhere but
+email's label filter.
 
 **Read [`one_mode.md`](one_mode.md) first (2026-09-14).** This document
 is now the render-side mechanism for that design's rule 2 ("prune at
@@ -137,19 +143,19 @@ Which documents to render is decided per provider, in
   the *write* for documents that came out identical, but every payload
   is still loaded and every document re-rendered to find that out.
 
-Which documents to **delete** is decided by whichever of two
+Which documents to **delete** was decided by whichever of two
 mechanisms the provider was ported onto
-([parse_and_render.md §"Two mechanisms"](../data_architecture_parse_and_render.md#two-mechanisms-because-there-are-two-kinds-of-renderer)):
+([parse_and_render.md §"Two mechanisms"](../data_architecture_parse_and_render.md#two-mechanisms-because-there-are-two-kinds-of-renderer));
+both are gone now (2026-09-14), replaced by the declared bucket below:
 
-- Diff-narrowed renderers call
-  [`buckets_without_rows`](../../../datalib/backend/etl/src/doltlite_raw.rs)
-  on the ids the scan named and hand the survivors to
-  `RenderCtx::remove_conversation`. This is the half with the "porting
+- Diff-narrowed renderers called `buckets_without_rows` on the ids the
+  scan named and handed the survivors to
+  `RenderCtx::remove_conversation`. This was the half with the "porting
   precondition, learned the hard way" in the
   [migration recipe](../provider_migration_dolt_diff_and_cas_edge.md):
   *you must be able to compute a document's id from a diff row alone.*
-  `contacts` fails it (one row holds several vCards) and so cannot be
-  ported.
+  `contacts` failed it (one row holds several vCards) and was ported by
+  mapping the row to its cards through the parse instead.
 - Whole-store renderers called `RenderCtx::retain_documents` with every
   document they *considered*, and the driver swept the rest. This was
   the half with the trap: a renderer that reported what it *emitted*
@@ -580,16 +586,15 @@ inputs, not the store.
    is on it.
 5. **The driver-side scan and sweep**, switching one provider at a time
    off `remove_conversation` / `retain_documents`. Done for every
-   provider but github and gitlab; the migration recipe's "same
-   commit" rule applies in reverse: a provider moves off the old
-   deletion path in the same commit that its declarations become
-   complete.
+   provider; the migration recipe's "same commit" rule applied in
+   reverse: a provider moved off the old deletion path in the same
+   commit that its declarations became complete.
 6. **Delete** the five guards, the two callbacks, `RenderPass`,
-   `buckets_without_rows`. `retain_documents`, `RenderPass` and
-   `RenderSummary.documents` are gone; `remove_conversation` and
-   `buckets_without_rows` go with github and gitlab.
-   (`prior_fingerprints` is already gone from every provider
-   signature, with the fingerprint itself.) Close #27.
+   `buckets_without_rows`. Done: `retain_documents`, `RenderPass`,
+   `RenderSummary.documents`, `remove_conversation`,
+   `buckets_without_rows` and `documents_for_conversation` are gone.
+   (`prior_fingerprints` went earlier, with the fingerprint itself.)
+   Close #27.
 7. **contacts.** Built (2026-09-14): the row-to-cards mapping goes
    through the parse, which is what a diff row could never do alone.
 

@@ -52,15 +52,6 @@ pub trait RenderProcessor: Send + Sync {
 /// like every other processor's.
 pub type DocCallback<'a> = dyn FnMut(RenderedMarkdown) -> Result<()> + Send + 'a;
 
-/// The counterpart to [`DocCallback`]: a render processor names a
-/// conversation the raw store no longer has, and every document rendered
-/// from it goes — rows and `.md` alike.
-///
-/// Keyed by conversation rather than by document because a periodizing
-/// renderer produced several documents from one conversation and cannot
-/// recompute how many once the conversation is gone. The store resolves it.
-pub type RemoveCallback<'a> = dyn FnMut(&str) -> Result<usize> + Send + 'a;
-
 /// A bucket the run rendered, with every raw row its render asked for:
 /// whatever else the store holds under that bucket is gone, and a later
 /// change to any of those rows names the bucket again.
@@ -72,11 +63,6 @@ pub type DeclareCallback<'a> = dyn FnMut(&str, &[Input]) -> Result<()> + Send + 
 /// render is sequential, so the lock is never actually contended.
 struct DocSink<'a> {
     cb: Mutex<&'a mut DocCallback<'a>>,
-}
-
-/// Same wrapper, for the removal half of the sink.
-struct RemoveSink<'a> {
-    cb: Mutex<&'a mut RemoveCallback<'a>>,
 }
 
 struct DeclareSink<'a> {
@@ -111,7 +97,6 @@ pub struct RenderCtx<'a> {
     /// the provider's scan is on its own.
     pub stale_buckets: Option<&'a HashSet<String>>,
     emit: DocSink<'a>,
-    remove: RemoveSink<'a>,
     declare: DeclareSink<'a>,
     consumed: Mutex<Option<String>>,
 }
@@ -127,7 +112,6 @@ impl<'a> RenderCtx<'a> {
         raw_pin: Option<&'a str>,
         stale_buckets: Option<&'a HashSet<String>>,
         on_doc: &'a mut DocCallback<'a>,
-        on_remove: &'a mut RemoveCallback<'a>,
         on_declare: &'a mut DeclareCallback<'a>,
     ) -> Self {
         Self {
@@ -140,9 +124,6 @@ impl<'a> RenderCtx<'a> {
             stale_buckets,
             emit: DocSink {
                 cb: Mutex::new(on_doc),
-            },
-            remove: RemoveSink {
-                cb: Mutex::new(on_remove),
             },
             declare: DeclareSink {
                 cb: Mutex::new(on_declare),
@@ -192,17 +173,5 @@ impl<'a> RenderCtx<'a> {
 
     pub fn consumed_commit(&self) -> Option<String> {
         self.consumed.lock().unwrap().clone()
-    }
-
-    /// This conversation is no longer in the raw store: drop every document
-    /// rendered from it. Returns how many went.
-    ///
-    /// Call it only for a conversation the run actually looked for and did
-    /// not find — an id the `dolt_diff` scan named, whose rows the parse then
-    /// came back empty for. Absence from a bucket the run never examined
-    /// means nothing.
-    pub fn remove_conversation(&self, conversation_uuid: &str) -> Result<usize> {
-        let mut cb = self.remove.cb.lock().unwrap();
-        (cb)(conversation_uuid)
     }
 }

@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{Bucket, Buckets, Input};
 use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -22,6 +23,9 @@ static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
     pub rendered: usize,
+    /// Every MR rendered, with the rows it read, for the caller to
+    /// declare.
+    pub buckets: Buckets,
 }
 
 pub fn slugify(name: &str) -> String {
@@ -266,17 +270,9 @@ pub fn render_gitlab(
 ) -> Result<RenderSummary> {
     tracing::info!(
         source = stanza,
-        scan_elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64),
-        changed_buckets = parsed
-            .scan
-            .changed_buckets
-            .as_ref()
-            .map(|s| s.len() as i64)
-            .unwrap_or(-1),
         mrs = parsed.merge_requests.len(),
-        skipped = parsed.docs_skipped,
-        cold_start = parsed.scan.render.is_none(),
-        "[render] gitlab dolt_diff scan"
+        cold_start = parsed.render.is_none(),
+        "[render] gitlab scan"
     );
     let mut summary = RenderSummary::default();
     let mut by_mr: std::collections::HashMap<(String, u32), Vec<NoteRow>> = Default::default();
@@ -300,13 +296,20 @@ pub fn render_gitlab(
             markdown_uuid: mr.uuid.clone(),
             source_id: String::new(),
             upstream_cursor: None,
-            bucket_key: None,
+            bucket_key: Some(mr.row_id.clone()),
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,
             edges: Vec::new(),
             problems,
         })?;
+        let discussions: BTreeSet<&str> = notes.iter().map(|n| n.row_id.as_str()).collect();
+        let mut inputs = vec![Input::new("merge_requests", &mr.row_id)];
+        inputs.extend(discussions.iter().map(|d| Input::new("discussions", *d)));
+        summary.buckets.push(Bucket {
+            key: mr.row_id.clone(),
+            inputs,
+        });
         summary.rendered += 1;
         progress.inc(1);
     }

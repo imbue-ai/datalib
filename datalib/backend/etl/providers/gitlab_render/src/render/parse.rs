@@ -5,9 +5,11 @@
 //! everything else (including `individual_note: true`) becomes general
 //! discussion.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_etl_render::inputs::{changed_rows, RawRange};
 use once_cell::sync::Lazy;
 use serde_json::Value;
 use uuid::Uuid;
@@ -49,6 +51,8 @@ pub struct GitlabSelfIdentity {
 #[derive(Debug, Clone)]
 pub struct MergeRequestRow {
     pub uuid: String,
+    /// `merge_requests.id`, the bucket key every row of this MR shares.
+    pub row_id: String,
     pub project_full_path: String,
     pub mr_iid: u32,
     pub title: String,
@@ -74,6 +78,9 @@ pub enum NoteSection {
 #[derive(Debug, Clone)]
 pub struct NoteRow {
     pub uuid: String,
+    /// The `discussions` row this note was unrolled from, for the MR's
+    /// declaration.
+    pub row_id: String,
     pub project_full_path: String,
     pub mr_iid: u32,
     pub kind: &'static str,
@@ -101,31 +108,17 @@ pub struct ParsedGitlabApi {
     /// named, or every MR on a cold start.
     pub merge_requests: Vec<MergeRequestRow>,
     pub notes: Vec<NoteRow>,
-    /// MRs the diff reported unchanged, so this run skipped them.
-    pub docs_skipped: usize,
-    pub scan: ScanResult,
-    /// Buckets the diff named whose `merge_requests` row is gone. Empty on
-    /// a cold start, which looks at every bucket and so has nothing to
-    /// compare against.
-    pub vanished_buckets: Vec<String>,
+    /// The commit everything was read at.
+    pub head: Option<String>,
+    /// The buckets to render — `merge_requests.id`s; `None` renders
+    /// everything.
+    pub render: Option<HashSet<String>>,
 }
 
-/// Result of the `dolt_diff` scan, carried alongside the parsed bag so
-/// render can advance the cursor and log the timing.
-#[derive(Debug, Clone, Default)]
-pub struct ScanResult {
-    /// `Some(set)` → render only these `"{project}!{iid}"` buckets.
-    /// `None` → render everything.
-    pub render: Option<std::collections::HashSet<String>>,
-    /// The buckets the diff named, for the removal probe.
-    pub changed_buckets: Option<std::collections::HashSet<String>>,
-    pub new_head: Option<String>,
-    pub scan_elapsed: Option<std::time::Duration>,
-}
+/// Every table an MR's document reads; the forward scan diffs each.
+const TABLES: [&str; 2] = ["merge_requests", "discussions"];
 
-/// Parse for render, narrowed by `dolt_diff` when a render cursor says
-/// where the last run got to. `None` renders everything.
-pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedGitlabApi> {
+pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedGitlabApi> {
     let db_path = db_path_for(path);
     if !db_path.exists() {
         // No store: this source has never been downloaded. That is
@@ -135,28 +128,13 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
         // docs/dev/step_protocol.md, "Rendering a source with no data".
         return Ok(ParsedGitlabApi::default());
     }
-    // One read-only open for the whole parse: the loads, the diff scan and
-    // the vanished-bucket probe. Three opens against one doltlite file is
-    // the "database is locked" hazard `doltlite_raw::open_reader` warns
-    // about — `max_connections` is 1, so a second pool waits on the first
-    // rather than failing fast. See #312.
-    let (raw, scan, gone) = tokio::task::block_in_place(|| {
-        let last = last_render_hash.map(str::to_string);
+    let (raw, head, changed) = tokio::task::block_in_place(|| {
         let path = db_path.clone();
         tokio::runtime::Handle::current().block_on(async move {
-            // `open_reader` pins to HEAD and installs the views, so the
-            // loads and the diff below all name one commit. `None` means
-            // the store cannot be read at all; gitlab never hands its
-            // rendered set to `retain_documents`, so an empty result here
-            // deletes nothing.
-            let Some(db) = RawDb::open_reader(&path).await? else {
-                return Ok(Default::default());
+            let Some(db) = RawDb::open_reader_at(&path, range.pin).await? else {
+                return Ok((LoadedRaw::default(), None, None));
             };
-            let pin = db
-                .pin()
-                .expect("open_reader returns a pinned handle")
-                .clone();
-            let out = read_everything(&db, last.as_deref(), &pin).await;
+            let out = read_everything(&db, range).await;
             // Closed before returning, on the error path too.
             db.close().await;
             out
@@ -165,86 +143,52 @@ pub fn parse_api_dir(path: &Path, last_render_hash: Option<&str>) -> Result<Pars
     .with_context(|| format!("load gitlab db {}", db_path.display()))?;
 
     let mut parsed = parse_loaded(raw);
-    parsed.vanished_buckets = gone;
-    if let Some(changed) = scan.render.as_ref() {
-        let before = parsed.merge_requests.len();
+    parsed.head = head;
+    // An MR's row id is its bucket key, so a changed MR names itself —
+    // gone or not; a changed discussion names its MR through the row,
+    // and a discussion that went is the driver's to name.
+    let forward = changed.map(|changed| {
+        let mut out: HashSet<String> = changed.get("merge_requests").cloned().unwrap_or_default();
+        if let Some(ids) = changed.get("discussions") {
+            for n in &parsed.notes {
+                if ids.contains(&n.row_id) {
+                    out.insert(mr_pk_recipe(&n.project_full_path, n.mr_iid));
+                }
+            }
+        }
+        out
+    });
+    parsed.render = range.narrow(forward.as_ref());
+    if let Some(render) = parsed.render.as_ref() {
         parsed
             .merge_requests
-            .retain(|mr| changed.contains(&mr_pk_recipe(&mr.project_full_path, mr.mr_iid)));
-        parsed.docs_skipped = before.saturating_sub(parsed.merge_requests.len());
+            .retain(|mr| render.contains(&mr.row_id));
         // Notes follow their MR: one left attached to an MR this pass is
         // not rendering would be grouped into a document nobody emits.
         parsed
             .notes
-            .retain(|n| changed.contains(&mr_pk_recipe(&n.project_full_path, n.mr_iid)));
+            .retain(|n| render.contains(&mr_pk_recipe(&n.project_full_path, n.mr_iid)));
     }
-    parsed.scan = scan;
     Ok(parsed)
 }
 
-/// Everything the parse needs off one open store.
 async fn read_everything(
     db: &RawDb,
-    last_render_hash: Option<&str>,
-    pin: &datalib_etl::pin::Pin,
-) -> Result<(LoadedRaw, ScanResult, Vec<String>)> {
+    range: RawRange<'_>,
+) -> Result<(
+    LoadedRaw,
+    Option<String>,
+    Option<HashMap<String, HashSet<String>>>,
+)> {
+    let pin = db.pin().expect("open_reader_at returns a pinned handle");
     let raw = LoadedRaw {
         self_identity: db.load_self_identity().await?,
         merge_requests: db.load_merge_requests().await?,
         discussions: db.load_discussions().await?,
     };
-    let scan = datalib_etl::doltlite_raw::scan_buckets(
-        db.pool(),
-        last_render_hash,
-        pin,
-        &datalib_etl::doltlite_raw::DiffScanSpec {
-            // `self_identity` is not read by render, so a change to it fans
-            // out to nothing.
-            global_fanout_tables: &[],
-            bucket_query: BUCKET_QUERY,
-        },
-    )
-    .await?;
-    let gone = match scan.changed_buckets.as_ref() {
-        Some(changed) => {
-            datalib_etl::doltlite_raw::buckets_without_rows(
-                db.pool(),
-                datalib_etl::pin::Reads::At(pin),
-                changed,
-                &[("merge_requests", "id")],
-            )
-            .await?
-        }
-        None => Vec::new(),
-    };
-    Ok((
-        raw,
-        ScanResult {
-            render: scan.render,
-            changed_buckets: scan.changed_buckets,
-            new_head: scan.new_head,
-            scan_elapsed: scan.scan_elapsed,
-        },
-        gone,
-    ))
+    let changed = changed_rows(db.pool(), range, pin, &TABLES).await?;
+    Ok((raw, Some(pin.commit().to_string()), changed))
 }
-
-/// An MR's document is its own row plus its discussions, so either moving
-/// re-renders it. `discussions` carries `(project_full_path, mr_iid)`,
-/// which composes the same key `merge_requests.id` already holds.
-const BUCKET_QUERY: &str = "
-    SELECT DISTINCT bucket FROM (
-        SELECT coalesce(to_id, from_id) AS bucket
-          FROM dolt_diff_merge_requests
-         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-        UNION
-        SELECT coalesce(to_project_full_path, from_project_full_path) || '!' ||
-               coalesce(to_mr_iid, from_mr_iid)
-          FROM dolt_diff_discussions
-         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-    )
-    WHERE bucket IS NOT NULL
-";
 
 pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
     let mut out = ParsedGitlabApi::default();
@@ -268,6 +212,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
         let diff_refs = p.get("diff_refs");
         out.merge_requests.push(MergeRequestRow {
             uuid: gitlab_mr_uuid(&proj, iid),
+            row_id: mr.id,
             project_full_path: proj,
             mr_iid: iid,
             title: p.get("title").and_then(|v| v.as_str()).unwrap_or("").into(),
@@ -316,6 +261,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
 
     // Discussions → flatten to NoteRows.
     for d in raw.discussions {
+        let row_id = d.id;
         let proj = d.project_full_path;
         let iid = d.mr_iid;
         let payload = d.payload;
@@ -378,6 +324,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
             };
             out.notes.push(NoteRow {
                 uuid: gitlab_note_uuid(&proj, id),
+                row_id: row_id.clone(),
                 project_full_path: proj.clone(),
                 mr_iid: iid,
                 kind,
@@ -425,7 +372,7 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse_api_dir(Path::new("/this/does/not/exist"), None).unwrap();
+        let parsed = parse_api_dir(Path::new("/this/does/not/exist"), RawRange::cold()).unwrap();
         assert!(parsed.merge_requests.is_empty());
         assert!(parsed.notes.is_empty());
         assert!(parsed.self_identity.is_none());

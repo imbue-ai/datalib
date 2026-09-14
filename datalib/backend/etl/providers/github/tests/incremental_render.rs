@@ -1,11 +1,6 @@
-//! Render incrementality for github, and the trap that comes with it.
-//!
-//! Putting a renderer on a `dolt_diff` cursor narrows what it emits to the
-//! documents that changed. Every provider here previously declared the
-//! documents it saw and let the driver delete the rest — correct while the
-//! renderer walked everything, and catastrophic the moment it stops. These
-//! tests pin the second run: it must render nothing new and, above all,
-//! must not treat the documents it skipped as deleted.
+//! Render incrementality for github: a second run over an unchanged
+//! store renders nothing, and a PR that left the store is a bucket to
+//! render with no rows, so the driver drops its document.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -18,6 +13,7 @@ use datalib_etl_github::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_github::synthesize::GithubSynth;
 use datalib_etl_github_render::render::{parse_api_dir, render_github};
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::RawRange;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 use tokio::sync::Mutex;
@@ -99,22 +95,40 @@ async fn download(api: &Path, playback: &Path, out_db: &Path) {
     db.close().await;
 }
 
-/// One render pass from `cursor`. Returns the uuids emitted, how many the
-/// diff let it skip, and the commit the pass consumed — what the render
-/// step would record as the next cursor.
+/// The range the driver hands a warm run: a cursor to diff from and its
+/// own stale set — empty here, since nothing declared has moved.
+fn warm<'a>(cursor: Option<&'a str>, none: &'a HashSet<String>) -> RawRange<'a> {
+    match cursor {
+        Some(cursor) => RawRange {
+            cursor: Some(cursor),
+            pin: None,
+            stale: Some(none),
+        },
+        None => RawRange::cold(),
+    }
+}
+
+/// One render pass from `cursor`. Returns the documents emitted, the
+/// buckets the pass rendered, and the commit it consumed — what the
+/// render step would record as the next cursor.
 fn render_once(
     raw: &Path,
     out: &Path,
     cursor: Option<&str>,
-) -> (Vec<RenderedMarkdown>, usize, Option<String>) {
-    let parsed = parse_api_dir(raw, cursor).unwrap();
+) -> (
+    Vec<RenderedMarkdown>,
+    Option<HashSet<String>>,
+    Option<String>,
+) {
+    let none = HashSet::new();
+    let parsed = parse_api_dir(raw, warm(cursor, &none)).unwrap();
     let mut docs = Vec::new();
     render_github(&parsed, out, "github", &Progress::noop(), &mut |d| {
         docs.push(d);
         Ok(())
     })
     .unwrap();
-    (docs, parsed.docs_skipped, parsed.scan.new_head.clone())
+    (docs, parsed.render.clone(), parsed.head.clone())
 }
 
 /// The headline: a second render over an unchanged store does no work.
@@ -129,11 +143,17 @@ async fn a_second_render_over_an_unchanged_store_renders_nothing() {
     build_events(&d.path().join("ev"), &[(1, "one"), (2, "two")]);
     download(&d.path().join("ev"), &d.path().join("pb"), &out_db).await;
 
-    let (first, skipped, cursor) = render_once(&db_path_for(&out_db), &out, None);
+    let (first, render, cursor) = render_once(&db_path_for(&out_db), &out, None);
     assert_eq!(first.len(), 2, "cold start renders both PRs");
-    assert_eq!(skipped, 0, "a cold start skips nothing — it has no cursor");
+    assert!(
+        render.is_none(),
+        "a cold start has no cursor to narrow from"
+    );
+    assert!(first
+        .iter()
+        .all(|d| d.bucket_key.as_deref().is_some_and(|k| k.starts_with(REPO))));
 
-    let (second, skipped, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref());
+    let (second, render, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref());
 
     assert!(
         second.is_empty(),
@@ -141,50 +161,17 @@ async fn a_second_render_over_an_unchanged_store_renders_nothing() {
          nothing — {} document(s) came back",
         second.len(),
     );
-    assert_eq!(skipped, 2, "and both PRs should be reported as skipped");
-}
-
-/// The trap. A narrowed render emits only what changed, so the set it
-/// produced is NOT the set of documents that should exist. This is the
-/// assertion that would have caught leaving `retain_documents` in place:
-/// the second run's output names neither PR, and treating that as the
-/// complete set deletes both.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_narrowed_render_must_not_be_read_as_the_complete_document_set() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let out_db = d.path().join("raw");
-    let out = d.path().join("out");
-
-    build_events(&d.path().join("ev"), &[(1, "one"), (2, "two")]);
-    download(&d.path().join("ev"), &d.path().join("pb"), &out_db).await;
-
-    let (first, _, cursor) = render_once(&db_path_for(&out_db), &out, None);
-    let held: HashSet<String> = first.iter().map(|d| d.markdown_uuid.clone()).collect();
-
-    let parsed = parse_api_dir(&db_path_for(&out_db), cursor.as_deref()).unwrap();
-
-    // Nothing moved upstream, so nothing may be named as vanished. That is
-    // the only list the processor is allowed to delete from.
-    assert!(
-        parsed.vanished_buckets.is_empty(),
-        "an unchanged store has lost nothing, but the parse named {:?}",
-        parsed.vanished_buckets,
-    );
-
-    let (second, _, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref());
-    let emitted: HashSet<String> = second.iter().map(|d| d.markdown_uuid.clone()).collect();
-    assert!(
-        emitted.is_empty() && held.len() == 2,
-        "the setup for the real claim: the run emitted nothing while two \
-         documents exist",
+    assert_eq!(
+        render,
+        Some(HashSet::new()),
+        "and no bucket is declared, so the driver sweeps nothing"
     );
 }
 
-/// And the detection still works: a PR gone from the store is named, so the
-/// processor has something to remove.
+/// A PR gone from the store is still a bucket to render — with no row,
+/// so it is declared empty and the driver drops its document.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_pr_that_left_the_store_is_named_as_vanished() {
+async fn a_pr_that_left_the_store_is_a_bucket_with_no_rows() {
     let _guard = ENV_LOCK.lock().await;
     let d = tempdir().unwrap();
     let out_db = d.path().join("raw");
@@ -215,11 +202,11 @@ async fn a_pr_that_left_the_store_is_named_as_vanished() {
     // the assertion below comes back empty.
     db.close().await;
 
-    let parsed = parse_api_dir(&db_path_for(&out_db), cursor.as_deref()).unwrap();
-
+    let (docs, render, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref());
     assert_eq!(
-        parsed.vanished_buckets,
-        vec![format!("{REPO}#2")],
-        "the diff named the bucket and the store no longer has its row",
+        render,
+        Some([format!("{REPO}#2")].into_iter().collect()),
+        "the diff named the bucket",
     );
+    assert!(docs.is_empty(), "and the store no longer has its row");
 }

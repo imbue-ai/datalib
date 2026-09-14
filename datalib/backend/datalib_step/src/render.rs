@@ -263,28 +263,6 @@ pub fn render_source(
         }
         Ok(())
     };
-    // The other half of the sink: a conversation the raw store no
-    // longer has takes its rendered documents with it. Without this
-    // the deletion stops at the raw store — the `.md` stays on disk
-    // and `grid_index`, which only ever learns of a removal from
-    // this store's own diff, never hears about it.
-    let mut on_remove = |conversation_uuid: &str| -> Result<usize> {
-        let gone = store.documents_for_conversation(conversation_uuid)?;
-        for uuid in &gone {
-            store
-                .remove_document(&data_root, uuid)
-                .with_context(|| format!("remove document {uuid}"))?;
-        }
-        if !gone.is_empty() {
-            removed += gone.len();
-            tracing::info!(
-                conversation = conversation_uuid,
-                documents = gone.len(),
-                "render: conversation is gone from the raw store; dropped its documents",
-            );
-        }
-        Ok(gone.len())
-    };
     // The buckets this run rendered. What the store holds under one of
     // them that this run did not emit is gone. Their inputs land in the
     // open batch beside their documents.
@@ -310,7 +288,6 @@ pub fn render_source(
                 raw_pin.as_deref(),
                 stale_buckets.as_ref(),
                 &mut on_doc,
-                &mut on_remove,
                 &mut on_declare,
             );
             futures::executor::block_on(proc.run(&ctx))
