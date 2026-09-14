@@ -112,7 +112,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin bulk rooms tx")?;
         bulk_upsert_in_tx(&mut tx, rows, &now).await?;
         tx.commit().await.context("commit bulk rooms tx")?;
@@ -123,7 +123,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin bulk users tx")?;
         bulk_upsert_in_tx(&mut tx, rows, &now).await?;
         tx.commit().await.context("commit bulk users tx")?;
@@ -134,7 +134,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin bulk events tx")?;
         bulk_upsert_in_tx(&mut tx, rows, &now).await?;
         tx.commit().await.context("commit bulk events tx")?;
@@ -148,7 +148,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self
             .pool
             .begin()

@@ -284,7 +284,8 @@ mod tests {
             xmp_document_id: None,
             xmp_instance_id: None,
             xmp_original_document_id: None,
-            first_seen_at: NOW.to_string(),
+            first_seen_at_utc: NOW.to_string(),
+            tz_offset: None,
         }
     }
 
@@ -292,7 +293,8 @@ mod tests {
         PdfPathRow {
             id: id.to_string(),
             blake3: blake3.to_string(),
-            last_seen_at: NOW.to_string(),
+            last_seen_at_utc: NOW.to_string(),
+            tz_offset: None,
         }
     }
 

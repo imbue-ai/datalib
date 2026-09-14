@@ -191,7 +191,7 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
         "chat: {n_groups} groups / {n_users} users / {n_messages} messages",
     ));
 
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await.context("begin google_chat tx")?;
     bulk_upsert_in_tx(&mut tx, &group_rows, &now).await?;
     bulk_upsert_in_tx(&mut tx, &user_rows, &now).await?;

@@ -102,7 +102,8 @@ pub const INGESTED_BACKUPS_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_back
     blake3 TEXT NOT NULL,
     snapshot_dir TEXT NULL,
     total_byte_size INTEGER NULL,
-    ingested_at TEXT NOT NULL
+    ingested_at_utc TEXT NOT NULL,
+    tz_offset TEXT NULL
 )";
 
 /// Documentation-only: the recipe for [`INGESTED_BACKUPS_DDL`]'s

@@ -110,19 +110,21 @@ pub struct SyncJobRow {
     /// [`SyncJobRow::job_state`] rather than comparing strings.
     #[col(sql = "VARCHAR(16)")]
     pub state: String,
-    /// When the backend enqueued the row (ISO-8601 with explicit local
-    /// offset, per AGENTS.md).
+    /// When the backend enqueued the row, in UTC.
     #[col(sql = "VARCHAR(40)")]
-    pub created_at: String,
-    /// When the worker flipped `state` to [`JobState::Running`]
-    /// (ISO-8601 with explicit offset). NULL while still pending.
+    pub created_at_utc: String,
+    /// When the worker flipped `state` to [`JobState::Running`], in
+    /// UTC. NULL while still pending.
     #[col(sql = "VARCHAR(40)")]
-    pub started_at: Option<String>,
-    /// When the worker flipped `state` to a terminal [`JobState`]
-    /// (ISO-8601 with explicit offset). NULL while still
-    /// pending/running.
+    pub started_at_utc: Option<String>,
+    /// When the worker flipped `state` to a terminal [`JobState`], in
+    /// UTC. NULL while still pending/running.
     #[col(sql = "VARCHAR(40)")]
-    pub finished_at: Option<String>,
+    pub finished_at_utc: Option<String>,
+    /// The server's offset when it stamped the latest of the three
+    /// above (`+02:00`).
+    #[col(sql = "VARCHAR(8)")]
+    pub tz_offset: Option<String>,
     /// Human-readable error message when `state` is
     /// [`JobState::Failed`]. The full
     /// structured log lives in `<root>/state/job-logs/<id>.log`; this

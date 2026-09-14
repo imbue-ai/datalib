@@ -20,7 +20,7 @@ use tempfile::tempdir;
 
 /// Tables whose contents must be byte-identical across a
 /// reset+redownload of the same upstream fixtures. Excludes the
-/// `*_bookkeeping` sidecars (volatile `fetched_at`) and the
+/// `*_bookkeeping` sidecars (volatile `fetched_at_utc`) and the
 /// whole-table bookkeeping (`sync_runs` etc.).
 const DATA_TABLES: &[&str] = &["users", "orgs", "conversations", "projects", "project_docs"];
 

@@ -270,7 +270,7 @@ mod tests {
 
         let run = DownloadRun::start(&pool, &json!({"k": "v"})).await.unwrap();
         let run_id = run.run_id();
-        sqlx::query("INSERT INTO sync_scope_state (scope, last_seen_at) VALUES (?, ?)")
+        sqlx::query("INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES (?, ?)")
             .bind("test_scope")
             .bind("2026-01-01T00:00:00Z")
             .execute(&pool)

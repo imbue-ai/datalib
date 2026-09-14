@@ -1,13 +1,14 @@
 # Logs and metrics: one store, written by the runner
 
-**Status: agreed plan (2026-09-11), built in full (2026-09-14).** [Order of work](#order-of-work)
-is the checklist; update it as slices land, and treat anything it still
-lists as unbuilt. Per [`AGENTS.md`](../../../AGENTS.md), where this file
-says "today" that was checked against `5f589a59`; where it says "will",
-nothing exists yet.
+**Status: built in full (2026-09-14), kept as the record of what was
+decided.** Every slice in [Order of work](#order-of-work) landed
+(#419, #421, #425, #428, #431). Where this file says "today" it means
+`5f589a59`, the tree before any of it; the tables section is current
+and the rest is the argument. The open questions at the end are the
+loose ends, with what each costs.
 
 This supersedes §3 ("Pipeline state as a table") and §4 ("Run logs,
-beside the data") of [`data_centric_ui.md`](data_centric_ui.md). That
+beside the data") of [`data_centric_ui.md`](../data_centric_ui.md). That
 proposal put each step's log in a file under the step's own tree; the
 decision here is one file per data root, for the reasons in
 [§"One file, not one per step"](#one-file-not-one-per-step). Issues:
@@ -83,20 +84,20 @@ per table, so the DDL comes from the struct and the http endpoints
 serve the same rows:
 
 ```
-runs           run_id, started_at, finished_at, tz_offset
-step_runs      run_id, step, state, attempt, started_at, finished_at,
-               error, msg, updated_at, tz_offset
-log            seq (rowid), run_id, step, attempt, ts, tz_offset, stream,
+runs           run_id, started_at_utc, finished_at_utc, tz_offset
+step_runs      run_id, step, state, attempt, started_at_utc, finished_at_utc,
+               error, msg, updated_at_utc, tz_offset
+log            seq (rowid), run_id, step, attempt, ts_utc, tz_offset, stream,
                level, target, thread, msg, fields
-metrics        run_id, step, name, labels, value, updated_at, tz_offset
-metric_samples run_id, step, name, labels, ts, tz_offset, value
+metrics        run_id, step, name, labels, value, updated_at_utc, tz_offset
+metric_samples run_id, step, name, labels, ts_utc, tz_offset, value
 ```
 
 Every stamp is **UTC** (`…+00:00`, microseconds) with the offset it was
 written in beside it — a step's own tracing line keeps its zone, the
-runner's arrival stamps keep the runner's. That is the shape #427
-moves the rest of the tree towards; here it is what makes text order
-instant order, so a reader sorts a `ts` column without parsing it.
+runner's arrival stamps keep the runner's. That is the shape every
+store keeps (#427); here it is what makes text order instant order, so
+a reader sorts a `ts_utc` column without parsing it.
 `level` and `stream` are text columns written through the `LogLevel`
 and `Stream` enums beside the row; `PortableTable` binds scalars only,
 and a reader keeps a word this build does not know rather than guessing.
@@ -280,20 +281,34 @@ Each slice is one PR that leaves the tree green.
    but not advancing" — or silent. `metric_samples` is still bounded
    only by run retention; the plan's open question stands.
 
-## Open questions
+## Loose ends
 
-- **Joining a raw store's `sync_runs` row to the run.** Steps now
-  receive `DATALIB_DAG_RUN_ID`; nothing stamps it yet. A `dag_run_id`
-  column on `sync_runs` (and on the render cursor) is the obvious next
-  step, and would let the Manage screen link a log line to the commit
-  it produced.
-- **Bytes.** `DownloadMetrics` counts requests and rows; nothing counts
-  bytes fetched or bytes written. The HTTP chokepoint sees the response
-  body length, so `bytes_fetched` is a one-line addition there. Bytes
-  written per store is what `usage.doltlite_db` already samples, from
-  the outside; whether to also count it from the inside is not decided.
-- **Whether `metric_samples` wants a cap of its own.** At one sample per
+What did not land, with an honest weight on each. None blocks
+anything.
+
+- **Whether `metric_samples` wants a cap of its own.** The rate query
+  reads only the last ten minutes of a run's samples (`RATE_WINDOW` in
+  `runs/src/store.rs`), so the table's size no longer costs anything
+  per `dag_changed` frame; what remains is disk. At one sample per
   changed series per five seconds a busy download writes ~700 rows an
-  hour per series; the run retention bounds it, but a run that lasts a
-  day with twenty series is a few hundred thousand rows. Measure before
-  deciding.
+  hour per series, bounded by run retention. Measure before deciding.
+  **Low.**
+- **A download's outcome carries no `rows`.** The count of its last
+  segment lives inside the `RawStoreSession` that sealed it, and
+  `ingest.rs` builds the claim after the session is gone. A consumer's
+  queue from a download is exact for every checkpoint and reads the
+  finish as "nothing more to come"; it under-reports only between the
+  producer finishing and the consumer's final pass. **Low; cosmetic.**
+- **Nothing stamps `DATALIB_DAG_RUN_ID` into a raw store.** A
+  `dag_run_id` column on `sync_runs` (and on the render cursor) would
+  let a commit in the history panel be joined to the run — and the
+  log — that made it. The panel already names the run on each commit
+  from the commit message, so this is a join nobody has needed yet.
+  **Low; nice to have.**
+- **Bytes.** `DownloadMetrics` counts requests and rows; nothing counts
+  bytes fetched. The HTTP chokepoint sees the response body length, so
+  `bytes_fetched` is a one-line addition when someone wants it.
+  **Low.**
+- **Timestamps everywhere as UTC + `tz_offset`.** The run store is the
+  first table in that shape; the rest of the tree is #427, in
+  progress separately.

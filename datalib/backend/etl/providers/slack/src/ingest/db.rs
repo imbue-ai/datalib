@@ -109,14 +109,14 @@ impl RawDb {
 
     pub async fn manifest_sweep_age(&self, key: &str) -> Result<Option<chrono::Duration>> {
         let scope = format!("slack:sweep:{key}");
-        let row = sqlx::query("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
+        let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(&scope)
             .fetch_optional(&self.pool)
             .await
             .context("select manifest sweep marker")?;
         let Some(row) = row else { return Ok(None) };
         let s: String = row
-            .try_get("last_seen_at")
+            .try_get("last_seen_at_utc")
             .context("read manifest sweep timestamp")?;
         let dt = datalib_time::parse_strict(&s)
             .with_context(|| format!("parse manifest sweep timestamp {s:?}"))?
@@ -128,15 +128,9 @@ impl RawDb {
     pub async fn record_manifest_sweep(&self, key: &str) -> Result<()> {
         let scope = format!("slack:sweep:{key}");
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO sync_scope_state (scope, last_seen_at) VALUES (?, ?) \
-             ON CONFLICT(scope) DO UPDATE SET last_seen_at = excluded.last_seen_at",
-        )
-        .bind(&scope)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .context("record manifest sweep marker")?;
+        dr::upsert_scope_state(&self.pool, &scope, &now)
+            .await
+            .context("record manifest sweep marker")?;
         Ok(())
     }
 
@@ -173,7 +167,7 @@ impl RawDb {
         let row = sqlx::query(
             "SELECT w.id FROM workspaces w \
              LEFT JOIN workspaces_bookkeeping b ON b.id = w.id \
-             ORDER BY b.fetched_at DESC LIMIT 1",
+             ORDER BY b.fetched_at_utc DESC LIMIT 1",
         )
         .fetch_optional(&self.pool)
         .await
@@ -617,7 +611,7 @@ impl RawDb {
             thread_ts: thread_ts.to_string(),
             latest_reply: latest_reply.map(String::from),
         };
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin replies_page tx")?;
         bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), &now).await?;
         tx.commit().await.context("commit replies_page tx")?;

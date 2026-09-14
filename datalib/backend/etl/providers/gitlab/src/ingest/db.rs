@@ -89,7 +89,7 @@ impl RawDb {
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
         let payload = &canonicalize_payload(payload);
         let row = SelfIdentityRow::from_payload(payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit self_identity tx")?;
@@ -117,7 +117,7 @@ impl RawDb {
     pub async fn upsert_merge_request(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
         let payload = &canonicalize_payload(payload);
         let row = MergeRequestRow::from_payload(proj, iid, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin merge_request tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit merge_request tx")?;
@@ -129,7 +129,7 @@ impl RawDb {
     pub async fn upsert_discussion(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
         let payload = &canonicalize_payload(payload);
         let row = DiscussionRow::from_payload(proj, iid, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin discussion tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit discussion tx")?;
@@ -148,7 +148,7 @@ impl RawDb {
             .iter()
             .map(|p| DiscussionRow::from_payload(proj, iid, &canonicalize_payload(p)))
             .collect::<Result<Vec<_>>>()?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self
             .pool
             .begin()

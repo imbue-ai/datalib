@@ -217,7 +217,7 @@ impl IndexedMarkdownStore {
     }
 
     pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
-        // `markdowns.rendered_at` is one of the times `--now` is
+        // `markdowns.rendered_at_utc` is one of the times `--now` is
         // documented to pin, and the pinned value is already in hand.
         // Left to sample its own clock, every document in a run
         // disagreed with every other by microseconds.
@@ -387,21 +387,21 @@ impl IndexedMarkdownStore {
     ) -> Result<()> {
         let mut guard = self.write_lock.acquire().await?;
         let conn = guard.conn();
-        // Read the prior `first_seen_at` for every uuid about to be
+        // Read the prior `first_seen_at_utc` for every uuid about to be
         // rewritten, *before* the delete. This is the whole reason the
         // store stamps these rather than the renderer: a renderer that
         // set both timestamps to "now" every run would make
-        // `first_seen_at` a synonym for `last_seen_at`, and "this has
+        // `first_seen_at_utc` a synonym for `last_seen_at_utc`, and "this has
         // been broken since Tuesday" would be unanswerable.
         let seen: HashMap<String, String> = sqlx::query(
-            "SELECT uuid, first_seen_at FROM render_problems \
+            "SELECT uuid, first_seen_at_utc FROM render_problems \
              WHERE scope_kind = ? AND scope_key = ?",
         )
         .bind(ScopeKind::Markdown.as_str())
         .bind(markdown_uuid)
         .fetch_all(&mut **conn)
         .await
-        .context("read prior first_seen_at")?
+        .context("read prior first_seen_at_utc")?
         .into_iter()
         .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
         .collect::<Result<_>>()?;
@@ -414,8 +414,8 @@ impl IndexedMarkdownStore {
         self.insert_problems(conn, problems, &seen).await
     }
 
-    /// Insert problem rows, stamping `first_seen_at` / `last_seen_at`.
-    /// `seen` maps a uuid to the `first_seen_at` it already had, which
+    /// Insert problem rows, stamping `first_seen_at_utc` / `last_seen_at_utc`.
+    /// `seen` maps a uuid to the `first_seen_at_utc` it already had, which
     /// is carried forward; anything absent is new and gets `now` for
     /// both.
     async fn insert_problems(
@@ -424,13 +424,15 @@ impl IndexedMarkdownStore {
         problems: &[RenderProblemRow],
         seen: &HashMap<String, String>,
     ) -> Result<()> {
+        let now = datalib_time::split_stamp(&self.now);
         for p in problems {
             let stamped = RenderProblemRow {
-                first_seen_at: seen
+                first_seen_at_utc: seen
                     .get(&p.uuid)
                     .cloned()
-                    .unwrap_or_else(|| self.now.clone()),
-                last_seen_at: self.now.clone(),
+                    .unwrap_or_else(|| now.utc.clone()),
+                last_seen_at_utc: now.utc.clone(),
+                tz_offset: now.tz_offset.clone(),
                 ..p.clone()
             };
             // Same generated write path the rows use; see
@@ -452,7 +454,7 @@ impl IndexedMarkdownStore {
     /// Append, not upsert: this table is the history behind the
     /// sparkline, and the current value already lives in `grid_rows`.
     ///
-    /// `INSERT OR REPLACE`, because the key is `(subject, measured_at)`
+    /// `INSERT OR REPLACE`, because the key is `(subject, measured_at_utc)`
     /// and a run stamps one pinned instant across every row it writes —
     /// so a re-run under the same `--now` should restate the series
     /// rather than fail the whole render on a duplicate carrying the
@@ -471,11 +473,13 @@ impl IndexedMarkdownStore {
             for sample in samples {
                 sqlx::query(
                     "INSERT OR REPLACE INTO source_measurements \
-                     (subject, kind, measured_at, bytes, items) VALUES (?, ?, ?, ?, ?)",
+                     (subject, kind, measured_at_utc, tz_offset, bytes, items) \
+                     VALUES (?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&sample.subject)
                 .bind(&sample.kind)
-                .bind(&sample.measured_at)
+                .bind(&sample.measured_at_utc)
+                .bind(&sample.tz_offset)
                 .bind(sample.bytes)
                 .bind(sample.items)
                 .execute(&mut **conn)
@@ -483,7 +487,7 @@ impl IndexedMarkdownStore {
                 .with_context(|| {
                     format!(
                         "insert measurement {} at {}",
-                        sample.subject, sample.measured_at
+                        sample.subject, sample.measured_at_utc
                     )
                 })?;
             }
@@ -504,14 +508,14 @@ impl IndexedMarkdownStore {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
             let seen: HashMap<String, String> = sqlx::query(
-                "SELECT uuid, first_seen_at FROM render_problems \
+                "SELECT uuid, first_seen_at_utc FROM render_problems \
                  WHERE scope_kind = ? AND scope_key = ?",
             )
             .bind(ScopeKind::Entity.as_str())
             .bind(entity_id)
             .fetch_all(&mut **conn)
             .await
-            .context("read prior first_seen_at")?
+            .context("read prior first_seen_at_utc")?
             .into_iter()
             .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
             .collect::<Result<_>>()?;
@@ -801,7 +805,8 @@ mod tests {
         SourceMeasurementRow {
             subject: subject.into(),
             kind: "tree".into(),
-            measured_at: at.into(),
+            measured_at_utc: at.into(),
+            tz_offset: None,
             bytes,
             items,
         }
@@ -837,8 +842,8 @@ mod tests {
 
         let series: Vec<(String, Option<i64>)> = blocking(async {
             sqlx::query(
-                "SELECT measured_at, bytes FROM source_measurements \
-                 WHERE subject = 'src/raw' ORDER BY measured_at",
+                "SELECT measured_at_utc, bytes FROM source_measurements \
+                 WHERE subject = 'src/raw' ORDER BY measured_at_utc",
             )
             .fetch_all(&st.pool)
             .await
@@ -925,8 +930,9 @@ mod tests {
                 "not-a-date",
             )])
             .unwrap(),
-            first_seen_at: "2026-01-01T00:00:00+00:00".into(),
-            last_seen_at: "2026-01-01T00:00:00+00:00".into(),
+            first_seen_at_utc: "2026-01-01T00:00:00+00:00".into(),
+            last_seen_at_utc: "2026-01-01T00:00:00+00:00".into(),
+            tz_offset: None,
             render_version: 7,
         }
     }

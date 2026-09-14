@@ -125,7 +125,7 @@ pub struct FeedbackRequest {
 #[derive(Debug, Serialize)]
 pub struct FeedbackResponse {
     pub feedback_uuid: String,
-    pub created_at: String,
+    pub created_at_utc: String,
     pub git_hash: &'static str,
 }
 
@@ -253,12 +253,14 @@ async fn submit_feedback(
     // client so each row carries a server-vouched provenance and so
     // `feedback_uuid` collisions are impossible from the wire.
     let feedback_uuid = uuid::Uuid::new_v4().to_string();
-    let created_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let (created_at_utc, tz_offset) =
+        datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let app_version = env!("CARGO_PKG_VERSION").to_string();
     let git_hash_str = git_hash().to_string();
     let row = FeedbackRow {
         feedback_uuid: feedback_uuid.clone(),
-        created_at: created_at.clone(),
+        created_at_utc: created_at_utc.clone(),
+        tz_offset: Some(tz_offset),
         sentiment: req.sentiment,
         comment: req.comment,
         app_version,
@@ -271,7 +273,7 @@ async fn submit_feedback(
     match s.app.insert_feedback(row).await {
         Ok(()) => Ok(Json(FeedbackResponse {
             feedback_uuid,
-            created_at,
+            created_at_utc,
             git_hash: git_hash(),
         })),
         Err(RepoError::ReadOnly) => Err(StatusCode::SERVICE_UNAVAILABLE),
@@ -990,7 +992,7 @@ pub struct DagStepProgress {
     pub progress_age_secs: Option<i64>,
     /// For a running step: seconds since it last logged a line.
     pub log_age_secs: Option<i64>,
-    pub updated_at: String,
+    pub updated_at_utc: String,
 }
 
 fn series_key(name: &str, labels: &str) -> String {
@@ -1023,9 +1025,9 @@ fn progress_by_step(
                 .metrics
                 .iter()
                 .filter(|m| m.step == p.step)
-                .map(|m| m.updated_at.as_str())
+                .map(|m| m.updated_at_utc.as_str())
                 .max()
-                .or(p.started_at.as_deref());
+                .or(p.started_at_utc.as_deref());
             let age = |since: Option<&str>| {
                 since
                     .filter(|_| running)
@@ -1041,7 +1043,7 @@ fn progress_by_step(
                     rates: Default::default(),
                     progress_age_secs: age(last_move),
                     log_age_secs: age(snap.last_log_at.get(&p.step).map(String::as_str)),
-                    updated_at: p.updated_at.clone(),
+                    updated_at_utc: p.updated_at_utc.clone(),
                 },
             )
         })
@@ -1058,7 +1060,7 @@ fn progress_by_step(
         if a.step != b.step || a.name != b.name || a.labels != b.labels {
             continue;
         }
-        let Some(dt) = secs_between(&a.ts, &b.ts).filter(|dt| *dt > 0.0) else {
+        let Some(dt) = secs_between(&a.ts_utc, &b.ts_utc).filter(|dt| *dt > 0.0) else {
             continue;
         };
         if let Some(p) = by_step.get_mut(&b.step) {
@@ -1212,7 +1214,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                         rates: p.rates.clone(),
                         progress_age_secs: p.progress_age_secs,
                         log_age_secs: p.log_age_secs,
-                        updated_at: p.updated_at.clone(),
+                        updated_at_utc: p.updated_at_utc.clone(),
                     }),
                 }
             })
@@ -1508,15 +1510,15 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
                 rates: Default::default(),
                 progress_age_secs: None,
                 log_age_secs: None,
-                updated_at: st.updated_at.clone(),
+                updated_at_utc: st.updated_at_utc.clone(),
             }),
         })
         .collect();
     Json(RunStepsResponse {
         run: Some(datalib_runs::RunRow {
             run_id,
-            started_at: snap.started_at.unwrap_or_default(),
-            finished_at: snap.finished_at,
+            started_at_utc: snap.started_at_utc.unwrap_or_default(),
+            finished_at_utc: snap.finished_at_utc,
             tz_offset: snap.tz_offset,
         }),
         steps,
@@ -1581,7 +1583,7 @@ mod tests {
         let sample = |step: &str, name: &str, ts: &str, value: i64| MetricSampleRow {
             step: step.into(),
             name: name.into(),
-            ts: ts.into(),
+            ts_utc: ts.into(),
             value,
             ..Default::default()
         };
@@ -1591,7 +1593,7 @@ mod tests {
                 StepRunRow {
                     step: "a/ingest".into(),
                     state: "running".into(),
-                    started_at: Some("2026-09-14T10:00:00.000000+00:00".into()),
+                    started_at_utc: Some("2026-09-14T10:00:00.000000+00:00".into()),
                     ..Default::default()
                 },
                 StepRunRow {
@@ -1605,7 +1607,7 @@ mod tests {
                 name: "rows_upserted".into(),
                 labels: "table=t".into(),
                 value: 700,
-                updated_at: "2026-09-14T10:01:00.000000+00:00".into(),
+                updated_at_utc: "2026-09-14T10:01:00.000000+00:00".into(),
                 ..Default::default()
             }],
             last_log_at: [(

@@ -90,7 +90,7 @@ reference doc it relates to.
   doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
-- [`docs/dev/plans/logs_and_metrics.md`](docs/dev/plans/logs_and_metrics.md)
+- [`docs/dev/plans/completed/logs_and_metrics.md`](docs/dev/plans/completed/logs_and_metrics.md)
   — *agreed plan (2026-09-11), built in full (2026-09-14)*: one
   plain-SQLite run store (`system/runs.sqlite`, tables in
   `app_schema::runs`) written by the runner alone, holding every run's
@@ -860,7 +860,7 @@ datalib carries the instant it was next *measured* rather than the
 instant it happened. It has its own file for exactly
 the reason the others do: a `-Am` commit from the job store would
 otherwise sweep whatever samples happened to be dirty into it. Reading
-it is `SELECT path, measured_at, bytes FROM disk_usage`; note it is
+it is `SELECT path, measured_at_utc, bytes FROM disk_usage`; note it is
 compacted (no repeated value, nothing closer than five seconds), so
 carry the last value forward rather than assuming a fixed interval.
 
@@ -1644,40 +1644,53 @@ interpolating something that came from upstream data — quote it
 
 ## Timestamp convention
 
-Every timestamp stored anywhere in this project — Dolt columns, JSON cache
-files, QMD frontmatter — is an **ISO-8601 string that preserves the
-timezone offset present in the source**.
+Two rules, one for a timestamp that is *ours* and one for a timestamp
+that is the *record's*.
 
-- If the upstream API gave us `2026-05-04T03:42:05-07:00`, we store
-  `2026-05-04T03:42:05-07:00` verbatim. Don't normalize to UTC — the local
-  offset itself carries information (it's how the timestamp would have
-  rendered to the human who saw it), and once dropped we can't get it back.
-- If the upstream gave us `...Z`, leave it as `Z` — that's still a valid
-  offset.
-- If the upstream gave us a unix-epoch number (no source offset), render
-  it as UTC with an explicit `+00:00` suffix, e.g. `2026-05-04T10:42:05.123456+00:00`.
-  Use `datetime.fromtimestamp(t, tz=timezone.utc).isoformat()` —
-  *not* `.strftime("...Z")`.
-- For our own "now" timestamps (`first_seen_at`, `last_seen_at`,
-  ingest-started markers, `_fetched_at`): use **local** time with explicit
-  offset, `datetime.now().astimezone().isoformat()`. The local offset is
-  itself information — it tells future-you what wall-clock time the ingest
-  happened in the zone where it actually ran. Don't normalize to UTC.
-  Steps should prefer the run-pinned `DATALIB_DAG_NOW` over sampling
-  their own clock, so one run's outputs agree.
+**A stamp we mint goes in a column named `<x>_at_utc`, in UTC, with a
+`tz_offset` column beside it.** `fetched_at_utc`, `last_attempt_at_utc`,
+`sync_runs.started_at_utc`, `cas_objects.first_seen_at_utc`,
+`markdowns.rendered_at_utc`, `sync_jobs.created_at_utc`,
+`disk_usage.measured_at_utc` — every one is `…+00:00` at microsecond
+precision, and the table's `tz_offset` (`+02:00`) holds the offset the
+clock was in when it made the latest of them. Same information as one
+offset-bearing string, split so that **text order is instant order**:
+`ORDER BY started_at_utc` is right, a `<` in SQL is right, and no reader
+has to parse before comparing. The name says UTC so nobody has to
+check.
 
-If you find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop and
-use `isoformat()` instead. The columns are `VARCHAR(40)`, wide enough for
-the longest offset-suffixed form including microseconds.
+- In memory and on the wire the stamp is still one string carrying its
+  offset — `IsoOffsetTimestamp::now_local()` is the "now", and
+  `DATALIB_DAG_NOW` (the run-pinned now every step should prefer over
+  its own clock) is that string. The split happens at the write:
+  `to_utc_and_offset()` for a value in hand, `datalib_time::split_stamp`
+  for one that arrived as a string. `bulk_upsert_in_tx` takes the
+  `IsoOffsetTimestamp` itself and does the split for the bookkeeping
+  sidecar.
+- One `tz_offset` per table, not per stamp. `sync_jobs` has three
+  stamps and one offset, refreshed on each write.
+- A JSON file (`_render_cursor.json`, the event tapes, the NDJSON run
+  events, `dag_state.json`) keeps the single offset-bearing string.
+  Nothing sorts a column there, and one string is the transport form.
 
-**The direction is changing**, one store at a time (#427): keep the
-offset, but in its own column. `system/runs.sqlite` (`app_schema::runs`)
-is the first — every stamp there is UTC (`…+00:00`) and each table
-carries a `tz_offset` (`+02:00`) beside it — so that text order is
-instant order and `ORDER BY` a timestamp is correct without parsing.
-`IsoOffsetTimestamp::to_utc_and_offset()` is the helper. A new table
-should follow that shape; the rules above still describe every other
-store until #427 moves it.
+**A stamp that belongs to the record stays as the source wrote it.**
+`grid_rows.when_ts`, `markdowns.created_at` / `updated_at`,
+`emails.received_at`, a payload's `created_time` — an ISO-8601 string
+preserving the offset the source gave it, because that offset is
+information (it is how the moment read to the person who saw it) and
+once dropped it cannot be recovered. A `Z` stays `Z`; a unix epoch
+renders as UTC with `+00:00`. Where such a column needs to sort, it gets
+a derived UTC twin rather than being rewritten: `grid_rows.when_ts_utc`
++ `when_offset`, split from `when_ts` at index time, is what the grid
+sorts and filters on, and `when_ts` itself is the record and feeds the
+fingerprint.
+
+`system/runs.sqlite` follows the same rule (`started_at_utc`, `log.ts_utc`,
+one `tz_offset` per table). The one JSON-backed exception on the API is
+`GET /api/dag`'s `run` / `last_run`, which mirror `dag_state.json` and
+so keep that file's `started_at` / `finished_at`. If you find yourself
+writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop — `isoformat()` on the
+Python side, `to_rfc3339()` here.
 
 ## Auth (web API)
 

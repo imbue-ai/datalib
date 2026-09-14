@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// `<root>/render_markdown/<...>.md` cache invalidation: ingest computes a
 /// fresh `row_set_hash` from the canonical grid_row tuples for this
 /// markdown file and compares it to the stored value; on mismatch the
-/// renderer re-emits the file and bumps `rendered_at`. A bump to
+/// renderer re-emits the file and bumps `rendered_at_utc`. A bump to
 /// `renderer_version` invalidates every cache entry at once.
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "markdowns", primary_key = "markdown_uuid")]
@@ -76,7 +76,7 @@ pub struct MarkdownRow {
     pub source_fingerprint: Option<String>,
     /// Optional provider-defined cheap-probe value, consulted *before*
     /// loading payloads to decide whether a markdown has changed.
-    /// Slack stamps each thread's `MAX(fetched_at)` here so the next run
+    /// Slack stamps each thread's `MAX(fetched_at_utc)` here so the next run
     /// can skip untouched threads without reading them. NULL for
     /// providers with no signal cheaper than the fingerprint.
     #[col(sql = "VARCHAR(64)")]
@@ -100,8 +100,12 @@ pub struct MarkdownRow {
     /// Nullable for the same reason as `row_set_hash`.
     #[col(sql = "VARCHAR(32)")]
     pub renderer_version: Option<String>,
-    /// When `md_path` was last written (ISO-8601 with explicit local
-    /// offset, per AGENTS.md). NULL before the first render.
+    /// When `md_path` was last written, in UTC. NULL before the first
+    /// render.
     #[col(sql = "VARCHAR(40)")]
-    pub rendered_at: Option<String>,
+    pub rendered_at_utc: Option<String>,
+    /// The offset the render step's clock was in when it stamped
+    /// `rendered_at_utc` (`+02:00`).
+    #[col(sql = "VARCHAR(8)")]
+    pub tz_offset: Option<String>,
 }

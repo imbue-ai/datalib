@@ -454,7 +454,7 @@ export type DagStepProgress = {
   // age with a short log age is "busy but not advancing".
   progress_age_secs: number | null;
   log_age_secs: number | null;
-  updated_at: string;
+  updated_at_utc: string;
 };
 
 // The fraction a step's `done` / `queued` pair describes, or null when
@@ -566,9 +566,11 @@ export type SyncJob = {
   progress_pct: number | null;
   progress_msg: string | null;
   error: string | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
+  // UTC, with the server's offset beside them in `tz_offset`.
+  created_at_utc: string;
+  started_at_utc: string | null;
+  finished_at_utc: string | null;
+  tz_offset?: string | null;
   parent_job_id?: string | null;
   pid?: number | null;
 };
@@ -615,9 +617,9 @@ export type PipelineStorage = {
   /// assumed, so the plot and the data can't disagree about what
   /// "recent" means.
   window_secs: number;
-  /// When the last walk finished, or null when none has yet — the only
-  /// case in which a zero doesn't mean an empty disk.
-  measured_at: string | null;
+  /// When the last walk finished, in UTC, or null when none has yet —
+  /// the only case in which a zero doesn't mean an empty disk.
+  measured_at_utc: string | null;
 };
 
 /// The backend walks the disk on a tick *while a sync is running*, and
@@ -760,8 +762,8 @@ export async function cancelJob(id: string, signal?: AbortSignal): Promise<void>
 // One run. A job started from the app has the job's id as its run id.
 export type RunInfo = {
   run_id: string;
-  started_at: string;
-  finished_at: string | null;
+  started_at_utc: string;
+  finished_at_utc: string | null;
   tz_offset: string | null;
 };
 
@@ -772,8 +774,9 @@ export type RunLogLine = {
   run_id: string;
   step: string | null;
   attempt: number;
-  // The line's own clock when it carried one, else when the runner read it.
-  ts: string;
+  // The line's own clock when it carried one, else when the runner read
+  // it. UTC; `tz_offset` is the offset that clock was in.
+  ts_utc: string;
   tz_offset: string | null;
   // Which pipe of the step it came from; null for a line the runner wrote.
   stream: "stdout" | "stderr" | null;
@@ -899,7 +902,7 @@ export type FeedbackRequest = {
 
 export type FeedbackResponse = {
   feedback_uuid: string;
-  created_at: string;
+  created_at_utc: string;
   git_hash: string;
 };
 

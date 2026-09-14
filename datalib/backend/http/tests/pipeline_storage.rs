@@ -169,7 +169,7 @@ async fn the_response_carries_a_history_and_names_its_window() {
 
     let none = storage(&app, "").await;
     assert_eq!(
-        none["measured_at"],
+        none["measured_at_utc"],
         serde_json::Value::Null,
         "before any walk the zero is 'not measured', not 'empty disk'"
     );
@@ -179,13 +179,13 @@ async fn the_response_carries_a_history_and_names_its_window() {
     // whole request over a flag, rather than merely ignoring it.
     for q in ["?refresh=1", "?refresh=true", "?refresh"] {
         assert!(
-            storage(&app, q).await["measured_at"].is_string(),
+            storage(&app, q).await["measured_at_utc"].is_string(),
             "{q} should have walked"
         );
     }
 
     let v = storage(&app, "?refresh=1").await;
-    assert!(v["measured_at"].is_string());
+    assert!(v["measured_at_utc"].is_string());
     assert_eq!(v["window_secs"], 300);
     // The root is measured on every walk, so it always has at least the
     // one sample.

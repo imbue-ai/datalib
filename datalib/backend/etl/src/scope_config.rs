@@ -32,16 +32,18 @@ pub async fn load(pool: &SqlitePool, scope: &str) -> Result<Option<Value>> {
 }
 
 pub async fn store(pool: &SqlitePool, scope: &str, config: &Value) -> Result<()> {
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let body = serde_json::to_string(config).context("serialize scope config")?;
     sqlx::query(
-        "INSERT INTO sync_scope_config (scope, config, updated_at) VALUES (?, ?, ?)
+        "INSERT INTO sync_scope_config (scope, config, updated_at_utc, tz_offset) \
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(scope) DO UPDATE SET config = excluded.config, \
-         updated_at = excluded.updated_at",
+         updated_at_utc = excluded.updated_at_utc, tz_offset = excluded.tz_offset",
     )
     .bind(scope)
     .bind(&body)
     .bind(&now)
+    .bind(&tz_offset)
     .execute(pool)
     .await
     .with_context(|| format!("upsert sync_scope_config {scope}"))?;
@@ -369,7 +371,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let pool = test_pool(d.path()).await;
         sqlx::query(
-            "INSERT INTO sync_scope_config (scope, config, updated_at) VALUES ('x', '{oops', 'now')",
+            "INSERT INTO sync_scope_config (scope, config, updated_at_utc) VALUES ('x', '{oops', 'now')",
         )
         .execute(&pool)
         .await

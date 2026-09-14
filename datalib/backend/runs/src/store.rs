@@ -17,6 +17,12 @@ use app_schema::runs::{LogRow, MetricRow, MetricSampleRow, RunRow, StepRunRow};
 /// the write (~0.3ms per row on a plain-SQLite file, measured).
 const FLUSH_EVERY: Duration = Duration::from_millis(200);
 
+/// How far back a snapshot looks for samples. A rate is a live
+/// question, and the snapshot is read on every `dag_changed` frame —
+/// several times a second during a run — so the window query must not
+/// scan a day-long run's every sample each time.
+const RATE_WINDOW: Duration = Duration::from_secs(10 * 60);
+
 /// The floor between two samples of one metric series. A series that
 /// changes every flush would otherwise write five rows a second for as
 /// long as the step runs; a rate drawn from five-second samples is the
@@ -168,8 +174,8 @@ pub struct Snapshot {
     /// store. A reader comparing this against the run it is displaying is
     /// how it avoids painting one run's numbers onto another.
     pub run_id: Option<String>,
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
+    pub started_at_utc: Option<String>,
+    pub finished_at_utc: Option<String>,
     pub tz_offset: Option<String>,
     pub steps: Vec<StepRunRow>,
     pub metrics: Vec<MetricRow>,
@@ -213,10 +219,10 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT r.run_id, r.started_at, r.finished_at, r.tz_offset FROM runs r \
+        "SELECT r.run_id, r.started_at_utc, r.finished_at_utc, r.tz_offset FROM runs r \
          WHERE ? IS NULL OR EXISTS \
            (SELECT 1 FROM step_runs s WHERE s.run_id = r.run_id AND s.step = ?) \
-         ORDER BY r.started_at DESC LIMIT ?",
+         ORDER BY r.started_at_utc DESC LIMIT ?",
     )
     .bind(step)
     .bind(step)
@@ -228,8 +234,8 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
     rows.iter()
         .map(|r| RunRow {
             run_id: r.get("run_id"),
-            started_at: r.get("started_at"),
-            finished_at: r.get("finished_at"),
+            started_at_utc: r.get("started_at_utc"),
+            finished_at_utc: r.get("finished_at_utc"),
             tz_offset: r.get("tz_offset"),
         })
         .collect()
@@ -237,8 +243,8 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
 
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
     let Some(run) = sqlx::query(
-        "SELECT run_id, started_at, finished_at, tz_offset FROM runs \
-         WHERE ? IS NULL OR run_id = ? ORDER BY started_at DESC LIMIT 1",
+        "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
+         WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1",
     )
     .bind(run_id)
     .bind(run_id)
@@ -249,7 +255,7 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     };
     let run_id: String = run.get("run_id");
     let steps = sqlx::query(
-        "SELECT step, state, attempt, started_at, finished_at, error, msg, updated_at, tz_offset \
+        "SELECT step, state, attempt, started_at_utc, finished_at_utc, error, msg, updated_at_utc, tz_offset \
          FROM step_runs WHERE run_id = ? ORDER BY step",
     )
     .bind(&run_id)
@@ -261,16 +267,16 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         step: r.get("step"),
         state: r.get("state"),
         attempt: r.get("attempt"),
-        started_at: r.get("started_at"),
-        finished_at: r.get("finished_at"),
+        started_at_utc: r.get("started_at_utc"),
+        finished_at_utc: r.get("finished_at_utc"),
         error: r.get("error"),
         msg: r.get("msg"),
-        updated_at: r.get("updated_at"),
+        updated_at_utc: r.get("updated_at_utc"),
         tz_offset: r.get("tz_offset"),
     })
     .collect();
     let metrics = sqlx::query(
-        "SELECT step, name, labels, value, updated_at, tz_offset FROM metrics \
+        "SELECT step, name, labels, value, updated_at_utc, tz_offset FROM metrics \
          WHERE run_id = ? ORDER BY step, name, labels",
     )
     .bind(&run_id)
@@ -283,7 +289,7 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         name: r.get("name"),
         labels: r.get("labels"),
         value: r.get("value"),
-        updated_at: r.get("updated_at"),
+        updated_at_utc: r.get("updated_at_utc"),
         tz_offset: r.get("tz_offset"),
     })
     .collect();
@@ -298,24 +304,29 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     .map(|r| (r.get::<String, _>("step"), r.get::<i64, _>("n")))
     .collect();
     let last_log_at = sqlx::query(
-        "SELECT step, MAX(ts) AS ts FROM log WHERE run_id = ? AND step IS NOT NULL GROUP BY step",
+        "SELECT step, MAX(ts_utc) AS ts_utc FROM log WHERE run_id = ? AND step IS NOT NULL GROUP BY step",
     )
     .bind(&run_id)
     .fetch_all(pool)
     .await?
     .iter()
-    .map(|r| (r.get::<String, _>("step"), r.get::<String, _>("ts")))
+    .map(|r| (r.get::<String, _>("step"), r.get::<String, _>("ts_utc")))
     .collect();
-    // The two newest per series, by a window over the whole run's
-    // samples. Text order is instant order, so `ts` sorts.
+    // The two newest per series, by a window over the run's recent
+    // samples only. Text order is instant order, so `ts` sorts and the
+    // cutoff is a plain comparison.
+    let (cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
+        .bump_micros(-(RATE_WINDOW.as_micros() as i64))
+        .to_utc_and_offset();
     let recent_samples = sqlx::query(
-        "SELECT step, name, labels, ts, tz_offset, value FROM ( \
+        "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
            SELECT *, ROW_NUMBER() OVER \
-             (PARTITION BY step, name, labels ORDER BY ts DESC) AS rn \
-           FROM metric_samples WHERE run_id = ?) \
-         WHERE rn <= 2 ORDER BY step, name, labels, ts",
+             (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
+           FROM metric_samples WHERE run_id = ? AND ts_utc > ?) \
+         WHERE rn <= 2 ORDER BY step, name, labels, ts_utc",
     )
     .bind(&run_id)
+    .bind(&cutoff)
     .fetch_all(pool)
     .await?
     .iter()
@@ -324,15 +335,15 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         step: r.get("step"),
         name: r.get("name"),
         labels: r.get("labels"),
-        ts: r.get("ts"),
+        ts_utc: r.get("ts_utc"),
         tz_offset: r.get("tz_offset"),
         value: r.get("value"),
     })
     .collect();
     Ok(Snapshot {
         run_id: Some(run_id),
-        started_at: run.get("started_at"),
-        finished_at: run.get("finished_at"),
+        started_at_utc: run.get("started_at_utc"),
+        finished_at_utc: run.get("finished_at_utc"),
         tz_offset: run.get("tz_offset"),
         steps,
         metrics,
@@ -360,7 +371,7 @@ pub async fn log_after(
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT seq, step, attempt, ts, tz_offset, stream, level, target, thread, msg, fields \
+        "SELECT seq, step, attempt, ts_utc, tz_offset, stream, level, target, thread, msg, fields \
          FROM log WHERE run_id = ? AND seq > ? AND (? IS NULL OR step = ?) \
          ORDER BY seq LIMIT ?",
     )
@@ -379,7 +390,7 @@ pub async fn log_after(
             run_id: run_id.to_string(),
             step: r.get("step"),
             attempt: r.get("attempt"),
-            ts: r.get("ts"),
+            ts_utc: r.get("ts_utc"),
             tz_offset: r.get("tz_offset"),
             stream: r.get("stream"),
             level: r.get("level"),
@@ -418,7 +429,7 @@ impl RunWriter {
     pub fn start(
         data_root: &Path,
         run_id: &str,
-        started_at: &str,
+        started_at_utc: &str,
         retention: Retention,
     ) -> Option<Self> {
         let path = runs_path(data_root);
@@ -430,10 +441,10 @@ impl RunWriter {
                 let pending = pending.clone();
                 // The start stamp arrives as the runner wrote it, offset
                 // and all; the store keeps UTC and the offset apart.
-                let (started_at, tz_offset) = split_stamp(started_at);
+                let (started_at_utc, tz_offset) = split_stamp(started_at_utc);
                 let run = RunInfo {
                     run_id: run_id.to_string(),
-                    started_at,
+                    started_at_utc,
                     tz_offset,
                     retention,
                 };
@@ -494,7 +505,7 @@ impl Drop for RunWriter {
 
 struct RunInfo {
     run_id: String,
-    started_at: String,
+    started_at_utc: String,
     tz_offset: Option<String>,
     retention: Retention,
 }
@@ -576,12 +587,12 @@ pub fn now_split() -> (String, Option<String>) {
 async fn begin_run(pool: &SqlitePool, run: &RunInfo) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     sqlx::query(
-        "INSERT INTO runs (run_id, started_at, tz_offset) VALUES (?, ?, ?) \
-         ON CONFLICT(run_id) DO UPDATE SET started_at = excluded.started_at, \
-           tz_offset = excluded.tz_offset, finished_at = NULL",
+        "INSERT INTO runs (run_id, started_at_utc, tz_offset) VALUES (?, ?, ?) \
+         ON CONFLICT(run_id) DO UPDATE SET started_at_utc = excluded.started_at_utc, \
+           tz_offset = excluded.tz_offset, finished_at_utc = NULL",
     )
     .bind(&run.run_id)
-    .bind(&run.started_at)
+    .bind(&run.started_at_utc)
     .bind(&run.tz_offset)
     .execute(&mut *tx)
     .await?;
@@ -589,14 +600,14 @@ async fn begin_run(pool: &SqlitePool, run: &RunInfo) -> Result<(), sqlx::Error> 
     let (cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
         .bump_micros(-(run.retention.max_age_days as i64) * 86_400 * 1_000_000)
         .to_utc_and_offset();
-    sqlx::query("DELETE FROM runs WHERE started_at < ? AND run_id != ?")
+    sqlx::query("DELETE FROM runs WHERE started_at_utc < ? AND run_id != ?")
         .bind(&cutoff)
         .bind(&run.run_id)
         .execute(&mut *tx)
         .await?;
     sqlx::query(
         "DELETE FROM runs WHERE run_id NOT IN \
-         (SELECT run_id FROM runs ORDER BY started_at DESC LIMIT ?)",
+         (SELECT run_id FROM runs ORDER BY started_at_utc DESC LIMIT ?)",
     )
     .bind(run.retention.max_runs.max(1) as i64)
     .execute(&mut *tx)
@@ -613,9 +624,9 @@ async fn begin_run(pool: &SqlitePool, run: &RunInfo) -> Result<(), sqlx::Error> 
 }
 
 async fn end_run(pool: &SqlitePool, run_id: &str) -> Result<(), sqlx::Error> {
-    let (finished_at, _) = now_split();
-    sqlx::query("UPDATE runs SET finished_at = ? WHERE run_id = ?")
-        .bind(finished_at)
+    let (finished_at_utc, _) = now_split();
+    sqlx::query("UPDATE runs SET finished_at_utc = ? WHERE run_id = ?")
+        .bind(finished_at_utc)
         .bind(run_id)
         .execute(pool)
         .await?;
@@ -637,38 +648,38 @@ async fn flush(
     for s in batch.steps.into_values() {
         sqlx::query(
             "INSERT INTO step_runs \
-               (run_id, step, state, attempt, started_at, finished_at, error, msg, updated_at, \
+               (run_id, step, state, attempt, started_at_utc, finished_at_utc, error, msg, updated_at_utc, \
                 tz_offset) \
              VALUES (?,?,?,?,?,?,?,?,?,?) \
              ON CONFLICT(run_id, step) DO UPDATE SET \
                state=excluded.state, attempt=excluded.attempt, \
-               started_at=COALESCE(excluded.started_at, step_runs.started_at), \
-               finished_at=excluded.finished_at, error=excluded.error, \
-               msg=excluded.msg, updated_at=excluded.updated_at, tz_offset=excluded.tz_offset",
+               started_at_utc=COALESCE(excluded.started_at_utc, step_runs.started_at_utc), \
+               finished_at_utc=excluded.finished_at_utc, error=excluded.error, \
+               msg=excluded.msg, updated_at_utc=excluded.updated_at_utc, tz_offset=excluded.tz_offset",
         )
         .bind(run_id)
         .bind(&s.step)
         .bind(&s.state)
         .bind(s.attempt)
-        .bind(&s.started_at)
-        .bind(&s.finished_at)
+        .bind(&s.started_at_utc)
+        .bind(&s.finished_at_utc)
         .bind(&s.error)
         .bind(&s.msg)
-        .bind(&s.updated_at)
+        .bind(&s.updated_at_utc)
         .bind(&s.tz_offset)
         .execute(&mut *tx)
         .await?;
     }
     for l in &batch.logs {
         sqlx::query(
-            "INSERT INTO log (run_id, step, attempt, ts, tz_offset, stream, level, target, thread, \
+            "INSERT INTO log (run_id, step, attempt, ts_utc, tz_offset, stream, level, target, thread, \
                               msg, fields) \
              VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(run_id)
         .bind(&l.step)
         .bind(l.attempt)
-        .bind(&l.ts)
+        .bind(&l.ts_utc)
         .bind(&l.tz_offset)
         .bind(&l.stream)
         .bind(&l.level)
@@ -682,17 +693,17 @@ async fn flush(
     let now = Instant::now();
     for (key, m) in batch.metrics {
         sqlx::query(
-            "INSERT INTO metrics (run_id, step, name, labels, value, updated_at, tz_offset) \
+            "INSERT INTO metrics (run_id, step, name, labels, value, updated_at_utc, tz_offset) \
              VALUES (?,?,?,?,?,?,?) \
              ON CONFLICT(run_id, step, name, labels) DO UPDATE SET \
-               value=excluded.value, updated_at=excluded.updated_at, tz_offset=excluded.tz_offset",
+               value=excluded.value, updated_at_utc=excluded.updated_at_utc, tz_offset=excluded.tz_offset",
         )
         .bind(run_id)
         .bind(&m.step)
         .bind(&m.name)
         .bind(&m.labels)
         .bind(m.value)
-        .bind(&m.updated_at)
+        .bind(&m.updated_at_utc)
         .bind(&m.tz_offset)
         .execute(&mut *tx)
         .await?;
@@ -737,19 +748,19 @@ async fn insert_sample(
         step: m.step.clone(),
         name: m.name.clone(),
         labels: m.labels.clone(),
-        ts: m.updated_at.clone(),
+        ts_utc: m.updated_at_utc.clone(),
         tz_offset: m.tz_offset.clone(),
         value: m.value,
     };
     sqlx::query(
-        "INSERT OR REPLACE INTO metric_samples (run_id, step, name, labels, ts, tz_offset, value) \
+        "INSERT OR REPLACE INTO metric_samples (run_id, step, name, labels, ts_utc, tz_offset, value) \
          VALUES (?,?,?,?,?,?,?)",
     )
     .bind(&sample.run_id)
     .bind(&sample.step)
     .bind(&sample.name)
     .bind(&sample.labels)
-    .bind(&sample.ts)
+    .bind(&sample.ts_utc)
     .bind(&sample.tz_offset)
     .bind(sample.value)
     .execute(&mut **tx)

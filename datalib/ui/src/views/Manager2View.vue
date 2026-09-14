@@ -1275,8 +1275,8 @@ function onLogRunChanged(run: RunInfo) {
   logFor.value = {
     ...logFor.value,
     runId: run.run_id,
-    live: run.finished_at == null,
-    startedAt: run.started_at,
+    live: run.finished_at_utc == null,
+    startedAt: run.started_at_utc,
   };
 }
 
@@ -1293,7 +1293,7 @@ async function runFor(row: Row): Promise<{ runId: string; live: boolean; started
     return { runId: row.lastRunId, live: false, startedAt: row.lastSynced };
   }
   const [newest] = await fetchRuns({ step: row.id, limit: 1 });
-  return newest ? { runId: newest.run_id, live: !newest.finished_at, startedAt: newest.started_at } : null;
+  return newest ? { runId: newest.run_id, live: !newest.finished_at_utc, startedAt: newest.started_at_utc } : null;
 }
 
 /// With `runId`, the log of that one run; without, the run in flight if
@@ -1327,7 +1327,7 @@ const ROOT_SPARK = { width: 260, height: 20 };
 const rootScale = computed(() => {
   const h = storage.value?.root.history ?? [];
   const values = h.map((x) => x.bytes);
-  if (storage.value?.measured_at) values.push(storage.value.root.bytes);
+  if (storage.value?.measured_at_utc) values.push(storage.value.root.bytes);
   if (values.length === 0) return { min: 0, max: 0 };
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -1349,10 +1349,10 @@ const rootDelta = computed(() => {
 
 /// What the status bar's plot is actually showing, in words.
 const rootSparkTitle = computed(() => {
-  // A response whose `measured_at` is null is a server that hasn't
+  // A response whose `measured_at_utc` is null is a server that hasn't
   // finished its first walk. Its zero is not an empty disk, and saying
   // "0 B" would be the one genuinely wrong thing this line can say.
-  if (!storage.value?.measured_at) return "Measuring the data root…";
+  if (!storage.value?.measured_at_utc) return "Measuring the data root…";
   const now = formatBytes(storage.value.root.bytes);
   const moved = rootDelta.value;
   if (moved === null || moved === 0) {
@@ -2358,9 +2358,9 @@ function mergeJob(e: JobProgressEvent) {
       ...prev,
       state: e.state,
       progress_msg: e.progress_msg,
-      started_at: prev.started_at ?? (e.state === "running" ? now : null),
-      finished_at:
-        prev.finished_at ??
+      started_at_utc: prev.started_at_utc ?? (e.state === "running" ? now : null),
+      finished_at_utc:
+        prev.finished_at_utc ??
         (e.state === "done" || e.state === "failed" || e.state === "canceled" ? now : null),
     };
     jobs.value = [...jobs.value.slice(0, at), next, ...jobs.value.slice(at + 1)];
@@ -2375,9 +2375,9 @@ function mergeJob(e: JobProgressEvent) {
       progress_pct: null,
       progress_msg: e.progress_msg,
       error: null,
-      created_at: now,
-      started_at: e.state === "running" ? now : null,
-      finished_at: null,
+      created_at_utc: now,
+      started_at_utc: e.state === "running" ? now : null,
+      finished_at_utc: null,
     },
     ...jobs.value,
   ];
@@ -2618,7 +2618,7 @@ onUnmounted(() => {
       <code class="m2-rootbar-path" :title="storage?.root.abs ?? ''">{{ storage?.root.abs }}</code>
       <span class="m2-rootbar-spark" ref="rootSparkHost" :title="rootSparkTitle"></span>
       <span class="m2-rootbar-size" :title="rootSparkTitle">
-        <b>{{ storage?.measured_at ? formatBytes(storage.root.bytes) : "—" }}</b>
+        <b>{{ storage?.measured_at_utc ? formatBytes(storage.root.bytes) : "—" }}</b>
         <span v-if="rootDelta !== null && rootDelta !== 0" class="m2-rootbar-delta">
           {{ rootDelta > 0 ? "+" : "−" }}{{ formatBytes(Math.abs(rootDelta)) }}
         </span>

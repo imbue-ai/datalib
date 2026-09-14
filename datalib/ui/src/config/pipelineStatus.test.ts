@@ -68,9 +68,9 @@ function job(over: Partial<SyncJob> = {}): SyncJob {
     progress_pct: null,
     progress_msg: null,
     error: null,
-    created_at: T.jobStart,
-    started_at: T.jobStart,
-    finished_at: null,
+    created_at_utc: T.jobStart,
+    started_at_utc: T.jobStart,
+    finished_at_utc: null,
     ...over,
   };
 }
@@ -119,7 +119,7 @@ describe("what a single snapshot means", () => {
   it("a pending job queues the step it names and everything downstream", () => {
     // Nothing is running yet — the worker has not even claimed the job.
     // This is the window that used to show nothing at all.
-    const claims = claimedBy(steps(), [job({ state: "pending", started_at: null })]);
+    const claims = claimedBy(steps(), [job({ state: "pending", started_at_utc: null })]);
     expect([...claims.keys()].sort()).toEqual([
       "a/ingest",
       "a/render_markdown",
@@ -195,7 +195,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
   {
     note: "clicked: the job exists, the worker has not claimed it, and the runner's record is still last run's",
     frame: {
-      jobs: [job({ state: "pending", started_at: null })],
+      jobs: [job({ state: "pending", started_at_utc: null })],
       run: { ...liveRun, run_id: "older", started_at: T.yesterday, finished_at: T.yesterday, live: false },
       dag: {},
     },
@@ -220,7 +220,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
             rates: {},
             progress_age_secs: 1,
             log_age_secs: 1,
-            updated_at: T.runStart,
+            updated_at_utc: T.runStart,
           },
         }),
       },
@@ -255,7 +255,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
   {
     note: "settled: the queue has caught up",
     frame: {
-      jobs: [job({ state: "done", finished_at: T.runEnd })],
+      jobs: [job({ state: "done", finished_at_utc: T.runEnd })],
       run: { ...liveRun, finished_at: T.runEnd, live: false },
       dag: {
         "a/ingest": dagStep({
@@ -375,7 +375,7 @@ describe("the live sequence, while the fetched record is still stale", () => {
           rates: {},
           progress_age_secs: 1,
           log_age_secs: 1,
-          updated_at: T.runStart,
+          updated_at_utc: T.runStart,
         },
       }),
     },
@@ -392,7 +392,7 @@ describe("the live sequence, while the fetched record is still stale", () => {
           rates: {},
           progress_age_secs: 1,
           log_age_secs: 1,
-          updated_at: T.runStart,
+          updated_at_utc: T.runStart,
         },
       }),
     },
@@ -401,7 +401,7 @@ describe("the live sequence, while the fetched record is still stale", () => {
   /// Compose one frame the way the view does, then read the row.
   function read(frame: (typeof frames)[number], id: string) {
     const active = frame.state === "pending" || frame.state === "running";
-    const j = job({ state: frame.state, started_at: active ? T.jobStart : null });
+    const j = job({ state: frame.state, started_at_utc: active ? T.jobStart : null });
     const run = effectiveRun(frame.fetched, frame.state === "running" ? j : undefined);
     return stepStatus({
       id,
@@ -499,7 +499,7 @@ describe("what a queued row is waiting for", () => {
   });
 
   function queuedDetail(id: string, blockers: string[], state: SyncJob["state"]) {
-    const j = job({ state, source_ids: "a/ingest", started_at: state === "pending" ? null : T.jobStart });
+    const j = job({ state, source_ids: "a/ingest", started_at_utc: state === "pending" ? null : T.jobStart });
     return stepStatus({
       id,
       step: undefined,
@@ -579,7 +579,7 @@ describe("a second sync of a row that has already run", () => {
 
   it("is queued the moment the job is, not still showing the last run", () => {
     expect(
-      paint([job({ state: "pending", started_at: null })], PREVIOUS, alreadySucceeded).key,
+      paint([job({ state: "pending", started_at_utc: null })], PREVIOUS, alreadySucceeded).key,
     ).toBe("queued");
   });
 
@@ -597,7 +597,7 @@ describe("a second sync of a row that has already run", () => {
   it("never goes backwards across the whole re-sync", () => {
     const running = dagStep({ ...alreadySucceeded, current_state: "running" });
     const seen = [
-      paint([job({ state: "pending", started_at: null })], PREVIOUS, alreadySucceeded),
+      paint([job({ state: "pending", started_at_utc: null })], PREVIOUS, alreadySucceeded),
       paint([job({ state: "running" })], PREVIOUS, alreadySucceeded),
       paint([job({ state: "running" })], THIS, running),
       // The record lands, describing the run that just ended.

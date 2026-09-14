@@ -215,7 +215,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     summary.blobs_stored = acc.bundle_mut().cas_inserts().len();
 
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = IsoOffsetTimestamp::now_local();
     let mut tx = db
         .pool()
         .begin()

@@ -22,22 +22,25 @@ use sqlx::Row;
 // Only the DDL fragments below use them; provider SQL spells them inline.
 pub const COL_ID: &str = "id";
 pub const COL_PAYLOAD: &str = "payload";
-pub const COL_FETCHED_AT: &str = "fetched_at";
+pub const COL_FETCHED_AT: &str = "fetched_at_utc";
 pub const COL_ATTEMPT_COUNT: &str = "attempt_count";
-pub const COL_LAST_ATTEMPT_AT: &str = "last_attempt_at";
+pub const COL_LAST_ATTEMPT_AT: &str = "last_attempt_at_utc";
 pub const COL_LAST_ERROR: &str = "last_error";
+pub const COL_TZ_OFFSET: &str = "tz_offset";
 
 pub fn bookkeeping_ddl_for(table: &str) -> String {
     // No `DEFAULT` on any column here; writers bind every value
-    // explicitly.
+    // explicitly. The stamps are UTC; `tz_offset` is the offset the
+    // writer's clock was in when it made the latest of them.
     format!(
         "CREATE TABLE IF NOT EXISTS {table}_bookkeeping (
             id TEXT PRIMARY KEY,
-            fetched_at TEXT NULL,
+            fetched_at_utc TEXT NULL,
             attempt_count INTEGER NOT NULL,
-            last_attempt_at TEXT NULL,
+            last_attempt_at_utc TEXT NULL,
             last_error TEXT NULL,
-            volatile_payload TEXT NULL
+            volatile_payload TEXT NULL,
+            tz_offset TEXT NULL
         )"
     )
 }
@@ -162,20 +165,22 @@ fn insert_path(obj: &mut serde_json::Map<String, Value>, path: &[&str], value: V
 /// A crash mid-sync leaves its row at `status='running'`.
 pub const SYNC_RUNS_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at TEXT NOT NULL,
-    finished_at TEXT NULL,
+    started_at_utc TEXT NOT NULL,
+    finished_at_utc TEXT NULL,
+    tz_offset TEXT NULL,
     config TEXT NOT NULL,
     status TEXT NOT NULL,
     summary TEXT NULL
 )";
 
 /// Per-scope incremental-sync cursor, for providers (github, gitlab) whose
-/// discovery is keyed by a search scope. `last_seen_at` is a provider-chosen
-/// timestamp, compared back against the configured refresh window when the
-/// next run picks its `since` floor.
+/// discovery is keyed by a search scope. `last_seen_at_utc` is a
+/// provider-chosen timestamp, stored in UTC and compared back against the
+/// configured refresh window when the next run picks its `since` floor.
 pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_state (
     scope TEXT PRIMARY KEY,
-    last_seen_at TEXT NOT NULL
+    last_seen_at_utc TEXT NOT NULL,
+    tz_offset TEXT NULL
 )";
 
 /// The config subset that produced each scope's cursor, so a download can
@@ -188,7 +193,8 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
 pub const SYNC_SCOPE_CONFIG_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_config (
     scope TEXT PRIMARY KEY,
     config TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at_utc TEXT NOT NULL,
+    tz_offset TEXT NULL
 )";
 
 /// DDL every provider gets for free, appended inside [`open`].
@@ -662,12 +668,14 @@ async fn rescue_dirty_working_tree(pool: &SqlitePool, db_path: &Path) {
 // ── sync_runs ───────────────────────────────────────────────────────
 
 pub async fn start_run(pool: &SqlitePool, config: &Value) -> Result<i64> {
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let cfg = serde_json::to_string(config).context("serialize run config")?;
     let row = sqlx::query(
-        "INSERT INTO sync_runs (started_at, config, status) VALUES (?, ?, 'running') RETURNING run_id",
+        "INSERT INTO sync_runs (started_at_utc, tz_offset, config, status) \
+         VALUES (?, ?, ?, 'running') RETURNING run_id",
     )
     .bind(&now)
+    .bind(&tz_offset)
     .bind(&cfg)
     .fetch_one(pool)
     .await
@@ -682,16 +690,20 @@ pub async fn finish_run(
     status: &str,
     summary: &Value,
 ) -> Result<()> {
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let s = serde_json::to_string(summary).context("serialize run summary")?;
-    sqlx::query("UPDATE sync_runs SET finished_at = ?, status = ?, summary = ? WHERE run_id = ?")
-        .bind(&now)
-        .bind(status)
-        .bind(&s)
-        .bind(run_id)
-        .execute(pool)
-        .await
-        .context("update sync_runs")?;
+    sqlx::query(
+        "UPDATE sync_runs SET finished_at_utc = ?, tz_offset = ?, status = ?, summary = ? \
+         WHERE run_id = ?",
+    )
+    .bind(&now)
+    .bind(&tz_offset)
+    .bind(status)
+    .bind(&s)
+    .bind(run_id)
+    .execute(pool)
+    .await
+    .context("update sync_runs")?;
     Ok(())
 }
 
@@ -849,9 +861,9 @@ pub async fn ensure_object_row(
     Ok(())
 }
 
-/// `result = None` is success (sets `fetched_at`, clears `last_error`);
-/// `Some(err)` is failure (leaves `fetched_at`, sets `last_error`). Both bump
-/// `attempt_count` and set `last_attempt_at`.
+/// `result = None` is success (sets `fetched_at_utc`, clears `last_error`);
+/// `Some(err)` is failure (leaves `fetched_at_utc`, sets `last_error`). Both bump
+/// `attempt_count` and set `last_attempt_at_utc`.
 ///
 /// Upserts, so it is safe even when [`ensure_object_row`] hasn't pre-seeded.
 pub async fn record_object_attempt(
@@ -869,24 +881,27 @@ pub async fn record_object_attempt(
         .execute(&mut **tx)
         .await
         .with_context(|| format!("record_object_attempt data stub {table}={id}"))?;
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let sql = match result {
         None => format!(
-            "INSERT INTO {table}_bookkeeping (id, fetched_at, attempt_count, last_attempt_at, last_error)
-             VALUES (?, ?, 1, ?, NULL)
+            "INSERT INTO {table}_bookkeeping \
+                (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, tz_offset)
+             VALUES (?, ?, 1, ?, NULL, ?)
              ON CONFLICT(id) DO UPDATE SET
-                fetched_at = excluded.fetched_at,
+                fetched_at_utc = excluded.fetched_at_utc,
                 attempt_count = {table}_bookkeeping.attempt_count + 1,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL"
+                last_attempt_at_utc = excluded.last_attempt_at_utc,
+                last_error = NULL,
+                tz_offset = excluded.tz_offset"
         ),
         Some(_) => format!(
-            "INSERT INTO {table}_bookkeeping (id, attempt_count, last_attempt_at, last_error)
-             VALUES (?, 1, ?, ?)
+            "INSERT INTO {table}_bookkeeping (id, attempt_count, last_attempt_at_utc, last_error, tz_offset)
+             VALUES (?, 1, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 attempt_count = {table}_bookkeeping.attempt_count + 1,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = excluded.last_error"
+                last_attempt_at_utc = excluded.last_attempt_at_utc,
+                last_error = excluded.last_error,
+                tz_offset = excluded.tz_offset"
         ),
     };
     // Audited: both arms interpolate only `table`; the rest is bound.
@@ -895,6 +910,7 @@ pub async fn record_object_attempt(
         None => q,
         Some(err) => q.bind(err),
     };
+    let q = q.bind(&tz_offset);
     q.execute(&mut **tx)
         .await
         .with_context(|| format!("record_object_attempt {table}={id}"))?;
@@ -960,7 +976,7 @@ pub async fn bulk_upsert_events(
     mut tx: sqlx::Transaction<'_, sqlx::Sqlite>,
     tape: Option<&crate::event_tape::EventTape>,
     batches: &[EventBatch<'_>],
-    now: &str,
+    now: &datalib_time::IsoOffsetTimestamp,
 ) -> Result<()> {
     for b in batches {
         crate::bulk::bulk_upsert_bookkeeping(
@@ -1019,7 +1035,7 @@ pub async fn bulk_upsert_with_tape_split<T: crate::bulk::BulkUpsertable>(
     if rows.is_empty() {
         return Ok(());
     }
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = pool
         .begin()
         .await
@@ -1383,14 +1399,14 @@ pub async fn load_payloads_with_id(
 // ── sync_scope_state ────────────────────────────────────────────────
 
 pub async fn load_scope_state(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows = sqlx::query("SELECT scope, last_seen_at FROM sync_scope_state")
+    let rows = sqlx::query("SELECT scope, last_seen_at_utc FROM sync_scope_state")
         .fetch_all(pool)
         .await
         .context("select sync_scope_state")?;
     let mut out = HashMap::with_capacity(rows.len());
     for r in rows {
         let scope: String = r.try_get("scope").unwrap_or_default();
-        let ts: String = r.try_get("last_seen_at").unwrap_or_default();
+        let ts: String = r.try_get("last_seen_at_utc").unwrap_or_default();
         if !scope.is_empty() && !ts.is_empty() {
             out.insert(scope, ts);
         }
@@ -1398,13 +1414,20 @@ pub async fn load_scope_state(pool: &SqlitePool) -> Result<HashMap<String, Strin
     Ok(out)
 }
 
+/// `last_seen_at` is whatever offset-bearing stamp the provider chose;
+/// the row keeps it as UTC with the offset beside it. A value that is
+/// not a stamp at all (email keeps its opaque JMAP state tokens and
+/// Gmail history ids here) is kept as written, with no offset.
 pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &str) -> Result<()> {
+    let stamp = datalib_time::split_stamp(last_seen_at);
     sqlx::query(
-        "INSERT INTO sync_scope_state (scope, last_seen_at) VALUES (?, ?)
-         ON CONFLICT(scope) DO UPDATE SET last_seen_at = excluded.last_seen_at",
+        "INSERT INTO sync_scope_state (scope, last_seen_at_utc, tz_offset) VALUES (?, ?, ?)
+         ON CONFLICT(scope) DO UPDATE SET last_seen_at_utc = excluded.last_seen_at_utc,
+            tz_offset = excluded.tz_offset",
     )
     .bind(scope)
-    .bind(last_seen_at)
+    .bind(&stamp.utc)
+    .bind(&stamp.tz_offset)
     .execute(pool)
     .await
     .with_context(|| format!("upsert sync_scope_state {scope}"))?;
@@ -1789,9 +1812,9 @@ mod tests {
         let p = d.path().join("migrate.doltlite_db");
         let old_bk = "CREATE TABLE IF NOT EXISTS widgets_bookkeeping (
             id TEXT PRIMARY KEY,
-            fetched_at TEXT NULL,
+            fetched_at_utc TEXT NULL,
             attempt_count INTEGER NOT NULL,
-            last_attempt_at TEXT NULL,
+            last_attempt_at_utc TEXT NULL,
             last_error TEXT NULL
         )";
         {
@@ -2208,7 +2231,7 @@ mod tests {
             let mut errs: Vec<String> = Vec::new();
             for sql in [
                 "INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)",
-                "INSERT INTO widgets_bookkeeping (id, fetched_at, attempt_count) VALUES ('w1', '2026-06-03T00:00:00Z', 0)",
+                "INSERT INTO widgets_bookkeeping (id, fetched_at_utc, attempt_count) VALUES ('w1', '2026-06-03T00:00:00Z', 0)",
             ] {
                 if let Err(e) = try_exec(sql).await {
                     errs.push(format!("setup `{sql}`: {e}"));
@@ -2221,13 +2244,13 @@ mod tests {
                     .await
                     .map_err(|e| e.to_string());
 
-            // Delete + reinsert IDENTICAL data, plus a new fetched_at — the
+            // Delete + reinsert IDENTICAL data, plus a new fetched_at_utc — the
             // integration-test shape.
             for sql in [
                 "DELETE FROM widgets",
                 "DELETE FROM widgets_bookkeeping",
                 "INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)",
-                "INSERT INTO widgets_bookkeeping (id, fetched_at, attempt_count) VALUES ('w1', '2026-06-03T00:00:05Z', 0)",
+                "INSERT INTO widgets_bookkeeping (id, fetched_at_utc, attempt_count) VALUES ('w1', '2026-06-03T00:00:05Z', 0)",
             ] {
                 if let Err(e) = try_exec(sql).await {
                     errs.push(format!("reset `{sql}`: {e}"));

@@ -115,7 +115,7 @@ async fn write_store(spec: &Spec, raw_dir: &std::path::Path, now: &str) -> Resul
     // The run-pinned stamp rather than `now_local()`: bookkeeping columns
     // land in the store, and a wall-clock value there would put build
     // time inside a fixture that is supposed to read in fixture time.
-    let stamped_at = now;
+    let stamped_at = datalib_time::parse_strict(now).context("--now")?;
 
     let device_rows: Vec<YolinkDeviceRow> = spec
         .devices
@@ -159,8 +159,8 @@ async fn write_store(spec: &Spec, raw_dir: &std::path::Path, now: &str) -> Resul
     }
 
     let mut tx = pool.begin().await?;
-    bulk_upsert_in_tx(&mut tx, &device_rows, stamped_at).await?;
-    bulk_upsert_in_tx(&mut tx, &reading_rows, stamped_at).await?;
+    bulk_upsert_in_tx(&mut tx, &device_rows, &stamped_at).await?;
+    bulk_upsert_in_tx(&mut tx, &reading_rows, &stamped_at).await?;
     tx.commit().await?;
 
     // Advance each device's cursor the way a real fetch would, so the

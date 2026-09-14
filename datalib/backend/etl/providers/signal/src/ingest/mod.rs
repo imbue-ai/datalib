@@ -291,7 +291,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // type. All four batches land in their own tx; an inner crash
     // never leaves a half-applied snapshot because the snapshot-level
     // commit happens in the orchestrator (see §"Commit lifecycle").
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
     {
         let mut tx = db.pool().begin().await.context("begin account tx")?;
         bulk_upsert_in_tx(&mut tx, &accounts, &now).await?;

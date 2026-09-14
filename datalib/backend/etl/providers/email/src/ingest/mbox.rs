@@ -733,7 +733,7 @@ async fn flush_account_and_lookups(
     accumulator: &Accumulator,
     summary: &mut FetchSummary,
 ) -> Result<()> {
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await.context("begin lookups tx")?;
 
     // Account row: route through `AccountRow::from_mbox_config` and
@@ -817,7 +817,7 @@ async fn bulk_insert_emails(tx: &mut Transaction<'_, Sqlite>, rows: &[EmailRow])
     // column list + binding sequence; the conflict clause uses the
     // universal "every non-PK col = excluded.<col>" shape from
     // `data_architecture_ingestion.md` §"One writer per row".
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
     datalib_etl::bulk::bulk_upsert_in_tx(tx, rows, &now).await
 }
 
