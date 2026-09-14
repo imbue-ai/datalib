@@ -55,7 +55,6 @@ use datalib_schema::render_problems::RenderProblemRow;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::html::escape_text;
-use datalib_etl_render::inputs::Input;
 
 /// Per-provider knobs the renderer parameterizes on. Values that
 /// would otherwise be hard-coded as `"signal"` / `"Signal Chat"` /
@@ -115,15 +114,7 @@ pub struct RenderSummary {
     pub buckets: Buckets,
 }
 
-/// One chat rendered: its `chat_uuid` and the rows it read.
-#[derive(Debug, Clone)]
-pub struct Bucket {
-    pub key: String,
-    pub inputs: Vec<Input>,
-}
-
-/// Every chat rendered.
-pub type Buckets = Vec<Bucket>;
+pub use datalib_etl_render::inputs::{Bucket, Buckets};
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(

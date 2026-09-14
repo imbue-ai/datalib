@@ -16,6 +16,7 @@ use datalib_etl_linkedin_render::posts;
 use datalib_etl_linkedin_render::processor::Source;
 use datalib_etl_linkedin_render::render;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::RawRange;
 
 fn build_export(root: &Path) -> Result<()> {
     // Who the export belongs to. The primary address is deliberately not
@@ -177,13 +178,19 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         fs::create_dir_all(&out_dir)?;
         // The export names its owner in `Email Addresses.csv`; every row
         // of every feed carries that on `account`.
-        let account = datalib_etl_linkedin_render::account::load_account(&raw_dir)?;
-        assert_eq!(account.as_deref(), Some("data@enterprise.starfleet.test"));
+        let account =
+            datalib_etl_linkedin_render::account::load_account(&raw_dir, RawRange::cold())?;
+        assert_eq!(
+            account.label.as_deref(),
+            Some("data@enterprise.starfleet.test")
+        );
         let source = Source {
             raw_dir: &raw_dir,
             out_dir: &out_dir,
             name: "linkedin",
-            account: account.as_deref(),
+            account: account.label.as_deref(),
+            account_inputs: &account.inputs,
+            range: RawRange::cold(),
         };
         let mut docs: Vec<RenderedMarkdown> = Vec::new();
         {
@@ -191,13 +198,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 docs.push(d);
                 Ok(())
             };
-            render::render(
-                &source,
-                &Progress::noop(),
-                &mut on_doc,
-                &mut std::collections::HashSet::new(),
-            )
-            .context("render")?;
+            render::render(&source, &Progress::noop(), &mut on_doc).context("render")?;
         }
 
         // Two `messages` conversations + one `guide_messages` = 3 chats,
@@ -221,13 +222,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 post_docs.push(d);
                 Ok(())
             };
-            posts::render_posts(
-                &source,
-                &Progress::noop(),
-                &mut on_doc,
-                &mut std::collections::HashSet::new(),
-            )
-            .context("render_posts")?;
+            posts::render_posts(&source, &Progress::noop(), &mut on_doc).context("render_posts")?;
         }
         // Two shares (two URNs) + a comment that merges into the first +
         // a comment on an external post + the undated comment = 4 threads.
@@ -329,13 +324,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 contact_docs.push(d);
                 Ok(())
             };
-            connections::render_connections(
-                &source,
-                &Progress::noop(),
-                &mut on_doc,
-                &mut std::collections::HashSet::new(),
-            )
-            .context("render_connections")?;
+            connections::render_connections(&source, &Progress::noop(), &mut on_doc)
+                .context("render_connections")?;
         }
         assert_eq!(contact_docs.len(), 2, "two connection contacts");
         // Identity + grid row are keyed off the profile URL.
@@ -380,11 +370,11 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
 
         // The photo landed in CAS, keyed by the connection's uuid.
         let blobs = load_photo_blobs(&db, datalib_etl::pin::Reads::Own).await?;
-        let (bytes, content_type) = blobs
+        let photo = blobs
             .get(&picard_uuid)
             .expect("Picard's photo fetched into CAS");
-        assert!(!bytes.is_empty(), "photo bytes stored");
-        assert_eq!(content_type.as_deref(), Some("image/png"));
+        assert!(!photo.bytes.is_empty(), "photo bytes stored");
+        assert_eq!(photo.content_type.as_deref(), Some("image/png"));
 
         // Re-render: the contact markdown now embeds the photo blob.
         let out2 = tmp.path().join("out2");
@@ -399,13 +389,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 with_photo.push(d);
                 Ok(())
             };
-            connections::render_connections(
-                &source2,
-                &Progress::noop(),
-                &mut on_doc,
-                &mut std::collections::HashSet::new(),
-            )
-            .context("render_connections with photo")?;
+            connections::render_connections(&source2, &Progress::noop(), &mut on_doc)
+                .context("render_connections with photo")?;
         }
         let picard_doc = with_photo
             .iter()

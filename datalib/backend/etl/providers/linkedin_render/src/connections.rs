@@ -1,8 +1,6 @@
 //! Render LinkedIn `connections` as first-class contacts through the
 //! shared [`datalib_etl_contact_common`] renderer.
 
-use datalib_etl_render::processor::RenderPass;
-
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{
@@ -10,13 +8,14 @@ use datalib_etl_contact_common::{
     NormalizedContact,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{changed_rows, Bucket, Inputs};
 use serde_json::Value;
 
 use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
 use datalib_etl_linkedin::ingest::schema_raw::{connection_uuid, ns_id};
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
-use crate::processor::Source;
+use crate::processor::{FeedOutcome, Source};
 
 use crate::render::RENDER_VERSION;
 use datalib_schema::providers::Provider;
@@ -33,71 +32,108 @@ pub fn render_connections(
     source: &Source<'_>,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name.
-    seen: &mut std::collections::HashSet<String>,
-) -> Result<RenderPass> {
+) -> Result<FeedOutcome> {
     let Source {
         raw_dir,
         out_dir,
         name: source_id,
         account,
+        account_inputs,
+        range,
     } = *source;
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(RenderPass::Skipped);
+        return Ok(FeedOutcome::default());
     }
-    let Some((payloads, photos)) = tokio::task::block_in_place(|| {
+    let Some((rows, photos, changed, new_head)) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open_reader(&db_path).await?;
             // Read at a commit: this store belongs to the download step, and
             // nothing committed means nothing to render from.
-            let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+            let Some(pin) = range.pin(db.pool()).await? else {
                 db.close().await;
-                // `None` all the way out, not an empty value: an empty load is
-                // indistinguishable from a source with nothing in it, and the
-                // caller sweeps every document this pass did not name.
                 return Ok(None);
             };
             datalib_etl::pin::install_views(db.pool(), &pin).await?;
             // A user who excluded connections has no table; treat a load
             // error as "absent" rather than failing the whole render.
-            let payloads = db
-                .load_payloads(datalib_etl::pin::Reads::At(&pin), "connections")
-                .await
-                .unwrap_or_default();
+            let rows = datalib_etl::doltlite_raw::load_payloads_with_id(
+                db.pool(),
+                datalib_etl::pin::Reads::At(&pin),
+                "connections",
+            )
+            .await
+            .unwrap_or_default();
             // Photos, if any were fetched, keyed by connection_uuid.
             let photos = load_photo_blobs(&db, datalib_etl::pin::Reads::At(&pin))
                 .await
                 .unwrap_or_default();
+            let changed =
+                changed_rows(db.pool(), range, &pin, &["connections", "contact_photos"]).await?;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             db.close().await;
-            Ok::<_, anyhow::Error>(Some((payloads, photos)))
+            Ok::<_, anyhow::Error>(Some((rows, photos, changed, pin.commit().to_string())))
         })
     })?
     else {
-        // Nothing committed to read: this pass did not walk, so it must not
-        // reach the retain sweep.
-        return Ok(RenderPass::Skipped);
+        return Ok(FeedOutcome::default());
     };
 
-    let contacts: Vec<NormalizedContact> = payloads
+    let mut contacts: Vec<NormalizedContact> = rows
         .iter()
-        .map(|p| {
+        .map(|(row_id, p)| {
             let mut c = to_contact(p);
-            if let Some((bytes, content_type)) = photos.get(&c.contact_uuid) {
+            let inputs = Inputs::default();
+            inputs.read("connections", row_id);
+            for input in account_inputs {
+                inputs.read(&input.table, &input.id);
+            }
+            if let Some(photo) = photos.get(&c.contact_uuid) {
+                inputs.read("contact_photos", &photo.row_id);
                 c.photo = Some(ContactPhoto {
-                    bytes: bytes.clone(),
-                    content_type: content_type
+                    bytes: photo.bytes.clone(),
+                    content_type: photo
+                        .content_type
                         .clone()
                         .unwrap_or_else(|| "application/octet-stream".to_string()),
                 });
             }
+            c.inputs = inputs.declared();
             c
         })
         .collect();
+
+    // What to render: the contacts the driver found stale, plus the ones
+    // a new or changed row maps to through the rows just loaded. A
+    // removed row's contact reaches here through the driver, having
+    // declared the row.
+    let forward = changed.map(|changed| {
+        contacts
+            .iter()
+            .filter(|c| {
+                c.inputs
+                    .iter()
+                    .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
+            })
+            .map(|c| c.contact_uuid.clone())
+            .collect::<std::collections::HashSet<String>>()
+    });
+    let render = range.narrow(forward.as_ref());
+    let mut outcome = FeedOutcome {
+        new_head: Some(new_head),
+        buckets: render
+            .iter()
+            .flatten()
+            .map(|key| Bucket {
+                key: key.clone(),
+                inputs: Vec::new(),
+            })
+            .collect(),
+    };
+    if let Some(render) = &render {
+        contacts.retain(|c| render.contains(&c.contact_uuid));
+    }
     let profile = ContactRenderProfile {
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
@@ -113,8 +149,8 @@ pub fn render_connections(
         progress,
         on_doc_complete,
     )?;
-    seen.extend(s.documents);
-    Ok(RenderPass::Walked)
+    outcome.buckets.extend(s.buckets);
+    Ok(outcome)
 }
 
 fn to_contact(p: &Value) -> NormalizedContact {
@@ -143,6 +179,7 @@ fn to_contact(p: &Value) -> NormalizedContact {
         .collect();
 
     NormalizedContact {
+        inputs: Vec::new(),
         contact_uuid,
         group_uuid: ns_id("group:connections"),
         group_label: GROUP_LABEL.to_string(),

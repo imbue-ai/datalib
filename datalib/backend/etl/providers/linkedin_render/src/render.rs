@@ -1,7 +1,6 @@
 //! Render LinkedIn's message-shaped feeds into markdown via the shared
 //! chat renderer.
 
-use datalib_etl_render::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
@@ -13,12 +12,13 @@ use datalib_etl_chat_common::render::{
 };
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
 use serde_json::Value;
 
 use datalib_etl_linkedin::ingest::schema_raw::{message_tables, ns_id as uuid5};
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
-use crate::processor::Source;
+use crate::processor::{FeedOutcome, Source};
 use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
@@ -47,35 +47,30 @@ pub fn render(
     source: &Source<'_>,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name.
-    seen: &mut std::collections::HashSet<String>,
-) -> Result<RenderPass> {
+) -> Result<FeedOutcome> {
     let Source {
         raw_dir,
         out_dir,
         name: source_id,
         account,
+        account_inputs,
+        range,
     } = *source;
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(RenderPass::Skipped);
+        return Ok(FeedOutcome::default());
     }
 
     // One open for every table, not one per table: reopening a doltlite
     // store while the last connection is still closing is what makes a
     // later `dolt_commit` fail.
-    let Some(by_table) = tokio::task::block_in_place(|| {
+    let Some((by_table, changed, new_head)) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open_reader(&db_path).await?;
             // Read at a commit: this store belongs to the download step, and
             // nothing committed means nothing to render from.
-            let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+            let Some(pin) = range.pin(db.pool()).await? else {
                 db.close().await;
-                // `None` all the way out, not an empty value: an empty load is
-                // indistinguishable from a source with nothing in it, and the
-                // caller sweeps every document this pass did not name.
                 return Ok(None);
             };
             datalib_etl::pin::install_views(db.pool(), &pin).await?;
@@ -85,24 +80,60 @@ pub fn render(
                 // load error as "absent" rather than failing the render.
                 loaded.push((
                     table,
-                    db.load_payloads(datalib_etl::pin::Reads::At(&pin), table)
-                        .await
-                        .unwrap_or_default(),
+                    datalib_etl::doltlite_raw::load_payloads_with_id(
+                        db.pool(),
+                        datalib_etl::pin::Reads::At(&pin),
+                        table,
+                    )
+                    .await
+                    .unwrap_or_default(),
                 ));
             }
+            let changed = changed_rows(db.pool(), range, &pin, &message_tables()).await?;
             db.close().await;
-            Ok::<_, anyhow::Error>(Some(loaded))
+            Ok::<_, anyhow::Error>(Some((loaded, changed, pin.commit().to_string())))
         })
     })?
     else {
-        // Nothing committed to read: this pass did not walk, so it must not
-        // reach the retain sweep.
-        return Ok(RenderPass::Skipped);
+        return Ok(FeedOutcome::default());
     };
 
     let mut chats: Vec<NormalizedChat> = Vec::new();
-    for (table, payloads) in &by_table {
-        chats.extend(build_chats(table, payloads, account));
+    for (table, rows) in &by_table {
+        chats.extend(build_chats(table, rows, account, account_inputs));
+    }
+
+    // What to render: the chats the driver found stale, plus the ones a
+    // new or changed row maps to — through the rows just loaded, since
+    // the conversation id lives inside the payload. A removed row's chat
+    // reaches here through the driver, having declared the row.
+    let forward = changed.map(|changed| {
+        let mut keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for chat in &chats {
+            if chat
+                .inputs
+                .iter()
+                .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
+            {
+                keys.insert(chat.chat_uuid.clone());
+            }
+        }
+        keys
+    });
+    let render = range.narrow(forward.as_ref());
+    let mut outcome = FeedOutcome {
+        new_head: Some(new_head),
+        buckets: render
+            .iter()
+            .flatten()
+            .map(|key| Bucket {
+                key: key.clone(),
+                inputs: Vec::new(),
+            })
+            .collect(),
+    };
+    if let Some(render) = &render {
+        chats.retain(|c| render.contains(&c.chat_uuid));
     }
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
@@ -115,20 +146,32 @@ pub fn render(
         progress,
         on_doc_complete,
     )?;
-    seen.extend(s.documents);
-    Ok(RenderPass::Walked)
+    outcome.buckets.extend(s.buckets);
+    Ok(outcome)
 }
 
-fn build_chats(table: &str, payloads: &[Value], account: Option<&str>) -> Vec<NormalizedChat> {
+/// Rows as `(row id, payload)`: the id is what the conversation declares
+/// it read, beside the account rows every document carries.
+fn build_chats(
+    table: &str,
+    rows: &[(String, Value)],
+    account: Option<&str>,
+    account_inputs: &[Input],
+) -> Vec<NormalizedChat> {
     // BTreeMap keeps conversation order stable across runs.
-    let mut by_conv: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
-    for p in payloads {
+    let mut by_conv: BTreeMap<String, (Vec<&Value>, Inputs)> = BTreeMap::new();
+    for (row_id, p) in rows {
         let conv = field(p, "CONVERSATION ID");
-        by_conv.entry(conv.to_string()).or_default().push(p);
+        let (rows, inputs) = by_conv.entry(conv.to_string()).or_default();
+        inputs.read(table, row_id);
+        rows.push(p);
     }
 
     let mut chats = Vec::with_capacity(by_conv.len());
-    for (conv, rows) in by_conv {
+    for (conv, (rows, inputs)) in by_conv {
+        for input in account_inputs {
+            inputs.read(&input.table, &input.id);
+        }
         let mut items: Vec<NormalizedChatItem> = rows
             .iter()
             .map(|p| {
@@ -161,7 +204,7 @@ fn build_chats(table: &str, payloads: &[Value], account: Option<&str>) -> Vec<No
             .unwrap_or_else(|| participants(&rows));
 
         chats.push(NormalizedChat {
-            inputs: Vec::new(),
+            inputs: inputs.declared(),
             path_prefix: None,
             id: format!("{table}:{conv}"),
             chat_uuid: uuid5(&format!("chat:{table}:{conv}")),
@@ -238,6 +281,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn with_ids(rows: &[Value]) -> Vec<(String, Value)> {
+        rows.iter()
+            .enumerate()
+            .map(|(i, v)| (format!("row-{i}"), v.clone()))
+            .collect()
+    }
+
     fn msg(conv: &str, from: &str, to: &str, date: &str, content: &str) -> Value {
         json!({
             "CONVERSATION ID": conv, "CONVERSATION TITLE": "",
@@ -253,7 +303,7 @@ mod tests {
             msg("c1", "B", "A", "2026-06-16 04:58:21 UTC", "first"),
             msg("c2", "A", "C", "2026-01-01 00:00:00 UTC", "other"),
         ];
-        let chats = build_chats("messages", &payloads, None);
+        let chats = build_chats("messages", &with_ids(&payloads), None, &[]);
         assert_eq!(chats.len(), 2);
         let c1 = chats.iter().find(|c| c.id == "messages:c1").unwrap();
         assert_eq!(c1.buckets[0].items.len(), 2);
@@ -291,7 +341,7 @@ mod tests {
     #[test]
     fn undated_message_gets_a_null_timestamp() {
         let payloads = vec![msg("c1", "A", "B", "", "undated")];
-        let chats = build_chats("messages", &payloads, None);
+        let chats = build_chats("messages", &with_ids(&payloads), None, &[]);
         assert_eq!(chats[0].buckets[0].items[0].date_ms, None);
     }
 }

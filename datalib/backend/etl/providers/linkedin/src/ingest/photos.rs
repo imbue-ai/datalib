@@ -168,10 +168,19 @@ enum Outcome {
 /// `owner_id (connection_uuid) → (bytes, content_type)`. Joins
 /// `contact_photos` → `cas_objects`. Empty when photos were never
 /// fetched (the table won't exist). Never fails on a missing table.
+/// A fetched photo: the `contact_photos` row it came through (what a
+/// contact declares it read), and the bytes.
+#[derive(Debug, Clone)]
+pub struct PhotoBlob {
+    pub row_id: String,
+    pub bytes: Vec<u8>,
+    pub content_type: Option<String>,
+}
+
 pub async fn load_photo_blobs(
     db: &RawDb,
     reads: datalib_etl::pin::Reads<'_>,
-) -> Result<std::collections::HashMap<String, (Vec<u8>, Option<String>)>> {
+) -> Result<std::collections::HashMap<String, PhotoBlob>> {
     let pool = db.pool();
     let table_exists: Option<String> =
         sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
@@ -188,7 +197,7 @@ pub async fn load_photo_blobs(
     // Audited: the only interpolation is a table name the caller chose --
     // a literal, or that literal behind `pinned_`.
     let edges = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT owner_id, blake3 FROM {} WHERE blake3 IS NOT NULL",
+        "SELECT id, owner_id, blake3 FROM {} WHERE blake3 IS NOT NULL",
         reads.table(CONTACT_PHOTOS_TABLE)
     )))
     .fetch_all(pool)
@@ -205,10 +214,18 @@ pub async fn load_photo_blobs(
     };
     let loaded = async {
         for row in edges {
+            let row_id: String = row.get("id");
             let owner_id: String = row.get("owner_id");
             let blake3: String = row.get("blake3");
             if let Some((bytes, content_type)) = load_cas_bytes(cas, &blake3).await? {
-                out.insert(owner_id, (bytes, content_type));
+                out.insert(
+                    owner_id,
+                    PhotoBlob {
+                        row_id,
+                        bytes,
+                        content_type,
+                    },
+                );
             }
         }
         Ok(out)
