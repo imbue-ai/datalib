@@ -2075,6 +2075,178 @@ mod tests {
         );
     }
 
+    /// Many seals landing while the fan-in is mid-pass collapse into
+    /// *one* follow-up pass, and that pass reads all of them. Each
+    /// producer seals once to get the fan-in started, then five more
+    /// times while it holds that first pass; when it lands, exactly one
+    /// more pass runs before the producers finish -- not one per seal,
+    /// and not zero -- and the queue the runner keeps per producer goes
+    /// from everything sealed mid-pass straight to empty.
+    #[tokio::test]
+    async fn seals_landing_mid_pass_collapse_into_one_follow_up_pass() {
+        use std::sync::atomic::AtomicBool;
+        const SEALS_EACH: u32 = 5;
+        const ROWS_EACH: u64 = 10;
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+        let concurrent = Arc::new(AtomicU32::new(0));
+        let max_seen = Arc::new(AtomicU32::new(0));
+        let in_pass = Arc::new(AtomicBool::new(false));
+        let sealed = Arc::new(AtomicU32::new(0));
+        // Each producer's reading of the pass count as it finished, after
+        // giving a wrongly-owed third pass time to show up.
+        let slack_saw = Arc::new(AtomicU32::new(0));
+        let email_saw = Arc::new(AtomicU32::new(0));
+
+        async fn until(flag: impl Fn() -> bool) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !flag() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        }
+
+        let producer = |name: &str, saw: Arc<AtomicU32>| {
+            let (passes, in_pass, sealed) = (passes.clone(), in_pass.clone(), sealed.clone());
+            StepSpec::new(
+                format!("{name}/rendered_md"),
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (passes, in_pass, sealed, saw) =
+                        (passes.clone(), in_pass.clone(), sealed.clone(), saw.clone());
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("data.md"), "rows").unwrap();
+                        // One seal to start the fan-in; every other lands
+                        // while it is busy.
+                        ctx.checkpoint_rows("v0", ROWS_EACH);
+                        until(|| in_pass.load(Ordering::SeqCst)).await;
+                        for k in 1..=SEALS_EACH {
+                            ctx.checkpoint_rows(&format!("v{k}"), ROWS_EACH);
+                            sealed.fetch_add(1, Ordering::SeqCst);
+                        }
+                        until(|| passes.load(Ordering::SeqCst) >= 2).await;
+                        // A pass wrongly owed per seal would be dispatched
+                        // the moment the follow-up lands; give it room.
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        saw.store(passes.load(Ordering::SeqCst), Ordering::SeqCst);
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "final")],
+                        })
+                    }
+                }),
+            )
+            .streams_output()
+        };
+
+        let grid_index = {
+            let (passes, concurrent, max_seen, in_pass, sealed) = (
+                passes.clone(),
+                concurrent.clone(),
+                max_seen.clone(),
+                in_pass.clone(),
+                sealed.clone(),
+            );
+            StepSpec::new(
+                "unified_index/grid",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (passes, concurrent, max_seen, in_pass, sealed) = (
+                        passes.clone(),
+                        concurrent.clone(),
+                        max_seen.clone(),
+                        in_pass.clone(),
+                        sealed.clone(),
+                    );
+                    async move {
+                        let now = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_seen.fetch_max(now, Ordering::SeqCst);
+                        if passes.load(Ordering::SeqCst) == 0 {
+                            in_pass.store(true, Ordering::SeqCst);
+                            until(|| sealed.load(Ordering::SeqCst) >= 2 * SEALS_EACH).await;
+                            // The seals cross a channel; let the scheduler
+                            // read every one before this pass lands.
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("index.txt"), "x").unwrap();
+                        passes.fetch_add(1, Ordering::SeqCst);
+                        concurrent.fetch_sub(1, Ordering::SeqCst);
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            )
+            .input("slack/rendered_md")
+            .input("email/rendered_md")
+        };
+
+        let graph = Graph::build(vec![
+            producer("slack", slack_saw.clone()),
+            producer("email", email_saw.clone()),
+            grid_index,
+        ])
+        .unwrap();
+        let rec = Arc::new(Recorder::default());
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = tokio::time::timeout(Duration::from_secs(15), r.run(&graph))
+            .await
+            .expect("the run must terminate")
+            .unwrap();
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            1,
+            "two fan-in passes overlapped"
+        );
+        for (name, saw) in [("slack", &slack_saw), ("email", &email_saw)] {
+            assert_eq!(
+                saw.load(Ordering::SeqCst),
+                2,
+                "{name}: {SEALS_EACH} seals each from two producers, landing mid-pass, \
+                 must wake the fan-in exactly once more",
+            );
+        }
+
+        // The queue the runner keeps per producer: every seal piles on
+        // while the fan-in is busy, and the one follow-up pass takes the
+        // whole pile off in a single step. (The first pass landing may
+        // take its own starting seal off first, for the producer whose
+        // seal dispatched it -- so the pile just before the drain is
+        // at least the mid-pass seals, not exactly all of them.)
+        let events = rec.0.lock().unwrap();
+        for producer in ["slack/rendered_md", "email/rendered_md"] {
+            let mut queued: Vec<i64> = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Metric {
+                        step,
+                        name,
+                        labels,
+                        value,
+                    } if step == "unified_index/grid"
+                        && name == "queued"
+                        && labels.get("from").map(String::as_str) == Some(producer) =>
+                    {
+                        Some(*value)
+                    }
+                    _ => None,
+                })
+                .collect();
+            queued.dedup();
+            let mid_pass = (SEALS_EACH as u64 * ROWS_EACH) as i64;
+            assert!(
+                queued.contains(&(mid_pass + ROWS_EACH as i64)),
+                "{producer}: the queue never held the starting seal plus every mid-pass one: {queued:?}"
+            );
+            let n = queued.len();
+            assert!(
+                n >= 2 && queued[n - 1] == 0 && queued[n - 2] >= mid_pass,
+                "{producer}: one pass must drain the whole queue in one step, not one seal of it: {queued:?}"
+            );
+        }
+    }
+
     /// A streaming pass must not wait behind `parallelism`. With every
     /// ordinary slot occupied by producers, a consumer that competed for
     /// those slots would never run — losing the whole point of the
