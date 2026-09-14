@@ -125,13 +125,16 @@ Narrowing it changes nothing already stored.
 
 ### What makes a record look changed
 
-Nothing has been declared volatile yet. Garmin's replies do carry
-per-fetch fields in places — a `lastSyncTimestampGMT` on a device, and
-almost certainly stamps inside some daily payloads — and those will
-churn `dolt_diff` inside the refresh window. Measure it against a real
-store before declaring anything: the etl README's rule is that a
-volatile field carries no information, and a field that only *looks*
-like noise is not one.
+Nothing has been declared volatile yet. Measured on the live account
+above: two runs a minute apart over the same five days changed no
+`garmin_daily` row (`dolt_diff_stat` between the two run commits is
+empty for the table and reports 100 modified rows for its bookkeeping
+sidecar, one per re-fetched day), so the per-day payloads at least
+carry no per-fetch stamp. A `lastSyncTimestampGMT` on a device
+row will move as the watch syncs; whether anything else churns is
+still to be measured against an account with a watch on it. The etl
+README's rule applies: a volatile field carries no information, and a
+field that only *looks* like noise is not one.
 
 ## What the provider deliberately does not do
 
@@ -156,11 +159,20 @@ like noise is not one.
   synthesizer writes the weight and activity fixtures for the windows a
   first run and a second run with `refresh_days = 7` ask for; a
   playback run with another value misses.
-- **Endpoint shapes are as the reference implementations show them**,
-  not verified against a live account by this provider yet — the
-  live probe is the next thing to do (see the `verify-api-shape` rule
-  in AGENTS.md), and the promoted columns (`start_time_gmt`,
-  `weight_g`, …) are the ones to check first.
+- **Verified against one live account (2026-09-14), but a thin one.**
+  Every endpoint answered with the shape the reference code predicts,
+  and the weigh-in columns were checked against real manual entries
+  (`samplePk`, `weight` in grams, `timestampGMT`, `sourceType`). That
+  account had no device paired, so the activity listing, the detail
+  record, the FIT download and the device fields were exercised only
+  through playback; check `start_time_gmt` and `activityType.typeKey`
+  against the first real activity. What the probe did show about
+  empty days: `hrv`, `endurance_score` and `hill_score` answer 204;
+  `steps_chart`, `training_readiness`, `max_metrics`, `daily_events`
+  and `body_battery_events` answer `[]`; `fitness_age` answers a 200
+  with `{"invalidReason": …}` (stored as-is, since it is an answer);
+  the wellness bundle answers 404. The rest answer a full object with
+  null fields, which is also stored as-is.
 
 ## How to inspect the result
 
