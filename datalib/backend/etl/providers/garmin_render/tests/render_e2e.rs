@@ -1,6 +1,6 @@
 //! Ingest the TNG account through playback, render it, and check the
 //! page: the weight plot, the table, the device rows, and that an
-//! unchanged store renders nothing the second time.
+//! unchanged store renders the same rows the second time.
 
 use std::path::{Path, PathBuf};
 
@@ -12,9 +12,10 @@ use datalib_etl_garmin::auth::Credentials;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::GarminApi;
-use datalib_etl_garmin_render::render::parse::{parse, Parsed};
+use datalib_etl_garmin_render::render::parse::parse;
 use datalib_etl_garmin_render::render::render::{document_uuid, render_all};
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::RawRange;
 
 const SOURCE: &str = "garmin";
 
@@ -57,21 +58,20 @@ async fn ingest(raw: &Path, playback: &Path) {
 fn render_once(
     raw: &Path,
     root: &Path,
-    cursor: Option<&str>,
+    pin: Option<&str>,
 ) -> (Vec<RenderedMarkdown>, Option<String>) {
     let mut emitted = Vec::new();
-    let head = match parse(raw, cursor).unwrap() {
-        Parsed::UpToDate { head } => Some(head),
-        Parsed::Fresh(parsed) => {
-            let mut on_doc = |md: RenderedMarkdown| {
-                emitted.push(md);
-                Ok(())
-            };
-            render_all(&parsed, root, SOURCE, &Progress::noop(), &mut on_doc).unwrap();
-            parsed.head.clone()
-        }
+    let range = RawRange {
+        pin,
+        ..RawRange::cold()
     };
-    (emitted, head)
+    let parsed = parse(raw, range).unwrap();
+    let mut on_doc = |md: RenderedMarkdown| {
+        emitted.push(md);
+        Ok(())
+    };
+    render_all(&parsed, root, SOURCE, &Progress::noop(), &mut on_doc).unwrap();
+    (emitted, parsed.head.clone())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -130,9 +130,21 @@ async fn renders_the_weight_page_then_skips_an_unchanged_store() {
         "body fat from the payload draws on y2"
     );
 
-    // Unchanged store: the page is not rewritten.
+    // Unchanged store, read at the same commit: identical rows, so the
+    // render store records no change.
     let cursor = cursor.expect("a successful render pins the commit it consumed");
     let (again, cursor_2) = render_once(&raw, root, Some(&cursor));
-    assert!(again.is_empty(), "HEAD did not move, nothing to render");
     assert_eq!(cursor_2.as_deref(), Some(cursor.as_str()));
+    assert_eq!(again.len(), 1);
+    let texts = |d: &RenderedMarkdown| {
+        d.rows
+            .iter()
+            .map(|r| (r.uuid.clone(), r.text.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(texts(&again[0]), texts(doc));
+    assert_eq!(
+        again[0].bucket_key.as_deref(),
+        Some(document_uuid(SOURCE).as_str())
+    );
 }

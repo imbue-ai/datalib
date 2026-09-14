@@ -102,8 +102,10 @@ pub fn render_all(
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
-        upstream_cursor: parsed.head.clone(),
-        bucket_key: None,
+        // Not the raw HEAD: it moves on every ingest, and a row whose
+        // content did not change may carry nothing per-run.
+        upstream_cursor: None,
+        bucket_key: Some(m_uuid.clone()),
         md_path,
         render_version: RENDER_VERSION,
         rows,
@@ -397,13 +399,11 @@ fn render_metric_table(out: &mut String, series: &[&Series]) {
     out.push('\n');
 }
 
-/// The store's own provenance — the doltlite HEAD hash and the per-commit
-/// hashes and wall-clock dates — is deliberately NOT rendered here, only
-/// the counts.
+/// The store's own provenance — the doltlite HEAD hash and the commit
+/// log — is deliberately NOT rendered here, only the counts.
 fn render_store_section(out: &mut String, parsed: &ParsedYolink) {
     out.push_str("## Store\n\n");
     out.push_str("| | |\n| --- | --- |\n");
-    let _ = writeln!(out, "| Commits | {} |", parsed.commits.len());
     let _ = writeln!(out, "| Readings | {} |", thousands(parsed.reading_count));
     let _ = writeln!(
         out,
