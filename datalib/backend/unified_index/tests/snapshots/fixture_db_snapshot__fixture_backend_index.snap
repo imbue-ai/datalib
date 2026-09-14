@@ -290,6 +290,21 @@ expression: snapshot
       "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
+      "created_at": "2369-04-14T06:45:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "3b570c00-a0c4-5acd-8c55-d957292d6822",
+      "md_path": "garmin/render_markdown/index.md",
+      "provider": "garmin",
+      "rendered_at_utc": "2369-04-15T00:00:00.000000+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "99dc316c075a2061b66fc4520f2dabe932757665e69e602c415600d346edf510",
+      "source_fingerprint": "0fec87ee3722c0e47ab502ac7f58f8ec7027cb84157dca1d301d373432ea5a05",
+      "source_id": "garmin",
+      "title": "Garmin — Jean-Luc Picard",
+      "tz_offset": "+00:00",
+      "updated_at": "2369-04-15T05:12:44+00:00"
+    },
+    {
       "created_at": "2370-10-26T08:00:00+00:00",
       "kind": "chat",
       "markdown_uuid": "40497823-e5f8-5775-9407-65834d6381ae",
@@ -708,6 +723,21 @@ expression: snapshot
       "title": "Captain's Log",
       "tz_offset": "+00:00",
       "updated_at": "2364-04-13T08:45:00-07:00"
+    },
+    {
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "a2488896-6cd5-53bd-89d5-a3a962fbc43c",
+      "md_path": "garmin/render_markdown/_datalib/storage.md",
+      "provider": "datalib",
+      "rendered_at_utc": "2369-04-15T00:00:00.000000+00:00",
+      "renderer_version": "rust-v1.2",
+      "row_set_hash": "590ba4fc440def4f9c23a3e13513ecb2e84dfbb63205d022dd0dd3dc45259b01",
+      "source_fingerprint": "617fd01d3ed2a4257517e183fc3a8ccc3618dcebe7e7185066bf55805f5b4c84",
+      "source_id": "garmin",
+      "title": "garmin storage",
+      "tz_offset": "+00:00",
+      "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
       "created_at": "2026-01-07T14:00:00+00:00",
@@ -1195,7 +1225,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=79 markdowns_read=79 markdowns_removed=0 markdowns_skipped=0 rows_inserted=359"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=81 markdowns_read=81 markdowns_removed=0 markdowns_skipped=0 rows_inserted=374"
     }
   ],
   "grid_rows": [
@@ -1720,6 +1750,35 @@ expression: snapshot
       "upstream_scope": null,
       "uuid": "1183b755-20cf-5a77-8bd2-eb9f270c5713",
       "when_ts": "2364-03-01T17:01:30+00:00"
+    },
+    {
+      "account": null,
+      "author": null,
+      "channel": "Forerunner 265",
+      "conversation_name": "Garmin — Jean-Luc Picard",
+      "conversation_uuid": "3b570c00-a0c4-5acd-8c55-d957292d6822",
+      "entire_chat": "/chat/3b570c00-a0c4-5acd-8c55-d957292d6822",
+      "git_sha": null,
+      "kind": "Garmin Device",
+      "markdown_uuid": "3b570c00-a0c4-5acd-8c55-d957292d6822",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "garmin",
+      "qmd_path": "garmin/render_markdown/index.md",
+      "slack_link": null,
+      "source_label": "Garmin",
+      "source_url": null,
+      "text_len": 34,
+      "text_sha": "sha256:b37669efc7c3bae4f72c069026b9826af2eb8af3013d35ed654c0012abca8e95",
+      "upstream_entity_kind": "device",
+      "upstream_id": "3654926501",
+      "upstream_scope": null,
+      "uuid": "11b3e363-3ea1-5a5d-b913-0d4c91c18617",
+      "when_ts": "2369-04-15T05:12:44+00:00"
     },
     {
       "account": "local-signal_ba_TNG",
@@ -2619,6 +2678,35 @@ expression: snapshot
       "upstream_scope": null,
       "uuid": "3b54eb62-675a-52ec-8977-1a40261bb8fd",
       "when_ts": "2364-04-11T00:08:20+00:00"
+    },
+    {
+      "account": null,
+      "author": "Jean-Luc Picard",
+      "channel": null,
+      "conversation_name": "Garmin — Jean-Luc Picard",
+      "conversation_uuid": "3b570c00-a0c4-5acd-8c55-d957292d6822",
+      "entire_chat": "/chat/3b570c00-a0c4-5acd-8c55-d957292d6822",
+      "git_sha": null,
+      "kind": "Garmin Weight",
+      "markdown_uuid": "3b570c00-a0c4-5acd-8c55-d957292d6822",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "garmin",
+      "qmd_path": "garmin/render_markdown/index.md",
+      "slack_link": null,
+      "source_label": "Garmin",
+      "source_url": null,
+      "text_len": 71,
+      "text_sha": "sha256:5ec8e114b0ac2bd69a0c634f7ab5065d9d6ee2bd6341470bb8c5c3dd99edcbb1",
+      "upstream_entity_kind": null,
+      "upstream_id": null,
+      "upstream_scope": null,
+      "uuid": "3b570c00-a0c4-5acd-8c55-d957292d6822",
+      "when_ts": "2369-04-14T06:45:00+00:00"
     },
     {
       "account": "picard@enterprise.starfleet",
@@ -7347,6 +7435,24 @@ expression: snapshot
     },
     {
       "kind": "Source Size",
+      "members_sha": "sha256:34e62d4be43df86d15f8e24733886c35f686c0bcf432c8ae95b75546c3071a42",
+      "rows": 1,
+      "source": "garmin"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:ff007567f282a626dbe614f3539da34425d6ee90797184f1d4e39ce1e80638f2",
+      "rows": 2,
+      "source": "garmin"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:feb15fed82255406407e18209e6a438c8e75983da69751472804be4b10cdecfd",
+      "rows": 10,
+      "source": "garmin"
+    },
+    {
+      "kind": "Source Size",
       "members_sha": "sha256:541e9e4b07f0f0126cfb31706c8591c71427731ec08a9b7dc9d22a27d19edb3b",
       "rows": 1,
       "source": "github"
@@ -7581,9 +7687,9 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 79,
+    "documents_count": 81,
     "dolt_log_count": 2,
-    "grid_rows_count": 210,
-    "storage_rows_count": 149
+    "grid_rows_count": 212,
+    "storage_rows_count": 162
   }
 }

@@ -123,7 +123,10 @@ pub fn render_all(
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         source_fingerprint: fingerprint,
-        upstream_cursor: parsed.head.clone(),
+        // Not the raw HEAD: the page is skipped on its fingerprint, so a
+        // kept row would name a commit older than the store it agrees
+        // with, and cold and incremental renders would then differ.
+        upstream_cursor: None,
         md_path,
         render_version: RENDER_VERSION,
         rows,
