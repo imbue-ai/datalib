@@ -8,6 +8,7 @@ import {
   openSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -126,6 +127,59 @@ signalBackupDir();
 // ── the config-mutating specs, one data root each ────────────────────
 type Sandbox = { spec: string; root: string; url: string };
 
+// A root holding nothing but the index group and the applet that serves
+// it: what `materialize_tng_root.sh` writes, minus the pre-built index
+// and markdown trees. The streaming spec needs this rather than the
+// fixture root because its sources replay the *same* conversations the
+// fixture already indexed under other ids, and entity ids are
+// provider-global — so against the fixture the index sees every one of
+// them as already indexed and skips it.
+const APPLET_BIN =
+  process.env.FW_E2E_DATALIB_APPLET ||
+  path.join(workspaceDir, "bazel-bin/datalib/backend/applets/datalib_applet");
+function bareRoot(prefix: string): string {
+  const root = mintRoot(prefix);
+  writeFileSync(
+    path.join(root, "config.toml"),
+    `data_root = "${root}"
+
+[[groups]]
+id = "unified_index"
+name = "Unified Index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = []
+
+[[applets]]
+group = "unified_index"
+id = "unified_index"
+command = "'${APPLET_BIN}' unified_index"
+`,
+  );
+  return root;
+}
+const ROOT_OF: Record<string, (prefix: string) => string> = {
+  "manager2-streaming": bareRoot,
+};
+
+// What a sandbox's backend gets in its environment beyond the common
+// set. Every step a sync spawns inherits it from the runner, which
+// inherits it from the server — the same chain a real install has from
+// the user's shell.
+const PLAYBACK_DIR = process.env.FW_E2E_PLAYBACK_DIR;
+const SANDBOX_ENV: Record<string, Record<string, string>> = {
+  // The streaming spec's two sources replay tapes rather than fetch,
+  // and each replayed request waits this long first: a download of a
+  // handful of conversations then lasts several seconds, long enough
+  // for it to seal checkpoints mid-run and for the spec to watch the
+  // rows arrive downstream while it is still going.
+  "manager2-streaming": PLAYBACK_DIR
+    ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "1500" }
+    : {},
+};
+
 /// Cached in env like the fixture root: worker subprocesses re-import
 /// this config and must attach to what the parent materialized rather
 /// than building their own. `url` is filled in below, once the backend
@@ -135,7 +189,7 @@ function sandboxRoots(): Sandbox[] {
   if (existing) return JSON.parse(existing) as Sandbox[];
   const made = CONFIG_MUTATING.map((spec) => ({
     spec,
-    root: materializeRoot(`datalib-e2e-${spec}-`),
+    root: (ROOT_OF[spec] ?? materializeRoot)(`datalib-e2e-${spec}-`),
     url: "",
   }));
   process.env.FW_E2E_SANDBOXES = JSON.stringify(made);
@@ -291,7 +345,9 @@ function servers(): Server[] {
       // install has from the user's shell.
       SIGNAL_BACKUP_PASSPHRASE: FIXTURE_SIGNAL_AEP,
     }),
-    ...SANDBOX_ROOTS.map((s) => spawnBackend(`sandbox-${s.spec}`, s.root)),
+    ...SANDBOX_ROOTS.map((s) =>
+      spawnBackend(`sandbox-${s.spec}`, s.root, SANDBOX_ENV[s.spec] ?? {}),
+    ),
   ];
   let started: Server[];
   try {

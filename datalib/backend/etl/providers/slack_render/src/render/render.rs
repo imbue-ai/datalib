@@ -42,9 +42,9 @@ pub struct RenderSummary {
     pub threads_total: usize,
     pub threads_rendered: usize,
     pub threads_skipped: usize,
-    /// Every thread rendered, with the documents considered for it — what
-    /// the processor declares through `RenderCtx::declare_bucket`.
-    pub buckets: Vec<(String, Vec<String>)>,
+    /// Every thread rendered, by uuid — what the processor declares
+    /// through `RenderCtx::declare_bucket`.
+    pub buckets: Vec<String>,
 }
 
 fn profile() -> RenderProfile {
@@ -102,10 +102,6 @@ pub fn render_all(
 
     let (chats, blobs_by_chat) = build_chats(parsed, labels);
 
-    // Incremental skip is driven upstream by dolt_diff, so the
-    // fingerprint map is intentionally empty: every changed thread that
-    // reached us is (re)rendered.
-    let no_priors: HashMap<String, String> = HashMap::new();
     let cc = cc_render_all(
         &profile(),
         &chats,
@@ -113,7 +109,6 @@ pub fn render_all(
         source_id,
         &blobs_by_chat,
         progress,
-        &no_priors,
         on_doc_complete,
     )
     .context("slack chat-common render")?;

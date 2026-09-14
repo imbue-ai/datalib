@@ -203,7 +203,6 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
         "family_device_id (a device read credential) leaked into the page"
     );
 
-    let fingerprint_1 = doc.source_fingerprint.clone();
     let md_1 = md.clone();
 
     // ---- second render, nothing appended ------------------------------
@@ -234,10 +233,6 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
         "the store moved, so the cursor must too"
     );
     assert_eq!(emitted.len(), 1, "an appended reading must re-render");
-    assert_ne!(
-        emitted[0].source_fingerprint, fingerprint_1,
-        "the re-rendered page must not reuse the previous fingerprint"
-    );
     let md_3 = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
     assert_ne!(
         md_3, md_1,
@@ -297,65 +292,5 @@ async fn an_empty_store_renders_a_page_without_plots() {
             .join("render_markdown/plots/temperature.html")
             .exists(),
         "an empty quantity must not produce an empty plot file"
-    );
-}
-
-async fn fingerprint_of(root: &Path, rows: &[(&str, &str, i64, f64)]) -> String {
-    let raw_path = root.join(STANZA).join("raw");
-    std::fs::create_dir_all(&raw_path).unwrap();
-    let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
-    seed(db.pool(), rows, &[("fridge", "temperature_humidity")]).await;
-
-    let Parsed::Fresh(parsed) = parse(&raw_path, None).unwrap() else {
-        panic!("cold start must not report UpToDate");
-    };
-    let mut out = None;
-    render_all(
-        &parsed,
-        root,
-        STANZA,
-        &Progress::noop(),
-        &mut |md: RenderedMarkdown| {
-            out = Some(md.source_fingerprint.clone());
-            Ok(())
-        },
-    )
-    .unwrap();
-    out.expect("a document should have been emitted")
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn the_fingerprint_hashes_the_readings_not_the_store() {
-    // Two stores with identical readings but independent histories —
-    // different `dolt_log()` HEADs, because doltlite stamps its bootstrap
-    // commits with the wall clock and hashes chain.
-    let rows: &[(&str, &str, i64, f64)] = &[
-        ("fridge", "temperature_c", 1_781_481_609_000, 3.5),
-        ("fridge", "temperature_c", 1_781_481_669_000, 3.7),
-    ];
-    let a = tempfile::tempdir().unwrap();
-    let b = tempfile::tempdir().unwrap();
-    let fp_a = fingerprint_of(a.path(), rows).await;
-    let fp_b = fingerprint_of(b.path(), rows).await;
-    assert_eq!(
-        fp_a, fp_b,
-        "same readings must fingerprint the same regardless of store identity"
-    );
-
-    // ...and it is genuinely sensitive to the payload. A corrected
-    // historical value is the case a shape-only hash (counts +
-    // timestamps) would miss, and yolink re-fetches overlapping windows
-    // precisely so corrections land — so this is a real path, not a
-    // hypothetical.
-    let c = tempfile::tempdir().unwrap();
-    let corrected: &[(&str, &str, i64, f64)] = &[
-        ("fridge", "temperature_c", 1_781_481_609_000, 3.5),
-        ("fridge", "temperature_c", 1_781_481_669_000, 3.9), // was 3.7
-    ];
-    let fp_c = fingerprint_of(c.path(), corrected).await;
-    assert_ne!(
-        fp_a, fp_c,
-        "a corrected value with the same count and timestamps must change \
-         the fingerprint, or the Load step will skip a changed document"
     );
 }

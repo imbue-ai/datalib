@@ -5,7 +5,6 @@
 //! the progress accounting parse's skip-load needs, and the render
 //! cursor.
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -21,8 +20,7 @@ use super::parse::ParsedSignal;
 
 /// Bump when Signal's own contribution to the rendered output changes.
 /// The shared layout has its own number — see
-/// `datalib_etl_chat_common::LAYOUT_VERSION`, which is folded into every
-/// fingerprint alongside this one.
+/// `datalib_etl_chat_common::LAYOUT_VERSION`.
 pub const RENDER_VERSION: u32 = 5;
 
 const SOURCE_LABEL: &str = "Signal";
@@ -34,9 +32,9 @@ pub struct RenderSummary {
     pub docs_rendered: usize,
     pub docs_skipped: usize,
     pub messages_rendered: usize,
-    /// Every chat rendered, with the documents considered for it — what
-    /// the processor declares through `RenderCtx::declare_bucket`.
-    pub buckets: Vec<(String, Vec<String>)>,
+    /// Every chat rendered, by uuid — what the processor declares
+    /// through `RenderCtx::declare_bucket`.
+    pub buckets: Vec<String>,
 }
 
 /// The render params recorded alongside the cursor. `period` decides
@@ -92,12 +90,6 @@ pub fn render_all(
     progress.inc(parsed.docs_skipped as u64);
 
     let (chats, blobs_by_chat) = to_chats(parsed, source_id);
-    // Empty on purpose. chat-common skips a document whose fingerprint
-    // is unchanged, and parse has *already* made that decision from
-    // `dolt_diff` — a bucket reaching here is one we have committed to
-    // writing. Handing over a real map would skip it a second time on
-    // the wrong evidence.
-    let prior_fingerprints = HashMap::new();
 
     let ChatSummary {
         docs_rendered,
@@ -111,7 +103,6 @@ pub fn render_all(
         source_id,
         &blobs_by_chat,
         progress,
-        &prior_fingerprints,
         on_doc_complete,
     )?;
 

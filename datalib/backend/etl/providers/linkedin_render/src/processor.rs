@@ -51,6 +51,10 @@ impl RenderProcessor for LinkedinRender {
         Some(crate::render::RENDER_VERSION)
     }
 
+    fn render_params(&self) -> serde_json::Value {
+        datalib_etl_chat_common::render::layout_params()
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         // This renderer walks the whole raw store every run, so the set it
         // considered is the complete one: anything else the render store
@@ -66,34 +70,17 @@ impl RenderProcessor for LinkedinRender {
         };
 
         // Every message-shaped feed (DMs + AI-coach transcripts) renders.
-        let r_pass = crate::render::render(
-            &source,
-            ctx.progress,
-            ctx.prior_fingerprints,
-            &mut on_doc,
-            &mut seen,
-        )
-        .context("linkedin render")?;
+        let r_pass = crate::render::render(&source, ctx.progress, &mut on_doc, &mut seen)
+            .context("linkedin render")?;
         // Connections render as first-class contacts via the shared contact
         // renderer (sibling of the chat path above).
-        let c_pass = crate::connections::render_connections(
-            &source,
-            ctx.progress,
-            ctx.prior_fingerprints,
-            &mut on_doc,
-            &mut seen,
-        )
-        .context("linkedin connections render")?;
+        let c_pass =
+            crate::connections::render_connections(&source, ctx.progress, &mut on_doc, &mut seen)
+                .context("linkedin connections render")?;
         // Your own posts (Shares) and the comments you left, grouped one
         // chat-style thread per post, with linkouts back to linkedin.com.
-        let p_pass = crate::posts::render_posts(
-            &source,
-            ctx.progress,
-            ctx.prior_fingerprints,
-            &mut on_doc,
-            &mut seen,
-        )
-        .context("linkedin posts render")?;
+        let p_pass = crate::posts::render_posts(&source, ctx.progress, &mut on_doc, &mut seen)
+            .context("linkedin posts render")?;
 
         // One sweep over the union of all three feeds: each contributes a
         // slice of this source's documents, and sweeping per feed would

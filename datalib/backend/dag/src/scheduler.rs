@@ -295,6 +295,12 @@ impl Runner {
         // pass lands. Without this the step would be dropped from `ready`
         // and the run would never terminate it.
         let mut final_pass_owed: Vec<bool> = vec![false; n];
+        // Set when a seal reached a consumer while a pass of it was in
+        // flight. One more pass follows when that one lands -- one,
+        // however many seals arrived, since the next pass reads everything
+        // sealed so far. Without it the rows waited for the next seal from
+        // anyone, or for the end of the run.
+        let mut streaming_pass_owed: Vec<bool> = vec![false; n];
         let mut early: Vec<bool> = vec![false; n];
         let mut warned_not_streaming: Vec<bool> = vec![false; n];
         let mut queue = QueueLedger::new(n);
@@ -549,6 +555,7 @@ impl Runner {
                             &in_flight,
                             &status,
                             &mut streaming_ready,
+                            &mut streaming_pass_owed,
                         );
                     }
                     None
@@ -689,12 +696,37 @@ impl Runner {
                         fields: None,
                     });
                     errors[i] = None;
+                } else if streams[i]
+                    && matches!(st, StepStatus::Succeeded { changed } if changed > 0)
+                {
+                    // An early pass that wrote something new is a seal for
+                    // the next hop, the same as a checkpoint: `versions`
+                    // already carries what it produced, and its consumers
+                    // may start on it now. Without this a chain streams one
+                    // hop only -- `render` ran on every `ingest` checkpoint,
+                    // but `grid_index` heard nothing until `render` went
+                    // terminal, after the download was over.
+                    enqueue_streaming_consumers(
+                        graph,
+                        i,
+                        &remaining_deps,
+                        &in_flight,
+                        &status,
+                        &mut streaming_ready,
+                        &mut streaming_pass_owed,
+                    );
                 }
                 // Its deps finished while it was running, so the final
                 // pass it is owed was held back rather than dispatched.
+                // That pass reads everything, so it settles any streaming
+                // pass owed as well.
                 if final_pass_owed[i] {
                     final_pass_owed[i] = false;
+                    streaming_pass_owed[i] = false;
                     ready.push_back(i);
+                } else if streaming_pass_owed[i] {
+                    streaming_pass_owed[i] = false;
+                    streaming_ready.push_back(i);
                 }
                 state.save(&self.data_root).context("save dag state")?;
                 continue;
@@ -727,6 +759,7 @@ impl Runner {
                     &in_flight,
                     &status,
                     &mut streaming_ready,
+                    &mut streaming_pass_owed,
                 );
             }
             // Persist after every terminal step so a crash mid-run
@@ -1203,10 +1236,11 @@ impl QueueLedger {
 ///   because the ordinary dispatch runs first in the same iteration and the
 ///   in-flight guard then swallows the early one. Kept because relying on
 ///   that ordering is not something the next reader should have to work out.
-/// - already in flight: a second instance is a second writer on one tree, and
-///   the notification is **dropped, not queued** -- the next one, or the final
-///   pass, subsumes it. Queueing would build a backlog of passes over data
-///   that has already moved on.
+/// - already in flight: a second instance is a second writer on one tree, so
+///   the notification is **not queued** -- it is folded into one owed pass,
+///   dispatched when the current one lands. One pass, however many seals
+///   arrived meanwhile: the next pass reads everything sealed so far, and a
+///   queue would be a backlog of passes over data that has already moved on.
 /// - already terminal: nothing left to tell it.
 fn enqueue_streaming_consumers(
     graph: &Graph,
@@ -1215,9 +1249,14 @@ fn enqueue_streaming_consumers(
     in_flight: &[bool],
     status: &[Option<StepStatus>],
     streaming_ready: &mut VecDeque<usize>,
+    streaming_pass_owed: &mut [bool],
 ) {
     for &c in &graph.dependents[producer] {
-        if remaining_deps[c] == 0 || in_flight[c] || status[c].is_some() {
+        if remaining_deps[c] == 0 || status[c].is_some() {
+            continue;
+        }
+        if in_flight[c] {
+            streaming_pass_owed[c] = true;
             continue;
         }
         if !streaming_ready.contains(&c) {
@@ -1670,6 +1709,92 @@ mod tests {
         assert_eq!(checkpoints, 3, "every checkpoint reaches the event stream");
     }
 
+    /// A chain of three. The middle step's early pass writes new output,
+    /// and that output has to reach the last step while the first is
+    /// still running: an early pass that completes is a seal for the next
+    /// hop, exactly as a checkpoint is. Without that a chain streams one
+    /// hop only -- the first consumer runs early, but nothing downstream of
+    /// it moves until it goes terminal, which is after the producer has
+    /// finished. For `ingest -> render -> grid_index` that meant no row
+    /// reached the grid until the download was over.
+    #[tokio::test]
+    async fn an_early_pass_that_produced_output_dispatches_its_own_consumers() {
+        let root = tempfile::tempdir().unwrap();
+        let sink_passes = Arc::new(AtomicU32::new(0));
+        // How many times the sink had run by the time the producer
+        // finished: the number this test is about.
+        let sink_passes_at_producer_end = Arc::new(AtomicU32::new(0));
+
+        // Two batches. After sealing each, wait (bounded, so a regression
+        // fails rather than hangs) for the sink to have caught up with it.
+        let producer = {
+            let sink_passes = sink_passes.clone();
+            let at_end = sink_passes_at_producer_end.clone();
+            StepSpec::new(
+                "slack/raw",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let sink_passes = sink_passes.clone();
+                    let at_end = at_end.clone();
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        for k in 0..2u32 {
+                            std::fs::write(dir.join("data.txt"), format!("batch{k}")).unwrap();
+                            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                            while sink_passes.load(Ordering::SeqCst) < k + 1
+                                && std::time::Instant::now() < deadline
+                            {
+                                ctx.checkpoint(&format!("v{k}"));
+                                tokio::time::sleep(Duration::from_millis(2)).await;
+                            }
+                        }
+                        at_end.store(sink_passes.load(Ordering::SeqCst), Ordering::SeqCst);
+                        std::fs::write(dir.join("data.txt"), "final").unwrap();
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "final")],
+                        })
+                    }
+                }),
+            )
+            .streams_output()
+        };
+        // Reads whatever the producer has written and reports a version
+        // derived from it, so an early pass over a new batch is new output.
+        let middle = StepSpec::new(
+            "slack/rendered",
+            StepRun::in_process(move |ctx: StepCtx| async move {
+                let dir = ctx.path_str(&ctx.step_id);
+                std::fs::create_dir_all(&dir).unwrap();
+                let read = std::fs::read_to_string(ctx.path_str("slack/raw").join("data.txt"))
+                    .unwrap_or_default();
+                std::fs::write(dir.join("out.txt"), &read).unwrap();
+                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                let version = blake3::hash(read.as_bytes()).to_hex().to_string();
+                Ok(StepOutcome {
+                    outputs: vec![ArtifactState::versioned(&pat, version)],
+                })
+            }),
+        )
+        .input("slack/raw")
+        .streams_output();
+        let graph = Graph::build(vec![
+            producer,
+            middle,
+            counting_consumer("unified_index/grid", "slack/rendered", sink_passes.clone()),
+        ])
+        .unwrap();
+
+        let report = runner(root.path()).run(&graph).await.unwrap();
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(
+            sink_passes_at_producer_end.load(Ordering::SeqCst) >= 2,
+            "the last step ran {} time(s) before the first finished; \
+             a middle step's early pass must wake its own consumers",
+            sink_passes_at_producer_end.load(Ordering::SeqCst)
+        );
+    }
+
     /// Without the capability nothing streams, and the consumer runs once.
     /// This is the guard that keeps a sink which cannot be read mid-write
     /// from being read mid-write.
@@ -1801,6 +1926,325 @@ mod tests {
             n < 50,
             "checkpoints must be dropped while the consumer runs, not queued (ran {n} times)"
         );
+    }
+
+    /// A seal that lands while the fan-in is mid-pass is not queued -- a
+    /// second instance would be a second writer on one tree -- but it is
+    /// not forgotten either: one more pass follows as soon as the current
+    /// one lands, and reads what the seal announced. Without that, rows
+    /// sealed by one source while the index was busy with another sat
+    /// there until the next seal from anyone, or the end of the run.
+    ///
+    /// Two producers, forced to interleave: `email` seals only once the
+    /// fan-in is inside its pass over `slack`, and the pass holds until
+    /// that seal has been sent. Both producers then stay alive until the
+    /// fan-in has run again -- bounded, so a regression fails rather than
+    /// hangs -- and record how many passes it had made when they finished.
+    #[tokio::test]
+    async fn a_seal_arriving_mid_pass_gets_one_more_pass_after_it() {
+        use std::sync::atomic::AtomicBool;
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+        let concurrent = Arc::new(AtomicU32::new(0));
+        let max_seen = Arc::new(AtomicU32::new(0));
+        let in_pass = Arc::new(AtomicBool::new(false));
+        let email_sealed = Arc::new(AtomicBool::new(false));
+        // The fewest passes any producer had seen when it finished. The
+        // minimum, because a producer giving up its wait and finishing is
+        // itself a seal that starts a pass -- the *other* producer would
+        // then see two, and the maximum would pass for the wrong reason.
+        let passes_at_producers_end = Arc::new(AtomicU32::new(u32::MAX));
+
+        async fn until(flag: impl Fn() -> bool) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !flag() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        }
+
+        let producer = |name: &str, seal_when: Arc<AtomicBool>, sealed: Arc<AtomicBool>| {
+            let passes = passes.clone();
+            let at_end = passes_at_producers_end.clone();
+            StepSpec::new(
+                format!("{name}/rendered_md"),
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (seal_when, sealed, passes, at_end) = (
+                        seal_when.clone(),
+                        sealed.clone(),
+                        passes.clone(),
+                        at_end.clone(),
+                    );
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("data.md"), "rows").unwrap();
+                        until(|| seal_when.load(Ordering::SeqCst)).await;
+                        ctx.checkpoint("v1");
+                        sealed.store(true, Ordering::SeqCst);
+                        until(|| passes.load(Ordering::SeqCst) >= 2).await;
+                        at_end.fetch_min(passes.load(Ordering::SeqCst), Ordering::SeqCst);
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "final")],
+                        })
+                    }
+                }),
+            )
+            .streams_output()
+        };
+        let always = Arc::new(AtomicBool::new(true));
+        let slack = producer("slack", always, Arc::new(AtomicBool::new(false)));
+        let email = producer("email", in_pass.clone(), email_sealed.clone());
+
+        let grid_index = {
+            let (passes, concurrent, max_seen, in_pass, email_sealed) = (
+                passes.clone(),
+                concurrent.clone(),
+                max_seen.clone(),
+                in_pass.clone(),
+                email_sealed.clone(),
+            );
+            StepSpec::new(
+                "unified_index/grid",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (passes, concurrent, max_seen, in_pass, email_sealed) = (
+                        passes.clone(),
+                        concurrent.clone(),
+                        max_seen.clone(),
+                        in_pass.clone(),
+                        email_sealed.clone(),
+                    );
+                    async move {
+                        let now = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_seen.fetch_max(now, Ordering::SeqCst);
+                        // The first pass holds until email has sealed into
+                        // it, so that seal is guaranteed to land mid-pass.
+                        if passes.load(Ordering::SeqCst) == 0 {
+                            in_pass.store(true, Ordering::SeqCst);
+                            until(|| email_sealed.load(Ordering::SeqCst)).await;
+                            // The scheduler reads the seal off a channel;
+                            // give it a moment to have done so before this
+                            // pass lands.
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("index.txt"), "x").unwrap();
+                        passes.fetch_add(1, Ordering::SeqCst);
+                        concurrent.fetch_sub(1, Ordering::SeqCst);
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            )
+            .input("slack/rendered_md")
+            .input("email/rendered_md")
+        };
+
+        let graph = Graph::build(vec![slack, email, grid_index]).unwrap();
+        let rec = Arc::new(Recorder::default());
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = tokio::time::timeout(Duration::from_secs(15), r.run(&graph))
+            .await
+            .expect("the run must terminate")
+            .unwrap();
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        let trace: Vec<String> = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::StepStart { step, .. } => Some(format!("start {step}")),
+                Event::StepFinish { step, .. } => Some(format!("finish {step}")),
+                Event::Checkpoint { step, version, .. } => Some(format!("seal {step} {version}")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            1,
+            "two instances of the fan-in ran at once"
+        );
+        assert!(
+            passes_at_producers_end.load(Ordering::SeqCst) >= 2,
+            "email's seal landed while the fan-in was busy with slack and was then \
+             forgotten: only {} pass(es) had run when the producers finished; \
+             events: {trace:#?}",
+            passes_at_producers_end.load(Ordering::SeqCst)
+        );
+    }
+
+    /// Many seals landing while the fan-in is mid-pass collapse into
+    /// *one* follow-up pass, and that pass reads all of them. Each
+    /// producer seals once to get the fan-in started, then five more
+    /// times while it holds that first pass; when it lands, exactly one
+    /// more pass runs before the producers finish -- not one per seal,
+    /// and not zero -- and the queue the runner keeps per producer goes
+    /// from everything sealed mid-pass straight to empty.
+    #[tokio::test]
+    async fn seals_landing_mid_pass_collapse_into_one_follow_up_pass() {
+        use std::sync::atomic::AtomicBool;
+        const SEALS_EACH: u32 = 5;
+        const ROWS_EACH: u64 = 10;
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+        let concurrent = Arc::new(AtomicU32::new(0));
+        let max_seen = Arc::new(AtomicU32::new(0));
+        let in_pass = Arc::new(AtomicBool::new(false));
+        let sealed = Arc::new(AtomicU32::new(0));
+        // Each producer's reading of the pass count as it finished, after
+        // giving a wrongly-owed third pass time to show up.
+        let slack_saw = Arc::new(AtomicU32::new(0));
+        let email_saw = Arc::new(AtomicU32::new(0));
+
+        async fn until(flag: impl Fn() -> bool) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !flag() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        }
+
+        let producer = |name: &str, saw: Arc<AtomicU32>| {
+            let (passes, in_pass, sealed) = (passes.clone(), in_pass.clone(), sealed.clone());
+            StepSpec::new(
+                format!("{name}/rendered_md"),
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (passes, in_pass, sealed, saw) =
+                        (passes.clone(), in_pass.clone(), sealed.clone(), saw.clone());
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("data.md"), "rows").unwrap();
+                        // One seal to start the fan-in; every other lands
+                        // while it is busy.
+                        ctx.checkpoint_rows("v0", ROWS_EACH);
+                        until(|| in_pass.load(Ordering::SeqCst)).await;
+                        for k in 1..=SEALS_EACH {
+                            ctx.checkpoint_rows(&format!("v{k}"), ROWS_EACH);
+                            sealed.fetch_add(1, Ordering::SeqCst);
+                        }
+                        until(|| passes.load(Ordering::SeqCst) >= 2).await;
+                        // A pass wrongly owed per seal would be dispatched
+                        // the moment the follow-up lands; give it room.
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        saw.store(passes.load(Ordering::SeqCst), Ordering::SeqCst);
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "final")],
+                        })
+                    }
+                }),
+            )
+            .streams_output()
+        };
+
+        let grid_index = {
+            let (passes, concurrent, max_seen, in_pass, sealed) = (
+                passes.clone(),
+                concurrent.clone(),
+                max_seen.clone(),
+                in_pass.clone(),
+                sealed.clone(),
+            );
+            StepSpec::new(
+                "unified_index/grid",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (passes, concurrent, max_seen, in_pass, sealed) = (
+                        passes.clone(),
+                        concurrent.clone(),
+                        max_seen.clone(),
+                        in_pass.clone(),
+                        sealed.clone(),
+                    );
+                    async move {
+                        let now = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_seen.fetch_max(now, Ordering::SeqCst);
+                        if passes.load(Ordering::SeqCst) == 0 {
+                            in_pass.store(true, Ordering::SeqCst);
+                            until(|| sealed.load(Ordering::SeqCst) >= 2 * SEALS_EACH).await;
+                            // The seals cross a channel; let the scheduler
+                            // read every one before this pass lands.
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("index.txt"), "x").unwrap();
+                        passes.fetch_add(1, Ordering::SeqCst);
+                        concurrent.fetch_sub(1, Ordering::SeqCst);
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            )
+            .input("slack/rendered_md")
+            .input("email/rendered_md")
+        };
+
+        let graph = Graph::build(vec![
+            producer("slack", slack_saw.clone()),
+            producer("email", email_saw.clone()),
+            grid_index,
+        ])
+        .unwrap();
+        let rec = Arc::new(Recorder::default());
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = tokio::time::timeout(Duration::from_secs(15), r.run(&graph))
+            .await
+            .expect("the run must terminate")
+            .unwrap();
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            1,
+            "two fan-in passes overlapped"
+        );
+        for (name, saw) in [("slack", &slack_saw), ("email", &email_saw)] {
+            assert_eq!(
+                saw.load(Ordering::SeqCst),
+                2,
+                "{name}: {SEALS_EACH} seals each from two producers, landing mid-pass, \
+                 must wake the fan-in exactly once more",
+            );
+        }
+
+        // The queue the runner keeps per producer: every seal piles on
+        // while the fan-in is busy, and the one follow-up pass takes the
+        // whole pile off in a single step. (The first pass landing may
+        // take its own starting seal off first, for the producer whose
+        // seal dispatched it -- so the pile just before the drain is
+        // at least the mid-pass seals, not exactly all of them.)
+        let events = rec.0.lock().unwrap();
+        for producer in ["slack/rendered_md", "email/rendered_md"] {
+            let mut queued: Vec<i64> = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Metric {
+                        step,
+                        name,
+                        labels,
+                        value,
+                    } if step == "unified_index/grid"
+                        && name == "queued"
+                        && labels.get("from").map(String::as_str) == Some(producer) =>
+                    {
+                        Some(*value)
+                    }
+                    _ => None,
+                })
+                .collect();
+            queued.dedup();
+            let mid_pass = (SEALS_EACH as u64 * ROWS_EACH) as i64;
+            assert!(
+                queued.contains(&(mid_pass + ROWS_EACH as i64)),
+                "{producer}: the queue never held the starting seal plus every mid-pass one: {queued:?}"
+            );
+            let n = queued.len();
+            assert!(
+                n >= 2 && queued[n - 1] == 0 && queued[n - 2] >= mid_pass,
+                "{producer}: one pass must drain the whole queue in one step, not one seal of it: {queued:?}"
+            );
+        }
     }
 
     /// A streaming pass must not wait behind `parallelism`. With every
@@ -1960,6 +2404,17 @@ mod tests {
             .find(|s| s.id == "unified_index/grid")
             .unwrap();
         assert!(idx.status.is_ok(), "{:?}", idx.status);
+        // And the pass that followed the first one read *both* finals:
+        // the second producer's finish arrived while the fan-in was busy
+        // with the first's, and held-back is not the same as dropped.
+        let st = DagState::load(root.path()).unwrap();
+        let read = &st.steps["unified_index/grid"].input_versions;
+        for producer in ["slack/rendered_md", "email/rendered_md"] {
+            assert!(
+                read.get(producer).is_some_and(|v| v.ends_with(":final")),
+                "the fan-in's last pass never read {producer}'s final output: {read:?}"
+            );
+        }
     }
 
     /// A producer *finishing* should start the fan-in, not just a

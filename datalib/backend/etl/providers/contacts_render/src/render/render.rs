@@ -1,7 +1,6 @@
 //! Map parsed vCards into [`NormalizedContact`]s and hand them to the
 //! shared [`datalib_etl_contact_common`] renderer.
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -29,7 +28,6 @@ pub fn render_all(
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     // Every document this render considered, skipped ones included — the
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
@@ -55,7 +53,6 @@ pub fn render_all(
         out_dir,
         source_id,
         progress,
-        prior_fingerprints,
         on_doc_complete,
     )?;
     seen.extend(summary.documents.iter().cloned());

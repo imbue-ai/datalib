@@ -1,6 +1,5 @@
 //! End-to-end over the fixture corpus: scan → store → render.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -91,7 +90,6 @@ impl Harness {
 
     async fn render(
         &self,
-        prior: &HashMap<String, String>,
     ) -> Result<(
         render::RenderSummary,
         Vec<datalib_etl_render::grid_index::RenderedMarkdown>,
@@ -106,7 +104,6 @@ impl Harness {
             &self.out_dir,
             STANZA,
             &datalib_etl::progress::Progress::noop(),
-            prior,
             &mut sink,
         )
         .await?;
@@ -204,7 +201,7 @@ async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
     assert_eq!(r.get::<i64, _>("has_encoding_issues"), 0);
     db.close().await;
 
-    let (_, emitted) = h.render(&HashMap::new()).await?;
+    let (_, emitted) = h.render().await?;
     let survey = emitted
         .iter()
         .find(|m| {
@@ -458,7 +455,7 @@ async fn rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
 async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<()> {
     let h = Harness::new();
     h.scan().await?;
-    let (s, emitted) = h.render(&HashMap::new()).await?;
+    let (s, emitted) = h.render().await?;
 
     // Exactly the four renderable documents, and 5 pages between them.
     // Pinned rather than bounded: every page here is embedded by the qmd
@@ -529,7 +526,7 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
 async fn every_qmd_path_equals_its_markdowns_md_path() -> Result<()> {
     let h = Harness::new();
     h.scan().await?;
-    let (_, emitted) = h.render(&HashMap::new()).await?;
+    let (_, emitted) = h.render().await?;
     assert!(
         !emitted.is_empty(),
         "nothing rendered; the test proves nothing"
@@ -565,7 +562,7 @@ async fn every_qmd_path_equals_its_markdowns_md_path() -> Result<()> {
 async fn scanned_documents_are_recorded_but_not_rendered() -> Result<()> {
     let h = Harness::new();
     h.scan().await?;
-    let (_, emitted) = h.render(&HashMap::new()).await?;
+    let (_, emitted) = h.render().await?;
 
     // No emitted document may come from the image-only fixture.
     for m in &emitted {
@@ -575,28 +572,5 @@ async fn scanned_documents_are_recorded_but_not_rendered() -> Result<()> {
             "the scanned fixture must not render until OCR lands"
         );
     }
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn unchanged_documents_are_skipped_on_re_render() -> Result<()> {
-    let h = Harness::new();
-    h.scan().await?;
-    let (first, emitted) = h.render(&HashMap::new()).await?;
-    assert!(first.converted > 0);
-
-    // Feed back the fingerprints the first pass produced — that is what
-    // the orchestrator does between runs.
-    let prior: HashMap<String, String> = emitted
-        .iter()
-        .map(|m| (m.markdown_uuid.clone(), m.source_fingerprint.clone()))
-        .collect();
-
-    let (second, _) = h.render(&prior).await?;
-    assert_eq!(
-        second.converted, 0,
-        "nothing changed; nothing should re-convert"
-    );
-    assert_eq!(second.skipped_unchanged, first.converted);
     Ok(())
 }

@@ -59,15 +59,8 @@ impl RenderProcessor for GithubRender {
         }
 
         let mut on_doc = |md| ctx.emit_doc(md);
-        let s = render_github(
-            &parsed,
-            ctx.root,
-            ctx.name,
-            ctx.progress,
-            ctx.prior_fingerprints,
-            &mut on_doc,
-        )
-        .context("render_github")?;
+        let s = render_github(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
+            .context("render_github")?;
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }

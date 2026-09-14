@@ -1,81 +1,14 @@
 //! Build the `grid_rows` for one GitLab MR document.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{Hash, Hasher};
 
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
-use serde_json::Value;
 
 use super::parse::{MergeRequestRow, NoteRow, NoteSection};
 
 pub const RENDER_VERSION: u32 = 1;
-
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
-    }
-}
-
-fn note_json(n: &NoteRow) -> Value {
-    serde_json::json!({
-        "uuid": n.uuid,
-        "kind": n.kind,
-        "section": format!("{:?}", n.section),
-        "external_id": n.external_id,
-        "in_reply_to_id": n.in_reply_to_id,
-        "discussion_id": n.discussion_id,
-        "author_username": n.author_username,
-        "body": n.body,
-        "path": n.path,
-        "line": n.line,
-        "commit_sha": n.commit_sha,
-        "created_at": n.created_at,
-        "updated_at": n.updated_at,
-    })
-}
-
-fn mr_json(mr: &MergeRequestRow) -> Value {
-    serde_json::json!({
-        "uuid": mr.uuid,
-        "project": mr.project_full_path,
-        "mr_iid": mr.mr_iid,
-        "title": mr.title,
-        "body": mr.body,
-        "state": mr.state,
-        "head_sha": mr.head_sha,
-        "base_sha": mr.base_sha,
-        "merged_at": mr.merged_at,
-        "updated_at": mr.updated_at,
-    })
-}
-
-pub fn fingerprint_for_mr(mr: &MergeRequestRow, notes: &[NoteRow]) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    RENDER_VERSION.hash(&mut h);
-    serde_json::to_string(&canonicalize(&mr_json(mr)))
-        .unwrap_or_default()
-        .hash(&mut h);
-    let mut sorted: Vec<&NoteRow> = notes.iter().collect();
-    sorted.sort_by_key(|n| n.external_id);
-    for n in sorted {
-        serde_json::to_string(&canonicalize(&note_json(n)))
-            .unwrap_or_default()
-            .hash(&mut h);
-    }
-    format!("{:016x}", h.finish())
-}
 
 fn ordered_notes(notes: &[NoteRow]) -> Vec<&NoteRow> {
     let mut general: Vec<&NoteRow> = notes

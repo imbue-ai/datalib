@@ -13,8 +13,8 @@ pub mod render;
 
 /// Bump when the rendered markdown layout or grid row shape changes
 /// enough that every existing doc needs re-rendering. v7 was the
-/// initial Rust port (same row shape as the Python `v6`, just to
-/// flip the fingerprint once). v8 adds the per-section `<div
+/// initial Rust port (same row shape as the Python `v6`, bumped so
+/// everything re-rendered once). v8 adds the per-section `<div
 /// data-section-uuid="…">` deep-link wrappers + per-paragraph grid
 /// rows + the book index's chapter cross-link table. v9 drops the
 /// inline `*Other:*` cross-language hyperlink (now expressed as an

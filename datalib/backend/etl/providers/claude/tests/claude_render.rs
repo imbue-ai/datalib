@@ -141,7 +141,6 @@ fn docs_bundle(docs: &[datalib_etl_render::grid_index::RenderedMarkdown]) -> Str
         out.push_str(&d.markdown_uuid);
         out.push_str(" ===\n");
         let v = serde_json::json!({
-            "source_fingerprint": d.source_fingerprint,
             "render_version": d.render_version,
             "rows": d.rows,
             "edges": d.edges,

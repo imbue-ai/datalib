@@ -41,6 +41,10 @@ impl RenderProcessor for ClaudeRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
+    fn render_params(&self) -> serde_json::Value {
+        datalib_etl_chat_common::render::layout_params()
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let parsed = parse(&self.raw_path, ctx.raw_cursor)
@@ -71,11 +75,11 @@ impl RenderProcessor for ClaudeRender {
         // A named bucket is a conversation or a project; both uuids are
         // declared, and the one that names nothing removes nothing.
         for bucket in parsed.scan.changed_buckets.iter().flatten() {
-            ctx.declare_bucket(&crate::render::ids::conversation(bucket).uuid, &[]);
-            ctx.declare_bucket(&crate::render::ids::project(bucket).uuid, &[]);
+            ctx.declare_bucket(&crate::render::ids::conversation(bucket).uuid, &[])?;
+            ctx.declare_bucket(&crate::render::ids::project(bucket).uuid, &[])?;
         }
-        for (bucket, documents) in &buckets {
-            ctx.declare_bucket(bucket, documents);
+        for bucket in &buckets {
+            ctx.declare_bucket(bucket, &[])?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);

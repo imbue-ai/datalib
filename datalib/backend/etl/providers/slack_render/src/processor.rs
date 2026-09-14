@@ -38,6 +38,10 @@ impl RenderProcessor for SlackRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
+    fn render_params(&self) -> serde_json::Value {
+        datalib_etl_chat_common::render::layout_params()
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let parsed = parse(&self.raw_path, ctx.raw_cursor)
@@ -55,10 +59,10 @@ impl RenderProcessor for SlackRender {
         // A thread the diff named that has no message left builds no
         // chat, so chat-common never sees it; the named set goes first.
         for thread_uuid in parsed.scan.changed_threads.iter().flatten() {
-            ctx.declare_bucket(thread_uuid, &[]);
+            ctx.declare_bucket(thread_uuid, &[])?;
         }
-        for (bucket, documents) in &summary.buckets {
-            ctx.declare_bucket(bucket, documents);
+        for bucket in &summary.buckets {
+            ctx.declare_bucket(bucket, &[])?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);

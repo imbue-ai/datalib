@@ -3,9 +3,7 @@
 //! each emitting into the render store all rows for
 //! that doc.
 
-use std::collections::HashMap;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -41,18 +39,15 @@ fn render_synth_ts(ts: DateTime<Utc>) -> String {
 pub struct RenderSummary {
     pub markdowns_total: usize,
     pub markdowns_rendered: usize,
-    pub markdowns_skipped: usize,
     pub rows_emitted: usize,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn render_all(
     parsed: &ParsedPerseus,
     alignments: &PerseusAlignments,
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     // Every document this render considered, skipped ones included — the
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
@@ -88,7 +83,6 @@ pub fn render_all(
             book,
             out_dir,
             source_id,
-            prior_fingerprints,
             &mut summary,
             on_doc_complete,
             seen,
@@ -107,7 +101,6 @@ pub fn render_all(
                     alignments,
                     out_dir,
                     source_id,
-                    prior_fingerprints,
                     &mut summary,
                     on_doc_complete,
                     seen,
@@ -130,25 +123,16 @@ fn render_book(
     book: &Book,
     out_dir: &Path,
     source_id: &str,
-    prior_fingerprints: &HashMap<String, String>,
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let m_uuid = book_uuid(&book.n);
-    let fingerprint = compute_book_fingerprint(book);
     let book_dir = render_markdown_root(out_dir, source_id).join(book_content_rel(&book.n));
     fs::create_dir_all(&book_dir).with_context(|| format!("mkdir -p {}", book_dir.display()))?;
     let md_path = book_dir.join("index.md");
 
     seen.insert(m_uuid.clone());
-
-    if prior_fingerprints.get(&m_uuid).map(String::as_str) == Some(fingerprint.as_str())
-        && md_path.exists()
-    {
-        summary.markdowns_skipped += 1;
-        return Ok(());
-    }
 
     let md = render_book_md(book);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
@@ -163,8 +147,8 @@ fn render_book(
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
-        source_fingerprint: fingerprint,
         upstream_cursor: None,
+        bucket_key: None,
         md_path,
         render_version: RENDER_VERSION,
         rows,
@@ -185,24 +169,15 @@ fn render_chapter(
     alignments: &PerseusAlignments,
     out_dir: &Path,
     source_id: &str,
-    prior_fingerprints: &HashMap<String, String>,
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let m_uuid = chapter_uuid(&book.n, &chapter.n, &edition.id);
-    let fingerprint = compute_chapter_fingerprint(book, chapter, edition, alignments);
     let rel = chapter_md_rel(source_id, &book.n, &chapter.n, &edition.id);
     let md_path = out_dir.join(&rel);
 
     seen.insert(m_uuid.clone());
-
-    if prior_fingerprints.get(&m_uuid).map(String::as_str) == Some(fingerprint.as_str())
-        && md_path.exists()
-    {
-        summary.markdowns_skipped += 1;
-        return Ok(());
-    }
 
     if let Some(parent) = md_path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
@@ -250,8 +225,8 @@ fn render_chapter(
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
-        source_fingerprint: fingerprint,
         upstream_cursor: None,
+        bucket_key: None,
         md_path,
         render_version: RENDER_VERSION,
         rows,
@@ -637,58 +612,6 @@ fn chapter_edges(
         }
     }
     edges
-}
-
-fn compute_book_fingerprint(book: &Book) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    RENDER_VERSION.hash(&mut h);
-    "book".hash(&mut h);
-    book.n.hash(&mut h);
-    book.chapters.len().hash(&mut h);
-    for c in &book.chapters {
-        c.n.hash(&mut h);
-    }
-    format!("{:016x}", h.finish())
-}
-
-fn compute_chapter_fingerprint(
-    book: &Book,
-    chapter: &Chapter,
-    edition: &Edition,
-    alignments: &PerseusAlignments,
-) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    RENDER_VERSION.hash(&mut h);
-    "chapter".hash(&mut h);
-    chapter.book_n.hash(&mut h);
-    chapter.n.hash(&mut h);
-    edition.id.hash(&mut h);
-    // Title flows into conversation_name / markdown title, so a CTS
-    // change must re-render.
-    edition.title.hash(&mut h);
-    alignments.is_aligned(&edition.id).hash(&mut h);
-    for sec in &chapter.sections {
-        let text = sec.text(&edition.id);
-        if text.is_empty() {
-            continue;
-        }
-        sec.n.hash(&mut h);
-        text.hash(&mut h);
-        // Fold in the alignment groups touching this edition so a
-        // change to `alignment_pairs` re-renders the affected docs.
-        for pa in alignments.for_section(&book.n, &chapter.n, &sec.n) {
-            if pa.a_id != edition.id && pa.b_id != edition.id {
-                continue;
-            }
-            pa.a_id.hash(&mut h);
-            pa.b_id.hash(&mut h);
-            for g in &pa.groups {
-                g.a.hash(&mut h);
-                g.b.hash(&mut h);
-            }
-        }
-    }
-    format!("{:016x}", h.finish())
 }
 
 #[cfg(test)]

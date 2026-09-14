@@ -261,9 +261,8 @@ pub enum WhenTsPrecision {
 /// equally "we do not know when this happened", which is a null column rather
 /// than a stand-in.
 ///
-/// `precision` is per-provider and not a free choice: the value reaches
-/// `source_fingerprint`, so changing it re-cuts every fingerprint that
-/// provider has and re-renders its whole tree.
+/// `precision` is per-provider and not a free choice: the value is stored
+/// on every grid row, so changing it rewrites that provider's whole tree.
 pub fn when_ts_from_unix_millis(ms: Option<i64>, precision: WhenTsPrecision) -> Option<String> {
     let ms = ms?;
     match IsoOffsetTimestamp::from_unix_millis(ms) {

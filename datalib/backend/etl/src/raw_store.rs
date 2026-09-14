@@ -248,7 +248,6 @@ mod tests {
             cas_pool: cas,
             checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(
                 crate::checkpointer::Policy::Every(crate::checkpointer::Cadence {
-                    quiet_for: std::time::Duration::ZERO,
                     at_most_every: std::time::Duration::ZERO,
                 }),
             )),

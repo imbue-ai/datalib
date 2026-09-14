@@ -144,7 +144,6 @@ fn checkpoint_cadence() -> Option<datalib_etl::checkpointer::Cadence> {
     let raw = std::env::var(ENV_CHECKPOINT_CADENCE).ok()?;
     match datalib_dag::config::CheckpointCadence::decode(&raw) {
         Some(c) => Some(datalib_etl::checkpointer::Cadence {
-            quiet_for: std::time::Duration::from_secs_f64(c.quiet_for_secs),
             at_most_every: std::time::Duration::from_secs_f64(c.at_most_every_secs),
         }),
         None => {

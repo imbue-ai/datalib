@@ -13,5 +13,4 @@ datalib-etl = { path = ".." }
 datalib-etl-render = { path = "../render" }
 datalib-schema = { path = "../../schema" }
 anyhow = { workspace = true }
-sha2 = { workspace = true }
 tracing = "0.1"

@@ -1,15 +1,15 @@
 //! The render processor and its run context.
 //!
 //! Split from [`datalib_etl::processor`], which keeps the download
-//! half. The two contexts share no fields: a render pass wants prior
-//! fingerprints and the three document sinks, a download wants the
+//! half. The two contexts share no fields: a render pass wants the raw
+//! cursor and the three document sinks, a download wants the
 //! store handle, the metrics scope and the interrupt hooks. Fusing
 //! them into one struct meant every field was `Option` and half the
 //! accessors panicked on the wrong phase — and, because the sinks
 //! carry `RenderedMarkdown`, it also put `datalib_schema` in front of
 //! every downloader.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use datalib_etl::progress::Progress;
 
 use crate::grid_index::RenderedMarkdown;
+pub use crate::indexed_markdown::Input;
 
 /// One source's render wave, as a unit the step driver can run.
 #[async_trait]
@@ -87,9 +88,10 @@ pub type RemoveCallback<'a> = dyn FnMut(&str) -> Result<usize> + Send + 'a;
 /// miss a deletion the diff failed to mention.
 pub type RetainCallback<'a> = dyn FnMut(&HashSet<String>) + Send + 'a;
 
-/// A bucket the run rendered, with the documents it considered for it:
-/// whatever else the store holds under that bucket is gone.
-pub type DeclareCallback<'a> = dyn FnMut(&str, &[String]) + Send + 'a;
+/// A bucket the run rendered, with every raw row its render asked for:
+/// whatever else the store holds under that bucket is gone, and a later
+/// change to any of those rows names the bucket again.
+pub type DeclareCallback<'a> = dyn FnMut(&str, &[Input]) -> Result<()> + Send + 'a;
 
 /// Interior-mutable wrapper around the orchestrator's fused-Load callback so
 /// a render processor can emit through a shared `&RenderCtx`. The `Mutex`
@@ -125,14 +127,21 @@ pub struct RenderCtx<'a> {
     pub now: &'a str,
     /// Per-source progress hook.
     pub progress: &'a Progress,
-    /// Prior-run per-markdown fingerprints, for fingerprint-driven
-    /// incremental skips. Empty on a run that renders everything.
-    pub prior_fingerprints: &'a HashMap<String, String>,
     /// The raw-store commit the previous render consumed: the `from_ref`
     /// for this run's `dolt_diff` scan. `None` means render everything —
     /// there is no earlier render, or the driver wants every bucket again
     /// (renderer version or params changed).
     pub raw_cursor: Option<&'a str>,
+    /// The raw-store commit the driver pinned for this run, when it did.
+    /// A provider pins the same one (`Pin::at`) rather than sampling HEAD,
+    /// so what it loads is what `stale_buckets` was computed against.
+    pub raw_pin: Option<&'a str>,
+    /// Buckets whose declared inputs changed since `raw_cursor`, from the
+    /// driver's reverse lookup in `render_inputs`: render these, plus
+    /// whatever the provider's own forward scan adds. `None` when the
+    /// driver could not say — no cursor, or nothing declared yet — and
+    /// the provider's scan is on its own.
+    pub stale_buckets: Option<&'a HashSet<String>>,
     emit: DocSink<'a>,
     remove: RemoveSink<'a>,
     retain: RetainSink<'a>,
@@ -147,8 +156,9 @@ impl<'a> RenderCtx<'a> {
         root: &'a Path,
         now: &'a str,
         progress: &'a Progress,
-        prior_fingerprints: &'a HashMap<String, String>,
         raw_cursor: Option<&'a str>,
+        raw_pin: Option<&'a str>,
+        stale_buckets: Option<&'a HashSet<String>>,
         on_doc: &'a mut DocCallback<'a>,
         on_remove: &'a mut RemoveCallback<'a>,
         on_retain: &'a mut RetainCallback<'a>,
@@ -159,8 +169,9 @@ impl<'a> RenderCtx<'a> {
             root,
             now,
             progress,
-            prior_fingerprints,
             raw_cursor,
+            raw_pin,
+            stale_buckets,
             emit: DocSink {
                 cb: Mutex::new(on_doc),
             },
@@ -177,17 +188,20 @@ impl<'a> RenderCtx<'a> {
         }
     }
 
-    /// This run rendered the bucket `conversation_uuid` and these are the
-    /// documents it considered for it — emitted or skipped as unchanged.
-    /// Any other document the store holds under that conversation is one
-    /// the bucket no longer produces: a period that emptied, a thread
-    /// whose last message went. The driver removes them at the end.
+    /// This run rendered `bucket_key`, and `inputs` is every raw row it
+    /// asked for — found or not: a thread rendered while its author's
+    /// `users` row had not arrived records `(users, U123)` anyway, so the
+    /// row's arrival names the thread. Any document the store holds
+    /// under that bucket which this run did not emit is one the bucket
+    /// no longer produces, and the driver removes it at the end.
     ///
     /// Only for a bucket the run actually rendered; a bucket it skipped
-    /// says nothing about its documents.
-    pub fn declare_bucket(&self, conversation_uuid: &str, documents: &[String]) {
+    /// says nothing about its documents. Every emitted document carries
+    /// its `bucket_key` — that is how the driver knows which are the
+    /// bucket's.
+    pub fn declare_bucket(&self, bucket_key: &str, inputs: &[Input]) -> Result<()> {
         let mut cb = self.declare.cb.lock().unwrap();
-        (cb)(conversation_uuid, documents)
+        (cb)(bucket_key, inputs)
     }
 
     pub fn emit_doc(&self, md: RenderedMarkdown) -> Result<()> {
@@ -228,10 +242,10 @@ impl<'a> RenderCtx<'a> {
     /// scan must not call it: most of what it did not name this run it
     /// simply did not look at. That one wants `remove_conversation`.
     ///
-    /// Include documents skipped on an unchanged fingerprint. "Considered
-    /// and unchanged" and "no longer there" are the two states this call
-    /// separates, and a renderer that reports only what it re-rendered
-    /// deletes its own steady state.
+    /// Include every document the walk saw, rendered or not. "Considered"
+    /// and "no longer there" are the two states this call separates, and
+    /// a renderer that reports only what it re-rendered deletes its own
+    /// steady state.
     ///
     /// Calls accumulate: a source with several render processors builds the
     /// set across all of them, and the sweep runs once at the end.
@@ -266,21 +280,21 @@ mod retain_tests {
     #[test]
     fn a_pass_that_did_not_walk_does_not_sweep() {
         let swept: Mutex<Vec<usize>> = Mutex::new(Vec::new());
-        let empty: HashMap<String, String> = HashMap::new();
         let progress = Progress::noop();
 
         let mut on_doc: Box<DocCallback<'_>> = Box::new(|_| Ok(()));
         let mut on_remove: Box<RemoveCallback<'_>> = Box::new(|_| Ok(0));
         let mut on_retain: Box<RetainCallback<'_>> =
             Box::new(|ids: &HashSet<String>| swept.lock().unwrap().push(ids.len()));
-        let mut on_declare: Box<DeclareCallback<'_>> = Box::new(|_, _| {});
+        let mut on_declare: Box<DeclareCallback<'_>> = Box::new(|_, _| Ok(()));
 
         let ctx = RenderCtx::new(
             "src",
             Path::new("/tmp"),
             "2026-01-01T00:00:00+00:00",
             &progress,
-            &empty,
+            None,
+            None,
             None,
             &mut on_doc,
             &mut on_remove,

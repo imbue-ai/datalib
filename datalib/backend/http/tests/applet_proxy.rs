@@ -112,8 +112,8 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
             &RenderedMarkdown {
                 markdown_uuid: md.to_string(),
                 source_id: "slack".into(),
-                source_fingerprint: format!("fp-{md}"),
                 upstream_cursor: None,
+                bucket_key: None,
                 md_path: tree.join(format!("{md}.md")),
                 render_version: 1,
                 rows,

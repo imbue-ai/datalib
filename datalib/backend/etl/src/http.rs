@@ -290,16 +290,43 @@ pub enum HttpError {
 /// directory; per-request fixtures live at `<dir>/<provider>/<key>.json`.
 pub const PLAYBACK_ENV: &str = "DATALIB_HTTP_PLAYBACK";
 
+/// Milliseconds to wait before answering each replayed request. Playback
+/// only: a fixture answers instantly, which hides everything that depends
+/// on a download taking time — checkpoints sealing mid-run, a consumer
+/// starting on a partial store, the Manage screen showing a step in
+/// flight. The streaming e2e suite sets it to make a replayed download
+/// last long enough to watch.
+pub const PLAYBACK_DELAY_ENV: &str = "DATALIB_HTTP_PLAYBACK_DELAY_MS";
+
 enum Mode {
     Live,
-    Playback(PathBuf),
+    Playback { root: PathBuf, delay: Duration },
 }
 
 impl Mode {
     fn current() -> Self {
         match std::env::var_os(PLAYBACK_ENV) {
-            Some(v) if !v.is_empty() => Mode::Playback(PathBuf::from(v)),
+            Some(v) if !v.is_empty() => Mode::Playback {
+                root: PathBuf::from(v),
+                delay: playback_delay(),
+            },
             _ => Mode::Live,
+        }
+    }
+}
+
+fn playback_delay() -> Duration {
+    let Some(raw) = std::env::var_os(PLAYBACK_DELAY_ENV) else {
+        return Duration::ZERO;
+    };
+    match raw.to_str().and_then(|s| s.trim().parse::<u64>().ok()) {
+        Some(ms) => Duration::from_millis(ms),
+        None => {
+            tracing::warn!(
+                value = ?raw,
+                "{PLAYBACK_DELAY_ENV} is not a whole number of milliseconds; replaying with no delay"
+            );
+            Duration::ZERO
         }
     }
 }
@@ -441,7 +468,12 @@ where
         crate::download_metrics::record_api_request();
         let outcome = match Mode::current() {
             Mode::Live => live::send(req).await,
-            Mode::Playback(root) => playback::lookup(req, &root).await,
+            Mode::Playback { root, delay } => {
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
+                playback::lookup(req, &root).await
+            }
         };
 
         // Decide whether this attempt is retryable. `None` = accept (success

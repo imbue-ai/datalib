@@ -959,10 +959,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # Ids specifically, not just how many of them there are.
         #
         # Note what this does and does not prove. A steady-state re-run
-        # skips every unchanged markdown on its `source_fingerprint`, so
-        # almost nothing is re-rendered and almost no id is re-derived —
-        # this is "the index sat still", which is worth pinning but is
-        # weaker than it looks. Re-derivation is tested by run 4.
+        # reads nothing from an unmoved raw store, so almost nothing is
+        # re-rendered and almost no id is re-derived — this is "the index
+        # sat still", which is worth pinning but is weaker than it looks.
+        # Re-derivation is tested by run 4.
         self.assertEqual(
             self._index_ids(),
             ids1,
@@ -1047,11 +1047,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # --- Run 4: a brand-new data root over the same fixture.
         #
         # The one run that actually re-derives every id. Runs 2 and 3
-        # both skip on `source_fingerprint`, so no id in them is
+        # both find their raw stores unmoved, so no id in them is
         # recomputed — they pin that the index sits still, not that the
-        # recipes are reproducible. Wiping the root removes every
-        # fingerprint along with the index, so every renderer runs again
-        # from scratch.
+        # recipes are reproducible. Wiping the root removes every cursor
+        # along with the index, so every renderer runs again from scratch.
         #
         # What this catches: a recipe that reads the clock, an RNG, or
         # anything whose order is not fixed (HashMap iteration, readdir)

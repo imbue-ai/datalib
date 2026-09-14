@@ -97,8 +97,7 @@ expression: docs_bundle(&docs)
       "uuid": "47e2f247-4752-5a4c-be37-8dde30fb91b4",
       "when_ts": "2370-10-26T08:05:00+00:00"
     }
-  ],
-  "source_fingerprint": "043f50e35e487c74b89c957fce2878cb95722764120d33226e43bb2744c86687"
+  ]
 }
 === 62b1d972-57f0-5b4c-a81b-805d6c650bde ===
 {
@@ -255,8 +254,7 @@ expression: docs_bundle(&docs)
       "uuid": "c2ee776a-69c8-529c-a2de-00d0709dab1c",
       "when_ts": "2370-10-24T08:05:00+00:00"
     }
-  ],
-  "source_fingerprint": "4d91f28f724b5ec2791e9383e1d0a861d290fe62a43c609b04acccb497bf6b3c"
+  ]
 }
 === d1f64243-f79a-5057-a85b-b5f6908ecf52 ===
 {
@@ -383,6 +381,5 @@ expression: docs_bundle(&docs)
       "uuid": "92a8d8ca-452f-5651-992c-14fdd5abf300",
       "when_ts": "2370-10-25T08:05:20+00:00"
     }
-  ],
-  "source_fingerprint": "ce8c1aebc3a3f7bad47dfab1c44056fe69849b70ac21ad86cc628cfffd7723f9"
+  ]
 }

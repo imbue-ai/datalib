@@ -107,9 +107,10 @@ either way, and the chat-level grid row was already one per document.
 ## `LAYOUT_VERSION`
 
 **Bump `LAYOUT_VERSION` whenever you change what `render_markdown`
-writes.** It is hashed into every document's fingerprint beside the
-provider's own `RENDER_VERSION`, so one edit re-renders all eight
-providers. Bumping the eight by hand is the alternative, and the one
+writes.** Every chat provider declares it through
+`RenderProcessor::render_params` (`layout_params()`), so one edit
+changes every provider's render params and the driver re-renders all
+of them. Bumping the eight by hand is the alternative, and the one
 you forget is the one that keeps serving the old layout forever.
 
 It stays out of the *stored* `render_version`, which is the provider's

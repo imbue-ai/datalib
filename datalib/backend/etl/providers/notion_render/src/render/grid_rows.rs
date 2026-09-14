@@ -2,7 +2,6 @@
 //! thread row and one comment row per discussion.
 
 use std::collections::{BTreeMap, HashMap};
-use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -229,50 +228,6 @@ fn thread_rows(
     rows
 }
 
-fn canonical_json(v: &Value) -> String {
-    serde_json::to_string(&canonicalize(v)).unwrap_or_default()
-}
-
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
-    }
-}
-
-/// A page's fingerprint: its own payload plus its body plus its
-/// comments. The body is included directly rather than via its blocks,
-/// which is only sound because the stored markdown is stable for an
-/// unchanged page — signed attachment URLs are reduced to slots before
-/// storage (`ingest::slots`). Were they left signed, every page with
-/// an image would re-render on every run.
-fn fingerprint_for_page(page: &Value, markdown: &str, comments: &[&Value]) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    canonical_json(page).hash(&mut h);
-    markdown.hash(&mut h);
-    for c in comments {
-        canonical_json(c).hash(&mut h);
-    }
-    format!("{:016x}", h.finish())
-}
-
-fn fingerprint_for_discussion(comments_sorted: &[&Value]) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    for c in comments_sorted {
-        canonical_json(c).hash(&mut h);
-    }
-    format!("{:016x}", h.finish())
-}
-
 /// Result of gathering per-document row sets from a parsed Notion tree.
 pub struct DocumentRows {
     /// One per page.
@@ -285,7 +240,6 @@ pub struct PageDocument {
     pub page_uuid: String,
     pub page_title: String,
     pub rows: Vec<GridRow>,
-    pub source_fingerprint: String,
     /// What this document lost on the way here; travels with the rows
     /// so both commit together.
     pub problems: Vec<RenderProblemRow>,
@@ -299,7 +253,6 @@ pub struct ThreadDocument {
     /// resolves it to the quoted text via `ParsedNotion::anchor_text`.
     pub anchor_block_uuid: Option<String>,
     pub rows: Vec<GridRow>,
-    pub source_fingerprint: String,
     /// See [`PageDocument::problems`].
     pub problems: Vec<RenderProblemRow>,
 }
@@ -308,16 +261,8 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
     let t0 = Instant::now();
     let page_titles = build_page_titles(&parsed.pages);
 
-    // Comments carry their owning page id from the download side, so
-    // there is nothing to resolve here. Mapping a comment back to its
-    // page used to need a walk up the block tree — that is why this
-    // function once had to be checked for linearity in the block count.
-    let mut comments_by_page: HashMap<String, Vec<&Value>> = HashMap::new();
     let mut comments_by_discussion: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
     for c in &parsed.comments {
-        if let Some(pid) = c.get("page_id").and_then(|v| v.as_str()) {
-            comments_by_page.entry(pid.to_string()).or_default().push(c);
-        }
         if let Some(did) = c.get("discussion_id").and_then(|v| v.as_str()) {
             if !did.is_empty() {
                 comments_by_discussion
@@ -336,34 +281,23 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         };
         k(a).cmp(&k(b))
     };
-    for v in comments_by_page.values_mut() {
-        v.sort_by(by_created);
-    }
     for v in comments_by_discussion.values_mut() {
         v.sort_by(by_created);
     }
 
     // ── page documents ───────────────────────────────────────────────
     let mut pages: Vec<PageDocument> = Vec::with_capacity(parsed.pages.len());
-    let empty: Vec<&Value> = Vec::new();
     for page in &parsed.pages {
         let Some(pid) = page.get("id").and_then(|v| v.as_str()).map(String::from) else {
             continue;
         };
         let title = page_titles.get(&pid).cloned().unwrap_or_default();
-        let markdown = parsed
-            .markdown_by_page
-            .get(&pid)
-            .map(String::as_str)
-            .unwrap_or("");
-        let comments = comments_by_page.get(&pid).unwrap_or(&empty);
         let mut problems: Vec<RenderProblemRow> = Vec::new();
         let mut rows: Vec<GridRow> = Vec::new();
         if let Some(r) = page_row(page, &title, stanza, &parsed.user_names, &mut problems) {
             rows.push(r);
         }
         pages.push(PageDocument {
-            source_fingerprint: fingerprint_for_page(page, markdown, comments),
             page_uuid: pid,
             page_title: title,
             rows,
@@ -410,7 +344,6 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
             &mut problems,
         );
         threads.push(ThreadDocument {
-            source_fingerprint: fingerprint_for_discussion(members),
             discussion_uuid: disc_id.clone(),
             page_uuid: page_id,
             page_title: title,
@@ -564,18 +497,6 @@ mod tests {
         let mut anon = c.clone();
         anon["display_name"] = json!({"type": "user"});
         assert_eq!(comment_author(&anon).as_deref(), Some("47b71049"));
-    }
-
-    /// The fingerprint has to move when the body moves — that is what
-    /// makes an edited page re-render — and stay put otherwise.
-    #[test]
-    fn the_page_fingerprint_tracks_the_body() {
-        let p = page("p1", "A");
-        let a = fingerprint_for_page(&p, "# one\n", &[]);
-        let b = fingerprint_for_page(&p, "# one\n", &[]);
-        let c = fingerprint_for_page(&p, "# two\n", &[]);
-        assert_eq!(a, b, "same input must fingerprint identically");
-        assert_ne!(a, c, "a changed body must change the fingerprint");
     }
 
     /// A database row has no body. It still needs a page document, or

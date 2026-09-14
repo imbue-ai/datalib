@@ -1049,9 +1049,9 @@ places, and only two of them move when you `mv` the directory. The other
 five have to be rewritten: `system/dag_state.json` keys,
 `markdowns.md_path`, `markdowns.source_id`, `grid_rows.qmd_path`, and
 any applet's `params.tree`. The last three are the dangerous ones,
-because `grid_index` skips a document whose `source_fingerprint` still
-matches — and that fingerprint is the *renderer's input hash*, which does
-not include the output path. So a bare rename leaves every `qmd_path`
+because `grid_index` re-reads a document only when its render store's
+diff names it — and a rename touches no row in that store. So a bare
+rename leaves every `qmd_path`
 pointing at a directory that no longer exists, the preview pane 404s,
 and qmd hits resolve to zero grid rows, with nothing logged.
 
