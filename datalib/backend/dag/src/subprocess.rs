@@ -189,16 +189,24 @@ pub(crate) async fn run_subprocess(
             Ok(v) => match serde_json::from_value::<Event>(v) {
                 // Forward, re-tagged with the authoritative id.
                 Ok(ev) => {
-                    // A checkpoint also goes to the scheduler, not just to
-                    // the event stream: it is the one event that changes
-                    // what the runner does next rather than only what it
-                    // displays. Same sink an in-process step calls, so
-                    // both kinds of step announce a seal one way.
                     match &ev {
-                        Event::Checkpoint { version, rows, .. } => match rows {
-                            Some(n) => ctx.checkpoint_rows(version, *n),
-                            None => ctx.checkpoint(version),
-                        },
+                        // A checkpoint goes to the scheduler, not to the
+                        // event stream: it is the one event that changes
+                        // what the runner does next, and the scheduler
+                        // emits it once it has recorded it -- the same
+                        // path an in-process step's seal takes, so a seal
+                        // is announced once whichever kind of step made
+                        // it. Forwarding it here as well put every
+                        // subprocess seal on the stream twice, and the
+                        // Manage screen counted four for a download that
+                        // made two.
+                        Event::Checkpoint { version, rows, .. } => {
+                            match rows {
+                                Some(n) => ctx.checkpoint_rows(version, *n),
+                                None => ctx.checkpoint(version),
+                            }
+                            continue;
+                        }
                         Event::Capabilities { streams_output, .. } => {
                             ctx.declare_streams_output(*streams_output)
                         }
@@ -571,6 +579,46 @@ mod tests {
         // finishes: the seal's 7, drained by that pass; the outcome's 3,
         // drained by the final one. The re-announced seal counts once.
         assert_eq!(queued, vec![7, 0, 3, 0]);
+    }
+
+    /// A seal a child announces on stdout reaches the event stream once.
+    /// It used to arrive twice -- forwarded from the wire, and again from
+    /// the scheduler when the signal reached it -- so every subprocess
+    /// step's `checkpoints` metric read double, and the Manage screen
+    /// counted four seals for a download that made two.
+    #[tokio::test]
+    async fn a_subprocess_checkpoint_reaches_the_event_stream_once() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "slack/rendered_md",
+            sh(r#"
+                out="$DATALIB_DAG_DATA_ROOT/slack/rendered_md"
+                mkdir -p "$out"
+                echo rows > "$out/data.md"
+                echo '{"event":"capabilities","step":"me","streams_output":true}'
+                echo '{"event":"checkpoint","step":"me","version":"v1","rows":7}'
+                echo '{"event":"outcome","outputs":[{"path":"slack/rendered_md","version":"final"}]}'
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let rec = Arc::new(Recorder::default());
+        let rep = Runner::new(root.path())
+            .sink(rec.clone())
+            .run(&g)
+            .await
+            .unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        let seals: Vec<(String, Option<u64>)> = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Checkpoint { version, rows, .. } => Some((version.clone(), *rows)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(seals, vec![("v1".to_string(), Some(7))]);
     }
 
     #[tokio::test]
