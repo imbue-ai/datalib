@@ -107,15 +107,14 @@ pub struct RenderSummary {
     /// mass deletion. Meaningful only to a caller that handed over every
     /// chat its store holds — see `RunCtx::retain_documents`.
     pub documents: Vec<String>,
-    /// Every chat rendered, by `chat_uuid` — the buckets the caller
-    /// declares through `RenderCtx::declare_bucket`. A chat handed in
-    /// that produced nothing is here too, which is how its old
-    /// documents go.
+    /// Every chat rendered, with what it was built from — the buckets
+    /// the caller declares through `RenderCtx::declare_bucket`. A chat
+    /// handed in that produced nothing is here too, which is how its
+    /// old documents go.
     pub buckets: Buckets,
 }
 
-/// The `chat_uuid` of every chat rendered.
-pub type Buckets = Vec<String>;
+pub use datalib_etl_render::inputs::{Bucket, Buckets};
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
@@ -136,7 +135,10 @@ pub fn render_all(
     let empty_bundle = BlobBundle::default();
     for chat in chats {
         let bundle = blobs_by_chat.get(&chat.id).unwrap_or(&empty_bundle);
-        summary.buckets.push(chat.chat_uuid.clone());
+        summary.buckets.push(Bucket {
+            key: chat.chat_uuid.clone(),
+            inputs: chat.inputs.clone(),
+        });
         for doc in &chat.buckets {
             let (items, reactions) = render_one(
                 profile,
@@ -825,6 +827,7 @@ mod tests {
 
     fn mk_chat() -> NormalizedChat {
         NormalizedChat {
+            inputs: Vec::new(),
             id: "100".to_string(),
             chat_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
             display: "Bridge Crew".to_string(),

@@ -74,15 +74,7 @@ impl RenderProcessor for EmailRender {
         }
 
         // Two-phase parse driven by the render cursor's commit.
-        let parsed = parse(&db, ctx.raw_cursor)?;
-
-        // Threads the mailbox lost — a JMAP `destroyed`, a Gmail history
-        // deletion, or a message gone from a re-ingested mbox.
-        let mut dropped = 0usize;
-        for (account_id, thread_id) in &parsed.vanished_threads {
-            dropped += ctx
-                .remove_conversation(&crate::render::render::thread_uuid(account_id, thread_id))?;
-        }
+        let parsed = parse(&db, ctx.raw_range(), !self.only_render_labels.is_empty())?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render_all(
             &parsed,
@@ -93,23 +85,26 @@ impl RenderProcessor for EmailRender {
             ctx.progress,
             &mut on_doc,
         )?;
-        for (account_id, thread_id) in parsed.scan.changed_threads.iter().flatten() {
+        // A thread this run looked at that no email still belongs to,
+        // or the label filter keeps out, builds no chat: declared with
+        // nothing, its documents go. The rendered ones follow and
+        // replace that.
+        for (account_id, thread_id) in parsed.scan.render.iter().flatten() {
             ctx.declare_bucket(
                 &crate::render::render::thread_uuid(account_id, thread_id),
                 &[],
             )?;
         }
-        for bucket in &buckets {
+        for bucket in &parsed.scan.gone {
             ctx.declare_bucket(bucket, &[])?;
+        }
+        for bucket in &buckets {
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }
-        Ok(if dropped == 0 {
-            "rendered".into()
-        } else {
-            format!("rendered, {dropped} document(s) gone upstream")
-        })
+        Ok("rendered".into())
     }
 }
 

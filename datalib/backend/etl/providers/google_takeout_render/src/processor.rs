@@ -45,20 +45,21 @@ impl RenderProcessor for GoogleTakeoutRender {
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         // Only the chat-shaped feeds (Google Chat / Google Voice) render; the
         // other feeds stay queryable in the raw store.
-        // This renderer walks the whole raw store every run, so the set it
-        // considered is the complete one: anything else the render store
-        // holds is a document whose source is gone. The driver sweeps.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
-        let pass = crate::render::render(
+        let outcome = crate::render::render(
             &self.raw_path,
             ctx.root,
             &self.name,
             ctx.progress,
             &mut on_doc,
-            &mut seen,
+            ctx.raw_range(),
         )?;
-        ctx.retain_documents(pass, &seen);
+        for bucket in &outcome.buckets {
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
+        }
+        if let Some(head) = outcome.new_head.as_deref() {
+            ctx.consumed(head);
+        }
         Ok("rendered".into())
     }
 }

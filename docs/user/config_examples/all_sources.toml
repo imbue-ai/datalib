@@ -71,12 +71,12 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown"]
 
 [[steps]]
 group = "unified_index"
 function = "qmd_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -606,6 +606,43 @@ group = "yolink"
 function = "render_markdown"
 inputs = ["yolink/ingest"]
 
+# --- Garmin Connect -----------------------------------------------------
+
+# Everything a Garmin watch uploads to Garmin Connect, over the API the
+# Connect phone app uses: the per-day metrics (sleep, heart rate, stress,
+# body battery, HRV, SpO2, respiration, training readiness/status,
+# steps, floors, hydration, fitness age, VO2max, endurance and hill
+# scores), weigh-ins, activities with their original FIT files, devices,
+# personal records, gear, badges, workouts and goals.
+#
+# Not a latchkey service. Sign in once with `datalib-step login garmin`
+# (email, password, emailed MFA code); it writes an OAuth1 token that
+# lasts about a year under `token_dir`, and the ingest step mints the
+# hourly bearer from it on its own. A token from garth works too.
+[[groups]]
+id = "garmin"
+type = "garmin"
+
+[[steps]]
+group = "garmin"
+function = "ingest"
+
+[steps.params.api]
+since = "2024-01-01"       # earliest day to mirror; default a year back. Quote it:
+                           # a bare date is a TOML date, not the string validated here
+# token_dir = "~/.garth"   # where the login put oauth1_token.json (default)
+# refresh_days = 7         # trailing days re-fetched every run (late syncs, recomputed sleep)
+# metrics = ["daily_summary", "sleep", "hrv"]  # a subset of the per-day metrics
+# activity_files = true    # each activity's original FIT file, into the blob store
+# wellness_files = false   # each day's wellness FIT bundle (one zip per day)
+
+# One page: the weigh-in history as an interactive plot and a table,
+# plus the account's devices. The rest of the store is mirrored but not
+# rendered yet.
+[[steps]]
+group = "garmin"
+function = "render_markdown"
+inputs = ["garmin/ingest"]
 # --- AirVisual (IQAir) monitors -----------------------------------------
 
 # AirVisual Pros' own history files, read off each unit's Samba share

@@ -1,8 +1,8 @@
 # Render inputs: record what each document was rendered from
 
-**Status: proposal (2026-09-11); the store and the driver's half are
-built (2026-09-14), the providers' half is not.** Built, of §"Order of
-work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
+**Status: proposal (2026-09-11); the store, the driver's half and all
+ten chat providers are built (2026-09-14); contacts and the non-chat
+providers are not.** Built, of §"Order of work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
 render store with `markdowns.bucket_key`, `RenderedMarkdown.bucket_key`,
 `RenderCtx::declare_bucket(bucket_key, inputs)`; the driver's scan —
 `render::reverse_lookup` diffs every table `render_inputs` mentions
@@ -17,12 +17,36 @@ still earn its place?" below), so `prior_fingerprints`,
 tree (#27). The synthetic provider in
 `datalib_step/src/render_model_test.rs` is fully on it — no fan-out
 table, no removal probe — and the model test proves the point: an
-author rename renders that author's parents and nothing else. Every
-real provider declares its buckets with *no inputs yet*, so their
-scans are unchanged; step 4 (chat-common declares for ten providers)
-and step 5 (drop `global_fanout_tables` and `buckets_without_rows` one
-provider at a time) are the next PRs, with `tests/fixtures/
-render_contract_test.py` as the check that each move is right.
+author rename renders that author's parents and nothing else. Steps 4
+and 5 for **slack, signal, claude, chatgpt, email and whatsapp**: each
+declares what every bucket read — its own rows as parse loads them,
+and every lookup-table row (`users`, `channels`, `recipients`,
+`projects`, `me`, `accounts`, `mailboxes`, `jid`, `lid_display_name`,
+`jid_map`…) as render asks for it, through
+`datalib_etl_render::inputs::Lookup`, which declares a miss too — and
+none of them has a `global_fanout_tables` entry, a
+`buckets_without_rows` probe or a `remove_conversation` call any more:
+a bucket the run looked at that builds nothing is declared with
+nothing, and the driver's sweep removes its documents. The one
+deliberate fan-out left is email's under a label filter, where the
+mailbox tree decides which threads render at all. The harness checks
+the narrowing one row at a time (see step 3), which is how "a `users`
+change names exactly the threads that user is in" is now a test rather
+than a claim: on the fixture one slack channel edit renders its four
+threads, one message its thread, one unreferenced user nothing. The
+other four chat providers followed the same day: sms_backup_restore
+was already diff-scanned; beeper, google_takeout and linkedin walked
+their whole store and handed the set to `retain_documents`, and now
+each declares, narrows to the driver's stale set joined with a forward
+scan — SQL over the primary tables where the bucket key is a column
+(beeper's rooms, takeout's spaces and conversations), and the diff's
+changed ids mapped through the rows already loaded where it lives
+inside the payload (linkedin, whose conversation id, profile URL and
+post link are all payload fields; `inputs::changed_rows`) — and no
+longer retains. A document that comes back at another path now loses
+the file at its old one (`put_document`), which a re-keyed beeper
+network was leaving behind. Next: contacts (step 7), then the non-chat
+providers.
 
 **Read [`one_mode.md`](one_mode.md) first (2026-09-14).** This document
 is now the render-side mechanism for that design's rule 2 ("prune at
@@ -504,23 +528,32 @@ inputs, not the store.
    and the sweep are unchanged. Every provider compiles by emitting an
    empty declaration, and the driver logs at `warn` per source with no
    inputs — so the migration state is visible, not silent.
-3. **The test that keeps input lists complete.** Over the TNG fixture:
-   render cold, record `render_inputs`; then for every raw table, for
-   every row, mutate one non-key column in a scratch copy of the raw
-   store and run the incremental path; assert that the buckets which
-   re-rendered to different output are a subset of the buckets that
-   declared that row. Expensive, so it runs per provider as an
-   `insta`-style golden of the *declared* sets rather than the
-   mutation loop on every CI run — the mutation loop is the `.update`.
-4. **chat-common.** Its parse helpers declare; ten providers move
-   together. Drop their `global_fanout_tables`; verify with the test
-   from step 3 that a `users` change names exactly the threads that
-   user is in.
+3. **The test that keeps input lists complete.** Built as the second
+   half of `tests/fixtures/render_contract_test.py` (2026-09-14): over
+   the TNG fixture, for every raw table, edit one row (the first by
+   primary key) in a scratch copy of the raw store, run the
+   incremental path, and assert both that it equals a cold render and
+   — for a table the provider declares — that it rendered exactly the
+   documents the store says read that row. Cheap enough to run on
+   every CI run (~70s for every provider), so it does; the per-row
+   loop and the `.update` golden this step first described were not
+   needed.
+4. **chat-common.** Built for the six diff-scanning providers
+   (2026-09-14), one commit each, with step 5 folded in: each declares
+   through `NormalizedChat.inputs`, reported back per rendered chat as
+   `Bucket { key, inputs }`, and its `global_fanout_tables`,
+   `buckets_without_rows` and `remove_conversation` went in the same
+   commit its declarations became complete. chat-common itself has no
+   parse helpers — that was this step's wrong guess; the reads happen
+   in each provider's parse and normalize, and that is where the
+   declaring is. The other four (beeper, google_takeout, linkedin,
+   sms_backup_restore) followed in the next PR, so every chat provider
+   is on it.
 5. **The driver-side scan and sweep**, switching one provider at a time
-   off `remove_conversation` / `retain_documents`. The migration
-   recipe's "same commit" rule applies in reverse: a provider moves
-   off the old deletion path in the same commit that its declarations
-   become complete.
+   off `remove_conversation` / `retain_documents`. Done for the six
+   above; the migration recipe's "same commit" rule applies in reverse:
+   a provider moves off the old deletion path in the same commit that
+   its declarations become complete.
 6. **Delete** the five guards, the two callbacks, `RenderPass`,
    `buckets_without_rows`. (`prior_fingerprints` is already gone from
    every provider signature, with the fingerprint itself.) Close #27.

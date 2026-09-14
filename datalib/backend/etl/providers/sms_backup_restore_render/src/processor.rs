@@ -52,26 +52,20 @@ impl RenderProcessor for SmsRender {
             &self.name,
             ctx.progress,
             &mut on_doc,
-            ctx.raw_cursor,
+            ctx.raw_range(),
         )
         .context("sms_backup_restore render")?;
 
-        // Named, not swept: the render above is narrowed by the diff, so
-        // what it emitted is only what changed.
-        let mut dropped = 0usize;
-        for chat_uuid in &outcome.vanished {
-            dropped += ctx.remove_conversation(chat_uuid)?;
-        }
         for bucket in &outcome.buckets {
-            ctx.declare_bucket(bucket, &[])?;
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
         }
 
         if let Some(head) = outcome.new_head.as_deref() {
             ctx.consumed(head);
         }
         Ok(format!(
-            "rendered={} skipped={} dropped={}",
-            outcome.rendered, outcome.skipped, dropped
+            "rendered={} skipped={}",
+            outcome.rendered, outcome.skipped
         ))
     }
 }

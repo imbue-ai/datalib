@@ -6,6 +6,7 @@ import emailIconUrl from "@/assets/email.svg";
 // Fastmail publishes no mark on Simple Icons; this is the vector
 // favicon fastmail.com serves for itself.
 import fastmailIconUrl from "@/assets/fastmail.svg";
+import garminIconUrl from "@/assets/garmin.svg";
 import githubIconUrl from "@/assets/github.svg";
 import gmailIconUrl from "@/assets/gmail.svg";
 import gitlabIconUrl from "@/assets/gitlab.svg";
@@ -24,6 +25,7 @@ const ICONS: Record<string, string> = {
   claude: claudeIconUrl,
   email: emailIconUrl,
   fastmail: fastmailIconUrl,
+  garmin: garminIconUrl,
   github: githubIconUrl,
   gmail: gmailIconUrl,
   gitlab: gitlabIconUrl,

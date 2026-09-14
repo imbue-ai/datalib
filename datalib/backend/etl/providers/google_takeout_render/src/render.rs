@@ -1,25 +1,26 @@
 //! Render the chat-shaped Takeout feeds into markdown via the shared
 //! chat renderer.
 
-use datalib_etl_render::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use datalib_etl::blob_cas::BlobBundle;
+use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+    render_all as cc_render_all, Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::Value;
 use uuid::Uuid;
 
+use datalib_etl_google_takeout::ingest::google_voice::schema_raw::VoiceAttachmentRow;
 use datalib_etl_google_takeout::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
 
@@ -72,34 +73,37 @@ fn voice_profile() -> RenderProfile {
     }
 }
 
+/// What one render pass did: the buckets to declare and the commit read.
+#[derive(Debug, Default)]
+pub struct RenderOutcome {
+    /// Every conversation this run looked at, named first with nothing
+    /// and then, for the rendered ones, with what they read.
+    pub buckets: Buckets,
+    pub new_head: Option<String>,
+}
+
 pub fn render(
     raw_dir: &Path,
     out_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name.
-    seen: &mut std::collections::HashSet<String>,
-) -> Result<RenderPass> {
+    range: RawRange<'_>,
+) -> Result<RenderOutcome> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(RenderPass::Skipped);
+        return Ok(RenderOutcome::default());
     }
-    let Some((messages, groups, voice_messages, voice_blobs)) =
+    let Some((messages, groups, voice_messages, voice_blobs, scan)) =
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let db = RawDb::open_reader(&db_path).await?;
-                // Pin before reading, and pin the CAS too — separate file,
-                // separate HEAD. No commit means nothing has been committed here
-                // to render, which is emptiness rather than a reason to read the
-                // working set.
-                let pin = datalib_etl::pin::head(db.pool()).await?;
+                // Pin before reading: the driver's pin when it made one,
+                // else HEAD. No commit means nothing has been committed here
+                // to render, which is emptiness rather than a reason to read
+                // the working set.
+                let pin = range.pin(db.pool()).await?;
                 let loaded = async {
-                    // `None` all the way out, not an empty tuple: an empty load
-                    // is indistinguishable from a source with nothing in it, and
-                    // the caller sweeps every document this pass did not name.
                     let Some(pin) = pin else {
                         return anyhow::Ok(None);
                     };
@@ -107,7 +111,7 @@ pub fn render(
                         .await
                         .context("pin the google_takeout raw store for render")?;
                     let messages = db
-                        .load_payloads(datalib_etl::pin::Reads::At(&pin), "chat_messages")
+                        .load_payloads_with_id(datalib_etl::pin::Reads::At(&pin), "chat_messages")
                         .await?;
                     // (dir name, group_info payload) — the directory name
                     // carries the space id, which `group_info.json` itself
@@ -116,10 +120,11 @@ pub fn render(
                         .load_payloads_with_id(datalib_etl::pin::Reads::At(&pin), "chat_groups")
                         .await?;
                     let voice_messages = db
-                        .load_payloads(datalib_etl::pin::Reads::At(&pin), "voice_messages")
+                        .load_payloads_with_id(datalib_etl::pin::Reads::At(&pin), "voice_messages")
                         .await?;
                     let voice_blobs = load_voice_blobs(&db, &voice_messages).await?;
-                    anyhow::Ok(Some((messages, groups, voice_messages, voice_blobs)))
+                    let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
+                    anyhow::Ok(Some((messages, groups, voice_messages, voice_blobs, scan)))
                 }
                 .await;
                 // Closed, not dropped: the next open of this store is a
@@ -129,13 +134,59 @@ pub fn render(
             })
         })?
     else {
-        // Nothing committed to read: this pass did not walk, so it must not
-        // reach the retain sweep.
-        return Ok(RenderPass::Skipped);
+        return Ok(RenderOutcome::default());
     };
 
-    if !messages.is_empty() {
-        let chats = build_chats(&messages, &groups);
+    let mut all_chats = build_chats(&messages, &groups);
+    let voice_start = all_chats.len();
+    all_chats.extend(build_voice_chats(&voice_messages));
+
+    // Narrow to the conversations the diff named and the ones the driver
+    // found stale through their declared inputs. The driver names them by
+    // chat uuid; the chats are by id.
+    let by_uuid: HashMap<&str, &str> = all_chats
+        .iter()
+        .map(|c| (c.chat_uuid.as_str(), c.id.as_str()))
+        .collect();
+    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
+        by_uuid.get(key).map(|id| id.to_string())
+    });
+    let mut outcome = RenderOutcome {
+        new_head: scan.new_head,
+        ..Default::default()
+    };
+    // Named first, with no documents: a conversation this run looked at
+    // that has no message left builds no chat, and chat-common never
+    // sees it. The rendered ones follow and replace that.
+    let uuid_of: HashMap<&str, &str> = all_chats
+        .iter()
+        .map(|c| (c.id.as_str(), c.chat_uuid.as_str()))
+        .collect();
+    outcome.buckets = narrowed
+        .render
+        .iter()
+        .flatten()
+        .map(|id| match uuid_of.get(id.as_str()) {
+            Some(uuid) => uuid.to_string(),
+            None => chat_uuid_for(id),
+        })
+        .chain(narrowed.gone.iter().cloned())
+        .map(|key| Bucket {
+            key,
+            inputs: Vec::new(),
+        })
+        .collect();
+    let (chats, voice_chats): (Vec<NormalizedChat>, Vec<NormalizedChat>) = {
+        let mut voice = all_chats.split_off(voice_start);
+        let mut chats = all_chats;
+        if let Some(render) = &narrowed.render {
+            chats.retain(|c| render.contains(&c.id));
+            voice.retain(|c| render.contains(&c.id));
+        }
+        (chats, voice)
+    };
+
+    if !chats.is_empty() {
         let blobs: HashMap<String, BlobBundle> = HashMap::new();
         let s = cc_render_all(
             &profile(),
@@ -146,32 +197,91 @@ pub fn render(
             progress,
             on_doc_complete,
         )?;
-        seen.extend(s.documents);
+        outcome.buckets.extend(s.buckets);
     }
 
-    if !voice_messages.is_empty() {
-        let chats = build_voice_chats(&voice_messages);
+    if !voice_chats.is_empty() {
         let s = cc_render_all(
             &voice_profile(),
-            &chats,
+            &voice_chats,
             out_root,
             source_id,
             &voice_blobs,
             progress,
             on_doc_complete,
         )?;
-        seen.extend(s.documents);
+        outcome.buckets.extend(s.buckets);
     }
-    Ok(RenderPass::Walked)
+    Ok(outcome)
+}
+
+/// The chat uuid a conversation id mints to, for a conversation the diff
+/// named that no longer has a message: a Google Chat space, or a Google
+/// Voice conversation carrying its `voice:` prefix.
+fn chat_uuid_for(id: &str) -> String {
+    if id.starts_with("voice:") {
+        uuid5(&format!("voice:chat:{id}"))
+    } else {
+        uuid5(&format!("chat:{id}"))
+    }
+}
+
+/// Which conversations a new or changed row maps to: a Google Chat
+/// message names its space (the first segment of its id), a group's
+/// members the spaces of the messages filed under it, a Google Voice
+/// message or attachment its conversation. Everything a rendered
+/// conversation read is declared, so this only has to catch what the
+/// declarations cannot — rows that were not there to declare.
+async fn scan_diff(
+    pool: &sqlx::SqlitePool,
+    cursor: Option<&str>,
+    pin: &datalib_etl::pin::Pin,
+) -> Result<datalib_etl::doltlite_raw::DiffScan> {
+    datalib_etl::doltlite_raw::scan_buckets(
+        pool,
+        cursor,
+        pin,
+        &datalib_etl::doltlite_raw::DiffScanSpec {
+            global_fanout_tables: &[],
+            bucket_query: "
+                SELECT DISTINCT bucket FROM (
+                    SELECT CASE WHEN instr(m.id, '/') > 0
+                                THEN substr(m.id, 1, instr(m.id, '/') - 1)
+                                ELSE m.id END AS bucket
+                      FROM (SELECT coalesce(to_id, from_id) AS id
+                              FROM dolt_diff_chat_messages
+                             WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged') m
+                    UNION
+                    SELECT CASE WHEN instr(m.id, '/') > 0
+                                THEN substr(m.id, 1, instr(m.id, '/') - 1)
+                                ELSE m.id END
+                      FROM dolt_diff_chat_groups g
+                      JOIN pinned_chat_messages m ON m.group_id = coalesce(g.to_id, g.from_id)
+                     WHERE g.from_ref = ?1 AND g.to_ref = ?2 AND g.diff_type != 'unchanged'
+                    UNION
+                    SELECT 'voice:' || coalesce(to_conversation_key, from_conversation_key)
+                      FROM dolt_diff_voice_messages
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT 'voice:' || m.conversation_key
+                      FROM dolt_diff_voice_attachments d
+                      JOIN pinned_voice_messages m ON m.id = coalesce(d.to_message_id, d.from_message_id)
+                     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
+                )
+                WHERE bucket IS NOT NULL AND bucket != '' AND bucket != 'voice:'
+            ",
+        },
+    )
+    .await
 }
 
 async fn load_voice_blobs(
     db: &RawDb,
-    voice_messages: &[Value],
+    voice_messages: &[(String, Value)],
 ) -> Result<HashMap<String, BlobBundle>> {
     // Group ref_names by conversation_key (== the chat.id we mint).
     let mut refs_by_chat: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for m in voice_messages {
+    for (_, m) in voice_messages {
         let key = voice_chat_id(m);
         let bag = refs_by_chat.entry(key).or_default();
         for r in voice_attachment_refs(m) {
@@ -198,9 +308,12 @@ async fn load_voice_blobs(
     Ok(out)
 }
 
-fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<NormalizedChat> {
-    // space id -> participant display, from each group dir's members.
-    let mut display_by_space: HashMap<String, String> = HashMap::new();
+/// Messages as `(row id, payload)`, groups as `(dir name, payload)`;
+/// the ids are what each space declares it read.
+fn build_chats(messages: &[(String, Value)], groups: &[(String, Value)]) -> Vec<NormalizedChat> {
+    // space id -> (group dir, participant display), from each group
+    // dir's members.
+    let mut display_by_space: HashMap<String, (String, String)> = HashMap::new();
     for (dir, payload) in groups {
         let space = space_of_dir(dir);
         let mut members: Vec<String> = payload
@@ -215,18 +328,20 @@ fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<Normalized
             .unwrap_or_default();
         members.dedup();
         if !members.is_empty() {
-            display_by_space.insert(space, members.join(", "));
+            display_by_space.insert(space, (dir.clone(), members.join(", ")));
         }
     }
 
-    let mut by_space: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
-    for m in messages {
+    let mut by_space: BTreeMap<String, (Vec<&Value>, Inputs)> = BTreeMap::new();
+    for (row_id, m) in messages {
         let space = space_of(m.get("message_id").and_then(Value::as_str).unwrap_or(""));
-        by_space.entry(space).or_default().push(m);
+        let (rows, inputs) = by_space.entry(space).or_default();
+        inputs.read("chat_messages", row_id);
+        rows.push(m);
     }
 
     let mut chats = Vec::with_capacity(by_space.len());
-    for (space, msgs) in by_space {
+    for (space, (msgs, inputs)) in by_space {
         let mut items: Vec<NormalizedChatItem> = msgs
             .iter()
             .map(|m| {
@@ -278,12 +393,16 @@ fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<Normalized
             })
             .collect();
 
-        let display = display_by_space
-            .get(&space)
-            .cloned()
-            .unwrap_or_else(|| space.clone());
+        let display = match display_by_space.get(&space) {
+            Some((dir, display)) => {
+                inputs.read("chat_groups", dir);
+                display.clone()
+            }
+            None => space.clone(),
+        };
 
         chats.push(NormalizedChat {
+            inputs: inputs.declared(),
             path_prefix: None,
             id: space.clone(),
             chat_uuid: uuid5(&format!("chat:{space}")),
@@ -373,14 +492,22 @@ fn voice_attachment_refs(m: &Value) -> Vec<String> {
 /// each periodized into month buckets. Conversations are keyed on the
 /// phone number so name-labeled and number-labeled exports of the same
 /// contact merge (see `google_voice::derive_channel`).
-fn build_voice_chats(messages: &[Value]) -> Vec<NormalizedChat> {
-    let mut by_chat: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
-    for m in messages {
-        by_chat.entry(voice_chat_id(m)).or_default().push(m);
+fn build_voice_chats(messages: &[(String, Value)]) -> Vec<NormalizedChat> {
+    let mut by_chat: BTreeMap<String, (Vec<&Value>, Inputs)> = BTreeMap::new();
+    for (row_id, m) in messages {
+        let (rows, inputs) = by_chat.entry(voice_chat_id(m)).or_default();
+        inputs.read("voice_messages", row_id);
+        for ref_name in voice_attachment_refs(m) {
+            inputs.read(
+                "voice_attachments",
+                &VoiceAttachmentRow::pk_recipe(row_id, &ref_name),
+            );
+        }
+        rows.push(m);
     }
 
     let mut chats = Vec::with_capacity(by_chat.len());
-    for (chat_id, msgs) in by_chat {
+    for (chat_id, (msgs, inputs)) in by_chat {
         // Display: prefer a human contact name over a bare number.
         let display = msgs
             .iter()
@@ -417,6 +544,7 @@ fn build_voice_chats(messages: &[Value]) -> Vec<NormalizedChat> {
             .collect();
 
         chats.push(NormalizedChat {
+            inputs: inputs.declared(),
             path_prefix: None,
             id: chat_id.clone(),
             chat_uuid: uuid5(&format!("voice:chat:{chat_id}")),
@@ -622,6 +750,20 @@ fn voice_mime(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_ids(rows: &[Value], id_key: &str) -> Vec<(String, Value)> {
+        rows.iter()
+            .map(|v| {
+                (
+                    v.get(id_key)
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    v.clone(),
+                )
+            })
+            .collect()
+    }
     use serde_json::json;
 
     #[test]
@@ -637,7 +779,7 @@ mod tests {
             "DM AAA".to_string(),
             json!({"members":[{"name":"Jean-Luc Picard"},{"name":"William Riker"}]}),
         )];
-        let chats = build_chats(&messages, &groups);
+        let chats = build_chats(&with_ids(&messages, "message_id"), &groups);
         assert_eq!(chats.len(), 1, "two messages in one space => one chat");
         assert_eq!(chats[0].id, "AAA");
         assert_eq!(chats[0].display, "Jean-Luc Picard, William Riker");
@@ -659,7 +801,7 @@ mod tests {
             json!({"message_id":"BBB/T2/M2","created_date":"Wednesday, March 5, 2025 at 9:34:00\u{202f}PM UTC","creator":{"name":"Riker","email":"r@e"},"text":"March."}),
         ];
         let groups: Vec<(String, Value)> = vec![];
-        let chats = build_chats(&messages, &groups);
+        let chats = build_chats(&with_ids(&messages, "message_id"), &groups);
         assert_eq!(chats.len(), 1);
         let keys: Vec<&str> = chats[0]
             .buckets
@@ -731,7 +873,7 @@ mod tests {
             json!({"id":"u1","kind":"text","conversation_key":"+1410","conversation_display":"Wes Blackwell","when":"2019-08-01T14:49:00.742-07:00","sender":{"tel":"+1410","name":"Wes Blackwell"},"is_me":false,"body":"Hello","attachments":[]}),
             json!({"id":"u2","kind":"text","conversation_key":"+1410","conversation_display":"+1410","when":"2019-09-02T10:00:00.000-07:00","sender":{"tel":"+6506","name":null},"is_me":true,"body":"Hi back","attachments":[]}),
         ];
-        let chats = build_voice_chats(&messages);
+        let chats = build_voice_chats(&with_ids(&messages, "id"));
         assert_eq!(chats.len(), 1);
         // Human name wins over the bare-number display.
         assert_eq!(chats[0].display, "Wes Blackwell");
@@ -751,7 +893,7 @@ mod tests {
             "when":"2010-02-18T16:10:05.000-08:00","party":{"tel":"+1555","name":"Jean-Luc Picard"},
             "transcript":"Make it so.","duration":"PT13S","audio":"vm.mp3"
         })];
-        let chats = build_voice_chats(&messages);
+        let chats = build_voice_chats(&with_ids(&messages, "id"));
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(item.text.as_deref(), Some("**Voicemail:** Make it so."));
@@ -766,7 +908,7 @@ mod tests {
             "id":"c1","kind":"missed","conversation_key":"+1999","conversation_display":"Spammer",
             "when":"2009-03-06T09:50:34.000-08:00","party":{"tel":"+1999","name":"Spammer"}
         })];
-        let chats = build_voice_chats(&messages);
+        let chats = build_voice_chats(&with_ids(&messages, "id"));
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::System);
         assert_eq!(item.system_note.as_deref(), Some("Missed call — Spammer"));
@@ -779,7 +921,7 @@ mod tests {
             "when":"2024-02-02T09:06:01.024-08:00","sender":{"tel":"+1202","name":null},"is_me":false,
             "body":"pic","attachments":["+1202 - Text - x-1-1.jpg"]
         })];
-        let chats = build_voice_chats(&messages);
+        let chats = build_voice_chats(&with_ids(&messages, "id"));
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(item.attachments[0].mime_type.as_deref(), Some("image/jpeg"));

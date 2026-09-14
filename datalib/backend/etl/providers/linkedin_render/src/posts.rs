@@ -1,7 +1,6 @@
 //! Render the user's own LinkedIn posts and the comments they left,
 //! grouped into one chat-style thread per post.
 
-use datalib_etl_render::processor::RenderPass;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
@@ -15,12 +14,13 @@ use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
 use serde_json::Value;
 
 use datalib_etl_linkedin::ingest::schema_raw::ns_id as uuid5;
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
-use crate::processor::Source;
+use crate::processor::{FeedOutcome, Source};
 
 use crate::render::{parse_date_ms, RENDER_VERSION};
 use datalib_schema::providers::Provider;
@@ -46,58 +46,89 @@ pub fn render_posts(
     source: &Source<'_>,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name.
-    seen: &mut std::collections::HashSet<String>,
-) -> Result<RenderPass> {
+) -> Result<FeedOutcome> {
     let Source {
         raw_dir,
         out_dir,
         name: source_id,
         account,
+        account_inputs,
+        range,
     } = *source;
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(RenderPass::Skipped);
+        return Ok(FeedOutcome::default());
     }
 
-    let Some((shares, comments)) = tokio::task::block_in_place(|| {
+    let Some((shares, comments, changed, new_head)) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open_reader(&db_path).await?;
             // Read at a commit: this store belongs to the download step, and
             // nothing committed means nothing to render from.
-            let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+            let Some(pin) = range.pin(db.pool()).await? else {
                 db.close().await;
-                // `None` all the way out, not an empty value: an empty load is
-                // indistinguishable from a source with nothing in it, and the
-                // caller sweeps every document this pass did not name.
                 return Ok(None);
             };
             datalib_etl::pin::install_views(db.pool(), &pin).await?;
             // A feed the user didn't export has no table; treat a load
             // error as "absent" rather than failing the render.
-            let shares = db
-                .load_payloads(datalib_etl::pin::Reads::At(&pin), "shares")
-                .await
-                .unwrap_or_default();
-            let comments = db
-                .load_payloads(datalib_etl::pin::Reads::At(&pin), "comments")
-                .await
-                .unwrap_or_default();
+            let shares = datalib_etl::doltlite_raw::load_payloads_with_id(
+                db.pool(),
+                datalib_etl::pin::Reads::At(&pin),
+                "shares",
+            )
+            .await
+            .unwrap_or_default();
+            let comments = datalib_etl::doltlite_raw::load_payloads_with_id(
+                db.pool(),
+                datalib_etl::pin::Reads::At(&pin),
+                "comments",
+            )
+            .await
+            .unwrap_or_default();
+            let changed = changed_rows(db.pool(), range, &pin, &["shares", "comments"]).await?;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             db.close().await;
-            Ok::<_, anyhow::Error>(Some((shares, comments)))
+            Ok::<_, anyhow::Error>(Some((shares, comments, changed, pin.commit().to_string())))
         })
     })?
     else {
-        // Nothing committed to read: this pass did not walk, so it must not
-        // reach the retain sweep.
-        return Ok(RenderPass::Skipped);
+        return Ok(FeedOutcome::default());
     };
 
-    let chats = build_post_chats(&shares, &comments, account);
+    let mut chats = build_post_chats(&shares, &comments, account, account_inputs);
+
+    // What to render: the threads the driver found stale, plus the ones a
+    // new or changed row maps to through the rows just loaded. A removed
+    // row's thread reaches here through the driver, having declared the
+    // row.
+    let forward = changed.map(|changed| {
+        chats
+            .iter()
+            .filter(|c| {
+                c.inputs
+                    .iter()
+                    .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
+            })
+            .map(|c| c.chat_uuid.clone())
+            .collect::<std::collections::HashSet<String>>()
+    });
+    let render = range.narrow(forward.as_ref());
+    let mut outcome = FeedOutcome {
+        new_head: Some(new_head),
+        buckets: render
+            .iter()
+            .flatten()
+            .map(|key| Bucket {
+                key: key.clone(),
+                inputs: Vec::new(),
+            })
+            .collect(),
+    };
+    if let Some(render) = &render {
+        chats.retain(|c| render.contains(&c.chat_uuid));
+    }
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
     let s = cc_render_all(
@@ -109,56 +140,69 @@ pub fn render_posts(
         progress,
         on_doc_complete,
     )?;
-    seen.extend(s.documents);
-    Ok(RenderPass::Walked)
+    outcome.buckets.extend(s.buckets);
+    Ok(outcome)
 }
 
 /// One share + its comments, sharing a post key.
 struct Thread<'a> {
     /// Representative full post URL for the linkout (first row seen).
     url: String,
+    /// The rows this thread was built from.
+    inputs: Inputs,
     share: Option<&'a Value>,
     comments: Vec<&'a Value>,
 }
 
+/// Shares and comments as `(row id, payload)`: the ids are what each
+/// thread declares it read, beside the account rows every document
+/// carries.
 fn build_post_chats(
-    shares: &[Value],
-    comments: &[Value],
+    shares: &[(String, Value)],
+    comments: &[(String, Value)],
     account: Option<&str>,
+    account_inputs: &[Input],
 ) -> Vec<NormalizedChat> {
     // BTreeMap keeps thread order stable across runs.
     let mut by_post: BTreeMap<String, Thread> = BTreeMap::new();
 
-    for (i, s) in shares.iter().enumerate() {
+    for (i, (row_id, s)) in shares.iter().enumerate() {
         let link = field(s, "ShareLink");
         let key = thread_key(link, &format!("share:{i}"));
         let t = by_post.entry(key).or_insert_with(|| Thread {
             url: link.to_string(),
+            inputs: Inputs::default(),
             share: None,
             comments: Vec::new(),
         });
         if t.url.is_empty() {
             t.url = link.to_string();
         }
+        t.inputs.read("shares", row_id);
         // Keep the first share if a key somehow repeats (shouldn't).
         t.share.get_or_insert(s);
     }
-    for (i, c) in comments.iter().enumerate() {
+    for (i, (row_id, c)) in comments.iter().enumerate() {
         let link = field(c, "Link");
         let key = thread_key(link, &format!("comment:{i}"));
         let t = by_post.entry(key).or_insert_with(|| Thread {
             url: link.to_string(),
+            inputs: Inputs::default(),
             share: None,
             comments: Vec::new(),
         });
         if t.url.is_empty() {
             t.url = link.to_string();
         }
+        t.inputs.read("comments", row_id);
         t.comments.push(c);
     }
 
     let mut chats = Vec::with_capacity(by_post.len());
     for (key, thread) in by_post {
+        for input in account_inputs {
+            thread.inputs.read(&input.table, &input.id);
+        }
         let mut items: Vec<NormalizedChatItem> = Vec::new();
 
         // Opening message: the post itself, or a note that the original
@@ -201,6 +245,7 @@ fn build_post_chats(
         }
 
         chats.push(NormalizedChat {
+            inputs: thread.inputs.declared(),
             path_prefix: None,
             id: format!("posts:{key}"),
             chat_uuid: uuid5(&format!("chat:posts:{key}")),
@@ -353,6 +398,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn with_ids(rows: &[Value]) -> Vec<(String, Value)> {
+        rows.iter()
+            .enumerate()
+            .map(|(i, v)| (format!("row-{i}"), v.clone()))
+            .collect()
+    }
+
     #[test]
     fn parses_post_urns_in_both_encodings() {
         assert_eq!(
@@ -391,7 +443,7 @@ mod tests {
         let shares = vec![share(ugc, "2026-05-07 16:41:18", "My post body")];
         let comments = vec![comment(ugc, "2026-05-08 09:00:00", "Following up")];
 
-        let chats = build_post_chats(&shares, &comments, None);
+        let chats = build_post_chats(&with_ids(&shares), &with_ids(&comments), None, &[]);
         assert_eq!(chats.len(), 1, "share + comment on same URN merge");
         let items = &chats[0].buckets[0].items;
         assert_eq!(items.len(), 2, "post + one comment");
@@ -420,8 +472,9 @@ mod tests {
         let act = "https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567681";
         let chats = build_post_chats(
             &[],
-            &[comment(act, "2026-04-30 15:32:07", "Great point!")],
+            &with_ids(&[comment(act, "2026-04-30 15:32:07", "Great point!")]),
             None,
+            &[],
         );
         assert_eq!(chats.len(), 1);
         let items = &chats[0].buckets[0].items;
@@ -443,12 +496,13 @@ mod tests {
         let a = "https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A111";
         let b = "https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A222";
         let chats = build_post_chats(
-            &[
+            &with_ids(&[
                 share(a, "2026-01-01 00:00:00", "A"),
                 share(b, "2026-01-02 00:00:00", "B"),
-            ],
+            ]),
             &[],
             None,
+            &[],
         );
         assert_eq!(chats.len(), 2, "two distinct posts → two threads");
     }

@@ -5,7 +5,8 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_linkedin_config::LinkedinRenderConfig;
-use datalib_etl_render::processor::{RenderCtx, RenderPass, RenderProcessor};
+use datalib_etl_render::inputs::{Buckets, Input, RawRange};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 use std::path::{Path, PathBuf};
 
 /// Render wave: always present (renders whatever is in the raw store).
@@ -30,6 +31,20 @@ pub struct Source<'a> {
     pub out_dir: &'a Path,
     pub name: &'a str,
     pub account: Option<&'a str>,
+    /// The rows the account label came from, declared by every document.
+    pub account_inputs: &'a [Input],
+    /// The raw store as this run reads it — the driver's cursor, pin and
+    /// stale set.
+    pub range: RawRange<'a>,
+}
+
+/// What one feed's render pass did: every bucket it looked at, named
+/// first with nothing and then, for the rendered ones, with what they
+/// read; and the commit it read.
+#[derive(Debug, Default)]
+pub struct FeedOutcome {
+    pub buckets: Buckets,
+    pub new_head: Option<String>,
 }
 
 /// LinkedIn's render processor — renders the three feeds (messages,
@@ -56,47 +71,49 @@ impl RenderProcessor for LinkedinRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
-        // This renderer walks the whole raw store every run, so the set it
-        // considered is the complete one: anything else the render store
-        // holds is a document whose source is gone. The driver sweeps.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut on_doc = |md| ctx.emit_doc(md);
-        let account = crate::account::load_account(&self.raw_path).context("linkedin account")?;
+        let account = crate::account::load_account(&self.raw_path, ctx.raw_range())
+            .context("linkedin account")?;
         let source = Source {
             raw_dir: &self.raw_path,
             out_dir: ctx.root,
             name: &self.name,
-            account: account.as_deref(),
+            account: account.label.as_deref(),
+            account_inputs: &account.inputs,
+            range: ctx.raw_range(),
         };
 
         // Every message-shaped feed (DMs + AI-coach transcripts) renders.
-        let r_pass = crate::render::render(&source, ctx.progress, &mut on_doc, &mut seen)
-            .context("linkedin render")?;
+        let messages =
+            crate::render::render(&source, ctx.progress, &mut on_doc).context("linkedin render")?;
         // Connections render as first-class contacts via the shared contact
         // renderer (sibling of the chat path above).
-        let c_pass =
-            crate::connections::render_connections(&source, ctx.progress, &mut on_doc, &mut seen)
+        let connections =
+            crate::connections::render_connections(&source, ctx.progress, &mut on_doc)
                 .context("linkedin connections render")?;
         // Your own posts (Shares) and the comments you left, grouped one
         // chat-style thread per post, with linkouts back to linkedin.com.
-        let p_pass = crate::posts::render_posts(&source, ctx.progress, &mut on_doc, &mut seen)
+        let posts = crate::posts::render_posts(&source, ctx.progress, &mut on_doc)
             .context("linkedin posts render")?;
 
-        // One sweep over the union of all three feeds: each contributes a
-        // slice of this source's documents, and sweeping per feed would
-        // have each delete the other two's.
-        // The sweep drops anything none of the three named, so it is only
-        // safe when all three actually walked. One that bailed contributed
-        // no uuids, and sweeping on that deletes what it would have named.
-        let pass = if [c_pass, p_pass, r_pass]
+        // Each feed names the buckets it looked at, with nothing, and then
+        // the ones it rendered, with what they read — in that order, so a
+        // bucket that no feed rendered ends declared with nothing and its
+        // documents go. The three feeds' keys never collide.
+        for bucket in messages
+            .buckets
             .iter()
-            .all(|p| *p == RenderPass::Walked)
+            .chain(&connections.buckets)
+            .chain(&posts.buckets)
         {
-            RenderPass::Walked
-        } else {
-            RenderPass::Skipped
-        };
-        ctx.retain_documents(pass, &seen);
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
+        }
+        if let Some(head) = [&messages, &connections, &posts]
+            .iter()
+            .find_map(|o| o.new_head.as_deref())
+        {
+            ctx.consumed(head);
+        }
         Ok("rendered".into())
     }
 }

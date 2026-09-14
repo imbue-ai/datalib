@@ -551,6 +551,54 @@ export const CATALOG: CatalogEntry[] = [
   // way of getting mail", which is not one form.
   { type: "email", label: "Email (mbox or other server)", blurb: "A Google Takeout .mbox, or a JMAP server other than Fastmail.", keywords: ["email", "mail", "jmap", "imap", "mbox", "takeout"], kind: "api", icon: "email", defaultName: "email", nameHint: "Old mail archive", wizard: false },
   { type: "contacts", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: null, defaultName: "contacts", nameHint: "Phone contacts", wizard: false },
+  {
+    type: "garmin",
+    method: "api",
+    label: "Garmin",
+    blurb: "Weight, sleep, heart rate, activities and FIT files from Garmin Connect.",
+    keywords: ["garmin", "connect", "watch", "forerunner", "fenix", "running", "weight", "sleep", "fitness"],
+    kind: "api",
+    icon: "garmin",
+    defaultName: "garmin",
+    nameHint: "My Garmin",
+    wizard: true,
+    fields: [
+      {
+        kind: "date",
+        target: "api.since",
+        label: "Mirror from",
+        help:
+          "The earliest day to mirror (YYYY-MM-DD). Leave empty for a year before the first " +
+          "sync; move it earlier later to backfill.",
+      },
+      {
+        kind: "bool",
+        target: "api.activity_files",
+        label: "Keep each activity's original FIT file",
+        default: true,
+        help: "The complete record of a workout; the JSON summary is a projection of it.",
+      },
+      {
+        kind: "bool",
+        target: "api.wellness_files",
+        label: "Keep each day's wellness FIT bundle",
+        default: false,
+        help:
+          "All-day heart rate, stress, steps, body battery and sleep at sensor resolution, " +
+          "one zip per day. The per-day metrics already carry the same series at chart resolution.",
+      },
+      {
+        kind: "text",
+        required: false,
+        target: "api.token_dir",
+        label: "Token folder",
+        placeholder: "~/.garth",
+        help:
+          "Where `datalib-step login garmin` (or garth) put oauth1_token.json. " +
+          "Leave empty for ~/.garth.",
+      },
+    ],
+  },
   { type: "yolink", method: "api", label: "YoLink", blurb: "Per-device temperature, humidity and water history.", keywords: ["yolink", "sensor", "temperature", "iot", "yosmart"], kind: "api", icon: "yolink", defaultName: "yolink", nameHint: "House sensors", wizard: false },
 
   {

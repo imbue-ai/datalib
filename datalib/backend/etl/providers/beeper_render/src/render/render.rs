@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 
 use datalib_etl::blob_cas::{self, BlobBundle};
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::render::Buckets;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 
 use super::normalize::{bundle_key, to_networks};
@@ -28,9 +29,9 @@ pub struct RenderSummary {
     pub docs_total: usize,
     pub docs_rendered: usize,
     pub blobs_materialized: usize,
-    /// Every document considered, rendered and skipped alike — what the
-    /// processor hands to `RenderCtx::retain_documents`.
-    pub documents: Vec<String>,
+    /// Every room rendered, with what it read — what the processor
+    /// declares through `RenderCtx::declare_bucket`.
+    pub buckets: Buckets,
 }
 
 /// Entry point. Renders every `(room, period)` bucket the parser
@@ -65,7 +66,7 @@ pub fn render_all(
             on_doc_complete,
         )?;
         summary.docs_rendered += s.docs_rendered;
-        summary.documents.extend(s.documents);
+        summary.buckets.extend(s.buckets);
     }
     Ok(summary)
 }

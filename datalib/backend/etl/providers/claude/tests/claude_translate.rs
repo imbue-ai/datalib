@@ -5,6 +5,7 @@
 
 use datalib_etl_claude::ingest::export::{ingest, IngestOptions};
 use datalib_etl_claude_render::render::parse::{parse, shred};
+use datalib_etl_render::inputs::RawRange;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -44,7 +45,7 @@ async fn parses_tng_api_fixture() {
             .expect("commit the ingest");
         db.close().await;
     }
-    let parsed = parse(raw.path(), None).expect("parse");
+    let parsed = parse(raw.path(), RawRange::cold()).expect("parse");
 
     assert!(!parsed.accounts.is_empty(), "expected accounts");
     assert!(!parsed.conversations.is_empty(), "expected conversations");

@@ -91,6 +91,7 @@ fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
     }
 
     NormalizedContact {
+        inputs: Vec::new(),
         contact_uuid: contact_uuid(source_id, &contact.addressbook, &contact.uid),
         group_uuid: addressbook_uuid(source_id, &contact.addressbook),
         group_label: contact.addressbook.clone(),

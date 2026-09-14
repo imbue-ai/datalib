@@ -5,12 +5,14 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::{self, BlobBundle};
+use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
+use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl_email::ingest::db::{db_path_for, EmailJoins, LoadedEmail};
+use datalib_etl_email::ingest::schema_raw::EmlBlobRow;
 
 /// SQL projection from the `email_blobs` edge's `blake3` to `.eml`
 /// bytes. Consumed by [`BlobBundle::load`]. After the eml-as-canonical
@@ -31,10 +33,13 @@ const EML_PROJECTION_SQL: &str = "
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → load only threads whose `(account_id, thread_id)`
-    /// is in `set`. `None` → cold start, render every thread.
+    /// is in `set`: the ones the driver found stale through their
+    /// declared inputs, plus the ones the diff named. `None` → cold
+    /// start, render every thread.
     pub render: Option<HashSet<(String, String)>>,
-    /// The threads the diff named, for the removal probe.
-    pub changed_threads: Option<HashSet<(String, String)>>,
+    /// Bucket keys the driver found stale that no email still belongs
+    /// to — declared with nothing so their documents go.
+    pub gone: Vec<String>,
     /// The HEAD commit hash at scan time. `None` if `dolt_log()` was
     /// unavailable (non-doltlite sqlite); cursor stays unwritten.
     pub new_head: Option<String>,
@@ -59,11 +64,6 @@ pub struct ParsedEmail {
     /// into the render summary.
     pub docs_skipped: usize,
     pub scan: ScanResult,
-    /// `(account_id, thread_id)` pairs the diff named that no email or
-    /// thread row still carries — threads the mailbox lost. Empty on a cold
-    /// start, which looks at every thread and so has nothing to compare
-    /// against.
-    pub vanished_threads: Vec<(String, String)>,
 }
 
 /// One rendered-markdown bucket: every email in a single JMAP Thread
@@ -77,24 +77,35 @@ pub struct EmailThreadBucket {
     pub emails: Vec<LoadedEmail>,
     pub joins: EmailJoins,
     pub blobs: BlobBundle,
+    /// Every raw row this thread reads — its emails, their mailbox,
+    /// keyword and `.eml` edges from the load; its account and the
+    /// mailboxes it is filed under as render looks them up.
+    pub inputs: Inputs,
 }
 
 pub fn parse_export(input: &Path) -> Result<ParsedEmail> {
-    parse(input, None)
+    parse(input, RawRange::cold(), false)
 }
 
-pub fn parse(input: &Path, last_render_hash: Option<&str>) -> Result<ParsedEmail> {
+/// `label_filter` says whether the render step filters threads by
+/// mailbox label: then which threads render depends on the whole
+/// mailbox tree, and a mailbox change renders everything.
+pub fn parse(input: &Path, range: RawRange<'_>, label_filter: bool) -> Result<ParsedEmail> {
     let db_path = db_path_for(input);
     if !db_path.is_file() {
         return Ok(ParsedEmail::default());
     }
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, last_render_hash).await })
+            .block_on(async move { parse_async(&db_path, range, label_filter).await })
     })
 }
 
-async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<ParsedEmail> {
+async fn parse_async(
+    db_path: &Path,
+    range: RawRange<'_>,
+    label_filter: bool,
+) -> Result<ParsedEmail> {
     let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?;
@@ -115,7 +126,7 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
     // already exist when the diff runs — its bucket query joins live tables.
     // No commit at all means nothing has been committed here to render, which
     // is emptiness, not a reason to read the working set.
-    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+    let Some(pin) = range.pin(&pool).await? else {
         return Ok(ParsedEmail::default());
     };
     datalib_etl::pin::install_views(&pool, &pin)
@@ -125,23 +136,19 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
     let accounts = load_accounts(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     let mailboxes = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "mailboxes").await?;
     let threads = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "threads").await?;
+    // Every thread with at least one email — the load set on a cold
+    // start, the denominator of the skipped count otherwise, and the
+    // map from the driver's bucket keys back to thread keys.
+    let all = load_all_thread_keys(&pool).await?;
 
-    // ── Phase 1: which threads changed since last_render_hash? ────
-    let scan = scan_diff(&pool, last_render_hash, &pin).await?;
+    // ── Phase 1: which threads changed since the cursor? ──────────
+    let scan = scan_diff(&pool, range, &pin, label_filter, &all).await?;
 
     let (to_load, docs_skipped) = match &scan.render {
-        None => {
-            // Cold start — load every thread with at least one email.
-            let all = load_all_thread_keys(&pool).await?;
-            (all, 0usize)
-        }
+        None => (all, 0usize),
         Some(changed) => {
-            // Count "total threads that have any emails" so the
-            // skipped count is meaningful; same denominator the
-            // render/load progress bar uses.
-            let total = load_all_thread_keys(&pool).await?;
-            let skipped = total.difference(changed).count();
-            let load: HashSet<(String, String)> = total.intersection(changed).cloned().collect();
+            let skipped = all.difference(changed).count();
+            let load: HashSet<(String, String)> = all.intersection(changed).cloned().collect();
             (load, skipped)
         }
     };
@@ -177,36 +184,6 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         }
     }
 
-    // Threads the diff named that nothing in the store still carries.
-    // Checked on `thread_id` alone rather than the `(account, thread)`
-    // pair the bucket is keyed by: a thread id that survives under a
-    // different account reads as present, so the error runs toward
-    // missing a deletion rather than inventing one.
-    let vanished_threads = match scan.changed_threads.as_ref() {
-        Some(changed) => {
-            let ids: std::collections::HashSet<String> =
-                changed.iter().map(|(_, t)| t.clone()).collect();
-            let gone: std::collections::HashSet<String> =
-                datalib_etl::doltlite_raw::buckets_without_rows(
-                    &pool,
-                    datalib_etl::pin::Reads::At(&pin),
-                    &ids,
-                    &[("threads", "id"), ("emails", "thread_id")],
-                )
-                .await?
-                .into_iter()
-                .collect();
-            let mut out: Vec<(String, String)> = changed
-                .iter()
-                .filter(|(_, t)| gone.contains(t))
-                .cloned()
-                .collect();
-            out.sort();
-            out
-        }
-        None => Vec::new(),
-    };
-
     Ok(ParsedEmail {
         accounts,
         mailboxes,
@@ -214,7 +191,6 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         docs,
         docs_skipped,
         scan,
-        vanished_threads,
     })
 }
 
@@ -307,19 +283,24 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
 /// the same primitive every other provider uses (slack / chatgpt /
 /// claude / signal). Bucket key shape is `"<account_id>|<thread_id>"`
 /// so it fits the helper's `HashSet<String>` API; we split it back
-/// into a `(String, String)` pair locally for the load step.
+/// into a `(String, String)` pair locally for the load step. An
+/// account or mailbox change reaches a thread through the inputs it
+/// declared — except under a label filter, where the mailbox tree
+/// decides which threads render at all, so any mailbox change renders
+/// everything.
 async fn scan_diff(
     pool: &SqlitePool,
-    last_render_hash: Option<&str>,
+    range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
+    label_filter: bool,
+    all: &HashSet<(String, String)>,
 ) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
-        last_render_hash,
+        range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            // Every thread's header names its account and its mailboxes.
-            global_fanout_tables: &["accounts", "mailboxes"],
+            global_fanout_tables: if label_filter { &["mailboxes"] } else { &[] },
             bucket_query: "
                 SELECT DISTINCT account_id || '|' || thread_id AS bucket_key FROM (
                     SELECT to_account_id  AS account_id, to_thread_id  AS thread_id
@@ -351,6 +332,13 @@ async fn scan_diff(
         },
     )
     .await?;
+    // The driver names buckets by the thread uuid; the load wants the
+    // `(account, thread)` pair.
+    let by_uuid: HashMap<String, String> = all
+        .iter()
+        .map(|(a, t)| (super::render::thread_uuid(a, t), format!("{a}|{t}")))
+        .collect();
+    let narrowed = range.narrow_by(scan.render.as_ref(), |key| by_uuid.get(key).cloned());
     let split = |set: HashSet<String>| {
         set.into_iter()
             .filter_map(|key| {
@@ -360,8 +348,8 @@ async fn scan_diff(
             .collect::<HashSet<(String, String)>>()
     };
     Ok(ScanResult {
-        render: scan.render.map(split),
-        changed_threads: scan.changed_buckets.map(split),
+        render: narrowed.render.map(split),
+        gone: narrowed.gone,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })
@@ -448,6 +436,7 @@ async fn load_buckets(
             emails: Vec::new(),
             joins: EmailJoins::default(),
             blobs: BlobBundle::default(),
+            inputs: Inputs::default(),
         });
     }
 
@@ -477,11 +466,16 @@ async fn load_buckets(
             continue;
         };
         email_ids_in_buckets.insert(id.clone());
+        let blob_id: String = r.try_get("blob_id").unwrap_or_default();
+        docs[idx].inputs.read("emails", &id);
+        docs[idx]
+            .inputs
+            .read("email_blobs", &EmlBlobRow::pk_recipe(&id, &blob_id));
         docs[idx].emails.push(LoadedEmail {
             id,
             account_id,
             thread_id,
-            blob_id: r.try_get("blob_id").unwrap_or_default(),
+            blob_id,
             message_id: r.try_get::<Option<String>, _>("message_id").unwrap_or(None),
             in_reply_to: r
                 .try_get::<Option<String>, _>("in_reply_to")
@@ -521,7 +515,7 @@ async fn load_buckets(
 
     // mailboxes
     let sql = format!(
-        "SELECT email_id, mailbox_id FROM pinned_email_mailboxes email_mailboxes WHERE email_id IN ({placeholders})"
+        "SELECT id, email_id, mailbox_id FROM pinned_email_mailboxes email_mailboxes WHERE email_id IN ({placeholders})"
     );
     let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for e in &email_ids_in_buckets {
@@ -537,12 +531,16 @@ async fn load_buckets(
         let Some(&idx) = email_to_bucket.get(&e) else {
             continue;
         };
+        docs[idx].inputs.read(
+            "email_mailboxes",
+            &r.try_get::<String, _>("id").unwrap_or_default(),
+        );
         docs[idx].joins.mailboxes.entry(e).or_default().push(m);
     }
 
     // keywords
     let sql = format!(
-        "SELECT email_id, keyword FROM pinned_email_keywords email_keywords WHERE email_id IN ({placeholders})"
+        "SELECT id, email_id, keyword FROM pinned_email_keywords email_keywords WHERE email_id IN ({placeholders})"
     );
     let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for e in &email_ids_in_buckets {
@@ -558,6 +556,10 @@ async fn load_buckets(
         let Some(&idx) = email_to_bucket.get(&e) else {
             continue;
         };
+        docs[idx].inputs.read(
+            "email_keywords",
+            &r.try_get::<String, _>("id").unwrap_or_default(),
+        );
         docs[idx].joins.keywords.entry(e).or_default().push(k);
     }
 

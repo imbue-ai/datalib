@@ -1,0 +1,33 @@
+[package]
+name = "datalib-etl-garmin"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_etl_garmin"
+path = "src/lib.rs"
+
+[dependencies]
+datalib-etl = { path = "../.." }
+datalib-etl-macros = { path = "../../macros" }
+datalib-time = { path = "../../../time" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
+sqlx = { workspace = true }
+tracing = "0.1"
+async-trait = { workspace = true }
+hmac = { workspace = true }
+sha1 = "0.11"
+base64 = "0.22"
+urlencoding = "2"
+uuid = { workspace = true }
+tempfile = "3"
+zip = { version = "7", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

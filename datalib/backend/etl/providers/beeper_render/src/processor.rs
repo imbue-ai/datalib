@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use datalib_etl::periodize::Period;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_beeper_config::BeeperRenderConfig;
-use datalib_etl_render::processor::{RenderCtx, RenderPass, RenderProcessor};
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 use std::path::PathBuf;
 
 pub fn plan_render(
@@ -49,7 +49,7 @@ impl RenderProcessor for BeeperRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(&self.raw_path, self.period)
+        let parsed = parse(&self.raw_path, self.period, ctx.raw_range())
             .with_context(|| format!("beeper parse {}", self.raw_path.display()))?;
         let raw_db_path = datalib_etl::doltlite_raw::db_path_for(&self.raw_path);
         let mut on_doc = |md| ctx.emit_doc(md);
@@ -62,15 +62,21 @@ impl RenderProcessor for BeeperRender {
             &raw_db_path,
         )
         .context("beeper render_all")?;
-        // Whole-store: every document the walk considered is what the
-        // source holds; the rest is gone. A parse that read no store
-        // walked nothing and says so.
-        let pass = if parsed.walked {
-            RenderPass::Walked
-        } else {
-            RenderPass::Skipped
-        };
-        ctx.retain_documents(pass, &summary.documents.iter().cloned().collect());
+        // A room this run looked at that has no event left builds no
+        // chat, so chat-common never sees it: declared with nothing, its
+        // documents go. The rendered ones follow and replace that.
+        for room in parsed.scan.render.iter().flatten() {
+            ctx.declare_bucket(room, &[])?;
+        }
+        for bucket in &parsed.scan.gone {
+            ctx.declare_bucket(bucket, &[])?;
+        }
+        for bucket in &summary.buckets {
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
+        }
+        if let Some(head) = parsed.scan.new_head.as_deref() {
+            ctx.consumed(head);
+        }
         Ok("rendered".into())
     }
 }

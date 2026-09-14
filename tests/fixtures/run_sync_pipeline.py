@@ -69,7 +69,13 @@ Args (positional):
                       reaches grid_index and the qmd index like any
                       chat source — which is the whole point of
                       including it here.
-    24: airvisual_tng  Two AirVisual Pros' data folders (the share's
+    24: garmin_tng    JSON spec for the TNG Garmin account (the path is
+                      to the .json file itself). `datalib-step
+                      synthesize garmin` expands it into playback
+                      fixtures like the HTTP providers' trees; the
+                      spec's `since`/`today` match the `api.since`
+                      written below and the pipeline's `--now`.
+    25: airvisual_tng  Two AirVisual Pros' data folders (the share's
                       own layout). File-backed; the ingest step walks
                       each folder directly.
 
@@ -152,7 +158,8 @@ def main() -> int:
     yolink_make_fixture_bin = Path(sys.argv[21]).resolve()
     yolink_spec = Path(sys.argv[22]).resolve()
     pdf_fx = Path(sys.argv[23]).resolve()
-    airvisual_fx = Path(sys.argv[24]).resolve()
+    garmin_spec = Path(sys.argv[24]).resolve()
+    airvisual_fx = Path(sys.argv[25]).resolve()
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -259,6 +266,9 @@ def main() -> int:
         # File-backed and rendering: PDFs under this tree become
         # markdown + grid_rows, so the fan-in steps index them.
         "tng_pdfs": ("pdf", pdf_fx, pdf_fx),
+        # The synth input is the spec file; the ingest walk replays the
+        # fixtures it wrote. The path is unused (the method is `api`).
+        "garmin": ("garmin", garmin_spec, garmin_spec),
         # Two AirVisual Pros' data folders under this tree, one
         # `export.devices` entry each; renders one page of plots.
         "ship-air": ("airvisual", airvisual_fx, airvisual_fx),
@@ -569,6 +579,11 @@ def _source_config(
         # root back from `pdf_scan_meta`, so it needs no params of its
         # own.
         source["fswalk"] = {"path": str(input_path)}
+    elif type_str == "garmin":
+        # `since` is the spec's; the walk's `today` is the pipeline's
+        # `--now`, which the spec matches too. The token dir is never
+        # read under playback.
+        source["api"] = {"since": "2369-04-01"}
     else:
         source["api"] = {}
     return source

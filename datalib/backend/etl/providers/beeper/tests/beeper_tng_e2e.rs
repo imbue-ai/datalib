@@ -211,7 +211,11 @@ async fn tng_fixture_translate_per_month_with_cross_month_reaction() -> Result<(
     let out_db = tmp.path().join("out.doltlite_db");
     run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
 
-    let parsed = render::parse::parse(&out_db, Period::Month)?;
+    let parsed = render::parse::parse(
+        &out_db,
+        Period::Month,
+        datalib_etl_render::inputs::RawRange::cold(),
+    )?;
 
     // 4 docs total: GC-Riker/2024-03, Signal-Data/2024-03,
     // Signal-Data/2024-04, Signal-Crusher/2024-04.
@@ -280,7 +284,11 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
     let out_db = tmp.path().join("out.doltlite_db");
     run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
 
-    let parsed = render::parse::parse(&out_db, Period::Month)?;
+    let parsed = render::parse::parse(
+        &out_db,
+        Period::Month,
+        datalib_etl_render::inputs::RawRange::cold(),
+    )?;
     let rendered_root = tmp.path().join("rendered");
     let mut rendered: Vec<RenderedMarkdown> = Vec::new();
     let mut on_doc = |d: RenderedMarkdown| -> anyhow::Result<()> {

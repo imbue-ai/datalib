@@ -54,6 +54,8 @@ pub enum SourceType {
     Contacts,
     Email,
     Fsindex,
+    /// Garmin Connect, over the API the Connect phone app uses.
+    Garmin,
     Github,
     Gitlab,
     GoogleTakeout,

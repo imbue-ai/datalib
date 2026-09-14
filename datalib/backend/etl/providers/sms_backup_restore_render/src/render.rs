@@ -7,18 +7,20 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use datalib_etl::blob_cas::BlobBundle;
+use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+    render_all as cc_render_all, Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::Value;
 use uuid::Uuid;
 
+use datalib_etl_sms_backup_restore::ingest::schema_raw::SmsAttachmentRow;
 use datalib_etl_sms_backup_restore::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
 
@@ -66,7 +68,7 @@ pub fn render(
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    last_render_hash: Option<&str>,
+    range: RawRange<'_>,
 ) -> Result<RenderOutcome> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
@@ -79,7 +81,7 @@ pub fn render(
             // separate HEAD. No commit means nothing has been committed here
             // to render, which is emptiness rather than a reason to read the
             // working set.
-            let pin = datalib_etl::pin::head(db.pool()).await?;
+            let pin = range.pin(db.pool()).await?;
             let loaded = async {
                 let Some(pin) = pin else {
                     return anyhow::Ok(Default::default());
@@ -87,14 +89,20 @@ pub fn render(
                 datalib_etl::pin::install_views(db.pool(), &pin)
                     .await
                     .context("pin the sms_backup_restore raw store for render")?;
-                let messages = db
-                    .load_payloads(datalib_etl::pin::Reads::At(&pin), "sms_messages")
-                    .await?;
-                let calls = db
-                    .load_payloads(datalib_etl::pin::Reads::At(&pin), "sms_calls")
-                    .await?;
+                let messages = datalib_etl::doltlite_raw::load_payloads_with_id(
+                    db.pool(),
+                    datalib_etl::pin::Reads::At(&pin),
+                    "sms_messages",
+                )
+                .await?;
+                let calls = datalib_etl::doltlite_raw::load_payloads_with_id(
+                    db.pool(),
+                    datalib_etl::pin::Reads::At(&pin),
+                    "sms_calls",
+                )
+                .await?;
                 let blobs = load_blobs(&db, &messages).await?;
-                let scan = scan_diff(db.pool(), last_render_hash, &pin).await?;
+                let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
                 anyhow::Ok((messages, calls, blobs, scan))
             }
             .await;
@@ -110,25 +118,38 @@ pub fn render(
     }
     let all_chats = build_chats(&messages, &calls);
 
-    // Narrow to the conversations the diff named. Everything else is
-    // byte-identical to what the store already holds, so re-deriving it
-    // only to have the fingerprint compare throw it away is the cost this
-    // cursor exists to remove.
+    // Narrow to the conversations the diff named and the ones the driver
+    // found stale through their declared inputs. Everything else is
+    // byte-identical to what the store already holds.
     let mut outcome = RenderOutcome {
         new_head: scan.new_head.clone(),
         scan_elapsed: scan.scan_elapsed,
         ..Default::default()
     };
-    // A conversation key the diff named that no chat carries any more:
-    // every message and call for that number is gone.
-    if let Some(changed) = &scan.changed_buckets {
-        let present: std::collections::HashSet<&str> =
-            all_chats.iter().map(|c| c.id.as_str()).collect();
-        for gone in changed.iter().filter(|k| !present.contains(k.as_str())) {
-            outcome.vanished.push(uuid5(&format!("chat:{gone}")));
-        }
-    }
-    let chats: Vec<NormalizedChat> = match &scan.render {
+    // The driver names stale buckets by chat uuid; the chats are by key.
+    let by_uuid: HashMap<&str, &str> = all_chats
+        .iter()
+        .map(|c| (c.chat_uuid.as_str(), c.id.as_str()))
+        .collect();
+    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
+        by_uuid.get(key).map(|id| id.to_string())
+    });
+    // Named buckets first, with no documents: a conversation this run
+    // looked at that has no message or call left builds no chat, and
+    // chat-common never sees it. The rendered ones follow and replace
+    // that.
+    outcome.buckets = narrowed
+        .render
+        .iter()
+        .flatten()
+        .map(|key| uuid5(&format!("chat:{key}")))
+        .chain(narrowed.gone.iter().cloned())
+        .map(|key| Bucket {
+            key,
+            inputs: Vec::new(),
+        })
+        .collect();
+    let chats: Vec<NormalizedChat> = match &narrowed.render {
         None => all_chats,
         Some(changed) => {
             let before = all_chats.len();
@@ -150,15 +171,6 @@ pub fn render(
         on_doc_complete,
     )?;
     outcome.rendered = s.docs_rendered;
-    // Named buckets first, with no documents: a conversation the diff
-    // named that has no message or call left builds no chat, and
-    // chat-common never sees it.
-    outcome.buckets = scan
-        .changed_buckets
-        .iter()
-        .flatten()
-        .map(|key| uuid5(&format!("chat:{key}")))
-        .collect();
     outcome.buckets.extend(s.buckets);
     Ok(outcome)
 }
@@ -168,17 +180,12 @@ pub fn render(
 #[derive(Debug, Clone, Default)]
 pub struct RenderOutcome {
     pub rendered: usize,
-    /// Conversations the diff named and no chat still carries — their
-    /// documents are the caller's to remove. Keyed by `chat_uuid`, since a
-    /// conversation periodizes into several documents and only the render
-    /// store knows how many.
-    pub vanished: Vec<String>,
     pub skipped: usize,
     pub new_head: Option<String>,
     pub scan_elapsed: Option<std::time::Duration>,
     /// Every conversation rendered, with the documents considered for it
     /// — what the processor declares through `RenderCtx::declare_bucket`.
-    pub buckets: datalib_etl_chat_common::render::Buckets,
+    pub buckets: Buckets,
 }
 
 /// Which conversations moved since `last_render_hash`.
@@ -187,15 +194,9 @@ pub struct RenderOutcome {
 /// [`chat_id`] builds, so the changed set compares directly against
 /// `NormalizedChat::id`.
 ///
-/// Attachments are deliberately *not* in the union. Naming their
-/// conversation needs a join back to `sms_messages`, and a plain read of a
-/// content table from render code is what
-/// `docs/dev/plans/streaming_steps_plan.md` is working off — the repo lint
-/// ratchets that count down and refuses new ones. The miss it costs is
-/// narrow: this provider parses local XML, so a message and its attachment
-/// land in the same commit and the message row already names the bucket. A
-/// blob filled in by a later run on its own would go unnoticed until
-/// something else in that conversation moves.
+/// Attachments are not in the union: every chat declares its attachment
+/// edges by key, present or not, so a blob filled in by a later run
+/// reaches its conversation through the driver's reverse lookup.
 async fn scan_diff(
     pool: &sqlx::SqlitePool,
     last_render_hash: Option<&str>,
@@ -225,9 +226,12 @@ async fn scan_diff(
     .await
 }
 
-async fn load_blobs(db: &RawDb, messages: &[Value]) -> Result<HashMap<String, BlobBundle>> {
+async fn load_blobs(
+    db: &RawDb,
+    messages: &[(String, Value)],
+) -> Result<HashMap<String, BlobBundle>> {
     let mut refs_by_chat: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for m in messages {
+    for (_, m) in messages {
         let key = chat_id(m);
         let bag = refs_by_chat.entry(key).or_default();
         for r in attachment_refs(m) {
@@ -268,14 +272,29 @@ fn attachment_refs(v: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
-    let mut by_chat: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
-    for v in messages.iter().chain(calls.iter()) {
-        by_chat.entry(chat_id(v)).or_default().push(v);
+/// Messages and calls as `(row id, payload)`; the id is what the chat
+/// declares it read.
+fn build_chats(messages: &[(String, Value)], calls: &[(String, Value)]) -> Vec<NormalizedChat> {
+    let mut by_chat: BTreeMap<String, (Vec<&Value>, Inputs)> = BTreeMap::new();
+    for (row_id, v) in messages {
+        let (rows, inputs) = by_chat.entry(chat_id(v)).or_default();
+        inputs.read("sms_messages", row_id);
+        for ref_name in attachment_refs(v) {
+            inputs.read(
+                "sms_attachments",
+                &SmsAttachmentRow::pk_recipe(row_id, &ref_name),
+            );
+        }
+        rows.push(v);
+    }
+    for (row_id, v) in calls {
+        let (rows, inputs) = by_chat.entry(chat_id(v)).or_default();
+        inputs.read("sms_calls", row_id);
+        rows.push(v);
     }
 
     let mut chats = Vec::with_capacity(by_chat.len());
-    for (id, rows) in by_chat {
+    for (id, (rows, inputs)) in by_chat {
         // Display: prefer a human contact name over a bare number.
         let display = rows
             .iter()
@@ -314,6 +333,7 @@ fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
             .collect();
 
         chats.push(NormalizedChat {
+            inputs: inputs.declared(),
             path_prefix: None,
             id: id.clone(),
             chat_uuid: uuid5(&format!("chat:{id}")),
@@ -507,6 +527,20 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn with_ids(rows: &[Value]) -> Vec<(String, Value)> {
+        rows.iter()
+            .map(|v| {
+                (
+                    v.get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    v.clone(),
+                )
+            })
+            .collect()
+    }
+
     /// A row with no usable `date` must carry no timestamp — not the
     /// epoch — while still landing in a bucket so it stays reachable.
     #[test]
@@ -515,7 +549,7 @@ mod tests {
             json!({"id":"nd1","kind":"sms","conversation_key":"+1410","conversation_display":"Jean-Luc Picard","is_me":false,"body":"When?","attachments":[]}),
             json!({"id":"nd2","kind":"sms","conversation_key":"+1410","conversation_display":"+1410","date":"not-a-number","is_me":true,"body":"Unclear","attachments":[]}),
         ];
-        let chats = build_chats(&messages, &[]);
+        let chats = build_chats(&with_ids(&messages), &[]);
         let items: Vec<_> = chats[0].buckets.iter().flat_map(|b| &b.items).collect();
         assert_eq!(items.len(), 2, "undated rows are kept, not dropped");
         for i in &items {
@@ -535,7 +569,7 @@ mod tests {
         let calls = vec![
             json!({"id":"c1","kind":"call","conversation_key":"+1410","conversation_display":"Jean-Luc Picard","date":1778277000000i64,"call_type":"missed","duration":0}),
         ];
-        let chats = build_chats(&messages, &calls);
+        let chats = build_chats(&with_ids(&messages), &with_ids(&calls));
         assert_eq!(chats.len(), 1, "calls + texts on one number → one chat");
         assert_eq!(chats[0].display, "Jean-Luc Picard");
         // 3 items across the buckets (2 texts + 1 call).
@@ -558,7 +592,7 @@ mod tests {
             "date":1781811656000i64,"is_me":false,"text":"Happy Thurs",
             "attachments":["x1/image000001.gif"]
         })];
-        let chats = build_chats(&messages, &[]);
+        let chats = build_chats(&with_ids(&messages), &[]);
         let it = chats[0].buckets[0]
             .items
             .iter()
@@ -584,7 +618,7 @@ mod tests {
             "id":"c9","kind":"call","conversation_key":"+1999","conversation_display":"Q",
             "date":1778277000000i64,"call_type":"missed","duration":0
         })];
-        let chats = build_chats(&[], &calls);
+        let chats = build_chats(&[], &with_ids(&calls));
         let it = &chats[0].buckets[0].items[0];
         assert_eq!(it.kind, ItemKind::System);
         assert_eq!(it.system_note.as_deref(), Some("Missed call — Q"));

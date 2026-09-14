@@ -13,6 +13,7 @@ mod grid_index;
 mod hints;
 mod ingest;
 mod introspect;
+mod login;
 mod methods;
 mod probe;
 mod qmd_index;
@@ -101,6 +102,22 @@ enum Cmd {
         /// Source type (`slack`, `claude`, …): the provider to ask.
         source_type: String,
     },
+    /// Utility (not a pipeline step): sign in to a service that holds
+    /// its own credential rather than a latchkey one, and store it
+    /// where that source's ingest step reads it. Interactive.
+    Login {
+        /// Source type; only `garmin` has a login of its own.
+        source_type: String,
+        /// Where to write the token files (garmin: `~/.garth`).
+        #[arg(long)]
+        token_dir: Option<String>,
+        /// Account email, else prompted for.
+        #[arg(long)]
+        email: Option<String>,
+        /// `garmin.com`, or `garmin.cn` for a China-region account.
+        #[arg(long, default_value = "garmin.com")]
+        domain: String,
+    },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
     /// for one source from a raw fixture tree (`--params
     /// '{"fixture_path": …}'`), for later replay via `--playback-root`.
@@ -163,6 +180,16 @@ async fn main() {
     // would corrupt the only thing its caller reads.
     if let Some(Cmd::Probe { source_type }) = &cli.cmd {
         probe::run_cli(source_type, cli.params.as_deref()).await;
+    }
+    // `login` likewise: it talks to a terminal, not to the runner.
+    if let Some(Cmd::Login {
+        source_type,
+        token_dir,
+        email,
+        domain,
+    }) = &cli.cmd
+    {
+        login::run_cli(source_type, token_dir.as_deref(), email.as_deref(), domain).await;
     }
 
     let step_id = std::env::var(ENV_STEP).unwrap_or_else(|_| "step".to_string());
@@ -254,6 +281,7 @@ async fn run(
         // Handled in `main` before the step machinery starts; see
         // there for why it cannot come through the outcome path.
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
+        Some(Cmd::Login { .. }) => unreachable!("login is answered in main"),
         None => {
             let env = StepEnv::from_env()?;
             run_function(

@@ -6,8 +6,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::{self, BlobBundle};
+use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl::periodize::Period;
+use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_etl_signal::ingest::schema_raw::ChatItemAttachmentRow;
 use datalib_signal_backup::backup;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -26,14 +28,13 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
 /// the cursor + log the elapsed_ms without a second round-trip.
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
-    /// `Some(set)` → render only chats whose id is in `set`. `None` →
-    /// cold start, render every chat. (First run, or no on-disk
-    /// doltlite, or `dolt_diff_<table>` unavailable, or no prior
-    /// cursor.)
+    /// `Some(set)` → render only chats whose id is in `set`: the ones
+    /// the driver found stale through their declared inputs, plus the
+    /// ones the diff named. `None` → cold start, render every chat.
     pub render: Option<HashSet<String>>,
-    /// The chats the diff named, for the removal probe — still a set
-    /// when `render` is `None` because a recipient changed.
-    pub changed_chats: Option<HashSet<String>>,
+    /// Bucket keys the driver found stale whose `chats` row is gone —
+    /// declared with nothing so their documents go.
+    pub gone: Vec<String>,
     /// The HEAD commit hash at scan time, ready to stamp into the
     /// render cursor on success. `None` if we couldn't read HEAD —
     /// next run is another cold start.
@@ -64,10 +65,11 @@ pub struct ParsedSignal {
     /// Scan diagnostics propagated up to render so it can write the
     /// cursor + log elapsed_ms.
     pub scan: ScanResult,
-    /// Bucket keys the diff named that the raw store no longer has a row
-    /// for. Empty on a cold start, which looks at every bucket and so has
-    /// nothing to compare against.
-    pub vanished_buckets: Vec<String>,
+    /// Every raw row each loaded chat reads, by `chat_id` — its `chats`
+    /// row, its items and attachment edges from the load, its
+    /// recipients as render looks them up. One per chat, not per
+    /// period: the bucket the driver sweeps is the chat.
+    pub inputs: HashMap<String, Inputs>,
 }
 
 #[derive(Debug, Clone)]
@@ -134,30 +136,30 @@ pub struct ParsedAttachment {
 }
 
 pub fn parse_raw_dir(input: &Path) -> Result<ParsedSignal> {
-    parse(input, Period::Month, "signal", None)
+    parse(input, Period::Month, "signal", RawRange::cold())
 }
 
 pub fn parse(
     input: &Path,
     period: Period,
     source_id: &str,
-    last_render_hash: Option<&str>,
+    range: RawRange<'_>,
 ) -> Result<ParsedSignal> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(input);
     if !db_path.is_file() {
         return Ok(ParsedSignal::default());
     }
-    let _ = source_id; // currently unused; keep param for symmetry with whatsapp
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, period, last_render_hash).await })
+            .block_on(async move { parse_async(&db_path, period, source_id, range).await })
     })
 }
 
 async fn parse_async(
     db_path: &Path,
     period: Period,
-    last_render_hash: Option<&str>,
+    source_id: &str,
+    range: RawRange<'_>,
 ) -> Result<ParsedSignal> {
     let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
@@ -180,7 +182,7 @@ async fn parse_async(
     // already exist when the diff runs — its bucket query joins live tables.
     // No commit at all means nothing has been committed here to render, which
     // is emptiness, not a reason to read the working set.
-    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+    let Some(pin) = range.pin(&pool).await? else {
         return Ok(ParsedSignal::default());
     };
     datalib_etl::pin::install_views(&pool, &pin)
@@ -190,8 +192,8 @@ async fn parse_async(
     let recipients = load_recipients(&pool).await?;
     let chats = load_chats(&pool).await?;
 
-    // ── Phase 1: which chats changed since last_render_hash? ──────
-    let scan = scan_diff(&pool, last_render_hash, &pin).await?;
+    // ── Phase 1: which chats changed since the cursor? ────────────
+    let scan = scan_diff(&pool, range, &pin, source_id, &chats).await?;
 
     // Decide the load set.
     let (to_load_chats, docs_skipped) = match &scan.render {
@@ -240,20 +242,20 @@ async fn parse_async(
         }
     }
 
-    // A chat the diff named whose `chats` row is gone: Signal's newest
-    // backup no longer carries it.
-    let vanished_buckets = match scan.changed_chats.as_ref() {
-        Some(changed) => {
-            datalib_etl::doltlite_raw::buckets_without_rows(
-                &pool,
-                datalib_etl::pin::Reads::At(&pin),
-                changed,
-                &[("chats", "id")],
-            )
-            .await?
+    let mut inputs: HashMap<String, Inputs> = HashMap::new();
+    for bucket in &docs {
+        let read = inputs.entry(bucket.chat_id.clone()).or_default();
+        read.read("chats", &bucket.chat_id);
+        for item in &bucket.items {
+            read.read("chat_items", &item.item_pk);
+            for att in &item.attachments {
+                read.read(
+                    "chat_item_attachments",
+                    &ChatItemAttachmentRow::pk_recipe(&item.item_pk, &att.ref_id),
+                );
+            }
         }
-        None => Vec::new(),
-    };
+    }
 
     Ok(ParsedSignal {
         recipients,
@@ -261,7 +263,7 @@ async fn parse_async(
         docs,
         docs_skipped,
         scan,
-        vanished_buckets,
+        inputs,
     })
 }
 
@@ -321,17 +323,19 @@ async fn load_all_chat_ids(pool: &sqlx::SqlitePool) -> Result<HashSet<String>> {
 
 async fn scan_diff(
     pool: &SqlitePool,
-    last_render_hash: Option<&str>,
+    range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
+    source_id: &str,
+    chats: &HashMap<String, ParsedChat>,
 ) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
-        last_render_hash,
+        range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            // Recipients fan out to every chat — the renderer
-            // dereferences recipient display names per chat.
-            global_fanout_tables: &["recipients"],
+            // A recipient change reaches a chat through the inputs it
+            // declared; nothing fans out.
+            global_fanout_tables: &[],
             bucket_query: "
                 SELECT DISTINCT chat_id FROM (
                     SELECT coalesce(to_id, from_id) AS chat_id
@@ -358,9 +362,17 @@ async fn scan_diff(
         },
     )
     .await?;
+    // The driver names buckets by the chat uuid; the load wants chat ids.
+    let by_uuid: HashMap<String, &str> = chats
+        .keys()
+        .map(|id| (super::signal_chat_uuid(source_id, id), id.as_str()))
+        .collect();
+    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
+        by_uuid.get(key).map(|id| id.to_string())
+    });
     Ok(ScanResult {
-        render: scan.render,
-        changed_chats: scan.changed_buckets,
+        render: narrowed.render,
+        gone: narrowed.gone,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })
