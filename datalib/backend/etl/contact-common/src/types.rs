@@ -39,6 +39,10 @@ pub struct NormalizedContact {
     /// Fetching the bytes into blob_cas is a deferred enhancement (e.g.
     /// pulling a connection's picture off their LinkedIn page).
     pub photo_url: Option<String>,
+    /// Every raw row this contact was built from — what the processor
+    /// declares through `RenderCtx::declare_bucket`. Empty only for a
+    /// provider that has not declared its inputs yet.
+    pub inputs: Vec<datalib_etl_render::inputs::Input>,
 }
 
 /// A single labelled detail rendered in the contact's table.

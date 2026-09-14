@@ -6,35 +6,63 @@
 use std::path::Path;
 
 use anyhow::Result;
+use datalib_etl_render::inputs::{Input, RawRange};
 use serde_json::Value;
 
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
-pub fn load_account(raw_dir: &Path) -> Result<Option<String>> {
+/// The export's owner, and the rows that said so. The label is "the
+/// primary address, else the first listed, else the profile's name",
+/// which reads every row of both tables — so every document that
+/// carries it declares them all.
+#[derive(Debug, Clone, Default)]
+pub struct Account {
+    pub label: Option<String>,
+    pub inputs: Vec<Input>,
+}
+
+pub fn load_account(raw_dir: &Path, range: RawRange<'_>) -> Result<Account> {
     let db_path = db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(None);
+        return Ok(Account::default());
     }
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open_reader(&db_path).await?;
-            let Some(pin) = datalib_etl::pin::head(db.pool()).await? else {
+            let Some(pin) = range.pin(db.pool()).await? else {
                 db.close().await;
-                return Ok(None);
+                return Ok(Account::default());
             };
             datalib_etl::pin::install_views(db.pool(), &pin).await?;
             // Either file can be absent from an export; a missing table
             // is "unknown", not a failed render.
-            let emails = db
-                .load_payloads(datalib_etl::pin::Reads::At(&pin), "email_addresses")
-                .await
-                .unwrap_or_default();
-            let profile = db
-                .load_payloads(datalib_etl::pin::Reads::At(&pin), "profile")
-                .await
-                .unwrap_or_default();
+            let emails = datalib_etl::doltlite_raw::load_payloads_with_id(
+                db.pool(),
+                datalib_etl::pin::Reads::At(&pin),
+                "email_addresses",
+            )
+            .await
+            .unwrap_or_default();
+            let profile = datalib_etl::doltlite_raw::load_payloads_with_id(
+                db.pool(),
+                datalib_etl::pin::Reads::At(&pin),
+                "profile",
+            )
+            .await
+            .unwrap_or_default();
             db.close().await;
-            Ok(account_label(&emails, &profile))
+            let inputs = emails
+                .iter()
+                .map(|(id, _)| Input::new("email_addresses", id))
+                .chain(profile.iter().map(|(id, _)| Input::new("profile", id)))
+                .collect();
+            let payloads = |rows: &[(String, Value)]| -> Vec<Value> {
+                rows.iter().map(|(_, v)| v.clone()).collect()
+            };
+            Ok(Account {
+                label: account_label(&payloads(&emails), &payloads(&profile)),
+                inputs,
+            })
         })
     })
 }

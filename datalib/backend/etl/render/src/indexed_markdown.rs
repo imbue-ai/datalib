@@ -231,15 +231,39 @@ impl IndexedMarkdownStore {
     /// document whose rows and file come out unchanged writes identical
     /// rows, and doltlite's content-addressed tables then carry no diff
     /// for it — that, and nothing here, is how "unchanged" is decided.
+    /// Write one document: its rows here and, when the document moved —
+    /// a re-keyed path prefix, a chat re-periodized under another
+    /// directory — the `.md` it used to be at goes, for the same reason
+    /// [`Self::remove_document`] unlinks: a file nothing names is still
+    /// served and still indexed.
     pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
-        self.transaction(|| {
+        let previous = self.transaction(|| {
             blocking(async {
+                let previous: Option<String> = {
+                    let mut guard = self.write_lock.acquire().await?;
+                    sqlx::query_scalar("SELECT md_path FROM markdowns WHERE markdown_uuid = ?")
+                        .bind(&md.markdown_uuid)
+                        .fetch_optional(&mut **guard.conn())
+                        .await
+                        .with_context(|| format!("read md_path for {}", md.markdown_uuid))?
+                        .flatten()
+                };
                 crate::grid_index::apply_one(&self.write_lock, out_dir, md)
                     .await
                     .with_context(|| format!("apply {}", md.markdown_uuid))?;
-                self.sweep_problems(&md.markdown_uuid, &md.problems).await
+                self.sweep_problems(&md.markdown_uuid, &md.problems).await?;
+                Ok(previous)
             })
-        })
+        })?;
+        let now = md
+            .md_path
+            .strip_prefix(out_dir)
+            .unwrap_or(&md.md_path)
+            .to_string_lossy();
+        if let Some(previous) = previous.filter(|p| *p != now) {
+            unlink_rendered(out_dir, &previous);
+        }
+        Ok(())
     }
 
     /// Drop one document: its rows here, and the `.md` file itself.
@@ -1150,6 +1174,34 @@ mod tests {
         .unwrap();
         assert_eq!(n, 1);
         assert_eq!(s.render_versions().unwrap(), [7].into_iter().collect());
+    }
+
+    /// A document that comes back at another path — beeper's
+    /// `<network>/` prefix after a room's network changed — leaves no
+    /// file at the old one: the store's row moves, and a file the row no
+    /// longer names is what `remove_document` exists to prevent.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_document_that_moves_leaves_no_file_behind() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let s = store(root);
+        let mut first = doc(root, "md-1", "fp-1");
+        first.md_path = root.join("old").join("md-1.md");
+        std::fs::create_dir_all(first.md_path.parent().unwrap()).unwrap();
+        std::fs::write(&first.md_path, "old").unwrap();
+        s.put_document(root, &first).unwrap();
+
+        let mut moved = doc(root, "md-1", "fp-1");
+        moved.md_path = root.join("new").join("md-1.md");
+        std::fs::create_dir_all(moved.md_path.parent().unwrap()).unwrap();
+        std::fs::write(&moved.md_path, "new").unwrap();
+        s.put_document(root, &moved).unwrap();
+
+        assert!(!first.md_path.exists(), "the old file is gone");
+        assert!(moved.md_path.exists(), "the new one stays");
+        // The same path twice is left alone.
+        s.put_document(root, &moved).unwrap();
+        assert!(moved.md_path.exists());
     }
 
     /// Re-rendering replaces a document's rows rather than accumulating

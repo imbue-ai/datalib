@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
@@ -47,6 +48,9 @@ pub struct RenderSummary {
     /// rewrite rather than contacts the address book lost. See
     /// `datalib_etl_chat_common::render::RenderSummary::documents`.
     pub documents: Vec<String>,
+    /// Every contact rendered, with what it read — what the processor
+    /// declares through `RenderCtx::declare_bucket`.
+    pub buckets: Buckets,
 }
 
 pub fn render_all(
@@ -65,6 +69,10 @@ pub fn render_all(
 
     for contact in contacts {
         summary.documents.push(contact.contact_uuid.clone());
+        summary.buckets.push(Bucket {
+            key: contact.contact_uuid.clone(),
+            inputs: contact.inputs.clone(),
+        });
         match render_one(profile, contact, out_dir, source_id, on_doc_complete) {
             Ok(photo_written) => {
                 summary.contacts_rendered += 1;
@@ -125,7 +133,7 @@ fn render_one(
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: contact.when_ts.clone(),
-        bucket_key: None,
+        bucket_key: Some(m_uuid.clone()),
         md_path,
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
@@ -317,6 +325,7 @@ mod tests {
 
     fn mk_contact() -> NormalizedContact {
         NormalizedContact {
+            inputs: Vec::new(),
             contact_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
             group_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
             group_label: "LinkedIn Connections".to_string(),

@@ -98,6 +98,59 @@ pub struct Narrowed {
     pub gone: Vec<String>,
 }
 
+/// One bucket a run rendered: its key and the rows it read — what a
+/// processor declares through `RenderCtx::declare_bucket`.
+#[derive(Debug, Clone)]
+pub struct Bucket {
+    pub key: String,
+    pub inputs: Vec<Input>,
+}
+
+/// Every bucket a render pass produced.
+pub type Buckets = Vec<Bucket>;
+
+/// The rows the diff names as changed since the cursor, per table, for
+/// the tables that exist — the forward half of a provider whose bucket
+/// keys are minted from rows it has to load anyway: map each changed id
+/// through the loaded rows to its bucket. `None` when there is no cursor
+/// to diff from, or the store cannot resolve it: everything renders.
+pub async fn changed_rows(
+    pool: &SqlitePool,
+    range: RawRange<'_>,
+    pin: &Pin,
+    tables: &[&str],
+) -> Result<Option<HashMap<String, HashSet<String>>>> {
+    let Some(from) = range.cursor else {
+        return Ok(None);
+    };
+    let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+    for table in tables {
+        let exists: Option<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+                .bind(table)
+                .fetch_optional(pool)
+                .await?;
+        if exists.is_none() {
+            continue;
+        }
+        match datalib_etl::doltlite_raw::changed_keys(pool, table, from, pin.commit()).await {
+            Ok(keys) => {
+                out.insert(table.to_string(), keys.into_iter().collect());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    table,
+                    from,
+                    error = %format!("{e:#}"),
+                    "render: the cursor cannot be diffed; rendering everything"
+                );
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(out))
+}
+
 /// The rows one bucket asked for, in the order the store diffs them.
 /// Interior-mutable so a lookup through a shared `&` still records.
 #[derive(Debug, Default)]

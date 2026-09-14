@@ -453,9 +453,10 @@ providers declaring what each bucket reads (the `render_inputs` step 4
 PR, 2026-09-14) closed seven more — every whatsapp gap, and email's
 `.eml` edges — and the harness now also edits one row at a time and
 checks the run rendered exactly the documents declared as reading it.
-Five remain, all tables a whole-store renderer's walk never reads
-(clause 2). pdf's is the one worth knowing: its bucket is the file's
-blake3, so text re-extracted at ingest never re-renders.*
+The four remaining chat providers closed three more, and with them the
+last `retain_documents` walks among the chat sources. Two remain, both
+pdf's (clause 2): its bucket is the file's blake3, so text re-extracted
+at ingest never re-renders.*
 
 A real provider is correct under the property if it keeps five
 promises. Written as a contract, so a provider author has a list and

@@ -1,9 +1,10 @@
 //! Render-stage parser.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_etl_render::inputs::{Inputs, RawRange};
 use sqlx::Row;
 
 use super::Period;
@@ -88,28 +89,43 @@ pub struct DocBucket {
     pub reactions_by_target: BTreeMap<String, Vec<Event>>,
 }
 
+/// What the diff scan said: which rooms to load, and the commit read.
+#[derive(Debug, Default)]
+pub struct ScanResult {
+    /// `Some(set)` → load only these rooms: the ones the driver found
+    /// stale through their declared inputs, plus the ones the diff
+    /// named. `None` → every room.
+    pub render: Option<HashSet<String>>,
+    /// Bucket keys the driver found stale whose room row is gone —
+    /// declared with nothing so their documents go.
+    pub gone: Vec<String>,
+    /// The commit this parse read. `None` when nothing was committed.
+    pub new_head: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct ParsedBeeper {
     pub rooms: HashMap<String, Room>,
     /// `Vec<DocBucket>` ordered by `(room_uuid, period_key)`.
     pub docs: Vec<DocBucket>,
-    /// Whether the store was read at all. `false` for no store on disk
-    /// or nothing committed — then `docs` is empty because nobody
-    /// looked, and the render must not sweep on it.
-    pub walked: bool,
+    /// Every raw row each loaded room reads, by room uuid: its row, its
+    /// events and attachment edges from the load, its senders' `users`
+    /// rows as their labels are looked up.
+    pub inputs: HashMap<String, Inputs>,
+    pub scan: ScanResult,
 }
 
 // Entry point
 
 pub fn parse_raw_dir(input: &Path) -> Result<ParsedBeeper> {
-    parse(input, Period::Month)
+    parse(input, Period::Month, RawRange::cold())
 }
 
 /// Open the doltlite raw store at `<input>/entities.doltlite_db` (or
 /// the path itself if it's already that file) and produce one
 /// [`DocBucket`] per `(room, period)` pair with events ready for
 /// rendering.
-pub fn parse(input: &Path, period: Period) -> Result<ParsedBeeper> {
+pub fn parse(input: &Path, period: Period, range: RawRange<'_>) -> Result<ParsedBeeper> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(input);
     if !db_path.is_file() {
         // Empty mirror is a valid configuration (download step
@@ -124,19 +140,20 @@ pub fn parse(input: &Path, period: Period) -> Result<ParsedBeeper> {
     // is already inside `#[tokio::main]`.
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, period).await })
+            .block_on(async move { parse_async(&db_path, period, range).await })
     })
 }
 
-async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
+async fn parse_async(db_path: &Path, period: Period, range: RawRange<'_>) -> Result<ParsedBeeper> {
     let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?;
 
-    // This provider does no diff scan, so it samples HEAD itself. No commit
-    // means nothing has been committed here to render — emptiness, not a
-    // reason to read whatever is sitting in the working set.
-    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+    // Pin before the first read: the driver's pin when it made one, else
+    // HEAD. No commit means nothing has been committed here to render —
+    // emptiness, not a reason to read whatever is sitting in the working
+    // set.
+    let Some(pin) = range.pin(&pool).await? else {
         return Ok(ParsedBeeper::default());
     };
     datalib_etl::pin::install_views(&pool, &pin)
@@ -172,6 +189,61 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
         );
     }
 
+    // ── which rooms to load ────────────────────────────────────────
+    // A new or changed event, room or attachment names its room; a
+    // changed row a room already declared reaches it through the
+    // driver. The bucket key is the room uuid itself.
+    let forward = datalib_etl::doltlite_raw::scan_buckets(
+        &pool,
+        range.cursor,
+        &pin,
+        &datalib_etl::doltlite_raw::DiffScanSpec {
+            global_fanout_tables: &[],
+            bucket_query: "
+                SELECT DISTINCT room_uuid FROM (
+                    SELECT coalesce(to_id, from_id) AS room_uuid
+                      FROM dolt_diff_rooms
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_room_uuid, from_room_uuid)
+                      FROM dolt_diff_events
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT e.room_uuid
+                      FROM dolt_diff_beeper_media_attachments d
+                      JOIN pinned_events e ON e.id = coalesce(d.to_event_uuid, d.from_event_uuid)
+                     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
+                )
+                WHERE room_uuid IS NOT NULL
+            ",
+        },
+    )
+    .await?;
+    let narrowed = range.narrow_by(forward.render.as_ref(), |key| Some(key.to_string()));
+    let scan = ScanResult {
+        render: narrowed.render,
+        gone: narrowed.gone,
+        new_head: forward.new_head,
+    };
+    // `AND room_uuid IN (…)` on every per-room read below, bound from
+    // the set; empty on a cold start.
+    let room_filter = match &scan.render {
+        None => String::new(),
+        Some(set) => {
+            let placeholders = std::iter::repeat_n("?", set.len().max(1))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(" AND room_uuid IN ({placeholders})")
+        }
+    };
+    // Bound in the order the placeholders were written; a set with no
+    // room still binds one value so the SQL stays valid and matches none.
+    let room_binds: Vec<String> = match &scan.render {
+        None => Vec::new(),
+        Some(set) if set.is_empty() => vec![String::new()],
+        Some(set) => set.iter().cloned().collect(),
+    };
+
     // ── per-user labels (used to populate sender_label) ────────────
     // Prefer full_name (from beeper participants) → display_name →
     // native_user_id. Stored separately rather than joined into
@@ -201,7 +273,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
     // `cas_objects` via the sibling CAS pool, mirroring how every
     // other ported provider grabs that metadata at render time.
     let blob_rows = sqlx::query(
-        "SELECT event_uuid, ref_id, blake3
+        "SELECT id, event_uuid, ref_id, blake3
          FROM pinned_beeper_media_attachments beeper_media_attachments",
     )
     .fetch_all(&pool)
@@ -228,8 +300,9 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
     } else {
         HashMap::new()
     };
-    let mut blobs_by_owner: HashMap<String, Vec<Blob>> = HashMap::new();
+    let mut blobs_by_owner: HashMap<String, Vec<(String, Blob)>> = HashMap::new();
     for r in &blob_rows {
+        let edge_id: String = r.try_get("id")?;
         let blake3: Option<String> = r.try_get("blake3")?;
         let has_bytes = blake3.is_some();
         let ref_id: String = r.try_get("ref_id")?;
@@ -255,7 +328,10 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
             has_bytes,
         };
         let owner: String = r.try_get("event_uuid")?;
-        blobs_by_owner.entry(owner).or_default().push(blob);
+        blobs_by_owner
+            .entry(owner)
+            .or_default()
+            .push((edge_id, blob));
     }
 
     // ── doc enumeration via GROUP BY (THE big SQL step) ────────────
@@ -285,13 +361,18 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
                 MAX(timestamp_ms) AS last_ms,
                 COUNT(*) AS event_count
          FROM pinned_events events
-         WHERE event_type != 'REACTION'
+         WHERE event_type != 'REACTION'{room_filter}
          GROUP BY room_uuid, period_key
          ORDER BY room_uuid, period_key"
     );
-    // Audited: the only interpolation is `period_expr`, built above from the
-    // `Period` enum (`strftime_fmt()` / `key_for_all()`), not from row data.
-    let bucket_rows = sqlx::query(sqlx::AssertSqlSafe(bucket_sql))
+    // Audited: the interpolations are `period_expr`, built above from the
+    // `Period` enum (`strftime_fmt()` / `key_for_all()`), and a `?,?,?`
+    // run sized from the room set, every room bound.
+    let mut bucket_query = sqlx::query(sqlx::AssertSqlSafe(bucket_sql));
+    for room in &room_binds {
+        bucket_query = bucket_query.bind(room);
+    }
+    let bucket_rows = bucket_query
         .fetch_all(&pool)
         .await
         .context("group events by (room, period)")?;
@@ -314,12 +395,28 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
                 reaction_emoji, reaction_target_native_event_id,
                 {period_expr} AS period_key
          FROM pinned_events events
+         WHERE 1 = 1{room_filter}
          ORDER BY room_uuid, timestamp_ms"
     );
-    let event_rows = sqlx::query(sqlx::AssertSqlSafe(events_sql))
+    let mut events_query = sqlx::query(sqlx::AssertSqlSafe(events_sql));
+    for room in &room_binds {
+        events_query = events_query.bind(room);
+    }
+    let event_rows = events_query
         .fetch_all(&pool)
         .await
         .context("read events for bucketing")?;
+
+    // Every row a room reads, recorded as it is read. Rooms this run
+    // looks at that have no events still declare their own row, so a
+    // room whose events all went keeps nothing.
+    let mut inputs: HashMap<String, Inputs> = HashMap::new();
+    for room_uuid in scan.render.iter().flatten() {
+        inputs
+            .entry(room_uuid.clone())
+            .or_default()
+            .read("rooms", room_uuid);
+    }
 
     // Index 1: native_event_id → period_key, for resolving where
     // a reaction's target falls (the reaction itself may have
@@ -369,10 +466,23 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
             r.try_get("reaction_target_native_event_id")?;
         let own_period: String = r.try_get("period_key")?;
 
-        let sender_label = sender_uuid
-            .as_ref()
-            .and_then(|u| user_label.get(u).cloned());
-        let blobs = blobs_by_owner.get(&event_uuid).cloned().unwrap_or_default();
+        let read = inputs.entry(room_uuid.clone()).or_default();
+        read.read("rooms", &room_uuid);
+        read.read("events", &event_uuid);
+        let users = read.lookup("users", &user_label);
+        let sender_label = sender_uuid.as_ref().and_then(|u| users.get(u).cloned());
+        let blobs: Vec<Blob> = blobs_by_owner
+            .get(&event_uuid)
+            .map(|edges| {
+                edges
+                    .iter()
+                    .map(|(edge_id, blob)| {
+                        read.read("beeper_media_attachments", edge_id);
+                        blob.clone()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let ev = Event {
             event_uuid: event_uuid.clone(),
@@ -440,6 +550,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
     Ok(ParsedBeeper {
         rooms,
         docs,
-        walked: true,
+        inputs,
+        scan,
     })
 }

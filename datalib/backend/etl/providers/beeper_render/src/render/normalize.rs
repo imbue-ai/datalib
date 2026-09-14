@@ -13,6 +13,7 @@ use datalib_etl_chat_common::types::{
     NormalizedReaction, OrphanReactions,
 };
 use datalib_etl_chat_common::{RenderProfile, WhenTsPrecision};
+use datalib_etl_render::inputs::Inputs;
 use datalib_schema::providers::Provider;
 
 use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Room};
@@ -46,10 +47,12 @@ pub fn to_networks(parsed: &ParsedBeeper) -> Vec<NetworkChats> {
             );
             continue;
         };
+        let no_inputs = Inputs::default();
+        let inputs = parsed.inputs.get(&doc.room_uuid).unwrap_or(&no_inputs);
         by_network
             .entry(room.network.clone())
             .or_default()
-            .push(to_chat(room, doc));
+            .push(to_chat(room, doc, inputs));
     }
 
     by_network
@@ -87,7 +90,7 @@ pub fn profile_for(network: &str) -> RenderProfile {
     }
 }
 
-fn to_chat(room: &Room, doc: &DocBucket) -> NormalizedChat {
+fn to_chat(room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
     let items: Vec<NormalizedChatItem> =
         doc.messages.iter().map(|m| to_item(room, doc, m)).collect();
 
@@ -114,7 +117,7 @@ fn to_chat(room: &Room, doc: &DocBucket) -> NormalizedChat {
         .collect();
 
     NormalizedChat {
-        inputs: Vec::new(),
+        inputs: inputs.declared(),
         id: bundle_key(doc),
         chat_uuid: room.room_uuid.clone(),
         display: room

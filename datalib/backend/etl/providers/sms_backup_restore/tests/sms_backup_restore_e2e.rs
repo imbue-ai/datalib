@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::RawRange;
 use datalib_etl_sms_backup_restore::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_sms_backup_restore_render::render;
 
@@ -122,7 +123,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
                 "sms_backup_restore",
                 &Progress::noop(),
                 &mut on_doc,
-                None,
+                RawRange::cold(),
             )
             .context("render")?;
         }

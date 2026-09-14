@@ -54,9 +54,6 @@ KNOWN_GAPS: dict[str, str] = {
     # ── a change that does not reach the render at all ──
     # (contract clause 2 for a diff-narrowed renderer; for a whole-store
     # one, a row its walk never reads — not traced yet)
-    "beeper: tweak rooms": "not traced",
-    "sms-backup-restore: delete sms_attachments": "not traced",
-    "sms-backup-restore: tweak sms_attachments": "same",
     # ── a table the bucket query does not name ──
     # (contract clause 2)
     "tng_pdfs: delete pdf_scan_meta": "scan provenance shown on the page; not in the scan",
@@ -374,25 +371,33 @@ class RenderContractTest(unittest.TestCase):
         m = re.match(r"render \S+: (\d+) document\(s\)", rows[0]) if rows else None
         return int(m.group(1)) if m else None
 
-    def _expected_rerender(
+    def _readers_of(
         self, source_dir: Path, table: str, row_id: str
-    ) -> int | None:
-        """How many documents a change to one row should re-render, by
-        what the store declares: every document under a bucket that
-        recorded reading `(table, row_id)`. `None` when the provider has
-        declared nothing for the table — its scan is on its own then."""
+    ) -> list[str] | None:
+        """The buckets the store says read `(table, row_id)` — what a
+        change to that row should re-render, and nothing else. `None`
+        when the provider has declared nothing for the table: its scan is
+        on its own then."""
         db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
         declared = self._rows(
             db, f"SELECT COUNT(*) FROM render_inputs WHERE input_table = '{table}';"
         )[0]
         if declared == "0":
             return None
+        return self._rows(
+            db,
+            "SELECT DISTINCT bucket_key FROM render_inputs "
+            f"WHERE input_table = '{table}' AND input_id = '{row_id}';",
+        )
+
+    def _documents_under(self, source_dir: Path, buckets: list[str]) -> int:
+        if not buckets:
+            return 0
+        db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
+        keys = ", ".join(f"'{b}'" for b in buckets)
         return int(
             self._rows(
-                db,
-                "SELECT COUNT(*) FROM markdowns WHERE bucket_key IN "
-                "(SELECT bucket_key FROM render_inputs "
-                f"WHERE input_table = '{table}' AND input_id = '{row_id}');",
+                db, f"SELECT COUNT(*) FROM markdowns WHERE bucket_key IN ({keys});"
             )[0]
         )
 
@@ -434,9 +439,17 @@ class RenderContractTest(unittest.TestCase):
             shutil.rmtree(inc)
             return False
         self._rows(db, f"SELECT dolt_commit('-Am', 'contract: {kind} {table}');")
-        expected = (
-            self._expected_rerender(inc / source, table, one_row)
+        readers = (
+            self._readers_of(inc / source, table, one_row)
             if one_row is not None
+            else None
+        )
+        # The documents under those buckets before the run; the edit may
+        # move a message into another period, so the count after the run
+        # is the other bound.
+        before = (
+            self._documents_under(inc / source, readers)
+            if readers is not None
             else None
         )
         inc_err = self._render_step(inc, source)
@@ -461,12 +474,15 @@ class RenderContractTest(unittest.TestCase):
             )
             if d:
                 failures.append(f"{source}: {kind} {table}\n{d}")
-            elif expected is not None:
+            elif readers is not None and before is not None:
+                after = self._documents_under(inc / source, readers)
                 rendered = self._rendered(inc / source)
-                if rendered != expected:
+                lo, hi = min(before, after), max(before, after)
+                if rendered is None or not lo <= rendered <= hi:
                     failures.append(
                         f"{source}: {kind} {table}\n  one row changed; the store declares "
-                        f"{expected} document(s) reading it, the run rendered {rendered}"
+                        f"{len(readers)} bucket(s) reading it, holding {before} document(s) "
+                        f"before the run and {after} after; the run rendered {rendered}"
                     )
         # `RENDER_CONTRACT_KEEP` leaves the scratch roots for inspection.
         if not os.environ.get("RENDER_CONTRACT_KEEP"):
