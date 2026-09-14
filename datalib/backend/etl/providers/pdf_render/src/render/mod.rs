@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
 use datalib_etl_render::section::{msg_div_open, MSG_DIV_CLOSE};
 
 pub use convert::RENDER_VERSION;
@@ -30,6 +31,9 @@ pub fn doc_qmd_path_rel(stanza: &str, blake3: &str) -> String {
 pub struct RenderSummary {
     pub converted: usize,
     pub failed: usize,
+    /// The documents whose conversion failed, by blake3. Their pages are
+    /// stale rather than gone, so the processor leaves them undeclared.
+    pub failed_blake3s: std::collections::HashSet<String>,
 }
 
 /// Load the work list. Split from [`render_targets`] so the async
@@ -37,29 +41,82 @@ pub struct RenderSummary {
 /// scope — otherwise the whole render future is non-`Send` and cannot
 /// be driven by the `#[async_trait]` processor.
 /// **`None` means the store could not be read**, which is not the same as
-/// a corpus with nothing in it. The caller uses this list as the membership
-/// test behind its deletions, so an empty vec here would remove every
-/// document the diff named.
+/// a corpus with nothing in it.
 pub async fn load_targets(raw_dir: &Path) -> Result<Option<Vec<RenderTarget>>> {
+    Ok(load(raw_dir, RawRange::cold()).await?.map(|l| l.targets))
+}
+
+/// The corpus at one commit, with what the diff since the cursor named.
+pub struct Loaded {
+    pub targets: Vec<RenderTarget>,
+    /// The `pdf_scan_meta` row every document's absolute path comes from.
+    pub scan_meta_id: Option<String>,
+    pub scan: PdfScan,
+}
+
+/// One open of the store for the whole pass: the documents to convert
+/// and the diff, at one commit — the driver's when it pinned one.
+/// `None` means the store could not be read, which is not the same as
+/// a corpus with nothing in it.
+pub async fn load(raw_dir: &Path, range: RawRange<'_>) -> Result<Option<Loaded>> {
     let db_path = datalib_etl_pdf::ingest::db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(None);
     }
-    let Some(db) = RawDb::open_reader(&db_path).await? else {
+    let Some(db) = RawDb::open_reader_at(&db_path, range.pin).await? else {
         return Ok(None);
     };
-    let targets = async {
-        match db.scan_root().await? {
-            Some(root) => db.convertible_documents(&root).await,
+    let loaded = async {
+        let (scan_meta_id, targets) = match db.scan_root().await? {
+            Some((id, root)) => (Some(id), db.convertible_documents(&root).await?),
             // No scan has run against this store yet.
-            None => Ok(Vec::new()),
-        }
+            None => (None, Vec::new()),
+        };
+        let scan = scan_changed(&db, range, &targets).await?;
+        Ok::<_, anyhow::Error>(Loaded {
+            targets,
+            scan_meta_id,
+            scan,
+        })
     }
     .await;
     // Closed before returning, on the error path too: the next open of
     // this store is a second connection until this one is gone.
     db.close().await;
-    targets.map(Some)
+    loaded.map(Some)
+}
+
+/// What a document reads: its own row, every path that holds its bytes,
+/// and the scan row its absolute path is rooted at.
+pub fn inputs_of(t: &RenderTarget, scan_meta_id: Option<&str>) -> Vec<Input> {
+    let mut inputs = vec![Input::new("pdf_documents", &t.blake3)];
+    inputs.extend(t.path_ids.iter().map(|id| Input::new("pdf_paths", id)));
+    if let Some(id) = scan_meta_id {
+        inputs.push(Input::new("pdf_scan_meta", id));
+    }
+    inputs
+}
+
+/// Every bucket a pass over `to_render` produces, for the processor to
+/// declare: the ones looked at, with nothing, then the ones converted,
+/// with what they read.
+pub fn buckets_of(
+    looked_at: Option<&std::collections::HashSet<String>>,
+    converted: &[RenderTarget],
+    scan_meta_id: Option<&str>,
+) -> Buckets {
+    looked_at
+        .into_iter()
+        .flatten()
+        .map(|blake3| Bucket {
+            key: grid_rows::document_uuid(blake3),
+            inputs: Vec::new(),
+        })
+        .chain(converted.iter().map(|t| Bucket {
+            key: grid_rows::document_uuid(&t.blake3),
+            inputs: inputs_of(t, scan_meta_id),
+        }))
+        .collect()
 }
 
 pub fn render_targets(
@@ -72,6 +129,7 @@ pub fn render_targets(
     let mut summary = RenderSummary {
         converted: 0,
         failed: 0,
+        failed_blake3s: Default::default(),
     };
     if targets.is_empty() {
         return Ok(summary);
@@ -92,6 +150,7 @@ pub fn render_targets(
             Err(e) => {
                 // One malformed document must not abort a corpus scan.
                 summary.failed += 1;
+                summary.failed_blake3s.insert(t.blake3.clone());
                 tracing::warn!(
                     path = %t.rel_path, blake3 = %t.blake3, error = %e,
                     "pdf_render_failed"
@@ -198,7 +257,7 @@ fn render_one(
         markdown_uuid: doc_uuid.to_string(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: None,
+        bucket_key: Some(doc_uuid.to_string()),
         md_path: md_path.to_path_buf(),
         render_version: RENDER_VERSION,
         rows,
@@ -255,45 +314,40 @@ mod tests {
 /// target list with it.
 #[derive(Debug, Clone, Default)]
 pub struct PdfScan {
-    /// `Some(set)` → convert only documents whose blake3 is in it.
-    /// `None` → convert everything the corpus holds.
+    /// `Some(set)` → convert only documents whose blake3 is in it: the
+    /// ones the driver found stale through their declared inputs, plus
+    /// the ones the diff named. `None` → convert everything the corpus
+    /// holds.
     pub render: Option<std::collections::HashSet<String>>,
-    /// The documents the diff named, for the removal probe.
-    pub changed: Option<std::collections::HashSet<String>>,
+    /// Bucket keys the driver found stale that name no document the diff
+    /// knows — declared with nothing so their pages go.
+    pub gone: Vec<String>,
     pub new_head: Option<String>,
     pub elapsed: Option<std::time::Duration>,
 }
 
-/// Ask the raw store which documents moved since `last_render_hash`.
+/// Ask the raw store which documents moved since the cursor.
 ///
 /// The bucket is the document's blake3, which is also its identity — for
-/// this provider "changed" and "different document" are the same statement. `pdf_paths` joins the union because a
-/// file appearing at a new path is how a document enters the corpus, even
-/// when its bytes were already known.
-pub async fn scan_changed(raw_dir: &Path, last_render_hash: Option<&str>) -> Result<PdfScan> {
-    let db_path = datalib_etl_pdf::ingest::db_path_for(raw_dir);
-    if !db_path.exists() {
-        return Ok(PdfScan::default());
-    }
-    // Read-only, and closed before returning: `load_targets` ran just
-    // before this against the same file, and a second pool overlapping the
-    // first is the "database is locked" hazard `open_reader`'s docs name.
-    // `open_reader` pins to HEAD and installs the views, so the diff and
-    // everything read at it name one commit.
-    let Some(db) = RawDb::open_reader(&db_path).await? else {
-        return Ok(PdfScan::default());
-    };
+/// this provider "changed" and "different document" are the same
+/// statement. `pdf_paths` joins the union because a file appearing at a
+/// new path is how a document enters the corpus, even when its bytes
+/// were already known. A `pdf_scan_meta` change reaches every document
+/// through the row each declared.
+async fn scan_changed(
+    db: &RawDb,
+    range: RawRange<'_>,
+    targets: &[RenderTarget],
+) -> Result<PdfScan> {
     let pin = db
         .pin()
         .expect("open_reader returns a pinned handle")
         .clone();
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         db.pool(),
-        last_render_hash,
+        range.cursor,
         &pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            // `pdf_scan_meta` records where the scan ran, which no
-            // rendered document reads.
             global_fanout_tables: &[],
             bucket_query: "
                 SELECT DISTINCT blake3 FROM (
@@ -309,12 +363,18 @@ pub async fn scan_changed(raw_dir: &Path, last_render_hash: Option<&str>) -> Res
             ",
         },
     )
-    .await;
-    db.close().await;
-    let scan = scan?;
+    .await?;
+    // The driver names stale buckets by document uuid; the diff by blake3.
+    let by_uuid: std::collections::HashMap<String, &str> = targets
+        .iter()
+        .map(|t| (grid_rows::document_uuid(&t.blake3), t.blake3.as_str()))
+        .collect();
+    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
+        by_uuid.get(key).map(|b| b.to_string())
+    });
     Ok(PdfScan {
-        render: scan.render,
-        changed: scan.changed_buckets,
+        render: narrowed.render,
+        gone: narrowed.gone,
         new_head: scan.new_head,
         elapsed: scan.scan_elapsed,
     })

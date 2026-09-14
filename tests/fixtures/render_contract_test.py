@@ -51,13 +51,14 @@ _SKIP_SUFFIXES = ("_bookkeeping",)
 # entry fail the run until it is removed, so it can only shrink. A new
 # entry needs a reason, which is the finding.
 KNOWN_GAPS: dict[str, str] = {
-    # ── a change that does not reach the render at all ──
-    # (contract clause 2 for a diff-narrowed renderer; for a whole-store
-    # one, a row its walk never reads — not traced yet)
-    # ── a table the bucket query does not name ──
-    # (contract clause 2)
-    "tng_pdfs: delete pdf_scan_meta": "scan provenance shown on the page; not in the scan",
-    "tng_pdfs: tweak pdf_scan_meta": "same",
+    # ── a failed render, on purpose ──
+    # The edit points the scan root at a directory that does not exist,
+    # so every conversion fails. Cold then has no pages; incremental
+    # keeps the last good ones, because a document whose conversion
+    # failed is left undeclared rather than swept — a stale page over a
+    # missing one, since nothing would bring it back until its inputs
+    # move again. Not a gap in what the provider declares.
+    "tng_pdfs: tweak pdf_scan_meta": "a failed conversion keeps its last page",
 }
 
 # Columns of the render store whose value is a stamp of *when* rather

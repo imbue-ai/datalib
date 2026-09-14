@@ -61,8 +61,18 @@ impl RawDb {
     /// deletes every document the diff named. See the plan's "The sink
     /// contract".
     pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
+        Self::open_reader_at(db_path, None).await
+    }
+
+    /// A reader pinned at `commit` — the one the render driver diffed
+    /// against — or at HEAD when there is none.
+    pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         let pool = dr::open_reader(db_path).await?;
-        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        let pin = match commit {
+            Some(commit) => Some(datalib_etl::pin::Pin::at(commit)?),
+            None => datalib_etl::pin::head(&pool).await?,
+        };
+        let Some(pin) = pin else {
             pool.close().await;
             return Ok(None);
         };
@@ -164,17 +174,25 @@ impl RawDb {
         Ok(())
     }
 
-    pub async fn scan_root(&self) -> Result<Option<PathBuf>> {
+    /// The scan's root and the `pdf_scan_meta` row it came from — a row
+    /// every rendered document reads, since its `source_url` is an
+    /// absolute path under that root.
+    pub async fn scan_root(&self) -> Result<Option<(String, PathBuf)>> {
         // Audited: the only interpolation is a table name this handle chose
         // -- a literal, or that literal behind `pinned_`.
         let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT abs_root FROM {} ORDER BY id LIMIT 1",
+            "SELECT id, abs_root FROM {} ORDER BY id LIMIT 1",
             self.reads().table("pdf_scan_meta")
         )))
         .fetch_optional(&self.pool)
         .await
         .context("read pdf_scan_meta")?;
-        Ok(row.map(|r| PathBuf::from(r.get::<String, _>("abs_root"))))
+        Ok(row.map(|r| {
+            (
+                r.get::<String, _>("id"),
+                PathBuf::from(r.get::<String, _>("abs_root")),
+            )
+        }))
     }
 
     pub async fn write_batch(&self, docs: &[PdfDocumentRow], paths: &[PdfPathRow]) -> Result<()> {
@@ -203,7 +221,8 @@ impl RawDb {
                     d.doc_created_at  AS doc_created_at,
                     d.doc_modified_at AS doc_modified_at,
                     MIN(p.id)     AS rel_path,
-                    COUNT(p.id)   AS copy_count
+                    COUNT(p.id)   AS copy_count,
+                    GROUP_CONCAT(p.id, char(30)) AS path_ids
                FROM {} d
                JOIN {} p ON p.blake3 = d.blake3
               WHERE d.has_encoding_issues = 0
@@ -221,7 +240,9 @@ impl RawDb {
             .into_iter()
             .map(|r| {
                 let rel: String = r.get("rel_path");
+                let path_ids: String = r.get("path_ids");
                 RenderTarget {
+                    path_ids: path_ids.split('\x1e').map(str::to_string).collect(),
                     blake3: r.get("blake3"),
                     title: r.get("title"),
                     author: r.get("author"),
@@ -254,6 +275,9 @@ pub struct RenderTarget {
     pub rel_path: String,
     /// How many paths currently hold these bytes.
     pub copy_count: i64,
+    /// Every `pdf_paths` row that holds these bytes — what the document
+    /// declares it read, beside its own `pdf_documents` row.
+    pub path_ids: Vec<String>,
 }
 
 #[cfg(test)]

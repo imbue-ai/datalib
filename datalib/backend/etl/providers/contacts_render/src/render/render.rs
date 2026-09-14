@@ -8,9 +8,10 @@ use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{
     render_all as cc_render_all, ContactField, ContactPhoto, ContactRenderProfile,
-    NormalizedContact, RenderSummary,
+    NormalizedContact,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{Bucket, Buckets, RawRange};
 
 use super::parse::{ParsedContact, ParsedContacts};
 use super::{addressbook_uuid, contact_uuid};
@@ -23,17 +24,16 @@ use datalib_schema::providers::Provider;
 /// the source name.
 pub const RENDER_VERSION: u32 = 3;
 
+/// Every bucket a pass looked at — named first with nothing, then the
+/// rendered ones with what they read — for the processor to declare.
 pub fn render_all(
     parsed: &ParsedContacts,
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
+    range: RawRange<'_>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name.
-    seen: &mut std::collections::HashSet<String>,
-) -> Result<RenderSummary> {
+) -> Result<Buckets> {
     let profile = ContactRenderProfile {
         provider: Provider::Contacts,
         source_label: humanize_source_label(source_id),
@@ -42,11 +42,39 @@ pub fn render_all(
         account: None,
         render_version: RENDER_VERSION,
     };
-    let contacts: Vec<NormalizedContact> = parsed
+    let mut contacts: Vec<NormalizedContact> = parsed
         .contacts
         .iter()
         .map(|c| normalize(c, source_id))
         .collect();
+
+    // What to render: the contacts the driver found stale, plus every
+    // card of a row the diff named — one `contacts` row can hold several
+    // cards, which is why the row alone could never name a document and
+    // the mapping goes through the parse.
+    let forward = parsed.changed.as_ref().map(|changed| {
+        contacts
+            .iter()
+            .filter(|c| {
+                c.inputs
+                    .iter()
+                    .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
+            })
+            .map(|c| c.contact_uuid.clone())
+            .collect::<std::collections::HashSet<String>>()
+    });
+    let render = range.narrow(forward.as_ref());
+    let mut buckets: Buckets = render
+        .iter()
+        .flatten()
+        .map(|key| Bucket {
+            key: key.clone(),
+            inputs: Vec::new(),
+        })
+        .collect();
+    if let Some(render) = &render {
+        contacts.retain(|c| render.contains(&c.contact_uuid));
+    }
     let summary = cc_render_all(
         &profile,
         &contacts,
@@ -55,8 +83,8 @@ pub fn render_all(
         progress,
         on_doc_complete,
     )?;
-    seen.extend(summary.documents.iter().cloned());
-    Ok(summary)
+    buckets.extend(summary.buckets);
+    Ok(buckets)
 }
 
 fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
@@ -91,7 +119,6 @@ fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
     }
 
     NormalizedContact {
-        inputs: Vec::new(),
         contact_uuid: contact_uuid(source_id, &contact.addressbook, &contact.uid),
         group_uuid: addressbook_uuid(source_id, &contact.addressbook),
         group_label: contact.addressbook.clone(),
@@ -113,6 +140,7 @@ fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
             content_type: p.content_type.clone(),
         }),
         photo_url: contact.photo_url.clone(),
+        inputs: contact.inputs.clone(),
     }
 }
 
@@ -167,6 +195,7 @@ mod tests {
 
     fn sample() -> ParsedContact {
         ParsedContact {
+            inputs: Vec::new(),
             uid: "tng-picard".to_string(),
             addressbook: "Bridge".to_string(),
             source_path: std::path::PathBuf::from("Bridge.vcf"),

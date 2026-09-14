@@ -39,6 +39,10 @@ pub struct RawDb {
 /// so the render path doesn't have to know about the envelope.
 #[derive(Debug, Clone)]
 pub struct LoadedRawContact {
+    /// The `contacts` row, and the `addressbooks` row its label came
+    /// from — what every card in it declares it read.
+    pub id: String,
+    pub addressbook_id: Option<String>,
     pub uid: String,
     pub href: String,
     pub addressbook_label: String,
@@ -64,8 +68,18 @@ impl RawDb {
     /// name, so handing back an empty read here would delete every
     /// contact the source has. See the plan's "The sink contract".
     pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
+        Self::open_reader_at(db_path, None).await
+    }
+
+    /// A reader pinned at `commit` — the one the render driver diffed
+    /// against — or at HEAD when there is none.
+    pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
-        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        let pin = match commit {
+            Some(commit) => Some(datalib_etl::pin::Pin::at(commit)?),
+            None => datalib_etl::pin::head(&pool).await?,
+        };
+        let Some(pin) = pin else {
             pool.close().await;
             return Ok(None);
         };
@@ -77,6 +91,11 @@ impl RawDb {
             cas: None,
             pin: Some(pin),
         }))
+    }
+
+    /// The commit a reader is pinned at; `None` for the writer.
+    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
+        self.pin.as_ref()
     }
 
     /// How this handle reads content. Every content query goes through
@@ -298,6 +317,7 @@ impl RawDb {
         // pinned read renames the table out from under them.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT c.id AS id,
+                    c.addressbook_id AS addressbook_id,
                     c.uid AS uid,
                     c.href AS href,
                     json_extract(c.payload, '$.vcard') AS vcard,
@@ -316,6 +336,11 @@ impl RawDb {
             let vcard: Option<String> = r.try_get("vcard").ok();
             let Some(vcard) = vcard else { continue };
             out.push(LoadedRawContact {
+                id: r.try_get("id").unwrap_or_default(),
+                addressbook_id: r
+                    .try_get::<Option<String>, _>("addressbook_id")
+                    .ok()
+                    .flatten(),
                 uid: r.try_get("uid").unwrap_or_default(),
                 href: r.try_get("href").unwrap_or_default(),
                 addressbook_label: r

@@ -454,9 +454,9 @@ PR, 2026-09-14) closed seven more — every whatsapp gap, and email's
 `.eml` edges — and the harness now also edits one row at a time and
 checks the run rendered exactly the documents declared as reading it.
 The four remaining chat providers closed three more, and with them the
-last `retain_documents` walks among the chat sources. Two remain, both
-pdf's (clause 2): its bucket is the file's blake3, so text re-extracted
-at ingest never re-renders.*
+last `retain_documents` walks among the chat sources; pdf and contacts
+closed all but one. The one left is a decision, not a miss: a pdf whose
+conversion fails keeps its last page where a cold render has none.*
 
 A real provider is correct under the property if it keeps five
 promises. Written as a contract, so a provider author has a list and
