@@ -1241,12 +1241,17 @@ markdowns
     renderer_version
     rendered_at_utc
     tz_offset
+    bucket_key
 render_cursor
     source_id
     raw_commit
     params
     rendered_at_utc
     tz_offset
+render_inputs
+    bucket_key
+    input_table
+    input_id
 render_problems
     uuid
     scope_key

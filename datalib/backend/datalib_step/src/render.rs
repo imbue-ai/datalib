@@ -1,19 +1,19 @@
 //! The render step driver: one source's render wave, written to the tree
 //! the step id names and read from the raw store its input names.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor};
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
-use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
+use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -32,7 +32,10 @@ pub async fn run(
     // first checkpoint arrives.
     emitter.declare_streams_output(true);
     let PlannedSource {
-        name, processors, ..
+        name,
+        processors,
+        raw_path,
+        ..
     } = planned;
     let Wave::Render(processors) = processors else {
         anyhow::bail!("the render driver was handed source {name:?}'s ingest wave");
@@ -62,6 +65,7 @@ pub async fn run(
         now: now.to_string(),
         cadence: control.checkpoint_cadence.unwrap_or_default(),
         storage,
+        raw_db: Some(datalib_etl::doltlite_raw::db_path_for(&raw_path)),
         progress: progress.clone(),
     };
     // Render is synchronous work driven by `futures`' executor (NOT
@@ -73,6 +77,7 @@ pub async fn run(
 
     tracing::info!(
         docs = report.docs,
+        skipped = report.skipped,
         removed = report.removed,
         "render: docs (re)rendered"
     );
@@ -138,12 +143,19 @@ pub struct RenderSource {
     /// The storage report to write beside the documents, if the source
     /// has one.
     pub storage: Option<crate::introspect::Measured>,
+    /// The raw doltlite store the source renders from, if it has one:
+    /// what the driver diffs for the reverse lookup in `render_inputs`.
+    pub raw_db: Option<PathBuf>,
     pub progress: Progress,
 }
 
 /// What a render left behind, for the shell to report.
 pub struct RenderReport {
+    /// Documents written.
     pub docs: usize,
+    /// Documents the providers emitted that the store already held
+    /// unchanged, and so were not written.
+    pub skipped: usize,
     pub removed: usize,
     /// Whole-store problem counts by outcome.
     pub problems: HashMap<String, i64>,
@@ -170,6 +182,7 @@ pub fn render_source(
         now,
         cadence,
         storage,
+        raw_db,
         progress,
     } = source;
     let declared = declared_render_versions(processors);
@@ -214,14 +227,18 @@ pub fn render_source(
         cursor = raw_cursor.as_deref().unwrap_or("none"),
         "render: prior fingerprints from the store"
     );
+    let (raw_pin, stale_buckets) =
+        reverse_lookup(&store, raw_db.as_deref(), raw_cursor.as_deref())?;
 
     let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(
         datalib_etl::checkpointer::Policy::Every(cadence),
     );
     let mut docs = 0usize;
+    let mut skipped = 0usize;
     let mut removed = 0usize;
-    // Every document this run wrote. On a full render it is what the
-    // walk produced, and the sweep below keeps exactly this.
+    // Every document this run emitted, written or not. On a full render
+    // it is what the walk produced, and the sweep below keeps exactly
+    // this.
     let mut emitted: BTreeSet<String> = BTreeSet::new();
     // The documents between two checkpoints share one SQL transaction
     // (the batch), and each is written whole inside it — rows, edges,
@@ -231,10 +248,17 @@ pub fn render_source(
     // value `grid_index::apply_one` consumes.
     store.begin_batch()?;
     let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
-        store
-            .put_document(&data_root, &md)
+        // The skip is the store's, from what the write would be: an
+        // unchanged document costs its render and nothing else, and the
+        // driver still learns it exists.
+        let written = store
+            .put_document_unless(&data_root, &md, &prior)
             .with_context(|| format!("store document {}", md.markdown_uuid))?;
         emitted.insert(md.markdown_uuid);
+        if !written {
+            skipped += 1;
+            return Ok(());
+        }
         docs += 1;
         progress.metric("documents_rendered", &[], docs as i64);
         // What a consumer reading a checkpoint may see is a document
@@ -288,14 +312,16 @@ pub fn render_source(
             .get_or_insert_with(BTreeSet::new)
             .extend(seen.iter().cloned());
     };
-    // The buckets this run rendered and the documents it considered for
-    // each. What the store holds under one of them beyond that is gone.
-    let mut buckets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut on_declare = |bucket: &str, documents: &[String]| {
-        buckets
-            .entry(bucket.to_string())
-            .or_default()
-            .extend(documents.iter().cloned());
+    // The buckets this run rendered. What the store holds under one of
+    // them that this run did not emit is gone. Their inputs land in the
+    // open batch beside their documents.
+    let mut buckets: BTreeSet<String> = BTreeSet::new();
+    let mut on_declare = |bucket: &str, inputs: &[Input]| -> Result<()> {
+        store
+            .put_inputs(bucket, inputs)
+            .with_context(|| format!("record inputs of bucket {bucket}"))?;
+        buckets.insert(bucket.to_string());
+        Ok(())
     };
     // The raw commit each processor rendered from, or `None` for one
     // that read no store.
@@ -307,8 +333,9 @@ pub fn render_source(
                 &data_root,
                 &now,
                 &progress,
-                &prior,
                 raw_cursor.as_deref(),
+                raw_pin.as_deref(),
+                stale_buckets.as_ref(),
                 &mut on_doc,
                 &mut on_remove,
                 &mut on_retain,
@@ -372,6 +399,13 @@ pub fn render_source(
     )?;
     docs += sealed.stored;
     removed += sealed.removed;
+    if !buckets.is_empty() {
+        tracing::info!(
+            source = %name,
+            buckets = buckets.len(),
+            "render: buckets declared with their inputs"
+        );
+    }
 
     // One commit for the whole render. Per-document commits would
     // put thousands of entries in `dolt_log` per run; committing
@@ -394,6 +428,7 @@ pub fn render_source(
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {
         docs,
+        skipped,
         removed,
         problems,
         head,
@@ -410,8 +445,9 @@ struct RunEnd<'a> {
     sweep: bool,
     /// Every document this run emitted, retained or owns.
     keep: &'a BTreeSet<String>,
-    /// Buckets the run rendered, each with the documents it considered.
-    declared: &'a BTreeMap<String, BTreeSet<String>>,
+    /// Buckets the run rendered: what the store holds under them beyond
+    /// `keep` is gone.
+    declared: &'a BTreeSet<String>,
     storage: Option<crate::introspect::Measured>,
     prior: &'a HashMap<String, String>,
     cursor: Option<RenderCursorRow>,
@@ -445,14 +481,13 @@ fn seal_run(store: &IndexedMarkdownStore, data_root: &Path, end: RunEnd<'_>) -> 
                 );
             }
         }
-        // A bucket the run rendered produces exactly the documents it
-        // considered; one the store still holds for it is from a period
-        // that emptied or a thread whose messages went. Positive evidence
+        // A bucket the run rendered produces exactly what it emitted; a
+        // document the store still holds for it is from a period that
+        // emptied or a thread whose messages went. Positive evidence
         // only: buckets the run never looked at are not here.
-        let buckets: Vec<&str> = end.declared.keys().map(String::as_str).collect();
-        for (bucket, uuid) in store.documents_for_conversations(&buckets)? {
-            let considered = end.declared.get(&bucket).is_some_and(|c| c.contains(&uuid));
-            if considered || end.keep.contains(&uuid) {
+        let buckets: Vec<&str> = end.declared.iter().map(String::as_str).collect();
+        for (bucket, uuid) in store.documents_for_buckets(&buckets)? {
+            if end.keep.contains(&uuid) {
                 continue;
             }
             store
@@ -468,6 +503,9 @@ fn seal_run(store: &IndexedMarkdownStore, data_root: &Path, end: RunEnd<'_>) -> 
         // The report is skipped whole when no number moved: it would be
         // byte-identical, and appending a sample saying "still the same"
         // would grow the store on a run where nothing happened.
+        // Its own fingerprint decides, not the output's: the body carries
+        // byte counts that wobble from run to run, and the fingerprint
+        // hashes the counts that mean something.
         if let Some(m) = end.storage {
             if end.prior.get(&m.doc.markdown_uuid) == Some(&m.doc.source_fingerprint) {
                 tracing::debug!("render: storage unchanged since the last run");
@@ -487,6 +525,67 @@ fn seal_run(store: &IndexedMarkdownStore, data_root: &Path, end: RunEnd<'_>) -> 
         }
         Ok(sealed)
     })
+}
+
+/// The driver's half of the scan: the buckets whose declared inputs
+/// changed between the cursor and the raw store's HEAD, from `dolt_diff`
+/// over every table `render_inputs` mentions and a reverse lookup. Also
+/// the commit that HEAD was, for the provider to pin. `(None, None)`
+/// when there is nothing to say: no cursor, no raw doltlite store,
+/// nothing declared yet, or a range this store cannot resolve — then the
+/// provider's own scan decides alone, as it did before `render_inputs`.
+fn reverse_lookup(
+    store: &IndexedMarkdownStore,
+    raw_db: Option<&Path>,
+    raw_cursor: Option<&str>,
+) -> Result<(Option<String>, Option<std::collections::HashSet<String>>)> {
+    let (Some(from), Some(raw_db)) = (raw_cursor, raw_db) else {
+        return Ok((None, None));
+    };
+    if !raw_db.exists() {
+        return Ok((None, None));
+    }
+    let tables = store.input_tables()?;
+    if tables.is_empty() {
+        return Ok((None, None));
+    }
+    let pool = blocking(datalib_etl::doltlite_raw::open_reader(raw_db))
+        .with_context(|| format!("open {} for the reverse lookup", raw_db.display()))?;
+    let result = (|| -> Result<_> {
+        let Some(pin) = blocking(datalib_etl::pin::head(&pool))? else {
+            return Ok((None, None));
+        };
+        let to = pin.commit().to_string();
+        let mut changed: Vec<Input> = Vec::new();
+        for table in &tables {
+            match blocking(datalib_etl::doltlite_raw::changed_keys(
+                &pool, table, from, &to,
+            )) {
+                Ok(keys) => changed.extend(keys.into_iter().map(|k| Input::new(table.clone(), k))),
+                // A cursor this store cannot resolve — the file was
+                // replaced by hand — or a table a schema change dropped.
+                // Either way the range is gone; the provider cold-starts.
+                Err(e) => {
+                    tracing::warn!(
+                        table,
+                        from,
+                        error = %format!("{e:#}"),
+                        "render: reverse lookup could not diff this table; leaving the scan to the provider"
+                    );
+                    return Ok((Some(to), None));
+                }
+            }
+        }
+        let stale = store.buckets_reading(&changed)?;
+        tracing::info!(
+            changed_rows = changed.len(),
+            stale_buckets = stale.len(),
+            "render: reverse lookup"
+        );
+        Ok((Some(to), Some(stale)))
+    })();
+    blocking(pool.close());
+    result
 }
 
 /// Whether this run diffs from the stored cursor or renders every bucket.
@@ -706,6 +805,7 @@ mod plan_tests {
                     source_id: "src".into(),
                     source_fingerprint: format!("fp-{uuid}"),
                     upstream_cursor: None,
+                    bucket_key: None,
                     md_path: root.join(uuid).join("all.md"),
                     render_version: 5,
                     rows: vec![row],
@@ -735,7 +835,7 @@ mod plan_tests {
             RunEnd {
                 sweep: true,
                 keep: &keep,
-                declared: &BTreeMap::new(),
+                declared: &BTreeSet::new(),
                 storage: None,
                 prior: &HashMap::new(),
                 cursor: Some(cursor("raw-head", json!({}))),
@@ -770,7 +870,7 @@ mod plan_tests {
             RunEnd {
                 sweep: false,
                 keep: &BTreeSet::new(),
-                declared: &BTreeMap::new(),
+                declared: &BTreeSet::new(),
                 storage: None,
                 prior: &HashMap::new(),
                 cursor: None,
@@ -836,6 +936,7 @@ mod stale_tree_tests {
                     source_id: "claude_web".into(),
                     source_fingerprint: format!("fp-{chat_uuid}"),
                     upstream_cursor: None,
+                    bucket_key: None,
                     md_path: root.join(chat_uuid).join("all.md"),
                     render_version: version,
                     rows: vec![row],

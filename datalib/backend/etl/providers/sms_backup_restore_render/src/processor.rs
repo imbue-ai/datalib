@@ -41,13 +41,16 @@ impl RenderProcessor for SmsRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+        // The fingerprint skip is the driver's: every document is emitted
+        // and the store writes only the ones that changed.
+        let no_priors: std::collections::HashMap<String, String> = Default::default();
         let mut on_doc = |md| ctx.emit_doc(md);
         let outcome = crate::render::render(
             &self.raw_path,
             ctx.root,
             &self.name,
             ctx.progress,
-            ctx.prior_fingerprints,
+            &no_priors,
             &mut on_doc,
             ctx.raw_cursor,
         )
@@ -59,8 +62,8 @@ impl RenderProcessor for SmsRender {
         for chat_uuid in &outcome.vanished {
             dropped += ctx.remove_conversation(chat_uuid)?;
         }
-        for (bucket, documents) in &outcome.buckets {
-            ctx.declare_bucket(bucket, documents);
+        for bucket in &outcome.buckets {
+            ctx.declare_bucket(bucket, &[])?;
         }
 
         if let Some(head) = outcome.new_head.as_deref() {

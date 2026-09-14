@@ -108,4 +108,10 @@ pub struct MarkdownRow {
     /// `rendered_at_utc` (`+02:00`).
     #[col(sql = "VARCHAR(8)")]
     pub tz_offset: Option<String>,
+    /// The bucket this document was rendered from — the unit the
+    /// provider loads, a conversation or a thread or a page — so a
+    /// bucket that re-renders to fewer documents can drop the extras.
+    /// NULL from a renderer that has not been ported to declare buckets.
+    #[col(sql = "VARCHAR(256)")]
+    pub bucket_key: Option<String>,
 }

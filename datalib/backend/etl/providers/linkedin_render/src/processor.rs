@@ -52,6 +52,9 @@ impl RenderProcessor for LinkedinRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+        // The fingerprint skip is the driver's: every document is emitted
+        // and the store writes only the ones that changed.
+        let no_priors: std::collections::HashMap<String, String> = Default::default();
         // This renderer walks the whole raw store every run, so the set it
         // considered is the complete one: anything else the render store
         // holds is a document whose source is gone. The driver sweeps.
@@ -66,34 +69,24 @@ impl RenderProcessor for LinkedinRender {
         };
 
         // Every message-shaped feed (DMs + AI-coach transcripts) renders.
-        let r_pass = crate::render::render(
-            &source,
-            ctx.progress,
-            ctx.prior_fingerprints,
-            &mut on_doc,
-            &mut seen,
-        )
-        .context("linkedin render")?;
+        let r_pass =
+            crate::render::render(&source, ctx.progress, &no_priors, &mut on_doc, &mut seen)
+                .context("linkedin render")?;
         // Connections render as first-class contacts via the shared contact
         // renderer (sibling of the chat path above).
         let c_pass = crate::connections::render_connections(
             &source,
             ctx.progress,
-            ctx.prior_fingerprints,
+            &no_priors,
             &mut on_doc,
             &mut seen,
         )
         .context("linkedin connections render")?;
         // Your own posts (Shares) and the comments you left, grouped one
         // chat-style thread per post, with linkouts back to linkedin.com.
-        let p_pass = crate::posts::render_posts(
-            &source,
-            ctx.progress,
-            ctx.prior_fingerprints,
-            &mut on_doc,
-            &mut seen,
-        )
-        .context("linkedin posts render")?;
+        let p_pass =
+            crate::posts::render_posts(&source, ctx.progress, &no_priors, &mut on_doc, &mut seen)
+                .context("linkedin posts render")?;
 
         // One sweep over the union of all three feeds: each contributes a
         // slice of this source's documents, and sweeping per feed would

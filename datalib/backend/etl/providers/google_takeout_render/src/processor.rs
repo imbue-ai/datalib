@@ -42,7 +42,10 @@ impl RenderProcessor for GoogleTakeoutRender {
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         // Only the chat-shaped feeds (Google Chat / Google Voice) render; the
         // other feeds stay queryable in the raw store.
-        let prior: &HashMap<String, String> = ctx.prior_fingerprints;
+        // The fingerprint skip is the driver's: every document is emitted
+        // and the store writes only the ones that changed.
+        let no_priors: HashMap<String, String> = HashMap::new();
+        let prior: &HashMap<String, String> = &no_priors;
         // This renderer walks the whole raw store every run, so the set it
         // considered is the complete one: anything else the render store
         // holds is a document whose source is gone. The driver sweeps.

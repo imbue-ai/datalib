@@ -8,7 +8,7 @@
 //! driver (`render_source`) and the index (`build_grid_index`) are the
 //! real ones.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -20,7 +20,7 @@ use datalib_etl::pin::{self, Reads};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::{build_grid_index, init_schema, RenderedMarkdown};
 use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
@@ -79,14 +79,22 @@ impl Params {
 }
 
 /// One document as both sides of the comparison see it: what the
-/// reference renderer produces, and what a store holds.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// reference renderer produces, and what a store holds. `content` is
+/// what the `.md` file carries; the store's own fingerprint is not
+/// compared, being the store's business.
+#[derive(Debug, Clone)]
 struct Doc {
-    fingerprint: String,
+    content: String,
     /// `(row uuid, text)`, sorted by uuid.
     rows: Vec<(String, String)>,
     /// `(edge uuid, destination)`, sorted.
     edges: Vec<(String, String)>,
+}
+
+impl PartialEq for Doc {
+    fn eq(&self, other: &Self) -> bool {
+        self.rows == other.rows && self.edges == other.edges
+    }
 }
 
 /// The reference renderer, shared by the model (over memory) and the
@@ -136,7 +144,7 @@ fn render_parent(
         h.update(b"\n");
     }
     Doc {
-        fingerprint: h.finalize().to_hex().to_string(),
+        content: h.finalize().to_hex().to_string(),
         rows,
         edges,
     }
@@ -204,62 +212,85 @@ impl RenderProcessor for SynthRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         let pool = blocking(doltlite_raw::open_reader(&self.raw_db)).context("open raw")?;
-        let Some(pin) = blocking(pin::head(&pool))? else {
+        // Pin what the driver diffed against, so the rows loaded are the
+        // rows the stale set was computed from; HEAD only on a run the
+        // driver did not pin.
+        let pin = match ctx.raw_pin {
+            Some(commit) => Some(pin::Pin::at(commit)?),
+            None => blocking(pin::head(&pool))?,
+        };
+        let Some(pin) = pin else {
             blocking(pool.close());
             return Ok("nothing committed".into());
         };
         blocking(pin::install_views(&pool, &pin))?;
+        // The forward projection: only what a *new* row of a primary or
+        // child table maps to. A changed author reaches its parents
+        // through the inputs they declared; a removed row names its
+        // bucket the same way.
         let scan = blocking(doltlite_raw::scan_buckets(
             &pool,
             ctx.raw_cursor,
             &pin,
             &DiffScanSpec {
-                global_fanout_tables: &["authors"],
+                global_fanout_tables: &[],
                 bucket_query: "
                     SELECT DISTINCT bucket FROM (
-                        SELECT coalesce(to_id, from_id) AS bucket FROM dolt_diff_parents
-                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                        SELECT to_id AS bucket FROM dolt_diff_parents
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type IN ('added', 'modified')
                         UNION
-                        SELECT coalesce(to_parent_id, from_parent_id) FROM dolt_diff_children
-                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                        SELECT to_parent_id FROM dolt_diff_children
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type IN ('added', 'modified')
                     ) WHERE bucket IS NOT NULL
                 ",
             },
         ))?;
         let model = blocking(load_model(&pool, Reads::At(&pin)))?;
-        if let Some(changed) = scan.changed_buckets.as_ref() {
-            let gone = blocking(doltlite_raw::buckets_without_rows(
-                &pool,
-                Reads::At(&pin),
-                changed,
-                &[("parents", "id")],
-            ))?;
-            for bucket in gone {
-                ctx.remove_conversation(&bucket)?;
-            }
-        }
         blocking(pool.close());
+
+        // What to render: everything when either side says so, else the
+        // union of the driver's stale set and the forward projection.
+        let render: Option<HashSet<String>> = match (ctx.stale_buckets, scan.render.as_ref()) {
+            (Some(stale), Some(forward)) => Some(stale.union(forward).cloned().collect()),
+            _ => None,
+        };
 
         let params = self.params();
         let version = self.version.load(Ordering::SeqCst);
         let fail_after = self.fail_after.load(Ordering::SeqCst);
+        let docs = expected(&model, params);
         let mut rendered = 0usize;
-        for (id, doc) in expected(&model, params) {
-            if scan.render.as_ref().is_some_and(|c| !c.contains(&id)) {
-                continue;
-            }
+        // Every bucket this run looks at, present in the store or not: a
+        // stale bucket whose parent is gone is declared with the rows it
+        // asked for and emits nothing, which is how its documents go.
+        let mut to_render: Vec<String> = model.parents.keys().cloned().collect();
+        if let Some(r) = &render {
+            to_render = r.iter().cloned().collect();
+            to_render.sort();
+        }
+        for id in to_render {
             if rendered == fail_after {
                 bail!("synthetic failure after {rendered} document(s)");
             }
             rendered += 1;
-            if ctx.prior_fingerprints.get(&id) == Some(&doc.fingerprint) {
-                continue;
+            let mut inputs = vec![Input::new("parents", &id)];
+            if let Some(parent) = model.parents.get(&id) {
+                inputs.push(Input::new("authors", &parent.author_id));
+                for (cid, c) in &model.children {
+                    if c.parent_id == id {
+                        inputs.push(Input::new("children", cid));
+                    }
+                }
             }
+            ctx.declare_bucket(&id, &inputs)?;
+            let Some(doc) = docs.get(&id) else {
+                continue;
+            };
             let root = datalib_etl::layout::render_markdown_root(ctx.root, ctx.name);
             let md_path = root.join(format!("{id}.md"));
             std::fs::create_dir_all(&root)?;
-            std::fs::write(&md_path, &doc.fingerprint)?;
-            ctx.emit_doc(to_rendered(&id, &doc, md_path, version))?;
+            std::fs::write(&md_path, &doc.content)?;
+            ctx.emit_doc(to_rendered(&id, doc, md_path, version))?;
         }
         ctx.consumed(pin.commit());
         Ok(format!("rendered {rendered}"))
@@ -345,8 +376,9 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
     RenderedMarkdown {
         markdown_uuid: id.to_string(),
         source_id: SOURCE.into(),
-        source_fingerprint: doc.fingerprint.clone(),
+        source_fingerprint: doc.content.clone(),
         upstream_cursor: None,
+        bucket_key: Some(id.to_string()),
         md_path,
         render_version: version,
         rows,
@@ -553,7 +585,7 @@ fn docs_of(rendered: &[RenderedMarkdown]) -> BTreeMap<String, Doc> {
             (
                 md.markdown_uuid.clone(),
                 Doc {
-                    fingerprint: md.source_fingerprint.clone(),
+                    content: String::new(),
                     rows,
                     edges,
                 },
@@ -592,16 +624,14 @@ fn render_store_at(
 }
 
 async fn index_docs(pool: &SqlitePool) -> BTreeMap<String, Doc> {
-    let mds =
-        sqlx::query("SELECT markdown_uuid, source_fingerprint FROM markdowns WHERE source_id = ?")
-            .bind(SOURCE)
-            .fetch_all(pool)
-            .await
-            .unwrap();
+    let mds = sqlx::query("SELECT markdown_uuid FROM markdowns WHERE source_id = ?")
+        .bind(SOURCE)
+        .fetch_all(pool)
+        .await
+        .unwrap();
     let mut out = BTreeMap::new();
     for md in mds {
         let uuid: String = md.try_get(0).unwrap();
-        let fingerprint: Option<String> = md.try_get(1).unwrap();
         let mut rows: Vec<(String, String)> =
             sqlx::query("SELECT uuid, text FROM grid_rows WHERE markdown_uuid = ?")
                 .bind(&uuid)
@@ -626,7 +656,7 @@ async fn index_docs(pool: &SqlitePool) -> BTreeMap<String, Doc> {
         out.insert(
             uuid,
             Doc {
-                fingerprint: fingerprint.unwrap_or_default(),
+                content: String::new(),
                 rows,
                 edges,
             },
@@ -700,6 +730,21 @@ impl World {
         }
     }
 
+    /// Apply these mutations to the model and the store, and commit. One
+    /// writer per open, closed before the render opens its reader.
+    async fn commit(&mut self, mutations: &[Mutation]) -> Option<String> {
+        let pool = doltlite_raw::open(&self.raw_db, RAW_DDL).await.unwrap();
+        for m in mutations {
+            apply_to_store(&pool, m).await.unwrap();
+            apply_to_model(&mut self.model, m);
+            self.history.push(format!("  {m:?}"));
+        }
+        self.history.push("  -- commit".into());
+        let hash = doltlite_raw::commit_run(&pool, "wave").await.unwrap();
+        pool.close().await;
+        hash
+    }
+
     /// Apply a wave of mutations to the model and the store, and commit.
     /// One writer per open, closed before the render opens its reader.
     async fn commit_wave(&mut self, rng: &mut Rng, mutations: usize) -> Option<String> {
@@ -717,6 +762,14 @@ impl World {
     }
 
     async fn render(&self, synth: &SynthRender, seal_often: bool) -> Result<()> {
+        self.render_report(synth, seal_often).await.map(|_| ())
+    }
+
+    async fn render_report(
+        &self,
+        synth: &SynthRender,
+        seal_often: bool,
+    ) -> Result<crate::render::RenderReport> {
         let processors: Vec<Box<dyn RenderProcessor>> =
             vec![Box::new(SynthRender::clone_of(synth))];
         let source = RenderSource {
@@ -733,9 +786,10 @@ impl World {
                 Default::default()
             },
             storage: None,
+            raw_db: Some(self.raw_db.clone()),
             progress: Progress::noop(),
         };
-        tokio::task::spawn_blocking(move || render_source(&processors, source).map(|_| ()))
+        tokio::task::spawn_blocking(move || render_source(&processors, source))
             .await
             .unwrap()
     }
@@ -922,6 +976,71 @@ async fn incremental_render_equals_cold_render_under_random_histories() {
         assert!(d.is_empty(), "seed {seed}: final index ≠ cold render:\n{d}");
         world.index.close().await;
     }
+}
+
+/// The point of `render_inputs`: a row every document reads but none
+/// owns — an author — re-renders exactly the documents that declared it,
+/// not the whole source. Before, `authors` was a fan-out table and one
+/// rename rendered everything with the fingerprints on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_changed_input_re_renders_only_the_buckets_that_declared_it() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    let parent = |n: u32, author: &str| {
+        Mutation::InsertParent(
+            format!("p{n}"),
+            Parent {
+                title: format!("title {n}"),
+                author_id: author.into(),
+            },
+        )
+    };
+    world
+        .commit(&[
+            Mutation::RenameAuthor("a0".into(), "ann".into()),
+            Mutation::RenameAuthor("a1".into(), "bob".into()),
+            parent(1, "a0"),
+            parent(2, "a0"),
+            parent(3, "a1"),
+            parent(4, "a1"),
+            parent(5, "a1"),
+        ])
+        .await;
+    let first = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(first.docs, 5, "cold: every parent renders");
+
+    world
+        .commit(&[Mutation::RenameAuthor("a0".into(), "anne".into())])
+        .await;
+    let second = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(
+        (second.docs, second.skipped),
+        (2, 0),
+        "ann's two parents render again; bob's three are not even looked at"
+    );
+    assert_store_is(
+        &world,
+        &expected(&world.model, Params { upper: false }),
+        "after rename",
+    );
+
+    world.commit(&[Mutation::DeleteParent("p3".into())]).await;
+    let third = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(
+        (third.docs, third.removed),
+        (0, 1),
+        "a deleted parent is named by its own removed row and its document goes"
+    );
+    assert_store_is(
+        &world,
+        &expected(&world.model, Params { upper: false }),
+        "after delete",
+    );
+    world.index.close().await;
 }
 
 /// A steady-state run writes nothing: the diff names no bucket, the

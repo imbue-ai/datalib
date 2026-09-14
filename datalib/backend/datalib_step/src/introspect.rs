@@ -470,6 +470,7 @@ pub fn plan(
             source_id: source_id.to_string(),
             source_fingerprint: fingerprint(&subjects),
             upstream_cursor: None,
+            bucket_key: None,
             md_path,
             render_version: RENDER_VERSION,
             rows,

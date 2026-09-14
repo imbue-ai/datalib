@@ -1,8 +1,27 @@
 # Render inputs: record what each document was rendered from
 
-**Status: proposal (2026-09-11), nothing built.** The measurements and
-file pointers below were checked against the tree on that date; the
-design has not been tried.
+**Status: proposal (2026-09-11); the store and the driver's half are
+built (2026-09-14), the providers' half is not.** Built, of §"Order of
+work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
+render store with `markdowns.bucket_key`, `RenderedMarkdown.bucket_key`,
+`RenderCtx::declare_bucket(bucket_key, inputs)`; the driver's scan —
+`render::reverse_lookup` diffs every table `render_inputs` mentions
+between the cursor and HEAD, reverse-looks-up the stale buckets, and
+hands the provider the pin (`RenderCtx::raw_pin`) and the set
+(`RenderCtx::stale_buckets`); the driver's sweep of a declared bucket's
+documents by `bucket_key`; and the fingerprint moved into the driver as
+a hash of the *output* (rows, edges, `.md` bytes — see "Does the
+fingerprint still earn its place?" below, whose worry about
+completeness is thereby closed), so `prior_fingerprints` has left every
+provider signature (#27). The synthetic provider in
+`datalib_step/src/render_model_test.rs` is fully on it — no fan-out
+table, no removal probe — and the model test proves the point: an
+author rename renders that author's parents and nothing else. Every
+real provider declares its buckets with *no inputs yet*, so their
+scans are unchanged; step 4 (chat-common declares for ten providers)
+and step 5 (drop `global_fanout_tables` and `buckets_without_rows` one
+provider at a time) are the next PRs, with `tests/fixtures/
+render_contract_test.py` as the check that each move is right.
 
 **Read [`one_mode.md`](one_mode.md) first (2026-09-14).** This document
 is now the render-side mechanism for that design's rule 2 ("prune at
@@ -443,6 +462,20 @@ when a declared input changed, so its output nearly always changed too.
 re-renders every thread that user touched, to identical output. The
 compare stays, in the driver, so those writes — and the grid and qmd
 work downstream of them — are skipped. It costs one map load.
+
+*Built, with one correction.* The fingerprint the driver compares is
+its own, over the output — the rows, the edges and the `.md` bytes
+(`IndexedMarkdownStore::put_document_unless`) — not the provider's. A
+provider's hash of its inputs cannot promise the output is unchanged:
+chat-common's left out the author names it resolves from `users` at
+render time, so with the driver trusting it a rename skipped every
+document it should have rewritten, across every fan-out table of every
+provider (the contract harness found all eighteen at once). Hashing the
+output is what a skip means, and it closed seven of the harness's
+known gaps in the same move. Datalib's own storage report is the one
+document that keeps its provider fingerprint: its body carries byte
+counts that wobble run to run and its fingerprint deliberately hashes
+only the row counts.
 
 ## Order of work
 

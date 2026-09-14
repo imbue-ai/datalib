@@ -37,6 +37,9 @@ impl RenderProcessor for GithubRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+        // The fingerprint skip is the driver's: every document is emitted
+        // and the store writes only the ones that changed.
+        let no_priors: std::collections::HashMap<String, String> = Default::default();
         use crate::render::{parse_api_dir, render_github};
         let parsed = parse_api_dir(&self.raw_path, ctx.raw_cursor)
             .with_context(|| format!("github parse {}", self.raw_path.display()))?;
@@ -64,7 +67,7 @@ impl RenderProcessor for GithubRender {
             ctx.root,
             ctx.name,
             ctx.progress,
-            ctx.prior_fingerprints,
+            &no_priors,
             &mut on_doc,
         )
         .context("render_github")?;

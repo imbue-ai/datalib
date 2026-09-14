@@ -50,24 +50,14 @@ _SKIP_SUFFIXES = ("_bookkeeping",)
 # entry fail the run until it is removed, so it can only shrink. A new
 # entry needs a reason, which is the finding.
 KNOWN_GAPS: dict[str, str] = {
-    # ── the fingerprint does not cover what the output reads ──
-    # (contract clause 4: a whole-store renderer's skip is only as good
-    # as its fingerprint, and these read rows the fingerprint ignores)
-    "beeper: delete users": "author names come from `users`, not in the fingerprint",
-    "beeper: tweak users": "same",
-    "beeper: tweak rooms": "room titles come from `rooms`, not in the fingerprint",
-    "google-takeout: delete chat_groups": "group names not in the fingerprint",
-    "google-takeout: delete voice_attachments": "attachments not in the fingerprint",
-    "google-takeout: tweak voice_attachments": "same",
-    "linkedin: delete email_addresses": "email addresses not in the fingerprint",
+    # ── a change that does not reach the render at all ──
+    # (contract clause 2 for a diff-narrowed renderer; for a whole-store
+    # one, a row its walk never reads — not traced yet)
+    "beeper: tweak rooms": "not traced",
+    "linkedin: delete email_addresses": "not traced",
     "linkedin: tweak email_addresses": "same",
-    "sms-backup-restore: delete sms_attachments": "attachments not in the fingerprint",
+    "sms-backup-restore: delete sms_attachments": "not traced",
     "sms-backup-restore: tweak sms_attachments": "same",
-    "sms-backup-restore: tweak sms_calls": "call fields not in the fingerprint",
-    "tng_pdfs: tweak pdf_documents": (
-        "the fingerprint is the file's blake3, so text re-extracted at ingest "
-        "(an extractor bump) never re-renders"
-    ),
     # ── a table the bucket query does not name ──
     # (contract clause 2)
     "tng_email: delete email_blobs": "attachment bytes; no join from blob to thread in the scan",

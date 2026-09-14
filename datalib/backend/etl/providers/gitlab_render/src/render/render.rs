@@ -312,6 +312,7 @@ pub fn render_gitlab(
             source_id: String::new(),
             source_fingerprint: fingerprint,
             upstream_cursor: None,
+            bucket_key: None,
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,

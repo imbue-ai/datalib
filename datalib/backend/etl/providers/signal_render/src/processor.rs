@@ -69,10 +69,10 @@ impl RenderProcessor for SignalRender {
         // chat at all, so chat-common never sees it; declaring the named
         // set first is what makes its old documents go.
         for chat_id in parsed.scan.changed_chats.iter().flatten() {
-            ctx.declare_bucket(&crate::render::signal_chat_uuid(&self.name, chat_id), &[]);
+            ctx.declare_bucket(&crate::render::signal_chat_uuid(&self.name, chat_id), &[])?;
         }
-        for (bucket, documents) in &summary.buckets {
-            ctx.declare_bucket(bucket, documents);
+        for bucket in &summary.buckets {
+            ctx.declare_bucket(bucket, &[])?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);

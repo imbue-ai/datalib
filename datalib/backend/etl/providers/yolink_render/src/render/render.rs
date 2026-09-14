@@ -106,6 +106,7 @@ pub fn render_all(
         source_id: source_id.to_string(),
         source_fingerprint: fingerprint,
         upstream_cursor: parsed.head.clone(),
+        bucket_key: None,
         md_path,
         render_version: RENDER_VERSION,
         rows,

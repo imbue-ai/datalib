@@ -42,9 +42,9 @@ pub struct RenderSummary {
     pub threads_total: usize,
     pub threads_rendered: usize,
     pub threads_skipped: usize,
-    /// Every thread rendered, with the documents considered for it — what
-    /// the processor declares through `RenderCtx::declare_bucket`.
-    pub buckets: Vec<(String, Vec<String>)>,
+    /// Every thread rendered, by uuid — what the processor declares
+    /// through `RenderCtx::declare_bucket`.
+    pub buckets: Vec<String>,
 }
 
 fn profile() -> RenderProfile {

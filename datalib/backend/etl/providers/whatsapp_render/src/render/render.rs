@@ -134,12 +134,7 @@ pub fn render_all(
     // messages all went builds no chat, and chat-common never sees it.
     let mut buckets: Buckets = named
         .iter()
-        .map(|jid| {
-            (
-                crate::render::whatsapp_chat_uuid(source_id, jid),
-                Vec::new(),
-            )
-        })
+        .map(|jid| crate::render::whatsapp_chat_uuid(source_id, jid))
         .collect();
     buckets.extend(summary.buckets);
     Ok((new_head, buckets))

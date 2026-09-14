@@ -34,9 +34,9 @@ pub struct RenderSummary {
     pub docs_rendered: usize,
     pub docs_skipped: usize,
     pub messages_rendered: usize,
-    /// Every chat rendered, with the documents considered for it — what
-    /// the processor declares through `RenderCtx::declare_bucket`.
-    pub buckets: Vec<(String, Vec<String>)>,
+    /// Every chat rendered, by uuid — what the processor declares
+    /// through `RenderCtx::declare_bucket`.
+    pub buckets: Vec<String>,
 }
 
 /// The render params recorded alongside the cursor. `period` decides

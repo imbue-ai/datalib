@@ -96,10 +96,10 @@ impl RenderProcessor for EmailRender {
             ctx.declare_bucket(
                 &crate::render::render::thread_uuid(account_id, thread_id),
                 &[],
-            );
+            )?;
         }
-        for (bucket, documents) in &buckets {
-            ctx.declare_bucket(bucket, documents);
+        for bucket in &buckets {
+            ctx.declare_bucket(bucket, &[])?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);

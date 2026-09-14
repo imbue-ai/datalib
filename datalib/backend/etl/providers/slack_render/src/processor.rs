@@ -55,10 +55,10 @@ impl RenderProcessor for SlackRender {
         // A thread the diff named that has no message left builds no
         // chat, so chat-common never sees it; the named set goes first.
         for thread_uuid in parsed.scan.changed_threads.iter().flatten() {
-            ctx.declare_bucket(thread_uuid, &[]);
+            ctx.declare_bucket(thread_uuid, &[])?;
         }
-        for (bucket, documents) in &summary.buckets {
-            ctx.declare_bucket(bucket, documents);
+        for bucket in &summary.buckets {
+            ctx.declare_bucket(bucket, &[])?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);

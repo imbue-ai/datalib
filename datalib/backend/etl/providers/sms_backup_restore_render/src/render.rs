@@ -159,7 +159,7 @@ pub fn render(
         .changed_buckets
         .iter()
         .flatten()
-        .map(|key| (uuid5(&format!("chat:{key}")), Vec::new()))
+        .map(|key| uuid5(&format!("chat:{key}")))
         .collect();
     outcome.buckets.extend(s.buckets);
     Ok(outcome)

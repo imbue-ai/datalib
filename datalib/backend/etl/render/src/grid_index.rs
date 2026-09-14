@@ -563,6 +563,10 @@ pub struct RenderedMarkdown {
     /// `MAX(fetched_at_utc)`. None when the provider has nothing cheaper than the
     /// fingerprint.
     pub upstream_cursor: Option<String>,
+    /// The bucket this document was rendered from — the same key the
+    /// provider declares through `RenderCtx::declare_bucket`. `None`
+    /// from a renderer that does not declare buckets yet.
+    pub bucket_key: Option<String>,
     /// Absolute path to the rendered `.md`; `qmd_path` is this with the
     /// out-dir prefix stripped.
     pub md_path: PathBuf,
@@ -1063,8 +1067,8 @@ async fn upsert_markdown(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, updated_at, \
           md_path, source_fingerprint, upstream_cursor, row_set_hash, renderer_version, \
-          rendered_at_utc, tz_offset) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          rendered_at_utc, tz_offset, bucket_key) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&source_id)
@@ -1080,6 +1084,7 @@ async fn upsert_markdown(
     .bind(&version_str)
     .bind(&rendered_at.utc)
     .bind(&rendered_at.tz_offset)
+    .bind(&md.bucket_key)
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
@@ -1500,6 +1505,7 @@ mod write_lock_tests {
             source_id: "test".into(),
             source_fingerprint: format!("fp-{uuid}"),
             upstream_cursor: None,
+            bucket_key: None,
             md_path: PathBuf::from(format!("/tmp/{uuid}.md")),
             render_version: 1,
             rows: vec![row],
@@ -1938,6 +1944,7 @@ mod source_cursor_tests {
             // Fingerprint follows the text, the way a renderer's does.
             source_fingerprint: format!("fp-{text}"),
             upstream_cursor: None,
+            bucket_key: None,
             md_path: rendered_root(root, source).join(format!("{uuid}.md")),
             render_version: 1,
             rows: vec![row],

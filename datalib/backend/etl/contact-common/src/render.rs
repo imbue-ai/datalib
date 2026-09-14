@@ -158,6 +158,7 @@ fn render_one(
         source_id: source_id.to_string(),
         source_fingerprint: fingerprint,
         upstream_cursor: contact.when_ts.clone(),
+        bucket_key: None,
         md_path,
         render_version: profile.render_version,
         rows: row.into_iter().collect(),

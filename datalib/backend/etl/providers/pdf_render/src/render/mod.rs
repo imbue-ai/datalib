@@ -227,6 +227,7 @@ fn render_one(
         source_id: source_id.to_string(),
         source_fingerprint: render_fingerprint(&t.blake3),
         upstream_cursor: None,
+        bucket_key: None,
         md_path: md_path.to_path_buf(),
         render_version: RENDER_VERSION,
         rows,

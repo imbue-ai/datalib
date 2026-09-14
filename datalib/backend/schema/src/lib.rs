@@ -31,6 +31,10 @@ pub mod render_cursor {
     include!("render_cursor.rs");
 }
 
+pub mod render_inputs {
+    include!("render_inputs.rs");
+}
+
 pub mod measurements {
     include!("measurements.rs");
 }
@@ -97,6 +101,7 @@ mod tests {
     renderer_version VARCHAR(32),
     rendered_at_utc VARCHAR(40),
     tz_offset VARCHAR(8),
+    bucket_key VARCHAR(256),
     PRIMARY KEY (markdown_uuid)
 )"#;
         let derived = super::markdowns::DDL[0].1;
