@@ -41,13 +41,6 @@ impl RenderProcessor for SmsRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
-        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        let cursor = datalib_etl::render_cursor::read_for_params(
-            &cursor_path,
-            &datalib_etl::render_cursor::no_params(),
-        )
-        .with_context(|| format!("read sms render cursor {}", cursor_path.display()))?;
-
         let mut on_doc = |md| ctx.emit_doc(md);
         let outcome = crate::render::render(
             &self.raw_path,
@@ -56,7 +49,7 @@ impl RenderProcessor for SmsRender {
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
-            cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
+            ctx.raw_cursor,
         )
         .context("sms_backup_restore render")?;
 
@@ -68,12 +61,7 @@ impl RenderProcessor for SmsRender {
         }
 
         if let Some(head) = outcome.new_head.as_deref() {
-            datalib_etl::render_cursor::write(
-                &cursor_path,
-                head,
-                &datalib_etl::render_cursor::no_params(),
-            )
-            .with_context(|| format!("write sms render cursor {}", cursor_path.display()))?;
+            ctx.consumed(head);
         }
         Ok(format!(
             "rendered={} skipped={} dropped={}",

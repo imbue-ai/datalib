@@ -10,7 +10,6 @@ use serde_json::Value;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl::render_cursor;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
@@ -115,15 +114,6 @@ pub fn render_all(
         on_doc_complete,
     )
     .context("slack chat-common render")?;
-
-    // Advance the render cursor only when everything succeeded AND we
-    // managed to read HEAD at scan time. Without HEAD the next run is
-    // another cold start (the right behavior — nothing to anchor on).
-    if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(out_dir, source_id);
-        render_cursor::write(&cursor_path, head, &render_cursor::no_params())
-            .with_context(|| format!("write slack render cursor {}", cursor_path.display()))?;
-    }
 
     Ok(RenderSummary {
         threads_total: parsed.threads.len() + parsed.docs_skipped,

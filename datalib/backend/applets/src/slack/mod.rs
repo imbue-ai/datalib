@@ -218,7 +218,10 @@ fn read_rows(
     // ambient runtime when serving (a plain blocking TCP accept loop),
     // and an ambient one under test.
     datalib_etl_render::indexed_markdown::blocking(async {
-        let pool = datalib_etl::doltlite_raw::open_derived(store, &[]).await?;
+        // The render step owns this store; a reader that opened it
+        // writably would rescue-commit its in-flight rows and fail its
+        // commits (AGENTS.md, "One open per doltlite file").
+        let pool = datalib_etl::doltlite_raw::open_reader(store).await?;
         let rows = sqlx::query(
             "SELECT channel, markdown_uuid, message_index, \
                         IFNULL(when_ts, ''), IFNULL(author, ''), text \

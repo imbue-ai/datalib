@@ -1269,9 +1269,13 @@ pub async fn scan_buckets(
                  and never say why.",
             ))
         }
+        // Datalib never replaces a store file, so a cursor the store cannot
+        // resolve means somebody did it by hand. Loud, every run, until
+        // the next successful pass writes a cursor this store knows.
         Err(e) => {
-            tracing::info!(
+            tracing::warn!(
                 error = %e,
+                from_ref,
                 "dolt_diff scan could not use this cursor — cold-starting (render everything)"
             );
             return Ok(DiffScan {

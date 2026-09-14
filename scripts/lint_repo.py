@@ -358,25 +358,38 @@ def _check_download_takes_a_store(root: Path) -> int:
     return 1
 
 
-# --- Check 5: render must not open a store writably ------------------
+# --- Check 5: a reader must not open a store writably -----------------
 #
-# `doltlite_raw::open` is not a read: it seals a dirty working tree into a
-# rescue commit, reconciles the schema, and commits with `-Am`, which takes
-# whatever else was dirty with it. The download step owns the raw store and
-# wants all three. Render only reads it, and once downloads commit
-# incrementally, a render that opens this way seals the downloader's
-# half-written batch on its behalf -- which pinning cannot protect against,
-# because the torn rows are then genuinely committed.
+# `doltlite_raw::open` (and `open_derived`) is not a read: it asks
+# `dolt_status`, seals a dirty working tree into a rescue commit, reconciles
+# the schema, and commits with `-Am`, which takes whatever else was dirty
+# with it. The step that owns a store wants all of that. Anyone else opening
+# it this way while the owner is writing fails the owner's in-flight commit
+# (`dolt_status` from a second connection -- #400) and seals its half-written
+# batch on its behalf, which pinning cannot protect against because the torn
+# rows are then genuinely committed.
 #
-# `open_reader` is the read path. This keeps render on it.
+# `open_reader` is the read path. This keeps every reader on it: render
+# reading a raw store, and the applets and the http server reading a render
+# store or the index.
 _WRITABLE_OPEN = re.compile(
-    r"\b(?:RawDb|BlobCas|dr|doltlite_raw|datalib_etl::doltlite_raw)::open\("
+    r"\b(?:RawDb|BlobCas|dr|doltlite_raw|datalib_etl::doltlite_raw)::open(?:_derived)?\("
 )
+
+
+def _reader_sources(root: Path) -> list[str]:
+    readers = [
+        p
+        for p in _git_ls_files(root, "datalib/backend/applets")
+        + _git_ls_files(root, "datalib/backend/http")
+        if p.endswith(".rs") and "/tests/" not in p
+    ]
+    return _render_sources(root) + readers
 
 
 def _check_render_opens_read_only(root: Path) -> int:
     bad: list[str] = []
-    for rel in _render_sources(root):
+    for rel in _reader_sources(root):
         # A `ingest/db.rs` is a download file that render calls into. Its
         # opens are the download step's, and the download step owns the store
         # it is writing -- only check 4 has anything to say about these.
@@ -389,16 +402,16 @@ def _check_render_opens_read_only(root: Path) -> int:
             if _WRITABLE_OPEN.search(line):
                 bad.append(f"{rel}:{lineno}: {line.strip()}")
     if not bad:
-        print("OK: no render path opens a doltlite store writably.")
+        print("OK: no reader opens a doltlite store writably.")
         return 0
-    print("ERROR: render code opens a doltlite store writably:", file=sys.stderr)
+    print("ERROR: a reader opens a doltlite store writably:", file=sys.stderr)
     for b in bad:
         print(f"  - {b}", file=sys.stderr)
     print(
         "\n`open` rescue-commits, reconciles the schema and commits with -Am --\n"
-        "three writes to a store the render step does not own. Use the\n"
-        "read-only path instead: `open_reader`.\n"
-        "See docs/dev/plans/streaming_steps_plan.md.",
+        "three writes to a store this code does not own, and its `dolt_status`\n"
+        "probe fails the owner's in-flight commit. Use the read-only path\n"
+        'instead: `open_reader`. See AGENTS.md, "One open per doltlite file".',
         file=sys.stderr,
     )
     return 1

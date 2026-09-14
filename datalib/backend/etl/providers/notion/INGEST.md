@@ -178,9 +178,9 @@ so instead of quoting something that no longer exists.
 
 Render asks the raw store what changed since the commit it last
 completed against (`dolt_diff`, via the shared `scan_buckets`), and is
-handed only those pages. The resume cursor lives at
-`<root>/<name>/render_markdown/_render_cursor.json` and is written only
-after every document lands.
+handed only those pages. The resume cursor is the `render_cursor` row
+in the render store, written by the render step in the same transaction
+as the last document of the run.
 
 Every table that can change a page projects a page id directly, so the
 union needs no joins — `comments`, `comment_anchors` and

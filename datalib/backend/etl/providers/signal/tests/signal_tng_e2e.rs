@@ -9,12 +9,10 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl::render_cursor;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_signal::ingest::{self, FetchOptions};
-use datalib_etl_signal_render::render::{parse_raw_dir, render_all, render_params};
+use datalib_etl_signal_render::render::{parse_raw_dir, render_all};
 use datalib_signal_backup::{
     backup, encrypt_attachment, local_media_name,
     write::{write_snapshot, SnapshotInput},
@@ -185,7 +183,6 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             &data_root,
             "signal-tng",
             &progress,
-            &render_params(Period::Month),
             &mut on_doc_complete,
         )?;
         assert_eq!(render_summary.docs_rendered, 1);
@@ -275,17 +272,21 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     );
 
     // ── Second pass: prove the docs_skipped path works ─────────────
-    let cursor_path = render_cursor::cursor_path(&data_root, "signal-tng");
-    let cursor =
-        render_cursor::read(&cursor_path)?.expect("first render should have written the cursor");
+    // The commit the first pass pinned is what the render step records
+    // as the cursor; the second pass diffs from it.
+    let cursor = parsed
+        .scan
+        .new_head
+        .clone()
+        .expect("first render should have pinned a commit");
     assert!(
-        !cursor.last_rendered_hash.is_empty(),
+        !cursor.is_empty(),
         "cursor must carry a non-empty doltlite commit hash"
     );
 
     let parsed2 = tokio::task::spawn_blocking({
         let raw = raw_db_path.clone();
-        let last_hash = cursor.last_rendered_hash.clone();
+        let last_hash = cursor.clone();
         move || {
             datalib_etl_signal_render::render::parse(
                 &raw,
@@ -312,7 +313,6 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         &data_root,
         "signal-tng",
         &progress,
-        &render_params(Period::Month),
         &mut |doc: RenderedMarkdown| -> Result<()> {
             rendered_docs_second_pass.push(doc);
             Ok(())

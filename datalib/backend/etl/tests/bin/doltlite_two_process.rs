@@ -46,6 +46,8 @@ async fn main() -> Result<()> {
         "churn" => churn(&args).await,
         "history" => history(&args).await,
         "probe" => probe(&args).await,
+        "hang" => hang(&args).await,
+        "reopen" => reopen(&args).await,
         other => bail!("unknown role {other:?}"),
     }?;
     write_atomic(&out, &serde_json::to_vec_pretty(&report)?)
@@ -305,6 +307,80 @@ async fn double_open(args: &Args) -> Result<Value> {
         "second_open_ms": second_open_ms,
         "second_open_error": second_err,
         "commits": through,
+    }))
+}
+
+/// Seed and commit, then open a SQL transaction, insert into it, announce
+/// readiness and wait to be killed. With `--commit` the transaction is
+/// committed at the SQL level first, so the rows sit in the working set —
+/// uncommitted to doltlite — when the kill lands. Never returns on its own:
+/// the test's `kill -9` is the whole point.
+async fn hang(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let pool = doltlite_raw::open(&db, &[TABLE_DDL])
+        .await
+        .context("open read-write")?;
+    if !doltlite_raw::has_dolt_extensions(&pool).await {
+        pool.close().await;
+        write_atomic(&args.path("out")?, b"{\"dolt\": false}")?;
+        write_atomic(&args.path("ready-out")?, b"no-dolt")?;
+        std::future::pending::<()>().await;
+        unreachable!();
+    }
+    for i in 0..SEED_ROWS {
+        insert(&pool, &format!("seed-{i}")).await?;
+    }
+    doltlite_raw::commit_run(&pool, "seed")
+        .await?
+        .ok_or_else(|| anyhow!("the seed commit committed nothing"))?;
+
+    let mut conn = pool.acquire().await.context("acquire")?;
+    sqlx::query("BEGIN")
+        .execute(&mut *conn)
+        .await
+        .context("BEGIN")?;
+    for i in 0..args.num("rows", 5) {
+        sqlx::query("INSERT INTO entities (id, body) VALUES (?, ?)")
+            .bind(format!("in-flight-{i}"))
+            .bind("x")
+            .execute(&mut *conn)
+            .await
+            .context("insert in-flight row")?;
+    }
+    if args.flag("commit") {
+        sqlx::query("COMMIT")
+            .execute(&mut *conn)
+            .await
+            .context("COMMIT")?;
+    }
+    write_atomic(&args.path("ready-out")?, b"ready")?;
+    std::future::pending::<()>().await;
+    unreachable!()
+}
+
+/// The next writer's view of a store a killed process left behind: what
+/// `open` found dirty and sealed as a rescue commit, and what the working
+/// set holds afterwards.
+async fn reopen(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let pool = doltlite_raw::open(&db, &[TABLE_DDL])
+        .await
+        .context("reopen read-write")?;
+    let working_set: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities")
+        .fetch_one(&pool)
+        .await
+        .context("count the working set")?;
+    let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default();
+    let committed = committed_rows(&pool).await;
+    pool.close().await;
+    Ok(json!({
+        "role": "reopen",
+        "working_set_rows": working_set,
+        "committed_rows": committed,
+        "commit_messages": messages,
     }))
 }
 

@@ -43,17 +43,8 @@ impl RenderProcessor for ClaudeRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        let cursor = datalib_etl::render_cursor::read_for_params(
-            &cursor_path,
-            &datalib_etl::render_cursor::no_params(),
-        )
-        .with_context(|| format!("read claude render cursor {}", cursor_path.display()))?;
-        let parsed = parse(
-            &self.raw_path,
-            cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-        )
-        .with_context(|| format!("claude parse {}", self.raw_path.display()))?;
+        let parsed = parse(&self.raw_path, ctx.raw_cursor)
+            .with_context(|| format!("claude parse {}", self.raw_path.display()))?;
         // Conversations and projects claude.ai no longer has. Their pages go
         // before we render, so a run interrupted afterwards has already
         // dropped them rather than leaving a document whose source is gone.
@@ -77,6 +68,9 @@ impl RenderProcessor for ClaudeRender {
             &mut on_doc,
         )
         .context("claude render_all")?;
+        if let Some(head) = parsed.scan.new_head.as_deref() {
+            ctx.consumed(head);
+        }
         Ok(if dropped == 0 {
             "rendered".into()
         } else {

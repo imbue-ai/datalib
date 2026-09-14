@@ -338,6 +338,96 @@ fn a_second_read_write_pool_does_not_block_on_the_first() {
     }
 }
 
+/// The atomicity boundary `docs/dev/plans/one_mode.md` rests on: a SQL
+/// transaction that never reached `COMMIT` leaves nothing behind. A writer
+/// is `kill -9`ed with rows inserted inside an open transaction; the next
+/// writer to open the store must find the working set clean — nothing to
+/// rescue-commit, the seed rows and only the seed rows.
+#[test]
+fn a_transaction_a_killed_writer_never_committed_leaves_no_rows_behind() {
+    let t = Scratch::new();
+    let mut writer = t.spawn(&[
+        "hang",
+        "--db",
+        &t.db(),
+        "--rows",
+        "5",
+        "--ready-out",
+        &t.path("ready"),
+        "--out",
+        &t.path("hang.json"),
+    ]);
+    if t.await_file("ready", &mut writer) == "no-dolt" {
+        writer.kill().expect("kill");
+        return;
+    }
+    writer.kill().expect("kill -9 the writer mid-transaction");
+    writer.wait().expect("reap");
+
+    let r = t.reopen();
+    assert_eq!(
+        r["working_set_rows"].as_i64(),
+        Some(SEED_ROWS),
+        "rows from a transaction that never committed are in the working set: {r:?}"
+    );
+    assert_eq!(r["committed_rows"].as_i64(), Some(SEED_ROWS), "{r:?}");
+    assert!(
+        !rescued(&r),
+        "there was nothing to rescue, yet `open` sealed a rescue commit: {r:?}"
+    );
+}
+
+/// The other half of the same boundary: a SQL `COMMIT` puts rows in the
+/// working set, and the working set lives in the file. The rows outlive the
+/// process that wrote them, and the next `open` seals them as a rescue
+/// commit — which is the behaviour the one-mode rules make safe, and the
+/// reason every unit of work has to be one transaction.
+#[test]
+fn rows_a_killed_writer_committed_at_the_sql_level_are_rescued_by_the_next_open() {
+    let t = Scratch::new();
+    let mut writer = t.spawn(&[
+        "hang",
+        "--db",
+        &t.db(),
+        "--rows",
+        "5",
+        "--commit",
+        "--ready-out",
+        &t.path("ready"),
+        "--out",
+        &t.path("hang.json"),
+    ]);
+    if t.await_file("ready", &mut writer) == "no-dolt" {
+        writer.kill().expect("kill");
+        return;
+    }
+    writer
+        .kill()
+        .expect("kill -9 the writer after its SQL commit");
+    writer.wait().expect("reap");
+
+    let r = t.reopen();
+    assert_eq!(
+        r["working_set_rows"].as_i64(),
+        Some(SEED_ROWS + 5),
+        "the working set is in the file and survives the process: {r:?}"
+    );
+    assert_eq!(
+        r["committed_rows"].as_i64(),
+        Some(SEED_ROWS + 5),
+        "the next open seals what it found: {r:?}"
+    );
+    assert!(rescued(&r), "expected a rescue commit in the log: {r:?}");
+}
+
+fn rescued(reopen: &Value) -> bool {
+    reopen["commit_messages"]
+        .as_array()
+        .expect("commit_messages")
+        .iter()
+        .any(|m| m.as_str().unwrap_or_default().starts_with("rescue:"))
+}
+
 // ── assertions ──────────────────────────────────────────────────────
 
 fn assert_stable_at_seed(reader: &Value) {
@@ -459,6 +549,19 @@ impl Scratch {
         let path = self.dir.path().join(name);
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         serde_json::from_slice(&bytes).expect("the report is JSON")
+    }
+
+    /// What the next writer finds when it opens the store.
+    fn reopen(&self) -> Value {
+        let mut child = self.spawn(&[
+            "reopen",
+            "--db",
+            &self.db(),
+            "--out",
+            &self.path("reopen.json"),
+        ]);
+        self.wait("reopen", &mut child);
+        self.report("reopen.json")
     }
 
     /// What a fresh process sees now that both sides have let go.

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
+use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
@@ -41,32 +42,46 @@ pub async fn run(
     // The providers write under `render_markdown_root(data_root, name)`;
     // `StepEnv::from_env` checked that this is the same tree as the id.
     let rendered_root = data_root.join(&env.step);
-    // Skip state and renderer versions come from the store: two indexed
-    // reads, where this used to walk the whole tree and parse every
-    // document's header to rebuild the same two answers.
     let declared = declared_render_versions(&processors);
-    let mut store = IndexedMarkdownStore::open(&rendered_root)
+    let declared_params = declared_render_params(&processors);
+    let store = IndexedMarkdownStore::open(&rendered_root)
         .map(|s| s.with_now(now))
         .with_context(|| format!("open render store for {}", name))?;
-    // A tree an older renderer wrote can't be updated in place, only
-    // replaced — see [`discard_tree_from_an_older_renderer`]. When it is
-    // discarded there is nothing left to skip against, so every document
-    // renders fresh.
     let on_disk = store.render_versions()?;
-    if tree_is_from_an_older_renderer(&on_disk, declared.as_ref()) {
-        progress.set_message("renderer version changed; re-rendering this source from scratch");
-        // The store lives inside the tree being removed, so its pool has
-        // to let go of the file first.
-        store.close();
-        discard_tree(&rendered_root)?;
-        store = IndexedMarkdownStore::open(&rendered_root)
-            .map(|s| s.with_now(now))
-            .with_context(|| format!("reopen render store for {}", name))?;
+    let stored_cursor = store.cursor()?;
+
+    // Everything again, in place: a renderer version or a param change
+    // means every document is rendered fresh and the ones the walk did
+    // not produce are swept at the end. The store — its history, and
+    // the commit `grid_index` last consumed — is kept, so a re-keyed
+    // document reaches the index as a deletion plus an addition rather
+    // than as an old row nobody ever removes.
+    let plan = RenderPlan::decide(
+        stored_cursor.as_ref(),
+        &declared_params,
+        tree_is_from_an_older_renderer(&on_disk, declared.as_ref()),
+    );
+    if let RenderPlan::Everything(why) = &plan {
+        progress.set_message(&format!("{why}; re-rendering this source in full"));
+        tracing::info!(source = %name, why, "render: rendering every document");
     }
-    let prior = store.prior_fingerprints()?;
+    let render_everything = matches!(plan, RenderPlan::Everything(_));
+    let raw_cursor: Option<String> = match plan {
+        RenderPlan::FromCursor(from) => from,
+        RenderPlan::Everything(_) => None,
+    };
+    // A full render ignores the fingerprints: an unchanged document has
+    // to be written again for the sweep below to tell "still produced"
+    // from "gone".
+    let prior = if render_everything {
+        HashMap::new()
+    } else {
+        store.prior_fingerprints()?
+    };
     tracing::info!(
         source = %name,
         prior = prior.len(),
+        cursor = raw_cursor.as_deref().unwrap_or("none"),
         "render: prior fingerprints from the store"
     );
 
@@ -104,82 +119,86 @@ pub async fn run(
     // Render is synchronous work driven by `futures`' executor (NOT
     // tokio's — providers block_on their own internal futures); run it
     // on a blocking thread.
-    let versions_after = tokio::task::spawn_blocking(
-        move || -> Result<(BTreeSet<u32>, HashMap<String, i64>, u64)> {
-            // The user's latency/history dial, the same one downloads take.
-            let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(
-                datalib_etl::checkpointer::Policy::Every(control_cadence.unwrap_or_default()),
-            );
-            // Every finished document goes into the per-source store. The
-            // providers already hand us a `RenderedMarkdown` carrying its
-            // rows, edges, fingerprint, version and problems through
-            // `ctx.emit_doc` — the same value `grid_index::apply_one`
-            // consumes — so nothing provider-side had to change to start
-            // writing a database.
-            let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
+    let versions_after = tokio::task::spawn_blocking(move || -> Result<RenderOutcome> {
+        // The user's latency/history dial, the same one downloads take.
+        let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(
+            datalib_etl::checkpointer::Policy::Every(control_cadence.unwrap_or_default()),
+        );
+        // Every document this run wrote. On a full render it is what the
+        // walk produced, and the sweep below keeps exactly this.
+        let mut emitted: BTreeSet<String> = BTreeSet::new();
+        // The documents between two checkpoints share one SQL transaction
+        // (the batch), and each is written whole inside it — rows, edges,
+        // markdown and problems together — so a commit landing between
+        // two documents never publishes a fraction of one. The providers
+        // hand us a `RenderedMarkdown` through `ctx.emit_doc`, the same
+        // value `grid_index::apply_one` consumes.
+        store.begin_batch()?;
+        let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
+            store
+                .put_document(&data_root, &md)
+                .with_context(|| format!("store document {}", md.markdown_uuid))?;
+            emitted.insert(md.markdown_uuid);
+            let n = docs_in.fetch_add(1, Ordering::SeqCst) + 1;
+            progress.metric("documents_rendered", &[], n as i64);
+            // What a consumer reading a checkpoint may see is a document
+            // this run is about to sweep. That is stale, not torn: the
+            // sweep's deletions reach the consumer through the same diff
+            // on its next pass.
+            checkpointer.wrote(1);
+            if checkpointer.should_seal() {
+                store.commit_batch()?;
+                let sealed = store.commit(&format!(
+                    "render {}: checkpoint at {} document(s)",
+                    planned_name,
+                    docs_in.load(Ordering::SeqCst)
+                ))?;
+                let rows = checkpointer.pending();
+                checkpointer.sealed();
+                // `None` means nothing was dirty after all, so no
+                // version moved and there is nothing to announce.
+                if let Some(hash) = sealed {
+                    progress.checkpoint_rows(&hash, rows);
+                }
+                store.begin_batch()?;
+            }
+            Ok(())
+        };
+        // The other half of the sink: a conversation the raw store no
+        // longer has takes its rendered documents with it. Without this
+        // the deletion stops at the raw store — the `.md` stays on disk
+        // and `grid_index`, which only ever learns of a removal from
+        // this store's own diff, never hears about it.
+        let mut on_remove = |conversation_uuid: &str| -> Result<usize> {
+            let gone = store.documents_for_conversation(conversation_uuid)?;
+            for uuid in &gone {
                 store
-                    .put_document(&data_root, &md)
-                    .with_context(|| format!("store document {}", md.markdown_uuid))?;
-                let n = docs_in.fetch_add(1, Ordering::SeqCst) + 1;
-                progress.metric("documents_rendered", &[], n as i64);
-                // **Between documents is the only consistent point.** A
-                // document is rows plus edges plus markdown, written as a
-                // group; sealing inside `put_document` would publish a
-                // fraction of one. Here the store is whole.
-                //
-                // What a consumer reading such a commit may still see is a
-                // document this run is about to sweep -- the retain sweep
-                // runs after every processor. That is stale, not torn: the
-                // sweep's deletions reach the consumer through the same
-                // diff on its next pass.
-                checkpointer.wrote(1);
-                if checkpointer.should_seal() {
-                    let sealed = store.commit(&format!(
-                        "render {}: checkpoint at {} document(s)",
-                        planned_name,
-                        docs_in.load(Ordering::SeqCst)
-                    ))?;
-                    let rows = checkpointer.pending();
-                    checkpointer.sealed();
-                    // `None` means nothing was dirty after all, so no
-                    // version moved and there is nothing to announce.
-                    if let Some(hash) = sealed {
-                        progress.checkpoint_rows(&hash, rows);
-                    }
-                }
-                Ok(())
-            };
-            // The other half of the sink: a conversation the raw store no
-            // longer has takes its rendered documents with it. Without this
-            // the deletion stops at the raw store — the `.md` stays on disk
-            // and `grid_index`, which only ever learns of a removal from
-            // this store's own diff, never hears about it.
-            let mut on_remove = |conversation_uuid: &str| -> Result<usize> {
-                let gone = store.documents_for_conversation(conversation_uuid)?;
-                for uuid in &gone {
-                    store
-                        .remove_document(&data_root, uuid)
-                        .with_context(|| format!("remove document {uuid}"))?;
-                }
-                if !gone.is_empty() {
-                    removed_in.fetch_add(gone.len(), Ordering::SeqCst);
-                    tracing::info!(
-                        conversation = conversation_uuid,
-                        documents = gone.len(),
-                        "render: conversation is gone from the raw store; dropped its documents",
-                    );
-                }
-                Ok(gone.len())
-            };
-            // A whole-store renderer declares the complete document set
-            // instead of naming vanished ids: `retained` accumulates across
-            // this source's processors and the sweep runs once, below.
-            let mut retained: Option<BTreeSet<String>> = None;
-            let mut on_retain = |seen: &std::collections::HashSet<String>| {
-                retained
-                    .get_or_insert_with(BTreeSet::new)
-                    .extend(seen.iter().cloned());
-            };
+                    .remove_document(&data_root, uuid)
+                    .with_context(|| format!("remove document {uuid}"))?;
+            }
+            if !gone.is_empty() {
+                removed_in.fetch_add(gone.len(), Ordering::SeqCst);
+                tracing::info!(
+                    conversation = conversation_uuid,
+                    documents = gone.len(),
+                    "render: conversation is gone from the raw store; dropped its documents",
+                );
+            }
+            Ok(gone.len())
+        };
+        // A whole-store renderer declares the complete document set
+        // instead of naming vanished ids: `retained` accumulates across
+        // this source's processors and the sweep runs once, below.
+        let mut retained: Option<BTreeSet<String>> = None;
+        let mut on_retain = |seen: &std::collections::HashSet<String>| {
+            retained
+                .get_or_insert_with(BTreeSet::new)
+                .extend(seen.iter().cloned());
+        };
+        // The raw commit each processor rendered from, or `None` for one
+        // that read no store.
+        let mut consumed: Vec<Option<String>> = Vec::with_capacity(processors.len());
+        let ran = (|| -> Result<()> {
             for proc in &processors {
                 let ctx = RenderCtx::new(
                     &name,
@@ -187,112 +206,110 @@ pub async fn run(
                     &now,
                     &progress,
                     &prior,
+                    raw_cursor.as_deref(),
                     &mut on_doc,
                     &mut on_remove,
                     &mut on_retain,
                 );
                 futures::executor::block_on(proc.run(&ctx))
                     .with_context(|| format!("processor {}", proc.id()))?;
+                consumed.push(ctx.consumed_commit());
             }
+            Ok(())
+        })();
+        // A failed processor takes the open batch with it: what it wrote
+        // since the last checkpoint is neither complete nor described by
+        // any cursor, and the next run renders it again.
+        if let Err(e) = ran {
+            let _ = store.rollback_batch();
+            return Err(e);
+        }
+        store.commit_batch()?;
+        let raw_commit = one_consumed_commit(&name, &consumed);
 
-            // Every source gets a storage report, including the ones
-            // that render no documents of their own — for `fsindex` and
-            // `media` it is the only thing they put in the grid.
-            //
-            // Planned before the retain sweep below so its id can be
-            // added to `keep`. That exemption is load-bearing:
-            // `retained` is what the *provider's* processors declared
-            // they hold, and they know nothing about this document — so
-            // the sweep would delete it, and the fingerprint skip would
-            // then decline to write it back on any run where no number
-            // moved. The report would vanish from the grid and stay
-            // gone.
-            let storage =
-                crate::introspect::plan(&data_root, &name, &rendered_rel, measured, &now)?;
-            if let (Some(m), Some(keep)) = (storage.as_ref(), retained.as_mut()) {
-                keep.insert(m.doc.markdown_uuid.clone());
-            }
+        // A full render in which every processor read its store walked
+        // everything, so whatever it did not produce is gone. A processor
+        // that read nothing (no raw store on disk, nothing committed) says
+        // nothing about what should exist, and nothing is swept.
+        let full_walk =
+            render_everything && !consumed.is_empty() && consumed.iter().all(Option::is_some);
+        let sweep = retained.is_some() || full_walk;
+        let mut keep = retained.unwrap_or_default();
+        keep.extend(emitted);
 
-            // The retain sweep, after every processor has had its say and
-            // only on a run that got through them all: a render that failed
-            // partway named a fraction of what it holds, and sweeping on
-            // that would delete the rest. `?` above already returned.
-            if let Some(keep) = retained {
-                for uuid in store.all_document_uuids()? {
-                    if keep.contains(&uuid) {
-                        continue;
-                    }
-                    store
-                        .remove_document(&data_root, &uuid)
-                        .with_context(|| format!("remove document {uuid}"))?;
-                    removed_in.fetch_add(1, Ordering::SeqCst);
-                    tracing::info!(
-                        document = %uuid,
-                        "render: this source no longer produces this document; dropped it",
-                    );
-                }
-            }
+        // Every source gets a storage report, including the ones that
+        // render no documents of their own — for `fsindex` and `media`
+        // it is the only thing they put in the grid. Planned before the
+        // sweep so its id is in `keep`: the provider's processors know
+        // nothing about it, and the fingerprint skip would then decline
+        // to write it back on any run where no number moved.
+        let storage = crate::introspect::plan(&data_root, &name, &rendered_rel, measured, &now)?;
+        if let Some(m) = storage.as_ref() {
+            keep.insert(m.doc.markdown_uuid.clone());
+        }
 
-            // Written after the sweep, so a report the sweep could not
-            // see (this source has none yet) is still created.
-            //
-            // Skipped whole when no number moved: the report would be
-            // byte-identical, and appending a sample saying "still the
-            // same" would grow the store on a run where nothing
-            // happened.
-            if let Some(m) = storage {
-                if prior.get(&m.doc.markdown_uuid) == Some(&m.doc.source_fingerprint) {
-                    tracing::debug!(
-                        source = %name,
-                        "render: storage unchanged since the last run"
-                    );
-                } else {
-                    m.write_report()
-                        .with_context(|| format!("write the storage report for {}", name))?;
-                    store
-                        .put_document(&data_root, &m.doc)
-                        .with_context(|| format!("store storage report for {}", name))?;
-                    store
-                        .put_measurements(&m.samples)
-                        .with_context(|| format!("append measurements for {}", name))?;
-                    docs_in.fetch_add(1, Ordering::SeqCst);
-                }
-            }
+        // The sweep runs only on a run that got through every processor
+        // — a render that failed partway named a fraction of what it
+        // holds, and `?` above already returned.
+        let sealed = seal_run(
+            &store,
+            &data_root,
+            RunEnd {
+                sweep: sweep.then_some(&keep),
+                storage,
+                prior: &prior,
+                cursor: raw_commit.map(|raw_commit| RenderCursorRow {
+                    source_id: name.clone(),
+                    raw_commit,
+                    params: declared_params.to_string(),
+                    rendered_at: now.clone(),
+                }),
+            },
+        )?;
+        docs_in.fetch_add(sealed.stored, Ordering::SeqCst);
+        removed_in.fetch_add(sealed.removed, Ordering::SeqCst);
 
-            // One commit for the whole render. Per-document commits would
-            // put thousands of entries in `dolt_log` per run; committing
-            // once is also what makes `dolt_diff` over this store answer
-            // "what did this render change?".
-            let stored = docs_in.load(Ordering::SeqCst);
-            let dropped = removed_in.load(Ordering::SeqCst);
-            let msg = if dropped == 0 {
-                format!("render {}: {stored} document(s)", name)
-            } else {
-                format!(
-                    "render {}: {stored} document(s), {dropped} removed upstream",
-                    name
-                )
-            };
-            store
-                .commit(&msg)
-                .with_context(|| format!("commit render store for {}", name))?;
-            // The versions the tree now carries, read back from the store
-            // that just wrote them — the post-render check needs them, and
-            // the store is consumed by `close` here. Problem counts come
-            // back the same way, so the step can say what it dropped.
-            let after = store.render_versions()?;
-            let problems = store.problem_counts()?;
-            store.close();
+        // One commit for the whole render. Per-document commits would
+        // put thousands of entries in `dolt_log` per run; committing
+        // once is also what makes `dolt_diff` over this store answer
+        // "what did this render change?".
+        let stored = docs_in.load(Ordering::SeqCst);
+        let dropped = removed_in.load(Ordering::SeqCst);
+        let msg = if dropped == 0 {
+            format!("render {}: {stored} document(s)", name)
+        } else {
+            format!(
+                "render {}: {stored} document(s), {dropped} removed upstream",
+                name
+            )
+        };
+        store
+            .commit(&msg)
+            .with_context(|| format!("commit render store for {}", name))?;
+        // The versions the tree now carries, read back from the store
+        // that just wrote them — the post-render check needs them, and
+        // the store is consumed by `close` here. Problem counts come
+        // back the same way, so the step can say what it dropped.
+        let outcome = RenderOutcome {
+            versions: store.render_versions()?,
+            problems: store.problem_counts()?,
+            head: store.head()?,
             // What the final commit sealed beyond the last checkpoint —
             // the last segment of a consumer's queue.
-            let unsealed = checkpointer.pending();
-            Ok((after, problems, unsealed))
-        },
-    )
+            unsealed: checkpointer.pending(),
+        };
+        store.close();
+        Ok(outcome)
+    })
     .await
     .context("render task panicked")??;
 
-    let (versions_on_disk, problem_counts, rows_in_final_commit) = versions_after;
+    let RenderOutcome {
+        versions: versions_on_disk,
+        problems: problem_counts,
+        head,
+        unsealed,
+    } = versions_after;
     let docs = docs.load(Ordering::SeqCst);
     let removed = removed.load(Ordering::SeqCst);
     tracing::info!(docs, removed, "render: docs (re)rendered");
@@ -334,46 +351,153 @@ pub async fn run(
     // backups (`restic --exclude-caches` etc.) may skip it. No-op until
     // the first render materializes the dir.
     datalib_core::layout::mark_derived_cache(&rendered_root);
-    match rendered_tree_version(&rendered_root) {
-        Some(version) => Ok(vec![OutputClaim {
+    // The store's HEAD is the tree's content version: doltlite advances
+    // it only when a commit changed something, so a run that rewrote
+    // nothing reports the same string. Without doltlite there is nothing
+    // content-derived to vouch for, and the runner hashes the tree.
+    Ok(head
+        .map(|h| OutputClaim {
             path: out_rel,
-            version,
-            rows: Some(rows_in_final_commit),
-        }]),
-        // No cursor: a provider that hasn't been ported to the
-        // dolt-diff render path, so we have nothing content-derived to
-        // vouch for. The runner hashes the tree instead.
-        None => Ok(vec![]),
+            version: format!("store:{h}"),
+            rows: Some(unsealed),
+        })
+        .into_iter()
+        .collect())
+}
+
+struct RenderOutcome {
+    versions: BTreeSet<u32>,
+    problems: HashMap<String, i64>,
+    head: Option<String>,
+    unsealed: u64,
+}
+
+/// What closes a run: the sweep (`Some(keep)` deletes every document not
+/// in it), the storage report, and the cursor to record.
+struct RunEnd<'a> {
+    sweep: Option<&'a BTreeSet<String>>,
+    storage: Option<crate::introspect::Measured>,
+    prior: &'a HashMap<String, String>,
+    cursor: Option<RenderCursorRow>,
+}
+
+struct Sealed {
+    stored: usize,
+    removed: usize,
+}
+
+/// The sweep, the storage report and the cursor land as one transaction,
+/// so the cursor can never claim a range the store's rows do not reflect.
+fn seal_run(store: &IndexedMarkdownStore, data_root: &Path, end: RunEnd<'_>) -> Result<Sealed> {
+    store.transaction(|| {
+        let mut sealed = Sealed {
+            stored: 0,
+            removed: 0,
+        };
+        if let Some(keep) = end.sweep {
+            for uuid in store.all_document_uuids()? {
+                if keep.contains(&uuid) {
+                    continue;
+                }
+                store
+                    .remove_document(data_root, &uuid)
+                    .with_context(|| format!("remove document {uuid}"))?;
+                sealed.removed += 1;
+                tracing::info!(
+                    document = %uuid,
+                    "render: this source no longer produces this document; dropped it",
+                );
+            }
+        }
+        // The report is skipped whole when no number moved: it would be
+        // byte-identical, and appending a sample saying "still the same"
+        // would grow the store on a run where nothing happened.
+        if let Some(m) = end.storage {
+            if end.prior.get(&m.doc.markdown_uuid) == Some(&m.doc.source_fingerprint) {
+                tracing::debug!("render: storage unchanged since the last run");
+            } else {
+                m.write_report().context("write the storage report")?;
+                store
+                    .put_document(data_root, &m.doc)
+                    .context("store storage report")?;
+                store
+                    .put_measurements(&m.samples)
+                    .context("append measurements")?;
+                sealed.stored += 1;
+            }
+        }
+        if let Some(cursor) = &end.cursor {
+            store.write_cursor(cursor)?;
+        }
+        Ok(sealed)
+    })
+}
+
+/// Whether this run diffs from the stored cursor or renders every bucket.
+#[derive(Debug, PartialEq, Eq)]
+enum RenderPlan {
+    /// Diff from this raw-store commit — or from nothing, when there is
+    /// no cursor yet: the provider then reads its whole store and the
+    /// fingerprints decide what to write, which is also the steady state
+    /// of a renderer that never records a cursor.
+    FromCursor(Option<String>),
+    /// Render everything, for the reason given, ignoring the
+    /// fingerprints. The stored cursor is kept: the sweep at the end of
+    /// the run is what removes documents the new version or params no
+    /// longer produce, and the range is still the one `grid_index` diffs
+    /// the store over.
+    Everything(&'static str),
+}
+
+impl RenderPlan {
+    fn decide(
+        stored: Option<&RenderCursorRow>,
+        declared_params: &serde_json::Value,
+        version_changed: bool,
+    ) -> RenderPlan {
+        if version_changed {
+            return RenderPlan::Everything("renderer version changed");
+        }
+        let Some(stored) = stored else {
+            return RenderPlan::FromCursor(None);
+        };
+        let stored_params: serde_json::Value =
+            serde_json::from_str(&stored.params).unwrap_or(serde_json::Value::Null);
+        if &stored_params != declared_params {
+            return RenderPlan::Everything("render params changed");
+        }
+        RenderPlan::FromCursor(Some(stored.raw_commit.clone()))
     }
 }
 
-fn rendered_tree_version(rendered_root: &Path) -> Option<String> {
-    let path = rendered_root.join("_render_cursor.json");
-    let cursor = match datalib_etl::render_cursor::read(&path) {
-        Ok(c) => c?,
-        // The cursor is written without an atomic rename, so a crash
-        // mid-write leaves truncated JSON. Falling back to the hash is
-        // correct, but doing it silently looks identical to "provider
-        // not ported yet" and would stay that way forever.
-        Err(e) => {
+/// Every processor's params under its id, so one source's cursor carries
+/// all of them and a change to any one re-renders the source.
+fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
+    processors
+        .iter()
+        .map(|p| (p.id().to_string(), p.render_params()))
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into()
+}
+
+/// The one raw commit this run rendered from. Every processor of a source
+/// reads the same store, so they agree unless a writer committed between
+/// their pins; then the earliest report wins, since a cursor past what any
+/// processor rendered would skip a range.
+fn one_consumed_commit(source: &str, consumed: &[Option<String>]) -> Option<String> {
+    let mut reported = consumed.iter().flatten();
+    let first = reported.next().cloned()?;
+    for other in reported {
+        if *other != first {
             tracing::warn!(
-                path = %path.display(),
-                error = %format!("{e:#}"),
-                "render: unreadable render cursor; reporting no version,                  so the runner will content-hash the tree"
+                source,
+                first,
+                other,
+                "render: processors pinned different raw commits; the cursor takes the first"
             );
-            return None;
         }
-    };
-    let params = cursor
-        .params
-        .as_ref()
-        .map(|p| p.to_string())
-        .unwrap_or_default();
-    Some(format!(
-        "raw:{} params:{}",
-        cursor.last_rendered_hash,
-        blake3::hash(params.as_bytes()).to_hex()
-    ))
+    }
+    Some(first)
 }
 
 fn tree_is_from_an_older_renderer(
@@ -390,17 +514,9 @@ fn tree_is_from_an_older_renderer(
         ?on_disk,
         ?current,
         "render: rendered tree came from a different renderer version; \
-         removing it and re-rendering from the raw store"
+         rendering every document again and sweeping what the walk does not produce"
     );
     true
-}
-
-fn discard_tree(rendered_root: &Path) -> Result<()> {
-    if !rendered_root.exists() {
-        return Ok(());
-    }
-    std::fs::remove_dir_all(rendered_root)
-        .with_context(|| format!("remove stale rendered tree {}", rendered_root.display()))
 }
 
 fn every_stored_version_must_be_declared(
@@ -431,10 +547,10 @@ fn every_stored_version_must_be_declared(
         anyhow::bail!(
             concat!(
                 "source `{source}`: documents under {root} carry render_version {undeclared:?}, ",
-                "which none of its processors declare (declared: {declared:?}). A processor ",
-                "that reports one version and writes another marks every tree stale — ",
-                "including the one it just wrote — and re-renders this source from scratch on ",
-                "every run."
+                "which none of its processors declare (declared: {declared:?}). Either a ",
+                "processor reports one version and writes another — which would re-render this ",
+                "source in full on every run — or the source's raw store could not be read on ",
+                "the run that was meant to replace the older documents, so they are still here."
             ),
             source = source,
             root = rendered_root.display(),
@@ -454,66 +570,174 @@ fn declared_render_versions(processors: &[Box<dyn RenderProcessor>]) -> Option<B
 }
 
 #[cfg(test)]
-mod tests {
+mod plan_tests {
+    use super::*;
+    use serde_json::json;
 
-    /// The reported version must be stable for an unchanged tree and
-    /// move when either half of what determines the tree moves. Both
-    /// failure modes are silent: a version that drifts re-indexes
-    /// forever, one that sticks skips real work.
+    fn cursor(raw_commit: &str, params: serde_json::Value) -> RenderCursorRow {
+        RenderCursorRow {
+            source_id: "src".into(),
+            raw_commit: raw_commit.into(),
+            params: params.to_string(),
+            rendered_at: "2026-01-01T00:00:00+00:00".into(),
+        }
+    }
+
+    /// The steady state: the same params as last time diff from the
+    /// stored commit, and the fingerprints stay in force.
     #[test]
-    fn rendered_tree_version_is_stable_and_moves_with_source_or_params() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("slack/render_markdown");
-        let cursor = root.join("_render_cursor.json");
-        let params = |p: &str| serde_json::json!({ "period": p });
-
-        datalib_etl::render_cursor::write(&cursor, "commit-a", &params("month")).unwrap();
-        let v1 = rendered_tree_version(&root).expect("cursor present");
-        // A second render that found nothing new rewrites the same
-        // cursor; the version must not budge.
-        datalib_etl::render_cursor::write(&cursor, "commit-a", &params("month")).unwrap();
-        assert_eq!(rendered_tree_version(&root).as_deref(), Some(v1.as_str()));
-
-        // New upstream data.
-        datalib_etl::render_cursor::write(&cursor, "commit-b", &params("month")).unwrap();
-        let v2 = rendered_tree_version(&root).unwrap();
-        assert_ne!(v1, v2, "a new source commit must move the version");
-
-        // Same data, different render knob: the tree differs, so the
-        // version must too, or the index keeps the old rendering.
-        datalib_etl::render_cursor::write(&cursor, "commit-b", &params("week")).unwrap();
-        assert_ne!(
-            rendered_tree_version(&root).unwrap(),
-            v2,
-            "a render param change must move the version"
+    fn unchanged_params_diff_from_the_stored_commit() {
+        let stored = cursor("commit-a", json!({"p": {"period": "month"}}));
+        assert_eq!(
+            RenderPlan::decide(Some(&stored), &json!({"p": {"period": "month"}}), false),
+            RenderPlan::FromCursor(Some("commit-a".into()))
         );
     }
 
-    /// No cursor (a provider not on the dolt-diff render path) means no
-    /// version, and the runner content-hashes instead.
+    /// A param change re-renders everything and does not forget where
+    /// it was — "render every bucket" and "lose the range" are different
+    /// requests, and only the first is wanted here.
     #[test]
-    fn rendered_tree_version_is_none_without_a_cursor() {
-        let td = tempfile::tempdir().unwrap();
-        assert!(rendered_tree_version(&td.path().join("nope")).is_none());
+    fn a_param_change_renders_everything() {
+        let stored = cursor("commit-a", json!({"p": {"period": "month"}}));
+        assert_eq!(
+            RenderPlan::decide(Some(&stored), &json!({"p": {"period": "day"}}), false),
+            RenderPlan::Everything("render params changed")
+        );
     }
 
-    /// A truncated cursor — the file is written without an atomic
-    /// rename — must not be mistaken for "no cursor" silently.
+    /// A renderer version bump is the same request, and it wins over a
+    /// usable cursor.
     #[test]
-    fn rendered_tree_version_is_none_for_an_unreadable_cursor() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("slack/render_markdown");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("_render_cursor.json"), "{ truncated").unwrap();
-        assert!(rendered_tree_version(&root).is_none());
+    fn a_version_bump_renders_everything() {
+        let stored = cursor("commit-a", json!({}));
+        assert_eq!(
+            RenderPlan::decide(Some(&stored), &json!({}), true),
+            RenderPlan::Everything("renderer version changed")
+        );
     }
-    use super::*;
+
+    /// No cursor is not "render everything": a renderer that never
+    /// records one — the whole-store kind — would otherwise lose its
+    /// fingerprint skip on every run and rewrite every document.
+    #[test]
+    fn no_cursor_keeps_the_fingerprints() {
+        assert_eq!(
+            RenderPlan::decide(None, &json!({}), false),
+            RenderPlan::FromCursor(None)
+        );
+    }
+
+    fn write_doc(root: &Path, uuid: &str) {
+        let store = IndexedMarkdownStore::open(root).unwrap();
+        let row = datalib_schema::grid_rows::GridRow::builder()
+            .uuid(uuid)
+            .provider(datalib_schema::providers::Provider::Test)
+            .kind("Test")
+            .source_label("Test")
+            .conversation_uuid(uuid)
+            .entire_chat(format!("/chat/{uuid}"))
+            .text("body")
+            .markdown_uuid(Some(uuid.to_string()))
+            .build()
+            .unwrap();
+        store
+            .put_document(
+                root,
+                &RenderedMarkdown {
+                    markdown_uuid: uuid.to_string(),
+                    source_id: "src".into(),
+                    source_fingerprint: format!("fp-{uuid}"),
+                    upstream_cursor: None,
+                    md_path: root.join(uuid).join("all.md"),
+                    render_version: 5,
+                    rows: vec![row],
+                    edges: Vec::new(),
+                    problems: Vec::new(),
+                },
+            )
+            .unwrap();
+        store.close();
+    }
+
+    /// A full render sweeps what the walk did not produce and records
+    /// the cursor with it: the store afterwards holds exactly the
+    /// emitted set, and the cursor names the commit the walk consumed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_full_walk_sweeps_what_it_did_not_produce_and_records_the_cursor() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("src/render_markdown");
+        write_doc(&root, "kept");
+        write_doc(&root, "stale");
+
+        let store = IndexedMarkdownStore::open(&root).unwrap();
+        let keep: BTreeSet<String> = ["kept".to_string()].into_iter().collect();
+        let sealed = seal_run(
+            &store,
+            td.path(),
+            RunEnd {
+                sweep: Some(&keep),
+                storage: None,
+                prior: &HashMap::new(),
+                cursor: Some(cursor("raw-head", json!({}))),
+            },
+        )
+        .unwrap();
+        assert_eq!(sealed.removed, 1);
+        assert_eq!(
+            store.all_document_uuids().unwrap(),
+            vec!["kept".to_string()]
+        );
+        assert_eq!(
+            store.cursor().unwrap().map(|c| c.raw_commit).as_deref(),
+            Some("raw-head")
+        );
+        store.close();
+    }
+
+    /// No sweep: an incremental run, or a full render in which a
+    /// processor read no store, leaves every document alone.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_without_a_sweep_deletes_nothing() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("src/render_markdown");
+        write_doc(&root, "a");
+        write_doc(&root, "b");
+
+        let store = IndexedMarkdownStore::open(&root).unwrap();
+        let sealed = seal_run(
+            &store,
+            td.path(),
+            RunEnd {
+                sweep: None,
+                storage: None,
+                prior: &HashMap::new(),
+                cursor: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(sealed.removed, 0);
+        assert_eq!(store.all_document_uuids().unwrap().len(), 2);
+        assert!(store.cursor().unwrap().is_none());
+        store.close();
+    }
+
+    #[test]
+    fn the_cursor_takes_the_first_reported_commit() {
+        assert_eq!(one_consumed_commit("src", &[]), None);
+        assert_eq!(one_consumed_commit("src", &[None]), None);
+        assert_eq!(
+            one_consumed_commit("src", &[None, Some("a".into()), Some("b".into())]),
+            Some("a".into())
+        );
+    }
 }
 
 #[cfg(test)]
 mod stale_tree_tests {
     //! A rendered tree written by a different renderer version is
-    //! replaced, not updated.
+    //! rendered again in full, and every stored version has to be one a
+    //! processor declares.
 
     use std::collections::BTreeSet;
     use std::path::Path;
@@ -525,7 +749,7 @@ mod stale_tree_tests {
     use datalib_schema::grid_rows::GridRow;
 
     use super::{
-        declared_render_versions, discard_tree, every_stored_version_must_be_declared,
+        declared_render_versions, every_stored_version_must_be_declared,
         tree_is_from_an_older_renderer,
     };
     use datalib_schema::providers::Provider;
@@ -580,10 +804,12 @@ mod stale_tree_tests {
         vs.iter().copied().collect()
     }
 
-    /// A tree at an older version is deleted, and the render that
-    /// follows has no fingerprints left to skip against.
+    /// A tree at an older version is rendered again in full. The store
+    /// itself is kept — its history is what `grid_index` diffs over, so
+    /// a re-keyed document reaches the index as a deletion plus an
+    /// addition rather than as an old row nobody removes.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_tree_from_an_older_renderer_is_discarded() {
+    async fn a_tree_from_an_older_renderer_is_rendered_again_in_place() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().join("claude_web/render_markdown");
         write_doc(&root, "old-uuid", 4);
@@ -594,13 +820,7 @@ mod stale_tree_tests {
             &on_disk,
             Some(&versions(&[5]))
         ));
-        discard_tree(&root).unwrap();
-
-        assert!(
-            !root.exists(),
-            "the tree is replaced, not merged: leaving the old directory \
-             behind is what puts every document in the index twice"
-        );
+        assert!(root.exists(), "the store is kept, not discarded");
     }
 
     /// A tree at the current version is left alone. Without this, every

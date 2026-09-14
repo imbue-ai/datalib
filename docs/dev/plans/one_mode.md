@@ -1,7 +1,14 @@
 # One mode: how every step writes its store
 
-**Status: agreed design (2026-09-14), nothing built.** This is the
-design that [`render_inputs.md`](render_inputs.md) and the
+**Status: agreed design (2026-09-14); the render side is built, the
+ingest side is not.** Of §"What changes in the tree", items 1, 3, 5,
+6 and the render half of 8 landed on 2026-09-14 — the crash test, the
+render store's transactions and in-store cursor, the index's cold-path
+prune, the slack applet on `open_reader`. Items 2 and 4 (the mirror
+measurement, wipe-at-end for ingest, `Policy::Never`,
+`always_clear_before_ingest`, `--start-over`) and 7 (`render_inputs`)
+are still to do; each item below says which. This is the design that
+[`render_inputs.md`](render_inputs.md) and the
 [deletion-record audit](deletion_record_audit_2026_09_11.md) turned out
 to be reaching for. Read this first; those two are now the mechanism
 for one of its rules and the measurement that motivated it.
@@ -226,13 +233,13 @@ emitted. Its "asked-but-undeclared bucket is an error" rule stands.
 In dependency order. Each item is a PR; the first two are prerequisites
 and small.
 
-1. **Verify the load-bearing assumption.** A test that opens a raw
-   store, begins a transaction, inserts, and is `kill -9`ed before
+1. **Verify the load-bearing assumption.** *Built.* A test that opens a
+   raw store, begins a transaction, inserts, and is `kill -9`ed before
    `COMMIT` — then reopens and asserts the rows are not in the working
    set (and that `rescue_dirty_working_tree` finds nothing to seal).
-   `doltlite_two_process_test` measures overlap, not crash. If this
-   fails, the whole model needs a different atomicity boundary, so it
-   goes first.
+   `doltlite_two_process_test` measures overlap, not crash. It passed
+   (`a_transaction_a_killed_writer_never_committed_leaves_no_rows_behind`,
+   with its twin for the SQL-committed half); the model stands.
 2. **Measure upsert-into-existing for the mirror engine.** Against the
    lightroom fixture: `INSERT … SELECT … ON CONFLICT DO UPDATE` into an
    existing table plus `DELETE WHERE pk NOT IN (SELECT pk FROM src)`,
@@ -244,14 +251,24 @@ and small.
    transaction, which needs a check that doltlite handles `ALTER TABLE
    … RENAME` with its history intact. Keyless tables cannot upsert and
    are already undiffable: refuse them at DDL time.
-3. **Render: documents in transactions, cursor in the store.** Wrap
-   `apply_markdown` (and the per-document sweep in `put_document`) in
-   `begin_transaction`/`commit_transaction`; add a `render_cursor`
-   table (one row: `from_commit`, `params`) written in the final
-   commit; delete `render_cursor.rs` and every provider's read/write
-   of it; delete `discard_tree` and `tree_is_from_an_older_renderer`'s
-   removal branch — the version check becomes "re-render everything".
-   Closes 1.1–1.4.
+3. **Render: documents in transactions, cursor in the store.** *Built.*
+   the documents between two checkpoints share one SQL transaction
+   (`begin_batch`/`commit_batch`, closed right before each
+   `dolt_commit`), each written whole inside it — `put_document` and
+   `remove_document` join the open batch, or run as a transaction of
+   their own outside one, so the driver's end of run — sweep, storage
+   report, cursor — is one more;
+   the `render_cursor` table (one row: `raw_commit`, `params`) is
+   written there by the driver; `render_cursor.rs` and every
+   provider's read/write of the file are gone — a provider reads
+   `RenderCtx::raw_cursor`, declares its knobs through
+   `RenderProcessor::render_params`, and reports the commit it pinned
+   through `RenderCtx::consumed`; `discard_tree` is gone, and a
+   version or param change is "render everything, fingerprints off,
+   sweep what the walk did not produce" — the sweep runs only when
+   every processor reported a consumed commit, since one that read no
+   store said nothing about what should exist. The step reports the
+   store's HEAD as its output version. Closes 1.1–1.4.
 4. **Ingest: wipe at the end.** `reset_and_redownload` stops
    truncating; it clears bookkeeping and scope state, and the run
    prunes at the end. Mirrors move to upsert+prune per table (from 2).
@@ -261,24 +278,25 @@ and small.
    deleted from `SourceCommon`, the config examples and the wizard.
    Add `--start-over` as the one truncating operation, committing its
    truncate before it fetches. Closes 2.1, 2.2, 2.3, 2.5.
-5. **Consumers propagate.** `build_grid_index`'s cold path (no cursor,
-   or unresolvable) reads the store whole *and* prunes index rows for
-   documents the store no longer has — an empty committed store is an
-   honest "nothing". `scan_buckets`'s unresolvable-cursor log goes to
-   `warn`. Render's cold start, once `render_inputs` lands, prunes
-   undeclared buckets. Closes 1.6 and the "cold start deletes nothing"
-   gap.
+5. **Consumers propagate.** *Built, except the last sentence.*
+   `build_grid_index`'s cold path (no cursor, or unresolvable) reads
+   the store whole *and* prunes index rows for documents the store no
+   longer has — an empty committed store is an honest "nothing".
+   `scan_buckets`'s unresolvable-cursor log goes to `warn`. Render's
+   cold start, once `render_inputs` lands, prunes undeclared buckets.
+   Closes 1.6 and the "cold start deletes nothing" gap.
 6. **The slack applet reads through `open_reader`**, and `lint_repo.py`
-   check 5 walks `applets/` and `http/` as well as `_render` crates.
-   Closes 2.4.
+   check 5 walks `applets/` and `http/` as well as `_render` crates,
+   and matches `open_derived` too. *Built.* Closes 2.4.
 7. **`render_inputs`**, per its own doc, now as the render-side
    implementation of rule 2 rather than a standalone proposal.
-8. **Prose.** Rewrite `provider_migration_dolt_diff_and_cas_edge.md`
-   §"Edge cases" and the streaming plan's §"Producer side" (the
-   `Never` paragraphs, the "disabled for the whole run" claim, the
-   whatsapp row). The sink contract keeps P1 and says P2 is automatic
-   for doltlite sinks. AGENTS.md's one-paragraph pipeline description
-   gains one sentence: every commit is readable.
+8. **Prose.** The render half is done: the migration recipe's cursor
+   section and §"Edge cases", `parse_and_render.md` §5, and AGENTS.md's
+   pipeline paragraph (which says which side is readable at every
+   commit and which is not yet). Still to do with item 4: the
+   streaming plan's §"Producer side" (the `Never` paragraphs, the
+   "disabled for the whole run" claim, the whatsapp row), and the sink
+   contract saying P2 is automatic for doltlite sinks.
 
 ## Open questions
 
