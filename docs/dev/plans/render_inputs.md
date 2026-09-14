@@ -1,9 +1,8 @@
 # Render inputs: record what each document was rendered from
 
-**Status: proposal (2026-09-11); the store, the driver's half and the
-six diff-scanning chat providers are built (2026-09-14); the four
-whole-store chat providers, contacts and the non-chat providers are
-not.** Built, of §"Order of work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
+**Status: proposal (2026-09-11); the store, the driver's half and all
+ten chat providers are built (2026-09-14); contacts and the non-chat
+providers are not.** Built, of §"Order of work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
 render store with `markdowns.bucket_key`, `RenderedMarkdown.bucket_key`,
 `RenderCtx::declare_bucket(bucket_key, inputs)`; the driver's scan —
 `render::reverse_lookup` diffs every table `render_inputs` mentions
@@ -34,11 +33,20 @@ mailbox tree decides which threads render at all. The harness checks
 the narrowing one row at a time (see step 3), which is how "a `users`
 change names exactly the threads that user is in" is now a test rather
 than a claim: on the fixture one slack channel edit renders its four
-threads, one message its thread, one unreferenced user nothing. Next:
-the whole-store chat providers (beeper, google_takeout, linkedin,
-sms_backup_restore — step 4's other half, whose `retain_documents`
-walk is what declarations replace), then contacts (step 7), then the
-non-chat providers.
+threads, one message its thread, one unreferenced user nothing. The
+other four chat providers followed the same day: sms_backup_restore
+was already diff-scanned; beeper, google_takeout and linkedin walked
+their whole store and handed the set to `retain_documents`, and now
+each declares, narrows to the driver's stale set joined with a forward
+scan — SQL over the primary tables where the bucket key is a column
+(beeper's rooms, takeout's spaces and conversations), and the diff's
+changed ids mapped through the rows already loaded where it lives
+inside the payload (linkedin, whose conversation id, profile URL and
+post link are all payload fields; `inputs::changed_rows`) — and no
+longer retains. A document that comes back at another path now loses
+the file at its old one (`put_document`), which a re-keyed beeper
+network was leaving behind. Next: contacts (step 7), then the non-chat
+providers.
 
 **Read [`one_mode.md`](one_mode.md) first (2026-09-14).** This document
 is now the render-side mechanism for that design's rule 2 ("prune at
@@ -538,9 +546,9 @@ inputs, not the store.
    commit its declarations became complete. chat-common itself has no
    parse helpers — that was this step's wrong guess; the reads happen
    in each provider's parse and normalize, and that is where the
-   declaring is. Left: beeper, google_takeout, linkedin,
-   sms_backup_restore, which walk their whole store and hand the set to
-   `retain_documents`.
+   declaring is. The other four (beeper, google_takeout, linkedin,
+   sms_backup_restore) followed in the next PR, so every chat provider
+   is on it.
 5. **The driver-side scan and sweep**, switching one provider at a time
    off `remove_conversation` / `retain_documents`. Done for the six
    above; the migration recipe's "same commit" rule applies in reverse:

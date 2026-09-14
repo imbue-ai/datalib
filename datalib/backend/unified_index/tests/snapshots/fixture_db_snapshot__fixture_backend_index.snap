@@ -29,7 +29,7 @@ expression: snapshot
       "updated_at": "2364-04-13T08:45:00-07:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "14207f4b-af38-5ee1-8d55-6fd426d572f2",
       "created_at": "2370-08-22T00:00:00Z",
       "kind": "chat",
       "markdown_uuid": "14207f4b-af38-5ee1-8d55-6fd426d572f2",
@@ -41,7 +41,7 @@ expression: snapshot
       "updated_at": "2370-08-22T00:00:00Z"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "1544ef1c-ce85-59cd-a01f-235133651a2c",
       "created_at": "2370-09-04T00:00:00Z",
       "kind": "chat",
       "markdown_uuid": "1544ef1c-ce85-59cd-a01f-235133651a2c",
@@ -125,7 +125,7 @@ expression: snapshot
       "updated_at": "2369-04-15T09:03:00+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
       "created_at": "2370-02-11T00:00:00Z",
       "kind": "chat",
       "markdown_uuid": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
@@ -521,7 +521,7 @@ expression: snapshot
       "updated_at": "2364-04-11T00:16:00+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "861a616f-cf0e-550e-b7bc-28efd43b7867",
       "created_at": "2369-04-10T00:00:00+00:00",
       "kind": "chat",
       "markdown_uuid": "861a616f-cf0e-550e-b7bc-28efd43b7867",
@@ -677,7 +677,7 @@ expression: snapshot
       "updated_at": "2026-01-06T08:00:00+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "b55690ec-c377-56ca-bf0a-e51a006a1071",
       "created_at": "2369-04-09T00:00:00+00:00",
       "kind": "chat",
       "markdown_uuid": "b55690ec-c377-56ca-bf0a-e51a006a1071",
@@ -701,7 +701,7 @@ expression: snapshot
       "updated_at": "2364-03-02T11:30:00+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "c27813c9-e0d8-551d-87fe-33ed24b93bb6",
       "created_at": "2370-04-15T00:00:00Z",
       "kind": "chat",
       "markdown_uuid": "c27813c9-e0d8-551d-87fe-33ed24b93bb6",
@@ -809,7 +809,7 @@ expression: snapshot
       "updated_at": "2369-05-28T15:18:20+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "dfabaa93-8b49-5738-bfc5-f2671bace58a",
       "created_at": "2369-04-08T00:00:00+00:00",
       "kind": "chat",
       "markdown_uuid": "dfabaa93-8b49-5738-bfc5-f2671bace58a",
