@@ -10,6 +10,7 @@
 // no reload. `watch.rs` reports the write as `config_changed`; `App.vue`
 // re-checks on it.
 import { test, expect, type Page } from "@playwright/test";
+import { rowMenuEntry } from "./grid-helpers";
 import { readFileSync, writeFileSync } from "node:fs";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -107,11 +108,14 @@ test("a step naming a group the config lacks says so on its Edit button", async 
 
   await page.goto("/sources2");
   await expect(gate(page)).toHaveCount(0);
-  const edit = page
-    .locator('.ag-row[row-id="ghost/ingest"]')
-    .getByRole("button", { name: "Edit settings" });
-  await expect(edit).toBeDisabled();
-  await expect(edit).toHaveAttribute("title", /names a group the config doesn't declare/);
+  const edit = await rowMenuEntry(
+    page,
+    page.locator('.ag-row[row-id="ghost/ingest"]'),
+    "Edit settings…",
+  ).open();
+  await expect(edit).toHaveClass(/ag-menu-option-disabled/);
+  await edit.hover();
+  await expect(page.getByText(/names a group the config doesn't declare/)).toBeVisible();
 });
 
 test("a file that is not a config blocks the app, and unblocks it live", async ({

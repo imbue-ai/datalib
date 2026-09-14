@@ -9,6 +9,7 @@ const STAGED_BINARIES: &[&str] = &[
     "binaries/datalib-http",
     "binaries/datalib-dag",
     "binaries/datalib-step",
+    "binaries/datalib-applet",
     "binaries/datalib-migrate-config",
     "binaries/latchkey-curl-dispatch",
     "binaries/latchkey-curl-impersonate",

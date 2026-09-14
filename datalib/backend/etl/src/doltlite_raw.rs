@@ -719,6 +719,24 @@ pub async fn commit_run_at_path(out_dir: &Path, msg: &str) -> Result<Option<Stri
     Ok(hash)
 }
 
+/// The run a step belongs to, from the runner's environment
+/// (`docs/dev/step_protocol.md`), or `None` outside a run.
+pub const RUN_ID_ENV: &str = "DATALIB_DAG_RUN_ID";
+
+/// A commit message with the run stamped on its end — `… run=<id>` —
+/// so the commit can be joined back to the run's log. The history
+/// reader parses exactly this suffix.
+pub fn stamp_run(msg: &str) -> String {
+    stamp_run_with(msg, std::env::var(RUN_ID_ENV).ok().as_deref())
+}
+
+fn stamp_run_with(msg: &str, run_id: Option<&str>) -> String {
+    match run_id {
+        Some(id) if !id.trim().is_empty() => format!("{msg} run={}", id.trim()),
+        _ => msg.to_string(),
+    }
+}
+
 pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> {
     if !has_dolt_extensions(pool).await {
         return Ok(None);
@@ -726,7 +744,7 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
     // "nothing to commit" is a legitimate outcome: the rescue commit in
     // `open` may already have swept everything up.
     match sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
-        .bind(msg)
+        .bind(stamp_run(msg))
         .fetch_optional(pool)
         .await
     {
@@ -1400,6 +1418,19 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    /// The stamp is what `datalib_history` parses back out, so its
+    /// shape is a contract: one trailing ` run=<id>`, and nothing when
+    /// there is no run.
+    #[test]
+    fn commit_messages_carry_the_run_id_as_a_trailing_stamp() {
+        assert_eq!(
+            stamp_run_with("download slack: msgs=4", Some("0199-abc")),
+            "download slack: msgs=4 run=0199-abc"
+        );
+        assert_eq!(stamp_run_with("seal", Some("  ")), "seal");
+        assert_eq!(stamp_run_with("seal", None), "seal");
+    }
 
     const WIDGETS_DDL: &str = "CREATE TABLE IF NOT EXISTS widgets (
             id TEXT PRIMARY KEY,

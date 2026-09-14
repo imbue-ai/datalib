@@ -1,27 +1,7 @@
 // Manager2: one row per group with its steps under it, and the one
 // dialog that creates and edits them.
-import { test, expect, type Locator, type Page } from "@playwright/test";
-import { expandGroup, groupRow, pipelineRow as row } from "./grid-helpers";
-
-/// Click a row action and wait for what it does, retrying the pair.
-///
-/// A save is followed by the server's `config_changed`, which reloads
-/// the config and force-repaints the actions column. A click whose
-/// mousedown lands on the old button and whose mouseup lands on its
-/// replacement fires no click at all, so a bare `.click()` right after
-/// a save is a race — the same one `actOnRowByUuid` retries around in
-/// grid-helpers. `effect` already visible means an earlier attempt
-/// landed, so nothing is clicked twice.
-async function clickUntil(button: Locator, effect: Locator): Promise<void> {
-  await expect(async () => {
-    if (await effect.isVisible()) return;
-    await button.click({ timeout: 2_000 });
-    await expect(effect).toBeVisible({ timeout: 2_000 });
-  }, `${await button.getAttribute("title").catch(() => "the action")} never took`).toPass({
-    timeout: 15_000,
-    intervals: [250, 500, 1_000],
-  });
-}
+import { test, expect, type Page } from "@playwright/test";
+import { expandGroup, groupRow, pickRowMenu, pipelineRow as row } from "./grid-helpers";
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
@@ -143,7 +123,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // Edit from the group's row: the same one dialog, over the source.
   // Name free, id fixed, and renaming leaves the id alone — the
   // property that keeps the index's paths honest.
-  await clickUntil(group.getByRole("button", { name: "Edit settings" }), wizard(page));
+  await pickRowMenu(page, group, "Edit settings…", wizard(page));
   await expect(nameField(page)).toHaveValue("Personal Claude");
   await expect(idField(page)).toHaveCount(0);
   await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/");
@@ -200,10 +180,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
 
   // A step under a group edits its source: the step row's button opens
   // the same dialog the group row's does, name box and all.
-  await clickUntil(
-    row(page, "fetch-only/ingest").getByRole("button", { name: "Edit settings" }),
-    wizard(page),
-  );
+  await pickRowMenu(page, row(page, "fetch-only/ingest"), "Edit settings…", wizard(page));
   await expect(nameField(page)).toHaveValue("Fetch Only");
   // Rendering reads the config rather than the provider: this source
   // has no render step, so the box is clear and saving writes none.
@@ -232,10 +209,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   await expect(editor).toHaveValue(/inputs = \["no-render\/ingest"\]/);
 
   await expandGroup(page, "no-render");
-  await clickUntil(
-    row(page, "no-render/ingest").getByRole("button", { name: "Edit settings" }),
-    wizard(page),
-  );
+  await pickRowMenu(page, row(page, "no-render/ingest"), "Edit settings…", wizard(page));
   await renderToggle(page).uncheck();
   // Saving takes the step out, so the dialog says so before it does.
   await expect(wizard(page)).toContainText("Rendering is off below");
@@ -319,10 +293,7 @@ test("a hand-written render step under a download-only type is called out, then 
   await expandGroup(page, "photos");
   await expect(row(page, "photos/render_markdown")).toBeVisible();
 
-  await clickUntil(
-    groupRow(page, "photos").getByRole("button", { name: "Edit settings" }),
-    wizard(page),
-  );
+  await pickRowMenu(page, groupRow(page, "photos"), "Edit settings…", wizard(page));
   await expect(wizard(page)).toContainText("Lightroom renders nothing. Saving removes it");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Photos.")).toBeVisible();
@@ -347,8 +318,10 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
     expect(d.message()).toContain("Doomed (render markdown)");
     void d.accept();
   });
-  await clickUntil(
-    row(page, "doomed/ingest").getByRole("button", { name: "Remove from config" }),
+  await pickRowMenu(
+    page,
+    row(page, "doomed/ingest"),
+    /^Remove from config$/,
     page.getByText("Removed Doomed."),
   );
 
@@ -374,10 +347,10 @@ test("deleting the group takes every step under it", async ({ page }) => {
     expect(d.message()).toContain("2 steps");
     void d.accept();
   });
-  await clickUntil(
-    groupRow(page, "whole-group").getByRole("button", {
-      name: "Remove from config, with everything under it",
-    }),
+  await pickRowMenu(
+    page,
+    groupRow(page, "whole-group"),
+    "Remove from config, with everything under it",
     page.getByText("Removed Whole Group."),
   );
 
