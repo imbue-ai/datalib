@@ -112,6 +112,10 @@ impl WriteLock {
         Ok(())
     }
 
+    pub async fn in_transaction(&self) -> bool {
+        self.inner.lock().await.tx_conn.is_some()
+    }
+
     pub async fn commit_transaction(&self) -> Result<()> {
         let mut inner = self.inner.lock().await;
         let mut conn = inner
@@ -598,9 +602,11 @@ pub async fn build_grid_index(
     // An error rolls back, leaving the index exactly as it was.
     let write_lock = WriteLock::new(pool.clone());
     // One dir per source plus the reserved `system/`; the directory name IS
-    // the source's id. Cursors load before the write transaction
-    // opens, because the index pool is one connection wide.
+    // the source's id. Cursors and the per-source document lists load
+    // before the write transaction opens, because the index pool is one
+    // connection wide.
     let cursors = load_source_cursors(pool).await?;
+    let indexed = load_markdown_uuids_by_source(pool).await?;
 
     let mut docs: Vec<(String, RenderedMarkdown)> = Vec::new();
     // `source_id → (new_head, documents_applied)` for the cursors this
@@ -671,13 +677,29 @@ pub async fn build_grid_index(
             let found = store
                 .documents_matching(out_dir, scan.changed_buckets.as_ref(), &pin)
                 .with_context(|| format!("read documents from {stanza}"))?;
-            // An id the diff named that the store no longer has is a deletion.
-            // Only a diff can produce this.
-            if let Some(changed) = &scan.changed_buckets {
-                let present: HashSet<&str> =
-                    found.iter().map(|d| d.markdown_uuid.as_str()).collect();
-                for gone in changed.iter().filter(|u| !present.contains(u.as_str())) {
-                    removed.push((stanza.clone(), gone.clone()));
+            let present: HashSet<&str> = found.iter().map(|d| d.markdown_uuid.as_str()).collect();
+            match &scan.changed_buckets {
+                // An id the diff named that the store no longer has is a
+                // deletion.
+                Some(changed) => {
+                    for gone in changed.iter().filter(|u| !present.contains(u.as_str())) {
+                        removed.push((stanza.clone(), gone.clone()));
+                    }
+                }
+                // The store was read whole, so it is the complete answer:
+                // a document the index holds for this source that the
+                // store does not is one the source no longer produces. A
+                // committed store with no rows is an honest "nothing";
+                // the store that could not be read was skipped above.
+                None => {
+                    for gone in indexed
+                        .get(&stanza)
+                        .into_iter()
+                        .flatten()
+                        .filter(|u| !present.contains(u.as_str()))
+                    {
+                        removed.push((stanza.clone(), gone.clone()));
+                    }
                 }
             }
             store.close();
@@ -834,6 +856,22 @@ pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, Stri
         let uuid: String = r.try_get("markdown_uuid")?;
         let fp: String = r.try_get("source_fingerprint")?;
         out.insert(uuid, fp);
+    }
+    Ok(out)
+}
+
+async fn load_markdown_uuids_by_source(
+    pool: &SqlitePool,
+) -> Result<HashMap<String, HashSet<String>>> {
+    let rows = sqlx::query("SELECT source_id, markdown_uuid FROM markdowns")
+        .fetch_all(pool)
+        .await
+        .context("load_markdown_uuids_by_source")?;
+    let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+    for r in rows {
+        out.entry(r.try_get("source_id")?)
+            .or_default()
+            .insert(r.try_get("markdown_uuid")?);
     }
     Ok(out)
 }
@@ -2114,5 +2152,45 @@ mod source_cursor_tests {
             "an unusable cursor must re-read the store, not skip it"
         );
         assert_eq!(index_row_count(&pool).await, 1);
+    }
+
+    /// The cold path deletes too. A store read whole is the complete
+    /// answer for its source, so a document the index still holds that
+    /// the store does not is gone — this used to be the one path that
+    /// could never remove anything, which is how a re-keyed uuid stayed
+    /// in the grid beside its replacement.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_cold_path_prunes_what_the_store_no_longer_holds() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        render(
+            root,
+            "src",
+            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+        );
+        render(root, "other", &[doc(root, "other", "md-3", "c")]);
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(index_row_count(&pool).await, 3);
+
+        unrender(root, "src", "md-2");
+        // Lose the range, so the next pass reads the store whole.
+        sqlx::query("DELETE FROM source_cursors WHERE source_id = 'src'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(s.markdowns_removed, 1, "the dropped document is reported");
+        let mut left: Vec<String> = sqlx::query_scalar("SELECT uuid FROM grid_rows")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        left.sort();
+        assert_eq!(
+            left,
+            vec!["md-1".to_string(), "md-3".to_string()],
+            "src's dropped document is gone and the other source is untouched"
+        );
     }
 }
