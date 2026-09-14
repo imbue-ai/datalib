@@ -433,6 +433,7 @@ fn build_chat(
     // The thread's title `↗` points at the root (first) email's outlink.
     let thread_source_url = items.first().and_then(|i| i.source_url.clone());
     let chat = NormalizedChat {
+        inputs: Vec::new(),
         path_prefix: None,
         id: tuid.clone(),
         chat_uuid: tuid.clone(),

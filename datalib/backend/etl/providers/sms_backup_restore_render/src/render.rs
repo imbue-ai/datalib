@@ -10,7 +10,7 @@ use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+    render_all as cc_render_all, Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
@@ -157,7 +157,10 @@ pub fn render(
         .changed_buckets
         .iter()
         .flatten()
-        .map(|key| uuid5(&format!("chat:{key}")))
+        .map(|key| Bucket {
+            key: uuid5(&format!("chat:{key}")),
+            inputs: Vec::new(),
+        })
         .collect();
     outcome.buckets.extend(s.buckets);
     Ok(outcome)
@@ -178,7 +181,7 @@ pub struct RenderOutcome {
     pub scan_elapsed: Option<std::time::Duration>,
     /// Every conversation rendered, with the documents considered for it
     /// — what the processor declares through `RenderCtx::declare_bucket`.
-    pub buckets: datalib_etl_chat_common::render::Buckets,
+    pub buckets: Buckets,
 }
 
 /// Which conversations moved since `last_render_hash`.
@@ -314,6 +317,7 @@ fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
             .collect();
 
         chats.push(NormalizedChat {
+            inputs: Vec::new(),
             path_prefix: None,
             id: id.clone(),
             chat_uuid: uuid5(&format!("chat:{id}")),

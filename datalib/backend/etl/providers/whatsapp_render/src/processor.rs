@@ -72,7 +72,7 @@ impl RenderProcessor for WhatsappRender {
         )
         .context("whatsapp render_all")?;
         for bucket in &buckets {
-            ctx.declare_bucket(bucket, &[])?;
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
         }
         if let Some(head) = consumed.as_deref() {
             ctx.consumed(head);

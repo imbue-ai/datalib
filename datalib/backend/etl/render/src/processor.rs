@@ -20,6 +20,7 @@ use datalib_etl::progress::Progress;
 
 use crate::grid_index::RenderedMarkdown;
 pub use crate::indexed_markdown::Input;
+use crate::inputs::RawRange;
 
 /// One source's render wave, as a unit the step driver can run.
 #[async_trait]
@@ -199,6 +200,15 @@ impl<'a> RenderCtx<'a> {
     /// says nothing about its documents. Every emitted document carries
     /// its `bucket_key` — that is how the driver knows which are the
     /// bucket's.
+    /// The raw store as this run should read it — see [`RawRange`].
+    pub fn raw_range(&self) -> RawRange<'a> {
+        RawRange {
+            cursor: self.raw_cursor,
+            pin: self.raw_pin,
+            stale: self.stale_buckets,
+        }
+    }
+
     pub fn declare_bucket(&self, bucket_key: &str, inputs: &[Input]) -> Result<()> {
         let mut cb = self.declare.cb.lock().unwrap();
         (cb)(bucket_key, inputs)

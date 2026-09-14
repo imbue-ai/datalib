@@ -57,6 +57,7 @@ pub fn to_chats(
             .collect();
 
         chats.push(NormalizedChat {
+            inputs: Vec::new(),
             path_prefix: None,
             id: bundle_key.clone(),
             chat_uuid: chat_uuid.clone(),

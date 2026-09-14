@@ -10,7 +10,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::{
-    render::{Buckets, RenderProfile, ENTITY_KIND_CONVERSATION},
+    render::{Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION},
     NormalizedChat,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -131,7 +131,10 @@ pub fn render_all(
     // messages all went builds no chat, and chat-common never sees it.
     let mut buckets: Buckets = named
         .iter()
-        .map(|jid| crate::render::whatsapp_chat_uuid(source_id, jid))
+        .map(|jid| Bucket {
+            key: crate::render::whatsapp_chat_uuid(source_id, jid),
+            inputs: Vec::new(),
+        })
         .collect();
     buckets.extend(summary.buckets);
     Ok((new_head, buckets))

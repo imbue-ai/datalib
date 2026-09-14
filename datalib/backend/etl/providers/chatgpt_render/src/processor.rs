@@ -60,7 +60,7 @@ impl RenderProcessor for ChatgptRender {
             ctx.declare_bucket(&crate::render::ids::conversation(conv_id).uuid, &[])?;
         }
         for bucket in &buckets {
-            ctx.declare_bucket(bucket, &[])?;
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);

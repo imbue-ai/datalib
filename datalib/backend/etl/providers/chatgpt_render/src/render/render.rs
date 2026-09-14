@@ -182,6 +182,7 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(&conv_id).uuid;
     NormalizedChat {
+        inputs: Vec::new(),
         path_prefix: None,
         id: chat_uuid.clone(),
         chat_uuid: chat_uuid.clone(),

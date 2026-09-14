@@ -95,6 +95,7 @@ fn aside(uuid: &str, at: i64, body: &str) -> NormalizedChatItem {
 
 fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedChat {
     NormalizedChat {
+        inputs: Vec::new(),
         id: id.to_string(),
         chat_uuid: id.to_string(),
         display: display.to_string(),

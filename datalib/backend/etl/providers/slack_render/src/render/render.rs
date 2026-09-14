@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, UpstreamRef,
@@ -44,7 +44,7 @@ pub struct RenderSummary {
     pub threads_skipped: usize,
     /// Every thread rendered, by uuid — what the processor declares
     /// through `RenderCtx::declare_bucket`.
-    pub buckets: Vec<String>,
+    pub buckets: Buckets,
 }
 
 fn profile() -> RenderProfile {
@@ -169,6 +169,7 @@ fn build_chats(
         let title = format!("{cname}: {}", thread_title(&root.text, labels));
 
         chats.push(NormalizedChat {
+            inputs: Vec::new(),
             path_prefix: None,
             id: thread_uuid.clone(),
             chat_uuid: thread_uuid.clone(),

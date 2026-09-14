@@ -62,7 +62,7 @@ impl RenderProcessor for SlackRender {
             ctx.declare_bucket(thread_uuid, &[])?;
         }
         for bucket in &summary.buckets {
-            ctx.declare_bucket(bucket, &[])?;
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);

@@ -341,6 +341,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
             });
         }
         out.push(NormalizedChat {
+            inputs: Vec::new(),
             path_prefix: None,
             id: ch.chat_jid.clone(),
             chat_uuid,

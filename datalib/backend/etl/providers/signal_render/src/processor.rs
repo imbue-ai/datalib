@@ -74,7 +74,7 @@ impl RenderProcessor for SignalRender {
             ctx.declare_bucket(&crate::render::signal_chat_uuid(&self.name, chat_id), &[])?;
         }
         for bucket in &summary.buckets {
-            ctx.declare_bucket(bucket, &[])?;
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);

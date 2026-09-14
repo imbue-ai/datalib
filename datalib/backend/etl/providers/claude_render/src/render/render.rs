@@ -360,6 +360,7 @@ fn build_chat(
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(&conv_uuid).uuid;
     NormalizedChat {
+        inputs: Vec::new(),
         path_prefix: None,
         id: chat_uuid.clone(),
         chat_uuid: chat_uuid.clone(),
@@ -477,6 +478,7 @@ fn build_project_page(
     items.sort_by_key(|i| i.date_ms);
 
     NormalizedChat {
+        inputs: Vec::new(),
         path_prefix: None,
         id: page_uuid.clone(),
         chat_uuid: page_uuid.clone(),

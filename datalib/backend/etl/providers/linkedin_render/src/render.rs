@@ -161,6 +161,7 @@ fn build_chats(table: &str, payloads: &[Value], account: Option<&str>) -> Vec<No
             .unwrap_or_else(|| participants(&rows));
 
         chats.push(NormalizedChat {
+            inputs: Vec::new(),
             path_prefix: None,
             id: format!("{table}:{conv}"),
             chat_uuid: uuid5(&format!("chat:{table}:{conv}")),
