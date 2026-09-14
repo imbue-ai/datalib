@@ -230,6 +230,17 @@ reference doc it relates to.
 - [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md)
   — the live recipe for porting the remaining providers to CAS blobs +
   incremental render.
+- [`docs/dev/plans/one_mode.md`](docs/dev/plans/one_mode.md) —
+  *agreed design (2026-09-14)*, nothing built: **read before touching
+  how any step commits, truncates, checkpoints, or handles Ctrl-C.**
+  Every step writes its doltlite store the same way — additive first,
+  prune at the end scoped to what it enumerated, cursor in the store in
+  the same commit, commit whenever, consumers propagate deletions — on
+  one rule: every SQL transaction leaves a state a consumer may read,
+  because the working set is in the file and *somebody* will commit
+  it. There is no wiping mode and no `Policy::Never`; a reset is
+  "re-verify" (clear the skip bookkeeping, same run) or "start over"
+  (one truncating commit, published honestly, then a normal run).
 - [`docs/dev/plans/render_inputs.md`](docs/dev/plans/render_inputs.md)
   — *proposal (2026-09-11)*, nothing built: a `render_inputs` table in
   each render store recording which raw rows every bucket was rendered
@@ -239,7 +250,7 @@ reference doc it relates to.
   guard around `retain_documents` — it inventories the five guards that
   exist today and the routes by which a document gets deleted and
   added back, and says which of those it fixes and which (a checkpoint
-  taken mid-wipe) it cannot.
+  taken mid-wipe) it cannot — `one_mode.md` closes that last one.
   [`deletion_record_audit_2026_09_11.md`](docs/dev/plans/deletion_record_audit_2026_09_11.md)
   is that proposal's first two conditions checked against the tree —
   measurement, not intent. Read it before touching `discard_tree`,

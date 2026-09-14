@@ -4,6 +4,14 @@
 file pointers below were checked against the tree on that date; the
 design has not been tried.
 
+**Read [`one_mode.md`](one_mode.md) first (2026-09-14).** This document
+is now the render-side mechanism for that design's rule 2 ("prune at
+the end, scoped to what you enumerated"): the buckets a run declares
+are what it enumerated, and the prune is every document under a
+declared bucket that was not emitted. The one route the table below
+says this proposal cannot fix — a checkpoint taken mid-wipe — is
+closed by that design, because under it there is no mid-wipe.
+
 ## The problem in one paragraph
 
 Incremental render has to answer one question: *given the raw rows that

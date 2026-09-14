@@ -308,6 +308,14 @@ list and `render_inputs.md` condition 3 are where that belongs.
 
 ## What to fix, in order
 
+*Superseded on 2026-09-14 by [`one_mode.md`](one_mode.md) §"What
+changes in the tree", which reorders these under one rule — every SQL
+transaction leaves a readable state, so any commit is safe — rather
+than patching each path. Items 4 and 5 below in particular are
+replaced: the interrupt hook and the rescue are *right* to commit
+once nothing wipes at the start. Kept as the record of what the audit
+found.*
+
 1. **Cursor into the render store, written in the final commit.**
    Closes 1.3 (structurally, where today it is safe by ordering) and
    1.4, and is what 1.1 and 1.2 build on. `grid_index`
