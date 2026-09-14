@@ -1,12 +1,13 @@
-//! AirVisual Pro export → doltlite. Walk the device's data folder, read
-//! every history file whose content changed since the last run, and
-//! upsert its samples. The current month's file grows every few
-//! minutes and is re-read whole each run; the rest cost a `stat`.
+//! AirVisual Pro export → doltlite. For each configured device, walk
+//! its data folder, read every history file whose content changed since
+//! the last run, and upsert its samples. The current month's file grows
+//! every few minutes and is re-read whole each run; the rest cost a
+//! `stat`.
 
 pub mod parse;
 pub mod schema_raw;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
@@ -22,9 +23,11 @@ use datalib_etl::progress::Progress;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 
+use datalib_etl_airvisual_config::AirvisualDevice;
+
 use schema_raw::{
-    full_ddl, AirvisualDeviceRow, AirvisualSampleRow, AirvisualUnplacedSampleRow, CURSOR_SCOPE,
-    DATA_TABLES,
+    cursor_scope, full_ddl, AirvisualDeviceRow, AirvisualSampleRow, AirvisualUnplacedSampleRow,
+    CURSOR_SCOPE_PREFIX, DATA_TABLES,
 };
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -61,7 +64,7 @@ impl RawDb {
                 .execute(&self.pool)
                 .await?;
         }
-        file_checkpoint::clear_scope(&self.pool, CURSOR_SCOPE).await
+        file_checkpoint::clear_scope_prefix(&self.pool, CURSOR_SCOPE_PREFIX).await
     }
 }
 
@@ -71,9 +74,7 @@ pub struct FetchOptions {
     /// one `.doltlite_db` make each other's `dolt_commit` fail. See
     /// `datalib/backend/etl/README.md`.
     pub db: RawDb,
-    pub input_path: PathBuf,
-    /// Configured device name; `None` reads it from the folder.
-    pub device: Option<String>,
+    pub devices: Vec<AirvisualDevice>,
     pub cache: FingerprintCache,
     pub progress: Progress,
     pub control: DownloadControl,
@@ -81,6 +82,7 @@ pub struct FetchOptions {
 
 #[derive(Debug, Default, Clone)]
 pub struct FetchSummary {
+    pub devices: usize,
     pub files: usize,
     pub files_skipped: usize,
     pub lines: usize,
@@ -99,6 +101,9 @@ pub struct DeviceInfo {
     pub node_name: Option<String>,
     pub serial_number: Option<String>,
     pub model: Option<String>,
+    pub mac_address: Option<String>,
+    pub app_version: Option<String>,
+    pub system_version: Option<String>,
     pub timezone: Option<String>,
 }
 
@@ -123,8 +128,34 @@ pub fn read_device_info(root: &Path) -> DeviceInfo {
             .as_i64()
             .map(|m| m.to_string())
             .or_else(|| s(&v["status"]["model"])),
+        mac_address: s(&v["status"]["mac_address"]),
+        app_version: s(&v["status"]["app_version"]),
+        system_version: s(&v["status"]["system_version"]),
         timezone: s(&v["settings"]["timezone"]),
     }
+}
+
+/// Who this device is: its serial from the config or the folder, and
+/// its name from the config, the folder, or the serial.
+pub struct Identity {
+    pub id: String,
+    pub name: String,
+}
+
+pub fn identify(dev: &AirvisualDevice, info: &DeviceInfo) -> Result<Identity> {
+    let id = match dev.serial.clone().or_else(|| info.serial_number.clone()) {
+        Some(id) => id,
+        None => anyhow::bail!(
+            "airvisual: no `serial` configured for {} and it has no {LATEST_JSON} to read one from",
+            dev.path.display()
+        ),
+    };
+    let name = dev
+        .name
+        .clone()
+        .or_else(|| info.node_name.clone())
+        .unwrap_or_else(|| id.clone());
+    Ok(Identity { id, name })
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -132,41 +163,48 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }
-
-    let info = read_device_info(&opts.input_path);
-    let device = match opts.device.clone().or_else(|| info.node_name.clone()) {
-        Some(d) => d,
-        None => anyhow::bail!(
-            "airvisual: no `device` configured and {} has no {LATEST_JSON} to read a name from",
-            opts.input_path.display()
-        ),
+    let mut s = FetchSummary {
+        devices: opts.devices.len(),
+        ..Default::default()
     };
-    upsert_device(&db, &device, &info).await?;
+    for dev in &opts.devices {
+        if let Err(e) = fetch_device(&db, dev, &opts.cache, &opts.progress, &mut s).await {
+            s.errors += 1;
+            warn!(event = "airvisual_device_failed", path = %dev.path.display(), error = %format!("{e:#}"));
+        }
+    }
+    Ok(s)
+}
 
-    let scan = fsscan::scan(
-        &opts.cache,
-        &opts.input_path,
-        &fsscan::ScanOptions::default(),
-        |p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with(HISTORY_SUFFIX))
-        },
-    )
+async fn fetch_device(
+    db: &RawDb,
+    dev: &AirvisualDevice,
+    cache: &FingerprintCache,
+    progress: &Progress,
+    s: &mut FetchSummary,
+) -> Result<()> {
+    let root = dev.path();
+    let info = read_device_info(&root);
+    let who = identify(dev, &info)?;
+    upsert_device(db, &who, &info).await?;
+    let scope = cursor_scope(&who.id);
+
+    let scan = fsscan::scan(cache, &root, &fsscan::ScanOptions::default(), |p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(HISTORY_SUFFIX))
+    })
     .await?;
-
-    let mut s = FetchSummary::default();
     s.errors += scan.errors.len();
     for e in &scan.errors {
         warn!(event = "airvisual_walk_error", path = %e.path.display(), error = %e.error);
     }
 
-    let prev = file_checkpoint::load_cursor(db.pool(), CURSOR_SCOPE).await?;
+    let prev = file_checkpoint::load_cursor(db.pool(), &scope).await?;
     let changes = scan.changes_since(&prev);
-    s.files = scan.files.len();
-    s.files_skipped = changes.unchanged;
-    opts.progress.set_length(Some(scan.files.len() as u64));
-    opts.progress.inc(changes.unchanged as u64);
+    s.files += scan.files.len();
+    s.files_skipped += changes.unchanged;
+    progress.set_message(&format!("airvisual: {}", who.name));
 
     // Sorted so the same timestamp appearing in two files (an archive
     // boundary, or a `corrupt_`/`restored_` pair) resolves the same way
@@ -174,8 +212,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut todo: Vec<&ScannedFile> = changes.needs_reading().collect();
     todo.sort_by(|a, b| a.rel.cmp(&b.rel));
     for f in todo {
-        opts.progress.set_message(&format!("airvisual: {}", f.rel));
-        match ingest_one(&db, &device, f).await {
+        match ingest_one(db, &who.id, &scope, f).await {
             Ok(stats) => {
                 s.lines += stats.lines;
                 s.samples += stats.samples;
@@ -184,6 +221,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 s.bad_lines += stats.bad_lines;
                 info!(
                     event = "airvisual_file",
+                    device = %who.id,
                     file = %f.rel,
                     lines = stats.lines,
                     samples = stats.samples,
@@ -193,33 +231,66 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
             Err(e) => {
                 s.errors += 1;
-                warn!(event = "airvisual_file_failed", file = %f.rel, error = %format!("{e:#}"));
+                warn!(event = "airvisual_file_failed", device = %who.id, file = %f.rel, error = %format!("{e:#}"));
             }
         }
-        opts.progress.inc(1);
     }
+    progress.inc(1);
 
     sqlx::query(
         "UPDATE airvisual_devices SET last_ts_ms =
-            (SELECT MAX(ts_ms) FROM airvisual_samples WHERE device_name = ?)
+            (SELECT MAX(ts_ms) FROM airvisual_samples WHERE device_id = ?)
          WHERE id = ?",
     )
-    .bind(&device)
-    .bind(&device)
+    .bind(&who.id)
+    .bind(&who.id)
     .execute(db.pool())
     .await?;
-    Ok(s)
+    Ok(())
 }
 
-async fn upsert_device(db: &RawDb, device: &str, info: &DeviceInfo) -> Result<()> {
+/// Write the device row only when it would change: an upsert stamps
+/// the bookkeeping sidecar, and a stamp on an unchanged run is a commit
+/// on an unchanged store, which makes the render re-run for nothing.
+async fn upsert_device(db: &RawDb, who: &Identity, info: &DeviceInfo) -> Result<()> {
     let row = AirvisualDeviceRow {
-        id: device.to_string(),
-        serial_number: info.serial_number.clone(),
+        id: who.id.clone(),
+        name: who.name.clone(),
         model: info.model.clone(),
+        mac_address: info.mac_address.clone(),
+        app_version: info.app_version.clone(),
+        system_version: info.system_version.clone(),
         timezone: info.timezone.clone(),
-        node_name: info.node_name.clone(),
         last_ts_ms: None,
     };
+    type Stored = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let stored: Option<Stored> = sqlx::query_as(
+        "SELECT name, model, mac_address, app_version, system_version, timezone \
+           FROM airvisual_devices WHERE id = ?",
+    )
+    .bind(&row.id)
+    .fetch_optional(db.pool())
+    .await?;
+    let same = stored
+        .as_ref()
+        .is_some_and(|(name, model, mac, app, sys, tz)| {
+            *name == row.name
+                && *model == row.model
+                && *mac == row.mac_address
+                && *app == row.app_version
+                && *sys == row.system_version
+                && *tz == row.timezone
+        });
+    if same {
+        return Ok(());
+    }
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await?;
     bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
@@ -230,7 +301,12 @@ async fn upsert_device(db: &RawDb, device: &str, info: &DeviceInfo) -> Result<()
 /// Parse one file and write its rows and its cursor stamp in one
 /// transaction, so a crash between the two cannot leave a stamp for
 /// rows that never landed.
-async fn ingest_one(db: &RawDb, device: &str, f: &ScannedFile) -> Result<parse::ParseStats> {
+async fn ingest_one(
+    db: &RawDb,
+    device: &str,
+    scope: &str,
+    f: &ScannedFile,
+) -> Result<parse::ParseStats> {
     let body =
         std::fs::read_to_string(&f.path).with_context(|| format!("read {}", f.path.display()))?;
     let parsed = parse::parse(&body, &f.rel).with_context(|| format!("parse {}", f.rel))?;
@@ -247,7 +323,7 @@ async fn ingest_one(db: &RawDb, device: &str, f: &ScannedFile) -> Result<parse::
                 id: schema_raw::unplaced_id_recipe(device, &f.rel, u.line_no),
                 payload: u.payload,
             },
-            device_name: device.to_string(),
+            device_id: device.to_string(),
             source_file: f.rel.clone(),
             line_no: u.line_no,
             device_ts_s: u.device_ts_s,
@@ -257,7 +333,7 @@ async fn ingest_one(db: &RawDb, device: &str, f: &ScannedFile) -> Result<parse::
     let mut tx = db.pool().begin().await?;
     bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
     bulk_upsert_in_tx(&mut tx, &unplaced, &now).await?;
-    file_checkpoint::record_file(&mut tx, CURSOR_SCOPE, f).await?;
+    file_checkpoint::record_file(&mut tx, scope, f).await?;
     tx.commit().await?;
     Ok(parsed.stats)
 }
@@ -268,7 +344,7 @@ fn sample_row(device: &str, s: parse::Sample, source_file: &str) -> AirvisualSam
             id: schema_raw::sample_id_recipe(device, s.ts_ms),
             payload: s.payload,
         },
-        device_name: device.to_string(),
+        device_id: device.to_string(),
         ts_ms: s.ts_ms,
         pm25_ugm3: s.pm25_ugm3,
         pm10_ugm3: s.pm10_ugm3,
@@ -288,11 +364,18 @@ fn sample_row(device: &str, s: parse::Sample, source_file: &str) -> AirvisualSam
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     const HEADER: &str = "Date;Time;Timestamp;PM2_5(ug/m3);AQI(US);AQI(CN);PM10(ug/m3);PM1(ug/m3);Outdoor AQI(US);Outdoor AQI(CN);Temperature(C);Temperature(F);Humidity(%RH);CO2(ppm);\n";
 
     fn line(ts: i64, pm25: &str, co2: &str) -> String {
         format!("2026/09/01;00:00:00;{ts};{pm25};6;1;1.0;1.0;0;0;23.5;74.3;48;{co2};\n")
+    }
+
+    fn latest_json(serial: &str, name: &str) -> String {
+        format!(
+            r#"{{"serial_number":"{serial}","settings":{{"node_name":"{name}","timezone":"Europe/Zurich"}},"status":{{"model":30,"mac_address":"7c25da8d352a","app_version":"1.1937","system_version":"KBG66F85"}}}}"#
+        )
     }
 
     async fn test_cache() -> FingerprintCache {
@@ -324,15 +407,26 @@ mod tests {
         }
     }
 
-    fn opts(e: &Env, device: Option<&str>) -> FetchOptions {
+    fn device(path: &Path, serial: Option<&str>, name: Option<&str>) -> AirvisualDevice {
+        AirvisualDevice {
+            path: path.to_path_buf(),
+            serial: serial.map(str::to_string),
+            name: name.map(str::to_string),
+        }
+    }
+
+    fn opts(e: &Env, devices: Vec<AirvisualDevice>) -> FetchOptions {
         FetchOptions {
             db: e.db.clone(),
-            input_path: e.root.clone(),
-            device: device.map(str::to_string),
+            devices,
             cache: e.cache.clone(),
             progress: Progress::default(),
             control: DownloadControl::default(),
         }
+    }
+
+    fn kitchen(e: &Env) -> Vec<AirvisualDevice> {
+        vec![device(&e.root, Some("KITCHEN01"), Some("kitchen"))]
     }
 
     async fn count(pool: &SqlitePool, sql: &'static str) -> i64 {
@@ -359,8 +453,11 @@ mod tests {
         // Not a history file: never read.
         std::fs::write(e.root.join("history.txt"), "{}").unwrap();
 
-        let s = fetch(opts(&e, Some("kitchen"))).await.unwrap();
-        assert_eq!((s.files, s.files_skipped, s.lines, s.errors), (2, 0, 3, 0));
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert_eq!(
+            (s.devices, s.files, s.files_skipped, s.lines, s.errors),
+            (1, 2, 0, 3, 0)
+        );
         assert_eq!(s.samples, 3);
         assert_eq!(
             count(e.db.pool(), "SELECT COUNT(*) FROM airvisual_samples").await,
@@ -374,13 +471,46 @@ mod tests {
         assert_eq!(co2, 430.0);
         let last: i64 = count(
             e.db.pool(),
-            "SELECT last_ts_ms FROM airvisual_devices WHERE id = 'kitchen'",
+            "SELECT last_ts_ms FROM airvisual_devices WHERE id = 'KITCHEN01'",
         )
         .await;
         assert_eq!(last, 1_788_221_736_000);
 
-        let again = fetch(opts(&e, Some("kitchen"))).await.unwrap();
+        let again = fetch(opts(&e, kitchen(&e))).await.unwrap();
         assert_eq!((again.files, again.files_skipped, again.samples), (2, 2, 0));
+        e.db.close().await;
+    }
+
+    /// The fixture pipeline asserts an unchanged run reads nothing
+    /// downstream, which holds only if an unchanged run writes nothing.
+    #[tokio::test]
+    async fn an_unchanged_run_leaves_the_working_set_clean() {
+        let e = env().await;
+        std::fs::write(
+            e.root.join(LATEST_JSON),
+            latest_json("KITCHEN01", "kitchen"),
+        )
+        .unwrap();
+        std::fs::write(
+            e.root.join("202609_AirVisual_values.txt"),
+            format!("{HEADER}{}", line(1788220836, "1.0", "425")),
+        )
+        .unwrap();
+        fetch(opts(&e, vec![device(&e.root, None, None)]))
+            .await
+            .unwrap();
+        sqlx::query("SELECT dolt_commit('-Am', 'first')")
+            .execute(e.db.pool())
+            .await
+            .unwrap();
+        fetch(opts(&e, vec![device(&e.root, None, None)]))
+            .await
+            .unwrap();
+        let dirty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_status")
+            .fetch_one(e.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(dirty, 0, "a second identical run must not touch the store");
         e.db.close().await;
     }
 
@@ -389,7 +519,7 @@ mod tests {
         let e = env().await;
         let f = e.root.join("202609_AirVisual_values.txt");
         std::fs::write(&f, format!("{HEADER}{}", line(1788220836, "1.0", "425"))).unwrap();
-        fetch(opts(&e, Some("kitchen"))).await.unwrap();
+        fetch(opts(&e, kitchen(&e))).await.unwrap();
         std::fs::write(
             &f,
             format!(
@@ -399,7 +529,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let s = fetch(opts(&e, Some("kitchen"))).await.unwrap();
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
         assert_eq!(s.files_skipped, 0);
         assert_eq!(
             count(e.db.pool(), "SELECT COUNT(*) FROM airvisual_samples").await,
@@ -409,11 +539,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn device_name_comes_from_the_folder_when_not_configured() {
+    async fn identity_comes_from_the_folder_when_not_configured() {
         let e = env().await;
         std::fs::write(
             e.root.join(LATEST_JSON),
-            r#"{"serial_number":"4133wv2jb9z","settings":{"node_name":"Cucina","timezone":"Europe/Zurich"},"status":{"model":30}}"#,
+            latest_json("4133wv2jb9z", "Cucina"),
         )
         .unwrap();
         std::fs::write(
@@ -421,29 +551,106 @@ mod tests {
             format!("{HEADER}{}", line(1788220836, "1.0", "425")),
         )
         .unwrap();
-        fetch(opts(&e, None)).await.unwrap();
-        let row: (String, Option<String>, Option<String>, Option<String>) =
-            sqlx::query_as("SELECT id, serial_number, model, timezone FROM airvisual_devices")
-                .fetch_one(e.db.pool())
-                .await
-                .unwrap();
+        fetch(opts(&e, vec![device(&e.root, None, None)]))
+            .await
+            .unwrap();
+        let row: (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = sqlx::query_as("SELECT id, name, model, mac_address, timezone FROM airvisual_devices")
+            .fetch_one(e.db.pool())
+            .await
+            .unwrap();
         assert_eq!(
             row,
             (
+                "4133wv2jb9z".into(),
                 "Cucina".into(),
-                Some("4133wv2jb9z".into()),
                 Some("30".into()),
+                Some("7c25da8d352a".into()),
                 Some("Europe/Zurich".into())
             )
         );
         assert_eq!(
             count(
                 e.db.pool(),
-                "SELECT COUNT(*) FROM airvisual_samples WHERE device_name = 'Cucina'"
+                "SELECT COUNT(*) FROM airvisual_samples WHERE device_id = '4133wv2jb9z'"
             )
             .await,
             1
         );
+        e.db.close().await;
+    }
+
+    #[tokio::test]
+    async fn the_config_overrides_the_folder_and_the_serial_stands_in_for_a_name() {
+        let e = env().await;
+        std::fs::write(
+            e.root.join(LATEST_JSON),
+            latest_json("4133wv2jb9z", "Cucina"),
+        )
+        .unwrap();
+        std::fs::write(
+            e.root.join("202609_AirVisual_values.txt"),
+            format!("{HEADER}{}", line(1788220836, "1.0", "425")),
+        )
+        .unwrap();
+        fetch(opts(&e, vec![device(&e.root, Some("OVERRIDE"), None)]))
+            .await
+            .unwrap();
+        let row: (String, String) = sqlx::query_as("SELECT id, name FROM airvisual_devices")
+            .fetch_one(e.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(row, ("OVERRIDE".into(), "Cucina".into()));
+        e.db.close().await;
+    }
+
+    #[tokio::test]
+    async fn two_devices_with_identical_file_names_keep_separate_cursors() {
+        let e = env().await;
+        let b = e.root.parent().unwrap().join("second");
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(
+            e.root.join("202609_AirVisual_values.txt"),
+            format!("{HEADER}{}", line(1788220836, "1.0", "425")),
+        )
+        .unwrap();
+        std::fs::write(
+            b.join("202609_AirVisual_values.txt"),
+            format!(
+                "{HEADER}{}{}",
+                line(1788220836, "5.0", "900"),
+                line(1788220846, "5.0", "901")
+            ),
+        )
+        .unwrap();
+        let devices = || {
+            vec![
+                device(&e.root, Some("A"), Some("kitchen")),
+                device(&b, Some("B"), Some("bedroom")),
+            ]
+        };
+        let s = fetch(opts(&e, devices())).await.unwrap();
+        assert_eq!((s.devices, s.files, s.samples, s.errors), (2, 2, 3, 0));
+        assert_eq!(
+            count(
+                e.db.pool(),
+                "SELECT COUNT(*) FROM airvisual_samples WHERE device_id = 'B'"
+            )
+            .await,
+            2
+        );
+        assert_eq!(
+            count(e.db.pool(), "SELECT COUNT(*) FROM ingested_files").await,
+            2,
+            "one cursor row per (device, file)"
+        );
+        let again = fetch(opts(&e, devices())).await.unwrap();
+        assert_eq!((again.files, again.files_skipped), (2, 2));
         e.db.close().await;
     }
 
@@ -460,7 +667,7 @@ mod tests {
         )
         .unwrap();
         for _ in 0..2 {
-            let s = fetch(opts(&e, Some("kitchen"))).await.unwrap();
+            let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
             assert_eq!(s.samples, 0, "nothing placeable in time");
         }
         assert_eq!(
@@ -481,33 +688,35 @@ mod tests {
         .fetch_one(e.db.pool())
         .await
         .unwrap();
-        assert_eq!(id, "kitchen#archive1/197001_AirVisual_values.txt#2");
+        assert_eq!(id, "KITCHEN01#archive1/197001_AirVisual_values.txt#2");
         e.db.close().await;
     }
 
     #[tokio::test]
-    async fn no_name_anywhere_is_an_error() {
+    async fn a_device_with_no_serial_anywhere_fails_alone() {
         let e = env().await;
         std::fs::write(
             e.root.join("202609_AirVisual_values.txt"),
             format!("{HEADER}{}", line(1788220836, "1.0", "425")),
         )
         .unwrap();
-        let err = fetch(opts(&e, None)).await.unwrap_err();
-        assert!(format!("{err}").contains("no `device` configured"));
+        let s = fetch(opts(&e, vec![device(&e.root, None, None)]))
+            .await
+            .unwrap();
+        assert_eq!((s.devices, s.errors, s.samples), (1, 1, 0));
         e.db.close().await;
     }
 
     #[tokio::test]
-    async fn reset_drops_rows_and_the_cursor() {
+    async fn reset_drops_rows_and_the_cursors() {
         let e = env().await;
         std::fs::write(
             e.root.join("202609_AirVisual_values.txt"),
             format!("{HEADER}{}", line(1788220836, "1.0", "425")),
         )
         .unwrap();
-        fetch(opts(&e, Some("kitchen"))).await.unwrap();
-        let mut o = opts(&e, Some("kitchen"));
+        fetch(opts(&e, kitchen(&e))).await.unwrap();
+        let mut o = opts(&e, kitchen(&e));
         o.control.reset_and_redownload = true;
         let s = fetch(o).await.unwrap();
         assert_eq!(

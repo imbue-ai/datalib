@@ -8,7 +8,7 @@ use async_trait::async_trait;
 
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use datalib_etl_airvisual_config::AirvisualConfig;
+use datalib_etl_airvisual_config::{AirvisualConfig, AirvisualDevice};
 
 use crate::ingest;
 
@@ -19,21 +19,19 @@ pub fn plan_ingest(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let Some(export) = config.export else {
-        anyhow::bail!("airvisual source {name} names no `export` (the Pro's data folder)");
+        anyhow::bail!("airvisual source {name} names no `export` (the Pros' data folders)");
     };
     Ok(vec![Box::new(AirvisualIngest {
         id: format!("airvisual/{name}/download"),
         raw_path,
-        input_path: export.path(),
-        device: export.device,
+        devices: export.devices,
     })])
 }
 
 struct AirvisualIngest {
     id: String,
     raw_path: PathBuf,
-    input_path: PathBuf,
-    device: Option<String>,
+    devices: Vec<AirvisualDevice>,
 }
 
 #[async_trait]
@@ -48,16 +46,15 @@ impl DataProcessor for AirvisualIngest {
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = ingest::fetch(ingest::FetchOptions {
             db,
-            input_path: self.input_path.clone(),
-            device: self.device.clone(),
+            devices: self.devices.clone(),
             cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
         })
         .await?;
         let summary = format!(
-            "files={} files_skipped={} lines={} samples={} sentinels={} clock_unset={} bad_lines={} errors={}",
-            s.files, s.files_skipped, s.lines, s.samples, s.sentinels, s.clock_unset, s.bad_lines, s.errors,
+            "devices={} files={} files_skipped={} lines={} samples={} sentinels={} clock_unset={} bad_lines={} errors={}",
+            s.devices, s.files, s.files_skipped, s.lines, s.samples, s.sentinels, s.clock_unset, s.bad_lines, s.errors,
         );
         Ok(session.finish(ctx, summary).await)
     }

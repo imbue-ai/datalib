@@ -31,7 +31,7 @@ fn sample(
             id: sample_id_recipe(device, ts_ms),
             payload: "{}".into(),
         },
-        device_name: device.to_string(),
+        device_id: device.to_string(),
         ts_ms,
         pm25_ugm3: pm25,
         pm10_ugm3: None,
@@ -48,16 +48,18 @@ fn sample(
     }
 }
 
-async fn seed(pool: &SqlitePool, rows: &[Seed], devices: &[&str]) {
+async fn seed(pool: &SqlitePool, rows: &[Seed], devices: &[(&str, &str)]) {
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let device_rows: Vec<AirvisualDeviceRow> = devices
         .iter()
-        .map(|name| AirvisualDeviceRow {
-            id: (*name).to_string(),
-            serial_number: Some("4133wv2jb9z".into()),
+        .map(|(id, name)| AirvisualDeviceRow {
+            id: (*id).to_string(),
+            name: (*name).to_string(),
             model: Some("30".into()),
+            mac_address: None,
+            app_version: Some("1.1937".into()),
+            system_version: Some("KBG66F85".into()),
             timezone: Some("Europe/Zurich".into()),
-            node_name: Some((*name).to_string()),
             last_ts_ms: None,
         })
         .collect();
@@ -117,28 +119,28 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
         db.pool(),
         &[
             (
-                "Cucina",
+                "4133WV2JB9Z",
                 1_788_220_836_000,
                 Some(1.0),
                 Some(425.0),
                 Some(23.5),
             ),
             (
-                "Cucina",
+                "4133WV2JB9Z",
                 1_788_221_736_000,
                 Some(2.0),
                 Some(430.0),
                 Some(23.4),
             ),
             (
-                "Schlafzimmer",
+                "QKAO9PC1XDJ",
                 1_788_220_836_000,
                 None,
                 Some(610.0),
                 Some(21.0),
             ),
         ],
-        &["Cucina", "Schlafzimmer"],
+        &[("4133WV2JB9Z", "Cucina"), ("QKAO9PC1XDJ", "Schlafzimmer")],
     )
     .await;
 
@@ -185,8 +187,9 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
         assert!(!md.contains(&format!("plots/{key}.html")), "{md}");
     }
 
-    // Both devices are series on the one CO2 plot; the sensor-off
-    // sample keeps Schlafzimmer off the particulates plot.
+    // Both devices are series on the one CO2 plot, under their names,
+    // not their serials; the sensor-off sample keeps Schlafzimmer off
+    // the particulates plot.
     let co2 = std::fs::read_to_string(plots.join("co2.html")).unwrap();
     assert!(co2.contains("\"name\":\"Cucina\""), "{co2}");
     assert!(co2.contains("\"name\":\"Schlafzimmer\""), "{co2}");
@@ -198,7 +201,9 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
     );
 
     assert!(md.contains("## Devices"), "{md}");
-    assert!(md.contains("serial `4133wv2jb9z`"), "{md}");
+    assert!(md.contains("### Cucina"), "{md}");
+    assert!(md.contains("serial `4133WV2JB9Z`"), "{md}");
+    assert!(md.contains("firmware 1.1937 / KBG66F85"), "{md}");
     assert!(md.contains("clock in Europe/Zurich"), "{md}");
     assert!(md.contains("## Store"), "{md}");
     assert!(
@@ -257,7 +262,7 @@ async fn an_empty_store_renders_a_page_without_plots() {
     let raw_path = root.join(STANZA).join("raw");
     std::fs::create_dir_all(&raw_path).unwrap();
     let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
-    seed(db.pool(), &[], &["Cucina"]).await;
+    seed(db.pool(), &[], &[("4133WV2JB9Z", "Cucina")]).await;
 
     let (emitted, _) = render_once(&raw_path, root, None);
     assert_eq!(emitted.len(), 1);

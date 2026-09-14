@@ -3,6 +3,16 @@ load("//tools:insta.bzl", "insta_update")
 
 exports_files(["Cargo.toml"])
 
+# Two TNG-themed Pros' data folders, in the share's own layout: an
+# archive per clock change, a pre-clock file, a corrupt/restored pair,
+# a live month ending in NULs. Used by :airvisual_fixture_e2e and the
+# central fixture pipeline at //tests/fixtures:ingested_tng.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/airvisual_tng/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "datalib_etl_airvisual",
     srcs = glob(["src/**/*.rs"]),
@@ -61,6 +71,27 @@ rust_test(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "airvisual_fixture_e2e",
+    size = "small",
+    srcs = ["tests/fixture_e2e.rs"],
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "AIRVISUAL_FIXTURE_DIR": "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
+    },
+    deps = [
+        ":datalib_etl_airvisual",
+        "//datalib/backend/etl/providers/airvisual_config:datalib_etl_airvisual_config",
+        "//datalib/backend/etl/providers/airvisual_render:datalib_etl_airvisual_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

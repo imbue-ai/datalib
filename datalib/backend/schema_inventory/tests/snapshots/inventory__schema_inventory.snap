@@ -1010,10 +1010,12 @@ recipients_bookkeeping
 == airvisual/raw ==
 airvisual_devices
     id
-    serial_number
+    name
     model
+    mac_address
+    app_version
+    system_version
     timezone
-    node_name
     last_ts_ms
 airvisual_devices_bookkeeping
     id
@@ -1026,7 +1028,7 @@ airvisual_devices_bookkeeping
 airvisual_samples
     id
     payload
-    device_name
+    device_id
     ts_ms
     pm25_ugm3
     pm10_ugm3
@@ -1051,7 +1053,7 @@ airvisual_samples_bookkeeping
 airvisual_unplaced_samples
     id
     payload
-    device_name
+    device_id
     source_file
     line_no
     device_ts_s

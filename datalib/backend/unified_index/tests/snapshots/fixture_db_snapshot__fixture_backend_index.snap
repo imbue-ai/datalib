@@ -245,6 +245,18 @@ expression: snapshot
       "updated_at": "2370-10-26T08:05:00+00:00"
     },
     {
+      "bucket_key": null,
+      "created_at": "2024-09-01T05:25:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "md_path": "ship-air/render_markdown/index.md",
+      "provider": "airvisual",
+      "renderer_version": "rust-v1.1",
+      "source_id": "ship-air",
+      "title": "AirVisual monitors — ship-air",
+      "updated_at": "2024-09-01T09:01:50+00:00"
+    },
+    {
       "bucket_key": "3c1232fb-5525-5678-b043-6e9a745ee4e0",
       "created_at": "2369-04-14T19:30:00+00:00",
       "kind": "chat",
@@ -689,6 +701,18 @@ expression: snapshot
       "updated_at": "2369-04-09T00:00:00+00:00"
     },
     {
+      "bucket_key": null,
+      "created_at": "2369-04-15T00:00:00+00:00",
+      "kind": "storage",
+      "markdown_uuid": "bb5586df-2fed-5980-a85a-aadb8db08315",
+      "md_path": "ship-air/render_markdown/_datalib/storage.md",
+      "provider": "datalib",
+      "renderer_version": "rust-v1.2",
+      "source_id": "ship-air",
+      "title": "ship-air storage",
+      "updated_at": "2369-04-15T00:00:00+00:00"
+    },
+    {
       "bucket_key": "bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0",
       "created_at": "2364-03-01T09:00:00+00:00",
       "kind": "document",
@@ -958,7 +982,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=79 markdowns_read=79 markdowns_removed=0 rows_inserted=359"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=81 markdowns_read=81 markdowns_removed=0 rows_inserted=368"
     }
   ],
   "grid_rows": [
@@ -2559,6 +2583,35 @@ expression: snapshot
     },
     {
       "account": null,
+      "author": null,
+      "channel": null,
+      "conversation_name": "AirVisual monitors — ship-air",
+      "conversation_uuid": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "entire_chat": "/chat/434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "git_sha": null,
+      "kind": "Sensor Timeseries",
+      "markdown_uuid": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "airvisual",
+      "qmd_path": "ship-air/render_markdown/index.md",
+      "slack_link": null,
+      "source_label": "AirVisual",
+      "source_url": null,
+      "text_len": 149,
+      "text_sha": "sha256:93c3098bf235a4de6904e0efda6ab1a5fd5a09d429674ef4d03fb67c9cc5c8b8",
+      "upstream_entity_kind": "timeseries",
+      "upstream_id": "ship-air",
+      "upstream_scope": "ship-air",
+      "uuid": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "when_ts": "2024-09-01T09:01:50+00:00"
+    },
+    {
+      "account": null,
       "author": "+17015550103",
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -2817,6 +2870,35 @@ expression: snapshot
       "upstream_scope": null,
       "uuid": "4e119d2c-5b9b-502a-a269-96807d04c5bb",
       "when_ts": "2364-04-11T00:02:00+00:00"
+    },
+    {
+      "account": null,
+      "author": "Ten Forward",
+      "channel": "Ten Forward",
+      "conversation_name": "AirVisual monitors — ship-air",
+      "conversation_uuid": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "entire_chat": "/chat/434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "git_sha": null,
+      "kind": "Sensor Device",
+      "markdown_uuid": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "airvisual",
+      "qmd_path": "ship-air/render_markdown/index.md",
+      "slack_link": null,
+      "source_label": "AirVisual",
+      "source_url": null,
+      "text_len": 352,
+      "text_sha": "sha256:371ac8e7f4b1129078098d43fc5b525c01b241c864f549b8f6e15d513f2929bb",
+      "upstream_entity_kind": "device",
+      "upstream_id": "TENFWD10X",
+      "upstream_scope": null,
+      "uuid": "4f00cac0-f6b4-54e8-a481-c087a9feaea7",
+      "when_ts": "2024-09-01T09:01:50+00:00"
     },
     {
       "account": null,
@@ -6793,6 +6875,35 @@ expression: snapshot
     },
     {
       "account": null,
+      "author": "Sickbay",
+      "channel": "Sickbay",
+      "conversation_name": "AirVisual monitors — ship-air",
+      "conversation_uuid": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "entire_chat": "/chat/434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "git_sha": null,
+      "kind": "Sensor Device",
+      "markdown_uuid": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "airvisual",
+      "qmd_path": "ship-air/render_markdown/index.md",
+      "slack_link": null,
+      "source_label": "AirVisual",
+      "source_url": null,
+      "text_len": 348,
+      "text_sha": "sha256:4b6da015b92c245130769d9cb81b21eba887260d19fc09d435a0bc924dfe66d4",
+      "upstream_entity_kind": "device",
+      "upstream_id": "SICKBAY01",
+      "upstream_scope": null,
+      "uuid": "efe5ca80-295e-5870-a97c-9a8ae5a3d20e",
+      "when_ts": "2024-09-01T05:25:00+00:00"
+    },
+    {
+      "account": null,
       "author": "jlpicard",
       "channel": null,
       "conversation_name": "Add Earl Grey, hot to replicator menu",
@@ -7200,6 +7311,24 @@ expression: snapshot
     },
     {
       "kind": "Source Size",
+      "members_sha": "sha256:506f3dc4b8bef55320b7ed032eb76807cae26f4974a9719076ce5f822203595a",
+      "rows": 1,
+      "source": "ship-air"
+    },
+    {
+      "kind": "Store",
+      "members_sha": "sha256:4fb22bb4a7c5220255c9950063974f96300a6fd09529e56378e80966e9a9d015",
+      "rows": 1,
+      "source": "ship-air"
+    },
+    {
+      "kind": "Table",
+      "members_sha": "sha256:f4a0808e96c56e8edac4facec29052f9e5bc42c9ffedabfa13bba8a5f32c39b2",
+      "rows": 4,
+      "source": "ship-air"
+    },
+    {
+      "kind": "Source Size",
       "members_sha": "sha256:c04179ba56fd7087780b67dc18583b5d07674594ebe32130d096509099a94b63",
       "rows": 1,
       "source": "signal"
@@ -7344,9 +7473,9 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 79,
+    "documents_count": 81,
     "dolt_log_count": 2,
-    "grid_rows_count": 210,
-    "storage_rows_count": 149
+    "grid_rows_count": 213,
+    "storage_rows_count": 155
   }
 }

@@ -36,16 +36,12 @@ pub fn document_uuid(source_id: &str) -> String {
     )
 }
 
-/// A device's row. Keyed on the configured device name rather than the
-/// serial because a copied folder may carry no serial, and a scope has
-/// to be present-or-never.
-pub fn device_uuid(source_id: &str, device: &str) -> String {
-    entity_id_str(
-        ID_NAMESPACE,
-        Scope::SourceInstance(source_id),
-        "device",
-        device,
-    )
+/// A device's row, keyed on its serial: IQAir issues those per unit, so
+/// the same Pro configured in two sources is one device — and
+/// `IdClaims` will say so rather than let one source's row erase the
+/// other's.
+pub fn device_uuid(serial: &str) -> String {
+    entity_id_str(ID_NAMESPACE, Scope::ProviderGlobal, "device", serial)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -155,7 +151,7 @@ fn render_plot(
             None => (lo, hi),
         });
         traces.push(Trace {
-            name: series_label(&s.device, spec),
+            name: series_label(parsed.device_label(&s.device), spec),
             axis: spec.axis,
             x_ms: s.ts_ms.clone(),
             y: s.values.iter().map(|v| (spec.to_si)(*v)).collect(),
@@ -250,7 +246,7 @@ fn render_markdown(
     );
 
     render_plot_sections(&mut out, plots);
-    render_device_sections(&mut out, parsed, source_id);
+    render_device_sections(&mut out, parsed);
     render_store_section(&mut out, parsed);
     out
 }
@@ -295,7 +291,7 @@ fn render_plot_sections(out: &mut String, plots: &[(&Quantity, PlotFacts)]) {
     }
 }
 
-fn render_device_sections(out: &mut String, parsed: &ParsedAirvisual, source_id: &str) {
+fn render_device_sections(out: &mut String, parsed: &ParsedAirvisual) {
     out.push_str("## Devices\n\n");
     if parsed.devices.is_empty() {
         out.push_str("*(no devices)*\n\n");
@@ -304,18 +300,18 @@ fn render_device_sections(out: &mut String, parsed: &ParsedAirvisual, source_id:
 
     let by_device = parsed.series_by_device();
     for dev in &parsed.devices {
-        let uuid = device_uuid(source_id, &dev.name);
+        let uuid = device_uuid(&dev.id);
         let _ = writeln!(
             out,
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--airvisual\">\n"
         );
         let _ = writeln!(out, "### {}\n", dev.name);
-        let mut facts: Vec<String> = Vec::new();
+        let mut facts: Vec<String> = vec![format!("serial `{}`", dev.id)];
         if let Some(m) = &dev.model {
             facts.push(format!("model {m}"));
         }
-        if let Some(s) = &dev.serial_number {
-            facts.push(format!("serial `{s}`"));
+        if let (Some(a), Some(sv)) = (&dev.app_version, &dev.system_version) {
+            facts.push(format!("firmware {a} / {sv}"));
         }
         if let Some(tz) = &dev.timezone {
             facts.push(format!("clock in {tz}"));
@@ -325,7 +321,7 @@ fn render_device_sections(out: &mut String, parsed: &ParsedAirvisual, source_id:
             None => "no samples yet".to_string(),
         });
         let _ = writeln!(out, "*{}*\n", facts.join(" · "));
-        match by_device.get(dev.name.as_str()) {
+        match by_device.get(dev.id.as_str()) {
             Some(list) if !list.is_empty() => render_metric_table(out, list),
             _ => out.push_str("*(no samples)*\n\n"),
         }
@@ -337,14 +333,14 @@ fn render_device_sections(out: &mut String, parsed: &ParsedAirvisual, source_id:
     let orphans: Vec<&str> = by_device
         .keys()
         .copied()
-        .filter(|d| !parsed.devices.iter().any(|dev| dev.name == *d))
+        .filter(|d| !parsed.devices.iter().any(|dev| dev.id == *d))
         .collect();
     if !orphans.is_empty() {
         let _ = writeln!(
             out,
-            "> **{} device{} with samples but no `airvisual_devices` row:** {}. \
-             Their series still plot; the device was most likely renamed in the \
-             config.\n",
+            "> **{} serial{} with samples but no `airvisual_devices` row:** {}. \
+             Their series still plot; the device was most likely given a different \
+             `serial` in the config.\n",
             orphans.len(),
             if orphans.len() == 1 { "" } else { "s" },
             orphans
@@ -390,11 +386,11 @@ fn render_metric_table(out: &mut String, series: &[&Series]) {
     out.push('\n');
 }
 
-/// Counts only — the doltlite hashes and dates stay out of the page.
+/// Counts of what was read — nothing about the store's own history,
+/// which changes on every run and would make an unchanged page differ.
 fn render_store_section(out: &mut String, parsed: &ParsedAirvisual) {
     out.push_str("## Store\n\n");
     out.push_str("| | |\n| --- | --- |\n");
-    let _ = writeln!(out, "| Commits | {} |", parsed.commits.len());
     let _ = writeln!(out, "| Samples | {} |", thousands(parsed.sample_count));
     let _ = writeln!(out, "| History files read | {} |", parsed.files.len());
     let _ = writeln!(
@@ -457,11 +453,11 @@ fn build_grid_rows(
         .collect();
 
     for (idx, dev) in parsed.devices.iter().enumerate() {
-        let uuid = device_uuid(source_id, &dev.name);
-        let series = by_device.get(dev.name.as_str());
-        let mut text = dev.name.clone();
+        let uuid = device_uuid(&dev.id);
+        let series = by_device.get(dev.id.as_str());
+        let mut text = format!("{} (serial {})", dev.name, dev.id);
         if let Some(m) = &dev.model {
-            let _ = write!(text, " (AirVisual model {m})");
+            let _ = write!(text, "\nAirVisual model {m}");
         }
         if let Some(list) = series {
             for s in list {
@@ -488,9 +484,8 @@ fn build_grid_rows(
                 .entire_chat(format!("/chat/{m_uuid}"))
                 .text(text)
                 .qmd_path(Some(md_rel.to_string()))
-                .upstream_id(Some(dev.name.clone()))
+                .upstream_id(Some(dev.id.clone()))
                 .upstream_entity_kind(Some("device".to_string()))
-                .upstream_scope(Some(source_id.to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
                 .build_or_record(source_id, m_uuid, RENDER_VERSION, problems),
         );
@@ -516,14 +511,13 @@ mod tests {
         let a = document_uuid("air-cucina");
         assert_eq!(a, document_uuid("air-cucina"), "must be deterministic");
         assert_ne!(a, document_uuid("air-2"), "must be source-scoped");
-        assert_ne!(
-            device_uuid("air-cucina", "Cucina"),
-            device_uuid("air-cucina", "Schlafzimmer")
+        assert_ne!(device_uuid("4133WV2JB9Z"), device_uuid("QKAO9PC1XDJ"));
+        assert_eq!(
+            device_uuid("4133WV2JB9Z"),
+            device_uuid("4133WV2JB9Z"),
+            "a serial is the device wherever it is configured"
         );
-        assert_ne!(
-            document_uuid("air-cucina"),
-            device_uuid("air-cucina", "Cucina")
-        );
+        assert_ne!(document_uuid("air-cucina"), device_uuid("air-cucina"));
     }
 
     #[test]

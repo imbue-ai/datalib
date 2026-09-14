@@ -107,6 +107,7 @@ filegroup(
         "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
         "//datalib/backend/etl/providers/yolink:tng_fixture",
         "//datalib/backend/etl/providers/pdf:pdf_fixture",
+        "//datalib/backend/etl/providers/airvisual:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -201,6 +202,8 @@ genrule(
             "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
             # PDF corpus (arg 23, appended for the same reason as 21-22).
             "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng",
+            # AirVisual: two Pros' data folders (arg 24, appended likewise).
+            "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         # It lives under the `unified_index/` tree the index steps own
@@ -269,6 +272,8 @@ py_test(
         "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
         # PDF corpus (arg 23, appended for the same reason as 21-22).
         "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng",
+        # AirVisual (arg 24, appended likewise).
+        "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
     ],
     data = [
         "run_sync_pipeline.py",
@@ -323,6 +328,8 @@ py_test(
         "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
         # PDF corpus (arg 23, appended for the same reason as 21-22).
         "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng",
+        # AirVisual (arg 24, appended likewise).
+        "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
     ],
     data = [
         "run_sync_pipeline.py",

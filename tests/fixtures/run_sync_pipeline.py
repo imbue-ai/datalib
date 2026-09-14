@@ -69,6 +69,9 @@ Args (positional):
                       reaches grid_index and the qmd index like any
                       chat source — which is the whole point of
                       including it here.
+    24: airvisual_tng  Two AirVisual Pros' data folders (the share's
+                      own layout). File-backed; the ingest step walks
+                      each folder directly.
 
 Args 21+ are appended rather than grouped with the other binaries
 (1-4) and fixture paths (7-20) deliberately: every index here is
@@ -149,6 +152,7 @@ def main() -> int:
     yolink_make_fixture_bin = Path(sys.argv[21]).resolve()
     yolink_spec = Path(sys.argv[22]).resolve()
     pdf_fx = Path(sys.argv[23]).resolve()
+    airvisual_fx = Path(sys.argv[24]).resolve()
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -255,6 +259,9 @@ def main() -> int:
         # File-backed and rendering: PDFs under this tree become
         # markdown + grid_rows, so the fan-in steps index them.
         "tng_pdfs": ("pdf", pdf_fx, pdf_fx),
+        # Two AirVisual Pros' data folders under this tree, one
+        # `export.devices` entry each; renders one page of plots.
+        "ship-air": ("airvisual", airvisual_fx, airvisual_fx),
     }
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
@@ -548,6 +555,15 @@ def _source_config(
         # ingest step is never run. `api = {}` would fail validation
         # outright anyway (yolink requires at least one `api.devices`).
         pass
+    elif type_str == "airvisual":
+        # One device per folder; serial and name come from each folder's
+        # latest_config_measurements.json.
+        source["export"] = {
+            "devices": [
+                {"path": str(input_path / "ten-forward")},
+                {"path": str(input_path / "sickbay")},
+            ]
+        }
     elif type_str == "pdf":
         # The scanner walks `fswalk.path`; the render step reads the
         # root back from `pdf_scan_meta`, so it needs no params of its

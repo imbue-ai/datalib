@@ -1,21 +1,21 @@
 # AirVisual ingest
 
-The ingest step of an `airvisual` group reads an IQAir **AirVisual Pro**'s
-own history files into a doltlite raw store:
+The ingest step of an `airvisual` group reads IQAir **AirVisual Pro**s'
+own history files into one doltlite raw store:
 
 ```
 <data_root>/<group>/ingest/entities.doltlite_db
-  airvisual_devices            one row per device: name, serial, model, timezone, last sample
+  airvisual_devices            one row per device: serial (the id), name, model, firmware, timezone, last sample
   airvisual_samples            one row per logged line, a REAL column per measurement
   airvisual_unplaced_samples   lines logged before the clock was set
-  ingested_files               which history files have been read, by content hash
+  ingested_files               which history files have been read, by content hash, per device
 ```
 
-The one method is `export`: the folder the Pro serves over Samba
-(`smb://<ip>/airvisual`, user `airvisual`, password shown on the device
-under *Settings › Network › Access Pro data*), mounted, or a copy of it.
-Every `*_AirVisual_values.txt` under the path is read, archive folders
-included.
+The one method is `export`, with one `devices` entry per Pro: the folder
+it serves over Samba (`smb://<ip>/airvisual`, user `airvisual`, password
+shown on the device under *Settings › Network › Access Pro data*),
+mounted, or a copy of it. Every `*_AirVisual_values.txt` under a path is
+read, archive folders included.
 
 ## Why the device's own files, and not IQAir's cloud
 
@@ -105,11 +105,33 @@ to `(mtime, size)`, and the worst case after a remount is a re-hash of
 Reset (`--reset-and-redownload`) empties the three tables and the
 cursor; the next run re-reads everything from the share.
 
-## Naming the device
+## Identity and name
 
-`export.device` is the row key for everything the device logged.
-Left out, it is `settings.node_name` from the folder's
-`latest_config_measurements.json` — the name shown on the device and in
-the app — and the step fails if neither is there (a copied folder
-without the JSON). Renaming re-keys the history; the render notices
-samples under a name no device row carries and says so.
+A device's **identity is its serial number** — IQAir issues one per
+unit, the device reports it in `latest_config_measurements.json`
+(`serial_number`), and it keys every sample (`{serial}#{ts_ms}`), every
+file cursor, and the device's `grid_rows` uuid. Its **name** is what a
+person calls it: `settings.node_name` from the same file, the name on
+the device's screen and in the app. The two are the id/name split the
+runbook makes for sources, for the same reason — the name can change
+without re-keying anything.
+
+Per `devices` entry, `serial` and `name` in the config override what
+the folder says; `serial` is required for a copied folder that lacks
+the JSON, and a device with no serial from either place fails alone
+while the others ingest. The same file also gives `model`,
+`mac_address`, `app_version`, `system_version` and `timezone`, kept on
+the device row. The row is rewritten only when one of those changes:
+an upsert stamps the bookkeeping sidecar, and a stamp on an unchanged
+run would commit an unchanged store and re-render its page.
+
+## The TNG fixture
+
+`tests/fixtures/airvisual_tng/` is two Pros' folders in the share's own
+layout — *Ten Forward* (a reception fills the lounge with CO₂) and
+*Sickbay* (a plasma-coolant leak spikes the particulates) — carrying
+every quirk above: an `archive1/` per device, a `197001_` file, a
+`corrupt_`/`restored_` pair sharing a timestamp, a `-1` line, and a
+live month ending in NULs. `airvisual_fixture_e2e` ingests and renders
+it; the central fixture pipeline (`//tests/fixtures:ingested_tng`)
+carries it as the `ship-air` source, so it reaches the grid golden.

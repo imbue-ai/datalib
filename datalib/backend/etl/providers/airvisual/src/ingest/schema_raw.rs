@@ -12,22 +12,31 @@ pub const DATA_TABLES: &[&str] = &[
     "airvisual_unplaced_samples",
 ];
 
-/// The `file_checkpoint` scope holding which history files this source
-/// has finished with.
-pub const CURSOR_SCOPE: &str = "airvisual/export";
+/// Prefix of the `file_checkpoint` scopes holding which history files
+/// this source has finished with — one scope per device, since two Pros
+/// name their files identically.
+pub const CURSOR_SCOPE_PREFIX: &str = "airvisual/export/";
 
-/// One row per device. `id` is the configured (or self-reported) device
-/// name; the other columns come from the folder's
-/// `latest_config_measurements.json` when it is there. `last_ts_ms` is
+pub fn cursor_scope(device_id: &str) -> String {
+    format!("{CURSOR_SCOPE_PREFIX}{device_id}")
+}
+
+/// One row per device. `id` is the serial number: the device's own
+/// identity, which keys every sample. `name` is what a person calls it
+/// — the config's `name`, else the device's own `node_name` — and may
+/// change without re-keying anything. The rest comes from the folder's
+/// `latest_config_measurements.json` when it is there; `last_ts_ms` is
 /// the newest sample stored, rewritten after each run.
 #[derive(Debug, Clone, Default, RawTable)]
 #[raw_table(table = "airvisual_devices")]
 pub struct AirvisualDeviceRow {
     pub id: String,
-    pub serial_number: Option<String>,
+    pub name: String,
     pub model: Option<String>,
+    pub mac_address: Option<String>,
+    pub app_version: Option<String>,
+    pub system_version: Option<String>,
     pub timezone: Option<String>,
-    pub node_name: Option<String>,
     pub last_ts_ms: Option<i64>,
 }
 
@@ -38,11 +47,12 @@ pub struct AirvisualDeviceRow {
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "airvisual_samples",
-    index = "airvisual_samples_by_device_ts:device_name,ts_ms"
+    index = "airvisual_samples_by_device_ts:device_id,ts_ms"
 )]
 pub struct AirvisualSampleRow {
     pub id_and_payload: WirePayload,
-    pub device_name: String,
+    /// The device's serial — `airvisual_devices.id`.
+    pub device_id: String,
     pub ts_ms: i64,
     pub pm25_ugm3: Option<f64>,
     pub pm10_ugm3: Option<f64>,
@@ -69,7 +79,7 @@ pub struct AirvisualSampleRow {
 #[raw_table(table = "airvisual_unplaced_samples")]
 pub struct AirvisualUnplacedSampleRow {
     pub id_and_payload: WirePayload,
-    pub device_name: String,
+    pub device_id: String,
     pub source_file: String,
     /// 1-based line number in `source_file`, the header being line 1.
     pub line_no: i64,
@@ -79,12 +89,12 @@ pub struct AirvisualUnplacedSampleRow {
 
 /// Same shape as `yolink_readings`' id, minus the metric, so a
 /// time-series consumer keys every device's samples the same way.
-pub fn sample_id_recipe(device_name: &str, ts_ms: i64) -> String {
-    format!("{device_name}#{ts_ms}")
+pub fn sample_id_recipe(device_id: &str, ts_ms: i64) -> String {
+    format!("{device_id}#{ts_ms}")
 }
 
-pub fn unplaced_id_recipe(device_name: &str, source_file: &str, line_no: i64) -> String {
-    format!("{device_name}#{source_file}#{line_no}")
+pub fn unplaced_id_recipe(device_id: &str, source_file: &str, line_no: i64) -> String {
+    format!("{device_id}#{source_file}#{line_no}")
 }
 
 pub fn full_ddl() -> Vec<String> {
