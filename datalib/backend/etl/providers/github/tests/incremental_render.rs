@@ -99,28 +99,24 @@ async fn download(api: &Path, playback: &Path, out_db: &Path) {
     db.close().await;
 }
 
-/// One render pass. Returns the uuids emitted and how many the diff let it
-/// skip. `prior` is the fingerprint map the store would hand back.
+/// One render pass from `cursor`. Returns the uuids emitted, how many the
+/// diff let it skip, and the commit the pass consumed — what the render
+/// step would record as the next cursor. `prior` is the fingerprint map
+/// the store would hand back.
 fn render_once(
     raw: &Path,
     out: &Path,
+    cursor: Option<&str>,
     prior: &HashMap<String, String>,
-) -> (Vec<RenderedMarkdown>, usize) {
-    let cursor_path = datalib_etl::render_cursor::cursor_path(out, "github");
-    let cursor = datalib_etl::render_cursor::read_for_params(
-        &cursor_path,
-        &datalib_etl::render_cursor::no_params(),
-    )
-    .unwrap();
-    let parsed =
-        parse_api_dir(raw, cursor.as_ref().map(|c| c.last_rendered_hash.as_str())).unwrap();
+) -> (Vec<RenderedMarkdown>, usize, Option<String>) {
+    let parsed = parse_api_dir(raw, cursor).unwrap();
     let mut docs = Vec::new();
     render_github(&parsed, out, "github", &Progress::noop(), prior, &mut |d| {
         docs.push(d);
         Ok(())
     })
     .unwrap();
-    (docs, parsed.docs_skipped)
+    (docs, parsed.docs_skipped, parsed.scan.new_head.clone())
 }
 
 /// The headline: a second render over an unchanged store does no work.
@@ -138,7 +134,7 @@ async fn a_second_render_over_an_unchanged_store_renders_nothing() {
     build_events(&d.path().join("ev"), &[(1, "one"), (2, "two")]);
     download(&d.path().join("ev"), &d.path().join("pb"), &out_db).await;
 
-    let (first, skipped) = render_once(&db_path_for(&out_db), &out, &HashMap::new());
+    let (first, skipped, cursor) = render_once(&db_path_for(&out_db), &out, None, &HashMap::new());
     assert_eq!(first.len(), 2, "cold start renders both PRs");
     assert_eq!(skipped, 0, "a cold start skips nothing — it has no cursor");
 
@@ -146,7 +142,7 @@ async fn a_second_render_over_an_unchanged_store_renders_nothing() {
         .iter()
         .map(|d| (d.markdown_uuid.clone(), d.source_fingerprint.clone()))
         .collect();
-    let (second, skipped) = render_once(&db_path_for(&out_db), &out, &prior);
+    let (second, skipped, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref(), &prior);
 
     assert!(
         second.is_empty(),
@@ -172,24 +168,14 @@ async fn a_narrowed_render_must_not_be_read_as_the_complete_document_set() {
     build_events(&d.path().join("ev"), &[(1, "one"), (2, "two")]);
     download(&d.path().join("ev"), &d.path().join("pb"), &out_db).await;
 
-    let (first, _) = render_once(&db_path_for(&out_db), &out, &HashMap::new());
+    let (first, _, cursor) = render_once(&db_path_for(&out_db), &out, None, &HashMap::new());
     let held: HashSet<String> = first.iter().map(|d| d.markdown_uuid.clone()).collect();
     let prior: HashMap<String, String> = first
         .iter()
         .map(|d| (d.markdown_uuid.clone(), d.source_fingerprint.clone()))
         .collect();
 
-    let cursor_path = datalib_etl::render_cursor::cursor_path(&out, "github");
-    let cursor = datalib_etl::render_cursor::read_for_params(
-        &cursor_path,
-        &datalib_etl::render_cursor::no_params(),
-    )
-    .unwrap();
-    let parsed = parse_api_dir(
-        &db_path_for(&out_db),
-        cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-    )
-    .unwrap();
+    let parsed = parse_api_dir(&db_path_for(&out_db), cursor.as_deref()).unwrap();
 
     // Nothing moved upstream, so nothing may be named as vanished. That is
     // the only list the processor is allowed to delete from.
@@ -199,7 +185,7 @@ async fn a_narrowed_render_must_not_be_read_as_the_complete_document_set() {
         parsed.vanished_buckets,
     );
 
-    let (second, _) = render_once(&db_path_for(&out_db), &out, &prior);
+    let (second, _, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref(), &prior);
     let emitted: HashSet<String> = second.iter().map(|d| d.markdown_uuid.clone()).collect();
     assert!(
         emitted.is_empty() && held.len() == 2,
@@ -219,7 +205,7 @@ async fn a_pr_that_left_the_store_is_named_as_vanished() {
 
     build_events(&d.path().join("ev"), &[(1, "one"), (2, "two")]);
     download(&d.path().join("ev"), &d.path().join("pb"), &out_db).await;
-    render_once(&db_path_for(&out_db), &out, &HashMap::new());
+    let (_, _, cursor) = render_once(&db_path_for(&out_db), &out, None, &HashMap::new());
 
     // Delete PR 2 from the raw store and commit, the way an upstream loss
     // reaches render.
@@ -242,17 +228,7 @@ async fn a_pr_that_left_the_store_is_named_as_vanished() {
     // the assertion below comes back empty.
     db.close().await;
 
-    let cursor_path = datalib_etl::render_cursor::cursor_path(&out, "github");
-    let cursor = datalib_etl::render_cursor::read_for_params(
-        &cursor_path,
-        &datalib_etl::render_cursor::no_params(),
-    )
-    .unwrap();
-    let parsed = parse_api_dir(
-        &db_path_for(&out_db),
-        cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-    )
-    .unwrap();
+    let parsed = parse_api_dir(&db_path_for(&out_db), cursor.as_deref()).unwrap();
 
     assert_eq!(
         parsed.vanished_buckets,

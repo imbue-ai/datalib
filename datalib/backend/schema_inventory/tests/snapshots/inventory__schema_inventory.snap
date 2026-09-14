@@ -1161,6 +1161,11 @@ markdowns
     row_set_hash
     renderer_version
     rendered_at
+render_cursor
+    source_id
+    raw_commit
+    params
+    rendered_at
 render_problems
     uuid
     scope_key

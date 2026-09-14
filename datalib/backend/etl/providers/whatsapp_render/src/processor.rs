@@ -55,18 +55,21 @@ impl RenderProcessor for WhatsappRender {
                 ctx.remove_conversation(&crate::render::whatsapp_chat_uuid(&self.name, chat_jid))?;
             Ok(())
         };
-        render_all(
+        let consumed = render_all(
             &parsed.chats,
             &parsed.blobs_by_chat,
             &self.raw_path,
             ctx.root,
             &self.name,
             ctx.progress,
-            ctx.prior_fingerprints,
+            ctx.raw_cursor,
             &mut on_doc,
             &mut on_chat_gone,
         )
         .context("whatsapp render_all")?;
+        if let Some(head) = consumed.as_deref() {
+            ctx.consumed(head);
+        }
         Ok(if dropped == 0 {
             "rendered".into()
         } else {

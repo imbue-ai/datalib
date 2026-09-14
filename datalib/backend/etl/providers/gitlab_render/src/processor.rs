@@ -38,17 +38,8 @@ impl RenderProcessor for GitlabRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render_gitlab};
-        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, ctx.name);
-        let cursor = datalib_etl::render_cursor::read_for_params(
-            &cursor_path,
-            &datalib_etl::render_cursor::no_params(),
-        )
-        .with_context(|| format!("read gitlab render cursor {}", cursor_path.display()))?;
-        let parsed = parse_api_dir(
-            &self.raw_path,
-            cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-        )
-        .with_context(|| format!("gitlab parse {}", self.raw_path.display()))?;
+        let parsed = parse_api_dir(&self.raw_path, ctx.raw_cursor)
+            .with_context(|| format!("gitlab parse {}", self.raw_path.display()))?;
 
         // Named, not swept: this render is narrowed by the diff, so what it
         // emits is only what changed. Handing that to `retain_documents`
@@ -74,6 +65,9 @@ impl RenderProcessor for GitlabRender {
             &mut on_doc,
         )
         .context("render_gitlab")?;
+        if let Some(head) = parsed.scan.new_head.as_deref() {
+            ctx.consumed(head);
+        }
         Ok(format!(
             "rendered={} skipped={} dropped={}",
             s.rendered, parsed.docs_skipped, dropped

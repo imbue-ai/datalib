@@ -27,6 +27,7 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
@@ -40,7 +41,6 @@ rust_test(
     crate = ":datalib_etl_render",
     edition = "2021",
     deps = [
-        "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
     ],
 )

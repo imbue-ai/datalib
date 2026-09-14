@@ -8,10 +8,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl::render_cursor;
 use datalib_etl_chat_common::render::ENTITY_KIND_CONVERSATION;
 use datalib_etl_chat_common::{RenderProfile, RenderSummary as ChatSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -38,9 +37,8 @@ pub struct RenderSummary {
 }
 
 /// The render params recorded alongside the cursor. `period` decides
-/// how messages bucket into documents, so changing it invalidates every
-/// document the previous run wrote — see
-/// [`datalib_etl::render_cursor::read_for_params`].
+/// how messages bucket into documents, so changing it re-renders every
+/// document the previous run wrote.
 pub fn render_params(period: Period) -> serde_json::Value {
     serde_json::json!({ "period": period.as_config_str() })
 }
@@ -66,7 +64,6 @@ pub fn render_all(
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
-    render_params: &serde_json::Value,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     // Log how long the dolt_diff scan took. Logged on every render
@@ -113,18 +110,6 @@ pub fn render_all(
         &prior_fingerprints,
         on_doc_complete,
     )?;
-
-    // Advance the render cursor only when:
-    //   * every doc rendered without error (we're here, so true), AND
-    //   * we managed to read HEAD at scan time.
-    // A missing HEAD (stock libsqlite3 / non-doltlite db) leaves the
-    // cursor unwritten — next run is another cold start, which is the
-    // right behavior since we have no way to anchor the diff.
-    if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(out_dir, source_id);
-        render_cursor::write(&cursor_path, head, render_params)
-            .with_context(|| format!("write signal render cursor {}", cursor_path.display()))?;
-    }
 
     Ok(RenderSummary {
         docs_total: parsed.docs.len() + parsed.docs_skipped,

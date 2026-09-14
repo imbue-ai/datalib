@@ -49,18 +49,9 @@ impl RenderProcessor for PdfRender {
             return Ok("skipped=store-unreadable".to_string());
         };
 
-        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, ctx.name);
-        let cursor = datalib_etl::render_cursor::read_for_params(
-            &cursor_path,
-            &datalib_etl::render_cursor::no_params(),
-        )
-        .with_context(|| format!("read pdf render cursor {}", cursor_path.display()))?;
-        let scan = render::scan_changed(
-            &self.raw_path,
-            cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-        )
-        .await
-        .context("pdf dolt_diff scan")?;
+        let scan = render::scan_changed(&self.raw_path, ctx.raw_cursor)
+            .await
+            .context("pdf dolt_diff scan")?;
 
         // `load_targets` returns the whole corpus, so it doubles as the
         // membership test the deletion needs: a bucket the diff named that
@@ -107,15 +98,8 @@ impl RenderProcessor for PdfRender {
         )
         .context("pdf render")?;
 
-        // After the conversions landed, so an interrupted run re-scans the
-        // same range rather than believing it consumed it.
         if let Some(head) = scan.new_head.as_deref() {
-            datalib_etl::render_cursor::write(
-                &cursor_path,
-                head,
-                &datalib_etl::render_cursor::no_params(),
-            )
-            .with_context(|| format!("write pdf render cursor {}", cursor_path.display()))?;
+            ctx.consumed(head);
         }
         Ok(format!(
             "converted={} unchanged={} skipped={} dropped={} failed={}",

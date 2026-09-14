@@ -40,17 +40,8 @@ impl RenderProcessor for SlackRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        let cursor = datalib_etl::render_cursor::read_for_params(
-            &cursor_path,
-            &datalib_etl::render_cursor::no_params(),
-        )
-        .with_context(|| format!("read slack render cursor {}", cursor_path.display()))?;
-        let parsed = parse(
-            &self.raw_path,
-            cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-        )
-        .with_context(|| format!("slack parse {}", self.raw_path.display()))?;
+        let parsed = parse(&self.raw_path, ctx.raw_cursor)
+            .with_context(|| format!("slack parse {}", self.raw_path.display()))?;
         // Threads no message belongs to any more — a deleted thread, or
         // one whose every message was deleted. The bucket key is already
         // the uuid render keys the thread's documents by.
@@ -61,6 +52,9 @@ impl RenderProcessor for SlackRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("slack render_all")?;
+        if let Some(head) = parsed.scan.new_head.as_deref() {
+            ctx.consumed(head);
+        }
         Ok(if dropped == 0 {
             "rendered".into()
         } else {

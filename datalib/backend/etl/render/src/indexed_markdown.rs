@@ -4,6 +4,13 @@
 //! The index reads it by asking `dolt_diff` what moved since the commit it
 //! last consumed, which is also how a document a source stopped holding gets
 //! named and deleted.
+//!
+//! Every write goes through a SQL transaction that leaves the store in a
+//! state a consumer may read — a document whole with its rows, edges and
+//! problems, never a document with its rows deleted and not yet re-inserted.
+//! That is what lets a doltlite commit land at any moment between them
+//! (checkpoint, Ctrl-C, rescue, end of run) without anyone checking what is
+//! in it. See `docs/dev/plans/one_mode.md`.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -16,6 +23,7 @@ use datalib_schema::edges::DDL as EDGES_DDL;
 use datalib_schema::grid_rows::DDL as GRID_ROWS_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::measurements::{SourceMeasurementRow, DDL as MEASUREMENTS_DDL};
+use datalib_schema::render_cursor::{RenderCursorRow, DDL as RENDER_CURSOR_DDL};
 use datalib_schema::render_problems::{RenderProblemRow, ScopeKind, DDL as RENDER_PROBLEMS_DDL};
 
 use crate::grid_index::{RenderedMarkdown, WriteLock};
@@ -39,11 +47,17 @@ fn store_ddl() -> Vec<&'static str> {
         .chain(EDGES_DDL.iter())
         .chain(RENDER_PROBLEMS_DDL.iter())
         .chain(MEASUREMENTS_DDL.iter())
+        .chain(RENDER_CURSOR_DDL.iter())
         .map(|(_table, ddl)| *ddl)
         .collect()
 }
 
 /// A source's render output store, open for writing.
+///
+/// The pool is one connection wide and a transaction holds it, so every
+/// read the driver may issue inside one goes through the write lock —
+/// which hands back the held connection — rather than the pool, which
+/// would wait on itself.
 pub struct IndexedMarkdownStore {
     pool: SqlitePool,
     write_lock: WriteLock,
@@ -161,17 +175,42 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Run `f` as one SQL transaction, or as part of the one already open.
+    ///
+    /// A unit of work — a document with its rows, the end-of-run sweep with
+    /// the cursor — is replaced whole or not at all. Joining an open
+    /// transaction is what lets the driver group several units into one
+    /// without the store asserting on a second `BEGIN`.
+    pub fn transaction<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        if blocking(self.write_lock.in_transaction()) {
+            return f();
+        }
+        blocking(self.write_lock.begin_transaction())?;
+        match f() {
+            Ok(v) => {
+                blocking(self.write_lock.commit_transaction())?;
+                Ok(v)
+            }
+            Err(e) => {
+                let _ = blocking(self.write_lock.rollback_transaction());
+                Err(e)
+            }
+        }
+    }
+
     pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
         // `markdowns.rendered_at` is one of the times `--now` is
         // documented to pin, and the pinned value is already in hand.
         // Left to sample its own clock, every document in a run
         // disagreed with every other by microseconds.
         let now = (!self.now.is_empty()).then_some(self.now.as_str());
-        blocking(async {
-            crate::grid_index::apply_one(&self.write_lock, out_dir, md, now)
-                .await
-                .with_context(|| format!("apply {}", md.markdown_uuid))?;
-            self.sweep_problems(&md.markdown_uuid, &md.problems).await
+        self.transaction(|| {
+            blocking(async {
+                crate::grid_index::apply_one(&self.write_lock, out_dir, md, now)
+                    .await
+                    .with_context(|| format!("apply {}", md.markdown_uuid))?;
+                self.sweep_problems(&md.markdown_uuid, &md.problems).await
+            })
         })
     }
 
@@ -180,39 +219,76 @@ impl IndexedMarkdownStore {
     /// The file matters as much as the rows. `md_path` is what
     /// `/applet/unified_index/chat/{uuid}` serves and what qmd indexed, so a
     /// document deleted from the store but left on disk stays searchable and
-    /// still resolves — a deletion the user can still read.
+    /// still resolves — a deletion the user can still read. It goes after
+    /// the rows commit: a rolled-back delete must not leave a document whose
+    /// rows say it exists and whose file is gone.
     pub fn remove_document(&self, out_dir: &Path, markdown_uuid: &str) -> Result<()> {
-        blocking(async {
-            let mut guard = self.write_lock.acquire().await?;
-            let conn = guard.conn();
-            let md_path: Option<String> =
-                sqlx::query_scalar("SELECT md_path FROM markdowns WHERE markdown_uuid = ?")
-                    .bind(markdown_uuid)
-                    .fetch_optional(&mut **conn)
-                    .await
-                    .with_context(|| format!("read md_path for {markdown_uuid}"))?
-                    .flatten();
-            for sql in [
-                "DELETE FROM grid_rows WHERE markdown_uuid = ?",
-                "DELETE FROM edges WHERE src_markdown_uuid = ?",
-                "DELETE FROM markdowns WHERE markdown_uuid = ?",
-            ] {
-                sqlx::query(sql)
+        let md_path = self.transaction(|| {
+            blocking(async {
+                let mut guard = self.write_lock.acquire().await?;
+                let conn = guard.conn();
+                let md_path: Option<String> =
+                    sqlx::query_scalar("SELECT md_path FROM markdowns WHERE markdown_uuid = ?")
+                        .bind(markdown_uuid)
+                        .fetch_optional(&mut **conn)
+                        .await
+                        .with_context(|| format!("read md_path for {markdown_uuid}"))?
+                        .flatten();
+                for sql in [
+                    "DELETE FROM grid_rows WHERE markdown_uuid = ?",
+                    "DELETE FROM edges WHERE src_markdown_uuid = ?",
+                    "DELETE FROM markdowns WHERE markdown_uuid = ?",
+                ] {
+                    sqlx::query(sql)
+                        .bind(markdown_uuid)
+                        .execute(&mut **conn)
+                        .await
+                        .with_context(|| format!("remove {markdown_uuid} from the store"))?;
+                }
+                sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
+                    .bind(ScopeKind::Markdown.as_str())
                     .bind(markdown_uuid)
                     .execute(&mut **conn)
                     .await
                     .with_context(|| format!("remove {markdown_uuid} from the store"))?;
-            }
-            sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
-                .bind(ScopeKind::Markdown.as_str())
-                .bind(markdown_uuid)
+                Ok(md_path)
+            })
+        })?;
+        if let Some(rel) = md_path {
+            unlink_rendered(out_dir, &rel);
+        }
+        Ok(())
+    }
+
+    /// Where the last render left off, if it recorded it.
+    pub fn cursor(&self) -> Result<Option<RenderCursorRow>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            sqlx::query_as::<_, RenderCursorRow>("SELECT * FROM render_cursor LIMIT 1")
+                .fetch_optional(&mut **guard.conn())
+                .await
+                .context("read the render cursor")
+        })
+    }
+
+    /// Record where this render left off. Call it inside the transaction
+    /// that holds the run's last work, so the cursor and the documents it
+    /// describes reach the store together.
+    pub fn write_cursor(&self, row: &RenderCursorRow) -> Result<()> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let conn = guard.conn();
+            sqlx::query("DELETE FROM render_cursor")
                 .execute(&mut **conn)
                 .await
-                .with_context(|| format!("remove {markdown_uuid} from the store"))?;
-            drop(guard);
-            if let Some(rel) = md_path {
-                unlink_rendered(out_dir, &rel);
-            }
+                .context("clear the prior render cursor")?;
+            let sql = datalib_etl::bulk::insert_sql::<RenderCursorRow>();
+            // Audited: `sql` is built from `RenderCursorRow`'s associated
+            // consts; every value is bound.
+            row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+                .execute(&mut **conn)
+                .await
+                .context("write the render cursor")?;
             Ok(())
         })
     }
@@ -227,12 +303,13 @@ impl IndexedMarkdownStore {
     /// only thing that still knows.
     pub fn documents_for_conversation(&self, conversation_uuid: &str) -> Result<Vec<String>> {
         blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
             let rows = sqlx::query(
                 "SELECT DISTINCT markdown_uuid FROM grid_rows \
                  WHERE conversation_uuid = ? AND markdown_uuid IS NOT NULL",
             )
             .bind(conversation_uuid)
-            .fetch_all(&self.pool)
+            .fetch_all(&mut **guard.conn())
             .await
             .with_context(|| format!("documents for conversation {conversation_uuid}"))?;
             rows.into_iter()
@@ -241,13 +318,14 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// Every document this store holds. The other half of a retain sweep:
-    /// a renderer that walked its whole raw store says what should be here,
+    /// Every document this store holds. The other half of a sweep: a
+    /// renderer that walked its whole raw store says what should be here,
     /// and whatever else is here is what the store lost.
     pub fn all_document_uuids(&self) -> Result<Vec<String>> {
         blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
             let rows = sqlx::query("SELECT markdown_uuid FROM markdowns")
-                .fetch_all(&self.pool)
+                .fetch_all(&mut **guard.conn())
                 .await
                 .context("list every document in the store")?;
             rows.into_iter()
@@ -586,6 +664,11 @@ impl IndexedMarkdownStore {
     /// One `dolt_commit` for the whole render, not one per document.
     pub fn commit(&self, summary: &str) -> Result<Option<String>> {
         blocking(datalib_etl::doltlite_raw::commit_run(&self.pool, summary))
+    }
+
+    /// The store's HEAD: its content version. `None` without doltlite.
+    pub fn head(&self) -> Result<Option<String>> {
+        blocking(datalib_etl::doltlite_raw::head_commit(&self.pool))
     }
 
     pub fn close(self) {

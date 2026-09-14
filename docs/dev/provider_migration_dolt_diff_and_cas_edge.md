@@ -123,32 +123,23 @@ whole migration.
 
 ## The shared primitives
 
-### `datalib_etl::render_cursor`
+### The render cursor
 
-A small JSON file at `<out_dir>/<stanza>/render_markdown/_render_cursor.json`.
+One row in the source's render store
+(`render_markdown/indexed_markdown.doltlite_db`, table `render_cursor`,
+`datalib_schema::render_cursor::RenderCursorRow`): the raw store's
+commit the last render consumed, and the render params it was rendered
+with. The render step driver owns it — it reads the row before the
+provider runs and writes it in the same SQL transaction as the run's
+last work, so the cursor can never claim a range the store's rows do
+not reflect, and there is no separate file to lose or to write
+non-atomically.
 
-```json
-{
-  "last_rendered_hash": "k7v9...",
-  "last_render_at": "2026-06-11T17:44:32-07:00"
-}
-```
-
-- `last_rendered_hash`: the doltlite HEAD that the previous run
-  successfully completed against. Used as `from_ref` for the next
-  run's `dolt_diff_<table>` query.
-- `last_render_at`: RFC 3339 stamp of when the cursor was written.
-
-Single-writer assumption. No locking, no atomic-rename dance.
-Missing file → cold start → render everything.
-
-API (see `datalib/backend/etl/src/render_cursor.rs`):
-
-```rust
-pub fn cursor_path(out_dir: &Path, provider: &str, source_id: &str) -> PathBuf;
-pub fn read(path: &Path) -> Result<Option<RenderCursor>>;
-pub fn write(path: &Path, hash: &str, scan_elapsed: Option<Duration>) -> Result<()>;
-```
+A provider sees the cursor as `RenderCtx::raw_cursor` (`None` means
+render everything) and reports the commit it pinned through
+`RenderCtx::consumed(head)`. A provider with render knobs declares them
+through `RenderProcessor::render_params`; when they differ from the
+stored ones the driver renders every bucket again and keeps the range.
 
 ### Per-provider CAS edge
 
@@ -415,14 +406,8 @@ commit map roughly to:
 3. `source_fingerprint` on `RenderedMarkdown` / the `markdowns` row is the
    bucket UUID itself (stable, distinct).
 
-4. On success, advance the render cursor:
-
-   ```rust
-   if let Some(head) = parsed.scan.new_head.as_deref() {
-       let cursor_path = render_cursor::cursor_path(out_dir, "<provider>", source_id);
-       render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)?;
-   }
-   ```
+4. `render_all` writes no cursor. The processor reports the pinned
+   commit (below) and the driver records it.
 
 ### Phase 5: step integration
 
@@ -432,15 +417,11 @@ source `type:` by `datalib_step/src/dispatch.rs`. In the provider's
 render path:
 
 ```rust
-let cursor_path = datalib_etl::render_cursor::cursor_path(
-    root, "<provider>", name,
-);
-let cursor = datalib_etl::render_cursor::read(&cursor_path)?;
-let parsed = parse(
-    &fixture,
-    cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-)?;
+let parsed = parse(&fixture, ctx.raw_cursor)?;
 render_all(&parsed, root, name, progress, on_doc_complete)?;
+if let Some(head) = parsed.scan.new_head.as_deref() {
+    ctx.consumed(head);
+}
 ```
 
 The `prior_fingerprints` arg stays in the shared render entry's
@@ -573,16 +554,20 @@ There is no `blocks` table. Notion renders the page body itself
 
 1. **First run / no cursor.** Cold start: parse loads every bucket
    (whatever the provider's "all" query is), `docs_skipped == 0`.
-   After render: cursor is written. Next run starts incremental.
+   After render: the driver records the cursor. Next run starts
+   incremental.
 
-2. **`--reset-and-redownload`.** Tables get truncated. Two options:
-   - Cursor stays. The next dolt_diff goes from old_hash to HEAD
-     (where HEAD now has the re-populated tables); dolt collapses
-     this correctly as added/modified/removed.
-   - Wipe the cursor. Simpler — next run is a cold start.
-   - **Recommend wipe the cursor.** Cleaner semantics, no reasoning
-     about diff collapse. Add the wipe to the reset_and_redownload
-     branch in download.
+2. **`--reset-and-redownload`.** Tables get truncated and refilled.
+   The cursor stays: the next dolt_diff goes from the old commit to
+   HEAD, where the tables are populated again, and dolt collapses the
+   range correctly as added/modified/removed — an unchanged row diffs
+   as unchanged. Nothing wipes the cursor, and nothing should: "render
+   every bucket again" and "forget where I was" are different requests
+   (`docs/dev/plans/one_mode.md`).
+
+   A renderer version bump or a render param change is the first of
+   those: the driver renders everything, keeps the range, and sweeps
+   at the end whatever the full walk did not produce.
 
 3. **dolt_diff_<table> says "no such table".** Happens on a brand-
    new working set where the table exists but has no dolt history
@@ -606,10 +591,9 @@ There is no `blocks` table. Notion renders the page body itself
    'HEAD'` covers the cumulative diff. Dolt handles arbitrary
    ranges natively; no per-commit accumulation needed.
 
-6. **Concurrent renders.** Cursor write isn't locked. Two
-   render-step processes racing on the same source: the
-   later overwrites. Worst case: some buckets render twice, none
-   get skipped wrongly. Don't add locking.
+6. **Concurrent renders.** Two render-step processes on one source
+   are two writers on one doltlite file, which AGENTS.md's "One open
+   per doltlite file" rules out; the runner never schedules it.
 
 7. **`dolt_log()` unavailable.** Non-doltlite libsqlite3. The
    `fetch_optional` returns `None`, scan_diff returns
@@ -721,9 +705,9 @@ Clippy lints, fmt drift, and test snapshot one-line updates are
 - **Dropping the `blob_refs` table itself.** It stays in the
   schema for the unported providers. Drop it in a final cleanup
   pass once every provider has migrated off it.
-- **A `--reset-cursor` CLI flag.** If a user wants to force-rerender
-  everything, they can `rm _render_cursor.json`. Add a flag only
-  when someone actually needs it.
+- **A `--reset-cursor` CLI flag.** Bumping the renderer version or
+  changing a render param already renders everything, and a "start
+  over" that empties the store is `one_mode.md`'s to add.
 - **Lifting the second-hop `SELECT bytes FROM cas_objects WHERE
   blake3 = ?` SQL into a shared helper.** It's three lines, and
   unifying it now would obscure the per-provider first hop.

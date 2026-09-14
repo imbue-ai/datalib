@@ -145,11 +145,6 @@ const VOLATILE_KEYS: &[&str] = &[
     // fetch: `expiry_time` is its rotating expiry; the sibling `url`'s volatile
     // query string is collapsed by `scrub_presigned` (the base URL stays).
     "expiry_time",
-    // Per-provider `_render_cursor.json` skip-check bookkeeping: `last_render_at`
-    // is wall-clock, and `last_rendered_hash` is a digest over inputs that
-    // include volatile fields (same reason `source_fingerprint` is redacted).
-    "last_render_at",
-    "last_rendered_hash",
     // Dolt commit hashes (`load.commit_hash`, per-source `commit`) fold in a
     // wall-clock timestamp, so they differ on every run even for identical
     // content. The actual content equality is covered by row counts + the

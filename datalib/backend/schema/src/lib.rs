@@ -27,6 +27,10 @@ pub mod source_cursors {
     include!("source_cursors.rs");
 }
 
+pub mod render_cursor {
+    include!("render_cursor.rs");
+}
+
 pub mod measurements {
     include!("measurements.rs");
 }

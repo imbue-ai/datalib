@@ -44,23 +44,17 @@ impl RenderProcessor for SignalRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
+    // `period` decides how messages bucket into documents, so a change
+    // re-renders every document.
+    fn render_params(&self) -> serde_json::Value {
+        crate::render::render_params(self.period)
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse, render_all};
 
-        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        // `period` decides how messages bucket into documents, so a
-        // cursor written under a different one points past documents
-        // that no longer exist under this one.
-        let render_params = crate::render::render_params(self.period);
-        let cursor = datalib_etl::render_cursor::read_for_params(&cursor_path, &render_params)
-            .with_context(|| format!("read signal render cursor {}", cursor_path.display()))?;
-        let parsed = parse(
-            &self.raw_path,
-            self.period,
-            &self.name,
-            cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-        )
-        .with_context(|| format!("signal parse {}", self.raw_path.display()))?;
+        let parsed = parse(&self.raw_path, self.period, &self.name, ctx.raw_cursor)
+            .with_context(|| format!("signal parse {}", self.raw_path.display()))?;
         // Chats the newest backup no longer carries. Signal periodizes,
         // so one chat owns several documents; the store resolves how many.
         let mut dropped = 0usize;
@@ -69,15 +63,11 @@ impl RenderProcessor for SignalRender {
                 ctx.remove_conversation(&crate::render::signal_chat_uuid(&self.name, chat_id))?;
         }
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_all(
-            &parsed,
-            ctx.root,
-            &self.name,
-            ctx.progress,
-            &render_params,
-            &mut on_doc,
-        )
-        .context("signal render_all")?;
+        render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
+            .context("signal render_all")?;
+        if let Some(head) = parsed.scan.new_head.as_deref() {
+            ctx.consumed(head);
+        }
         Ok(if dropped == 0 {
             "rendered".into()
         } else {

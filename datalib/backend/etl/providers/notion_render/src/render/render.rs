@@ -447,16 +447,6 @@ pub fn render_notion(
         summary.rendered += 1;
         progress.inc(1);
     }
-    // Only once every document landed. A cursor written over a failed
-    // render would tell the next run those pages were already done.
-    if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = datalib_etl::render_cursor::cursor_path(root, stanza);
-        datalib_etl::render_cursor::write(
-            &cursor_path,
-            head,
-            &datalib_etl::render_cursor::no_params(),
-        )?;
-    }
     Ok(summary)
 }
 
