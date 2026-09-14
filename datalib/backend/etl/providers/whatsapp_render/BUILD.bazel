@@ -22,6 +22,7 @@ rust_library(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",

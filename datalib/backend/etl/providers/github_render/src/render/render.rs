@@ -12,7 +12,7 @@ use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use super::grid_rows::{fingerprint_for_pr, rows_for_pr, RENDER_VERSION};
+use super::grid_rows::{rows_for_pr, RENDER_VERSION};
 use super::parse::{CommentRow, CommentSection, ParsedGithubApi, PullRequestRow};
 
 pub const SLUG_MAX_LEN: usize = 60;
@@ -22,7 +22,6 @@ static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
     pub rendered: usize,
-    pub skipped: usize,
 }
 
 pub fn slugify(name: &str) -> String {
@@ -305,7 +304,6 @@ pub fn render_github(
     root: &Path,
     stanza: &str,
     progress: &Progress,
-    prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
@@ -335,17 +333,8 @@ pub fn render_github(
     for pr in &parsed.pull_requests {
         let key = (pr.repo_full_name.clone(), pr.pr_number);
         let comments = by_pr.remove(&key).unwrap_or_default();
-        let fingerprint = fingerprint_for_pr(pr, &comments);
         let md_rel = pr_qmd_path_rel(stanza, &pr.repo_full_name, pr.pr_number);
         let md_path = root.join(&md_rel);
-
-        if prior_fingerprints.get(&pr.uuid).map(String::as_str) == Some(fingerprint.as_str())
-            && md_path.exists()
-        {
-            summary.skipped += 1;
-            progress.inc(1);
-            continue;
-        }
 
         render_one_pr(pr, &comments, root, stanza)?;
         let mut problems: Vec<RenderProblemRow> = Vec::new();
@@ -353,8 +342,8 @@ pub fn render_github(
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: pr.uuid.clone(),
             source_id: String::new(),
-            source_fingerprint: fingerprint,
             upstream_cursor: None,
+            bucket_key: None,
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,

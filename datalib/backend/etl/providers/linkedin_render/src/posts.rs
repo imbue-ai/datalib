@@ -45,7 +45,6 @@ fn profile() -> RenderProfile {
 pub fn render_posts(
     source: &Source<'_>,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     // Every document this render considered, skipped ones included — the
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
@@ -108,7 +107,6 @@ pub fn render_posts(
         source_id,
         &blobs,
         progress,
-        prior_fingerprints,
         on_doc_complete,
     )?;
     seen.extend(s.documents);

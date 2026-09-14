@@ -118,8 +118,6 @@ pub fn render_all(
         (None, None, Vec::new())
     };
     let to_render: &[NormalizedChat] = filtered_owned.as_deref().unwrap_or(chats);
-
-    let empty_fingerprints: HashMap<String, String> = HashMap::new();
     let summary = datalib_etl_chat_common::render::render_all(
         &profile(),
         to_render,
@@ -127,19 +125,13 @@ pub fn render_all(
         source_id,
         blobs_by_chat,
         progress,
-        &empty_fingerprints,
         on_doc_complete,
     )?;
     // Named chats first, with no documents: one the diff named whose
     // messages all went builds no chat, and chat-common never sees it.
     let mut buckets: Buckets = named
         .iter()
-        .map(|jid| {
-            (
-                crate::render::whatsapp_chat_uuid(source_id, jid),
-                Vec::new(),
-            )
-        })
+        .map(|jid| crate::render::whatsapp_chat_uuid(source_id, jid))
         .collect();
     buckets.extend(summary.buckets);
     Ok((new_head, buckets))

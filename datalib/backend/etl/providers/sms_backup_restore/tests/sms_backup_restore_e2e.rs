@@ -1,7 +1,6 @@
 //! End-to-end test for the "SMS Backup & Restore" provider.
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -122,7 +121,6 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
                 &out_dir,
                 "sms_backup_restore",
                 &Progress::noop(),
-                &HashMap::new(),
                 &mut on_doc,
                 None,
             )

@@ -1,82 +1,14 @@
 //! Build the `grid_rows` for one GitHub PR document.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{Hash, Hasher};
 
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
-use serde_json::Value;
 
 use super::parse::{CommentRow, CommentSection, PullRequestRow};
 
 pub const RENDER_VERSION: u32 = 1;
-
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
-    }
-}
-
-fn comment_json(c: &CommentRow) -> Value {
-    serde_json::json!({
-        "uuid": c.uuid,
-        "kind": c.kind,
-        "section": format!("{:?}", c.section),
-        "external_id": c.external_id,
-        "in_reply_to_id": c.in_reply_to_id,
-        "user_login": c.user_login,
-        "body": c.body,
-        "path": c.path,
-        "line": c.line,
-        "commit_id": c.commit_id,
-        "state": c.state,
-        "created_at": c.created_at,
-        "updated_at": c.updated_at,
-    })
-}
-
-fn pr_json(pr: &PullRequestRow) -> Value {
-    serde_json::json!({
-        "uuid": pr.uuid,
-        "repo": pr.repo_full_name,
-        "pr_number": pr.pr_number,
-        "title": pr.title,
-        "body": pr.body,
-        "state": pr.state,
-        "head_sha": pr.head_sha,
-        "base_sha": pr.base_sha,
-        "merged_at": pr.merged_at,
-        "updated_at": pr.updated_at,
-    })
-}
-
-pub fn fingerprint_for_pr(pr: &PullRequestRow, comments: &[CommentRow]) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    RENDER_VERSION.hash(&mut h);
-    serde_json::to_string(&canonicalize(&pr_json(pr)))
-        .unwrap_or_default()
-        .hash(&mut h);
-    // Sort comments deterministically (external_id is stable).
-    let mut sorted: Vec<&CommentRow> = comments.iter().collect();
-    sorted.sort_by_key(|c| c.external_id);
-    for c in sorted {
-        serde_json::to_string(&canonicalize(&comment_json(c)))
-            .unwrap_or_default()
-            .hash(&mut h);
-    }
-    format!("{:016x}", h.finish())
-}
 
 /// Sort comments into rendered order (matches `render.rs`).
 fn ordered_comments(comments: &[CommentRow]) -> Vec<&CommentRow> {

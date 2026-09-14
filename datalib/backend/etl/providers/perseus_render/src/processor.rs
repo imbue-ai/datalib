@@ -67,7 +67,6 @@ impl RenderProcessor for PerseusRender {
             ctx.root,
             &self.name,
             ctx.progress,
-            ctx.prior_fingerprints,
             &mut on_doc,
             &mut seen,
         )

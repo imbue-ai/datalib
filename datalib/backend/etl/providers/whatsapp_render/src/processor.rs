@@ -41,6 +41,10 @@ impl RenderProcessor for WhatsappRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
+    fn render_params(&self) -> serde_json::Value {
+        datalib_etl_chat_common::render::layout_params()
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse, render_all};
         // WhatsApp doesn't expose a `period` knob on its sync block today —
@@ -67,8 +71,8 @@ impl RenderProcessor for WhatsappRender {
             &mut on_chat_gone,
         )
         .context("whatsapp render_all")?;
-        for (bucket, documents) in &buckets {
-            ctx.declare_bucket(bucket, documents);
+        for bucket in &buckets {
+            ctx.declare_bucket(bucket, &[])?;
         }
         if let Some(head) = consumed.as_deref() {
             ctx.consumed(head);

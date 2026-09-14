@@ -217,8 +217,8 @@ never varies within it.
 
 `ingested_tng_test`'s run 4 wipes the data root and ingests the same
 TNG fixture again, then asserts every id is byte-identical to run 1.
-Runs 2 and 3 cannot do this: both skip on `source_fingerprint`, so no
-id in them is recomputed. Verified by sabotage — a wall-clock salt in
+Runs 2 and 3 cannot do this: both find their raw stores unmoved, so
+no id in them is recomputed. Verified by sabotage — a wall-clock salt in
 an id recipe passes runs 1–3 and fails run 4.
 
 It catches a recipe that reads the clock, an RNG, or an unfixed
@@ -315,7 +315,7 @@ compare row content rather than just the id.
    this build doesn't produce is deleted and re-rendered from the raw
    store.
    Skip the bump and the port silently does nothing to any data root
-   that already exists: the fingerprints still match, so nothing
+   that already exists: the raw store has not moved, so nothing
    re-renders and the old ids stay.
 
    Every render processor already returns its constant from

@@ -101,17 +101,15 @@ async fn download(api: &Path, playback: &Path, out_db: &Path) {
 
 /// One render pass from `cursor`. Returns the uuids emitted, how many the
 /// diff let it skip, and the commit the pass consumed — what the render
-/// step would record as the next cursor. `prior` is the fingerprint map
-/// the store would hand back.
+/// step would record as the next cursor.
 fn render_once(
     raw: &Path,
     out: &Path,
     cursor: Option<&str>,
-    prior: &HashMap<String, String>,
 ) -> (Vec<RenderedMarkdown>, usize, Option<String>) {
     let parsed = parse_api_dir(raw, cursor).unwrap();
     let mut docs = Vec::new();
-    render_github(&parsed, out, "github", &Progress::noop(), prior, &mut |d| {
+    render_github(&parsed, out, "github", &Progress::noop(), &mut |d| {
         docs.push(d);
         Ok(())
     })
@@ -121,9 +119,6 @@ fn render_once(
 
 /// The headline: a second render over an unchanged store does no work.
 ///
-/// Before the port this renderer re-derived every PR on every run and let
-/// the fingerprint compare throw the results away — correct output, and the
-/// whole cost paid anyway.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_second_render_over_an_unchanged_store_renders_nothing() {
     let _guard = ENV_LOCK.lock().await;
@@ -134,15 +129,11 @@ async fn a_second_render_over_an_unchanged_store_renders_nothing() {
     build_events(&d.path().join("ev"), &[(1, "one"), (2, "two")]);
     download(&d.path().join("ev"), &d.path().join("pb"), &out_db).await;
 
-    let (first, skipped, cursor) = render_once(&db_path_for(&out_db), &out, None, &HashMap::new());
+    let (first, skipped, cursor) = render_once(&db_path_for(&out_db), &out, None);
     assert_eq!(first.len(), 2, "cold start renders both PRs");
     assert_eq!(skipped, 0, "a cold start skips nothing — it has no cursor");
 
-    let prior: HashMap<String, String> = first
-        .iter()
-        .map(|d| (d.markdown_uuid.clone(), d.source_fingerprint.clone()))
-        .collect();
-    let (second, skipped, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref(), &prior);
+    let (second, skipped, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref());
 
     assert!(
         second.is_empty(),
@@ -168,12 +159,8 @@ async fn a_narrowed_render_must_not_be_read_as_the_complete_document_set() {
     build_events(&d.path().join("ev"), &[(1, "one"), (2, "two")]);
     download(&d.path().join("ev"), &d.path().join("pb"), &out_db).await;
 
-    let (first, _, cursor) = render_once(&db_path_for(&out_db), &out, None, &HashMap::new());
+    let (first, _, cursor) = render_once(&db_path_for(&out_db), &out, None);
     let held: HashSet<String> = first.iter().map(|d| d.markdown_uuid.clone()).collect();
-    let prior: HashMap<String, String> = first
-        .iter()
-        .map(|d| (d.markdown_uuid.clone(), d.source_fingerprint.clone()))
-        .collect();
 
     let parsed = parse_api_dir(&db_path_for(&out_db), cursor.as_deref()).unwrap();
 
@@ -185,7 +172,7 @@ async fn a_narrowed_render_must_not_be_read_as_the_complete_document_set() {
         parsed.vanished_buckets,
     );
 
-    let (second, _, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref(), &prior);
+    let (second, _, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref());
     let emitted: HashSet<String> = second.iter().map(|d| d.markdown_uuid.clone()).collect();
     assert!(
         emitted.is_empty() && held.len() == 2,
@@ -205,7 +192,7 @@ async fn a_pr_that_left_the_store_is_named_as_vanished() {
 
     build_events(&d.path().join("ev"), &[(1, "one"), (2, "two")]);
     download(&d.path().join("ev"), &d.path().join("pb"), &out_db).await;
-    let (_, _, cursor) = render_once(&db_path_for(&out_db), &out, None, &HashMap::new());
+    let (_, _, cursor) = render_once(&db_path_for(&out_db), &out, None);
 
     // Delete PR 2 from the raw store and commit, the way an upstream loss
     // reaches render.

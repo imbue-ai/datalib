@@ -34,14 +34,12 @@ Each comment block is blockquoted, with the header line spelling out
 
 ## Rows
 
-The same `RenderedMarkdown { markdown_uuid, source_fingerprint, rows }`
-shape every provider emits:
+The same `RenderedMarkdown { markdown_uuid, rows, .. }` shape every
+provider emits:
 
-- `markdown_uuid` — UUIDv5 of `github:{repo}:pr:{num}`.
-- `source_fingerprint` — DefaultHasher hash of `RENDER_VERSION`
-  + canonicalized PR JSON + canonicalized comment JSONs (sorted by
-  `upstream_id`). Re-renders that didn't change content produce an
-  identical row set, so the store's commit does not move.
+- `markdown_uuid` — UUIDv5 of `github:{repo}:pr:{num}`. Re-renders
+  that didn't change content produce an identical row set, so the
+  store's commit carries no diff for them.
 - `rows[0]` — the PR row itself (kind = "GitHub PR").
 - `rows[1..]` — one row per comment, in the same order as the rendered
   doc (Reviews → General → Inline-by-`(path, line)`). `message_index`

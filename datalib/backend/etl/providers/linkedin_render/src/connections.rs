@@ -2,7 +2,6 @@
 //! shared [`datalib_etl_contact_common`] renderer.
 
 use datalib_etl_render::processor::RenderPass;
-use std::collections::HashMap;
 
 use anyhow::Result;
 use datalib_etl::progress::Progress;
@@ -33,7 +32,6 @@ const FIELD_COLUMNS: &[&str] = &["Company", "Position", "Email Address", "Connec
 pub fn render_connections(
     source: &Source<'_>,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     // Every document this render considered, skipped ones included — the
     // caller hands it to `RunCtx::retain_documents`, which drops whatever
@@ -113,7 +111,6 @@ pub fn render_connections(
         out_dir,
         source_id,
         progress,
-        prior_fingerprints,
         on_doc_complete,
     )?;
     seen.extend(s.documents);

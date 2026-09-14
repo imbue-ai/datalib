@@ -108,11 +108,16 @@ whole migration.
   as missing and re-fetches. See `data_architecture_ingestion.md`
   §"No-preseed listing flow" for the rationale.
 
+**Gone since (2026-09-14), tree-wide rather than per port:**
+- `source_fingerprint` on `RenderedMarkdown` / the `markdowns` row, and
+  the `prior_fingerprints` arg on every render entry. Earlier revisions
+  of this recipe kept the field "because grid_index still reads it";
+  nothing reads it now. A renderer writes every document it renders,
+  and doltlite's content-addressed tables store an unchanged one as no
+  change — see `plans/render_inputs.md` §"Does the fingerprint still
+  earn its place?".
+
 **Kept (and load-bearing):**
-- Per-doc `source_fingerprint` field on `RenderedMarkdown` / the `markdowns` row
-  — the grid_index step still reads it. It's now set to the markdown_uuid
-  (or thread_uuid). Stable across re-renders of the same bucket,
-  distinct across buckets; the skip decision happens elsewhere.
 - The bookkeeping sidecars (`<table>_bookkeeping`) and the rest of
   the `bulk_upsert_in_tx` machinery — unaffected.
 - `WirePayloadRow` derive macro — emits one less column.
@@ -400,11 +405,12 @@ commit map roughly to:
    on the bucket's pre-loaded bytes, no `Arc<dyn BlobReader>`.
 
 2. `parsed.threads`/`parsed.conversations`/etc. is already
-   filtered down to changed buckets by the parse step. No
-   `prior_fingerprints` arg; no fingerprint compare inside render.
+   filtered down to changed buckets by the parse step. Render writes
+   every one of them; nothing compares.
 
-3. `source_fingerprint` on `RenderedMarkdown` / the `markdowns` row is the
-   bucket UUID itself (stable, distinct).
+3. `bucket_key` on `RenderedMarkdown` names the bucket the document
+   came from, and the processor declares that bucket through
+   `RenderCtx::declare_bucket` (`plans/render_inputs.md`).
 
 4. `render_all` writes no cursor. The processor reports the pinned
    commit (below) and the driver records it.
@@ -423,10 +429,6 @@ if let Some(head) = parsed.scan.new_head.as_deref() {
     ctx.consumed(head);
 }
 ```
-
-The `prior_fingerprints` arg stays in the shared render entry's
-signature for unported providers — just unused inside this arm.
-Don't refactor that signature mid-migration.
 
 ---
 
@@ -640,14 +642,11 @@ non-negotiable for the upcoming ones:
    provider's port is its own commit; mixing two providers'
    migrations is asking for an awkward bisect later.
 
-7. **`source_fingerprint` on the document is now the bucket UUID,
-   not a content hash.** The grid_index step still consumes the field
-   for its `(qmd_path, source_fingerprint)` skip key; we're
-   trading "fingerprint changes when content changes" for
-   "fingerprint is stable per bucket". The grid_index step's skip
-   becomes "have we ever loaded this exact UUID before?" instead
-   of "is the content the same?" — fine because the renderer no
-   longer writes if the content hasn't changed.
+7. **There is no fingerprint on the document.** Earlier revisions of
+   this list made `source_fingerprint` the bucket UUID and leaned on
+   grid_index's skip key; both are gone. The renderer writes what it
+   rendered, the store stores an unchanged row as no change, and the
+   index reads only what the store's diff names.
 
 ---
 
@@ -685,8 +684,7 @@ user**:
   awkward (no clear bucket key, joins that don't project the key
   cleanly, etc).
 - A test against a checked-in fixture fails in a way that's not
-  obviously a snapshot needing `cargo insta` review or a
-  fingerprint snapshot needing one-line update.
+  obviously a snapshot needing `cargo insta` review.
 - The orchestrator's per-source state machinery doesn't have an
   obvious place to thread the cursor (most arms do; if one
   doesn't, surface the proposed restructure before doing it).

@@ -61,8 +61,8 @@ fn profile() -> RenderProfile {
 /// Projects are not chats, but they are *page-shaped* in exactly the
 /// way chat-common already handles: a titled page whose body is a list
 /// of anchored sections, each with its own grid row. Reusing the same
-/// renderer gets the `id="m-{uuid}"` / `data-section-uuid` anchors, the
-/// rows, and the fingerprint skip for free — see docs/dev/cards.md
+/// renderer gets the `id="m-{uuid}"` / `data-section-uuid` anchors and
+/// the rows for free — see docs/dev/cards.md
 /// for why those anchors are load-bearing.
 fn project_profile() -> RenderProfile {
     RenderProfile {
@@ -130,8 +130,6 @@ pub fn render_all(
         blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
         chats.push(chat);
     }
-
-    let no_priors: HashMap<String, String> = HashMap::new();
     let mut buckets = cc_render_all(
         &profile(),
         &chats,
@@ -139,7 +137,6 @@ pub fn render_all(
         source_id,
         &blobs_by_chat,
         progress,
-        &no_priors,
         on_doc_complete,
     )
     .context("claude chat-common render")?
@@ -164,7 +161,6 @@ pub fn render_all(
             source_id,
             &no_blobs,
             progress,
-            &no_priors,
             on_doc_complete,
         )
         .context("claude project render")?;

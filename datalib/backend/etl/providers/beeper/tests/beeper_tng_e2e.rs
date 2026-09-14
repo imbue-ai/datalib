@@ -1,7 +1,6 @@
 //! End-to-end test for the Beeper provider against the
 //! ST:TNG-themed SQL fixture.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -293,13 +292,11 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
         &rendered_root,
         "tng",
         &Progress::noop(),
-        &HashMap::new(),
         &mut on_doc,
         &out_db,
     )?;
     assert_eq!(summary.docs_total, 4);
     assert_eq!(summary.docs_rendered, 4);
-    assert_eq!(summary.docs_skipped, 0);
     assert_eq!(summary.blobs_materialized, 2);
     assert_eq!(rendered.len(), 4);
 

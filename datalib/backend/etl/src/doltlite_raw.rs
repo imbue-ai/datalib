@@ -1326,6 +1326,55 @@ pub async fn scan_buckets(
     })
 }
 
+/// The primary-key columns of `table`, in `pragma_table_info` order.
+pub async fn primary_key_columns(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
+    let rows = sqlx::query("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("pragma_table_info({table})"))?;
+    rows.into_iter()
+        .map(|r| {
+            use sqlx::Row;
+            r.try_get::<String, _>(0).map_err(Into::into)
+        })
+        .collect()
+}
+
+/// The primary keys of every row of `table` that is not `unchanged`
+/// between `from_ref` and `to_ref`, rendered as text the way
+/// `render_inputs.input_id` is: a composite key's columns in
+/// `pragma_table_info` order, joined by `|`. A removed row's key comes
+/// from its `from_` side, so a deletion names the row that left.
+pub async fn changed_keys(
+    pool: &SqlitePool,
+    table: &str,
+    from_ref: &str,
+    to_ref: &str,
+) -> Result<Vec<String>> {
+    let pk = primary_key_columns(pool, table).await?;
+    if pk.is_empty() {
+        anyhow::bail!("{table} has no primary key, so dolt_diff_{table} cannot name its rows");
+    }
+    let parts: Vec<String> = pk
+        .iter()
+        .map(|c| format!("CAST(coalesce(to_{c}, from_{c}) AS TEXT)"))
+        .collect();
+    let sql = format!(
+        "SELECT {} FROM dolt_diff_{table} \
+          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
+        parts.join(" || '|' || ")
+    );
+    // Audited: `table` and its columns come from `sqlite_master` and
+    // `pragma_table_info` of the store itself; both refs are bound.
+    sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql))
+        .bind(from_ref)
+        .bind(to_ref)
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("dolt_diff_{table} keys from {from_ref} to {to_ref}"))
+}
+
 pub async fn record_object_error(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,

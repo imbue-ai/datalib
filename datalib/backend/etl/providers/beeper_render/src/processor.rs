@@ -43,6 +43,10 @@ impl RenderProcessor for BeeperRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
+    fn render_params(&self) -> serde_json::Value {
+        datalib_etl_chat_common::render::layout_params()
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         let parsed = parse(&self.raw_path, self.period)
@@ -54,7 +58,6 @@ impl RenderProcessor for BeeperRender {
             ctx.root,
             &self.name,
             ctx.progress,
-            ctx.prior_fingerprints,
             &mut on_doc,
             &raw_db_path,
         )

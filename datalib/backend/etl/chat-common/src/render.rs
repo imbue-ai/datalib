@@ -1,6 +1,6 @@
 //! `render_all` — drives every `(chat, period)` bucket through
-//! [`render_one`], handles fingerprint-skip, and feeds rendered docs
-//! into the orchestrator's `on_doc_complete` callback.
+//! [`render_one`] and feeds rendered docs into the orchestrator's
+//! `on_doc_complete` callback.
 
 use std::collections::HashMap;
 use std::fs;
@@ -10,18 +10,37 @@ use std::path::{Path, PathBuf};
 /// value most providers put in [`RenderProfile::chat_entity_kind`].
 pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 
-/// The markdown layout in this file has its own version, and it is
-/// hashed into every document's fingerprint beside the provider's
-/// [`RenderProfile::render_version`].
+/// The markdown layout in this file has its own version, beside the
+/// provider's [`RenderProfile::render_version`].
 ///
 /// **Bump this whenever `render_markdown` changes what it writes.**
 /// Without it, changing the shared layout means editing the version
-/// constant in all eight providers by hand and re-rendering nothing
-/// in the one you forget. The provider's own number stays its own —
+/// constant in all ten providers by hand and re-rendering nothing in
+/// the one you forget. It reaches the render step as a render param
+/// ([`layout_params`]), so a bump renders every document again the way
+/// any param change does. The provider's own number stays its own —
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
 pub const LAYOUT_VERSION: u32 = 3;
+
+/// What every chat-common provider declares through
+/// `RenderProcessor::render_params`, merged with its own knobs: the
+/// layout version, so a bump to it re-renders the source.
+pub fn layout_params() -> serde_json::Value {
+    serde_json::json!({ "layout_version": LAYOUT_VERSION })
+}
+
+/// `layout_params()` with a provider's own knobs folded in.
+pub fn layout_params_with(own: serde_json::Value) -> serde_json::Value {
+    let mut params = layout_params();
+    if let (Some(base), Some(extra)) = (params.as_object_mut(), own.as_object()) {
+        for (k, v) in extra {
+            base.insert(k.clone(), v.clone());
+        }
+    }
+    params
+}
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
@@ -33,7 +52,6 @@ use datalib_etl_render::section::msg_div_open;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
-use sha2::{Digest, Sha256};
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::html::escape_text;
@@ -64,10 +82,9 @@ pub struct RenderProfile {
     /// that minted their `uuid`.
     pub chat_entity_kind: &'static str,
     /// Precision of the `when_ts` this provider stamps on its grid
-    /// rows. Not a free choice: the value reaches `source_fingerprint`,
-    /// so changing it re-renders the provider's whole tree. Beeper is
-    /// the one source whose upstream timestamps are meaningful below
-    /// the second.
+    /// rows. Not a free choice: changing it changes every row, so the
+    /// provider's whole tree re-renders. Beeper is the one source whose
+    /// upstream timestamps are meaningful below the second.
     pub when_ts_precision: WhenTsPrecision,
     /// Each provider bumps its own render version when its render
     /// layer changes meaningfully (column changes, item-shape changes,
@@ -80,7 +97,6 @@ pub struct RenderProfile {
 pub struct RenderSummary {
     pub docs_total: usize,
     pub docs_rendered: usize,
-    pub docs_skipped: usize,
     pub items_rendered: usize,
     pub reactions_rendered: usize,
     /// Every document this call *considered*, rendered and skipped alike.
@@ -91,15 +107,15 @@ pub struct RenderSummary {
     /// mass deletion. Meaningful only to a caller that handed over every
     /// chat its store holds — see `RunCtx::retain_documents`.
     pub documents: Vec<String>,
-    /// The same, per chat: `(chat_uuid, the documents considered for it)`.
-    /// A chat handed in that produced nothing is here with an empty list,
-    /// which is how the caller learns its old documents are gone — see
-    /// `RenderCtx::declare_bucket`.
+    /// Every chat rendered, by `chat_uuid` — the buckets the caller
+    /// declares through `RenderCtx::declare_bucket`. A chat handed in
+    /// that produced nothing is here too, which is how its old
+    /// documents go.
     pub buckets: Buckets,
 }
 
-/// `(chat_uuid, the documents considered for it)`, per chat rendered.
-pub type Buckets = Vec<(String, Vec<String>)>;
+/// The `chat_uuid` of every chat rendered.
+pub type Buckets = Vec<String>;
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
@@ -109,7 +125,6 @@ pub fn render_all(
     source_id: &str,
     blobs_by_chat: &HashMap<String, BlobBundle>,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary {
@@ -121,45 +136,30 @@ pub fn render_all(
     let empty_bundle = BlobBundle::default();
     for chat in chats {
         let bundle = blobs_by_chat.get(&chat.id).unwrap_or(&empty_bundle);
-        summary.buckets.push((
-            chat.chat_uuid.clone(),
-            chat.buckets
-                .iter()
-                .map(|d| d.markdown_uuid.clone())
-                .collect(),
-        ));
+        summary.buckets.push(chat.chat_uuid.clone());
         for doc in &chat.buckets {
-            let outcome = render_one(
+            let (items, reactions) = render_one(
                 profile,
                 chat,
                 doc,
                 out_dir,
                 source_id,
                 bundle,
-                prior_fingerprints,
                 on_doc_complete,
             )?;
             summary.documents.push(doc.markdown_uuid.clone());
-            match outcome {
-                Outcome::Rendered { items, reactions } => {
-                    summary.docs_rendered += 1;
-                    summary.items_rendered += items;
-                    summary.reactions_rendered += reactions;
-                }
-                Outcome::Skipped => summary.docs_skipped += 1,
-            }
+            summary.docs_rendered += 1;
+            summary.items_rendered += items;
+            summary.reactions_rendered += reactions;
             progress.inc(1);
         }
     }
     Ok(summary)
 }
 
-enum Outcome {
-    Rendered { items: usize, reactions: usize },
-    Skipped,
-}
-
-#[allow(clippy::too_many_arguments)]
+/// Render one document; `(items, reactions)` rendered. Always: the
+/// store writes what it is handed, and doltlite's content-addressed
+/// tables carry no diff for a document that came out the same.
 fn render_one(
     profile: &RenderProfile,
     chat: &NormalizedChat,
@@ -167,20 +167,9 @@ fn render_one(
     out_dir: &Path,
     source_id: &str,
     blobs: &BlobBundle,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<Outcome> {
-    let fingerprint = compute_fingerprint(profile.render_version, LAYOUT_VERSION, chat, doc);
+) -> Result<(usize, usize)> {
     let (md_path, page_dir) = output_paths(out_dir, source_id, chat, &doc.period_key);
-
-    if prior_fingerprints
-        .get(&doc.markdown_uuid)
-        .map(String::as_str)
-        == Some(fingerprint.as_str())
-        && md_path.exists()
-    {
-        return Ok(Outcome::Skipped);
-    }
     fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     // Materialize attachment bytes from blob_cas into <page_dir>/blobs/
@@ -203,7 +192,7 @@ fn render_one(
     };
     let doc_title = format!("{chat_title} ({})", doc.period_key);
 
-    let md = render_markdown(profile, chat, doc, &chat_title, &doc_title, &fingerprint);
+    let md = render_markdown(profile, chat, doc, &chat_title, &doc_title);
     fs::write(&md_path, &md).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
@@ -233,8 +222,8 @@ fn render_one(
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: doc.markdown_uuid.clone(),
         source_id: source_id.to_string(),
-        source_fingerprint: fingerprint,
         upstream_cursor: None,
+        bucket_key: Some(chat.chat_uuid.clone()),
         md_path,
         render_version: profile.render_version,
         rows,
@@ -243,10 +232,7 @@ fn render_one(
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;
 
-    Ok(Outcome::Rendered {
-        items: items_rendered,
-        reactions: reactions_rendered,
-    })
+    Ok((items_rendered, reactions_rendered))
 }
 
 /// Write every blob in the per-chat bundle into
@@ -316,7 +302,6 @@ fn render_markdown(
     // heading takes them apart, so a clamp cannot eat the period.
     chat_title: &str,
     title: &str,
-    fingerprint: &str,
 ) -> String {
     let mut s = String::with_capacity(8 * 1024);
     s.push_str("---\n");
@@ -340,7 +325,6 @@ fn render_markdown(
         s.push_str(&format!("external_id: {e}\n"));
     }
     s.push_str(&format!("item_count: {}\n", doc.items.len()));
-    s.push_str(&format!("source_fingerprint: {fingerprint}\n"));
     s.push_str("---\n\n");
 
     // The chat's name and the period go in separately: a long title is
@@ -796,121 +780,11 @@ fn attachment_search_text(item: &NormalizedChatItem) -> String {
         .join(" ")
 }
 
-// Fingerprint
-
-/// `layout_version` is always [`LAYOUT_VERSION`] in production; it is a
-/// parameter so a test can prove the shared layout really does reach
-/// the hash.
-fn compute_fingerprint(
-    render_version: u32,
-    layout_version: u32,
-    chat: &NormalizedChat,
-    doc: &NormalizedDoc,
-) -> String {
-    let mut h = Sha256::new();
-    h.update(render_version.to_be_bytes());
-    h.update(b"|");
-    h.update(layout_version.to_be_bytes());
-    h.update(b"|");
-    h.update(chat.chat_uuid.as_bytes());
-    h.update(b"|");
-    h.update(doc.period_key.as_bytes());
-    // Fold chat-level linkout + title in only when present, so providers
-    // that don't set them keep their existing fingerprints (no forced
-    // re-render); a change re-renders the `↗` / `<h1>`.
-    if let Some(url) = &chat.source_url {
-        h.update(b"|src|");
-        h.update(url.as_bytes());
-    }
-    if let Some(title) = &chat.title {
-        h.update(b"|title|");
-        h.update(title.as_bytes());
-    }
-    if let Some(org) = &chat.org_uuid {
-        h.update(b"|org|");
-        h.update(org.as_bytes());
-    }
-    if let Some(org_name) = &chat.org_name {
-        h.update(b"|orgn|");
-        h.update(org_name.as_bytes());
-    }
-    for item in &doc.items {
-        h.update(b"\n");
-        h.update(item.message_uuid.as_bytes());
-        h.update(b"|");
-        h.update(item.author_id.as_bytes());
-        h.update(b"|");
-        // Tag the presence of a timestamp before its bytes, so "no
-        // timestamp" and "the epoch" hash differently. Without the tag
-        // an item that gains a real `0` stamp — or loses one and falls
-        // back to null — would keep its old fingerprint and never
-        // re-render.
-        match item.date_ms {
-            Some(ms) => {
-                h.update([1u8]);
-                h.update(ms.to_be_bytes());
-            }
-            None => h.update([0u8]),
-        }
-        h.update(b"|");
-        h.update(item.text.as_deref().unwrap_or("").as_bytes());
-        if let Some(url) = &item.source_url {
-            h.update(b"|msrc|");
-            h.update(url.as_bytes());
-        }
-        if let Some(k) = &item.kind_label {
-            h.update(b"|kind|");
-            h.update(k.as_bytes());
-        }
-        if item.is_aside {
-            h.update(b"|aside|");
-        }
-        h.update(b"|");
-        h.update((item.attachments.len() as u32).to_be_bytes());
-        for a in &item.attachments {
-            // Hash `ref_id` (the source-of-truth pointer into blob_cas)
-            // rather than `rel_path` — `rel_path` is filled in at
-            // render time, so hashing it would defeat the
-            // "compute the fingerprint up front" pattern. file_name
-            // mixed in so a renamed but otherwise identical attachment
-            // still triggers a re-render.
-            h.update(a.ref_id.as_deref().unwrap_or("").as_bytes());
-            h.update(b"+");
-            h.update(a.file_name.as_deref().unwrap_or("").as_bytes());
-        }
-        h.update(b"|");
-        h.update((item.reactions.len() as u32).to_be_bytes());
-        let mut reacts = item.reactions.clone();
-        reacts.sort_by(|a, b| a.reaction_uuid.cmp(&b.reaction_uuid));
-        for r in &reacts {
-            h.update(r.reaction_uuid.as_bytes());
-            h.update(b"+");
-            h.update(r.emoji.as_bytes());
-        }
-    }
-    for group in &doc.orphan_reactions {
-        h.update(b"\norphan|");
-        h.update(group.target_native_id.as_bytes());
-        let mut reacts = group.reactions.clone();
-        reacts.sort_by(|a, b| a.reaction_uuid.cmp(&b.reaction_uuid));
-        for r in &reacts {
-            h.update(b"+");
-            h.update(r.reaction_uuid.as_bytes());
-            h.update(b"+");
-            h.update(r.emoji.as_bytes());
-        }
-    }
-    h.finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>()
-}
-
 // Format helpers
 use datalib_time::{when_ts_from_unix_millis, WhenTsPrecision};
 
 /// Seconds precision, as this renderer has always emitted. Changing it
-/// would re-cut every fingerprint chat-common has written.
+/// would re-render every document chat-common has written.
 fn when_ts_from_ms(ms: Option<i64>, precision: WhenTsPrecision) -> Option<String> {
     when_ts_from_unix_millis(ms, precision)
 }
@@ -1082,44 +956,9 @@ mod tests {
         assert_eq!(a[0].uuid, b[0].uuid);
     }
 
-    #[test]
-    fn fingerprint_is_stable_across_runs() {
-        let chat = mk_chat();
-        let fp1 = compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]);
-        let fp2 = compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]);
-        assert_eq!(fp1, fp2);
-    }
-
-    #[test]
-    fn fingerprint_changes_with_render_version() {
-        let chat = mk_chat();
-        let fp1 = compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]);
-        let fp2 = compute_fingerprint(2, LAYOUT_VERSION, &chat, &chat.buckets[0]);
-        assert_ne!(fp1, fp2);
-    }
-
     /// Bumping the shared layout must re-render every chat provider
     /// without any of them touching its own `RENDER_VERSION` — that is
     /// the whole reason [`LAYOUT_VERSION`] exists.
-    #[test]
-    fn fingerprint_changes_with_layout_version() {
-        let chat = mk_chat();
-        assert_ne!(
-            compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]),
-            compute_fingerprint(1, LAYOUT_VERSION + 1, &chat, &chat.buckets[0]),
-        );
-    }
-
-    #[test]
-    fn fingerprint_changes_with_reaction() {
-        let chat1 = mk_chat();
-        let mut chat2 = mk_chat();
-        chat2.buckets[0].items[0].reactions[0].emoji = "👍".to_string();
-        let fp1 = compute_fingerprint(1, LAYOUT_VERSION, &chat1, &chat1.buckets[0]);
-        let fp2 = compute_fingerprint(1, LAYOUT_VERSION, &chat2, &chat2.buckets[0]);
-        assert_ne!(fp1, fp2);
-    }
-
     #[test]
     fn renders_basic_text_item_with_reaction() {
         let profile = RenderProfile {
@@ -1139,7 +978,6 @@ mod tests {
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-            "fp",
         );
         assert!(md.contains("Make it so."));
         assert!(md.contains("🫡 Will Riker"));
@@ -1160,7 +998,6 @@ mod tests {
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-            "fp",
         );
         assert!(
             md.contains("## <span class=\"msg-author\">Picard</span> "),
@@ -1185,7 +1022,6 @@ mod tests {
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-            "fp",
         );
         assert!(
             md.contains("&lt;script&gt;x&lt;/script&gt; &amp; co"),
@@ -1221,7 +1057,6 @@ mod tests {
             &chat.buckets[0],
             "Test \u{b7} Bridge Crew",
             "Test \u{b7} Bridge Crew (2364-04)",
-            "fp",
         );
 
         assert!(
@@ -1275,7 +1110,6 @@ mod tests {
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-            "fp",
         );
 
         assert_eq!(
@@ -1290,17 +1124,6 @@ mod tests {
         for uuid in ["aside-1", "aside-2", "aside-3"] {
             assert!(md.contains(&format!("id=\"m-{uuid}\"")), "{md}");
         }
-    }
-
-    #[test]
-    fn flipping_is_aside_re_renders_the_document() {
-        let chat1 = mk_chat();
-        let mut chat2 = mk_chat();
-        chat2.buckets[0].items[0].is_aside = true;
-        assert_ne!(
-            compute_fingerprint(1, LAYOUT_VERSION, &chat1, &chat1.buckets[0]),
-            compute_fingerprint(1, LAYOUT_VERSION, &chat2, &chat2.buckets[0]),
-        );
     }
 
     #[test]
@@ -1329,14 +1152,7 @@ mod tests {
             when_ts_precision: WhenTsPrecision::Seconds,
             render_version: 1,
         };
-        let md = render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-            "fp",
-        );
+        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
         assert!(md.contains("not yet fetched"));
         assert!(md.contains("https://example/vscapture"));
     }
@@ -1357,14 +1173,7 @@ mod tests {
         chat.source_url = Some("https://example.com/post/42".to_string());
 
         // Title gets the `↗` source link.
-        let md = render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-            "fp",
-        );
+        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://example.com/post/42"),
             "title carries the source linkout: {md}"
@@ -1376,25 +1185,6 @@ mod tests {
         assert_eq!(
             rows[0].source_url.as_deref(),
             Some("https://example.com/post/42")
-        );
-    }
-
-    #[test]
-    fn fingerprint_tracks_source_url() {
-        // None (the default) keeps the pre-existing fingerprint stable…
-        let none = mk_chat();
-        let mut bare = mk_chat();
-        bare.source_url = None;
-        assert_eq!(
-            compute_fingerprint(1, LAYOUT_VERSION, &none, &none.buckets[0]),
-            compute_fingerprint(1, LAYOUT_VERSION, &bare, &bare.buckets[0]),
-        );
-        // …while setting / changing it re-cuts the fingerprint.
-        let mut set = mk_chat();
-        set.source_url = Some("https://example.com/a".to_string());
-        assert_ne!(
-            compute_fingerprint(1, LAYOUT_VERSION, &none, &none.buckets[0]),
-            compute_fingerprint(1, LAYOUT_VERSION, &set, &set.buckets[0]),
         );
     }
 
@@ -1421,13 +1211,6 @@ mod tests {
             None => format!("{} · {}", profile.source_label, chat.display),
         };
         assert_eq!(chat_title, "#bridge: Make it so.");
-
-        // And a set title re-cuts the fingerprint (None stays stable).
-        let plain = mk_chat();
-        assert_ne!(
-            compute_fingerprint(1, LAYOUT_VERSION, &plain, &plain.buckets[0]),
-            compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]),
-        );
     }
 
     #[test]
@@ -1446,14 +1229,7 @@ mod tests {
         chat.buckets[0].items[0].source_url = Some("https://slack.example/p123".to_string());
 
         // Message header carries a `↗` linkout.
-        let md = render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-            "fp",
-        );
+        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://slack.example/p123"),
             "message header carries the per-message linkout: {md}"
@@ -1468,13 +1244,6 @@ mod tests {
         assert_eq!(
             msg.source_url.as_deref(),
             Some("https://slack.example/p123")
-        );
-
-        // A per-message URL re-cuts the fingerprint.
-        let plain = mk_chat();
-        assert_ne!(
-            compute_fingerprint(1, LAYOUT_VERSION, &plain, &plain.buckets[0]),
-            compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]),
         );
     }
 
@@ -1497,13 +1266,6 @@ mod tests {
         // The message row uses the override, not the profile default.
         assert!(rows.iter().any(|r| r.kind == "LLM Response"));
         assert!(!rows.iter().any(|r| r.kind == "Test Message"));
-
-        // …and it re-cuts the fingerprint.
-        let plain = mk_chat();
-        assert_ne!(
-            compute_fingerprint(1, LAYOUT_VERSION, &plain, &plain.buckets[0]),
-            compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]),
-        );
     }
 
     fn test_profile() -> RenderProfile {
@@ -1587,31 +1349,9 @@ mod tests {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items[0].date_ms = None;
-        let md = render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-            "fp",
-        );
+        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
         assert!(md.contains("(no timestamp)"), "{md}");
         assert!(!md.contains("1970"), "{md}");
-    }
-
-    /// `None` and `Some(0)` are different facts and must not collide in
-    /// the fingerprint, or an item that gains or loses a stamp never
-    /// re-renders.
-    #[test]
-    fn fingerprint_separates_no_timestamp_from_the_epoch() {
-        let mut undated = mk_chat();
-        undated.buckets[0].items[0].date_ms = None;
-        let mut epoch = mk_chat();
-        epoch.buckets[0].items[0].date_ms = Some(0);
-        assert_ne!(
-            compute_fingerprint(1, LAYOUT_VERSION, &undated, &undated.buckets[0]),
-            compute_fingerprint(1, LAYOUT_VERSION, &epoch, &epoch.buckets[0]),
-        );
     }
 
     #[test]
@@ -1637,12 +1377,5 @@ mod tests {
             assert_eq!(r.org_uuid.as_deref(), Some("org-123"));
             assert_eq!(r.org_name.as_deref(), Some("Starfleet"));
         }
-
-        // org identity folds into the fingerprint (only when set).
-        let plain = mk_chat();
-        assert_ne!(
-            compute_fingerprint(1, LAYOUT_VERSION, &plain, &plain.buckets[0]),
-            compute_fingerprint(1, LAYOUT_VERSION, &chat, &chat.buckets[0]),
-        );
     }
 }

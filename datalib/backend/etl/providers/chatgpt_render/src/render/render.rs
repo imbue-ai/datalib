@@ -82,8 +82,6 @@ pub fn render_all(
         chats.push(chat);
     }
 
-    // Skip is driven upstream by dolt_diff; the fingerprint map is empty.
-    let no_priors: HashMap<String, String> = HashMap::new();
     let summary = cc_render_all(
         &profile(),
         &chats,
@@ -91,7 +89,6 @@ pub fn render_all(
         source_id,
         &blobs_by_chat,
         progress,
-        &no_priors,
         on_doc_complete,
     )
     .context("chatgpt chat-common render")?;

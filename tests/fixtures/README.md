@@ -196,9 +196,8 @@ stable:
 * **`yolink/render_markdown/index.md`**, in its "Store" section only: the
   page reports the store's HEAD and commit log, which *is* the content —
   a page describing a store legitimately changes when the store's
-  identity does. Its `source_fingerprint` is deliberately **not**
-  HEAD-derived (see `render/render.rs::compute_fingerprint`), which is
-  what keeps the `markdowns` row stable.
+  identity does. Its `markdowns` row carries nothing HEAD-derived, so
+  the row stays stable while the page moves.
 
 Notion's rendered pages used to be nondeterministic too — two runs
 emitted the same blocks in a different order. That was

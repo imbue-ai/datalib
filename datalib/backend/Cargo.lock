@@ -1112,7 +1112,6 @@ dependencies = [
  "datalib-time",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "tracing",
  "uuid",
 ]
@@ -1235,7 +1234,6 @@ dependencies = [
  "datalib-etl",
  "datalib-etl-render",
  "datalib-schema",
- "sha2 0.11.0",
  "tracing",
 ]
 
@@ -1777,7 +1775,6 @@ dependencies = [
  "datalib-time",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "sqlx",
  "tempfile",
  "tokio",
@@ -2040,7 +2037,6 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "sqlx",
  "tempfile",
  "thiserror 2.0.20",
