@@ -13,6 +13,8 @@ pub mod disk_usage {
     include!("disk_usage.rs");
 }
 
+pub mod runs;
+
 #[cfg(test)]
 mod tests {
     #[test]

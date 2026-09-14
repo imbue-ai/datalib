@@ -1032,8 +1032,10 @@ So the complete local gate is the hygiene lint **and** the test suite:
 bazelisk run //:lint_repo && bazelisk test //...
 ```
 
-`bazelisk run //:precommit` runs the same lint plus clippy, and is the
-friendlier wrapper if you want everything. Both go through
+**The one command to run before pushing is `bazelisk run //:precommit`.**
+It is the hygiene lint, `//:lint`, a `bazelisk build //...` (which is
+what runs the rustfmt and clippy aspects over every crate), and every
+hermetic test. Both wrappers go through
 [`//:lint_repo`](BUILD.bazel), a `py_binary` — deliberately, so the
 script runs on Bazel's pinned Python rather than the host's. It needs
 `tomllib` (Python ≥3.11) and macOS still ships 3.9 as `python3`, which
@@ -1067,14 +1069,21 @@ not.** Measured on one warm mac:
 | loop | command | cost |
 |---|---|---|
 | lint + typecheck | `bazelisk test //:lint` | **~3s** |
+| everything a laptop can check | `bazelisk run //:precommit` | the row below plus a `build //...` for the fmt/clippy aspects |
 | every hermetic test | `bazelisk test //... --build_tests_only --test_tag_filters=-no-sandbox,-requires-network,-external,-manual` | **~106s** after edits to a shared crate, **~2s** when nothing moved; 133 of 146 targets |
 | the package you're editing | `bazelisk test //datalib/backend/etl/...` | varies |
 | the whole gate, e2e included | push, and read CI | ~3 min warm / ~20 min cold |
 
-Reach for the middle row before pushing. It drops the 13 targets that
-need a host, and `--build_tests_only` stops it building the rest of the
-tree to run them. **Those tag filters belong on that line and nowhere
-else** — never on the full run; the paragraph below says why.
+Reach for `//:precommit` before pushing. The test line under it drops
+the 13 targets that need a host, and `--build_tests_only` stops it
+building the rest of the tree to run them — **which is also why it
+does not check formatting**: the rustfmt and clippy aspects run only on
+the targets named on the command line, and with `--build_tests_only`
+those are the tests, not the libraries they link. A misformatted
+`worker.rs` passed that line and failed CI (2026-09-14); `//:precommit`'s
+`build //...` is the step that catches it. **Those tag filters belong
+on that line and nowhere else** — never on the full run; the paragraph
+below says why.
 
 Don't shell out to `cargo` / `pnpm` for any of these — they bypass the
 cache and can disagree with CI.
@@ -1530,9 +1539,10 @@ Two rules for the boundary:
 
 - **`parse` returns `Option`, never a guess.** A store written by a
   newer build, or a third-party step, can name a value this binary does
-  not have. The caller decides what that means — see `TaskState::for_run_state`,
-  which maps an unknown status to `Failed` *deliberately*, with a
-  sentence saying why.
+  not have. The caller decides what that means — the Manage screen
+  shows a status word it does not know as the bare word, deliberately,
+  rather than drawing nothing (`Manager2View.vue`'s Status renderer
+  says why).
 - **Add a test that strum and serde agree** when a type derives both.
   They are independent derives producing independent strings, so the
   agreement is a real check, not a tautology. One `#[test]` over
@@ -1572,8 +1582,8 @@ One enum per vocabulary, living with whoever mints it:
 | what a step is doing in a run | `RunState` | `dag/src/run_state.rs` |
 | why a step failed | `FailureKind` | `dag/src/step.rs` |
 | what the run store itself names | `LiveState` | `runs/src/lib.rs` |
+| a log line's severity, and which pipe it came from | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |
 | a sync job's lifecycle | `JobState`, `JobKind` | `app_schema/src/sync_jobs.rs` |
-| a task board row | `TaskState` | `http/src/worker.rs` |
 | a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what render could not do | `Outcome`, `Reason`, `ScopeKind`, `Stage` | `schema/src/render_problems.rs` |
@@ -1581,7 +1591,7 @@ One enum per vocabulary, living with whoever mints it:
 | whether an ingest method reaches a live service or reads files on disk | `Reach` | `source_common/src/lib.rs`, declared per method by each `<p>_config` crate |
 
 The TypeScript side mirrors these as string-literal unions in
-`datalib/ui/src/api.ts` (`DagRunState`, `SyncTaskState`, `SyncJobState`,
+`datalib/ui/src/api.ts` (`DagRunState`, `SyncJobState`,
 `ConnectState`). They are hand-kept in step with the Rust — there is no
 generator — so change both halves together.
 
@@ -1657,6 +1667,15 @@ timezone offset present in the source**.
 If you find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop and
 use `isoformat()` instead. The columns are `VARCHAR(40)`, wide enough for
 the longest offset-suffixed form including microseconds.
+
+**The direction is changing**, one store at a time (#427): keep the
+offset, but in its own column. `system/runs.sqlite` (`app_schema::runs`)
+is the first — every stamp there is UTC (`…+00:00`) and each table
+carries a `tz_offset` (`+02:00`) beside it — so that text order is
+instant order and `ORDER BY` a timestamp is correct without parsing.
+`IsoOffsetTimestamp::to_utc_and_offset()` is the helper. A new table
+should follow that shape; the rules above still describe every other
+store until #427 moves it.
 
 ## Auth (web API)
 

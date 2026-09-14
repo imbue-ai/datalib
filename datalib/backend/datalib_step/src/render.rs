@@ -138,7 +138,8 @@ pub async fn run(
                 .put_document(&data_root, &md)
                 .with_context(|| format!("store document {}", md.markdown_uuid))?;
             emitted.insert(md.markdown_uuid);
-            docs_in.fetch_add(1, Ordering::SeqCst);
+            let n = docs_in.fetch_add(1, Ordering::SeqCst) + 1;
+            progress.metric("documents_rendered", &[], n as i64);
             // What a consumer reading a checkpoint may see is a document
             // this run is about to sweep. That is stale, not torn: the
             // sweep's deletions reach the consumer through the same diff
@@ -293,6 +294,7 @@ pub async fn run(
     let docs = docs.load(Ordering::SeqCst);
     let removed = removed.load(Ordering::SeqCst);
     tracing::info!(docs, removed, "render: docs (re)rendered");
+    progress_after.metric("documents_removed", &[], removed as i64);
     if removed > 0 {
         progress_after.set_message(&format!(
             "{removed} document(s) dropped — their source is gone upstream"

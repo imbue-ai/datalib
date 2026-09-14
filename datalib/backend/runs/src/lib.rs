@@ -1,14 +1,16 @@
 //! The run store: one plain-SQLite file per data root that the runner
 //! writes and anything can read. Holds what every run did — each step's
 //! state, its log lines, and its metrics — across runs, until retention
-//! removes the old ones. A leaf crate with no datalib dependencies beyond
-//! `datalib_time`, so the runner takes it without taking `datalib_core`.
+//! removes the old ones. The tables are `app_schema::runs`; this crate
+//! is the writer and the reader over them.
 
 pub mod store;
 
+pub use app_schema::runs::{
+    LogLevel, LogRow, MetricRow, MetricSampleRow, RunRow, StepRunRow, Stream,
+};
 pub use store::{
-    canonical_labels, log_after, open_or_create, snapshot, LogRow, MetricRow, RunWriter, Snapshot,
-    StepRow,
+    canonical_labels, log_after, open_or_create, runs, snapshot, snapshot_of, RunWriter, Snapshot,
 };
 
 use std::path::{Path, PathBuf};
@@ -21,7 +23,7 @@ pub fn runs_path(data_root: &Path) -> PathBuf {
 }
 
 /// The two states the store itself names. Every other value of
-/// [`StepRow::state`] is a terminal status minted by whoever writes the
+/// [`StepRunRow::state`] is a terminal status minted by whoever writes the
 /// store — the DAG runner's `RunState`, today — which this crate
 /// deliberately does not enumerate: the scheduler's vocabulary is not its
 /// business. "Not one of these two" is the whole of what it needs to know.
@@ -46,7 +48,7 @@ impl LiveState {
     }
 }
 
-/// Whether a [`StepRow::state`] means the step is finished.
+/// Whether a [`StepRunRow::state`] means the step is finished.
 pub fn is_terminal(state: &str) -> bool {
     LiveState::parse(state).is_none()
 }
@@ -68,64 +70,14 @@ impl Default for Retention {
     }
 }
 
-/// Bumped whenever [`SCHEMA`] changes shape. A store carrying another
+/// Bumped whenever the tables change shape. A store carrying another
 /// version is deleted and remade rather than migrated: nothing in it is
 /// load-bearing, and a migration is code that would exist only to keep
 /// old log lines.
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
-/// The schema. `IF NOT EXISTS` throughout so opening an existing store is
-/// the same code path as making one. `log.seq` is the rowid, so a reader
-/// tailing "everything after N" needs no timestamp arithmetic.
-pub const SCHEMA: &str = "\
-CREATE TABLE IF NOT EXISTS runs (
-    run_id      TEXT PRIMARY KEY,
-    started_at  TEXT NOT NULL,
-    finished_at TEXT
-);
-CREATE TABLE IF NOT EXISTS step_runs (
-    run_id      TEXT NOT NULL,
-    step        TEXT NOT NULL,
-    state       TEXT NOT NULL,
-    attempt     INTEGER NOT NULL DEFAULT 0,
-    started_at  TEXT,
-    finished_at TEXT,
-    error       TEXT,
-    msg         TEXT,
-    updated_at  TEXT NOT NULL,
-    PRIMARY KEY (run_id, step)
-);
-CREATE TABLE IF NOT EXISTS log (
-    seq     INTEGER PRIMARY KEY,
-    run_id  TEXT NOT NULL,
-    step    TEXT,
-    attempt INTEGER NOT NULL DEFAULT 0,
-    ts      TEXT NOT NULL,
-    stream  TEXT,
-    level   TEXT NOT NULL,
-    target  TEXT,
-    thread  TEXT,
-    msg     TEXT NOT NULL,
-    fields  TEXT
-);
-CREATE INDEX IF NOT EXISTS log_by_run_step ON log (run_id, step, seq);
-CREATE TABLE IF NOT EXISTS metrics (
-    run_id     TEXT NOT NULL,
-    step       TEXT NOT NULL,
-    name       TEXT NOT NULL,
-    labels     TEXT NOT NULL DEFAULT '',
-    value      INTEGER NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (run_id, step, name, labels)
-);
-CREATE TABLE IF NOT EXISTS metric_samples (
-    run_id TEXT NOT NULL,
-    step   TEXT NOT NULL,
-    name   TEXT NOT NULL,
-    labels TEXT NOT NULL DEFAULT '',
-    ts     TEXT NOT NULL,
-    value  INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS metric_samples_by_series
-    ON metric_samples (run_id, step, name, labels, ts);
-";
+/// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so
+/// a reader tailing "everything after N" needs no timestamp arithmetic;
+/// the index is for narrowing that to one run and step.
+pub const INDEXES: &[&str] =
+    &["CREATE INDEX IF NOT EXISTS log_by_run_step ON log (run_id, step, seq)"];

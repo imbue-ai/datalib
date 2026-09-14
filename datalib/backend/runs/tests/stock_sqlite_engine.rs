@@ -1,6 +1,8 @@
 //! Does the store still come out as an *ordinary* SQLite file?
 
-use datalib_runs::{open_or_create, runs_path, SCHEMA};
+use datalib_runs::{open_or_create, runs_path};
+
+const SCHEMA: &str = app_schema::runs::run::DDL[0].1;
 
 fn magic(path: &std::path::Path) -> Vec<u8> {
     std::fs::read(path).unwrap().into_iter().take(15).collect()

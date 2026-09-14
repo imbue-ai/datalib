@@ -71,6 +71,17 @@ impl IsoOffsetTimestamp {
         self.0.timestamp_millis()
     }
 
+    /// The same instant as a UTC stamp (`…+00:00`, microseconds) plus
+    /// the offset it was written in (`+02:00`), for a store that keeps
+    /// the two in separate columns so that text order is instant order.
+    pub fn to_utc_and_offset(&self) -> (String, String) {
+        let utc = self
+            .0
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::Micros, false);
+        (utc, self.0.offset().to_string())
+    }
+
     pub fn inner(&self) -> DateTime<FixedOffset> {
         self.0
     }
@@ -426,6 +437,22 @@ pub fn validate_iso_offset(s: &str) -> Result<(), TimestampParseError> {
 
 #[cfg(test)]
 mod tests {
+    /// The UTC half sorts as text the way the instants sort; the offset
+    /// half is what the stamp would have shown where it was made.
+    #[test]
+    fn utc_and_offset_split_one_stamp_into_two_columns() {
+        let t = super::parse_strict("2026-09-11T17:10:41.113+02:00").unwrap();
+        assert_eq!(
+            t.to_utc_and_offset(),
+            (
+                "2026-09-11T15:10:41.113000+00:00".to_string(),
+                "+02:00".to_string()
+            )
+        );
+        let z = super::parse_strict("2026-09-11T15:10:41Z").unwrap();
+        assert_eq!(z.to_utc_and_offset().1, "+00:00");
+    }
+
     use super::*;
 
     #[test]

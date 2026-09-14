@@ -404,7 +404,7 @@ faster.
     ├── lock                        # held by the running server
     ├── feedback.doltlite_db        # feedback you filed (nothing regenerates it)
     ├── jobs.doltlite_db            # sync job queue + history
-    ├── job-logs/                   # one log per sync job
+    ├── runs.sqlite                 # every run's step states, logs and metrics
     ├── usage.doltlite_db           # bytes on disk over time
     ├── media/                      # attachment bytes served to the UI
     └── frontend/                   # UI components the applets contribute
