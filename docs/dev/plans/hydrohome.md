@@ -85,7 +85,7 @@ evidence: the Dart `x509` and `pointycastle` packages are linked, the
 binary generates a CSR (`package:x509/src/request.dart`), the API exposes
 `/v3/energybridge/GetCertificateForExisting` and a
 `GetEnergyBridgePublicCertificateUseCase`, and the bundled `.env` carries
-a `CERTIFICATE_PASSWORD` that unlocks the client key material. So the app
+a bundled password that unlocks the client key material. So the app
 authenticates to AWS IoT with a client certificate it either mints (CSR →
 API) or fetches for an already-registered bridge.
 
@@ -238,28 +238,22 @@ service name. Two rungs:
 `POST /v3/login/12`'s request/response bodies were deliberately **not**
 dumped (they carry the SSO assertion and the minted token). That call is
 where the publishability gate now lives: **does the login exchange
-require the leaked `BCH_PROD_OAUTH_CLIENT_SECRET`, or only the user's SSO
+require an app-embedded client secret, or only the user's SSO
 assertion?** If only the assertion, a working client — and a `hydrohome`
 latchkey service — embeds no shared secret and the provider is cleanly
 publishable. If it needs the baked-in secret, that is the thing to design
 around (or a reason to keep it private). Settling it means inspecting
 that one call's shape, a deliberate separate step.
 
-### Leaked secrets (a finding, not a dependency)
+### Don't depend on a shared client-side secret
 
-`assets/flutter_assets/.env` ships in the APK in plaintext and contains
-`BCH_PROD_OAUTH_CLIENT_SECRET`, `BCH_PREPROD_OAUTH_CLIENT_SECRET`, a
-Localizely SDK token, and `CERTIFICATE_PASSWORD`. This is a Powerley
-packaging mistake, not BC Hydro's. The client secrets are the milder
-case — a mobile app is a public client that fundamentally can't keep a
-shared secret — but they are shipped to all ~75k installs regardless.
-`CERTIFICATE_PASSWORD` is the sloppy one: a single client-cert password
-shared across every install, where the right design provisions a unique
-cert per device (it unlocks the IoT client cert, relevant only if the
-live side is ever built). Whichever way the `/v3/login/12` question above
-resolves, **do not build anything that depends on a leaked shared secret
-staying valid** — if the login needs it, that is an argument for keeping
-the provider private, not for embedding the secret.
+The app bundles configuration inside its APK, including some shared
+secret material a mobile app cannot really keep private. The rule for us
+is independent of the specifics: **a published provider must not embed or
+depend on any secret extracted from the app** — auth belongs in latchkey,
+per user (see above). If the `/v3/login/12` question above turns out to
+require an app-embedded shared secret, that is an argument for keeping the
+provider private, not for baking the secret into the tree.
 
 ## How this would land in datalib
 
@@ -316,7 +310,7 @@ account ids.
   minted by BC Hydro SSO (`app.bchydro.com/sso/ui/login`) → an exchange
   at `/v3/login/12`; there is no client-side `/connect/token`. What that
   exchange takes as input — the SSO assertion alone, or the assertion
-  plus `BCH_PROD_OAUTH_CLIENT_SECRET` — decides whether a working client
+  plus an app-embedded client secret — decides whether a working client
   embeds a shared secret. Settle it by inspecting that one call's shape
   (a credential-bearing call, so a deliberate separate step) before
   committing to "publishable."
@@ -328,7 +322,7 @@ account ids.
   want the continuous live feed; per-minute history does not need it.
 - **Cert lifetime and renewal** (only relevant if we build the live
   side). Whether `/v3/energybridge/GetCertificateForExisting` re-issues
-  on demand and whether the leaked `CERTIFICATE_PASSWORD` is load-bearing
+  on demand and whether the bundled client-cert password is load-bearing
   for that call.
 - **Powerlync vs Energy Bridge.** This plan is the Energy Bridge. The
   Powerlync exposes the same data locally as a HomeKit accessory (custom
