@@ -83,12 +83,6 @@ reference doc it relates to.
   into. Every slice is built; the plan is complete.
   Read it before touching step ids, the wizard, or `datalib-step`'s
   dispatch. It reverses the "ungrouping" section of `step_identity.md`.
-- [`docs/dev/plans/incremental_contract.md`](docs/dev/plans/incremental_contract.md)
-  — *proposal*, nothing built: testing incremental render (and, as far
-  as it goes, download) the way the runner is tested — without a
-  provider. One property (incremental ≡ cold), a synthetic provider
-  that checks the framework against it, and a five-clause contract a
-  real provider keeps, checked by a single-row mutation harness.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
   *proposal*, nothing built: letting a consumer step start before its
   producer finishes. Splits the two meanings an edge carries today
