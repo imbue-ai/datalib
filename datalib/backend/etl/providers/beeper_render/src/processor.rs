@@ -43,10 +43,11 @@ impl RenderProcessor for BeeperRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
+    fn render_params(&self) -> serde_json::Value {
+        datalib_etl_chat_common::render::layout_params()
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
-        // The fingerprint skip is the driver's: every document is emitted
-        // and the store writes only the ones that changed.
-        let no_priors: std::collections::HashMap<String, String> = Default::default();
         use crate::render::{parse::parse, render::render_all};
         let parsed = parse(&self.raw_path, self.period)
             .with_context(|| format!("beeper parse {}", self.raw_path.display()))?;
@@ -57,7 +58,6 @@ impl RenderProcessor for BeeperRender {
             ctx.root,
             &self.name,
             ctx.progress,
-            &no_priors,
             &mut on_doc,
             &raw_db_path,
         )

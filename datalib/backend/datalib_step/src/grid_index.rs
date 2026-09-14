@@ -58,11 +58,8 @@ pub async fn run(
         // `read` is the one that says whether the cursors are working:
         // it is how many documents were pulled out of the per-source
         // stores at all, and on a steady-state run it should be 0.
-        // `loaded` was already 0 before the cursors existed, because
-        // the fingerprint compare happened after paying to read them.
         read = summary.markdowns_total,
         loaded = summary.markdowns_loaded,
-        skipped = summary.markdowns_skipped,
         removed = summary.markdowns_removed,
         rows = summary.rows_inserted,
         "grid_index: build_grid_index done"
@@ -71,7 +68,6 @@ pub async fn run(
     for (name, n) in [
         ("markdowns_read", summary.markdowns_total),
         ("markdowns_loaded", summary.markdowns_loaded),
-        ("markdowns_skipped", summary.markdowns_skipped),
         ("markdowns_removed", summary.markdowns_removed),
         ("rows_inserted", summary.rows_inserted),
     ] {
@@ -80,10 +76,9 @@ pub async fn run(
 
     let msg = format!(
         "datalib-step grid_index: markdowns_read={} markdowns_loaded={} \
-         markdowns_skipped={} markdowns_removed={} rows_inserted={}",
+         markdowns_removed={} rows_inserted={}",
         summary.markdowns_total,
         summary.markdowns_loaded,
-        summary.markdowns_skipped,
         summary.markdowns_removed,
         summary.rows_inserted,
     );

@@ -54,9 +54,9 @@ grid_index step (the `grid_index` function of `datalib-step`; `build_grid_index`
 `datalib/backend/etl/render/src/grid_index.rs`) stacks those stores into the
 unified index: it asks each one `dolt_diff` between the commit the
 index last consumed (`source_cursors`) and that store's HEAD, applies
-each changed document's row set, and stamps the corresponding
-`markdowns` row with the `row_set_hash` used to skip unchanged
-re-renders next time.
+each changed document's row set, and copies the corresponding
+`markdowns` row across (its `row_set_hash` is a digest of the rows,
+written for inspection and read by nothing).
 
 ## Consumer side: `datalib/backend/unified_index/src/dolt_repo.rs`
 
@@ -404,10 +404,10 @@ fixture from byte-identical inputs moves six of its sixteen sources by
 1-22 bytes, in a different direction each time. That is a stronger
 property than "changes on every fetch" — it is the same input giving a
 different number — and it is why `byte_size` is kept out of *both*
-hashes that decide staleness: the storage report's own fingerprint and
-`compute_row_set_hash`, the markdown cache key. Hashing it re-renders
-documents nothing touched and churns every golden carrying a
-`row_set_hash` on any backend change. `fixture_db_snapshot.rs` scrubs
+digests: `introspect::counts_unchanged`, which decides whether the
+storage report is rewritten, and `compute_row_set_hash`. Hashing it
+would rewrite the report on every run and churn every golden carrying
+a `row_set_hash` on any backend change. `fixture_db_snapshot.rs` scrubs
 the byte figure out of the text it digests for the same reason.
 
 This is the download side's *volatile field* idea arriving somewhere
@@ -434,7 +434,7 @@ store grows on any run that touches it (a bookkeeping
 `last_attempt_at_utc` mutation rewrites chunks with no row added), and
 `sync_runs` gains a row per run. So:
 
-- byte sizes are **reported but not fingerprinted**; and
+- byte sizes are **reported but never compared**; and
 - `sync_runs`, `sync_scope_state`, `sync_scope_config` and every
   `<table>_bookkeeping` sidecar are left out of the report entirely.
   They are not the source's data — `doltlite_raw`'s own words for the

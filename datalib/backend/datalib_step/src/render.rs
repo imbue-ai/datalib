@@ -77,7 +77,6 @@ pub async fn run(
 
     tracing::info!(
         docs = report.docs,
-        skipped = report.skipped,
         removed = report.removed,
         "render: docs (re)rendered"
     );
@@ -153,9 +152,6 @@ pub struct RenderSource {
 pub struct RenderReport {
     /// Documents written.
     pub docs: usize,
-    /// Documents the providers emitted that the store already held
-    /// unchanged, and so were not written.
-    pub skipped: usize,
     pub removed: usize,
     /// Whole-store problem counts by outcome.
     pub problems: HashMap<String, i64>,
@@ -187,6 +183,7 @@ pub fn render_source(
     } = source;
     let declared = declared_render_versions(processors);
     let declared_params = declared_render_params(processors);
+    let declared_params_text = declared_params.to_string();
     let store = IndexedMarkdownStore::open(&rendered_root)
         .map(|s| s.with_now(&now))
         .with_context(|| format!("open render store for {}", name))?;
@@ -213,19 +210,10 @@ pub fn render_source(
         RenderPlan::FromCursor(from) => from,
         RenderPlan::Everything(_) => None,
     };
-    // A full render ignores the fingerprints: an unchanged document has
-    // to be written again for the sweep below to tell "still produced"
-    // from "gone".
-    let prior = if render_everything {
-        HashMap::new()
-    } else {
-        store.prior_fingerprints()?
-    };
     tracing::info!(
         source = %name,
-        prior = prior.len(),
         cursor = raw_cursor.as_deref().unwrap_or("none"),
-        "render: prior fingerprints from the store"
+        "render: starting"
     );
     let (raw_pin, stale_buckets) =
         reverse_lookup(&store, raw_db.as_deref(), raw_cursor.as_deref())?;
@@ -234,11 +222,9 @@ pub fn render_source(
         datalib_etl::checkpointer::Policy::Every(cadence),
     );
     let mut docs = 0usize;
-    let mut skipped = 0usize;
     let mut removed = 0usize;
-    // Every document this run emitted, written or not. On a full render
-    // it is what the walk produced, and the sweep below keeps exactly
-    // this.
+    // Every document this run emitted. On a full render it is what the
+    // walk produced, and the sweep below keeps exactly this.
     let mut emitted: BTreeSet<String> = BTreeSet::new();
     // The documents between two checkpoints share one SQL transaction
     // (the batch), and each is written whole inside it — rows, edges,
@@ -248,17 +234,13 @@ pub fn render_source(
     // value `grid_index::apply_one` consumes.
     store.begin_batch()?;
     let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
-        // The skip is the store's, from what the write would be: an
-        // unchanged document costs its render and nothing else, and the
-        // driver still learns it exists.
-        let written = store
-            .put_document_unless(&data_root, &md, &prior)
+        // Every emitted document is written. One that came out the same
+        // writes the same rows, and doltlite's content-addressed tables
+        // then carry no diff for it — nothing here decides "unchanged".
+        store
+            .put_document(&data_root, &md)
             .with_context(|| format!("store document {}", md.markdown_uuid))?;
         emitted.insert(md.markdown_uuid);
-        if !written {
-            skipped += 1;
-            return Ok(());
-        }
         docs += 1;
         progress.metric("documents_rendered", &[], docs as i64);
         // What a consumer reading a checkpoint may see is a document
@@ -367,8 +349,8 @@ pub fn render_source(
     let mut keep = retained.unwrap_or_default();
     keep.extend(emitted);
     // The storage report's id goes in `keep`: the provider's processors
-    // know nothing about it, and the fingerprint skip would then
-    // decline to write it back on any run where no number moved.
+    // know nothing about it, and the sweep would otherwise drop it on
+    // any run where no number moved.
     if let Some(m) = storage.as_ref() {
         keep.insert(m.doc.markdown_uuid.clone());
     }
@@ -384,17 +366,25 @@ pub fn render_source(
             keep: &keep,
             declared: &buckets,
             storage,
-            prior: &prior,
-            cursor: raw_commit.map(|raw_commit| {
-                let stamp = datalib_time::split_stamp(&now);
-                RenderCursorRow {
-                    source_id: name.clone(),
-                    raw_commit,
-                    params: declared_params.to_string(),
-                    rendered_at_utc: stamp.utc,
-                    tz_offset: stamp.tz_offset,
-                }
-            }),
+            // The cursor is rewritten only when it moves: its row carries
+            // a per-run stamp, and rewriting it unchanged would give
+            // every steady-state run a commit.
+            cursor: raw_commit
+                .filter(|raw_commit| {
+                    stored_cursor.as_ref().is_none_or(|c| {
+                        c.raw_commit != *raw_commit || c.params != declared_params_text
+                    })
+                })
+                .map(|raw_commit| {
+                    let stamp = datalib_time::split_stamp(&now);
+                    RenderCursorRow {
+                        source_id: name.clone(),
+                        raw_commit,
+                        params: declared_params_text.clone(),
+                        rendered_at_utc: stamp.utc,
+                        tz_offset: stamp.tz_offset,
+                    }
+                }),
         },
     )?;
     docs += sealed.stored;
@@ -428,7 +418,6 @@ pub fn render_source(
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {
         docs,
-        skipped,
         removed,
         problems,
         head,
@@ -449,7 +438,6 @@ struct RunEnd<'a> {
     /// `keep` is gone.
     declared: &'a BTreeSet<String>,
     storage: Option<crate::introspect::Measured>,
-    prior: &'a HashMap<String, String>,
     cursor: Option<RenderCursorRow>,
 }
 
@@ -500,14 +488,17 @@ fn seal_run(store: &IndexedMarkdownStore, data_root: &Path, end: RunEnd<'_>) -> 
                 "render: this bucket no longer produces this document; dropped it",
             );
         }
-        // The report is skipped whole when no number moved: it would be
-        // byte-identical, and appending a sample saying "still the same"
-        // would grow the store on a run where nothing happened.
-        // Its own fingerprint decides, not the output's: the body carries
-        // byte counts that wobble from run to run, and the fingerprint
-        // hashes the counts that mean something.
+        // The report is skipped whole when no count moved: its byte
+        // sizes wobble from run to run, so a rewrite would be a diff for
+        // the index to re-read and a sample saying "still the same" for
+        // the series to grow by. The counts it measured last time are
+        // the store's own `source_measurements`.
         if let Some(m) = end.storage {
-            if end.prior.get(&m.doc.markdown_uuid) == Some(&m.doc.source_fingerprint) {
+            let same_version =
+                store.document_version(&m.doc.markdown_uuid)? == Some(m.doc.render_version);
+            let same_counts =
+                crate::introspect::counts_unchanged(&store.latest_items()?, &m.samples);
+            if same_version && same_counts {
                 tracing::debug!("render: storage unchanged since the last run");
             } else {
                 m.write_report().context("write the storage report")?;
@@ -592,15 +583,13 @@ fn reverse_lookup(
 #[derive(Debug, PartialEq, Eq)]
 enum RenderPlan {
     /// Diff from this raw-store commit — or from nothing, when there is
-    /// no cursor yet: the provider then reads its whole store and the
-    /// fingerprints decide what to write, which is also the steady state
-    /// of a renderer that never records a cursor.
+    /// no cursor yet: the provider then reads its whole store, which is
+    /// also the steady state of a renderer that never records a cursor.
     FromCursor(Option<String>),
-    /// Render everything, for the reason given, ignoring the
-    /// fingerprints. The stored cursor is kept: the sweep at the end of
-    /// the run is what removes documents the new version or params no
-    /// longer produce, and the range is still the one `grid_index` diffs
-    /// the store over.
+    /// Render everything, for the reason given. The stored cursor is
+    /// kept: the sweep at the end of the run is what removes documents
+    /// the new version or params no longer produce, and the range is
+    /// still the one `grid_index` diffs the store over.
     Everything(&'static str),
 }
 
@@ -740,7 +729,7 @@ mod plan_tests {
     }
 
     /// The steady state: the same params as last time diff from the
-    /// stored commit, and the fingerprints stay in force.
+    /// stored commit.
     #[test]
     fn unchanged_params_diff_from_the_stored_commit() {
         let stored = cursor("commit-a", json!({"p": {"period": "month"}}));
@@ -774,10 +763,11 @@ mod plan_tests {
     }
 
     /// No cursor is not "render everything": a renderer that never
-    /// records one — the whole-store kind — would otherwise lose its
-    /// fingerprint skip on every run and rewrite every document.
+    /// records one — the whole-store kind — sweeps for itself through
+    /// `retain_documents`, and the driver's full-walk sweep must not run
+    /// over it.
     #[test]
-    fn no_cursor_keeps_the_fingerprints() {
+    fn no_cursor_is_not_a_full_render() {
         assert_eq!(
             RenderPlan::decide(None, &json!({}), false),
             RenderPlan::FromCursor(None)
@@ -803,7 +793,6 @@ mod plan_tests {
                 &RenderedMarkdown {
                     markdown_uuid: uuid.to_string(),
                     source_id: "src".into(),
-                    source_fingerprint: format!("fp-{uuid}"),
                     upstream_cursor: None,
                     bucket_key: None,
                     md_path: root.join(uuid).join("all.md"),
@@ -837,7 +826,6 @@ mod plan_tests {
                 keep: &keep,
                 declared: &BTreeSet::new(),
                 storage: None,
-                prior: &HashMap::new(),
                 cursor: Some(cursor("raw-head", json!({}))),
             },
         )
@@ -872,7 +860,6 @@ mod plan_tests {
                 keep: &BTreeSet::new(),
                 declared: &BTreeSet::new(),
                 storage: None,
-                prior: &HashMap::new(),
                 cursor: None,
             },
         )
@@ -934,7 +921,6 @@ mod stale_tree_tests {
                 &RenderedMarkdown {
                     markdown_uuid: chat_uuid.to_string(),
                     source_id: "claude_web".into(),
-                    source_fingerprint: format!("fp-{chat_uuid}"),
                     upstream_cursor: None,
                     bucket_key: None,
                     md_path: root.join(chat_uuid).join("all.md"),
@@ -955,9 +941,9 @@ mod stale_tree_tests {
         v
     }
 
-    fn fingerprint_count(root: &Path) -> usize {
+    fn document_count(root: &Path) -> usize {
         let store = IndexedMarkdownStore::open(root).unwrap();
-        let n = store.prior_fingerprints().unwrap().len();
+        let n = store.all_document_uuids().unwrap().len();
         store.close();
         n
     }
@@ -975,7 +961,7 @@ mod stale_tree_tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().join("claude_web/render_markdown");
         write_doc(&root, "old-uuid", 4);
-        assert_eq!(fingerprint_count(&root), 1, "the fixture must be readable");
+        assert_eq!(document_count(&root), 1, "the fixture must be readable");
 
         let on_disk = stored_versions(&root);
         assert!(tree_is_from_an_older_renderer(
@@ -1000,7 +986,7 @@ mod stale_tree_tests {
             &on_disk,
             Some(&versions(&[5]))
         ));
-        assert_eq!(fingerprint_count(&root), 2);
+        assert_eq!(document_count(&root), 2);
     }
 
     /// An empty tree — a first run — is not "stale".

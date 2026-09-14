@@ -168,12 +168,10 @@ async fn snapshot_grid_rows_and_documents() {
         .collect();
 
     // ── documents ────────────────────────────────────────────────
-    // Includes source_fingerprint (render's input-hash) since the
-    // markdowns_loaded table merged into documents.
     let drows = sqlx::query(
         "SELECT markdown_uuid, source_id, provider, kind, title, \
-                created_at, updated_at, md_path, source_fingerprint, \
-                row_set_hash, renderer_version, rendered_at_utc, tz_offset \
+                created_at, updated_at, md_path, bucket_key, \
+                row_set_hash, renderer_version \
          FROM markdowns ORDER BY markdown_uuid",
     )
     .fetch_all(&pool)
@@ -192,14 +190,12 @@ async fn snapshot_grid_rows_and_documents() {
                 "created_at": r.try_get::<Option<String>, _>("created_at").ok().flatten(),
                 "updated_at": r.try_get::<Option<String>, _>("updated_at").ok().flatten(),
                 "md_path": r.try_get::<Option<String>, _>("md_path").ok().flatten(),
-                "source_fingerprint": r.try_get::<Option<String>, _>("source_fingerprint").ok().flatten(),
+                "bucket_key": r.try_get::<Option<String>, _>("bucket_key").ok().flatten(),
                 "row_set_hash": stable_row_set_hash(
                     r.try_get::<String, _>("provider").ok().as_deref(),
                     r.try_get::<Option<String>, _>("row_set_hash").ok().flatten(),
                 ),
                 "renderer_version": r.try_get::<Option<String>, _>("renderer_version").ok().flatten(),
-                "rendered_at_utc": r.try_get::<Option<String>, _>("rendered_at_utc").ok().flatten(),
-                "tz_offset": r.try_get::<Option<String>, _>("tz_offset").ok().flatten(),
             })
         })
         .collect();

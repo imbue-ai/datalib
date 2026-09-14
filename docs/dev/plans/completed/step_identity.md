@@ -185,8 +185,9 @@ migration. Directories do not move.
 
 - **`system/dag_state.json`** is keyed by step id. Simplest is to drop
   it and let every step re-run once. That is nearly free: downloads are
-  incremental against a raw store that hasn't moved, renders skip on
-  `source_fingerprint`, and `grid_index` skips on the same. Remapping
+  incremental against a raw store that hasn't moved, renders diff a
+  raw store that hasn't moved, and `grid_index` diffs render stores
+  that haven't either. Remapping
   the keys is possible — the converter knows old → new — but not worth
   the code.
 - **`config.toml`** is rewritten by `datalib-migrate-config`, which
@@ -197,9 +198,9 @@ migration. Directories do not move.
 - **Applet `params.tree`** values (`slack/rendered_md`) are unchanged,
   since the trees are unchanged.
 
-Worth stating because it was the scary part earlier: `grid_index` skips
-a document whose `source_fingerprint` matches, and that fingerprint
-excludes the output path — so if directories *did* move, every
+Worth stating because it was the scary part earlier: `grid_index`
+re-reads a document only when its render store's diff names it, and a
+moved directory touches no row — so if directories *did* move, every
 `qmd_path` would silently strand. They don't move, so this hazard is
 avoided rather than handled.
 

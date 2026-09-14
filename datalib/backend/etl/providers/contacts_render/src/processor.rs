@@ -42,9 +42,6 @@ impl RenderProcessor for ContactsRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
-        // The fingerprint skip is the driver's: every document is emitted
-        // and the store writes only the ones that changed.
-        let no_priors: std::collections::HashMap<String, String> = Default::default();
         use crate::render::{parse, render};
 
         let db_path = ingest::db_path_for(&self.raw_path);
@@ -65,7 +62,6 @@ impl RenderProcessor for ContactsRender {
             ctx.root,
             &self.name,
             ctx.progress,
-            &no_priors,
             &mut on_doc,
             &mut seen,
         )

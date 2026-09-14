@@ -36,9 +36,6 @@ impl RenderProcessor for PdfRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
-        // The fingerprint skip is the driver's: every document is emitted
-        // and the store writes only the ones that changed.
-        let no_priors: std::collections::HashMap<String, String> = Default::default();
         let out_dir = datalib_etl::layout::render_markdown_root(ctx.root, ctx.name);
         // Load first, render second: the document sink borrows `ctx`
         // and is not `Send`, so it must not be alive across an await.
@@ -93,22 +90,15 @@ impl RenderProcessor for PdfRender {
         );
 
         let mut on_doc = |md| ctx.emit_doc(md);
-        let s = render::render_targets(
-            &to_render,
-            &out_dir,
-            ctx.name,
-            ctx.progress,
-            &no_priors,
-            &mut on_doc,
-        )
-        .context("pdf render")?;
+        let s = render::render_targets(&to_render, &out_dir, ctx.name, ctx.progress, &mut on_doc)
+            .context("pdf render")?;
 
         if let Some(head) = scan.new_head.as_deref() {
             ctx.consumed(head);
         }
         Ok(format!(
-            "converted={} unchanged={} skipped={} dropped={} failed={}",
-            s.converted, s.skipped_unchanged, skipped, dropped, s.failed
+            "converted={} skipped={} dropped={} failed={}",
+            s.converted, skipped, dropped, s.failed
         ))
     }
 }

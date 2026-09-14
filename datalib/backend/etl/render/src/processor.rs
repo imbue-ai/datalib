@@ -1,8 +1,8 @@
 //! The render processor and its run context.
 //!
 //! Split from [`datalib_etl::processor`], which keeps the download
-//! half. The two contexts share no fields: a render pass wants prior
-//! fingerprints and the three document sinks, a download wants the
+//! half. The two contexts share no fields: a render pass wants the raw
+//! cursor and the three document sinks, a download wants the
 //! store handle, the metrics scope and the interrupt hooks. Fusing
 //! them into one struct meant every field was `Option` and half the
 //! accessors panicked on the wrong phase — and, because the sinks
@@ -242,10 +242,10 @@ impl<'a> RenderCtx<'a> {
     /// scan must not call it: most of what it did not name this run it
     /// simply did not look at. That one wants `remove_conversation`.
     ///
-    /// Include documents skipped on an unchanged fingerprint. "Considered
-    /// and unchanged" and "no longer there" are the two states this call
-    /// separates, and a renderer that reports only what it re-rendered
-    /// deletes its own steady state.
+    /// Include every document the walk saw, rendered or not. "Considered"
+    /// and "no longer there" are the two states this call separates, and
+    /// a renderer that reports only what it re-rendered deletes its own
+    /// steady state.
     ///
     /// Calls accumulate: a source with several render processors builds the
     /// set across all of them, and the sweep runs once at the end.

@@ -12,7 +12,7 @@ use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use super::grid_rows::{fingerprint_for_mr, rows_for_mr, RENDER_VERSION};
+use super::grid_rows::{rows_for_mr, RENDER_VERSION};
 use super::parse::{MergeRequestRow, NoteRow, NoteSection, ParsedGitlabApi};
 
 pub const SLUG_MAX_LEN: usize = 60;
@@ -22,7 +22,6 @@ static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
     pub rendered: usize,
-    pub skipped: usize,
 }
 
 pub fn slugify(name: &str) -> String {
@@ -263,7 +262,6 @@ pub fn render_gitlab(
     root: &Path,
     stanza: &str,
     progress: &Progress,
-    prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     tracing::info!(
@@ -292,17 +290,8 @@ pub fn render_gitlab(
     for mr in &parsed.merge_requests {
         let key = (mr.project_full_path.clone(), mr.mr_iid);
         let notes = by_mr.remove(&key).unwrap_or_default();
-        let fingerprint = fingerprint_for_mr(mr, &notes);
         let md_rel = mr_qmd_path_rel(stanza, &mr.project_full_path, mr.mr_iid);
         let md_path = root.join(&md_rel);
-
-        if prior_fingerprints.get(&mr.uuid).map(String::as_str) == Some(fingerprint.as_str())
-            && md_path.exists()
-        {
-            summary.skipped += 1;
-            progress.inc(1);
-            continue;
-        }
 
         render_one_mr(mr, &notes, root, stanza)?;
         let mut problems: Vec<RenderProblemRow> = Vec::new();
@@ -310,7 +299,6 @@ pub fn render_gitlab(
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: mr.uuid.clone(),
             source_id: String::new(),
-            source_fingerprint: fingerprint,
             upstream_cursor: None,
             bucket_key: None,
             md_path: md_path.clone(),

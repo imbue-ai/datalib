@@ -80,8 +80,7 @@ impl Params {
 
 /// One document as both sides of the comparison see it: what the
 /// reference renderer produces, and what a store holds. `content` is
-/// what the `.md` file carries; the store's own fingerprint is not
-/// compared, being the store's business.
+/// what the `.md` file carries.
 #[derive(Debug, Clone)]
 struct Doc {
     content: String,
@@ -130,21 +129,13 @@ fn render_parent(
     }
     rows.sort();
     edges.sort();
-    let mut h = blake3::Hasher::new();
-    for (u, t) in &rows {
-        h.update(u.as_bytes());
-        h.update(b"\0");
-        h.update(t.as_bytes());
-        h.update(b"\n");
-    }
-    for (e, d) in &edges {
-        h.update(e.as_bytes());
-        h.update(b"\0");
-        h.update(d.as_bytes());
-        h.update(b"\n");
-    }
+    let content = rows
+        .iter()
+        .map(|(u, t)| format!("{u}: {t}\n"))
+        .chain(edges.iter().map(|(e, d)| format!("{e} -> {d}\n")))
+        .collect();
     Doc {
-        content: h.finalize().to_hex().to_string(),
+        content,
         rows,
         edges,
     }
@@ -376,7 +367,6 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
     RenderedMarkdown {
         markdown_uuid: id.to_string(),
         source_id: SOURCE.into(),
-        source_fingerprint: doc.content.clone(),
         upstream_cursor: None,
         bucket_key: Some(id.to_string()),
         md_path,
@@ -981,7 +971,7 @@ async fn incremental_render_equals_cold_render_under_random_histories() {
 /// The point of `render_inputs`: a row every document reads but none
 /// owns — an author — re-renders exactly the documents that declared it,
 /// not the whole source. Before, `authors` was a fan-out table and one
-/// rename rendered everything with the fingerprints on.
+/// rename rendered everything.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_changed_input_re_renders_only_the_buckets_that_declared_it() {
     let td = tempfile::tempdir().unwrap();
@@ -1018,8 +1008,7 @@ async fn a_changed_input_re_renders_only_the_buckets_that_declared_it() {
         .await;
     let second = world.render_report(&synth, false).await.unwrap();
     assert_eq!(
-        (second.docs, second.skipped),
-        (2, 0),
+        second.docs, 2,
         "ann's two parents render again; bob's three are not even looked at"
     );
     assert_store_is(

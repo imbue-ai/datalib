@@ -53,7 +53,10 @@ impl RenderProcessor for EmailRender {
     // Both knobs change the rendered output for documents the diff
     // would never surface, so a change to either re-renders everything.
     fn render_params(&self) -> serde_json::Value {
-        crate::render::render::render_params(self.outlink, &self.only_render_labels)
+        datalib_etl_chat_common::render::layout_params_with(crate::render::render::render_params(
+            self.outlink,
+            &self.only_render_labels,
+        ))
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
@@ -70,9 +73,7 @@ impl RenderProcessor for EmailRender {
             return Ok("skipped (no raw db)".into());
         }
 
-        // Two-phase parse driven by the render cursor's commit;
-        // `prior_fingerprints` is intentionally unused for email (the
-        // cursor is the single source of truth).
+        // Two-phase parse driven by the render cursor's commit.
         let parsed = parse(&db, ctx.raw_cursor)?;
 
         // Threads the mailbox lost — a JMAP `destroyed`, a Gmail history

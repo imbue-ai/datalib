@@ -4,7 +4,6 @@
 pub mod convert;
 pub mod grid_rows;
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,13 +27,8 @@ pub fn doc_qmd_path_rel(stanza: &str, blake3: &str) -> String {
     )
 }
 
-pub fn render_fingerprint(blake3: &str) -> String {
-    format!("{blake3}.v{RENDER_VERSION}")
-}
-
 pub struct RenderSummary {
     pub converted: usize,
-    pub skipped_unchanged: usize,
     pub failed: usize,
 }
 
@@ -73,12 +67,10 @@ pub fn render_targets(
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary {
         converted: 0,
-        skipped_unchanged: 0,
         failed: 0,
     };
     if targets.is_empty() {
@@ -92,18 +84,6 @@ pub fn render_targets(
         progress.inc(1);
         let md_path = md_path_for(out_dir, &t.blake3);
         let doc_uuid = grid_rows::document_uuid(&t.blake3);
-
-        // The fingerprint IS the content hash. That is the whole payoff
-        // of content identity: a document that has not changed cannot
-        // need re-conversion, and one that has changed has a different
-        // primary key, so there is no separate invalidation to get
-        // wrong.
-        let fingerprint = render_fingerprint(&t.blake3);
-        if prior_fingerprints.get(&doc_uuid) == Some(&fingerprint) && md_path.exists() {
-            summary.skipped_unchanged += 1;
-            continue;
-        }
-
         match render_one(t, &md_path, source_id, &doc_uuid) {
             Ok(rendered) => {
                 summary.converted += 1;
@@ -129,20 +109,12 @@ pub async fn render(
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     // An unreadable store renders nothing. This wrapper does no deleting,
     // so unlike the processor's path it can treat the two alike.
     let targets = load_targets(raw_dir).await?.unwrap_or_default();
-    render_targets(
-        &targets,
-        out_dir,
-        source_id,
-        progress,
-        prior_fingerprints,
-        on_doc_complete,
-    )
+    render_targets(&targets, out_dir, source_id, progress, on_doc_complete)
 }
 
 fn render_one(
@@ -225,7 +197,6 @@ fn render_one(
     Ok(RenderedMarkdown {
         markdown_uuid: doc_uuid.to_string(),
         source_id: source_id.to_string(),
-        source_fingerprint: render_fingerprint(&t.blake3),
         upstream_cursor: None,
         bucket_key: None,
         md_path: md_path.to_path_buf(),
@@ -243,23 +214,6 @@ fn yaml_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_fingerprint_changes_when_the_renderer_does() {
-        // The whole point: content alone would skip re-rendering after a
-        // renderer change, leaving an existing install on stale output
-        // forever. If this ever equals the bare hash again, the cache
-        // key has lost its version component.
-        let fp = render_fingerprint("deadbeef");
-        assert_ne!(fp, "deadbeef");
-        assert!(fp.starts_with("deadbeef."), "{fp}");
-        assert!(fp.ends_with(&RENDER_VERSION.to_string()), "{fp}");
-    }
-
-    #[test]
-    fn the_fingerprint_still_distinguishes_content() {
-        assert_ne!(render_fingerprint("aaaa"), render_fingerprint("bbbb"));
-    }
 
     #[test]
     fn md_path_is_content_named() {
@@ -312,9 +266,8 @@ pub struct PdfScan {
 
 /// Ask the raw store which documents moved since `last_render_hash`.
 ///
-/// The bucket is the document's blake3, which is also its identity and its
-/// render fingerprint — for this provider "changed" and "different
-/// document" are the same statement. `pdf_paths` joins the union because a
+/// The bucket is the document's blake3, which is also its identity — for
+/// this provider "changed" and "different document" are the same statement. `pdf_paths` joins the union because a
 /// file appearing at a new path is how a document enters the corpus, even
 /// when its bytes were already known.
 pub async fn scan_changed(raw_dir: &Path, last_render_hash: Option<&str>) -> Result<PdfScan> {

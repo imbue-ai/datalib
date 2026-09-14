@@ -93,8 +93,8 @@ pub struct OAContentPartRow {
 }
 
 /// One conversation as it sits between download and render: the upstream
-/// JSON payload (full, untouched — used for fingerprinting and for
-/// on-demand shredding into messages/parts) paired with the surfaced
+/// JSON payload (full, untouched — shredded on demand into
+/// messages/parts) paired with the surfaced
 /// `OAConversationRow` metadata.
 #[derive(Debug, Clone)]
 pub struct ChatGPTConversation {
@@ -898,8 +898,8 @@ pub fn build_conv_row(
 
 /// Walk a conversation's `mapping` and emit its messages and content
 /// parts. Only called for conversations the renderer is actually going
-/// to re-render — for unchanged conversations the fingerprint check
-/// short-circuits and we never visit the mapping at all.
+/// to re-render — an unchanged conversation never reaches render, so
+/// its mapping is never visited.
 pub fn shred(c: &ChatGPTConversation) -> ShreddedConversation {
     let mut messages = Vec::new();
     let mut content_parts_out = Vec::new();

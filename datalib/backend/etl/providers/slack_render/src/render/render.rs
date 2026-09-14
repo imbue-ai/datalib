@@ -102,10 +102,6 @@ pub fn render_all(
 
     let (chats, blobs_by_chat) = build_chats(parsed, labels);
 
-    // Incremental skip is driven upstream by dolt_diff, so the
-    // fingerprint map is intentionally empty: every changed thread that
-    // reached us is (re)rendered.
-    let no_priors: HashMap<String, String> = HashMap::new();
     let cc = cc_render_all(
         &profile(),
         &chats,
@@ -113,7 +109,6 @@ pub fn render_all(
         source_id,
         &blobs_by_chat,
         progress,
-        &no_priors,
         on_doc_complete,
     )
     .context("slack chat-common render")?;

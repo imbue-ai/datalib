@@ -37,9 +37,6 @@ impl RenderProcessor for GitlabRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
-        // The fingerprint skip is the driver's: every document is emitted
-        // and the store writes only the ones that changed.
-        let no_priors: std::collections::HashMap<String, String> = Default::default();
         use crate::render::{parse_api_dir, render_gitlab};
         let parsed = parse_api_dir(&self.raw_path, ctx.raw_cursor)
             .with_context(|| format!("gitlab parse {}", self.raw_path.display()))?;
@@ -59,15 +56,8 @@ impl RenderProcessor for GitlabRender {
         }
 
         let mut on_doc = |md| ctx.emit_doc(md);
-        let s = render_gitlab(
-            &parsed,
-            ctx.root,
-            ctx.name,
-            ctx.progress,
-            &no_priors,
-            &mut on_doc,
-        )
-        .context("render_gitlab")?;
+        let s = render_gitlab(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
+            .context("render_gitlab")?;
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }

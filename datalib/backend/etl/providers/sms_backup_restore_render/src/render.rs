@@ -65,7 +65,6 @@ pub fn render(
     out_root: &Path,
     source_id: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     last_render_hash: Option<&str>,
 ) -> Result<RenderOutcome> {
@@ -148,7 +147,6 @@ pub fn render(
         source_id,
         &blobs,
         progress,
-        prior_fingerprints,
         on_doc_complete,
     )?;
     outcome.rendered = s.docs_rendered;

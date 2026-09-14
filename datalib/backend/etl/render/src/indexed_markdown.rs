@@ -160,23 +160,6 @@ impl IndexedMarkdownStore {
         &self.path
     }
 
-    pub fn prior_fingerprints(&self) -> Result<HashMap<String, String>> {
-        blocking(async {
-            let rows = sqlx::query(
-                "SELECT markdown_uuid, source_fingerprint FROM markdowns \
-                 WHERE source_fingerprint IS NOT NULL",
-            )
-            .fetch_all(&self.pool)
-            .await
-            .context("read prior fingerprints")?;
-            let mut out = HashMap::with_capacity(rows.len());
-            for r in rows {
-                out.insert(r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?);
-            }
-            Ok(out)
-        })
-    }
-
     /// The renderer versions the provider's own documents carry.
     ///
     /// The storage report is excluded: datalib renders it, not any of
@@ -244,55 +227,19 @@ impl IndexedMarkdownStore {
         }
     }
 
-    /// Store `md` as given, `source_fingerprint` included. For a document
-    /// whose own fingerprint is the right skip signal — datalib's storage
-    /// report hashes its row counts and leaves out the byte counts that
-    /// wobble from run to run — and for tests.
+    /// Store `md`, replacing what the store held for it. Always: a
+    /// document whose rows and file come out unchanged writes identical
+    /// rows, and doltlite's content-addressed tables then carry no diff
+    /// for it — that, and nothing here, is how "unchanged" is decided.
     pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
-        // `markdowns.rendered_at_utc` is one of the times `--now` is
-        // documented to pin, and the pinned value is already in hand.
-        // Left to sample its own clock, every document in a run
-        // disagreed with every other by microseconds.
-        let now = (!self.now.is_empty()).then_some(self.now.as_str());
         self.transaction(|| {
             blocking(async {
-                crate::grid_index::apply_one(&self.write_lock, out_dir, md, now)
+                crate::grid_index::apply_one(&self.write_lock, out_dir, md)
                     .await
                     .with_context(|| format!("apply {}", md.markdown_uuid))?;
                 self.sweep_problems(&md.markdown_uuid, &md.problems).await
             })
         })
-    }
-
-    /// Store a provider's document unless `prior` says the store already
-    /// holds exactly this output. Returns whether it was written.
-    ///
-    /// The fingerprint compared is computed here, from what is about to
-    /// be written — the rows, the edges and the `.md` bytes — and stored
-    /// as `markdowns.source_fingerprint` in place of whatever the
-    /// provider set. A skip may only ever mean "the output is
-    /// unchanged", and a provider's own hash of its inputs cannot promise
-    /// that: chat-common's left out the author names it resolves from
-    /// `users` at render time, so a rename skipped every document it
-    /// should have rewritten.
-    pub fn put_document_unless(
-        &self,
-        out_dir: &Path,
-        md: &RenderedMarkdown,
-        prior: &HashMap<String, String>,
-    ) -> Result<bool> {
-        let fingerprint = output_fingerprint(md)?;
-        if prior.get(&md.markdown_uuid) == Some(&fingerprint) {
-            return Ok(false);
-        }
-        self.put_document(
-            out_dir,
-            &RenderedMarkdown {
-                source_fingerprint: fingerprint,
-                ..md.clone()
-            },
-        )?;
-        Ok(true)
     }
 
     /// Drop one document: its rows here, and the `.md` file itself.
@@ -457,6 +404,44 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// The newest `items` sample per subject in `source_measurements`:
+    /// what the storage report compares its counts against to decide
+    /// whether anything moved.
+    pub fn latest_items(&self) -> Result<HashMap<String, Option<i64>>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let rows = sqlx::query(
+                "SELECT subject, items FROM source_measurements m \
+                  WHERE measured_at_utc = (SELECT MAX(measured_at_utc) FROM source_measurements \
+                                            WHERE subject = m.subject)",
+            )
+            .fetch_all(&mut **guard.conn())
+            .await
+            .context("read latest measurements")?;
+            let mut out = HashMap::with_capacity(rows.len());
+            for r in rows {
+                out.insert(r.try_get::<String, _>(0)?, r.try_get::<Option<i64>, _>(1)?);
+            }
+            Ok(out)
+        })
+    }
+
+    /// The renderer version a stored document carries, if it is there.
+    pub fn document_version(&self, markdown_uuid: &str) -> Result<Option<u32>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let v: Option<Option<String>> = sqlx::query_scalar(
+                "SELECT renderer_version FROM markdowns WHERE markdown_uuid = ?",
+            )
+            .bind(markdown_uuid)
+            .fetch_optional(&mut **guard.conn())
+            .await
+            .context("read a document's version")?;
+            Ok(v.flatten()
+                .and_then(|v| v.rsplit('.').next().and_then(|s| s.parse::<u32>().ok())))
+        })
+    }
+
     /// Where the last render left off, if it recorded it.
     pub fn cursor(&self) -> Result<Option<RenderCursorRow>> {
         blocking(async {
@@ -530,47 +515,6 @@ impl IndexedMarkdownStore {
                 .collect()
         })
     }
-}
-
-/// A hash of everything a document's write consists of: its rows (by
-/// the same canonical tuple list `markdowns.row_set_hash` uses), its
-/// edges, and the bytes of its `.md`. Two documents with equal
-/// fingerprints would write the same store and the same file.
-fn output_fingerprint(md: &RenderedMarkdown) -> Result<String> {
-    let mut h = blake3::Hasher::new();
-    h.update(crate::grid_index::compute_row_set_hash(&md.rows).as_bytes());
-    let mut edges: Vec<String> = md
-        .edges
-        .iter()
-        .map(|e| {
-            format!(
-                "{}\0{}\0{}\0{}\0{}\0{}",
-                e.edge_uuid,
-                e.src_markdown_uuid,
-                e.src_anchor_uuid.as_deref().unwrap_or(""),
-                e.dst_markdown_uuid,
-                e.dst_anchor_uuid.as_deref().unwrap_or(""),
-                e.label.as_deref().unwrap_or("")
-            )
-        })
-        .collect();
-    edges.sort();
-    for e in &edges {
-        h.update(e.as_bytes());
-        h.update(b"\n");
-    }
-    h.update(b"\0md\0");
-    match std::fs::read(&md.md_path) {
-        Ok(bytes) => h.update(&bytes),
-        // A document with no file behind it (a renderer that emits rows
-        // only) hashes as such rather than failing the write.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => h.update(b"-"),
-        Err(e) => {
-            return Err(e)
-                .with_context(|| format!("read {} to fingerprint it", md.md_path.display()))
-        }
-    };
-    Ok(h.finalize().to_hex().to_string())
 }
 
 /// Delete a rendered document's file, and the per-document directory it sat
@@ -903,7 +847,6 @@ impl IndexedMarkdownStore {
                 out.push(RenderedMarkdown {
                     markdown_uuid: md.markdown_uuid.clone(),
                     source_id: md.source_id.clone(),
-                    source_fingerprint: md.source_fingerprint.clone().unwrap_or_default(),
                     upstream_cursor: md.upstream_cursor.clone(),
                     bucket_key: md.bucket_key.clone(),
                     md_path: match md.md_path.as_deref() {
@@ -977,20 +920,19 @@ mod tests {
             .expect("row")
     }
 
-    fn doc(dir: &Path, markdown_uuid: &str, fingerprint: &str) -> RenderedMarkdown {
-        doc_with(dir, markdown_uuid, fingerprint, Vec::new())
+    fn doc(dir: &Path, markdown_uuid: &str, label: &str) -> RenderedMarkdown {
+        doc_with(dir, markdown_uuid, label, Vec::new())
     }
 
     fn doc_with(
         dir: &Path,
         markdown_uuid: &str,
-        fingerprint: &str,
+        _label: &str,
         problems: Vec<RenderProblemRow>,
     ) -> RenderedMarkdown {
         RenderedMarkdown {
             markdown_uuid: markdown_uuid.to_string(),
             source_id: "src".into(),
-            source_fingerprint: fingerprint.into(),
             upstream_cursor: None,
             bucket_key: None,
             md_path: dir.join(format!("{markdown_uuid}.md")),
@@ -1189,40 +1131,25 @@ mod tests {
         }
     }
 
-    /// The fingerprint the store keeps is its own, over the output: the
-    /// same rows, edges and `.md` bytes fingerprint the same whatever the
-    /// provider wrote in `source_fingerprint`, and a second write of the
-    /// same output is skipped.
+    /// The write path has no skip of its own: the same document written
+    /// twice is the same row twice, and doltlite reports nothing between
+    /// the two commits. The store-level check is `dolt_diff` staying
+    /// empty; here, that the second write is accepted and the row is one.
     #[tokio::test(flavor = "multi_thread")]
-    async fn the_store_fingerprints_the_output_and_skips_an_unchanged_one() {
+    async fn writing_the_same_document_twice_is_one_row() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        assert!(s.prior_fingerprints().unwrap().is_empty(), "fresh store");
-
-        let written = s
-            .put_document_unless(root, &doc(root, "md-1", "fp-1"), &HashMap::new())
-            .unwrap();
-        assert!(written);
-        let fps = s.prior_fingerprints().unwrap();
-        let stored = fps.get("md-1").cloned().expect("a fingerprint");
-        assert_ne!(
-            stored, "fp-1",
-            "the provider's label is not the fingerprint"
-        );
+        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
+        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
+        let n: i64 = blocking(async {
+            sqlx::query_scalar("SELECT COUNT(*) FROM markdowns")
+                .fetch_one(&s.pool)
+                .await
+        })
+        .unwrap();
+        assert_eq!(n, 1);
         assert_eq!(s.render_versions().unwrap(), [7].into_iter().collect());
-
-        // Same output under a different provider label: unchanged.
-        let written = s
-            .put_document_unless(root, &doc(root, "md-1", "fp-2"), &fps)
-            .unwrap();
-        assert!(!written, "identical output must not be written again");
-        // Different rows: written, with a different fingerprint.
-        let mut changed = doc(root, "md-1", "fp-1");
-        changed.rows[0].text = "changed".into();
-        let written = s.put_document_unless(root, &changed, &fps).unwrap();
-        assert!(written);
-        assert_ne!(s.prior_fingerprints().unwrap()["md-1"], stored);
     }
 
     /// Re-rendering replaces a document's rows rather than accumulating

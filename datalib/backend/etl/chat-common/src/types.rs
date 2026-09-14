@@ -67,8 +67,7 @@ pub struct NormalizedReaction {
     /// The emoji or short string (`🫡`, `🔥`, …).
     pub emoji: String,
     /// Unix milliseconds when the reaction was sent, or `None` when
-    /// upstream gave none. Used for fingerprint stability and for the
-    /// reaction row's `when_ts` — see [`NormalizedChatItem::date_ms`]
+    /// upstream gave none. Used for the reaction row's `when_ts` — see [`NormalizedChatItem::date_ms`]
     /// for why this is an `Option` and what `None` costs downstream.
     pub date_ms: Option<i64>,
     /// What this reaction is upstream, for its grid_row's backpointer
@@ -84,8 +83,8 @@ pub struct NormalizedChatItem {
     /// Stable per-item UUID minted by the provider. Used as the section
     /// anchor (`id="m-{uuid}"`) and the message-level grid_row PK.
     pub message_uuid: String,
-    /// Provider-stable identity string used in the fingerprint hash.
-    /// Doesn't have to be human-readable.
+    /// Provider-stable identity string. Doesn't have to be
+    /// human-readable.
     pub author_id: String,
     /// Pre-resolved author label ("Me", "Will Riker", "+15551234"). The
     /// provider owns the outgoing/incoming rule and any name lookup.
@@ -126,8 +125,8 @@ pub struct NormalizedChatItem {
     /// transcript reads as what was said with the plumbing tucked
     /// away. `false` for anything a person or an assistant actually
     /// said, which is the default for every provider that doesn't set
-    /// it. Layout only: an aside still gets its own anchor, its own
-    /// grid_row, and its own place in the fingerprint.
+    /// it. Layout only: an aside still gets its own anchor and its own
+    /// grid_row.
     pub is_aside: bool,
 }
 
@@ -198,8 +197,7 @@ pub struct NormalizedDoc {
 /// A complete chat as exposed to chat-common's renderer.
 #[derive(Debug, Clone, Serialize)]
 pub struct NormalizedChat {
-    /// Provider-local chat id. Goes into the fingerprint hash and the
-    /// on-disk path slug.
+    /// Provider-local chat id. Goes into the on-disk path slug.
     pub id: String,
     /// Stable per-chat UUID minted by the provider. Same value across
     /// every bucket of this chat.

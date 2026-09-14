@@ -59,7 +59,6 @@ pub fn write_samples(out_dir: &Path) -> Result<Vec<String>> {
         "samples",
         &HashMap::new(),
         &Progress::noop(),
-        &HashMap::new(),
         &mut |doc| {
             paths.push(doc.md_path.to_string_lossy().into_owned());
             Ok(())

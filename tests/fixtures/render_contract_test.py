@@ -54,8 +54,6 @@ KNOWN_GAPS: dict[str, str] = {
     # (contract clause 2 for a diff-narrowed renderer; for a whole-store
     # one, a row its walk never reads — not traced yet)
     "beeper: tweak rooms": "not traced",
-    "linkedin: delete email_addresses": "not traced",
-    "linkedin: tweak email_addresses": "same",
     "sms-backup-restore: delete sms_attachments": "not traced",
     "sms-backup-restore: tweak sms_attachments": "same",
     # ── a table the bucket query does not name ──
@@ -74,7 +72,6 @@ KNOWN_GAPS: dict[str, str] = {
 # Columns of the render store whose value is a stamp of *when* rather
 # than *what*: identical content renders them differently on every run.
 _VOLATILE = {
-    "markdowns": ("rendered_at_utc", "tz_offset"),
     "render_problems": ("first_seen_at_utc", "last_seen_at_utc", "tz_offset"),
     "render_cursor": ("rendered_at_utc", "tz_offset", "raw_commit"),
 }

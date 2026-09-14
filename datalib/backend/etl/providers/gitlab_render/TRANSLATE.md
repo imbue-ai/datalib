@@ -31,13 +31,12 @@ plus that document's `grid_rows`.
 
 ## Rows
 
-Same `RenderedMarkdown { markdown_uuid, source_fingerprint, rows }`
-shape as the other providers:
+Same `RenderedMarkdown { markdown_uuid, rows, .. }` shape as the
+other providers:
 
-- `markdown_uuid` — UUIDv5 of `gitlab:{project}:mr:{iid}`.
-- `source_fingerprint` — DefaultHasher hash of `RENDER_VERSION`
-  + canonicalized MR JSON + canonicalized note JSONs (sorted by note
-  id). Stable across re-renders.
+- `markdown_uuid` — UUIDv5 of `gitlab:{project}:mr:{iid}`. Re-renders
+  that didn't change content produce an identical row set, so the
+  store's commit carries no diff for them.
 - `rows[0]` — the MR row (kind = "GitLab MR").
 - `rows[1..]` — one row per surviving note (General first, then
   Inline-by-`(path, line)`). `message_index` indexes within the doc;

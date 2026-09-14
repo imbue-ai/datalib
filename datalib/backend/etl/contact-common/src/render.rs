@@ -1,9 +1,7 @@
-//! `render_all` — one `.md` + one [`GridRow`] per contact, with
-//! fingerprint-skip and the `on_doc_complete` callback the orchestrator
-//! threads through. Provider-agnostic: everything provider-specific
+//! `render_all` — one `.md` + one [`GridRow`] per contact, handed to
+//! the `on_doc_complete` callback the orchestrator threads through. Provider-agnostic: everything provider-specific
 //! arrives via [`ContactRenderProfile`] + the [`NormalizedContact`]s.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,7 +12,6 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
-use sha2::{Digest, Sha256};
 
 use crate::types::{ContactPhoto, NormalizedContact};
 
@@ -44,7 +41,6 @@ pub struct ContactRenderProfile {
 pub struct RenderSummary {
     pub contacts_total: usize,
     pub contacts_rendered: usize,
-    pub contacts_skipped: usize,
     pub photos_materialized: usize,
     /// Every document this call considered, rendered and skipped alike —
     /// and the ones whose render failed, which are documents we could not
@@ -59,7 +55,6 @@ pub fn render_all(
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary {
@@ -70,21 +65,13 @@ pub fn render_all(
 
     for contact in contacts {
         summary.documents.push(contact.contact_uuid.clone());
-        match render_one(
-            profile,
-            contact,
-            out_dir,
-            source_id,
-            prior_fingerprints,
-            on_doc_complete,
-        ) {
-            Ok(Outcome::Rendered { photo_written }) => {
+        match render_one(profile, contact, out_dir, source_id, on_doc_complete) {
+            Ok(photo_written) => {
                 summary.contacts_rendered += 1;
                 if photo_written {
                     summary.photos_materialized += 1;
                 }
             }
-            Ok(Outcome::Skipped) => summary.contacts_skipped += 1,
             Err(e) => {
                 tracing::warn!(
                     event = "contact_render_failed",
@@ -100,28 +87,15 @@ pub fn render_all(
     Ok(summary)
 }
 
-enum Outcome {
-    Rendered { photo_written: bool },
-    Skipped,
-}
-
 fn render_one(
     profile: &ContactRenderProfile,
     contact: &NormalizedContact,
     out_dir: &Path,
     source_id: &str,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<Outcome> {
+) -> Result<bool> {
     let m_uuid = &contact.contact_uuid;
-    let fingerprint = compute_fingerprint(profile.render_version, contact);
-
     let (md_path, page_dir) = output_paths(out_dir, source_id, contact);
-    if prior_fingerprints.get(m_uuid).map(String::as_str) == Some(fingerprint.as_str())
-        && md_path.exists()
-    {
-        return Ok(Outcome::Skipped);
-    }
     fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     // Photo first — written to `blobs/`, referenced from the markdown
@@ -133,13 +107,7 @@ fn render_one(
     };
     let photo_written = photo_rel.is_some();
 
-    let md = render_markdown(
-        profile,
-        contact,
-        source_id,
-        &fingerprint,
-        photo_rel.as_deref(),
-    );
+    let md = render_markdown(profile, contact, source_id, photo_rel.as_deref());
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
@@ -156,7 +124,6 @@ fn render_one(
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
-        source_fingerprint: fingerprint,
         upstream_cursor: contact.when_ts.clone(),
         bucket_key: None,
         md_path,
@@ -167,7 +134,7 @@ fn render_one(
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 
-    Ok(Outcome::Rendered { photo_written })
+    Ok(photo_written)
 }
 
 fn output_paths(
@@ -193,44 +160,10 @@ fn display_or_id(contact: &NormalizedContact) -> &str {
         .unwrap_or(&contact.contact_uuid)
 }
 
-fn compute_fingerprint(render_version: u32, contact: &NormalizedContact) -> String {
-    let mut h = Sha256::new();
-    h.update(render_version.to_be_bytes());
-    h.update(b"|");
-    h.update(contact.contact_uuid.as_bytes());
-    h.update(b"|");
-    h.update(contact.group_uuid.as_bytes());
-    h.update(b"|");
-    h.update(contact.group_label.as_bytes());
-    h.update(b"|");
-    h.update(contact.display_name.as_deref().unwrap_or("").as_bytes());
-    h.update(b"|");
-    h.update(contact.external_id.as_deref().unwrap_or("").as_bytes());
-    h.update(b"|");
-    h.update(contact.when_ts.as_deref().unwrap_or("").as_bytes());
-    h.update(b"|");
-    h.update(contact.source_url.as_deref().unwrap_or("").as_bytes());
-    for f in &contact.fields {
-        h.update(b"\n");
-        h.update(f.label.as_bytes());
-        h.update(b"=");
-        h.update(f.value.as_bytes());
-    }
-    h.update(b"|photo:");
-    h.update((contact.photo.as_ref().map(|p| p.bytes.len()).unwrap_or(0) as u64).to_be_bytes());
-    h.update(b"|photo_url:");
-    h.update(contact.photo_url.as_deref().unwrap_or("").as_bytes());
-    h.finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>()
-}
-
 fn render_markdown(
     profile: &ContactRenderProfile,
     contact: &NormalizedContact,
     source_id: &str,
-    fingerprint: &str,
     photo_rel: Option<&str>,
 ) -> String {
     let m_uuid = &contact.contact_uuid;
@@ -238,7 +171,6 @@ fn render_markdown(
 
     out.push_str("---\n");
     out.push_str(&format!("markdown_uuid: {m_uuid}\n"));
-    out.push_str(&format!("source_fingerprint: {fingerprint}\n"));
     out.push_str(&format!("source_id: {source_id}\n"));
     out.push_str(&format!("provider: {}\n", profile.provider));
     out.push_str(&format!("group: {}\n", yaml_safe(&contact.group_label)));
@@ -414,18 +346,8 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_is_stable_and_sensitive() {
-        let c = mk_contact();
-        assert_eq!(compute_fingerprint(1, &c), compute_fingerprint(1, &c));
-        assert_ne!(compute_fingerprint(1, &c), compute_fingerprint(2, &c));
-        let mut c2 = mk_contact();
-        c2.fields[0].value = "Klingon Empire".to_string();
-        assert_ne!(compute_fingerprint(1, &c), compute_fingerprint(1, &c2));
-    }
-
-    #[test]
     fn markdown_has_title_url_and_field_table() {
-        let md = render_markdown(&mk_profile(), &mk_contact(), "linkedin", "fp", None);
+        let md = render_markdown(&mk_profile(), &mk_contact(), "linkedin", None);
         assert!(md.contains("Jean-Luc Picard"));
         assert!(md.contains("https://www.linkedin.com/in/jlp"));
         assert!(md.contains("| Company | Starfleet |"));

@@ -49,16 +49,16 @@ The body is byte-stable against the Python `_render_one_openai`.
 
 ## Incrementality
 
-The document's `markdowns` row carries `source_fingerprint`, a 64-bit
-hash over the canonical JSON of the conversation row, every message
-row, and every content part (sorted by `(message_id, part_index)`).
-Render skips a document whose fingerprint already matches; the Load
-step uses the same value to dedup against prior runs.
+Render asks the raw store `dolt_diff` from the commit the render
+cursor names and renders only the conversations that moved. Every document
+it renders is written; an unchanged one writes identical rows, which
+doltlite's content-addressed tables store as no change, so the index
+never sees it.
 
-Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk
-render layout changes in a way that should invalidate stale `.md`
-files even though their `source_fingerprint` would otherwise still
-match.
+Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk render
+layout changes: the driver then re-renders every document. The shared
+chat layout has its own number, `LAYOUT_VERSION` in chat-common, which
+every chat provider declares through `render_params`.
 
 ## Goldens
 

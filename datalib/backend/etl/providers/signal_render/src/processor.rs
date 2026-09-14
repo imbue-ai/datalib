@@ -47,7 +47,9 @@ impl RenderProcessor for SignalRender {
     // `period` decides how messages bucket into documents, so a change
     // re-renders every document.
     fn render_params(&self) -> serde_json::Value {
-        crate::render::render_params(self.period)
+        datalib_etl_chat_common::render::layout_params_with(crate::render::render_params(
+            self.period,
+        ))
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {

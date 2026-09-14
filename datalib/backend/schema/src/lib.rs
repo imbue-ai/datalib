@@ -78,7 +78,7 @@ mod tests {
     /// creates, so this spells it out in full: a change to the struct
     /// that nobody meant to make to the table shows up here. Three
     /// drifts had already opened up while nothing read the struct — it
-    /// was missing `source_fingerprint` and `upstream_cursor`, it
+    /// was missing `upstream_cursor`, it
     /// declared `title` as `VARCHAR(512)` where the table had `TEXT`,
     /// and it made `row_set_hash` / `renderer_version` NOT NULL where
     /// the table allows NULL, the last of which fails a write rather
@@ -95,12 +95,9 @@ mod tests {
     created_at VARCHAR(40),
     updated_at VARCHAR(40),
     md_path VARCHAR(1024),
-    source_fingerprint VARCHAR(64),
     upstream_cursor VARCHAR(64),
     row_set_hash CHAR(64),
     renderer_version VARCHAR(32),
-    rendered_at_utc VARCHAR(40),
-    tz_offset VARCHAR(8),
     bucket_key VARCHAR(256),
     PRIMARY KEY (markdown_uuid)
 )"#;
@@ -113,15 +110,22 @@ mod tests {
         );
     }
 
-    /// The columns `grid_index`'s hand-written `MARKDOWNS_DDL` writes
-    /// have to be on the struct, or the struct is not the schema.
-    /// `source_fingerprint` and `upstream_cursor` were absent for as
-    /// long as `MarkdownRow` went unused by anything.
+    /// Nothing on `markdowns` may be a per-run stamp: a re-render of an
+    /// unchanged document must write an identical row, or doltlite sees
+    /// a change and every consumer re-reads it. `rendered_at_utc` was
+    /// exactly that, and `source_fingerprint` a second answer to a
+    /// question doltlite already answers.
     #[test]
-    fn markdowns_covers_the_render_bookkeeping_columns() {
+    fn markdowns_carries_no_per_run_stamp() {
         let (_, cols) = super::markdowns::COLUMNS[0];
-        assert!(cols.contains(&"source_fingerprint"), "{cols:?}");
+        for gone in ["rendered_at_utc", "tz_offset", "source_fingerprint"] {
+            assert!(
+                !cols.contains(&gone),
+                "{gone} is back on markdowns: {cols:?}"
+            );
+        }
         assert!(cols.contains(&"upstream_cursor"), "{cols:?}");
+        assert!(cols.contains(&"bucket_key"), "{cols:?}");
     }
 
     #[test]

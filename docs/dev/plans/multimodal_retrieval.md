@@ -249,13 +249,13 @@ Both columns exist on `markdowns`, and both are **write-only today.**
 `compute_row_set_hash` runs at
 [`grid_index.rs:777`](../../../datalib/backend/etl/render/src/grid_index.rs) and
 `format!("{RENDERER_VERSION}.{}", md.render_version)` at `:778`; both are
-`INSERT`ed at `:796` and never selected again outside tests. The only
-render-skip reader is `load_fingerprints` (`:676`), which selects
-`source_fingerprint` alone — a **provider-supplied** value that does not
-move when the renderer changes. `pdf` patches around this locally by
-folding its own `RENDER_VERSION` into `render_fingerprint`; no other
-provider does. This is **imbue-ai/datalib#172**, and the schema's own
-doc comment asserting the opposite is what that issue is about.
+`INSERT`ed at `:796` and never selected again outside tests. (When this
+was measured the render skip keyed on a provider-supplied
+`source_fingerprint` that did not move when the renderer changed —
+**imbue-ai/datalib#172**. That column is gone as of 2026-09-14: render
+writes every document and doltlite's content-addressed tables settle
+"unchanged"; a renderer version change goes through
+`RenderProcessor::render_version` and re-renders everything.)
 
 So: we are not "keeping a freshness key that exists" — we are building
 one. The columns are the right shape and the values are already computed;
@@ -464,9 +464,7 @@ This is the question the previous draft did not ask. Taking it seriously:
 *is* a deterministic function of the raw rows plus the renderer, and
 `markdowns` already carries the two columns that would express it
 (`row_set_hash`, `renderer_version`). But per §3.5 those columns are
-written and never read: the render-skip in force keys on
-`source_fingerprint`, which is provider-supplied and does not move when
-the renderer changes (**#172**).
+written and never read.
 
 That matters more here than it looks. "Render on the fly" is the same
 cache with capacity zero — but a capacity-zero cache is only correct if

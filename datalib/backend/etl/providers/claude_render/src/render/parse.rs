@@ -119,9 +119,9 @@ pub struct AttachmentRow {
 }
 
 /// One conversation as it sits between download and render: the upstream
-/// JSON payload (full, normalized to export shape — used for
-/// fingerprinting and for on-demand shredding into messages / content
-/// blocks / attachments) paired with the surfaced [`ConversationRow`]
+/// JSON payload (full, normalized to export shape — shredded on demand
+/// into messages / content blocks / attachments) paired with the
+/// surfaced [`ConversationRow`]
 /// metadata.
 #[derive(Debug, Clone)]
 pub struct ClaudeConversation {
@@ -612,9 +612,8 @@ pub fn build_conv_row(c: &Value) -> Result<Option<ConversationRow>> {
 
 /// Walk a conversation's `chat_messages` array and emit its messages,
 /// content blocks, and attachments. Only called for conversations the
-/// renderer is actually going to re-render — for unchanged
-/// conversations the fingerprint check short-circuits and we never
-/// visit the array at all.
+/// renderer is actually going to re-render — an unchanged conversation
+/// never reaches render, so its array is never visited.
 pub fn shred(c: &ClaudeConversation) -> ShreddedConversation {
     let mut messages = Vec::new();
     let mut content_blocks = Vec::new();

@@ -118,8 +118,6 @@ pub fn render_all(
         (None, None, Vec::new())
     };
     let to_render: &[NormalizedChat] = filtered_owned.as_deref().unwrap_or(chats);
-
-    let empty_fingerprints: HashMap<String, String> = HashMap::new();
     let summary = datalib_etl_chat_common::render::render_all(
         &profile(),
         to_render,
@@ -127,7 +125,6 @@ pub fn render_all(
         source_id,
         blobs_by_chat,
         progress,
-        &empty_fingerprints,
         on_doc_complete,
     )?;
     // Named chats first, with no documents: one the diff named whose

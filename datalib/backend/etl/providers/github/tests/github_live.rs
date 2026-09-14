@@ -55,7 +55,6 @@ async fn github_live_single_pr_snapshot() {
         &render_root,
         stanza,
         &datalib_etl::progress::Progress::noop(),
-        &std::collections::HashMap::new(),
         &mut |doc| {
             docs.push(doc);
             Ok(())

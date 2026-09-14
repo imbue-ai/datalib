@@ -40,17 +40,17 @@ impl RenderProcessor for SmsRender {
         Some(crate::render::RENDER_VERSION)
     }
 
+    fn render_params(&self) -> serde_json::Value {
+        datalib_etl_chat_common::render::layout_params()
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
-        // The fingerprint skip is the driver's: every document is emitted
-        // and the store writes only the ones that changed.
-        let no_priors: std::collections::HashMap<String, String> = Default::default();
         let mut on_doc = |md| ctx.emit_doc(md);
         let outcome = crate::render::render(
             &self.raw_path,
             ctx.root,
             &self.name,
             ctx.progress,
-            &no_priors,
             &mut on_doc,
             ctx.raw_cursor,
         )

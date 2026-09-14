@@ -85,7 +85,6 @@ async fn main() -> Result<()> {
         "grid_rows_load",
         markdowns_total = tracing::field::Empty,
         markdowns_loaded = tracing::field::Empty,
-        markdowns_skipped = tracing::field::Empty,
     );
     let _enter = span.enter();
 
@@ -105,7 +104,6 @@ async fn main() -> Result<()> {
         event = "grid_rows_load_complete",
         markdowns_total = summary.markdowns_total,
         markdowns_loaded = summary.markdowns_loaded,
-        markdowns_skipped = summary.markdowns_skipped,
         rows_inserted = summary.rows_inserted,
     );
 

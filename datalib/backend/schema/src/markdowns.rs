@@ -11,12 +11,11 @@
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
-/// One row in the `markdowns` table. Source of truth for
-/// `<root>/render_markdown/<...>.md` cache invalidation: ingest computes a
-/// fresh `row_set_hash` from the canonical grid_row tuples for this
-/// markdown file and compares it to the stored value; on mismatch the
-/// renderer re-emits the file and bumps `rendered_at_utc`. A bump to
-/// `renderer_version` invalidates every cache entry at once.
+/// One row in the `markdowns` table: one rendered `.md` file and the
+/// facts about it the grid and the index read. Nothing here is stamped
+/// per run: a re-render that produces the same document writes the same
+/// row, and doltlite's content-addressed tables then carry no diff for
+/// it, which is the whole of how "unchanged" is decided downstream.
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "markdowns", primary_key = "markdown_uuid")]
 pub struct MarkdownRow {
@@ -68,29 +67,18 @@ pub struct MarkdownRow {
     /// resolves this column to find the file to serve.
     #[col(sql = "VARCHAR(1024)")]
     pub md_path: Option<String>,
-    /// Hash of the upstream payload(s) that produced this document, as
-    /// computed by the renderer. The render stage's skip check compares
-    /// it: an unchanged fingerprint means the document does not need
-    /// re-rendering.
-    #[col(sql = "VARCHAR(64)")]
-    pub source_fingerprint: Option<String>,
     /// Optional provider-defined cheap-probe value, consulted *before*
     /// loading payloads to decide whether a markdown has changed.
     /// Slack stamps each thread's `MAX(fetched_at_utc)` here so the next run
     /// can skip untouched threads without reading them. NULL for
-    /// providers with no signal cheaper than the fingerprint.
+    /// providers with no such signal.
     #[col(sql = "VARCHAR(64)")]
     pub upstream_cursor: Option<String>,
     /// SHA-256 (hex) over the canonical tuple list of grid_rows that feed
     /// this markdown — message texts, authors, timestamps, attachments.
-    /// Computed by ingest; if it matches the stored value and
-    /// `renderer_version` is unchanged, the renderer skips this markdown.
-    /// The canonical tuple definition is part of the renderer contract;
-    /// bump `renderer_version` if you change it.
-    /// Nullable, and that is production's shape rather than an
-    /// aspiration: `grid_index` writes NULL here for a markdown it has
-    /// not hashed. The struct declared it non-null for as long as
-    /// nothing read the struct.
+    /// A summary of the rows, for anyone comparing two stores by hand.
+    /// Nullable: `grid_index` writes NULL here for a markdown it has
+    /// not hashed.
     #[col(sql = "CHAR(64)")]
     pub row_set_hash: Option<String>,
     /// Opaque version string for the renderer that produced `md_path`.
@@ -100,14 +88,6 @@ pub struct MarkdownRow {
     /// Nullable for the same reason as `row_set_hash`.
     #[col(sql = "VARCHAR(32)")]
     pub renderer_version: Option<String>,
-    /// When `md_path` was last written, in UTC. NULL before the first
-    /// render.
-    #[col(sql = "VARCHAR(40)")]
-    pub rendered_at_utc: Option<String>,
-    /// The offset the render step's clock was in when it stamped
-    /// `rendered_at_utc` (`+02:00`).
-    #[col(sql = "VARCHAR(8)")]
-    pub tz_offset: Option<String>,
     /// The bucket this document was rendered from — the unit the
     /// provider loads, a conversation or a thread or a page — so a
     /// bucket that re-renders to fewer documents can drop the extras.
