@@ -12,7 +12,6 @@ import {
   AllCommunityModule,
   themeQuartz,
   colorSchemeVariable,
-  type CellContextMenuEvent,
   type ColDef,
   type DefaultMenuItem,
   type GetContextMenuItemsParams,
@@ -811,20 +810,15 @@ const windowPhrase = computed(() => {
 /// 24×24 Material-ish glyphs, drawn in `currentColor` so they follow the
 /// button's own colour through hover, disabled and the dark theme.
 const ICON_PATHS: Record<string, string> = {
-  // A table: what Browse opens is this row's data as rows and columns.
-  browse: "M3 5h18v4H3V5zm0 6h8v8H3v-8zm10 0h8v8h-8v-8z",
   run: "M8 5v14l11-7z",
   // The play button's other face. A row whose work is already queued or
   // in flight can't usefully be started again, so the button becomes
   // the one thing left to do with it.
   stop: "M6 6h12v12H6z",
-  edit: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
-  reveal: "M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z",
-  trash: "M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
 };
 
-/// An icon button for the Actions cell. Built once per cell; its face
-/// is set by `setButton`, and re-set in place on every repaint.
+/// The Sync cell's button. Built once per cell; its face is set by
+/// `setButton`, and re-set in place on every repaint.
 function iconButton(
   icon: keyof typeof ICON_PATHS,
   label: string,
@@ -863,33 +857,25 @@ function setButton(
   b.querySelector("path")!.setAttribute("d", ICON_PATHS[icon]);
 }
 
-/// The Actions cell. A class rather than a function so that `refresh`
-/// can update the buttons in place and return true: `repaint()` runs
-/// on every job event — a few times a second during a sync — and a
-/// function renderer is torn down and rebuilt on each, so a click
-/// whose mousedown landed on the old button and mouseup on its
-/// replacement fired nothing. The buttons are created once and read
-/// the row current at click time.
+/// The one button a row keeps: Sync, or Stop while a job has the row
+/// claimed. Everything else a row can do is in its right-click menu.
+///
+/// A class rather than a function so that `refresh` can update the
+/// button in place and return true: `repaint()` runs on every job
+/// event — a few times a second during a sync — and a function
+/// renderer is torn down and rebuilt on each, so a click whose
+/// mousedown landed on the old button and mouseup on its replacement
+/// fired nothing. The button is created once and reads the row current
+/// at click time.
 class ActionsRenderer implements ICellRendererComp<Row> {
   private wrap!: HTMLSpanElement;
   private row!: Row;
-  private browse!: HTMLButtonElement;
   private run!: HTMLButtonElement;
-  private edit!: HTMLButtonElement;
-  private reveal: HTMLButtonElement | null = null;
-  private trash!: HTMLButtonElement;
 
   init(p: ICellRendererParams<Row>): void {
     this.row = p.data!;
     this.wrap = document.createElement("span");
     this.wrap.className = "m2-actions";
-    // First, and deliberately: looking at the data is the thing a
-    // person came here to do, and it is the one action on this row that
-    // changes nothing.
-    this.browse = iconButton("browse", "Browse this data", null, false, () => {
-      if (!this.row.browseBlocked) openBrowse(this.row);
-    });
-    this.wrap.appendChild(this.browse);
     // One button, two faces. While a job has this row claimed the only
     // useful thing to do with it is call it off — starting a second
     // sync of work already queued is never what was meant. A group is
@@ -900,23 +886,6 @@ class ActionsRenderer implements ICellRendererComp<Row> {
       else void runRow(this.row);
     });
     this.wrap.appendChild(this.run);
-    // A source is one form — the group with both its steps — opened
-    // from the group's row or from either step under it.
-    this.edit = iconButton("edit", "Edit settings", null, false, () => {
-      if (this.row.editGroup) openEdit(this.row.editGroup);
-    });
-    this.wrap.appendChild(this.edit);
-    // Absent rather than disabled in a plain browser — the same "a
-    // missing menu item, not a broken one" rule desktop.ts states.
-    if (canReveal) {
-      this.reveal = iconButton("reveal", revealLabel, null, false, () => void reveal(this.row.key));
-      this.wrap.appendChild(this.reveal);
-    }
-    this.trash = iconButton("trash", "Remove from config", null, true, () => {
-      if (this.row.kind === "group") void deleteGroup(this.row.id);
-      else void deleteSource(this.row.id);
-    });
-    this.wrap.appendChild(this.trash);
     this.apply();
   }
 
@@ -932,12 +901,6 @@ class ActionsRenderer implements ICellRendererComp<Row> {
 
   private apply(): void {
     const row = this.row;
-    setButton(
-      this.browse,
-      "browse",
-      row.kind === "group" && !row.type ? "Browse every source" : "Browse this data",
-      row.browseBlocked,
-    );
     if (row.stopJobId && row.stopTarget) {
       const claim = claimedBy.value.get(row.stopTarget);
       setButton(
@@ -951,14 +914,6 @@ class ActionsRenderer implements ICellRendererComp<Row> {
       setButton(this.run, "run", "Sync now", row.runBlocked);
       this.run.classList.remove("danger");
     }
-    setButton(this.edit, "edit", "Edit settings", row.editBlocked);
-    if (this.reveal) setButton(this.reveal, "reveal", revealLabel, row.revealBlocked);
-    setButton(
-      this.trash,
-      "trash",
-      row.kind === "group" ? "Remove from config, with everything under it" : "Remove from config",
-      null,
-    );
   }
 }
 
@@ -1233,13 +1188,12 @@ const columnDefs: ColDef<Row>[] = [
     },
   },
   {
-    headerName: "Actions",
+    headerName: "Sync",
     colId: "actions",
     sortable: false,
     filter: false,
-    flex: 1,
-    width: canReveal ? 162 : 132,
-    minWidth: canReveal ? 132 : 102,
+    width: 64,
+    minWidth: 64,
     resizable: false,
     valueGetter: (p: ValueGetterParams<Row>) => p.data?.id,
     cellRenderer: ActionsRenderer,
@@ -1521,10 +1475,10 @@ async function openRunLog(row: HistoryRow) {
 }
 
 // ── The right-click menu. Every action a row offers, in one place,
-// with Lightroom semantics: right-click a row outside the selection
-// and it is the one target; right-click inside it and the whole
-// selection is. An entry that does not apply stays, disabled, with the
-// reason as its tooltip — see `config/rowMenu.ts`.
+// with Lightroom semantics: right-click a row inside the selection and
+// the whole selection is the target; outside it, that row alone, and
+// the selection stays as it was. An entry that does not apply stays,
+// disabled, with the reason as its tooltip — see `config/rowMenu.ts`.
 
 const rowSelection: RowSelectionOptions<Row> = {
   mode: "multiRow",
@@ -1533,15 +1487,10 @@ const rowSelection: RowSelectionOptions<Row> = {
   enableClickSelection: true,
 };
 
-function onCellContextMenu(e: CellContextMenuEvent<Row>) {
-  if (!gridApi || !e.node) return;
-  if (!e.node.isSelected()) {
-    gridApi.deselectAll();
-    e.node.setSelected(true);
-  }
-}
-
-/// The rows a right-click acts on, in table order.
+/// The rows a right-click acts on, in table order: the selection when
+/// the row under the pointer is in it, that row alone when it is not.
+/// The selection itself is never touched — as in Lightroom, a
+/// right-click aims the action, it does not re-select.
 function menuTargets(api: GridApi<Row>, anchor: IRowNode<Row> | null | undefined): Row[] {
   if (!anchor?.data) return [];
   const selected = (api.getSelectedNodes() as IRowNode<Row>[])
@@ -2586,7 +2535,6 @@ onUnmounted(() => {
         :preventDefaultOnContextMenu="true"
         :getContextMenuItems="contextMenuItems"
         @grid-ready="onGridReady"
-        @cell-context-menu="onCellContextMenu"
         @cell-double-clicked="onCellDoubleClicked"
         @row-group-opened="onRowGroupOpened"
       />
@@ -2700,12 +2648,14 @@ onUnmounted(() => {
             its status came from.
           </p>
           <p>
-            <b>Right-click a row</b> for everything it can do — the actions, the log, a rename
-            (on the Name cell), and its <b>commit history</b>: every store under it is versioned,
-            and the panel lists each commit — when, what it said, what it did to each table, and
-            the run that made it — newest first, updating while a sync runs. Right-click inside a
-            selection and the menu acts on all of it; outside one, on that row alone. An entry
-            that doesn’t apply stays, greyed, and says why on hover.
+            <b>Right-click a row</b> for everything it can do — browse, edit, reveal, remove, the
+            log, a rename (on the Name cell), and its <b>commit history</b>: every store under it
+            is versioned, and the panel lists each commit — when, what it said, what it did to
+            each table, and the run that made it — newest first, updating while a sync runs.
+            Right-click inside a selection and the menu acts on all of it; outside one, on that
+            row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
+            and says why on hover. <b>Sync</b> stays a button: it is the one thing a row does
+            often.
           </p>
           <p>
             <b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its

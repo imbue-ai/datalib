@@ -59,13 +59,15 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expect(page.getByText("QMD index: The QMD index keeps no doltlite store")).toBeVisible();
   await page.keyboard.press("Escape");
 
-  // A row outside the selection becomes the whole selection.
+  // A row outside the selection is the one target, and the selection
+  // is left exactly as it was — a right-click aims, it does not select.
   const group = groupRow(page, "unified_index");
   await group.locator('[col-id="status"]').click({ button: "right" });
-  await expect(page.locator(".ag-row-selected")).toHaveCount(1);
   await expect(menuEntries(page).last()).toHaveText(
     "Remove from config, with everything under it",
   );
+  await expect(page.locator(".ag-row-selected")).toHaveCount(2);
+  await expect(group).not.toHaveClass(/ag-row-selected/);
   await page.keyboard.press("Escape");
 });
 

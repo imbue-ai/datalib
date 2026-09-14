@@ -10,6 +10,7 @@ import {
   expectGridPainted,
   groupRow,
   pipelineRow as row,
+  rowMenuEntry,
   searchAndSettle,
   settle,
   settleRows,
@@ -154,9 +155,12 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The qmd index step, removed before anything can queue it. See the
     // header: it is real work this test cannot afford, and the delete
     // action is the honest way to not run it.
-    await row(page, "unified_index/qmd_index")
-      .getByRole("button", { name: "Remove from config" })
-      .click();
+    const remove = await rowMenuEntry(
+      page,
+      row(page, "unified_index/qmd_index"),
+      /^Remove from config$/,
+    ).open();
+    await remove.click();
     await expect(row(page, "unified_index/qmd_index")).toHaveCount(0);
 
     // ── 4-6. the wizard ──────────────────────────────────────────────

@@ -1,8 +1,9 @@
 // The Manage screen's right-click menu: what it offers for the rows it
 // targets, and why an entry is greyed out. Lightroom semantics — the
 // targets are the selection when the clicked row is part of it, and
-// the clicked row alone when it is not — are the caller's; this only
-// sees the targets that came out of that.
+// the clicked row alone when it is not, with the selection left as it
+// was either way — are the caller's; this only sees the targets that
+// came out of that.
 //
 // Every entry is always present. One that does not apply is disabled
 // with the reason as its tooltip, the same rule the action buttons
