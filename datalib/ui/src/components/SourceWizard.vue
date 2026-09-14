@@ -504,13 +504,15 @@ async function connectViaLatchkey() {
   }
   connect.value = { state: "running", message: "A browser window should open. Finish the login there." };
   try {
-    // A cookie capture has to watch a real sign-in happen. latchkey
-    // otherwise restores the session it saved last time, so the browser
-    // opens already signed in, no new cookie is issued, and the login
-    // waits forever (imbue-ai/latchkey#150). Told from the descriptor,
-    // not from whether we are registering: the flow is the service's
-    // either way.
-    const ephemeral = chosen.value?.credentialRegister?.login_flow === "cookie-capture";
+    // Both generic captures (the only flows a registration can name)
+    // have to watch a real sign-in happen. latchkey otherwise restores
+    // the session it saved last time, so the browser opens already
+    // signed in: a cookie capture then waits forever for a cookie that
+    // is never re-issued (imbue-ai/latchkey#150), and a token capture
+    // "succeeds" by re-reading the expired token that session still
+    // holds (imbue-ai/latchkey#152). Told from the descriptor, not from
+    // whether we are registering: the flow is the service's either way.
+    const ephemeral = !!chosen.value?.credentialRegister;
     const started = await startLatchkeyConnect(
       name,
       accountValue.value,
