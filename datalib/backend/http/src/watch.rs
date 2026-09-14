@@ -35,6 +35,11 @@ pub enum RootEvent {
     /// A component appeared, changed or vanished under
     /// `system/frontend/`.
     FrontendChanged,
+    /// The grid index (`unified_index/grid_index/db.doltlite_db`) was
+    /// written. Under streaming that happens many times per sync -- a
+    /// `grid_index` pass per checkpoint -- and it is how rows reach the
+    /// grid while the download that produced them is still running.
+    IndexChanged,
     /// Nothing changed; the stream is open. See [`HEARTBEAT`].
     Heartbeat,
 }
@@ -63,6 +68,11 @@ fn classify(root: &Path, path: &Path) -> Option<RootEvent> {
         if name == "dag_state.json" || name.starts_with("runs.sqlite") {
             return Some(RootEvent::DagChanged);
         }
+    }
+    if path.parent() == Some(datalib_core::layout::grid_index_dir(root).as_path())
+        && name.starts_with(datalib_core::layout::GRID_DB)
+    {
+        return Some(RootEvent::IndexChanged);
     }
     None
 }
@@ -94,6 +104,10 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     let root = std::fs::canonicalize(&root).unwrap_or(root);
     let system = std::fs::canonicalize(&system).unwrap_or(system);
     let frontend = std::fs::canonicalize(&frontend).unwrap_or(frontend);
+    // Not created here: `unified_index/` belongs to the steps and the
+    // applet, and a root that has never synced has none. Watched once it
+    // exists — see the debounce loop below.
+    let grid_index = datalib_core::layout::grid_index_dir(&root);
 
     // notify calls back on its own thread, so hand off through an
     // unbounded channel rather than doing any work there.
@@ -137,16 +151,18 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             eprintln!("watch: {} ({e})", dir.display());
         }
     }
+    let mut index_watched = watcher
+        .watch(&grid_index, RecursiveMode::NonRecursive)
+        .is_ok();
 
     tokio::spawn(async move {
         // The debounce task owns the watcher, because dropping a
         // watcher stops the watch and there is nowhere better to put
-        // it: `AppState` is cloned per request, and a handle nobody
-        // ever calls would be state for its own sake. The task cannot
-        // end — the only sender lives in the watcher's callback, which
-        // this task now holds — so the watch lasts as long as the
-        // process, which is exactly its intended lifetime.
-        let _watcher = watcher;
+        // it: `AppState` is cloned per request. The task cannot end —
+        // the only sender lives in the watcher's callback, which this
+        // task now holds — so the watch lasts as long as the process,
+        // which is exactly its intended lifetime.
+        let mut watcher = watcher;
         loop {
             // Open a window on the first event, then coalesce
             // everything that lands inside it. One burst → one message
@@ -160,6 +176,15 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             // away (`Ok(None)`) — both mean "publish what you have".
             while let Ok(Some(kind)) = tokio::time::timeout_at(deadline, raw_rx.recv()).await {
                 pending.insert(kind);
+            }
+            // The grid index's directory appears partway through the
+            // first sync, and a watch on a path that did not exist was
+            // never registered. The runner's record moves throughout a
+            // run, so arming on it converges within that run.
+            if !index_watched && pending.contains(&RootEvent::DagChanged) {
+                index_watched = watcher
+                    .watch(&grid_index, RecursiveMode::NonRecursive)
+                    .is_ok();
             }
             for kind in pending {
                 let _ = tx.send(kind);
@@ -190,6 +215,10 @@ mod tests {
         assert_eq!(
             classify(root, &root.join("system/frontend/user/abc.js")),
             Some(RootEvent::FrontendChanged)
+        );
+        assert_eq!(
+            classify(root, &root.join("unified_index/grid_index/db.doltlite_db")),
+            Some(RootEvent::IndexChanged)
         );
     }
 
