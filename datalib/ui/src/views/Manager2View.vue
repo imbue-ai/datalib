@@ -923,16 +923,31 @@ function activityChips(
   p: DagStepProgress,
 ): { kind: string; text: string; title: string }[] {
   const chips: { kind: string; text: string; title: string }[] = [];
-  const queued = p.metrics.queued;
-  if (queued != null) {
+  // Every `queued` series: the step's own gauge, plus one per producer
+  // (`queued{from=slack/ingest}`) that the runner keeps from what the
+  // producers sealed. One chip, summed; the breakdown is on hover.
+  const queuedSeries = Object.entries(p.metrics).filter(
+    ([name]) => name === "queued" || name.startsWith("queued{"),
+  );
+  if (queuedSeries.length > 0) {
+    const queued = queuedSeries.reduce((n, [, v]) => n + v, 0);
+    const breakdown = queuedSeries
+      .map(([name, v]) => {
+        const from = name.match(/^queued\{from=(.*)\}$/)?.[1];
+        return from ? `${v.toLocaleString()} from ${from}` : `${v.toLocaleString()} of its own`;
+      })
+      .join(", ");
     chips.push({
       kind: queued > 0 ? "queued" : "idle",
       text: `${queued.toLocaleString()} queued`,
-      title: "Work the step says is still ahead of it",
+      title:
+        queuedSeries.length > 1
+          ? `Work still ahead of the step: ${breakdown}`
+          : "Work the step says is still ahead of it",
     });
   }
   for (const [name, value] of Object.entries(p.metrics)) {
-    if (name === "queued") continue;
+    if (name === "queued" || name.startsWith("queued{")) continue;
     chips.push({
       kind: "metric",
       text: `${name} ${value.toLocaleString()}`,

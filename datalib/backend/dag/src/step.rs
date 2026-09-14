@@ -187,8 +187,13 @@ pub struct CheckpointSink(Option<tokio::sync::mpsc::UnboundedSender<StepSignal>>
 pub enum StepSignal {
     /// What this step's sink can do. Sent once, as the step starts.
     Capabilities { step: StepId, streams_output: bool },
-    /// The step sealed its output at `version` and is still running.
-    Checkpoint { step: StepId, version: String },
+    /// The step sealed its output at `version` and is still running;
+    /// `rows` is what the seal added, when the step counted.
+    Checkpoint {
+        step: StepId,
+        version: String,
+        rows: Option<u64>,
+    },
 }
 
 impl CheckpointSink {
@@ -202,10 +207,11 @@ impl CheckpointSink {
         Self(None)
     }
 
-    pub fn send(&self, step: &StepId, version: &str) {
+    pub fn send(&self, step: &StepId, version: &str, rows: Option<u64>) {
         self.signal(StepSignal::Checkpoint {
             step: step.clone(),
             version: version.to_string(),
+            rows,
         });
     }
 
@@ -274,7 +280,13 @@ impl StepCtx {
     /// the sink contract, and it is declared by
     /// [`StepSpec::streams_output`].
     pub fn checkpoint(&self, version: &str) {
-        self.checkpoint.send(&self.step_id, version);
+        self.checkpoint.send(&self.step_id, version, None);
+    }
+
+    /// A seal that says how many rows it added, so the runner can keep a
+    /// queue depth for the consumers.
+    pub fn checkpoint_rows(&self, version: &str, rows: u64) {
+        self.checkpoint.send(&self.step_id, version, Some(rows));
     }
 
     /// Announce whether this step's output may be read while it is being
@@ -296,6 +308,10 @@ pub struct ArtifactState {
     /// and the scheduler can derive "unchanged". A timestamp does not
     /// qualify. Opaque otherwise: it is only ever compared for equality.
     pub version: String,
+    /// Rows this output gained since the step's last checkpoint (or in
+    /// all, if it never sealed), when the step counted. The last segment
+    /// of a consumer's queue.
+    pub rows: Option<u64>,
 }
 
 impl ArtifactState {
@@ -303,7 +319,13 @@ impl ArtifactState {
         Self {
             path: path.clone(),
             version: version.into(),
+            rows: None,
         }
+    }
+
+    pub fn with_rows(mut self, rows: u64) -> Self {
+        self.rows = Some(rows);
+        self
     }
 }
 

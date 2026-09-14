@@ -153,11 +153,12 @@ pub async fn run(
                     planned_name,
                     docs_in.load(Ordering::SeqCst)
                 ))?;
+                let rows = checkpointer.pending();
                 checkpointer.sealed();
                 // `None` means nothing was dirty after all, so no
                 // version moved and there is nothing to announce.
                 if let Some(hash) = sealed {
-                    progress.checkpoint(&hash);
+                    progress.checkpoint_rows(&hash, rows);
                 }
                 store.begin_batch()?;
             }
@@ -293,6 +294,9 @@ pub async fn run(
             versions: store.render_versions()?,
             problems: store.problem_counts()?,
             head: store.head()?,
+            // What the final commit sealed beyond the last checkpoint —
+            // the last segment of a consumer's queue.
+            unsealed: checkpointer.pending(),
         };
         store.close();
         Ok(outcome)
@@ -304,6 +308,7 @@ pub async fn run(
         versions: versions_on_disk,
         problems: problem_counts,
         head,
+        unsealed,
     } = versions_after;
     let docs = docs.load(Ordering::SeqCst);
     let removed = removed.load(Ordering::SeqCst);
@@ -354,6 +359,7 @@ pub async fn run(
         .map(|h| OutputClaim {
             path: out_rel,
             version: format!("store:{h}"),
+            rows: Some(unsealed),
         })
         .into_iter()
         .collect())
@@ -363,6 +369,7 @@ struct RenderOutcome {
     versions: BTreeSet<u32>,
     problems: HashMap<String, i64>,
     head: Option<String>,
+    unsealed: u64,
 }
 
 /// What closes a run: the sweep (`Some(keep)` deletes every document not

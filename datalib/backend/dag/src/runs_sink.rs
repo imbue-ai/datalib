@@ -160,7 +160,11 @@ impl EventSink for RunStoreSink {
             }
             // A checkpoint is the one thing a watcher can act on before
             // the step ends, so it is a log line as well as a count.
-            Event::Checkpoint { step, version } => {
+            Event::Checkpoint {
+                step,
+                version,
+                rows,
+            } => {
                 let n = {
                     let mut steps = self.steps.lock().expect("run store sink mutex");
                     let acc = steps.entry(step.clone()).or_default();
@@ -176,7 +180,9 @@ impl EventSink for RunStoreSink {
                     tz_offset,
                     level: LogLevel::Info.as_str().into(),
                     msg: "sealed a checkpoint".into(),
-                    fields: Some(serde_json::json!({ "version": version }).to_string()),
+                    fields: Some(
+                        serde_json::json!({ "version": version, "rows": rows }).to_string(),
+                    ),
                     ..Default::default()
                 });
             }
@@ -443,6 +449,7 @@ mod tests {
             Event::Checkpoint {
                 step: "slack/raw".into(),
                 version: "abc".into(),
+                rows: Some(12),
             },
         ])
         .await;

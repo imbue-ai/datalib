@@ -149,6 +149,24 @@ metrics for it:
 `progress_message` is the step's own words — a phase, not a number.
 `log`'s `target` and `fields` are optional; a plain `msg` is fine.
 
+A step that seals part of its output while still running says so with
+a `checkpoint` (the streaming protocol in
+`docs/dev/plans/streaming_steps_plan.md`), and should say how many rows
+that seal added:
+
+```json
+{"event":"checkpoint","step":"me","version":"a1b2c3","rows":340}
+```
+
+`rows` is what the runner keeps each **consumer's** queue depth from —
+the `queued{from=<you>}` metric on every step that reads your output,
+counting up as you seal and down as they read — with no store opened
+to measure it. A step that cannot count leaves `rows` out; its
+consumers' queue then reads as unknown rather than wrong. A
+checkpoint you re-announce (which you should, until a consumer has
+run — one arriving while the consumer is mid-pass is dropped) counts
+once, and one that arrives after your outcome is ignored.
+
 The `step` field is required by the schema but its value doesn't
 matter — the runner re-tags every event with the authoritative step
 id (children of `datalib-step` label sub-work `parent/child`, which
@@ -167,9 +185,13 @@ version of each output you produced:
 
 ```json
 {"event":"outcome","outputs":[
-  {"path":"weather/ingest","version":"2026-07-21T06:00Z-a1b2"}
+  {"path":"weather/ingest","version":"2026-07-21T06:00Z-a1b2","rows":12}
 ]}
 ```
+
+`rows` is optional and means the same as on a `checkpoint`: what this
+output gained since your last seal (or in all, if you never sealed) —
+finishing is the last seal, as far as a consumer's queue is concerned.
 
 There are two cases per declared output, and that is the whole
 protocol:
