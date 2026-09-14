@@ -55,8 +55,6 @@ KNOWN_GAPS: dict[str, str] = {
     # (contract clause 2 for a diff-narrowed renderer; for a whole-store
     # one, a row its walk never reads — not traced yet)
     "beeper: tweak rooms": "not traced",
-    "sms-backup-restore: delete sms_attachments": "not traced",
-    "sms-backup-restore: tweak sms_attachments": "same",
     # ── a table the bucket query does not name ──
     # (contract clause 2)
     "tng_pdfs: delete pdf_scan_meta": "scan provenance shown on the page; not in the scan",
