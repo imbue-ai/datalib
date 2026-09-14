@@ -34,6 +34,9 @@ pub struct RenderSummary {
     pub docs_rendered: usize,
     pub docs_skipped: usize,
     pub messages_rendered: usize,
+    /// Every chat rendered, with the documents considered for it — what
+    /// the processor declares through `RenderCtx::declare_bucket`.
+    pub buckets: Vec<(String, Vec<String>)>,
 }
 
 /// The render params recorded alongside the cursor. `period` decides
@@ -99,6 +102,7 @@ pub fn render_all(
     let ChatSummary {
         docs_rendered,
         items_rendered,
+        buckets,
         ..
     } = datalib_etl_chat_common::render_all(
         &profile(),
@@ -116,5 +120,6 @@ pub fn render_all(
         docs_rendered,
         docs_skipped: parsed.docs_skipped,
         messages_rendered: items_rendered,
+        buckets,
     })
 }

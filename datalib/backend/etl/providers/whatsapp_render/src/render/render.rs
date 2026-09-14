@@ -10,7 +10,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::{
-    render::{RenderProfile, ENTITY_KIND_CONVERSATION},
+    render::{Buckets, RenderProfile, ENTITY_KIND_CONVERSATION},
     NormalizedChat,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -45,7 +45,8 @@ fn profile() -> RenderProfile {
 /// sibling CAS in the same call that built `chats`.
 ///
 /// Returns the raw commit the render consumed — what the render step
-/// records as the cursor — or `None` when there was no store to pin.
+/// records as the cursor, or `None` when there was no store to pin — and
+/// every chat rendered with the documents considered for it.
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
     chats: &[NormalizedChat],
@@ -60,15 +61,17 @@ pub fn render_all(
     // scan happens in here rather than in `parse`, so the caller learns
     // about them the same way it learns about documents.
     on_chat_gone: &mut dyn FnMut(&str) -> Result<()>,
-) -> Result<Option<String>> {
+) -> Result<(Option<String>, Buckets)> {
     // Incremental gate: with a cursor, ask doltlite which chats changed
     // between that hash and HEAD and skip the rest. Cold start (no
     // cursor) or no doltlite db on disk renders every chat.
     let db_path = doltlite_raw::db_path_for(raw_dir);
 
-    let (filtered_owned, new_head): (Option<Vec<NormalizedChat>>, Option<String>) = if db_path
-        .exists()
-    {
+    let (filtered_owned, new_head, named): (
+        Option<Vec<NormalizedChat>>,
+        Option<String>,
+        Vec<String>,
+    ) = if db_path.exists() {
         let last = cursor;
         let scan = tokio::task::block_in_place(|| match tokio::runtime::Handle::try_current() {
             Ok(h) => h.block_on(scan_diff(&db_path, last)),
@@ -105,14 +108,19 @@ pub fn render_all(
                 on_chat_gone(jid)?;
             }
         }
-        (filtered, scan.head)
+        let named = scan
+            .changed
+            .as_ref()
+            .map(|c| c.live.iter().cloned().collect())
+            .unwrap_or_default();
+        (filtered, scan.head, named)
     } else {
-        (None, None)
+        (None, None, Vec::new())
     };
     let to_render: &[NormalizedChat] = filtered_owned.as_deref().unwrap_or(chats);
 
     let empty_fingerprints: HashMap<String, String> = HashMap::new();
-    datalib_etl_chat_common::render::render_all(
+    let summary = datalib_etl_chat_common::render::render_all(
         &profile(),
         to_render,
         out_dir,
@@ -122,7 +130,19 @@ pub fn render_all(
         &empty_fingerprints,
         on_doc_complete,
     )?;
-    Ok(new_head)
+    // Named chats first, with no documents: one the diff named whose
+    // messages all went builds no chat, and chat-common never sees it.
+    let mut buckets: Buckets = named
+        .iter()
+        .map(|jid| {
+            (
+                crate::render::whatsapp_chat_uuid(source_id, jid),
+                Vec::new(),
+            )
+        })
+        .collect();
+    buckets.extend(summary.buckets);
+    Ok((new_head, buckets))
 }
 
 /// What changed between two commits, as chat JIDs: the ones HEAD still
@@ -536,7 +556,7 @@ mod tests {
                 gone.push(jid.to_string());
                 Ok(())
             };
-            let consumed = render_all(
+            let (consumed, _) = render_all(
                 &parsed.chats,
                 &parsed.blobs_by_chat,
                 &raw_dir,

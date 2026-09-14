@@ -11,7 +11,7 @@ use serde_json::Value;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
+    render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
@@ -105,7 +105,7 @@ pub fn render_all(
     options: RenderOptions,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<()> {
+) -> Result<Buckets> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
         source = source_id,
@@ -132,7 +132,7 @@ pub fn render_all(
     }
 
     let no_priors: HashMap<String, String> = HashMap::new();
-    cc_render_all(
+    let mut buckets = cc_render_all(
         &profile(),
         &chats,
         root,
@@ -142,7 +142,8 @@ pub fn render_all(
         &no_priors,
         on_doc_complete,
     )
-    .context("claude chat-common render")?;
+    .context("claude chat-common render")?
+    .buckets;
 
     // Projects are a second pass with their own profile. They share the
     // page-path namespace with conversations (`render_markdown/<source>/
@@ -156,7 +157,7 @@ pub fn render_all(
             .map(|p| build_project_page(p, &options, parsed))
             .collect();
         let no_blobs: HashMap<String, BlobBundle> = HashMap::new();
-        cc_render_all(
+        let projects = cc_render_all(
             &project_profile(),
             &project_chats,
             root,
@@ -167,9 +168,10 @@ pub fn render_all(
             on_doc_complete,
         )
         .context("claude project render")?;
+        buckets.extend(projects.buckets);
     }
 
-    Ok(())
+    Ok(buckets)
 }
 
 fn build_chat(

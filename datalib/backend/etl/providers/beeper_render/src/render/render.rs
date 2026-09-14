@@ -30,6 +30,9 @@ pub struct RenderSummary {
     pub docs_rendered: usize,
     pub docs_skipped: usize,
     pub blobs_materialized: usize,
+    /// Every document considered, rendered and skipped alike — what the
+    /// processor hands to `RenderCtx::retain_documents`.
+    pub documents: Vec<String>,
 }
 
 /// Entry point. Renders every `(room, period)` bucket the parser
@@ -67,6 +70,7 @@ pub fn render_all(
         )?;
         summary.docs_rendered += s.docs_rendered;
         summary.docs_skipped += s.docs_skipped;
+        summary.documents.extend(s.documents);
     }
     Ok(summary)
 }

@@ -87,6 +87,10 @@ pub type RemoveCallback<'a> = dyn FnMut(&str) -> Result<usize> + Send + 'a;
 /// miss a deletion the diff failed to mention.
 pub type RetainCallback<'a> = dyn FnMut(&HashSet<String>) + Send + 'a;
 
+/// A bucket the run rendered, with the documents it considered for it:
+/// whatever else the store holds under that bucket is gone.
+pub type DeclareCallback<'a> = dyn FnMut(&str, &[String]) + Send + 'a;
+
 /// Interior-mutable wrapper around the orchestrator's fused-Load callback so
 /// a render processor can emit through a shared `&RenderCtx`. The `Mutex`
 /// keeps [`RenderCtx`] `Sync` (hence every `run` future `Send`); per-source
@@ -103,6 +107,10 @@ struct RemoveSink<'a> {
 /// Same wrapper, for the whole-store retain half.
 struct RetainSink<'a> {
     cb: Mutex<&'a mut RetainCallback<'a>>,
+}
+
+struct DeclareSink<'a> {
+    cb: Mutex<&'a mut DeclareCallback<'a>>,
 }
 
 /// Driver-owned context handed to every [`RenderProcessor::run`].
@@ -128,6 +136,7 @@ pub struct RenderCtx<'a> {
     emit: DocSink<'a>,
     remove: RemoveSink<'a>,
     retain: RetainSink<'a>,
+    declare: DeclareSink<'a>,
     consumed: Mutex<Option<String>>,
 }
 
@@ -143,6 +152,7 @@ impl<'a> RenderCtx<'a> {
         on_doc: &'a mut DocCallback<'a>,
         on_remove: &'a mut RemoveCallback<'a>,
         on_retain: &'a mut RetainCallback<'a>,
+        on_declare: &'a mut DeclareCallback<'a>,
     ) -> Self {
         Self {
             name,
@@ -160,8 +170,24 @@ impl<'a> RenderCtx<'a> {
             retain: RetainSink {
                 cb: Mutex::new(on_retain),
             },
+            declare: DeclareSink {
+                cb: Mutex::new(on_declare),
+            },
             consumed: Mutex::new(None),
         }
+    }
+
+    /// This run rendered the bucket `conversation_uuid` and these are the
+    /// documents it considered for it — emitted or skipped as unchanged.
+    /// Any other document the store holds under that conversation is one
+    /// the bucket no longer produces: a period that emptied, a thread
+    /// whose last message went. The driver removes them at the end.
+    ///
+    /// Only for a bucket the run actually rendered; a bucket it skipped
+    /// says nothing about its documents.
+    pub fn declare_bucket(&self, conversation_uuid: &str, documents: &[String]) {
+        let mut cb = self.declare.cb.lock().unwrap();
+        (cb)(conversation_uuid, documents)
     }
 
     pub fn emit_doc(&self, md: RenderedMarkdown) -> Result<()> {
@@ -247,6 +273,7 @@ mod retain_tests {
         let mut on_remove: Box<RemoveCallback<'_>> = Box::new(|_| Ok(0));
         let mut on_retain: Box<RetainCallback<'_>> =
             Box::new(|ids: &HashSet<String>| swept.lock().unwrap().push(ids.len()));
+        let mut on_declare: Box<DeclareCallback<'_>> = Box::new(|_, _| {});
 
         let ctx = RenderCtx::new(
             "src",
@@ -258,6 +285,7 @@ mod retain_tests {
             &mut on_doc,
             &mut on_remove,
             &mut on_retain,
+            &mut on_declare,
         );
 
         ctx.retain_documents(RenderPass::Skipped, &HashSet::new());

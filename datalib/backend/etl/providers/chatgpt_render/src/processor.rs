@@ -50,8 +50,14 @@ impl RenderProcessor for ChatgptRender {
             dropped += ctx.remove_conversation(&crate::render::ids::conversation(conv_id).uuid)?;
         }
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
+        let buckets = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("chatgpt render_all")?;
+        for conv_id in parsed.scan.changed_conversations.iter().flatten() {
+            ctx.declare_bucket(&crate::render::ids::conversation(conv_id).uuid, &[]);
+        }
+        for (bucket, documents) in &buckets {
+            ctx.declare_bucket(bucket, documents);
+        }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }

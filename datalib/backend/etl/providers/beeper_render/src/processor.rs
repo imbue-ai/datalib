@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use datalib_etl::periodize::Period;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_beeper_config::BeeperRenderConfig;
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{RenderCtx, RenderPass, RenderProcessor};
 use std::path::PathBuf;
 
 pub fn plan_render(
@@ -49,7 +49,7 @@ impl RenderProcessor for BeeperRender {
             .with_context(|| format!("beeper parse {}", self.raw_path.display()))?;
         let raw_db_path = datalib_etl::doltlite_raw::db_path_for(&self.raw_path);
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_all(
+        let summary = render_all(
             &parsed,
             ctx.root,
             &self.name,
@@ -59,6 +59,15 @@ impl RenderProcessor for BeeperRender {
             &raw_db_path,
         )
         .context("beeper render_all")?;
+        // Whole-store: every document the walk considered is what the
+        // source holds; the rest is gone. A parse that read no store
+        // walked nothing and says so.
+        let pass = if parsed.walked {
+            RenderPass::Walked
+        } else {
+            RenderPass::Skipped
+        };
+        ctx.retain_documents(pass, &summary.documents.iter().cloned().collect());
         Ok("rendered".into())
     }
 }

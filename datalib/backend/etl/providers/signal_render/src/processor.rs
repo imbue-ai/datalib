@@ -63,8 +63,17 @@ impl RenderProcessor for SignalRender {
                 ctx.remove_conversation(&crate::render::signal_chat_uuid(&self.name, chat_id))?;
         }
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
+        let summary = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("signal render_all")?;
+        // A chat the diff named that came back with no items builds no
+        // chat at all, so chat-common never sees it; declaring the named
+        // set first is what makes its old documents go.
+        for chat_id in parsed.scan.changed_chats.iter().flatten() {
+            ctx.declare_bucket(&crate::render::signal_chat_uuid(&self.name, chat_id), &[]);
+        }
+        for (bucket, documents) in &summary.buckets {
+            ctx.declare_bucket(bucket, documents);
+        }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }

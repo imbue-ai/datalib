@@ -83,7 +83,7 @@ impl RenderProcessor for EmailRender {
                 .remove_conversation(&crate::render::render::thread_uuid(account_id, thread_id))?;
         }
         let mut on_doc = |md| ctx.emit_doc(md);
-        render_all(
+        let buckets = render_all(
             &parsed,
             ctx.root,
             &self.name,
@@ -92,6 +92,15 @@ impl RenderProcessor for EmailRender {
             ctx.progress,
             &mut on_doc,
         )?;
+        for (account_id, thread_id) in parsed.scan.changed_threads.iter().flatten() {
+            ctx.declare_bucket(
+                &crate::render::render::thread_uuid(account_id, thread_id),
+                &[],
+            );
+        }
+        for (bucket, documents) in &buckets {
+            ctx.declare_bucket(bucket, documents);
+        }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }

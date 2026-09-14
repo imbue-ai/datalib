@@ -59,6 +59,9 @@ impl RenderProcessor for SmsRender {
         for chat_uuid in &outcome.vanished {
             dropped += ctx.remove_conversation(chat_uuid)?;
         }
+        for (bucket, documents) in &outcome.buckets {
+            ctx.declare_bucket(bucket, documents);
+        }
 
         if let Some(head) = outcome.new_head.as_deref() {
             ctx.consumed(head);

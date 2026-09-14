@@ -318,7 +318,8 @@ async fn scan_diff(
         last_render_hash,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &[],
+            // Every thread's header names its account and its mailboxes.
+            global_fanout_tables: &["accounts", "mailboxes"],
             bucket_query: "
                 SELECT DISTINCT account_id || '|' || thread_id AS bucket_key FROM (
                     SELECT to_account_id  AS account_id, to_thread_id  AS thread_id

@@ -42,6 +42,9 @@ pub struct RenderSummary {
     pub threads_total: usize,
     pub threads_rendered: usize,
     pub threads_skipped: usize,
+    /// Every thread rendered, with the documents considered for it — what
+    /// the processor declares through `RenderCtx::declare_bucket`.
+    pub buckets: Vec<(String, Vec<String>)>,
 }
 
 fn profile() -> RenderProfile {
@@ -119,6 +122,7 @@ pub fn render_all(
         threads_total: parsed.threads.len() + parsed.docs_skipped,
         threads_rendered: cc.docs_rendered,
         threads_skipped: parsed.docs_skipped,
+        buckets: cc.buckets,
     })
 }
 

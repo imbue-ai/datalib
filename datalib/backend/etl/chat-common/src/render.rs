@@ -91,7 +91,15 @@ pub struct RenderSummary {
     /// mass deletion. Meaningful only to a caller that handed over every
     /// chat its store holds — see `RunCtx::retain_documents`.
     pub documents: Vec<String>,
+    /// The same, per chat: `(chat_uuid, the documents considered for it)`.
+    /// A chat handed in that produced nothing is here with an empty list,
+    /// which is how the caller learns its old documents are gone — see
+    /// `RenderCtx::declare_bucket`.
+    pub buckets: Buckets,
 }
+
+/// `(chat_uuid, the documents considered for it)`, per chat rendered.
+pub type Buckets = Vec<(String, Vec<String>)>;
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
@@ -113,6 +121,13 @@ pub fn render_all(
     let empty_bundle = BlobBundle::default();
     for chat in chats {
         let bundle = blobs_by_chat.get(&chat.id).unwrap_or(&empty_bundle);
+        summary.buckets.push((
+            chat.chat_uuid.clone(),
+            chat.buckets
+                .iter()
+                .map(|d| d.markdown_uuid.clone())
+                .collect(),
+        ));
         for doc in &chat.buckets {
             let outcome = render_one(
                 profile,

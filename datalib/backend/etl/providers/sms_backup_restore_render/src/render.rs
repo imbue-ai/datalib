@@ -152,6 +152,16 @@ pub fn render(
         on_doc_complete,
     )?;
     outcome.rendered = s.docs_rendered;
+    // Named buckets first, with no documents: a conversation the diff
+    // named that has no message or call left builds no chat, and
+    // chat-common never sees it.
+    outcome.buckets = scan
+        .changed_buckets
+        .iter()
+        .flatten()
+        .map(|key| (uuid5(&format!("chat:{key}")), Vec::new()))
+        .collect();
+    outcome.buckets.extend(s.buckets);
     Ok(outcome)
 }
 
@@ -168,6 +178,9 @@ pub struct RenderOutcome {
     pub skipped: usize,
     pub new_head: Option<String>,
     pub scan_elapsed: Option<std::time::Duration>,
+    /// Every conversation rendered, with the documents considered for it
+    /// — what the processor declares through `RenderCtx::declare_bucket`.
+    pub buckets: datalib_etl_chat_common::render::Buckets,
 }
 
 /// Which conversations moved since `last_render_hash`.

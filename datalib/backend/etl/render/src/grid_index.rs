@@ -46,6 +46,11 @@ pub struct WriteLock {
     total_wait_ns: AtomicU64,
     total_hold_ns: AtomicU64,
     acquisitions: AtomicU64,
+    /// The documents this lock's run has written so far. A lock lives for
+    /// one run of one writer, so this is what separates "two documents of
+    /// this run minted one row uuid" from "a row moved here from a
+    /// document an earlier run wrote" — see `insert_grid_row`.
+    written: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 struct WriteLockInner {
@@ -86,7 +91,19 @@ impl WriteLock {
             total_wait_ns: AtomicU64::new(0),
             total_hold_ns: AtomicU64::new(0),
             acquisitions: AtomicU64::new(0),
+            written: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
+    }
+
+    fn note_written(&self, markdown_uuid: &str) {
+        self.written
+            .lock()
+            .unwrap()
+            .insert(markdown_uuid.to_string());
+    }
+
+    fn written_this_run(&self, markdown_uuid: &str) -> bool {
+        self.written.lock().unwrap().contains(markdown_uuid)
     }
 
     pub fn new_arc(pool: SqlitePool) -> Arc<Self> {
@@ -962,7 +979,7 @@ async fn apply_markdown(
         .context("delete prior rows")?;
 
     for row in &md.rows {
-        insert_grid_row(conn, row).await?;
+        insert_grid_row(conn, write_lock, row).await?;
     }
 
     // Each markdown owns the edges whose `src_markdown_uuid` matches, so a
@@ -980,6 +997,7 @@ async fn apply_markdown(
     upsert_markdown(conn, md, qmd_path, &run_stamp(now_override))
         .await
         .context("upsert markdowns")?;
+    write_lock.note_written(&md.markdown_uuid);
 
     // The grid_index step issues one dolt_commit per run after the whole
     // load; per-doc commits would drown dolt_log.
@@ -1089,47 +1107,76 @@ async fn insert_edge(
     Ok(())
 }
 
+/// Insert one row, and settle a `PRIMARY KEY (uuid)` collision by *who*
+/// wrote the row's current owner. A document an earlier run wrote still
+/// holding this uuid means the row has moved — a message re-bucketed
+/// into another period, a chat whose document id is minted from a name
+/// that changed — and the incoming document takes it over; the old
+/// owner, when it re-renders, no longer emits it. A document *this* run
+/// wrote still holding it means two documents minted one id, which is a
+/// finding and fails. A plain upsert would hide the second behind the
+/// first.
 async fn insert_grid_row(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    write_lock: &WriteLock,
     row: &GridRow,
 ) -> Result<()> {
-    // A plain INSERT, not the bulk upsert: a `PRIMARY KEY (uuid)` collision
-    // here is a finding, not an update — see the error arm below.
-    // `ON CONFLICT DO UPDATE` would silently overwrite it.
     let sql = datalib_etl::bulk::insert_sql::<GridRow>();
     // Audited: `sql` comes from `GridRow`'s associated consts; values bound.
     let res = row
         .bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
         .execute(&mut **conn)
         .await;
+    let Err(e) = res else {
+        return Ok(());
+    };
 
-    if let Err(e) = res {
-        // Almost always `PRIMARY KEY (uuid)`. The bare sqlx error names the
-        // constraint but not the row already there, which is the only thing
-        // that says which other document minted this id.
-        let existing: Option<(String, String)> = sqlx::query_as(
-            "SELECT provider, IFNULL(markdown_uuid, '') FROM grid_rows WHERE uuid = ? LIMIT 1",
-        )
-        .bind(&row.uuid)
-        .fetch_optional(&mut **conn)
-        .await
-        .ok()
-        .flatten();
-        return match existing {
-            Some((provider, md)) => Err(anyhow::Error::new(e)).with_context(|| {
-                format!(
-                    "insert grid_row {}: an existing {provider} row already holds that \
-                     uuid (markdown {md}); the incoming row is a {} from markdown {}",
-                    row.uuid,
-                    row.provider,
-                    row.markdown_uuid.as_deref().unwrap_or("<none>"),
-                )
-            }),
-            None => {
-                Err(anyhow::Error::new(e)).with_context(|| format!("insert grid_row {}", row.uuid))
-            }
-        };
+    // The bare sqlx error names the constraint but not the row already
+    // there, which is the only thing that says which document holds it
+    // and when that document was rendered.
+    let existing: Option<(String, String)> = sqlx::query_as(
+        "SELECT provider, IFNULL(markdown_uuid, '') FROM grid_rows WHERE uuid = ? LIMIT 1",
+    )
+    .bind(&row.uuid)
+    .fetch_optional(&mut **conn)
+    .await
+    .ok()
+    .flatten();
+    let Some((provider, md)) = existing else {
+        return Err(anyhow::Error::new(e)).with_context(|| format!("insert grid_row {}", row.uuid));
+    };
+    let moved = provider == row.provider
+        && md != row.markdown_uuid.as_deref().unwrap_or("")
+        && !write_lock.written_this_run(&md);
+    if !moved {
+        return Err(anyhow::Error::new(e)).with_context(|| {
+            format!(
+                "insert grid_row {}: an existing {provider} row already holds that \
+                 uuid (markdown {md}, written this run); the incoming row is a {} \
+                 from markdown {}",
+                row.uuid,
+                row.provider,
+                row.markdown_uuid.as_deref().unwrap_or("<none>"),
+            )
+        });
     }
+    tracing::info!(
+        uuid = %row.uuid,
+        from = %md,
+        to = row.markdown_uuid.as_deref().unwrap_or("<none>"),
+        "grid_row moved to another document"
+    );
+    sqlx::query("DELETE FROM grid_rows WHERE uuid = ?")
+        .bind(&row.uuid)
+        .execute(&mut **conn)
+        .await
+        .with_context(|| format!("release moved grid_row {}", row.uuid))?;
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(
+        datalib_etl::bulk::insert_sql::<GridRow>(),
+    )))
+    .execute(&mut **conn)
+    .await
+    .with_context(|| format!("insert moved grid_row {}", row.uuid))?;
     Ok(())
 }
 
@@ -1230,7 +1277,8 @@ mod insert_round_trip_tests {
 
         let row = fully_populated_row();
         let mut conn = pool.acquire().await.expect("acquire");
-        insert_grid_row(&mut conn, &row)
+        let lock = WriteLock::new(pool.clone());
+        insert_grid_row(&mut conn, &lock, &row)
             .await
             .expect("insert_grid_row");
         drop(conn);

@@ -470,7 +470,10 @@ fn project_doc_row(project_uuid: String, doc_uuid: String, payload: Value) -> Pr
 /// Phase 1: union over `dolt_diff_conversations`,
 /// `dolt_diff_claude_attachments` and `dolt_diff_project_docs` to
 /// project the changed bucket keys — conversation UUIDs from the first
-/// two, project UUIDs from the third.
+/// two, project UUIDs from the last two. `projects` is also a fan-out
+/// table (a rename reaches every conversation's `project` column), but
+/// fan-out alone never *names* a project, and a deleted one has to be
+/// named to be removed.
 async fn scan_diff(
     pool: &SqlitePool,
     last_render_hash: Option<&str>,
@@ -494,6 +497,10 @@ async fn scan_diff(
                     UNION
                     SELECT coalesce(to_project_uuid, from_project_uuid)
                       FROM dolt_diff_project_docs
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_id, from_id)
+                      FROM dolt_diff_projects
                      WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
                 WHERE bucket_uuid IS NOT NULL
