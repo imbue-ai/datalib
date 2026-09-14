@@ -446,7 +446,7 @@ export type DagStepProgress = {
   metrics: Record<string, number>;
   // `warn` and `error` log lines so far this run.
   errors: number;
-  updated_at: string;
+  updated_at_utc: string;
 };
 
 // The fraction a step's `done` / `queued` pair describes, or null when
@@ -754,8 +754,8 @@ export async function cancelJob(id: string, signal?: AbortSignal): Promise<void>
 // One run. A job started from the app has the job's id as its run id.
 export type RunInfo = {
   run_id: string;
-  started_at: string;
-  finished_at: string | null;
+  started_at_utc: string;
+  finished_at_utc: string | null;
   tz_offset: string | null;
 };
 
@@ -766,8 +766,9 @@ export type RunLogLine = {
   run_id: string;
   step: string | null;
   attempt: number;
-  // The line's own clock when it carried one, else when the runner read it.
-  ts: string;
+  // The line's own clock when it carried one, else when the runner read
+  // it. UTC; `tz_offset` is the offset that clock was in.
+  ts_utc: string;
   tz_offset: string | null;
   // Which pipe of the step it came from; null for a line the runner wrote.
   stream: "stdout" | "stderr" | null;

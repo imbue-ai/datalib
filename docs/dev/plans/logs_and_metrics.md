@@ -83,20 +83,20 @@ per table, so the DDL comes from the struct and the http endpoints
 serve the same rows:
 
 ```
-runs           run_id, started_at, finished_at, tz_offset
-step_runs      run_id, step, state, attempt, started_at, finished_at,
-               error, msg, updated_at, tz_offset
-log            seq (rowid), run_id, step, attempt, ts, tz_offset, stream,
+runs           run_id, started_at_utc, finished_at_utc, tz_offset
+step_runs      run_id, step, state, attempt, started_at_utc, finished_at_utc,
+               error, msg, updated_at_utc, tz_offset
+log            seq (rowid), run_id, step, attempt, ts_utc, tz_offset, stream,
                level, target, thread, msg, fields
-metrics        run_id, step, name, labels, value, updated_at, tz_offset
-metric_samples run_id, step, name, labels, ts, tz_offset, value
+metrics        run_id, step, name, labels, value, updated_at_utc, tz_offset
+metric_samples run_id, step, name, labels, ts_utc, tz_offset, value
 ```
 
 Every stamp is **UTC** (`…+00:00`, microseconds) with the offset it was
 written in beside it — a step's own tracing line keeps its zone, the
-runner's arrival stamps keep the runner's. That is the shape #427
-moves the rest of the tree towards; here it is what makes text order
-instant order, so a reader sorts a `ts` column without parsing it.
+runner's arrival stamps keep the runner's. That is the shape every
+store keeps (#427); here it is what makes text order instant order, so
+a reader sorts a `ts_utc` column without parsing it.
 `level` and `stream` are text columns written through the `LogLevel`
 and `Stream` enums beside the row; `PortableTable` binds scalars only,
 and a reader keeps a word this build does not know rather than guessing.

@@ -12,10 +12,10 @@ pub struct RunRow {
     pub run_id: String,
     /// UTC.
     #[col(sql = "VARCHAR(40)")]
-    pub started_at: String,
+    pub started_at_utc: String,
     /// UTC; `None` while the run is going, or if it died.
     #[col(sql = "VARCHAR(40)")]
-    pub finished_at: Option<String>,
+    pub finished_at_utc: Option<String>,
     /// The runner's own offset when it stamped the two above (`+02:00`).
     #[col(sql = "VARCHAR(8)")]
     pub tz_offset: Option<String>,

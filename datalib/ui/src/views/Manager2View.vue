@@ -1312,8 +1312,8 @@ function onLogRunChanged(run: RunInfo) {
   logFor.value = {
     ...logFor.value,
     runId: run.run_id,
-    live: run.finished_at == null,
-    startedAt: run.started_at,
+    live: run.finished_at_utc == null,
+    startedAt: run.started_at_utc,
   };
 }
 
@@ -1330,7 +1330,7 @@ async function runFor(row: Row): Promise<{ runId: string; live: boolean; started
     return { runId: row.lastRunId, live: false, startedAt: row.lastSynced };
   }
   const [newest] = await fetchRuns({ step: row.id, limit: 1 });
-  return newest ? { runId: newest.run_id, live: !newest.finished_at, startedAt: newest.started_at } : null;
+  return newest ? { runId: newest.run_id, live: !newest.finished_at_utc, startedAt: newest.started_at_utc } : null;
 }
 
 /// With `runId`, the log of that one run; without, the run in flight if

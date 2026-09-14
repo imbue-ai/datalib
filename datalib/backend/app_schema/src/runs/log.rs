@@ -84,7 +84,7 @@ pub struct LogRow {
     /// UTC. The line's own clock when it carried one, else when the
     /// runner read it.
     #[col(sql = "VARCHAR(40)")]
-    pub ts: String,
+    pub ts_utc: String,
     /// The offset `ts` was written in: the step's for a line that
     /// stamped itself, the runner's otherwise.
     #[col(sql = "VARCHAR(8)")]

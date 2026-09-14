@@ -102,7 +102,7 @@ class RunStoreEndToEnd(unittest.TestCase):
         con = sqlite3.connect(f"file:{self.store}?mode=ro", uri=True)
         try:
             runs = con.execute(
-                "SELECT run_id, started_at, finished_at, tz_offset FROM runs"
+                "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs"
             ).fetchall()
             steps = {
                 r[0]: r
@@ -118,7 +118,7 @@ class RunStoreEndToEnd(unittest.TestCase):
                 )
             }
             log = con.execute(
-                "SELECT step, attempt, stream, level, thread, ts, msg, fields, tz_offset "
+                "SELECT step, attempt, stream, level, thread, ts_utc, msg, fields, tz_offset "
                 "FROM log WHERE run_id = ? ORDER BY seq",
                 (RUN_ID,),
             ).fetchall()

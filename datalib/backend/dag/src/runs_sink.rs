@@ -46,11 +46,11 @@ impl RunStoreSink {
     pub fn start(
         data_root: &std::path::Path,
         run_id: &str,
-        started_at: &str,
+        started_at_utc: &str,
         retention: Retention,
     ) -> Option<Self> {
         Some(Self {
-            writer: RunWriter::start(data_root, run_id, started_at, retention)?,
+            writer: RunWriter::start(data_root, run_id, started_at_utc, retention)?,
             steps: Mutex::new(HashMap::new()),
         })
     }
@@ -62,7 +62,7 @@ impl RunStoreSink {
             f(acc);
             acc.row.step = step.clone();
             let (at, offset) = now();
-            acc.row.updated_at = at;
+            acc.row.updated_at_utc = at;
             acc.row.tz_offset = offset;
             acc.row.clone()
         };
@@ -70,13 +70,13 @@ impl RunStoreSink {
     }
 
     fn metric(&self, step: &StepId, name: &str, labels: &BTreeMap<String, String>, value: i64) {
-        let (updated_at, tz_offset) = now();
+        let (updated_at_utc, tz_offset) = now();
         self.writer.metric(MetricRow {
             step: step.clone(),
             name: name.to_string(),
             labels: canonical_labels(labels),
             value,
-            updated_at,
+            updated_at_utc,
             tz_offset,
             ..Default::default()
         });
@@ -126,7 +126,7 @@ impl EventSink for RunStoreSink {
                     row: StepRunRow {
                         state: LiveState::Running.as_str().into(),
                         attempt: *attempt as i64,
-                        started_at: Some(now().0),
+                        started_at_utc: Some(now().0),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -138,7 +138,7 @@ impl EventSink for RunStoreSink {
                 error,
             } => self.update(step, |a| {
                 a.row.state = status.as_str().into();
-                a.row.finished_at = Some(now().0);
+                a.row.finished_at_utc = Some(now().0);
                 a.row.error = error.clone();
             }),
             Event::Metric {
@@ -168,11 +168,11 @@ impl EventSink for RunStoreSink {
                     acc.checkpoints
                 };
                 self.metric(step, "checkpoints", &BTreeMap::new(), n as i64);
-                let (ts, tz_offset) = now();
+                let (ts_utc, tz_offset) = now();
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
                     attempt: self.attempt_of(step),
-                    ts,
+                    ts_utc,
                     tz_offset,
                     level: LogLevel::Info.as_str().into(),
                     msg: "sealed a checkpoint".into(),
@@ -192,14 +192,14 @@ impl EventSink for RunStoreSink {
             } => {
                 // The line's own clock when it has one — that is when the
                 // step wrote it, where ours is when we read it.
-                let (ts, tz_offset) = match ts {
+                let (ts_utc, tz_offset) = match ts {
                     Some(own) => split_stamp(own),
                     None => now(),
                 };
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
                     attempt: self.attempt_of(step),
-                    ts,
+                    ts_utc,
                     tz_offset,
                     stream: stream.map(|s| s.as_str().to_string()),
                     level: level.as_str().into(),
@@ -213,11 +213,11 @@ impl EventSink for RunStoreSink {
                 })
             }
             Event::Hint { step, msg } => {
-                let (ts, tz_offset) = now();
+                let (ts_utc, tz_offset) = now();
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
                     attempt: self.attempt_of(step),
-                    ts,
+                    ts_utc,
                     tz_offset,
                     level: LogLevel::Warn.as_str().into(),
                     msg: msg.clone(),
@@ -405,7 +405,7 @@ mod tests {
         assert_eq!(s.state, RunState::Failed.as_str());
         assert_eq!(s.msg.as_deref(), Some("conversations.list"));
         assert_eq!(s.error.as_deref(), Some("boom"));
-        assert!(s.started_at.is_some() && s.finished_at.is_some());
+        assert!(s.started_at_utc.is_some() && s.finished_at_utc.is_some());
     }
 
     /// Log lines, hints and checkpoints all land in the log, unwrapped,
@@ -453,7 +453,7 @@ mod tests {
         assert_eq!(log.len(), 3, "{log:?}");
         assert_eq!(log[0].level, "warn");
         assert_eq!(
-            log[0].ts, "2026-09-11T08:00:00.000000+00:00",
+            log[0].ts_utc, "2026-09-11T08:00:00.000000+00:00",
             "the line's own clock wins, kept as UTC"
         );
         assert_eq!(log[0].tz_offset.as_deref(), Some("+00:00"));

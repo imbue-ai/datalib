@@ -59,7 +59,7 @@ const runs = ref<RunInfo[]>([]);
 const live = computed(() => {
   if (runId.value === props.runId) return props.live;
   const r = runs.value.find((x) => x.run_id === runId.value);
-  return !!r && r.finished_at == null;
+  return !!r && r.finished_at_utc == null;
 });
 
 const stepOnly = ref(true);
@@ -140,8 +140,8 @@ function pickRun(ev: Event) {
 /// How a run reads in the picker: when it started, and whether it is
 /// still going — the id itself is in the header for whoever needs it.
 function runLabel(r: RunInfo): string {
-  const when = formatRelative(r.started_at, Date.now());
-  return r.finished_at == null ? `${when} · running` : when;
+  const when = formatRelative(r.started_at_utc, Date.now());
+  return r.finished_at_utc == null ? `${when} · running` : when;
 }
 
 function levelClass(p: CellClassParams<RunLogLine>): string {
@@ -152,7 +152,7 @@ function levelClass(p: CellClassParams<RunLogLine>): string {
 const columnDefs = computed((): ColDef<RunLogLine>[] => [
   {
     headerName: "Time",
-    field: "ts",
+    field: "ts_utc",
     width: 110,
     // The time of day to the millisecond, in the viewer's zone (a
     // step's own lines are stamped in UTC, the runner's in local time);

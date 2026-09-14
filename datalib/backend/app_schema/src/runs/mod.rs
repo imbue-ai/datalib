@@ -3,11 +3,10 @@
 // per file below; the writer is the DAG runner alone, the readers are
 // `datalib-http` and anyone with `sqlite3`.
 //
-// Timestamps here are **UTC with a `+00:00` suffix**, and each table
-// carries a `tz_offset` column holding the offset the stamp was made
-// in (`+02:00`). That is the pair the repo is moving towards; the
-// stores written before this one keep the offset in the stamp itself
-// (AGENTS.md, "Timestamp convention").
+// Every stamp is a `<x>_utc` column — UTC with a `+00:00` suffix — and
+// each table carries a `tz_offset` column holding the offset the stamp
+// was made in (`+02:00`), the pair every store keeps (AGENTS.md,
+// "Timestamp convention").
 
 pub mod log {
     include!("log.rs");

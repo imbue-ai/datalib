@@ -16,7 +16,7 @@ fn at(step: &str, state: &str, msg: &str) -> StepRunRow {
         state: state.into(),
         attempt: 1,
         msg: Some(msg.into()),
-        updated_at: T0.into(),
+        updated_at_utc: T0.into(),
         ..Default::default()
     }
 }
@@ -27,7 +27,7 @@ fn metric(step: &str, name: &str, value: i64) -> MetricRow {
         name: name.into(),
         labels: String::new(),
         value,
-        updated_at: T0.into(),
+        updated_at_utc: T0.into(),
         ..Default::default()
     }
 }
@@ -35,7 +35,7 @@ fn metric(step: &str, name: &str, value: i64) -> MetricRow {
 fn line(step: &str, level: &str, msg: &str) -> LogRow {
     LogRow {
         step: Some(step.into()),
-        ts: T0.into(),
+        ts_utc: T0.into(),
         level: level.into(),
         msg: msg.into(),
         ..Default::default()
@@ -58,13 +58,13 @@ async fn what_is_published_is_readable() {
     let snap = snapshot(td.path()).await;
     assert_eq!(snap.run_id.as_deref(), Some("run-1"));
     assert!(
-        snap.finished_at.is_some(),
+        snap.finished_at_utc.is_some(),
         "a dropped writer closes the run"
     );
     assert!(
-        snap.finished_at.as_deref().unwrap().ends_with("+00:00"),
+        snap.finished_at_utc.as_deref().unwrap().ends_with("+00:00"),
         "stamps are stored in UTC: {:?}",
-        snap.finished_at
+        snap.finished_at_utc
     );
     assert_eq!(snap.steps.len(), 2, "{snap:?}");
     let fetch = snap.steps.iter().find(|r| r.step == "slack/raw").unwrap();

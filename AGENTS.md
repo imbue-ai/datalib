@@ -1677,11 +1677,12 @@ a derived UTC twin rather than being rewritten: `grid_rows.when_ts_utc`
 sorts and filters on, and `when_ts` itself is the record and feeds the
 fingerprint.
 
-`system/runs.sqlite` keeps its stamps as plain `started_at` / `ts` with a
-`tz_offset` beside them (#425); the `_utc` name is the rule for
-everything after it. If you find yourself writing
-`strftime("%Y-%m-%dT%H:%M:%SZ")`, stop — `isoformat()` on the Python
-side, `to_rfc3339()` here.
+`system/runs.sqlite` follows the same rule (`started_at_utc`, `log.ts_utc`,
+one `tz_offset` per table). The one JSON-backed exception on the API is
+`GET /api/dag`'s `run` / `last_run`, which mirror `dag_state.json` and
+so keep that file's `started_at` / `finished_at`. If you find yourself
+writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop — `isoformat()` on the
+Python side, `to_rfc3339()` here.
 
 ## Auth (web API)
 

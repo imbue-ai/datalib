@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, PortableTable)]
 #[portable_table(
     table = "metric_samples",
-    primary_key = "run_id, step, name, labels, ts"
+    primary_key = "run_id, step, name, labels, ts_utc"
 )]
 pub struct MetricSampleRow {
     #[col(sql = "VARCHAR(64)")]
@@ -21,7 +21,7 @@ pub struct MetricSampleRow {
     pub labels: String,
     /// UTC.
     #[col(sql = "VARCHAR(40)")]
-    pub ts: String,
+    pub ts_utc: String,
     #[col(sql = "VARCHAR(8)")]
     pub tz_offset: Option<String>,
     #[col(sql = "BIGINT")]

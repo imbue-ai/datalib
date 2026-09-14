@@ -60,12 +60,12 @@ fn write_two_runs(root: &Path) {
             step: "slack/ingest".into(),
             state: "succeeded".into(),
             attempt: 1,
-            updated_at: t.into(),
+            updated_at_utc: t.into(),
             ..Default::default()
         });
         w.log(LogRow {
             step: Some("slack/ingest".into()),
-            ts: t.into(),
+            ts_utc: t.into(),
             level: "error".into(),
             msg: "from run 1".into(),
             ..Default::default()
@@ -78,13 +78,13 @@ fn write_two_runs(root: &Path) {
             state: "running".into(),
             attempt: 1,
             msg: Some("conversations.list".into()),
-            updated_at: t.into(),
+            updated_at_utc: t.into(),
             ..Default::default()
         });
         w.step(StepRunRow {
             step: "slack/render_markdown".into(),
             state: "pending".into(),
-            updated_at: t.into(),
+            updated_at_utc: t.into(),
             ..Default::default()
         });
         w.metric(MetricRow {
@@ -92,7 +92,7 @@ fn write_two_runs(root: &Path) {
             name: "rows_upserted".into(),
             labels: "table=slack_messages".into(),
             value: 42,
-            updated_at: t.into(),
+            updated_at_utc: t.into(),
             ..Default::default()
         });
         w.metric(MetricRow {
@@ -100,14 +100,14 @@ fn write_two_runs(root: &Path) {
             name: "queued".into(),
             labels: String::new(),
             value: 7,
-            updated_at: t.into(),
+            updated_at_utc: t.into(),
             ..Default::default()
         });
         for (level, msg) in [("info", "hello"), ("warn", "slow"), ("info", "still here")] {
             w.log(LogRow {
                 step: Some("slack/ingest".into()),
                 attempt: 1,
-                ts: t.into(),
+                ts_utc: t.into(),
                 stream: Some("stderr".into()),
                 level: level.into(),
                 thread: Some("main".into()),

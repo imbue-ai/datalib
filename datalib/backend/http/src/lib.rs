@@ -982,7 +982,7 @@ pub struct DagStepProgress {
     pub metrics: std::collections::BTreeMap<String, i64>,
     /// `warn` and `error` log lines so far this run.
     pub errors: i64,
-    pub updated_at: String,
+    pub updated_at_utc: String,
 }
 
 /// A run's per-step numbers, keyed by step, from a store snapshot.
@@ -999,7 +999,7 @@ fn progress_by_step(
                     msg: p.msg.clone(),
                     metrics: Default::default(),
                     errors: snap.errors.get(&p.step).copied().unwrap_or(0),
-                    updated_at: p.updated_at.clone(),
+                    updated_at_utc: p.updated_at_utc.clone(),
                 },
             )
         })
@@ -1147,7 +1147,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                         msg: p.msg.clone(),
                         metrics: p.metrics.clone(),
                         errors: p.errors,
-                        updated_at: p.updated_at.clone(),
+                        updated_at_utc: p.updated_at_utc.clone(),
                     }),
                 }
             })
@@ -1440,15 +1440,15 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
                 msg: None,
                 metrics: Default::default(),
                 errors: 0,
-                updated_at: st.updated_at.clone(),
+                updated_at_utc: st.updated_at_utc.clone(),
             }),
         })
         .collect();
     Json(RunStepsResponse {
         run: Some(datalib_runs::RunRow {
             run_id,
-            started_at: snap.started_at.unwrap_or_default(),
-            finished_at: snap.finished_at,
+            started_at_utc: snap.started_at_utc.unwrap_or_default(),
+            finished_at_utc: snap.finished_at_utc,
             tz_offset: snap.tz_offset,
         }),
         steps,

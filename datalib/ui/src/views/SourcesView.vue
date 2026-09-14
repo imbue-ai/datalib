@@ -257,7 +257,7 @@ async function loadJobs() {
 
 // Apply one SSE push. If the job is already in the list, patch it in
 // place so the segmented bar updates without a full reload; otherwise
-// (a brand-new job, or a terminal event that needs finished_at/error)
+// (a brand-new job, or a terminal event that needs finished_at_utc/error)
 // schedule a debounced reload to pull the authoritative row.
 function onProgress(ev: JobProgressEvent) {
   const j = jobs.value.find((x) => x.id === ev.id);
@@ -265,7 +265,7 @@ function onProgress(ev: JobProgressEvent) {
   if (j) {
     j.state = ev.state;
     j.progress_msg = ev.progress_msg;
-    // Terminal rows need server-stamped finished_at/error: reload soon.
+    // Terminal rows need server-stamped finished_at_utc/error: reload soon.
     if (terminal) scheduleReload();
   } else {
     // Unknown job (just enqueued): bring it into the list.
@@ -340,7 +340,7 @@ async function loadLog(id: string) {
   try {
     const rows = await fetchRunLog(id, { limit: 5000 });
     logLines.value = rows.map((l) => ({
-      text: `${formatTimeOfDay(l.ts)} ${l.step ?? ""} ${l.msg}`,
+      text: `${formatTimeOfDay(l.ts_utc)} ${l.step ?? ""} ${l.msg}`,
       cls: l.level === "error" ? "log-line-error" : l.level === "warn" ? "log-line-warn" : "",
     }));
     if (rows.length === 0) logError.value = "no log yet — the run has not written anything.";

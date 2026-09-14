@@ -20,10 +20,10 @@ pub struct StepRunRow {
     pub attempt: i64,
     /// UTC.
     #[col(sql = "VARCHAR(40)")]
-    pub started_at: Option<String>,
+    pub started_at_utc: Option<String>,
     /// UTC.
     #[col(sql = "VARCHAR(40)")]
-    pub finished_at: Option<String>,
+    pub finished_at_utc: Option<String>,
     #[col(sql = "TEXT")]
     pub error: Option<String>,
     /// The step's own words: "conversations.list", "3 of 9 channels".
@@ -31,7 +31,7 @@ pub struct StepRunRow {
     pub msg: Option<String>,
     /// UTC.
     #[col(sql = "VARCHAR(40)")]
-    pub updated_at: String,
+    pub updated_at_utc: String,
     /// The runner's offset when it stamped this row.
     #[col(sql = "VARCHAR(8)")]
     pub tz_offset: Option<String>,
