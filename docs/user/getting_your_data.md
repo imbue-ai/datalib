@@ -97,7 +97,7 @@ npx -y latchkey services register chatgpt \
   --login-url="https://chatgpt.com/auth/login" \
   --login-flow=token-capture \
   --login-flow-params='{"tokenUrl": "https://chatgpt.com/api/auth/session", "tokenField": "accessToken"}'
-LATCHKEY_EPHEMERAL_BROWSER=1 npx -y latchkey auth browser chatgpt
+npx -y latchkey auth browser chatgpt
 ```
 
 The second command opens chatgpt.com, waits for you to log in, and
@@ -107,12 +107,13 @@ gone (it reports `unknown`, not `invalid`); when a sync or **Test
 connection** comes back `HTTP 401 token_expired`, run that same
 `auth browser` line again.
 
-`LATCHKEY_EPHEMERAL_BROWSER=1` matters: without it latchkey reopens
-the browser session it saved last time, which is still signed in, and
-chatgpt.com's session endpoint hands that session's old, expired token
-straight back — the login looks successful and stores a token that
-does not work (imbue-ai/latchkey#152). The wizard's button sets it
-for you.
+If it still says `token_expired` right after a fresh login, look for
+a *second* service on the same address: `latchkey curl` picks the
+first registered service whose base URL matches, so an older
+registration for `https://chatgpt.com/` — a test one, say — is the
+credential every request actually carries, whatever you just stored
+under `chatgpt`. `latchkey services list` shows them; `latchkey
+services deregister <name>` removes the stale one.
 
 If you registered `chatgpt` before this guide said to, latchkey will
 have recorded it as a `set`-only service — `latchkey services info

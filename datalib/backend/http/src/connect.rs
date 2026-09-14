@@ -524,21 +524,21 @@ pub async fn probe(
 // shared
 
 /// A browser login that must observe a *fresh* sign-in, so latchkey
-/// must not restore the session it saved last time. Ephemeral mode
+/// must not restore the session it saved last time.
+///
+/// Cookie capture reads the `Set-Cookie` headers that arrive while
+/// someone signs in. latchkey otherwise seeds the browser with its own
+/// persisted state, which lands you already signed in — and a site that
+/// sees an established session issues no new cookie, so the capture
+/// waits for something that can never arrive and the login hangs with
+/// nothing on screen to say why (imbue-ai/latchkey#150). Ephemeral mode
 /// neither loads nor saves that state.
 ///
-/// latchkey otherwise seeds the browser with its own persisted state,
-/// which lands you already signed in, and both generic captures go
-/// wrong from there. Cookie capture reads the `Set-Cookie` headers that
-/// arrive while someone signs in; a site that sees an established
-/// session issues none, so the login hangs with nothing on screen to
-/// say why (imbue-ai/latchkey#150). Token capture asks the app's own
-/// session endpoint, which hands back the token cached in that stale
-/// session — expired, and stored as if fresh (imbue-ai/latchkey#152).
-///
-/// Only for those two. An OAuth login *benefits* from the saved
+/// Only for cookie capture. An OAuth login *benefits* from the saved
 /// session — it has an identity to re-derive either way, and being
-/// already signed in is one less password.
+/// already signed in is one less password. Whether token capture needs
+/// it is open (imbue-ai/latchkey#152); until it is shown to, a sign-in
+/// every time is a cost nobody asked for.
 const EPHEMERAL_BROWSER_ENV: &str = "LATCHKEY_EPHEMERAL_BROWSER";
 
 async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
