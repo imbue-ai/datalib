@@ -10,26 +10,34 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
 use crate::auth::{
-    curl, exchange, oauth1_header, write_tokens, Nonce, OAuth1Token, OAuth2Token, OAUTH_USER_AGENT,
+    curl, curl_impersonated, exchange, oauth1_header, write_tokens, Nonce, OAuth1Token,
+    OAuth2Token, OAUTH_USER_AGENT,
 };
 
 const CLIENT_ID: &str = "GCM_ANDROID_DARK";
 
-/// The SSO pages sit behind Cloudflare and are meant for a WebView, so
-/// the requests have to look like one.
+/// The SSO pages sit behind Cloudflare's bot wall, so every request to
+/// them goes out impersonated (Chrome's TLS fingerprint and user agent,
+/// set by the dispatch curl) and with a browser's navigation headers.
 const SSO_HEADERS: &[&str] = &[
-    "User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) \
-     AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
     "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language: en-US,en;q=0.9",
     "Sec-Fetch-Mode: navigate",
     "Sec-Fetch-Dest: document",
 ];
 
+/// Cloudflare's rate limit on the login endpoint fires on a credential
+/// POST that follows the page load too quickly; the clients that get
+/// through wait roughly this long between the two.
+const PAUSE_BEFORE_CREDENTIALS: std::time::Duration = std::time::Duration::from_secs(35);
+
 /// How the caller answers the two questions a login can ask. Split out
 /// so the flow can be driven by a terminal or by a test.
 pub trait Prompts {
     fn mfa_code(&mut self, method: &str) -> Result<String>;
+    /// The login is about to wait this long before sending the
+    /// credentials; a terminal says so, a test does not care.
+    fn pausing(&mut self, _for: std::time::Duration) {}
 }
 
 pub struct TerminalPrompts;
@@ -37,6 +45,15 @@ pub struct TerminalPrompts;
 impl Prompts for TerminalPrompts {
     fn mfa_code(&mut self, method: &str) -> Result<String> {
         read_line(&format!("MFA code (sent by {method}): "))
+    }
+
+    #[allow(clippy::disallowed_macros)]
+    fn pausing(&mut self, d: std::time::Duration) {
+        println!(
+            "waiting {}s before submitting: Garmin's bot wall rate-limits a login that \
+             follows the page load too quickly",
+            d.as_secs()
+        );
     }
 }
 
@@ -68,12 +85,16 @@ pub async fn login(
     args.extend(["-H", "Sec-Fetch-Site: none"]);
     let page = format!("{sso}/mobile/sso/en/sign-in?clientId={CLIENT_ID}");
     args.push(&page);
-    let r = curl(&args).await.context("Garmin SSO sign-in page")?;
+    let r = curl_impersonated(&args)
+        .await
+        .context("Garmin SSO sign-in page")?;
     if r.status != 200 {
         bail!("Garmin SSO sign-in page -> HTTP {}", r.status);
     }
 
-    // 2. The credentials.
+    // 2. The credentials, after the pause the bot wall wants.
+    prompts.pausing(PAUSE_BEFORE_CREDENTIALS);
+    tokio::time::sleep(PAUSE_BEFORE_CREDENTIALS).await;
     let body = json!({
         "username": email,
         "password": password,
@@ -140,7 +161,7 @@ pub async fn login(
     args.push(&referer);
     let embed = format!("{sso}/portal/sso/embed");
     args.push(&embed);
-    let _ = curl(&args).await;
+    let _ = curl_impersonated(&args).await;
 
     // 4. Ticket → OAuth1 token. Signed with the consumer alone.
     let url = format!(
@@ -197,7 +218,13 @@ async fn sso_post(jar: &str, url: &str, body: &Value) -> Result<Value> {
         &payload,
         url,
     ]);
-    let r = curl(&args).await?;
+    let r = curl_impersonated(&args).await?;
+    if r.status == 429 {
+        bail!(
+            "HTTP 429: Garmin's sign-in is rate-limiting this address. Wait fifteen minutes \
+             or so before trying again; every attempt in the meantime extends the block"
+        );
+    }
     if r.status != 200 {
         bail!(
             "HTTP {}: {}",

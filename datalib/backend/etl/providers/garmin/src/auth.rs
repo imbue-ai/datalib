@@ -400,7 +400,24 @@ pub struct CurlResponse {
 /// `Authorization` and, for the SSO login, a cookie jar — neither of
 /// which the shared transport models.
 pub async fn curl(args: &[&str]) -> Result<CurlResponse> {
-    let out = tokio::process::Command::new("curl")
+    run_curl(tokio::process::Command::new("curl"), args).await
+}
+
+/// The dispatch curl with the impersonation marker, so the request
+/// leaves with Chrome's TLS fingerprint and user agent. The SSO host is
+/// behind Cloudflare's bot wall, which since spring 2026 answers the
+/// phone app's own login flow with 429 unless the client looks like a
+/// browser (matin/garth#222).
+pub async fn curl_impersonated(args: &[&str]) -> Result<CurlResponse> {
+    let dispatch = datalib_etl::latchkey::ensure_curl_dispatch()?;
+    let mut cmd = tokio::process::Command::new(dispatch);
+    cmd.arg("-H")
+        .arg(datalib_etl::http::IMPERSONATE_MARKER_HEADER);
+    run_curl(cmd, args).await
+}
+
+async fn run_curl(mut cmd: tokio::process::Command, args: &[&str]) -> Result<CurlResponse> {
+    let out = cmd
         .args(args)
         .arg("-w")
         .arg("\n%{http_code}")
