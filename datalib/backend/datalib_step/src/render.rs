@@ -120,7 +120,8 @@ pub async fn run(
                 store
                     .put_document(&data_root, &md)
                     .with_context(|| format!("store document {}", md.markdown_uuid))?;
-                docs_in.fetch_add(1, Ordering::SeqCst);
+                let n = docs_in.fetch_add(1, Ordering::SeqCst) + 1;
+                progress.metric("documents_rendered", &[], n as i64);
                 // **Between documents is the only consistent point.** A
                 // document is rows plus edges plus markdown, written as a
                 // group; sealing inside `put_document` would publish a
@@ -290,6 +291,7 @@ pub async fn run(
     let docs = docs.load(Ordering::SeqCst);
     let removed = removed.load(Ordering::SeqCst);
     tracing::info!(docs, removed, "render: docs (re)rendered");
+    progress_after.metric("documents_removed", &[], removed as i64);
     if removed > 0 {
         progress_after.set_message(&format!(
             "{removed} document(s) dropped — their source is gone upstream"

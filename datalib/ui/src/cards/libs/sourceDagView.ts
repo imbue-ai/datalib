@@ -1,13 +1,19 @@
 // Builtin view: visualize the sync pipeline's step DAG.
 import type { CardRender } from "../types";
-import {
-  fetchActiveJobs,
-  fetchDag,
-  type DagStep,
-  type SyncTask,
-} from "@/api";
+import { fetchDag, type DagResponse, type DagStep } from "@/api";
 import { subscribeLive } from "@/live";
-import { parseTasks } from "@/sync/progress";
+
+/// The node's colour class for a runner state. The legend's words, not
+/// the runner's: `succeeded` reads as done, `skipped_up_to_date` as up
+/// to date.
+const NODE_CLASS: Record<string, string> = {
+  running: "running",
+  succeeded: "done",
+  skipped_up_to_date: "skipped",
+  failed: "failed",
+  blocked: "blocked",
+  not_selected: "not_selected",
+};
 
 const NODE_H = 30;
 const NODE_GAP_Y = 14;
@@ -218,14 +224,18 @@ export function sourceDagView(): CardRender {
       wrap.appendChild(legend);
     }
 
-    function applyTasks(tasks: SyncTask[] | null | undefined) {
-      if (!tasks) return;
+    /// Live states come with the graph: the runner's record, which
+    /// `/api/dag` reads. Only for a run in flight — a finished run's
+    /// colours would claim something is happening.
+    function applyStates(dag: DagResponse) {
       const next = new Map<string, string>();
-      for (const t of tasks) {
-        if (t.state !== "todo") next.set(t.id, t.state);
+      if (dag.run?.live) {
+        for (const s of dag.steps) {
+          const cls = s.current_state ? NODE_CLASS[s.current_state] : undefined;
+          if (cls) next.set(s.id, cls);
+        }
       }
       states = next;
-      paint();
     }
 
     async function load() {
@@ -233,31 +243,23 @@ export function sourceDagView(): CardRender {
         const dag = await fetchDag();
         if (disposed) return;
         steps = dag.steps;
+        applyStates(dag);
         paint(dag.ok ? undefined : (dag.error ?? "unknown error"));
       } catch (e) {
         if (!disposed) paint((e as Error).message);
       }
-      // Seed live state from any already-running job.
-      try {
-        const jobs = await fetchActiveJobs();
-        const running = jobs.find((j) => j.state === "running");
-        if (!disposed && running) applyTasks(parseTasks(running.progress_msg));
-      } catch {
-        // no live state — structure alone is fine
-      }
     }
 
     const unsubscribe = subscribeLive({
-      job: (ev) => {
-        if (disposed) return;
-        applyTasks(ev.tasks ?? parseTasks(ev.progress_msg));
-      },
       // The shape of the graph is the config, so it is redrawn when the
-      // config moves — instead of the 15-second poll this replaces,
-      // which every mounted card ran independently and which made a
-      // saved config take up to fifteen seconds to show.
+      // config moves; the colours are the runner's record, redrawn when
+      // that moves — instead of the 15-second poll this replaces, which
+      // every mounted card ran independently and which made a saved
+      // config take up to fifteen seconds to show.
       root: (e) => {
-        if (!disposed && e.kind === "config_changed") void load();
+        if (!disposed && (e.kind === "config_changed" || e.kind === "dag_changed")) {
+          void load();
+        }
       },
       resync: () => {
         if (!disposed) void load();

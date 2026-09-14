@@ -839,10 +839,14 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     let fields = collect_named_fields(&input)?;
 
     let mut columns: Vec<PortableColumn> = Vec::new();
+    let mut pk_is_text = false;
     for f in &fields {
         let ident = f.ident.as_ref().expect("named field");
         let name = ident.to_string();
         let sql = parse_col_attr(f)?;
+        if name == primary_key.trim() {
+            pk_is_text = matches!(classify(&f.ty), Some(PromotedKind::TextNotNull));
+        }
         // Nullability follows the Rust type: Option<T> → nullable.
         let decl = if is_option(&f.ty) {
             format!("{name} {sql}")
@@ -905,9 +909,12 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     // The write path. TYPED_COLUMNS and the bind order below are built
     // from one list, so they cannot disagree — which is the failure the
     // trait's docs warn about ("Mismatch → mis-binding at runtime") and
-    // the reason to generate this rather than hand-write it.
+    // the reason to generate this rather than hand-write it. Only for a
+    // single text key: `BulkUpsertable::id` returns `&str`, so an
+    // integer key (a rowid alias the store assigns) gets DDL and
+    // columns and writes itself, the same as a composite key.
     let composite_pk = primary_key.contains(',');
-    let write_path = if composite_pk {
+    let write_path = if composite_pk || !pk_is_text {
         quote! {}
     } else {
         let pk_ident = Ident::new(primary_key.trim(), proc_macro2::Span::call_site());

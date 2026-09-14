@@ -2,7 +2,7 @@
 //! *process's* position sees it, and the coalescing and retention rules
 //! hold.
 
-use datalib_runs::{log_after, snapshot, LogRow, MetricRow, Retention, RunWriter, StepRow};
+use datalib_runs::{log_after, snapshot, LogRow, MetricRow, Retention, RunWriter, StepRunRow};
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
 
@@ -10,8 +10,8 @@ fn start(root: &std::path::Path, run_id: &str) -> RunWriter {
     RunWriter::start(root, run_id, run_id, Retention::default()).expect("start the store")
 }
 
-fn at(step: &str, state: &str, msg: &str) -> StepRow {
-    StepRow {
+fn at(step: &str, state: &str, msg: &str) -> StepRunRow {
+    StepRunRow {
         step: step.into(),
         state: state.into(),
         attempt: 1,
@@ -28,6 +28,7 @@ fn metric(step: &str, name: &str, value: i64) -> MetricRow {
         labels: String::new(),
         value,
         updated_at: T0.into(),
+        ..Default::default()
     }
 }
 
@@ -59,6 +60,11 @@ async fn what_is_published_is_readable() {
     assert!(
         snap.finished_at.is_some(),
         "a dropped writer closes the run"
+    );
+    assert!(
+        snap.finished_at.as_deref().unwrap().ends_with("+00:00"),
+        "stamps are stored in UTC: {:?}",
+        snap.finished_at
     );
     assert_eq!(snap.steps.len(), 2, "{snap:?}");
     let fetch = snap.steps.iter().find(|r| r.step == "slack/raw").unwrap();
@@ -168,6 +174,46 @@ async fn runs_accumulate_and_the_snapshot_is_the_newest() {
 
     let old = log_after(td.path(), "2026-01-01T00:00:00+00:00", None, 0, 10).await;
     assert_eq!(old.len(), 1, "the earlier run's log is still there");
+}
+
+/// A reader can ask for a run by id, list the runs a step took part in,
+/// and read the warn/error count per step — what the Manage screen's
+/// history and its E column are made of.
+#[tokio::test]
+async fn runs_can_be_listed_by_step_and_read_by_id() {
+    use datalib_runs::{runs, snapshot_of};
+    let td = tempfile::tempdir().unwrap();
+    let keep = Retention {
+        max_runs: 100,
+        max_age_days: 36500,
+    };
+    {
+        let id = "2026-01-01T00:00:00+00:00";
+        let w = RunWriter::start(td.path(), id, id, keep).unwrap();
+        w.step(at("a", "succeeded", "ok"));
+        w.log(line("a", "warn", "hmm"));
+        w.log(line("a", "error", "no"));
+        w.log(line("a", "info", "fine"));
+    }
+    {
+        let id = "2026-01-02T00:00:00+00:00";
+        let w = RunWriter::start(td.path(), id, id, keep).unwrap();
+        w.step(at("b", "succeeded", "ok"));
+    }
+    let all = runs(td.path(), None, 10).await;
+    assert_eq!(
+        all.iter().map(|r| r.run_id.as_str()).collect::<Vec<_>>(),
+        ["2026-01-02T00:00:00+00:00", "2026-01-01T00:00:00+00:00"],
+        "newest first"
+    );
+    let with_a = runs(td.path(), Some("a"), 10).await;
+    assert_eq!(with_a.len(), 1);
+    assert_eq!(with_a[0].run_id, "2026-01-01T00:00:00+00:00");
+
+    let first = snapshot_of(td.path(), Some("2026-01-01T00:00:00+00:00")).await;
+    assert_eq!(first.steps[0].step, "a");
+    assert_eq!(first.errors.get("a"), Some(&2), "warn + error, not info");
+    assert!(snapshot_of(td.path(), Some("nope")).await.run_id.is_none());
 }
 
 /// Retention by count: the newest `max_runs` survive, including the run

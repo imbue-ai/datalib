@@ -68,6 +68,16 @@ pub async fn run(
         "grid_index: build_grid_index done"
     );
 
+    for (name, n) in [
+        ("markdowns_read", summary.markdowns_total),
+        ("markdowns_loaded", summary.markdowns_loaded),
+        ("markdowns_skipped", summary.markdowns_skipped),
+        ("markdowns_removed", summary.markdowns_removed),
+        ("rows_inserted", summary.rows_inserted),
+    ] {
+        progress.metric(name, &[], n as i64);
+    }
+
     let msg = format!(
         "datalib-step grid_index: markdowns_read={} markdowns_loaded={} \
          markdowns_skipped={} markdowns_removed={} rows_inserted={}",

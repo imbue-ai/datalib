@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Read-only mirror of scripts/pre-commit, for `bazelisk run //:precommit`.
-# Same checks, but never mutates the working tree (no auto-format, no
+# Read-only mirror of scripts/pre-commit, for `bazelisk run //:precommit`:
+# the one command that checks locally as much of what CI checks as a
+# laptop can. Never mutates the working tree (no auto-format, no
 # `git add`).
 #
 # This script is NO LONGER a `bazel test`. It used to be exposed as
@@ -85,12 +86,23 @@ bazelisk test //:lint
 # no cargo-side workaround needed.
 #
 # No `--config=clippy`: the aspect is always-on now (see .bazelrc), so a
-# plain build runs it. This step remains because it sweeps the WHOLE
-# graph — `bazelisk test //:lint` above only builds three targets — and
-# because a plain `bazelisk test //...` is not part of this wrapper.
+# plain build runs it. This step sweeps the WHOLE graph, and it has to
+# be a `build`, not the test run below: both aspects run only on the
+# targets named on the command line, and `--build_tests_only` names
+# the tests alone — a library those tests link is built but never
+# fmt- or clippy-checked (measured: a misformatted worker.rs passed
+# the test line and failed this one).
 if [ -d datalib/backend ]; then
-    echo "[rust] bazelisk build //... (clippy aspect is always-on)"
+    echo "[rust] bazelisk build //... (rustfmt + clippy aspects are always-on)"
     bazelisk build //...
 fi
+
+# --- Every hermetic test ---
+# What CI's `bazel test //...` runs, minus the targets that need a host
+# (a browser, the network, the keychain). Those tag filters belong on
+# this line and nowhere else — see AGENTS.md, "Running tests".
+echo "[test] every hermetic test"
+bazelisk test //... --build_tests_only \
+  --test_tag_filters=-no-sandbox,-requires-network,-external,-manual
 
 echo "All pre-commit checks passed."
