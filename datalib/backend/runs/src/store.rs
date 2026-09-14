@@ -175,6 +175,12 @@ pub struct Snapshot {
     pub metrics: Vec<MetricRow>,
     /// `warn` and `error` log rows per step — the E of USE.
     pub errors: BTreeMap<String, i64>,
+    /// When each step last logged anything (UTC), for telling a step
+    /// that is busy but not advancing from one that has gone silent.
+    pub last_log_at: BTreeMap<String, String>,
+    /// The two newest samples of every series — enough for a rate.
+    /// Oldest first within a series.
+    pub recent_samples: Vec<MetricSampleRow>,
 }
 
 /// The newest run.
@@ -291,6 +297,38 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     .iter()
     .map(|r| (r.get::<String, _>("step"), r.get::<i64, _>("n")))
     .collect();
+    let last_log_at = sqlx::query(
+        "SELECT step, MAX(ts) AS ts FROM log WHERE run_id = ? AND step IS NOT NULL GROUP BY step",
+    )
+    .bind(&run_id)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| (r.get::<String, _>("step"), r.get::<String, _>("ts")))
+    .collect();
+    // The two newest per series, by a window over the whole run's
+    // samples. Text order is instant order, so `ts` sorts.
+    let recent_samples = sqlx::query(
+        "SELECT step, name, labels, ts, tz_offset, value FROM ( \
+           SELECT *, ROW_NUMBER() OVER \
+             (PARTITION BY step, name, labels ORDER BY ts DESC) AS rn \
+           FROM metric_samples WHERE run_id = ?) \
+         WHERE rn <= 2 ORDER BY step, name, labels, ts",
+    )
+    .bind(&run_id)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| MetricSampleRow {
+        run_id: run_id.clone(),
+        step: r.get("step"),
+        name: r.get("name"),
+        labels: r.get("labels"),
+        ts: r.get("ts"),
+        tz_offset: r.get("tz_offset"),
+        value: r.get("value"),
+    })
+    .collect();
     Ok(Snapshot {
         run_id: Some(run_id),
         started_at: run.get("started_at"),
@@ -299,6 +337,8 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         steps,
         metrics,
         errors,
+        last_log_at,
+        recent_samples,
     })
 }
 
