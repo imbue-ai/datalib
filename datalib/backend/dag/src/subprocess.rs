@@ -56,6 +56,8 @@ struct WireOutcome {
 struct WireArtifactState {
     path: crate::ArtifactPath,
     version: Option<String>,
+    #[serde(default)]
+    rows: Option<u64>,
 }
 
 impl WireOutcome {
@@ -66,6 +68,7 @@ impl WireOutcome {
                 Some(version) => out.push(ArtifactState {
                     path: row.path,
                     version,
+                    rows: row.rows,
                 }),
                 None => sink.emit(&Event::Log {
                     step: step.to_string(),
@@ -192,7 +195,10 @@ pub(crate) async fn run_subprocess(
                     // displays. Same sink an in-process step calls, so
                     // both kinds of step announce a seal one way.
                     match &ev {
-                        Event::Checkpoint { version, .. } => ctx.checkpoint(version),
+                        Event::Checkpoint { version, rows, .. } => match rows {
+                            Some(n) => ctx.checkpoint_rows(version, *n),
+                            None => ctx.checkpoint(version),
+                        },
                         Event::Capabilities { streams_output, .. } => {
                             ctx.declare_streams_output(*streams_output)
                         }
@@ -324,7 +330,11 @@ fn retag(ev: Event, id: &str) -> Event {
             status,
             error,
         },
-        Event::Checkpoint { version, .. } => Event::Checkpoint { step: id, version },
+        Event::Checkpoint { version, rows, .. } => Event::Checkpoint {
+            step: id,
+            version,
+            rows,
+        },
         Event::Capabilities { streams_output, .. } => Event::Capabilities {
             step: id,
             streams_output,
@@ -496,12 +506,12 @@ mod tests {
                 echo '{"event":"capabilities","step":"me","streams_output":true}'
                 i=0
                 while [ $i -lt 200 ]; do
-                    echo '{"event":"checkpoint","step":"me","version":"v1"}'
+                    echo '{"event":"checkpoint","step":"me","version":"v1","rows":7}'
                     if [ -f "$DATALIB_DAG_DATA_ROOT/consumed" ]; then break; fi
                     sleep 0.05
                     i=$((i+1))
                 done
-                echo '{"event":"outcome","outputs":[{"path":"slack/rendered_md","version":"final"}]}'
+                echo '{"event":"outcome","outputs":[{"path":"slack/rendered_md","version":"final","rows":3}]}'
             "#),
         );
 
@@ -526,9 +536,10 @@ mod tests {
         };
 
         let g = Graph::build(vec![producer, consumer]).unwrap();
+        let rec = Arc::new(Recorder::default());
         let rep = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            Runner::new(root.path()).run(&g),
+            Runner::new(root.path()).sink(rec.clone()).run(&g),
         )
         .await
         .expect("a declared-streaming subprocess must not deadlock")
@@ -542,6 +553,24 @@ mod tests {
             "the consumer never ran early: the capability or the checkpoint \
              did not survive the subprocess boundary"
         );
+        // The row counts crossed the wire too: the checkpoint's 7 and
+        // the outcome's 3 both reached the consumer's queue.
+        let queued: Vec<i64> = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Metric {
+                    step, name, value, ..
+                } if step == "unified_index/grid" && name == "queued" => Some(*value),
+                _ => None,
+            })
+            .collect();
+        // Exact, because the producer waits for the early pass before it
+        // finishes: the seal's 7, drained by that pass; the outcome's 3,
+        // drained by the final one. The re-announced seal counts once.
+        assert_eq!(queued, vec![7, 0, 3, 0]);
     }
 
     #[tokio::test]

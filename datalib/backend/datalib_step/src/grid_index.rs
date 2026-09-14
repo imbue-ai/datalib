@@ -112,6 +112,7 @@ pub async fn run(
         Some(version) => Ok(vec![OutputClaim {
             path: out_rel(),
             version,
+            rows: None,
         }]),
         None => Ok(vec![]),
     }

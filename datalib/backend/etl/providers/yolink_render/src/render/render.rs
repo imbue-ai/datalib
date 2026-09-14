@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl::render_cursor;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::grid_rows::GridRow;
@@ -44,10 +43,6 @@ pub fn device_uuid(source_id: &str, device: &str) -> String {
         format!("yolink:{source_id}:device:{device}").as_bytes(),
     )
     .to_string()
-}
-
-pub fn cursor_params() -> serde_json::Value {
-    serde_json::json!({ "render_version": RENDER_VERSION })
 }
 
 /// Counts for the step's one-line run summary.
@@ -119,20 +114,11 @@ pub fn render_all(
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
     progress.inc(1);
-
-    // Cursor last, and only with a real HEAD: an unwritten cursor makes
-    // the next run re-render, which is the harmless direction. Writing a
-    // placeholder would make it skip forever.
-    if let Some(head) = parsed.head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(root, source_id);
-        render_cursor::write(&cursor_path, head, &cursor_params())
-            .with_context(|| format!("write yolink render cursor {}", cursor_path.display()))?;
-    } else {
+    if parsed.head.is_none() {
         tracing::warn!(
             event = "yolink_render_no_head",
             source = source_id,
-            "dolt_log() returned no HEAD; leaving the render cursor unwritten \
-             (next run will re-render)"
+            "dolt_log() returned no HEAD; the render cursor stays put and the next run re-renders"
         );
     }
 
@@ -671,14 +657,6 @@ mod tests {
             device_uuid("yolink", "freezer")
         );
         assert_ne!(document_uuid("yolink"), device_uuid("yolink", "fridge"));
-    }
-
-    #[test]
-    fn cursor_params_carry_the_render_version() {
-        // The point of not using `no_params()`: bumping RENDER_VERSION
-        // must invalidate a cursor written by the previous version.
-        let stored = serde_json::json!({"render_version": RENDER_VERSION - 1});
-        assert_ne!(stored, cursor_params());
     }
 
     #[test]

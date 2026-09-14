@@ -10,7 +10,6 @@ use serde_json::Value;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl::render_cursor;
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
@@ -170,11 +169,6 @@ pub fn render_all(
         .context("claude project render")?;
     }
 
-    if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(root, source_id);
-        render_cursor::write(&cursor_path, head, &render_cursor::no_params())
-            .with_context(|| format!("write claude render cursor {}", cursor_path.display()))?;
-    }
     Ok(())
 }
 

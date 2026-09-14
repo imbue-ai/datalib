@@ -67,6 +67,12 @@ pub enum Event {
     Checkpoint {
         step: StepId,
         version: String,
+        /// How many rows this seal added over the one before it. The
+        /// runner sums these per consumer into its `queued` metric, so a
+        /// step that knows the number should say it; one that does not
+        /// leaves it out and its consumers' queue reads as unknown.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<u64>,
     },
     /// The current value of one of the step's metrics: rows written,
     /// requests made, items still queued. Always an absolute value — the

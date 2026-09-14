@@ -328,6 +328,41 @@ async fn a_store_from_another_schema_version_is_replaced() {
     assert_eq!(log_after(td.path(), "run-2", None, 0, 10).await.len(), 1);
 }
 
+/// A rate needs two points. The writer samples a series when its value
+/// changed and the floor between samples has passed, and always once
+/// more at the end — so a series that moved twice inside the floor still
+/// leaves its first and last values. The snapshot carries the newest two
+/// per series, oldest first, and when each step last logged.
+#[tokio::test]
+async fn the_snapshot_carries_two_samples_per_series_and_the_last_log_time() {
+    let td = tempfile::tempdir().unwrap();
+    {
+        let w = start(td.path(), "run-1");
+        w.metric(MetricRow {
+            updated_at_utc: "2026-09-14T10:00:00.000000+00:00".into(),
+            ..metric("a", "rows", 1)
+        });
+        w.log(line("a", "info", "first"));
+        // Past the flush interval, inside the sample floor.
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        w.metric(MetricRow {
+            updated_at_utc: "2026-09-14T10:00:03.000000+00:00".into(),
+            ..metric("a", "rows", 7)
+        });
+        w.log(LogRow {
+            ts_utc: "2026-09-14T10:00:03.500000+00:00".into(),
+            ..line("a", "info", "second")
+        });
+    }
+    let snap = snapshot(td.path()).await;
+    let values: Vec<i64> = snap.recent_samples.iter().map(|s| s.value).collect();
+    assert_eq!(values, vec![1, 7], "{:?}", snap.recent_samples);
+    assert_eq!(
+        snap.last_log_at.get("a").map(String::as_str),
+        Some("2026-09-14T10:00:03.500000+00:00")
+    );
+}
+
 /// The property the whole design is for: a reader can read *while* the
 /// writer is writing, without contending. Here the reader is a separate
 /// connection opened per poll, which is what `datalib-http` does.

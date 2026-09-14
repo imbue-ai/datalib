@@ -25,9 +25,8 @@ impl Period {
 
     /// The config spelling this variant round-trips from
     /// [`Self::from_config`]. Stable across releases — it's recorded in
-    /// render cursors (see
-    /// [`crate::render_cursor::read_for_params`]), so changing a string
-    /// here would read as a config change and re-render every tree.
+    /// the render cursor's params, so changing a string here would read
+    /// as a config change and re-render every tree.
     pub fn as_config_str(self) -> &'static str {
         match self {
             Period::Month => "month",

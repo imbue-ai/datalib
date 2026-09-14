@@ -982,39 +982,101 @@ pub struct DagStepProgress {
     pub metrics: std::collections::BTreeMap<String, i64>,
     /// `warn` and `error` log lines so far this run.
     pub errors: i64,
+    /// Per series, the change per second between its two newest samples
+    /// — only for a series that has two, so a number here is measured,
+    /// never assumed.
+    pub rates: std::collections::BTreeMap<String, f64>,
+    /// For a running step: seconds since any of its metrics last moved
+    /// (since it started, if none ever did). Long means "not advancing";
+    /// `log_age_secs` says whether it is at least still talking.
+    pub progress_age_secs: Option<i64>,
+    /// For a running step: seconds since it last logged a line.
+    pub log_age_secs: Option<i64>,
     pub updated_at_utc: String,
 }
 
-/// A run's per-step numbers, keyed by step, from a store snapshot.
+fn series_key(name: &str, labels: &str) -> String {
+    if labels.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name}{{{labels}}}")
+    }
+}
+
+fn secs_between(earlier: &str, later: &str) -> Option<f64> {
+    let a = datalib_time::parse_strict(earlier).ok()?.inner();
+    let b = datalib_time::parse_strict(later).ok()?.inner();
+    Some((b - a).num_microseconds()? as f64 / 1_000_000.0)
+}
+
+/// A run's per-step numbers, keyed by step, from a store snapshot, with
+/// rates and ages derived as of `now` (UTC, ISO).
 fn progress_by_step(
     snap: &datalib_runs::Snapshot,
+    now: &str,
 ) -> std::collections::HashMap<String, DagStepProgress> {
     let mut by_step: std::collections::HashMap<String, DagStepProgress> = snap
         .steps
         .iter()
         .map(|p| {
+            let running =
+                datalib_runs::LiveState::parse(&p.state) == Some(datalib_runs::LiveState::Running);
+            let last_move = snap
+                .metrics
+                .iter()
+                .filter(|m| m.step == p.step)
+                .map(|m| m.updated_at_utc.as_str())
+                .max()
+                .or(p.started_at_utc.as_deref());
+            let age = |since: Option<&str>| {
+                since
+                    .filter(|_| running)
+                    .and_then(|t| secs_between(t, now))
+                    .map(|s| s.max(0.0) as i64)
+            };
             (
                 p.step.clone(),
                 DagStepProgress {
                     msg: p.msg.clone(),
                     metrics: Default::default(),
                     errors: snap.errors.get(&p.step).copied().unwrap_or(0),
+                    rates: Default::default(),
+                    progress_age_secs: age(last_move),
+                    log_age_secs: age(snap.last_log_at.get(&p.step).map(String::as_str)),
                     updated_at_utc: p.updated_at_utc.clone(),
                 },
             )
         })
         .collect();
     for m in &snap.metrics {
-        let key = if m.labels.is_empty() {
-            m.name.clone()
-        } else {
-            format!("{}{{{}}}", m.name, m.labels)
-        };
         if let Some(p) = by_step.get_mut(&m.step) {
-            p.metrics.insert(key, m.value);
+            p.metrics.insert(series_key(&m.name, &m.labels), m.value);
+        }
+    }
+    // Two newest samples per series, oldest first: the rate is their
+    // slope. One sample is a point, not a line, so it says nothing.
+    for pair in snap.recent_samples.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        if a.step != b.step || a.name != b.name || a.labels != b.labels {
+            continue;
+        }
+        let Some(dt) = secs_between(&a.ts_utc, &b.ts_utc).filter(|dt| *dt > 0.0) else {
+            continue;
+        };
+        if let Some(p) = by_step.get_mut(&b.step) {
+            p.rates.insert(
+                series_key(&b.name, &b.labels),
+                (b.value - a.value) as f64 / dt,
+            );
         }
     }
     by_step
+}
+
+fn now_utc() -> String {
+    datalib_time::IsoOffsetTimestamp::now_local()
+        .to_utc_and_offset()
+        .0
 }
 
 /// A step's last outcome, mirroring `datalib_dag::state::LastRun`.
@@ -1085,7 +1147,9 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
     // steps is worse than showing none at all.
     let store = datalib_runs::snapshot(&s.root).await;
     let progress: std::collections::HashMap<String, DagStepProgress> = match (&run, &store.run_id) {
-        (Some(r), Some(store_run)) if &r.run_id == store_run => progress_by_step(&store),
+        (Some(r), Some(store_run)) if &r.run_id == store_run => {
+            progress_by_step(&store, &now_utc())
+        }
         _ => Default::default(),
     };
 
@@ -1147,6 +1211,9 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                         msg: p.msg.clone(),
                         metrics: p.metrics.clone(),
                         errors: p.errors,
+                        rates: p.rates.clone(),
+                        progress_age_secs: p.progress_age_secs,
+                        log_age_secs: p.log_age_secs,
                         updated_at_utc: p.updated_at_utc.clone(),
                     }),
                 }
@@ -1430,7 +1497,7 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
             steps: Vec::new(),
         });
     };
-    let mut progress = progress_by_step(&snap);
+    let mut progress = progress_by_step(&snap, &now_utc());
     let steps = snap
         .steps
         .iter()
@@ -1440,6 +1507,9 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
                 msg: None,
                 metrics: Default::default(),
                 errors: 0,
+                rates: Default::default(),
+                progress_age_secs: None,
+                log_age_secs: None,
                 updated_at_utc: st.updated_at_utc.clone(),
             }),
         })
@@ -1501,6 +1571,92 @@ fn repo_err_to_status(e: RepoError) -> StatusCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rate is the slope of a series' two newest samples; the ages
+    /// are how long a running step has gone without a metric moving and
+    /// without logging — the two together being #136's "busy but not
+    /// advancing" (long progress age, short log age) as distinct from
+    /// "silent" (both long). A finished step has no ages.
+    #[test]
+    fn rates_and_ages_are_derived_from_the_snapshot() {
+        use datalib_runs::{MetricRow, MetricSampleRow, StepRunRow};
+        let sample = |step: &str, name: &str, ts: &str, value: i64| MetricSampleRow {
+            step: step.into(),
+            name: name.into(),
+            ts_utc: ts.into(),
+            value,
+            ..Default::default()
+        };
+        let snap = datalib_runs::Snapshot {
+            run_id: Some("r".into()),
+            steps: vec![
+                StepRunRow {
+                    step: "a/ingest".into(),
+                    state: "running".into(),
+                    started_at_utc: Some("2026-09-14T10:00:00.000000+00:00".into()),
+                    ..Default::default()
+                },
+                StepRunRow {
+                    step: "b/ingest".into(),
+                    state: "succeeded".into(),
+                    ..Default::default()
+                },
+            ],
+            metrics: vec![MetricRow {
+                step: "a/ingest".into(),
+                name: "rows_upserted".into(),
+                labels: "table=t".into(),
+                value: 700,
+                updated_at_utc: "2026-09-14T10:01:00.000000+00:00".into(),
+                ..Default::default()
+            }],
+            last_log_at: [(
+                "a/ingest".to_string(),
+                "2026-09-14T10:02:50.000000+00:00".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            recent_samples: vec![
+                sample(
+                    "a/ingest",
+                    "rows_upserted",
+                    "2026-09-14T10:00:50.000000+00:00",
+                    500,
+                ),
+                sample(
+                    "a/ingest",
+                    "rows_upserted",
+                    "2026-09-14T10:01:00.000000+00:00",
+                    700,
+                ),
+                // A lone sample is a point, not a slope.
+                sample(
+                    "a/ingest",
+                    "api_requests",
+                    "2026-09-14T10:01:00.000000+00:00",
+                    9,
+                ),
+            ],
+            ..Default::default()
+        };
+        let by = progress_by_step(&snap, "2026-09-14T10:03:00.000000+00:00");
+        let a = &by["a/ingest"];
+        assert_eq!(a.metrics["rows_upserted{table=t}"], 700);
+        assert_eq!(a.rates.get("rows_upserted"), Some(&20.0), "{:?}", a.rates);
+        assert!(!a.rates.contains_key("api_requests"));
+        assert_eq!(
+            a.progress_age_secs,
+            Some(120),
+            "two minutes since the metric moved"
+        );
+        assert_eq!(a.log_age_secs, Some(10), "but it logged ten seconds ago");
+        let b = &by["b/ingest"];
+        assert_eq!(
+            (b.progress_age_secs, b.log_age_secs),
+            (None, None),
+            "not running"
+        );
+    }
 
     fn fringe_of(text: &str) -> Vec<String> {
         let checked = datalib_dag::config::check_text(text);

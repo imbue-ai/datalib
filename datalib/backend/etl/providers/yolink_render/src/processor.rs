@@ -44,17 +44,10 @@ impl RenderProcessor for YolinkRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::parse::{parse, Parsed};
-        use crate::render::render::{cursor_params, render_all};
+        use crate::render::render::render_all;
 
-        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        let cursor = datalib_etl::render_cursor::read_for_params(&cursor_path, &cursor_params())
-            .with_context(|| format!("read yolink render cursor {}", cursor_path.display()))?;
-
-        match parse(
-            &self.raw_path,
-            cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-        )
-        .with_context(|| format!("yolink parse {}", self.raw_path.display()))?
+        match parse(&self.raw_path, ctx.raw_cursor)
+            .with_context(|| format!("yolink parse {}", self.raw_path.display()))?
         {
             // The whole store is one document, so an unchanged HEAD means
             // an unchanged page — nothing was appended, nothing to draw.
@@ -65,12 +58,16 @@ impl RenderProcessor for YolinkRender {
                     head = %head,
                     "raw store HEAD unchanged since last render",
                 );
+                ctx.consumed(&head);
                 Ok(format!("up to date at {head}"))
             }
             Parsed::Fresh(parsed) => {
                 let mut on_doc = |md| ctx.emit_doc(md);
                 let s = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
                     .context("yolink render_all")?;
+                if let Some(head) = parsed.head.as_deref() {
+                    ctx.consumed(head);
+                }
                 Ok(format!(
                     "devices={} series={} points={} plots={}",
                     s.devices, s.series, s.points, s.plots,

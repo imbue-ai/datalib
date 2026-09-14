@@ -4,12 +4,11 @@
 use std::path::Path;
 
 use datalib_etl::progress::Progress;
-use datalib_etl::render_cursor;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_yolink::ingest::schema_raw::{YolinkDeviceRow, YolinkReadingRow};
 use datalib_etl_yolink::ingest::{db_path_for, RawDb};
 use datalib_etl_yolink_render::render::parse::{parse, Parsed};
-use datalib_etl_yolink_render::render::render::{cursor_params, document_uuid, render_all};
+use datalib_etl_yolink_render::render::render::{document_uuid, render_all};
 use sqlx::sqlite::SqlitePool;
 
 const STANZA: &str = "yolink";
@@ -51,28 +50,28 @@ async fn seed(pool: &SqlitePool, rows: &[(&str, &str, i64, f64)], devices: &[(&s
 }
 
 /// Run the render processor's inner loop the way `processor.rs` does:
-/// read the cursor, parse, and render only when the store moved.
-/// Returns the emitted documents (empty when the render was skipped).
-fn render_once(raw_path: &Path, root: &Path) -> Vec<RenderedMarkdown> {
-    let cursor_path = render_cursor::cursor_path(root, STANZA);
-    let cursor = render_cursor::read_for_params(&cursor_path, &cursor_params()).unwrap();
+/// parse from the cursor the previous pass handed back, and render only
+/// when the store moved. Returns the emitted documents (empty when the
+/// render was skipped) and the commit the pass consumed — what the render
+/// step would record as the cursor.
+fn render_once(
+    raw_path: &Path,
+    root: &Path,
+    cursor: Option<&str>,
+) -> (Vec<RenderedMarkdown>, Option<String>) {
     let mut emitted = Vec::new();
-    match parse(
-        raw_path,
-        cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-    )
-    .unwrap()
-    {
-        Parsed::UpToDate { .. } => {}
+    let head = match parse(raw_path, cursor).unwrap() {
+        Parsed::UpToDate { head } => Some(head),
         Parsed::Fresh(parsed) => {
             let mut on_doc = |md: RenderedMarkdown| {
                 emitted.push(md);
                 Ok(())
             };
             render_all(&parsed, root, STANZA, &Progress::noop(), &mut on_doc).unwrap();
+            parsed.head.clone()
         }
-    }
-    emitted
+    };
+    (emitted, head)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -115,7 +114,7 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
     .await;
 
     // ---- first render -------------------------------------------------
-    let emitted = render_once(&raw_path, root);
+    let (emitted, cursor) = render_once(&raw_path, root, None);
     assert_eq!(emitted.len(), 1, "the whole store renders as one document");
     let doc = &emitted[0];
     assert_eq!(doc.markdown_uuid, document_uuid(STANZA));
@@ -208,16 +207,9 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
     let md_1 = md.clone();
 
     // ---- second render, nothing appended ------------------------------
-    let cursor = render_cursor::read(&render_cursor::cursor_path(root, STANZA))
-        .unwrap()
-        .expect("cursor written after a successful render");
-    assert_eq!(
-        cursor.params,
-        Some(cursor_params()),
-        "the cursor must record the render version so a bump re-renders"
-    );
-
-    let emitted = render_once(&raw_path, root);
+    let cursor = cursor.expect("a successful render pins the commit it consumed");
+    let (emitted, cursor_2) = render_once(&raw_path, root, Some(&cursor));
+    assert_eq!(cursor_2.as_deref(), Some(cursor.as_str()));
     assert!(
         emitted.is_empty(),
         "HEAD did not move, so nothing should have been rendered"
@@ -235,7 +227,12 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
         &[],
     )
     .await;
-    let emitted = render_once(&raw_path, root);
+    let (emitted, cursor_3) = render_once(&raw_path, root, Some(&cursor));
+    assert_ne!(
+        cursor_3,
+        Some(cursor),
+        "the store moved, so the cursor must too"
+    );
     assert_eq!(emitted.len(), 1, "an appended reading must re-render");
     assert_ne!(
         emitted[0].source_fingerprint, fingerprint_1,
@@ -289,7 +286,7 @@ async fn an_empty_store_renders_a_page_without_plots() {
     let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
     seed(db.pool(), &[], &[("main_fridge", "temperature_humidity")]).await;
 
-    let emitted = render_once(&raw_path, root);
+    let (emitted, _) = render_once(&raw_path, root, None);
     assert_eq!(emitted.len(), 1);
     let md = std::fs::read_to_string(root.join(STANZA).join("render_markdown/index.md")).unwrap();
     assert!(md.contains("nothing to plot"), "{md}");

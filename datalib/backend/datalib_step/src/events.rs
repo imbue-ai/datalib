@@ -15,6 +15,8 @@ use datalib_etl::progress::{Progress, ProgressSink};
 pub struct OutputClaim {
     pub path: String,
     pub version: String,
+    /// Rows the output gained since the last seal, when counted.
+    pub rows: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -57,6 +59,9 @@ impl Emitter {
                 let mut m = serde_json::Map::new();
                 m.insert("path".into(), o.path.clone().into());
                 m.insert("version".into(), o.version.clone().into());
+                if let Some(rows) = o.rows {
+                    m.insert("rows".into(), rows.into());
+                }
                 serde_json::Value::Object(m)
             })
             .collect();
@@ -117,6 +122,14 @@ impl ProgressSink for EmitterSink {
         self.emitter.event(&Event::Checkpoint {
             step: self.step.clone(),
             version: version.to_string(),
+            rows: None,
+        });
+    }
+    fn checkpoint_rows(&self, version: &str, rows: u64) {
+        self.emitter.event(&Event::Checkpoint {
+            step: self.step.clone(),
+            version: version.to_string(),
+            rows: Some(rows),
         });
     }
     fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {

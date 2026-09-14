@@ -9,9 +9,8 @@ use datalib_etl::blob_cas::BlobBundle;
 
 use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
-use datalib_etl::render_cursor;
 use datalib_etl_chat_common::{
-    render::{RenderProfile, RenderSummary, ENTITY_KIND_CONVERSATION},
+    render::{RenderProfile, ENTITY_KIND_CONVERSATION},
     NormalizedChat,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -44,6 +43,9 @@ fn profile() -> RenderProfile {
 /// doltlite db for the dolt_diff render-cursor scan. Attachment bytes
 /// arrive pre-loaded in `blobs_by_chat`, which parse hydrates from the
 /// sibling CAS in the same call that built `chats`.
+///
+/// Returns the raw commit the render consumed — what the render step
+/// records as the cursor — or `None` when there was no store to pin.
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
     chats: &[NormalizedChat],
@@ -52,25 +54,22 @@ pub fn render_all(
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
-    _prior_fingerprints: &HashMap<String, String>,
+    cursor: Option<&str>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     // Chat JIDs the diff named that no `chat` row still carries. The
     // scan happens in here rather than in `parse`, so the caller learns
     // about them the same way it learns about documents.
     on_chat_gone: &mut dyn FnMut(&str) -> Result<()>,
-) -> Result<RenderSummary> {
-    // Incremental gate: if a render cursor exists at the root of this
-    // source's render directory, ask doltlite which chats changed
-    // between that hash and HEAD. Skip the rest. Cold start (no cursor)
-    // or no doltlite db on disk renders every chat.
-    let cursor_path = render_cursor::cursor_path(out_dir, source_id);
-    let prior = render_cursor::read_for_params(&cursor_path, &render_cursor::no_params())?;
+) -> Result<Option<String>> {
+    // Incremental gate: with a cursor, ask doltlite which chats changed
+    // between that hash and HEAD and skip the rest. Cold start (no
+    // cursor) or no doltlite db on disk renders every chat.
     let db_path = doltlite_raw::db_path_for(raw_dir);
 
     let (filtered_owned, new_head): (Option<Vec<NormalizedChat>>, Option<String>) = if db_path
         .exists()
     {
-        let last = prior.as_ref().map(|c| c.last_rendered_hash.as_str());
+        let last = cursor;
         let scan = tokio::task::block_in_place(|| match tokio::runtime::Handle::try_current() {
             Ok(h) => h.block_on(scan_diff(&db_path, last)),
             Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(&db_path, last)),
@@ -113,7 +112,7 @@ pub fn render_all(
     let to_render: &[NormalizedChat] = filtered_owned.as_deref().unwrap_or(chats);
 
     let empty_fingerprints: HashMap<String, String> = HashMap::new();
-    let summary = datalib_etl_chat_common::render::render_all(
+    datalib_etl_chat_common::render::render_all(
         &profile(),
         to_render,
         out_dir,
@@ -123,11 +122,7 @@ pub fn render_all(
         &empty_fingerprints,
         on_doc_complete,
     )?;
-
-    if let Some(head) = new_head {
-        render_cursor::write(&cursor_path, &head, &render_cursor::no_params())?;
-    }
-    Ok(summary)
+    Ok(new_head)
 }
 
 /// What changed between two commits, as chat JIDs: the ones HEAD still
@@ -401,25 +396,18 @@ mod tests {
         pool.close().await;
 
         // First render — cold start (no cursor). Both chats should
-        // render, cursor file should appear.
-        let (docs1, _) = render_capture(&raw_dir, &out_dir).await;
+        // render, and the pass hands back the commit it consumed.
+        let (docs1, _, first_cursor) = render_capture(&raw_dir, &out_dir, None).await;
         assert_eq!(
             docs1.len(),
             2,
             "first render should emit one doc per chat, got {docs1:?}"
         );
-        let cursor_path = render_cursor::cursor_path(&out_dir, "test");
-        assert!(
-            cursor_path.exists(),
-            "cursor file missing after first render"
-        );
-        let first_cursor = render_cursor::read(&cursor_path)
-            .expect("read cursor")
-            .expect("cursor populated");
+        let first_cursor = first_cursor.expect("first render pins the commit it consumed");
 
         // Second render — no DB changes since first cursor. dolt_diff
         // should report zero changed chats → zero docs rendered.
-        let (docs2, _) = render_capture(&raw_dir, &out_dir).await;
+        let (docs2, _, _) = render_capture(&raw_dir, &out_dir, Some(&first_cursor)).await;
         assert!(
             docs2.is_empty(),
             "no-op rerun should render zero docs, got {docs2:?}"
@@ -441,7 +429,8 @@ mod tests {
         pool.close().await;
 
         // Third render — only alice's chat should be in the changed set.
-        let (docs3, gone3) = render_capture(&raw_dir, &out_dir).await;
+        let (docs3, gone3, third_cursor) =
+            render_capture(&raw_dir, &out_dir, Some(&first_cursor)).await;
         assert_eq!(
             docs3.len(),
             1,
@@ -456,11 +445,9 @@ mod tests {
         );
 
         // Cursor advanced past the previous HEAD.
-        let third_cursor = render_cursor::read(&cursor_path)
-            .expect("read cursor 3")
-            .expect("cursor populated 3");
+        let third_cursor = third_cursor.expect("cursor populated 3");
         assert_ne!(
-            third_cursor.last_rendered_hash, first_cursor.last_rendered_hash,
+            third_cursor, first_cursor,
             "cursor should advance after a committed change"
         );
 
@@ -483,7 +470,7 @@ mod tests {
             .expect("doltlite returned no hash on delete");
         pool.close().await;
 
-        let (docs4, gone4) = render_capture(&raw_dir, &out_dir).await;
+        let (docs4, gone4, _) = render_capture(&raw_dir, &out_dir, Some(&third_cursor)).await;
         assert!(
             docs4.is_empty(),
             "a deletion re-renders nothing, got {docs4:?}"
@@ -523,10 +510,16 @@ mod tests {
         .expect("insert message");
     }
 
-    /// Rendered markdown uuids, and the chat JIDs reported gone.
-    async fn render_capture(raw_dir: &Path, out_dir: &Path) -> (Vec<String>, Vec<String>) {
+    /// Rendered markdown uuids, the chat JIDs reported gone, and the
+    /// commit the pass consumed.
+    async fn render_capture(
+        raw_dir: &Path,
+        out_dir: &Path,
+        cursor: Option<&str>,
+    ) -> (Vec<String>, Vec<String>, Option<String>) {
         let raw_dir = raw_dir.to_path_buf();
         let out_dir = out_dir.to_path_buf();
+        let cursor = cursor.map(str::to_string);
         // parse + render are sync but call into tokio::task::block_in_place,
         // so we have to push the whole thing off the test's reactor thread.
         tokio::task::spawn_blocking(move || {
@@ -534,7 +527,6 @@ mod tests {
             let mut emitted: Vec<String> = Vec::new();
             let mut gone: Vec<String> = Vec::new();
             let progress = datalib_etl::progress::Progress::noop();
-            let prior: HashMap<String, String> = HashMap::new();
             let mut on_complete =
                 |md: datalib_etl_render::grid_index::RenderedMarkdown| -> Result<()> {
                     emitted.push(md.markdown_uuid);
@@ -544,19 +536,19 @@ mod tests {
                 gone.push(jid.to_string());
                 Ok(())
             };
-            render_all(
+            let consumed = render_all(
                 &parsed.chats,
                 &parsed.blobs_by_chat,
                 &raw_dir,
                 &out_dir,
                 "test",
                 &progress,
-                &prior,
+                cursor.as_deref(),
                 &mut on_complete,
                 &mut on_chat_gone,
             )
             .expect("render_all");
-            (emitted, gone)
+            (emitted, gone, consumed)
         })
         .await
         .expect("spawn_blocking joined")

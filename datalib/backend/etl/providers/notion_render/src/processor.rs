@@ -38,17 +38,8 @@ impl RenderProcessor for NotionRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render::render_notion};
-        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, ctx.name);
-        let cursor = datalib_etl::render_cursor::read_for_params(
-            &cursor_path,
-            &datalib_etl::render_cursor::no_params(),
-        )
-        .with_context(|| format!("read notion render cursor {}", cursor_path.display()))?;
-        let parsed = parse_api_dir(
-            &self.raw_path,
-            cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-        )
-        .with_context(|| format!("notion parse {}", self.raw_path.display()))?;
+        let parsed = parse_api_dir(&self.raw_path, ctx.raw_cursor)
+            .with_context(|| format!("notion parse {}", self.raw_path.display()))?;
         // Documents whose source is gone. They go before the render, so a
         // run interrupted afterwards has already dropped them rather than
         // leaving a document pointing at a page Notion no longer has.
@@ -70,6 +61,9 @@ impl RenderProcessor for NotionRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         render_notion(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
             .context("render_notion")?;
+        if let Some(head) = parsed.scan.new_head.as_deref() {
+            ctx.consumed(head);
+        }
         Ok(if dropped == 0 {
             "rendered".into()
         } else {

@@ -314,7 +314,9 @@ transaction leaves a readable state, so any commit is safe — rather
 than patching each path. Items 4 and 5 below in particular are
 replaced: the interrupt hook and the rescue are *right* to commit
 once nothing wipes at the start. Kept as the record of what the audit
-found.*
+found. Of the findings, 1.1–1.4, 1.6 and 2.4 are closed by the render
+side of that plan (built the same day); 1.5 by its prose; 2.1–2.3 and
+2.5 wait on its ingest side.*
 
 1. **Cursor into the render store, written in the final commit.**
    Closes 1.3 (structurally, where today it is safe by ordering) and

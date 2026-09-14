@@ -1,6 +1,6 @@
 # Logs and metrics: one store, written by the runner
 
-**Status: agreed plan (2026-09-11), being built.** [Order of work](#order-of-work)
+**Status: agreed plan (2026-09-11), built in full (2026-09-14).** [Order of work](#order-of-work)
 is the checklist; update it as slices land, and treat anything it still
 lists as unbuilt. Per [`AGENTS.md`](../../../AGENTS.md), where this file
 says "today" that was checked against `5f589a59`; where it says "will",
@@ -255,11 +255,30 @@ Each slice is one PR that leaves the tree green.
    run the step took part in, not only the last; the worker's failure
    tail is checked end to end against the real runner
    (`worker_failure_tail_test`).
-3. **Queue depth between steps** — `rows` on `checkpoint`, the
-   runner's per-consumer sum, `queued` published for consumers.
-4. **Rates and flatlines** — `metric_samples` drawn as rates; a step
-   whose `metrics` stopped moving while `log` did not, flagged. Closes
-   the "progress-flatline" item of #136.
+3. ~~**Queue depth between steps**~~ **Done.** `rows` on `checkpoint`
+   and on each `outcome` output; `QueueLedger` in `scheduler.rs` keeps,
+   per consumer and producer, the seals not yet read and publishes
+   `queued{from=<producer>}` — rising on a seal, drained when a pass
+   that read up to that version completes, cleared when the consumer
+   is found up to date. Two rules the test found: a re-announced seal
+   counts once, and a checkpoint arriving after the producer's outcome
+   is ignored (it would otherwise rewind the output's version — a
+   hazard that predates this slice). Render and the raw store count
+   rows at each seal; render's outcome carries its last segment, the
+   download's does not yet (the count lives inside the session that
+   sealed it). The Activity chip sums every `queued` series and shows
+   the per-producer breakdown on hover.
+4. ~~**Rates and flatlines**~~ **Done.** The snapshot carries the two
+   newest samples per series and each step's last log time;
+   `progress_by_step` in `http/src/lib.rs` derives a per-second rate
+   per series (slope of those two — one sample is a point, not a
+   line) and, for a running step, `progress_age_secs` (since any
+   metric moved) and `log_age_secs`. The Activity cell
+   (`ui/src/config/activity.ts`) shows a rate beside a moving series
+   and, past a minute without a metric moving, a "no progress" chip
+   whose hover says whether the step is still logging — #136's "busy
+   but not advancing" — or silent. `metric_samples` is still bounded
+   only by run retention; the plan's open question stands.
 
 ## Open questions
 

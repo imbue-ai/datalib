@@ -33,6 +33,15 @@ pub trait RenderProcessor: Send + Sync {
     fn render_version(&self) -> Option<u32> {
         None
     }
+
+    /// The knobs that shape this processor's output — a period, a label
+    /// filter. The driver stores them beside the cursor and, when they
+    /// differ from the stored ones, renders every bucket again rather
+    /// than only the changed ones. A processor with no knobs returns the
+    /// empty object, which never differs from itself.
+    fn render_params(&self) -> serde_json::Value {
+        serde_json::json!({})
+    }
 }
 
 /// Whether a render pass actually walked its source's documents.
@@ -109,11 +118,17 @@ pub struct RenderCtx<'a> {
     /// Per-source progress hook.
     pub progress: &'a Progress,
     /// Prior-run per-markdown fingerprints, for fingerprint-driven
-    /// incremental skips.
+    /// incremental skips. Empty on a run that renders everything.
     pub prior_fingerprints: &'a HashMap<String, String>,
+    /// The raw-store commit the previous render consumed: the `from_ref`
+    /// for this run's `dolt_diff` scan. `None` means render everything —
+    /// there is no earlier render, or the driver wants every bucket again
+    /// (renderer version or params changed).
+    pub raw_cursor: Option<&'a str>,
     emit: DocSink<'a>,
     remove: RemoveSink<'a>,
     retain: RetainSink<'a>,
+    consumed: Mutex<Option<String>>,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -124,6 +139,7 @@ impl<'a> RenderCtx<'a> {
         now: &'a str,
         progress: &'a Progress,
         prior_fingerprints: &'a HashMap<String, String>,
+        raw_cursor: Option<&'a str>,
         on_doc: &'a mut DocCallback<'a>,
         on_remove: &'a mut RemoveCallback<'a>,
         on_retain: &'a mut RetainCallback<'a>,
@@ -134,6 +150,7 @@ impl<'a> RenderCtx<'a> {
             now,
             progress,
             prior_fingerprints,
+            raw_cursor,
             emit: DocSink {
                 cb: Mutex::new(on_doc),
             },
@@ -143,12 +160,26 @@ impl<'a> RenderCtx<'a> {
             retain: RetainSink {
                 cb: Mutex::new(on_retain),
             },
+            consumed: Mutex::new(None),
         }
     }
 
     pub fn emit_doc(&self, md: RenderedMarkdown) -> Result<()> {
         let mut cb = self.emit.cb.lock().unwrap();
         (cb)(md)
+    }
+
+    /// This run pinned `raw_commit` and rendered from it. The driver
+    /// records it as the cursor in the run's final transaction, and a run
+    /// that rendered everything treats it as proof the walk was complete.
+    /// A processor that never read a raw store — none on disk, nothing
+    /// committed — says nothing, and the cursor stays where it was.
+    pub fn consumed(&self, raw_commit: &str) {
+        *self.consumed.lock().unwrap() = Some(raw_commit.to_string());
+    }
+
+    pub fn consumed_commit(&self) -> Option<String> {
+        self.consumed.lock().unwrap().clone()
     }
 
     /// This conversation is no longer in the raw store: drop every document
@@ -223,6 +254,7 @@ mod retain_tests {
             "2026-01-01T00:00:00+00:00",
             &progress,
             &empty,
+            None,
             &mut on_doc,
             &mut on_remove,
             &mut on_retain,

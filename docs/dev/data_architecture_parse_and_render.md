@@ -266,16 +266,18 @@ re-implementation:
 - **No atomicity.** §2 above admits this outright: a SIGKILL mid-write
   leaves a `.md` whose fingerprint does not match its body. A commit
   fixes that by construction.
-- **Deletion is expressible.** The two known gaps — orphaned documents
-  after a render-param change (§5), and the whole-tree `rm -rf` in
-  `discard_tree_from_an_older_renderer` when a renderer re-keys its
-  documents — are both "you cannot update a file tree in place when
-  identity moves." `DELETE … WHERE` is the answer to both.
+- **Deletion is expressible.** The two gaps a file tree had — orphaned
+  documents after a render-param change (§5), and the whole-tree
+  `rm -rf` a renderer that re-keyed its documents used to need — were
+  both "you cannot update a file tree in place when identity moves."
+  `DELETE … WHERE` is the answer to both, and both are closed now: a
+  version or param change renders everything in place and sweeps what
+  the walk did not produce.
 - **The step's output version comes free.** A doltlite artifact versions
-  as its commit hash, so the runner never content-hashes anything.
-  `rendered_tree_version` exists today only to avoid that hashing, and
-  [#225](pipeline_dag_architecture.md) is what happens when the
-  avoidance is missed: forty seconds of hashing, every run, to version a
+  as its commit hash, so the runner never content-hashes anything. The
+  render step reports its store's HEAD, and
+  [#225](pipeline_dag_architecture.md) is what happens when a step
+  reports nothing: forty seconds of hashing, every run, to version a
   step that had already been skipped.
 
 It also simplifies [§4](#4-data-quality-rules)'s problem sink rather
@@ -723,8 +725,9 @@ Render skips what it can, by four mechanisms:
 
 - **What changed since last render** —
   [dolt_diff supersedes per-bucket fingerprints](data_architecture_ingestion.md#dolt_diff-supersedes-per-bucket-fingerprints).
-  The per-source cursor stamps the doltlite HEAD into
-  `_render_cursor.json`; the next run diffs from it.
+  The render store's `render_cursor` row names the raw commit the last
+  render consumed; the next run diffs from it. The render step driver
+  writes the row in the same transaction as the run's last work.
 - **Whether a document needs re-loading** — `source_cursors` in the
   index database names the store commit `grid_index` last consumed, and
   the `source_fingerprint` on the `markdowns` row settles anything the
@@ -735,24 +738,33 @@ Render skips what it can, by four mechanisms:
 
 ### The same problem on the render side
 
-Render has its own cursor (`_render_cursor.json`, see
-[`render_cursor`](../../datalib/backend/etl/src/render_cursor.rs)) and the
-same failure mode: a render param only reaches documents that the
-upstream diff happens to surface, so widening `only_render_labels`
-renders nothing new and changing `period` re-buckets only the chats that
-moved.
+Render has its own cursor (the `render_cursor` row in the render
+store, `datalib_schema::render_cursor::RenderCursorRow`) and the same
+failure mode: a render param only reaches documents that the upstream
+diff happens to surface, so widening `only_render_labels` renders
+nothing new and changing `period` re-buckets only the chats that moved.
 
-The cursor therefore records the render params too, and
-`read_for_params` drops it when they differ. Render invalidates
-*wholesale* where download reacts proportionally — it's local work over
-an on-disk store, so there's no rate limit to ration and the simpler
-rule is easier to trust.
+The cursor therefore records the render params too — each processor
+declares its knobs through `RenderProcessor::render_params` — and when
+they differ the driver renders every bucket again, ignoring the
+fingerprints, and keeps the range. Render re-renders *wholesale* where
+download reacts proportionally — it's local work over an on-disk
+store, so there's no rate limit to ration and the simpler rule is
+easier to trust. A renderer version bump takes the same path.
 
-**Known gap:** nothing prunes `render_markdown/`. A re-render under new
-params writes the new documents but leaves any that changed identity
-(notably a different `period` bucketing) beside them as orphans, and
-they stay in the grid index. Fixing that needs a pruning pass that knows
-the full expected document set.
+What such a run did not produce is swept at the end: every processor
+reported the raw commit it read (`RenderCtx::consumed`), so the walk
+was complete, and a document the store holds that the walk did not
+emit — a chat re-bucketed under a different `period`, a uuid minted by
+the old recipe — is gone. The sweep, the storage report and the cursor
+land in one transaction, and the deletions reach the grid index
+through the store's own `dolt_diff`. A run in which a processor read
+no store (none on disk, nothing committed) sweeps nothing: it said
+nothing about what should exist. The remaining gap is the ordinary
+incremental run: a raw row that changed in a `global_fanout_tables`
+table renders everything with the fingerprints on and asks nothing
+about removals — `docs/dev/plans/render_inputs.md` is the design that
+closes it.
 
 ### Render-side partial-progress visibility
 

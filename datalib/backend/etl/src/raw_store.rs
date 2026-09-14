@@ -157,7 +157,12 @@ impl SealState {
     async fn seal(&self) -> Result<()> {
         // Counted as done whatever happens below, so a store that cannot
         // commit is retried on the next cadence rather than on every row.
-        self.checkpointer.lock().unwrap().sealed();
+        let rows = {
+            let mut c = self.checkpointer.lock().unwrap();
+            let pending = c.pending();
+            c.sealed();
+            pending
+        };
         // **Blobs before entities, always.** An entity names a blob by its
         // blake3, so sealing entities first admits a reader pinned at that
         // commit seeing a row whose bytes are not yet committed — a dangling
@@ -173,7 +178,7 @@ impl SealState {
         // `None` means there was nothing dirty after all; no version moved,
         // so there is nothing to announce.
         if let Some(hash) = sealed {
-            self.progress.checkpoint(&hash);
+            self.progress.checkpoint_rows(&hash, rows);
         }
         Ok(())
     }

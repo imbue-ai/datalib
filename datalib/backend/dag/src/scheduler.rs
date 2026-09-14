@@ -297,6 +297,7 @@ impl Runner {
         let mut final_pass_owed: Vec<bool> = vec![false; n];
         let mut early: Vec<bool> = vec![false; n];
         let mut warned_not_streaming: Vec<bool> = vec![false; n];
+        let mut queue = QueueLedger::new(n);
         // Seeded from the spec (how an in-process step declares it) and
         // overwritten by a `Capabilities` signal (how a subprocess does).
         let mut streams: Vec<bool> = graph.steps.iter().map(|s| s.streams_output).collect();
@@ -328,6 +329,7 @@ impl Runner {
                     false,
                 ) {
                     Decision::Skip { status: st } => {
+                        queue.cleared(graph, i, &*self.sink);
                         // The output keeps its last-recorded version,
                         // and if there isn't one we say so. There is
                         // deliberately no fallback here: hashing a tree
@@ -458,7 +460,7 @@ impl Runner {
                 }
                 Some(signal) = checkpoints.recv() => {
                     'checkpoint: {
-                        let (step, version) = match signal {
+                        let (step, version, rows) = match signal {
                             crate::step::StepSignal::Capabilities {
                                 step,
                                 streams_output,
@@ -470,13 +472,23 @@ impl Runner {
                                 }
                                 break 'checkpoint;
                             }
-                            crate::step::StepSignal::Checkpoint { step, version } => {
-                                (step, version)
-                            }
+                            crate::step::StepSignal::Checkpoint {
+                                step,
+                                version,
+                                rows,
+                            } => (step, version, rows),
                         };
                         let Some(p) = graph.steps.iter().position(|st| st.id == step) else {
                             break 'checkpoint;
                         };
+                        // A seal announced by a step that has since
+                        // finished is stale: its stdout was still being
+                        // drained when its outcome landed. Applying it
+                        // would rewind the output's version to before
+                        // the outcome and re-queue rows already read.
+                        if status[p].is_some() {
+                            break 'checkpoint;
+                        }
                         // The producer's output is readable up to here.
                         // Recorded exactly the way a completed pass records
                         // it, which is what lets the consumer's ordinary
@@ -493,8 +505,9 @@ impl Runner {
                         // work if both kinds of version are comparable.
                         let qualified = format!("{}:{}", graph.fingerprints[p], version);
                         let moved = versions.get(&out) != Some(&qualified);
-                        versions.insert(out.clone(), qualified);
+                        versions.insert(out.clone(), qualified.clone());
                         changed_now.insert(out, moved);
+                        queue.sealed(graph, p, &qualified, rows, &*self.sink);
                         // The event carries what the step said, not the
                         // qualified form: the qualification is the runner's
                         // bookkeeping, and a reader of the stream should see
@@ -502,6 +515,7 @@ impl Runner {
                         self.sink.emit(&Event::Checkpoint {
                             step: step.clone(),
                             version,
+                            rows,
                         });
                         if !streams[p] {
                             // Sealed a sink it says nobody may read early.
@@ -575,7 +589,20 @@ impl Runner {
                                 changed += moved as usize;
                                 versions.insert(path.clone(), v.clone());
                                 changed_now.insert(path.clone(), moved);
+                                // Finishing is the last seal: whatever
+                                // the outcome says this segment added
+                                // goes on the consumers' queues.
+                                let rows = outcome
+                                    .outputs
+                                    .iter()
+                                    .find(|o| o.path.as_str() == path)
+                                    .and_then(|o| o.rows);
+                                queue.sealed(graph, i, v, rows, &*self.sink);
                             }
+                            // This pass read its inputs as of `consumed`,
+                            // so everything sealed up to there is off
+                            // this step's queue.
+                            queue.consumed(graph, i, &consumed, &status, &*self.sink);
                             // What this pass was dispatched against, not what
                             // is current now -- see `consumed`.
                             let input_versions = consumed.clone().into_iter().collect();
@@ -1059,6 +1086,110 @@ fn resolve_outputs(
     Ok(vec![(path.to_string(), format!("{fingerprint}:{v}"))])
 }
 
+/// What each consumer has not read yet, per producer: the seals (a
+/// checkpoint, or the producer finishing) recorded after the version the
+/// consumer last read, with the rows each added. Published as the
+/// consumer's `queued{from=<producer>}` metric — the S of USE, kept by
+/// the runner from what producers say, so no store is opened to measure
+/// it.
+struct QueueLedger {
+    /// Per consumer, per producer index: seals not yet consumed.
+    pending: Vec<BTreeMap<usize, Vec<Seal>>>,
+    /// Per consumer, per producer: the version last put on the queue,
+    /// consumed or not. A producer re-announces a seal until its
+    /// consumer has run (a checkpoint arriving mid-pass is dropped by
+    /// design), and the repeat must not count its rows twice.
+    last_seen: Vec<BTreeMap<usize, String>>,
+}
+
+/// One seal as the ledger keeps it: the qualified version, and the rows
+/// it added if the producer counted.
+type Seal = (String, Option<u64>);
+
+impl QueueLedger {
+    fn new(n: usize) -> Self {
+        Self {
+            pending: vec![BTreeMap::new(); n],
+            last_seen: vec![BTreeMap::new(); n],
+        }
+    }
+
+    fn sealed(
+        &mut self,
+        graph: &Graph,
+        producer: usize,
+        qualified: &str,
+        rows: Option<u64>,
+        sink: &dyn EventSink,
+    ) {
+        for &c in &graph.dependents[producer] {
+            if self.last_seen[c].get(&producer).map(String::as_str) == Some(qualified) {
+                continue;
+            }
+            self.last_seen[c].insert(producer, qualified.to_string());
+            self.pending[c]
+                .entry(producer)
+                .or_default()
+                .push((qualified.to_string(), rows));
+            self.publish(graph, c, producer, sink);
+        }
+    }
+
+    /// A pass of `consumer` finished having read its inputs as of
+    /// `consumed`: every seal up to the version it read is off the queue.
+    /// A version not among the seals is one recorded before this ledger
+    /// began (a previous run's), or a producer that finished without a
+    /// row count; either way, if the producer is done there is nothing
+    /// more to come.
+    fn consumed(
+        &mut self,
+        graph: &Graph,
+        consumer: usize,
+        consumed: &HashMap<String, String>,
+        status: &[Option<StepStatus>],
+        sink: &dyn EventSink,
+    ) {
+        let producers: Vec<usize> = self.pending[consumer].keys().copied().collect();
+        for p in producers {
+            let out = graph.steps[p].output().as_str().to_string();
+            let Some(read) = consumed.get(&out) else {
+                continue;
+            };
+            let seals = self.pending[consumer].entry(p).or_default();
+            match seals.iter().position(|(v, _)| v == read) {
+                Some(idx) => {
+                    seals.drain(..=idx);
+                }
+                None if status[p].is_some() => seals.clear(),
+                None => {}
+            }
+            self.publish(graph, consumer, p, sink);
+        }
+    }
+
+    /// A consumer found up to date read everything there was.
+    fn cleared(&mut self, graph: &Graph, consumer: usize, sink: &dyn EventSink) {
+        let producers: Vec<usize> = self.pending[consumer].keys().copied().collect();
+        for p in producers {
+            self.pending[consumer].insert(p, Vec::new());
+            self.publish(graph, consumer, p, sink);
+        }
+    }
+
+    fn publish(&self, graph: &Graph, consumer: usize, producer: usize, sink: &dyn EventSink) {
+        let value: u64 = self.pending[consumer]
+            .get(&producer)
+            .map(|seals| seals.iter().map(|(_, n)| n.unwrap_or(0)).sum())
+            .unwrap_or(0);
+        sink.emit(&Event::Metric {
+            step: graph.steps[consumer].id.clone(),
+            name: "queued".to_string(),
+            labels: BTreeMap::from([("from".to_string(), graph.steps[producer].id.clone())]),
+            value: value as i64,
+        });
+    }
+}
+
 /// Queue a producer's consumers for an *early* pass.
 ///
 /// Called from the two places a producer can make one worth running: it
@@ -1409,6 +1540,98 @@ mod tests {
             }),
         )
         .input(input)
+    }
+
+    /// The S of USE, from what the producer says: each seal's rows go on
+    /// the consumer's queue, and each pass the consumer completes takes
+    /// off everything up to the version it read. The sequence is the
+    /// assertion — it has to rise on a seal and fall to zero once the
+    /// consumer has caught up, and end at zero when the run does.
+    #[tokio::test]
+    async fn a_consumers_queue_rises_on_seals_and_drains_as_it_reads() {
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+        // Like `streaming_producer`, but each seal says it added 10 rows,
+        // and the final outcome says its last segment added 5.
+        let producer = {
+            let passes = passes.clone();
+            StepSpec::new(
+                "slack/raw",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let passes = passes.clone();
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        for k in 0..2u32 {
+                            std::fs::write(dir.join("data.txt"), format!("batch{k}")).unwrap();
+                            while passes.load(Ordering::SeqCst) < k + 1 {
+                                ctx.checkpoint_rows(&format!("v{k}"), 10);
+                                tokio::time::sleep(Duration::from_millis(2)).await;
+                            }
+                        }
+                        std::fs::write(dir.join("data.txt"), "final").unwrap();
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "final").with_rows(5)],
+                        })
+                    }
+                }),
+            )
+            .streams_output()
+        };
+        let graph = Graph::build(vec![
+            producer,
+            counting_consumer("unified_index/grid", "slack/raw", passes.clone()),
+        ])
+        .unwrap();
+
+        let rec = Arc::new(Recorder::default());
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = r.run(&graph).await.unwrap();
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+
+        let queued: Vec<i64> = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Metric {
+                    step,
+                    name,
+                    labels,
+                    value,
+                } if step == "unified_index/grid"
+                    && name == "queued"
+                    && labels.get("from").map(String::as_str) == Some("slack/raw") =>
+                {
+                    Some(*value)
+                }
+                _ => None,
+            })
+            .collect();
+        // A seal re-announced while the consumer is mid-pass adds the
+        // same version again only as a metric refresh, so the exact
+        // sequence has repeats; what must hold is the shape.
+        assert!(!queued.is_empty(), "no queued metric was published");
+        assert!(
+            queued.contains(&10),
+            "a seal of 10 rows never showed: {queued:?}"
+        );
+        assert!(
+            queued.contains(&5),
+            "the outcome's last segment of 5 rows never showed: {queued:?}"
+        );
+        assert_eq!(
+            *queued.last().unwrap(),
+            0,
+            "the run ended with rows unread: {queued:?}"
+        );
+        assert!(
+            queued.windows(2).any(|w| w[0] > 0 && w[1] == 0),
+            "the queue never drained after a pass: {queued:?}"
+        );
     }
 
     /// The point of the whole feature: a consumer runs *before* its

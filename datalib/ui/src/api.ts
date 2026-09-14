@@ -446,6 +446,14 @@ export type DagStepProgress = {
   metrics: Record<string, number>;
   // `warn` and `error` log lines so far this run.
   errors: number;
+  // Per series, the change per second between its two newest samples;
+  // absent for a series with fewer than two.
+  rates: Record<string, number>;
+  // For a running step: seconds since any metric moved (since it
+  // started, if none did), and since it last logged. A long progress
+  // age with a short log age is "busy but not advancing".
+  progress_age_secs: number | null;
+  log_age_secs: number | null;
   updated_at_utc: string;
 };
 

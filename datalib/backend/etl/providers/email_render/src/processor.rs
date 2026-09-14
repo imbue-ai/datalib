@@ -50,6 +50,12 @@ impl RenderProcessor for EmailRender {
         Some(crate::render::render::RENDER_VERSION)
     }
 
+    // Both knobs change the rendered output for documents the diff
+    // would never surface, so a change to either re-renders everything.
+    fn render_params(&self) -> serde_json::Value {
+        crate::render::render::render_params(self.outlink, &self.only_render_labels)
+    }
+
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::parse::parse;
         use crate::render::render::render_all;
@@ -64,17 +70,10 @@ impl RenderProcessor for EmailRender {
             return Ok("skipped (no raw db)".into());
         }
 
-        // Two-phase parse driven by the render cursor's commit, identical to
-        // the old registry path; `prior_fingerprints` is intentionally unused
-        // for email (the cursor is the single source of truth).
-        let cursor_path = datalib_etl::render_cursor::cursor_path(ctx.root, &self.name);
-        // Both knobs change the rendered output for documents the diff
-        // would never surface, so a cursor from a different pair has to
-        // go — see `render_cursor::read_for_params`.
-        let render_params =
-            crate::render::render::render_params(self.outlink, &self.only_render_labels);
-        let cursor = datalib_etl::render_cursor::read_for_params(&cursor_path, &render_params)?;
-        let parsed = parse(&db, cursor.as_ref().map(|c| c.last_rendered_hash.as_str()))?;
+        // Two-phase parse driven by the render cursor's commit;
+        // `prior_fingerprints` is intentionally unused for email (the
+        // cursor is the single source of truth).
+        let parsed = parse(&db, ctx.raw_cursor)?;
 
         // Threads the mailbox lost — a JMAP `destroyed`, a Gmail history
         // deletion, or a message gone from a re-ingested mbox.
@@ -93,6 +92,9 @@ impl RenderProcessor for EmailRender {
             ctx.progress,
             &mut on_doc,
         )?;
+        if let Some(head) = parsed.scan.new_head.as_deref() {
+            ctx.consumed(head);
+        }
         Ok(if dropped == 0 {
             "rendered".into()
         } else {

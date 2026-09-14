@@ -12,6 +12,15 @@ declared bucket that was not emitted. The one route the table below
 says this proposal cannot fix — a checkpoint taken mid-wipe — is
 closed by that design, because under it there is no mid-wipe.
 
+**Step 1 of §"Order of work" is built** (2026-09-14, as `one_mode.md`
+items 3, 5 and 6): the cursor is a row in the render store written in
+the run's final transaction, nothing discards the store, a version or
+param change renders everything and sweeps what the walk did not
+produce, and the slack applet reads through `open_reader`. Where the
+text below says the cursor is `_render_cursor.json`, or that a cold
+start deletes nothing, it describes the tree before that. Steps 0 and
+2–7 are untouched.
+
 ## The problem in one paragraph
 
 Incremental render has to answer one question: *given the raw rows that

@@ -176,7 +176,6 @@ by luck, which is how the original claim survived:
 | `grid_rows` / `markdowns` / `edges` **contents** | **yes** |
 | `backend_index.doltlite_db` **file** | no |
 | rendered `.md` trees | yes, except yolink's `index.md` (below) |
-| `_render_cursor.json` | no |
 
 **The table contents are the property worth relying on, and they hold.**
 Dump them (`.mode json`, `SELECT * … ORDER BY 1`) and two independent
@@ -191,13 +190,9 @@ A source can pin its own commit — `yolink-make-fixture` passes
 `--now` through to `dolt_commit --date` — but not those two. This is a
 property of the store format, not a bug to fix here.
 
-Two things leak that instability into files that otherwise would be
+One thing leaks that instability into a file that otherwise would be
 stable:
 
-* **`_render_cursor.json`**, for every stanza: it records
-  `last_render_at` from the local clock and `last_rendered_hash` from
-  the store, both of which move. It is pipeline state that happens to
-  live inside `render_markdown/`, so `tar_qmd.py` sweeps it into `qmd.tar`.
 * **`yolink/render_markdown/index.md`**, in its "Store" section only: the
   page reports the store's HEAD and commit log, which *is* the content —
   a page describing a store legitimately changes when the store's

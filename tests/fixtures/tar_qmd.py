@@ -15,8 +15,8 @@ so callers can extract with `--strip-components=1` to land
 TWO archives come out, and the split is a build-cache decision:
 
   * `qmd.tar` — the whole rendered tree. Markdown, each source's
-    `indexed_markdown.doltlite_db`, the `_render_cursor.json` files, and the
-    attachment blobs (images, audio, PDFs). This is what
+    `indexed_markdown.doltlite_db` (which carries its render cursor), and
+    the attachment blobs (images, audio, PDFs). This is what
     `materialize_tng_root.sh` extracts to build a data root you can
     actually browse.
 
@@ -29,11 +29,11 @@ TWO archives come out, and the split is a build-cache decision:
 Why the second archive exists: bazel keys an action on the content of
 its inputs, so any byte that can change without changing the action's
 OUTPUT is pure cache poison. The embedder opens nothing but `*.md`, and
-two of the excluded kinds change on literally every pipeline run —
-`_render_cursor.json` carries a wall-clock `last_render_at`, and the pdf
-provider's rows carry a `source_url` holding the absolute bazel sandbox
-path (…/darwin-sandbox/4914/… vs …/5269/…), which lands in that
-source's `indexed_markdown.doltlite_db`. With
+the excluded kind changes on literally every pipeline run — every
+`indexed_markdown.doltlite_db` chains its commit hashes off a wall-clock
+initial commit and carries the render cursor's `rendered_at`, and the
+pdf provider's rows carry a `source_url` holding the absolute bazel
+sandbox path (…/darwin-sandbox/4914/… vs …/5269/…). With
 those in the archive the ~90s CPU-only embed on CI re-ran for every
 change anywhere upstream, including changes that left all 57 markdown
 files byte-identical.

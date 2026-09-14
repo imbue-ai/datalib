@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl::render_cursor;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::render_problems::RenderProblemRow;
@@ -321,14 +320,6 @@ pub fn render_gitlab(
         })?;
         summary.rendered += 1;
         progress.inc(1);
-    }
-    // Last, and only on the way out: a cursor written before the documents
-    // land would tell the next run it had already consumed work this one
-    // did not finish.
-    if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(root, stanza);
-        render_cursor::write(&cursor_path, head, &render_cursor::no_params())
-            .with_context(|| format!("write gitlab render cursor {}", cursor_path.display()))?;
     }
     Ok(summary)
 }
