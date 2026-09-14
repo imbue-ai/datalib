@@ -24,6 +24,7 @@ rust_library(
         "@datalib_crates//:once_cell",
         "@datalib_crates//:regex",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],
 )

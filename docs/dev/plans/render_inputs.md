@@ -1,8 +1,8 @@
 # Render inputs: record what each document was rendered from
 
 **Status: proposal (2026-09-11); the store, the driver's half, all ten
-chat providers, pdf and contacts are built (2026-09-14); github,
-gitlab, notion, perseus, yolink and garmin are not.** Built, of §"Order of work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
+chat providers, pdf, contacts, yolink, garmin, perseus and notion are
+built (2026-09-14); github and gitlab are not.** Built, of §"Order of work": step 1 (as `one_mode.md`); step 2 — `render_inputs` in the
 render store with `markdowns.bucket_key`, `RenderedMarkdown.bucket_key`,
 `RenderCtx::declare_bucket(bucket_key, inputs)`; the driver's scan —
 `render::reverse_lookup` diffs every table `render_inputs` mentions
@@ -54,9 +54,24 @@ cards — maps a changed row to its cards through the parse, each card
 declaring its row and its addressbook's. A document whose conversion
 failed is left undeclared, keeping its last page rather than losing it
 until its inputs move again; the harness records that as the one
-`KNOWN_GAPS` entry, a decision rather than a miss. Next: the non-chat
-diff-scanning providers (github, gitlab), then perseus, yolink,
-garmin (one document per store each) and notion.
+`KNOWN_GAPS` entry, a decision rather than a miss. yolink and garmin
+— one page each, reading their tables whole — declare a **whole
+table** as one input (`Input::whole_table`, stored as `input_id =
+'*'`; the reverse lookup makes such a bucket stale when any row of
+the table moved, and the harness's one-row check counts it as a
+reader of every row), and with that their HEAD-vs-cursor gate went:
+it re-rendered the page on every ingest run, because `sync_runs`
+moves HEAD whether or not a reading arrived. perseus reads `.xml`
+files, so nothing diffs; it renders the whole tree every run as
+**one bucket**, declaring the files it read, and the driver's sweep
+of that bucket is what removes an edition's documents when its file
+goes — the last `retain_documents` caller, so `retain_documents`,
+`RenderPass` and `RenderSummary.documents` are gone. notion's pages
+and threads are two bucket families with the raw id as key: a page
+declares its row, its body, its attachment rows and its author's
+`users` row; a thread its comments, its page (for the title) and its
+anchor block; a thread whose page Notion no longer has is not a
+document, cold or warm. Next: github and gitlab.
 
 **Read [`one_mode.md`](one_mode.md) first (2026-09-14).** This document
 is now the render-side mechanism for that design's rule 2 ("prune at
@@ -135,13 +150,14 @@ mechanisms the provider was ported onto
   *you must be able to compute a document's id from a diff row alone.*
   `contacts` fails it (one row holds several vCards) and so cannot be
   ported.
-- Whole-store renderers call `RenderCtx::retain_documents` with every
-  document they *considered*, and the driver sweeps the rest. This is
-  the half with the trap: a renderer that reports what it *emitted*
-  rather than what it *considered* deletes its own steady state, and a
-  renderer that returns early with an empty set deletes the source.
+- Whole-store renderers called `RenderCtx::retain_documents` with every
+  document they *considered*, and the driver swept the rest. This was
+  the half with the trap: a renderer that reported what it *emitted*
+  rather than what it *considered* deleted its own steady state, and a
+  renderer that returned early with an empty set deleted the source.
+  Gone (2026-09-14): the last caller, perseus, declares one bucket.
 
-Count the guards that exist only to keep the second mechanism from
+Count the guards that existed only to keep the second mechanism from
 deleting a live source: `RenderPass::Walked | Skipped`
 ([`processor.rs`](../../../datalib/backend/etl/render/src/processor.rs)),
 the "considered, not emitted" rule on `RenderSummary.documents`, the
@@ -484,8 +500,11 @@ table without one is not diffable today either, so nothing regresses.
 
 **Whole-store renderers with no doltlite raw store.** `perseus` reads
 `.xml` files. It keeps re-rendering everything; its inputs are file
-paths, which the fan-in table can hold (`input_table = 'file'`) but
-nothing diffs. Out of scope; it is out of scope for #27 too.
+names, which the fan-in table holds (`input_table = 'file'`) but
+nothing diffs. Built as one bucket for the whole tree: the sweep of
+what a run did not emit is what removes a dropped edition's documents,
+and the driver's reverse lookup finds no doltlite store and leaves
+the scan to the provider, which has none.
 
 **Does the fingerprint still earn its place?** No — and this was
 settled the hard way (2026-09-14). The worry was a `users` row whose
@@ -560,13 +579,17 @@ inputs, not the store.
    sms_backup_restore) followed in the next PR, so every chat provider
    is on it.
 5. **The driver-side scan and sweep**, switching one provider at a time
-   off `remove_conversation` / `retain_documents`. Done for the six
-   above; the migration recipe's "same commit" rule applies in reverse:
-   a provider moves off the old deletion path in the same commit that
-   its declarations become complete.
+   off `remove_conversation` / `retain_documents`. Done for every
+   provider but github and gitlab; the migration recipe's "same
+   commit" rule applies in reverse: a provider moves off the old
+   deletion path in the same commit that its declarations become
+   complete.
 6. **Delete** the five guards, the two callbacks, `RenderPass`,
-   `buckets_without_rows`. (`prior_fingerprints` is already gone from
-   every provider signature, with the fingerprint itself.) Close #27.
+   `buckets_without_rows`. `retain_documents`, `RenderPass` and
+   `RenderSummary.documents` are gone; `remove_conversation` and
+   `buckets_without_rows` go with github and gitlab.
+   (`prior_fingerprints` is already gone from every provider
+   signature, with the fingerprint itself.) Close #27.
 7. **contacts.** Built (2026-09-14): the row-to-cards mapping goes
    through the parse, which is what a diff row could never do alone.
 

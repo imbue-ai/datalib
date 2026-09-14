@@ -1,23 +1,14 @@
-//! Read what the weight page needs out of the Garmin raw store, and
-//! decide up front whether there is anything to do.
+//! Read what the weight page needs out of the Garmin raw store.
 
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
+use datalib_etl_render::inputs::{Input, RawRange};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl_garmin::ingest::db_path_for;
-
-pub enum Parsed {
-    /// The store's HEAD matches the render cursor: the page is current.
-    UpToDate {
-        head: String,
-    },
-    Fresh(Box<ParsedGarmin>),
-}
 
 /// One weigh-in, ascending by `timestamp_gmt` in [`ParsedGarmin::weigh_ins`].
 #[derive(Debug, Clone)]
@@ -48,8 +39,9 @@ pub struct MetricCount {
 
 #[derive(Debug, Clone, Default)]
 pub struct ParsedGarmin {
+    /// The commit everything was read at; `None` when nothing is
+    /// committed yet, so the cursor stays unwritten.
     pub head: Option<String>,
-    pub scan_elapsed: Option<Duration>,
     pub display_name: Option<String>,
     pub full_name: Option<String>,
     pub weigh_ins: Vec<WeighIn>,
@@ -60,7 +52,24 @@ pub struct ParsedGarmin {
     pub items: i64,
 }
 
-pub fn parse(raw_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> {
+/// The tables the page reads, whole: any row of any of them moving
+/// re-renders it.
+pub fn inputs() -> Vec<Input> {
+    [
+        "garmin_account",
+        "garmin_weigh_ins",
+        "garmin_devices",
+        "garmin_daily",
+        "garmin_activities",
+        "garmin_activity_files",
+        "garmin_items",
+    ]
+    .into_iter()
+    .map(Input::whole_table)
+    .collect()
+}
+
+pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedGarmin> {
     let db_path = db_path_for(raw_path);
     if !db_path.exists() {
         anyhow::bail!(
@@ -69,57 +78,48 @@ pub fn parse(raw_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> 
         );
     }
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, last_render_hash).await })
+        tokio::runtime::Handle::current().block_on(async move {
+            let pool = datalib_etl::doltlite_raw::open_reader(&db_path)
+                .await
+                .with_context(|| {
+                    format!("open garmin doltlite for render {}", db_path.display())
+                })?;
+            let parsed = parse_pinned(&pool, range).await;
+            pool.close().await;
+            parsed
+        })
     })
 }
 
-async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> {
-    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
-        .await
-        .with_context(|| format!("open garmin doltlite for render {}", db_path.display()))?;
-    let started = std::time::Instant::now();
-    let pin = datalib_etl::pin::head(&pool).await?;
-    let scan_elapsed = Some(started.elapsed());
-    let Some(pin) = pin else {
-        pool.close().await;
-        return Ok(Parsed::Fresh(Box::new(ParsedGarmin {
-            scan_elapsed,
-            ..Default::default()
-        })));
+async fn parse_pinned(pool: &SqlitePool, range: RawRange<'_>) -> Result<ParsedGarmin> {
+    let Some(pin) = range.pin(pool).await? else {
+        return Ok(ParsedGarmin::default());
     };
-    datalib_etl::pin::install_views(&pool, &pin)
+    datalib_etl::pin::install_views(pool, &pin)
         .await
         .context("pin the garmin raw store for render")?;
-    let head = pin.commit().to_string();
-    if last_render_hash == Some(head.as_str()) {
-        pool.close().await;
-        return Ok(Parsed::UpToDate { head });
-    }
 
-    let (display_name, full_name) = load_account(&pool).await?;
-    let weigh_ins = load_weigh_ins(&pool).await?;
-    let devices = load_devices(&pool).await?;
-    let metrics = load_metric_counts(&pool).await?;
+    let (display_name, full_name) = load_account(pool).await?;
+    let weigh_ins = load_weigh_ins(pool).await?;
+    let devices = load_devices(pool).await?;
+    let metrics = load_metric_counts(pool).await?;
     let activities = scalar(
-        &pool,
+        pool,
         "SELECT COUNT(*) FROM pinned_garmin_activities garmin_activities",
     )
     .await?;
     let activity_files = scalar(
-        &pool,
+        pool,
         "SELECT COUNT(*) FROM pinned_garmin_activity_files garmin_activity_files WHERE blake3 IS NOT NULL",
     )
     .await?;
     let items = scalar(
-        &pool,
+        pool,
         "SELECT COUNT(*) FROM pinned_garmin_items garmin_items",
     )
     .await?;
-    pool.close().await;
-    Ok(Parsed::Fresh(Box::new(ParsedGarmin {
-        head: Some(head),
-        scan_elapsed,
+    Ok(ParsedGarmin {
+        head: Some(pin.commit().to_string()),
         display_name,
         full_name,
         weigh_ins,
@@ -128,7 +128,7 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         activities,
         activity_files,
         items,
-    })))
+    })
 }
 
 async fn scalar(pool: &SqlitePool, sql: &'static str) -> Result<i64> {

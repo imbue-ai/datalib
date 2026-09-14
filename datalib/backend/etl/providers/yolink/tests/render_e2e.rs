@@ -5,9 +5,10 @@ use std::path::Path;
 
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::RawRange;
 use datalib_etl_yolink::ingest::schema_raw::{YolinkDeviceRow, YolinkReadingRow};
 use datalib_etl_yolink::ingest::{db_path_for, RawDb};
-use datalib_etl_yolink_render::render::parse::{parse, Parsed};
+use datalib_etl_yolink_render::render::parse::parse;
 use datalib_etl_yolink_render::render::render::{document_uuid, render_all};
 use sqlx::sqlite::SqlitePool;
 
@@ -49,29 +50,27 @@ async fn seed(pool: &SqlitePool, rows: &[(&str, &str, i64, f64)], devices: &[(&s
         .unwrap();
 }
 
-/// Run the render processor's inner loop the way `processor.rs` does:
-/// parse from the cursor the previous pass handed back, and render only
-/// when the store moved. Returns the emitted documents (empty when the
-/// render was skipped) and the commit the pass consumed — what the render
-/// step would record as the cursor.
+/// Parse at `pin` (HEAD when `None`) and render, the way `processor.rs`
+/// does once the driver has found the page stale. Returns the emitted
+/// documents and the commit the pass consumed — what the render step
+/// would record as the cursor.
 fn render_once(
     raw_path: &Path,
     root: &Path,
-    cursor: Option<&str>,
+    pin: Option<&str>,
 ) -> (Vec<RenderedMarkdown>, Option<String>) {
     let mut emitted = Vec::new();
-    let head = match parse(raw_path, cursor).unwrap() {
-        Parsed::UpToDate { head } => Some(head),
-        Parsed::Fresh(parsed) => {
-            let mut on_doc = |md: RenderedMarkdown| {
-                emitted.push(md);
-                Ok(())
-            };
-            render_all(&parsed, root, STANZA, &Progress::noop(), &mut on_doc).unwrap();
-            parsed.head.clone()
-        }
+    let range = RawRange {
+        pin,
+        ..RawRange::cold()
     };
-    (emitted, head)
+    let parsed = parse(raw_path, range).unwrap();
+    let mut on_doc = |md: RenderedMarkdown| {
+        emitted.push(md);
+        Ok(())
+    };
+    render_all(&parsed, root, STANZA, &Progress::noop(), &mut on_doc).unwrap();
+    (emitted, parsed.head.clone())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -184,7 +183,7 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
     assert!(md.contains("temperature_humidity"), "{md}");
     assert!(md.contains("watermeter"), "{md}");
     assert!(md.contains("## Store"), "{md}");
-    assert!(md.contains("| Commits |"), "store counts missing:\n{md}");
+    assert!(md.contains("| Readings |"), "store counts missing:\n{md}");
     // Counts yes; the doltlite HEAD hash and the per-commit hashes and
     // wall-clock dates no. `test seed` is this test's own commit message,
     // so it appears in the page only if the commit log is being rendered.
@@ -205,18 +204,15 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
 
     let md_1 = md.clone();
 
-    // ---- second render, nothing appended ------------------------------
+    // ---- second render, nothing appended, read at the same commit ----
     let cursor = cursor.expect("a successful render pins the commit it consumed");
     let (emitted, cursor_2) = render_once(&raw_path, root, Some(&cursor));
     assert_eq!(cursor_2.as_deref(), Some(cursor.as_str()));
-    assert!(
-        emitted.is_empty(),
-        "HEAD did not move, so nothing should have been rendered"
-    );
+    assert_eq!(emitted.len(), 1);
     assert_eq!(
         std::fs::read_to_string(page_dir.join("index.md")).unwrap(),
         md_1,
-        "the page was rewritten despite an unchanged store"
+        "an unchanged store must render the same page, so the store records no change"
     );
 
     // ---- third render, one new reading --------------------------------
@@ -226,7 +222,7 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
         &[],
     )
     .await;
-    let (emitted, cursor_3) = render_once(&raw_path, root, Some(&cursor));
+    let (emitted, cursor_3) = render_once(&raw_path, root, None);
     assert_ne!(
         cursor_3,
         Some(cursor),
@@ -262,9 +258,7 @@ async fn a_metric_with_no_unit_mapping_fails_loudly() {
     )
     .await;
 
-    let Parsed::Fresh(parsed) = parse(&raw_path, None).unwrap() else {
-        panic!("cold start must not report UpToDate");
-    };
+    let parsed = parse(&raw_path, RawRange::cold()).unwrap();
     let err = render_all(&parsed, root, STANZA, &Progress::noop(), &mut |_| Ok(()))
         .unwrap_err()
         .to_string();

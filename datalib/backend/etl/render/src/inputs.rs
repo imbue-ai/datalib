@@ -52,6 +52,12 @@ impl<'a> RawRange<'a> {
         }
     }
 
+    /// Whether one bucket has to render: the driver found it stale, or
+    /// could not say. For a provider whose store is one document.
+    pub fn is_stale(&self, key: &str) -> bool {
+        self.stale.is_none_or(|stale| stale.contains(key))
+    }
+
     /// What to render: the driver's stale set joined with the provider's
     /// forward scan, or everything when either side could not narrow.
     /// For a provider whose bucket key is the raw id.

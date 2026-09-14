@@ -61,6 +61,9 @@ pub struct Book {
 pub struct ParsedPerseus {
     pub editions: Vec<Edition>,
     pub books: Vec<Book>,
+    /// Every file under the input directory this was read from, by
+    /// name: `__cts__.xml` and one per edition.
+    pub files: Vec<String>,
 }
 
 impl ParsedPerseus {
@@ -104,6 +107,13 @@ pub fn parse(input_path: &Path) -> Result<ParsedPerseus> {
         );
     }
     files.sort();
+    let mut read: Vec<String> = files
+        .iter()
+        .map(|(id, _)| format!("{TLG_FILE_PREFIX}{id}.xml"))
+        .collect();
+    if input_path.join("__cts__.xml").exists() {
+        read.push("__cts__.xml".to_string());
+    }
 
     // Parse each edition's text and build its metadata.
     let mut maps: Vec<(String, FlatMap)> = Vec::with_capacity(files.len());
@@ -175,7 +185,11 @@ pub fn parse(input_path: &Path) -> Result<ParsedPerseus> {
         })
         .collect();
 
-    Ok(ParsedPerseus { editions, books })
+    Ok(ParsedPerseus {
+        editions,
+        books,
+        files: read,
+    })
 }
 
 /// Numeric-then-lexical sort key for the string locator components, so

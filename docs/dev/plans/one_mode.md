@@ -456,7 +456,9 @@ checks the run rendered exactly the documents declared as reading it.
 The four remaining chat providers closed three more, and with them the
 last `retain_documents` walks among the chat sources; pdf and contacts
 closed all but one. The one left is a decision, not a miss: a pdf whose
-conversion fails keeps its last page where a cold render has none.*
+conversion fails keeps its last page where a cold render has none.
+yolink, garmin, perseus and notion followed with no new gap, and with
+perseus went `retain_documents` itself.*
 
 A real provider is correct under the property if it keeps five
 promises. Written as a contract, so a provider author has a list and
@@ -473,11 +475,13 @@ a harness has something to check:
    moot by a `global_fanout_tables` hit. This is the clause every
    mass-staleness bug lives in, because a miss is silent: the run
    succeeds and the document is simply old.
-3. **Removals are named or the set is complete.** A diff-narrowed
-   renderer calls `remove_conversation` for every named bucket whose
-   entity is gone (`buckets_without_rows`); a whole-store renderer's
-   `retain_documents` set is what it *considered*, failed documents
-   included, and it returns `Skipped` when it did not look.
+3. **Removals are named or the set is complete.** A renderer declares
+   every bucket it looked at, with nothing when the bucket's rows are
+   gone, and the driver drops what the store holds under a declared
+   bucket that the run did not emit. A whole-store renderer with no
+   diff (perseus) is one bucket. The two still on the old path,
+   github and gitlab, call `remove_conversation` for every named
+   bucket whose entity is gone (`buckets_without_rows`).
 4. **Byte-stable.** Rendering the same bucket from the same commit
    twice produces identical rows, so doltlite stores the second render
    as no change and a steady-state run moves nothing. Nothing per-run

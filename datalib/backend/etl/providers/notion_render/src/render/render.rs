@@ -15,6 +15,7 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{Bucket, Buckets};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
@@ -22,7 +23,7 @@ use serde_json::Value;
 use super::grid_rows::{gather_documents, PageDocument, ThreadDocument};
 use super::parse::ParsedNotion;
 
-pub const RENDER_VERSION: u32 = 2;
+pub const RENDER_VERSION: u32 = 3;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
@@ -362,6 +363,7 @@ pub fn render_notion(
         let PageDocument {
             page_uuid,
             page_title,
+            inputs,
             ..
         } = doc;
         let page_dir = pages_root.join(page_dir_segment(page_uuid));
@@ -370,12 +372,15 @@ pub fn render_notion(
             continue;
         };
         fs::create_dir_all(&page_dir)?;
+        if let Some(ids) = parsed.attachment_ids_by_page.get(page_uuid) {
+            inputs.read_all("notion_attachments", ids.iter().map(String::as_str));
+        }
         let bundle = parsed.blobs_by_page.get(page_uuid).unwrap_or(&empty_bundle);
         if !bundle.is_empty() {
             bundle.materialize_to_dir(&page_dir.join("blobs"))?;
         }
-        let body = parsed
-            .markdown_by_page
+        let body = inputs
+            .lookup("page_markdown", &parsed.markdown_by_page)
             .get(page_uuid)
             .map(|m| localize_attachments(m, bundle))
             .unwrap_or_default();
@@ -392,13 +397,17 @@ pub fn render_notion(
             markdown_uuid: page_uuid.clone(),
             source_id: String::new(),
             upstream_cursor: None,
-            bucket_key: None,
+            bucket_key: Some(page_uuid.clone()),
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows: doc.rows.clone(),
             edges: Vec::new(),
             problems: doc.problems.clone(),
         })?;
+        summary.buckets.push(Bucket {
+            key: page_uuid.clone(),
+            inputs: inputs.declared(),
+        });
         summary.rendered += 1;
         progress.inc(1);
     }
@@ -416,6 +425,7 @@ pub fn render_notion(
             discussion_uuid,
             page_uuid,
             page_title,
+            inputs,
             ..
         } = doc;
         let thread_path = root.join(thread_qmd_path_rel(stanza, page_uuid, discussion_uuid));
@@ -425,33 +435,40 @@ pub fn render_notion(
         let dir = thread_path
             .parent()
             .expect("thread_qmd_path_rel always has a parent dir");
+        let anchors = inputs.lookup("comment_anchors", &parsed.anchor_text);
         let anchor = doc
             .anchor_block_uuid
             .as_deref()
-            .and_then(|b| parsed.anchor_text.get(b))
+            .and_then(|b| anchors.get(b))
             .map(String::as_str);
         let p = render_thread(discussion_uuid, page_title, members, anchor, dir)?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: discussion_uuid.clone(),
             source_id: String::new(),
             upstream_cursor: None,
-            bucket_key: None,
+            bucket_key: Some(discussion_uuid.clone()),
             md_path: p,
             render_version: RENDER_VERSION,
             rows: doc.rows.clone(),
             edges: Vec::new(),
             problems: doc.problems.clone(),
         })?;
+        summary.buckets.push(Bucket {
+            key: discussion_uuid.clone(),
+            inputs: inputs.declared(),
+        });
         summary.rendered += 1;
         progress.inc(1);
     }
     Ok(summary)
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
     pub rendered: usize,
-    pub skipped: usize,
+    /// Every bucket rendered, with what it read — page ids and
+    /// discussion ids, for the caller to declare.
+    pub buckets: Buckets,
 }
 
 #[cfg(test)]
