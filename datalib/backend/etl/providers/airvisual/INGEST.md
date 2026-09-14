@@ -18,7 +18,11 @@ converted), so keeping the line as JSON beside them would only repeat
 it, and a sensor sample has no fetch to retry, so the `_bookkeeping`
 row the shared upsert writes per entity would double the row count
 for nothing — `fsindex` makes the same call. `schema_raw::upsert_samples`
-is the chunked multi-row upsert. Measured on 2026-09-14 over both real
+is the chunked multi-row upsert, and one device's files all go in one
+transaction with its device row and its cursor stamps: a full re-read
+is a minute, so the per-file durability `contacts` and `google_takeout`
+buy with a transaction per file would cost a tree rewrite per file
+here for nothing (1,597 dead chunks per cold run, against 174). Measured on 2026-09-14 over both real
 Pros (384,622 samples from 24 MB of history text): the store went from
 275 MB with payload and sidecar to 80 MB without, 66 MB after
 `dolt_gc()`; the same rows as plain SQLite are 44 MB (33 MB of rows,

@@ -1,6 +1,8 @@
 //! AirVisual Pro export → doltlite. For each configured device, walk
 //! its data folder, read every history file whose content changed since
-//! the last run, and upsert its samples. The current month's file grows
+//! the last run, and upsert its samples — all of one device's files in
+//! one transaction, since a full re-read is a minute and every SQL
+//! commit rewrites the store's tree. The current month's file grows
 //! every few minutes and is re-read whole each run; the rest cost a
 //! `stat`.
 
@@ -11,6 +13,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
+use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
@@ -187,7 +190,6 @@ async fn fetch_device(
     let started = std::time::Instant::now();
     let info = read_device_info(&root);
     let who = identify(dev, &info)?;
-    upsert_device(db, &who, &info).await?;
     let scope = cursor_scope(&who.id);
     let identified_ms = started.elapsed().as_millis();
 
@@ -221,9 +223,11 @@ async fn fetch_device(
     // every run: the later path wins.
     let mut todo: Vec<&ScannedFile> = changes.needs_reading().collect();
     todo.sort_by(|a, b| a.rel.cmp(&b.rel));
+    let mut tx = db.pool().begin().await?;
+    upsert_device(&mut tx, &who, &info).await?;
     for f in todo {
         let file_started = std::time::Instant::now();
-        match ingest_one(db, &who.id, &scope, f).await {
+        match ingest_one(&mut tx, &who.id, &scope, f).await {
             Ok((stats, timing)) => {
                 s.lines += stats.lines;
                 s.samples += stats.samples;
@@ -250,8 +254,6 @@ async fn fetch_device(
             }
         }
     }
-    progress.inc(1);
-
     sqlx::query(
         "UPDATE airvisual_devices SET last_ts_ms =
             (SELECT MAX(ts_ms) FROM airvisual_samples WHERE device_id = ?)
@@ -259,15 +261,21 @@ async fn fetch_device(
     )
     .bind(&who.id)
     .bind(&who.id)
-    .execute(db.pool())
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
+    progress.inc(1);
     Ok(())
 }
 
 /// Write the device row only when it would change: an upsert stamps
 /// the bookkeeping sidecar, and a stamp on an unchanged run is a commit
 /// on an unchanged store, which makes the render re-run for nothing.
-async fn upsert_device(db: &RawDb, who: &Identity, info: &DeviceInfo) -> Result<()> {
+async fn upsert_device(
+    tx: &mut Transaction<'_, Sqlite>,
+    who: &Identity,
+    info: &DeviceInfo,
+) -> Result<()> {
     let row = AirvisualDeviceRow {
         id: who.id.clone(),
         name: who.name.clone(),
@@ -291,7 +299,7 @@ async fn upsert_device(db: &RawDb, who: &Identity, info: &DeviceInfo) -> Result<
            FROM airvisual_devices WHERE id = ?",
     )
     .bind(&row.id)
-    .fetch_optional(db.pool())
+    .fetch_optional(&mut **tx)
     .await?;
     let same = stored
         .as_ref()
@@ -306,15 +314,11 @@ async fn upsert_device(db: &RawDb, who: &Identity, info: &DeviceInfo) -> Result<
     if same {
         return Ok(());
     }
-    let mut tx = db.pool().begin().await?;
-    bulk_upsert_entity_in_tx(&mut tx, &[row]).await?;
-    tx.commit().await?;
-    Ok(())
+    bulk_upsert_entity_in_tx(tx, &[row]).await
 }
 
-/// Parse one file and write its rows and its cursor stamp in one
-/// transaction, so a crash between the two cannot leave a stamp for
-/// rows that never landed.
+/// Parse one file and write its rows and its cursor stamp into the
+/// device's transaction.
 /// Where one file's time went, for the `airvisual_file` event.
 struct FileTiming {
     read_ms: u128,
@@ -323,7 +327,7 @@ struct FileTiming {
 }
 
 async fn ingest_one(
-    db: &RawDb,
+    tx: &mut Transaction<'_, Sqlite>,
     device: &str,
     scope: &str,
     f: &ScannedFile,
@@ -353,11 +357,9 @@ async fn ingest_one(
             device_ts_s: u.device_ts_s,
         })
         .collect();
-    let mut tx = db.pool().begin().await?;
-    schema_raw::upsert_samples(&mut tx, &rows).await?;
-    bulk_upsert_entity_in_tx(&mut tx, &unplaced).await?;
-    file_checkpoint::record_file(&mut tx, scope, f).await?;
-    tx.commit().await?;
+    schema_raw::upsert_samples(tx, &rows).await?;
+    bulk_upsert_entity_in_tx(tx, &unplaced).await?;
+    file_checkpoint::record_file(tx, scope, f).await?;
     let upsert_ms = t.elapsed().as_millis() - read_ms - parse_ms;
     Ok((
         parsed.stats,
