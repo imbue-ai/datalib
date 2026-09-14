@@ -90,6 +90,7 @@ import { browseColumns, browseQuery } from "@/config/browsePresets";
 import { encodeColumns } from "@/router/columns";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
 import RunLogPanel from "@/components/RunLogPanel.vue";
+import { activityChips, activityText } from "@/config/activity";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
@@ -914,59 +915,6 @@ class ActionsRenderer implements ICellRendererComp<Row> {
       this.run.classList.remove("danger");
     }
   }
-}
-
-/// The chips the Activity cell draws: `queued` first, because it is the
-/// one that says whether the step is keeping up; then every other
-/// series the step reported; then the warn/error count when there is one.
-function activityChips(
-  p: DagStepProgress,
-): { kind: string; text: string; title: string }[] {
-  const chips: { kind: string; text: string; title: string }[] = [];
-  // Every `queued` series: the step's own gauge, plus one per producer
-  // (`queued{from=slack/ingest}`) that the runner keeps from what the
-  // producers sealed. One chip, summed; the breakdown is on hover.
-  const queuedSeries = Object.entries(p.metrics).filter(
-    ([name]) => name === "queued" || name.startsWith("queued{"),
-  );
-  if (queuedSeries.length > 0) {
-    const queued = queuedSeries.reduce((n, [, v]) => n + v, 0);
-    const breakdown = queuedSeries
-      .map(([name, v]) => {
-        const from = name.match(/^queued\{from=(.*)\}$/)?.[1];
-        return from ? `${v.toLocaleString()} from ${from}` : `${v.toLocaleString()} of its own`;
-      })
-      .join(", ");
-    chips.push({
-      kind: queued > 0 ? "queued" : "idle",
-      text: `${queued.toLocaleString()} queued`,
-      title:
-        queuedSeries.length > 1
-          ? `Work still ahead of the step: ${breakdown}`
-          : "Work the step says is still ahead of it",
-    });
-  }
-  for (const [name, value] of Object.entries(p.metrics)) {
-    if (name === "queued" || name.startsWith("queued{")) continue;
-    chips.push({
-      kind: "metric",
-      text: `${name} ${value.toLocaleString()}`,
-      title: `${name} = ${value.toLocaleString()} so far this run`,
-    });
-  }
-  if (p.errors > 0) {
-    chips.push({
-      kind: "errors",
-      text: `${p.errors.toLocaleString()} ⚠`,
-      title: `${p.errors} warning${p.errors === 1 ? "" : "s"} or error${p.errors === 1 ? "" : "s"} logged this run — double-click Status to read them`,
-    });
-  }
-  return chips;
-}
-
-/// The cell's sortable, filterable value: the chips as text.
-function activityText(p: DagStepProgress | null): string {
-  return p ? activityChips(p).map((c) => c.text).join("  ") : "";
 }
 
 const columnDefs: ColDef<Row>[] = [
@@ -3311,6 +3259,7 @@ onUnmounted(() => {
 .m2-chip.queued { color: var(--datalib-log-warn); }
 .m2-chip.idle { color: var(--datalib-log-ok); }
 .m2-chip.errors { color: var(--datalib-log-error); }
+.m2-chip.stalled { color: var(--datalib-log-warn); }
 
 /* Bytes on disk: the recent history against the largest row, with the
    size centred over it and the per-output breakdown on `title`. */

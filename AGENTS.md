@@ -91,13 +91,14 @@ reference doc it relates to.
   we thought we didn't have, and a plain `SELECT` reads the *working
   set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
 - [`docs/dev/plans/logs_and_metrics.md`](docs/dev/plans/logs_and_metrics.md)
-  — *agreed plan (2026-09-11), being built*: one plain-SQLite run store
-  (`system/runs.sqlite`) written by the runner alone, holding every
-  run's step states, log lines and metrics; progress reported as
-  absolute `metric` events rather than a percentage; queue depth per
-  step. Its §"Order of work" says what has landed. Read it before
-  touching how a step reports progress, how the Manage screen shows a
-  run, or `datalib_runs`.
+  — *agreed plan (2026-09-11), built in full (2026-09-14)*: one
+  plain-SQLite run store (`system/runs.sqlite`, tables in
+  `app_schema::runs`) written by the runner alone, holding every run's
+  step states, log lines and metrics; progress reported as absolute
+  `metric` events rather than a percentage; queue depth per step from
+  the rows each producer seals; rates and stall detection derived
+  from the samples. Read it before touching how a step reports
+  progress, how the Manage screen shows a run, or `datalib_runs`.
 - [`docs/dev/plans/streaming_steps_plan.md`](docs/dev/plans/streaming_steps_plan.md)
   — *plan*, partly built: how to build the above, measured against the
   tree, with each step marked done or not. Read it before touching how

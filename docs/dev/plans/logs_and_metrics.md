@@ -1,6 +1,6 @@
 # Logs and metrics: one store, written by the runner
 
-**Status: agreed plan (2026-09-11), being built.** [Order of work](#order-of-work)
+**Status: agreed plan (2026-09-11), built in full (2026-09-14).** [Order of work](#order-of-work)
 is the checklist; update it as slices land, and treat anything it still
 lists as unbuilt. Per [`AGENTS.md`](../../../AGENTS.md), where this file
 says "today" that was checked against `5f589a59`; where it says "will",
@@ -268,9 +268,17 @@ Each slice is one PR that leaves the tree green.
    download's does not yet (the count lives inside the session that
    sealed it). The Activity chip sums every `queued` series and shows
    the per-producer breakdown on hover.
-4. **Rates and flatlines** — `metric_samples` drawn as rates; a step
-   whose `metrics` stopped moving while `log` did not, flagged. Closes
-   the "progress-flatline" item of #136.
+4. ~~**Rates and flatlines**~~ **Done.** The snapshot carries the two
+   newest samples per series and each step's last log time;
+   `progress_by_step` in `http/src/lib.rs` derives a per-second rate
+   per series (slope of those two — one sample is a point, not a
+   line) and, for a running step, `progress_age_secs` (since any
+   metric moved) and `log_age_secs`. The Activity cell
+   (`ui/src/config/activity.ts`) shows a rate beside a moving series
+   and, past a minute without a metric moving, a "no progress" chip
+   whose hover says whether the step is still logging — #136's "busy
+   but not advancing" — or silent. `metric_samples` is still bounded
+   only by run retention; the plan's open question stands.
 
 ## Open questions
 
