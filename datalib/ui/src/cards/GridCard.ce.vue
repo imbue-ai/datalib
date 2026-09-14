@@ -354,7 +354,8 @@ function rowKey(row: SearchRow): string {
 
 // Lightroom-style: if multiple rows are selected and the right-click anchor
 // is part of that selection, the action targets all selected rows;
-// otherwise it targets only the anchor row.
+// otherwise it targets only the anchor row. The selection itself is left
+// alone either way — a right-click aims the action, it does not re-select.
 function resolveTargetRows(
   api: GridApi<SearchRow>,
   anchor: IRowNode<SearchRow> | null | undefined,
@@ -1332,11 +1333,6 @@ const gridOptions: GridOptions<SearchRow> = {
     const v = e.value;
     const cellRendered = typeof v === "string" ? v : v == null ? "" : String(v);
     contextCellInfo.value = { column: colId, cellValue: cellRendered };
-    // Lightroom: right-clicking an unselected row narrows selection to it.
-    if (e.node && !e.node.isSelected()) {
-      gridApi.deselectAll();
-      e.node.setSelected(true);
-    }
   },
   // Any change a USER can make to columns gets reflected in the
   // persisted state. Filtered by event source: the grid also fires

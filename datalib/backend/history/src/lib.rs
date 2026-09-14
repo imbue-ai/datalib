@@ -34,6 +34,10 @@ pub struct Commit {
     /// at second resolution and writes no offset.
     pub date: String,
     pub message: String,
+    /// The run that made the commit, when the message ends in the
+    /// ` run=<id>` stamp a step puts there (`doltlite_raw::stamp_run`).
+    /// The job id, when the app ran it.
+    pub run: Option<String>,
     /// Every table the store has, as it stood after this commit, largest
     /// first. A table that did not exist yet and was not touched is left
     /// out.
@@ -137,6 +141,7 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
             parent: parent.clone(),
             committer,
             date: iso_utc(&date),
+            run: run_id_of(&message),
             message,
             tables,
         });
@@ -221,6 +226,13 @@ async fn table_changes(
         }
     }
     Ok(changes)
+}
+
+fn run_id_of(message: &str) -> Option<String> {
+    let (_, last) = message.trim_end().rsplit_once(char::is_whitespace)?;
+    last.strip_prefix("run=")
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
 }
 
 fn iso_utc(dolt_date: &str) -> String {
@@ -332,7 +344,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        commit(&pool, "churn").await;
+        commit(&pool, "churn run=job-9").await;
         pool.close().await;
 
         let h = read(&path, 100).await.unwrap();
@@ -341,12 +353,14 @@ mod tests {
         assert_eq!(
             messages,
             [
-                "churn",
+                "churn run=job-9",
                 "first load",
                 "schema",
                 "Initialize data repository"
             ]
         );
+        assert_eq!(h.commits[0].run.as_deref(), Some("job-9"));
+        assert_eq!(h.commits[1].run, None);
         assert!(
             h.commits[0].date.ends_with("+00:00"),
             "{}",
@@ -410,6 +424,18 @@ mod tests {
         assert_eq!(h.commits.len(), 2);
         assert_eq!(h.commits[0].message, "two");
         assert_eq!(table(&h.commits[0], "t").rows, 1);
+    }
+
+    #[test]
+    fn the_run_stamp_is_read_off_the_end_of_the_message() {
+        assert_eq!(
+            run_id_of("download slack: msgs=4 run=0199-abc").as_deref(),
+            Some("0199-abc")
+        );
+        assert_eq!(run_id_of("seal run=j1 ").as_deref(), Some("j1"));
+        assert_eq!(run_id_of("Initialize data repository"), None);
+        assert_eq!(run_id_of("rerun=3"), None);
+        assert_eq!(run_id_of("run="), None);
     }
 
     #[test]

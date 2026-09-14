@@ -1,7 +1,7 @@
 // Gmail and Fastmail: two wizard forms over one step type, and the
 // Connection block that fills their label pickers from the live account.
 import { test, expect, type Page } from "@playwright/test";
-import { expandGroup } from "./grid-helpers";
+import { expandGroup, pickRowMenu } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 /// A field's own input. Descendant rather than direct child: a
@@ -348,9 +348,11 @@ test("an existing source reopens on the form that wrote it", async ({ page }) =>
   // must still count as modeled, or Edit would be disabled on the
   // wizard's own output.
   await expandGroup(page, "personal-mail");
-  await page
-    .locator('.ag-row[row-id="personal-mail/render_markdown"]')
-    .getByRole("button", { name: "Edit" })
-    .click();
+  await pickRowMenu(
+    page,
+    page.locator('.ag-row[row-id="personal-mail/render_markdown"]'),
+    "Edit settings…",
+    wizard(page),
+  );
   await expect(wizard(page).locator(".wiz-chosen")).toContainText("Fastmail");
 });

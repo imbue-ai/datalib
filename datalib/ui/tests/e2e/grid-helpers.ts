@@ -243,6 +243,43 @@ export async function expandGroup(page: Page, id: string): Promise<void> {
   }, `group ${id} never opened`).toPass({ timeout: 15_000, intervals: [100, 250, 500] });
 }
 
+/// One entry of a Manage row's right-click menu, opened on its Status
+/// cell. The row's menu is where its actions live; Sync is the one
+/// button left.
+export function rowMenuEntry(page: Page, row: Locator, entry: string | RegExp) {
+  return {
+    open: async () => {
+      await row.locator('[col-id="status"]').click({ button: "right" });
+      const option = page.locator(".ag-menu-option", { hasText: entry });
+      await expect(option).toBeVisible({ timeout: 2_000 });
+      return option;
+    },
+  };
+}
+
+/// Pick a Manage row's menu entry and wait for what it does, retrying the
+/// pair. A save remounts the table, and a menu opened on a row the grid
+/// is about to replace closes with it, so one attempt is a race. `effect`
+/// already visible means an earlier attempt landed, so nothing is picked
+/// twice.
+export async function pickRowMenu(
+  page: Page,
+  row: Locator,
+  entry: string | RegExp,
+  effect: Locator,
+): Promise<void> {
+  await expect(async () => {
+    if (await effect.isVisible()) return;
+    await page.keyboard.press("Escape");
+    const option = await rowMenuEntry(page, row, entry).open();
+    await option.click({ timeout: 2_000 });
+    await expect(effect).toBeVisible({ timeout: 2_000 });
+  }, `${String(entry)} never took`).toPass({
+    timeout: 15_000,
+    intervals: [250, 500, 1_000],
+  });
+}
+
 /// A row's status. The column paints an icon, so the state is the
 /// icon's accessible name — the same word a person gets by hovering.
 /// Null while the cell is mid-repaint or the row is virtualized away.
