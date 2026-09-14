@@ -256,78 +256,59 @@ pub async fn start_connect(
             if let Err(e) = latchkey_output(&args).await {
                 let message = e.to_string();
                 if !message.contains("already exists") {
-                    let mut slot = slot.lock().expect("connect slot mutex");
-                    slot.status = ConnectState::Failed;
-                    slot.output = tail(&message);
+                    fail(&slot, &service, tail(&message));
                     return;
                 }
             }
         }
-        // latchkey's `auth browser` *refreshes* an account; it will not
-        // create one, and refuses a name it has never seen. Seeding it
-        // is the whole remedy — the login overwrites the placeholder —
-        // so do that rather than handing the person a command. Only on
-        // that exact refusal: any other failure is its own problem.
-        let mut seeded = false;
-        if !account.is_empty() {
-            if let Err(e) = latchkey_output(&args).await {
-                if e.to_string().contains("No credentials stored for account") {
-                    if let Err(e) = latchkey_output(&seed_args(&service, &account)).await {
-                        let mut slot = slot.lock().expect("connect slot mutex");
-                        slot.status = ConnectState::Failed;
-                        slot.output = tail(&e.to_string());
-                        return;
-                    }
-                    seeded = true;
-                }
-            } else {
-                // It succeeded on the first pass; nothing left to do.
-                let mut slot = slot.lock().expect("connect slot mutex");
-                slot.status = ConnectState::Ok;
-                return;
-            }
-        }
-
         // Before the login, not lazily after it fails: the refusal names
         // a command, and the person reading it pressed a button
         // precisely so they would not have to run one.
         if let Err(e) = latchkey_output(&ensure_browser_args()).await {
-            let mut slot = slot.lock().expect("connect slot mutex");
-            slot.status = ConnectState::Failed;
-            slot.output = format!(
+            let message = format!(
                 "no browser available for the login ({}). Latchkey can install one, which \
                  downloads a Chromium of a few hundred megabytes: run `{} ensure-browser` and \
                  try again.",
                 tail(&e.to_string()),
                 datalib_core::node_runtime::latchkey_cli_hint(),
             );
+            fail(&slot, &service, message);
             return;
         }
 
-        let outcome =
-            tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output_env(&args, &login_env)).await;
-        // A placeholder outliving a login that never finished is a
-        // stored credential that cannot work, and it would make the
-        // account look connected in every account list.
-        if seeded && !matches!(outcome, Ok(Ok(_))) {
-            let _ = latchkey_output(&clear_args(&service, &account)).await;
+        let login =
+            || tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output_env(&args, &login_env));
+        let mut outcome = login().await;
+
+        // latchkey's `auth browser` *refreshes* an account; it will not
+        // create one, and refuses a name it has never seen. Seeding it
+        // is the whole remedy — the login overwrites the placeholder —
+        // so do that rather than handing the person a command. Only on
+        // that exact refusal: any other failure is its own problem.
+        let refused_unknown_account = !account.is_empty()
+            && matches!(&outcome, Ok(Err(e)) if e.to_string().contains("No credentials stored for account"));
+        if refused_unknown_account {
+            if let Err(e) = latchkey_output(&seed_args(&service, &account)).await {
+                fail(&slot, &service, tail(&e.to_string()));
+                return;
+            }
+            outcome = login().await;
+            // A placeholder outliving a login that never finished is a
+            // stored credential that cannot work, and it would make the
+            // account look connected in every account list.
+            if !matches!(outcome, Ok(Ok(_))) {
+                let _ = latchkey_output(&clear_args(&service, &account)).await;
+            }
         }
-        let mut slot = slot.lock().expect("connect slot mutex");
+
         match outcome {
-            Ok(Ok(output)) => {
-                slot.status = ConnectState::Ok;
-                slot.account = stored_account(&output);
-                slot.output = tail(&output);
-            }
-            Ok(Err(e)) => {
-                slot.status = ConnectState::Failed;
-                slot.output = tail(&e.to_string());
-            }
-            Err(_) => {
-                slot.status = ConnectState::Failed;
-                slot.output = "the browser login did not finish within 15 minutes; start it again"
-                    .to_string();
-            }
+            Ok(Ok(output)) => succeed(&slot, &service, stored_account(&output), tail(&output)),
+            Ok(Err(e)) => fail(&slot, &service, tail(&e.to_string())),
+            Err(_) => fail(
+                &slot,
+                &service,
+                "the browser login did not finish within 15 minutes; start it again".to_string(),
+            ),
         }
     });
 
@@ -337,6 +318,34 @@ pub async fn start_connect(
         account: None,
         output: String::new(),
     }))
+}
+
+/// The attempt's outcome goes to this process's stderr as well as to
+/// the slot: the slot is reaped on the first poll that reads it, and a
+/// login that "worked" but stored a dead credential (latchkey#152) is
+/// only diagnosable afterwards if something durable says what latchkey
+/// printed. The output is latchkey's, so it is scrubbed first.
+fn fail(slot: &Arc<Mutex<ConnectStatus>>, service: &str, output: String) {
+    eprintln!("latchkey login for {service} failed: {}", scrub(&output));
+    let mut slot = slot.lock().expect("connect slot mutex");
+    slot.status = ConnectState::Failed;
+    slot.output = output;
+}
+
+fn succeed(
+    slot: &Arc<Mutex<ConnectStatus>>,
+    service: &str,
+    account: Option<String>,
+    output: String,
+) {
+    match &account {
+        Some(a) => eprintln!("latchkey login for {service}: stored under account {a:?}"),
+        None => eprintln!("latchkey login for {service}: stored"),
+    }
+    let mut slot = slot.lock().expect("connect slot mutex");
+    slot.status = ConnectState::Ok;
+    slot.account = account;
+    slot.output = output;
 }
 
 /// The placeholder that brings a named account into existence so the
@@ -496,10 +505,12 @@ pub async fn probe(
         // The step prints its error chain to stderr; that chain is the
         // useful message ("Gmail users.getProfile: HTTP 401 …"), so
         // pass it through rather than replacing it with our own.
-        return Err(err(
-            StatusCode::BAD_GATEWAY,
-            &tail(&String::from_utf8_lossy(&out.stderr)),
-        ));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        eprintln!(
+            "probe {source_type} failed: {}",
+            scrub(&error_chain(&stderr))
+        );
+        return Err(err(StatusCode::BAD_GATEWAY, &tail(&stderr)));
     }
     let report: Value = serde_json::from_slice(&out.stdout).map_err(|e| {
         err(
@@ -525,7 +536,9 @@ pub async fn probe(
 ///
 /// Only for cookie capture. An OAuth login *benefits* from the saved
 /// session — it has an identity to re-derive either way, and being
-/// already signed in is one less password.
+/// already signed in is one less password. Whether token capture needs
+/// it is open (imbue-ai/latchkey#152); until it is shown to, a sign-in
+/// every time is a cost nobody asked for.
 const EPHEMERAL_BROWSER_ENV: &str = "LATCHKEY_EPHEMERAL_BROWSER";
 
 async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
@@ -596,6 +609,105 @@ fn tail(s: &str) -> String {
     format!("…{}", &s[cut..])
 }
 
+/// The `error: …` lines `datalib-step probe` prints on failure, without
+/// the tracing output around them. Falls back to the whole tail when a
+/// crash left no chain.
+fn error_chain(stderr: &str) -> String {
+    let chain: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("error: "))
+        .collect();
+    if chain.is_empty() {
+        tail(stderr)
+    } else {
+        chain.join(" | ")
+    }
+}
+
+/// Blank anything credential-shaped before a line goes to the log.
+/// Nothing logged here is *meant* to carry one — `latchkey curl` runs
+/// without `-v`, and a probe's error is a status line and a body
+/// preview — but latchkey's own output on a failed login is whatever it
+/// chose to print, and a log file outlives the dialog.
+///
+/// Word-based, so it is deliberately blunt: the word after `Bearer`,
+/// the rest of a line after `Cookie:` / `Set-Cookie:`, any JWT, and the
+/// value of any `k=v` whose key mentions a token, secret, password,
+/// session or cookie.
+fn scrub(s: &str) -> String {
+    const BLANK: &str = "<redacted>";
+    let mut out = String::with_capacity(s.len());
+    for (i, line) in s.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let mut blank_next = false;
+        let mut words = line.split(' ').peekable();
+        let mut first = true;
+        while let Some(word) = words.next() {
+            if !first {
+                out.push(' ');
+            }
+            first = false;
+            let lower = word.to_ascii_lowercase();
+            if blank_next && !word.is_empty() {
+                out.push_str(BLANK);
+                blank_next = false;
+                continue;
+            }
+            if lower == "cookie:" || lower == "set-cookie:" {
+                out.push_str(word);
+                if words.peek().is_some() {
+                    out.push(' ');
+                    out.push_str(BLANK);
+                }
+                break;
+            }
+            if lower == "bearer" {
+                out.push_str(word);
+                blank_next = true;
+                continue;
+            }
+            if looks_like_jwt(word) {
+                out.push_str(BLANK);
+                continue;
+            }
+            if let Some((key, _)) = word.split_once('=') {
+                let k = key.to_ascii_lowercase();
+                if ["token", "secret", "password", "session", "cookie"]
+                    .iter()
+                    .any(|needle| k.contains(needle))
+                {
+                    out.push_str(key);
+                    out.push('=');
+                    out.push_str(BLANK);
+                    continue;
+                }
+            }
+            out.push_str(word);
+        }
+    }
+    out
+}
+
+/// Three base64url segments, the first a `{"` header (`eyJ`), which is
+/// what every JWT starts with.
+fn looks_like_jwt(word: &str) -> bool {
+    let trimmed = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_');
+    let mut parts = trimmed.split('.');
+    let (Some(h), Some(p), Some(sig), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let b64url = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    h.starts_with("eyJ") && b64url(h) && b64url(p) && b64url(sig)
+}
+
 fn validated_service(service: &str) -> Result<String, (StatusCode, Json<Value>)> {
     let s = service.trim();
     if s.is_empty()
@@ -625,6 +737,55 @@ fn validated_type(source_type: &str) -> Result<String, (StatusCode, Json<Value>)
 
 fn err(status: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
     (status, Json(serde_json::json!({ "error": message })))
+}
+
+#[cfg(test)]
+mod scrub_tests {
+    use super::{error_chain, scrub};
+
+    /// The message this exists for — the chatgpt 401 — must survive
+    /// whole: it names the endpoint, the status and the body's code.
+    #[test]
+    fn keeps_the_chatgpt_401_intact() {
+        let msg = "error: chatgpt.com credentials are not set up: GET /backend-api/me -> \
+                   HTTP 401 cf-mitigated=None body=\"{\\n \"code\": \"token_expired\"}\"";
+        assert_eq!(scrub(msg), msg);
+    }
+
+    #[test]
+    fn blanks_bearer_tokens_cookies_and_jwts() {
+        let jwt = "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE3NTc3NjAwMDB9.c2lnbmF0dXJl";
+        assert_eq!(
+            scrub(&format!("-H Authorization: Bearer {jwt} sent")),
+            "-H Authorization: Bearer <redacted> sent"
+        );
+        assert_eq!(
+            scrub(&format!("stored {jwt} for chatgpt")),
+            "stored <redacted> for chatgpt"
+        );
+        assert_eq!(
+            scrub("Cookie: sessionKey=sk-abc; other=1"),
+            "Cookie: <redacted>"
+        );
+        assert_eq!(
+            scrub("GET https://x/y?access_token=abc&limit=5 ok"),
+            "GET https://x/y?access_token=<redacted> ok"
+        );
+        assert_eq!(
+            scrub("line one\nSet-Cookie: a=b\nline three"),
+            "line one\nSet-Cookie: <redacted>\nline three"
+        );
+    }
+
+    #[test]
+    fn error_chain_keeps_only_the_error_lines() {
+        let stderr = "{\"level\":\"INFO\",\"msg\":\"probing\"}\nerror: fetch /me: boom\nerror: caused by x\n";
+        assert_eq!(
+            error_chain(stderr),
+            "error: fetch /me: boom | error: caused by x"
+        );
+        assert_eq!(error_chain("segfault\n"), "segfault");
+    }
 }
 
 #[cfg(test)]
