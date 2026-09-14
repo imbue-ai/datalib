@@ -47,19 +47,8 @@ impl RenderProcessor for ClaudeRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(&self.raw_path, ctx.raw_cursor)
+        let parsed = parse(&self.raw_path, ctx.raw_range())
             .with_context(|| format!("claude parse {}", self.raw_path.display()))?;
-        // Conversations and projects claude.ai no longer has. Their pages go
-        // before we render, so a run interrupted afterwards has already
-        // dropped them rather than leaving a document whose source is gone.
-        // A bucket id could have been either kind and the store no longer
-        // says which, so both derivations are offered; the one that names
-        // nothing removes nothing.
-        let mut dropped = 0usize;
-        for bucket in &parsed.vanished_buckets {
-            dropped += ctx.remove_conversation(&crate::render::ids::conversation(bucket).uuid)?;
-            dropped += ctx.remove_conversation(&crate::render::ids::project(bucket).uuid)?;
-        }
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render_all(
             &parsed,
@@ -72,11 +61,16 @@ impl RenderProcessor for ClaudeRender {
             &mut on_doc,
         )
         .context("claude render_all")?;
-        // A named bucket is a conversation or a project; both uuids are
-        // declared, and the one that names nothing removes nothing.
-        for bucket in parsed.scan.changed_buckets.iter().flatten() {
+        // A bucket this run looked at is a conversation or a project;
+        // both uuids are declared with nothing, so whichever page it had
+        // that this run did not produce goes. The rendered ones follow
+        // and replace that.
+        for bucket in parsed.scan.render.iter().flatten() {
             ctx.declare_bucket(&crate::render::ids::conversation(bucket).uuid, &[])?;
             ctx.declare_bucket(&crate::render::ids::project(bucket).uuid, &[])?;
+        }
+        for bucket in &parsed.scan.gone {
+            ctx.declare_bucket(bucket, &[])?;
         }
         for bucket in &buckets {
             ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
@@ -84,10 +78,6 @@ impl RenderProcessor for ClaudeRender {
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }
-        Ok(if dropped == 0 {
-            "rendered".into()
-        } else {
-            format!("rendered, {dropped} document(s) gone upstream")
-        })
+        Ok("rendered".into())
     }
 }

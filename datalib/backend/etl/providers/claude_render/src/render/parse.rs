@@ -5,12 +5,14 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use datalib_etl::blob_cas::{self, BlobBundle};
+use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
+use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::{Map, Value};
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl_claude::ingest::db::{self, db_path_for, LoadedConversation, LoadedRaw};
 use datalib_etl_claude::ingest::normalize::normalize_to_export_shape;
+use datalib_etl_claude::ingest::schema_raw::ConversationAttachmentRow;
 
 /// SQL projection that maps an Anthropic `file_uuid` to its CAS
 /// blake3. Consumed by [`BlobBundle::load`].
@@ -53,6 +55,10 @@ pub struct ProjectRow {
     pub raw_json: Value,
     /// This project's knowledge documents, sorted by `(created_at, uuid)`.
     pub docs: Vec<ProjectDocRow>,
+    /// Every raw row this project's page reads — its row and its
+    /// documents from the load, the viewer's `users` row as render
+    /// looks it up.
+    pub inputs: Inputs,
 }
 
 /// One knowledge document attached to a project. The text rides inline
@@ -135,6 +141,10 @@ pub struct ClaudeConversation {
     /// has no attachments or no doltlite db is present (legacy
     /// JSON-tree fixture).
     pub blobs: BlobBundle,
+    /// Every raw row this conversation reads — its row and attachment
+    /// edges from the load, its account's `users` row and its project as
+    /// render looks them up.
+    pub inputs: Inputs,
 }
 
 /// Shredded form of one conversation. Built by [`shred`] only for
@@ -154,13 +164,15 @@ pub struct ShreddedConversation {
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → render only the conversations and projects whose
-    /// UUID is in `set`. `None` → render everything. Conversation and
-    /// project UUIDs share one set because they are drawn from disjoint
-    /// upstream id spaces, so a membership test can't confuse them.
+    /// UUID is in `set`: the ones the driver found stale through their
+    /// declared inputs, plus the ones the diff named. `None` → render
+    /// everything. Conversation and project UUIDs share one set because
+    /// they are drawn from disjoint upstream id spaces, so a membership
+    /// test can't confuse them.
     pub render: Option<HashSet<String>>,
-    /// The buckets the diff named, for the removal probe — still a set
-    /// when `render` is `None` because a fan-out table changed.
-    pub changed_buckets: Option<HashSet<String>>,
+    /// Bucket keys the driver found stale whose row is gone from both
+    /// entity tables — declared with nothing so their pages go.
+    pub gone: Vec<String>,
     pub new_head: Option<String>,
     pub scan_elapsed: Option<Duration>,
 }
@@ -184,11 +196,6 @@ pub struct ParsedExport {
     /// Count of docs (conversations + projects) `dolt_diff` reported as
     /// unchanged.
     pub docs_skipped: usize,
-    /// Bucket ids the diff named that the raw store no longer has a row for:
-    /// conversations and projects that went away upstream. Empty on a cold
-    /// start, which examines every bucket and so has nothing to compare
-    /// against.
-    pub vanished_buckets: Vec<String>,
     pub scan: ScanResult,
 }
 
@@ -215,10 +222,10 @@ fn str_field(v: &Map<String, Value>, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(String::from)
 }
 
-pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedExport> {
+pub fn parse(path: &Path, range: RawRange<'_>) -> Result<ParsedExport> {
     let db_path = db_path_for(path);
     if db_path.exists() {
-        return parse_doltlite(&db_path, last_render_hash);
+        return parse_doltlite(&db_path, range);
     }
     // No store: this source has never been downloaded. That is the
     // normal state of every source in a freshly scaffolded config, not
@@ -228,17 +235,14 @@ pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedExport
     Ok(ParsedExport::default())
 }
 
-fn parse_doltlite(db_path: &Path, last_render_hash: Option<&str>) -> Result<ParsedExport> {
+fn parse_doltlite(db_path: &Path, range: RawRange<'_>) -> Result<ParsedExport> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_doltlite_async(db_path, last_render_hash).await })
+            .block_on(async move { parse_doltlite_async(db_path, range).await })
     })
 }
 
-async fn parse_doltlite_async(
-    db_path: &Path,
-    last_render_hash: Option<&str>,
-) -> Result<ParsedExport> {
+async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<ParsedExport> {
     let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open claude doltlite for render {}", db_path.display()))?;
@@ -265,15 +269,13 @@ async fn parse_doltlite_async(
     // a provider that swept would have to skip instead. See the plan's
     // "The sink contract".
 
-    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+    let Some(pin) = range.pin(&pool).await? else {
         return Ok(ParsedExport::default());
     };
 
     datalib_etl::pin::install_views(&pool, &pin)
         .await
         .context("pin the claude raw store for render")?;
-
-    let scan = scan_diff(&pool, last_render_hash, &pin).await?;
 
     // These three all read tables the download side also reads; the
     // single copy of each lives in `ingest::db` (users/orgs go
@@ -286,6 +288,9 @@ async fn parse_doltlite_async(
         db::first_user_uuid_from(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     let all_convs = db::load_conversations_from(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     let total = all_convs.len();
+    let all_projects = load_project_rows(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
+
+    let scan = scan_diff(&pool, range, &pin, &all_convs, &all_projects).await?;
 
     let (filtered, docs_skipped) = match &scan.render {
         None => (all_convs, 0usize),
@@ -312,7 +317,6 @@ async fn parse_doltlite_async(
     // `project_name_by_uuid` is loaded unfiltered, though — an unchanged
     // conversation that *is* being re-rendered (because something else
     // in its bucket moved) still has to resolve its project's name.
-    let all_projects = load_project_rows(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     parsed.project_name_by_uuid = name_index(&all_projects);
     parsed.projects = match &scan.render {
         None => all_projects,
@@ -326,34 +330,28 @@ async fn parse_doltlite_async(
             kept
         }
     };
-    // A bucket the diff named whose row is gone from both entity tables is a
-    // conversation or project claude.ai no longer has. Rendering cannot see
-    // this — it only ever gets handed what still exists — so the question is
-    // asked of the store here, while the changed set is still in hand.
-    if let Some(changed) = scan.changed_buckets.as_ref() {
-        parsed.vanished_buckets = datalib_etl::doltlite_raw::buckets_without_rows(
-            &pool,
-            datalib_etl::pin::Reads::At(&pin),
-            changed,
-            &[("conversations", "id"), ("projects", "id")],
-        )
-        .await?;
-    }
     parsed.scan = scan;
 
     // Per-doc BlobBundle: walk each conversation's
     // `chat_messages[*].files[*].file_uuid` and bulk-load the matching
     // edge-table rows + CAS bytes. Two SQL queries per conversation.
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        for conv in &mut parsed.conversations {
-            let refs = collect_attachment_ref_ids(&conv.upstream_payload);
-            if refs.is_empty() {
-                continue;
-            }
-            let ref_strs: Vec<&str> = refs.iter().map(String::as_str).collect();
-            conv.blobs =
-                BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &ref_strs).await?;
+    for conv in &mut parsed.conversations {
+        let refs = collect_attachment_ref_ids(&conv.upstream_payload);
+        for file_uuid in &refs {
+            conv.inputs.read(
+                "claude_attachments",
+                &ConversationAttachmentRow::pk_recipe(&conv.conv.conversation_uuid, file_uuid),
+            );
         }
+        let Some(cas_pool) = cas_pool.as_ref() else {
+            continue;
+        };
+        if refs.is_empty() {
+            continue;
+        }
+        let ref_strs: Vec<&str> = refs.iter().map(String::as_str).collect();
+        conv.blobs =
+            BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &ref_strs).await?;
     }
 
     Ok(parsed)
@@ -405,14 +403,21 @@ async fn load_project_rows(
 
     let mut out = Vec::with_capacity(projects.len());
     for p in projects {
+        let inputs = Inputs::default();
+        inputs.read("projects", &p.id);
         let mut docs = docs_by_project.remove(&p.id).unwrap_or_default();
+        for d in &docs {
+            inputs.read("project_docs", &d.doc_uuid);
+        }
         // Deterministic order: the render is a golden test, and the
         // upstream listing order is not promised to be stable.
         docs.sort_by(|a, b| {
             (a.created_at.as_deref().unwrap_or(""), a.doc_uuid.as_str())
                 .cmp(&(b.created_at.as_deref().unwrap_or(""), b.doc_uuid.as_str()))
         });
-        out.push(project_row(p.id, p.org_uuid, p.org_name, p.payload, docs));
+        let mut row = project_row(p.id, p.org_uuid, p.org_name, p.payload, docs);
+        row.inputs = inputs;
+        out.push(row);
     }
     out.sort_by(|a, b| a.project_uuid.cmp(&b.project_uuid));
     Ok(out)
@@ -452,6 +457,7 @@ fn project_row(
         updated_at: str_field(&obj, "updated_at"),
         raw_json: payload,
         docs,
+        inputs: Inputs::default(),
     }
 }
 
@@ -468,23 +474,24 @@ fn project_doc_row(project_uuid: String, doc_uuid: String, payload: Value) -> Pr
 }
 
 /// Phase 1: union over `dolt_diff_conversations`,
-/// `dolt_diff_claude_attachments` and `dolt_diff_project_docs` to
-/// project the changed bucket keys — conversation UUIDs from the first
-/// two, project UUIDs from the last two. `projects` is also a fan-out
-/// table (a rename reaches every conversation's `project` column), but
-/// fan-out alone never *names* a project, and a deleted one has to be
-/// named to be removed.
+/// `dolt_diff_claude_attachments`, `dolt_diff_project_docs` and
+/// `dolt_diff_projects` to project the changed bucket keys —
+/// conversation UUIDs from the first two, project UUIDs from the last
+/// two. A user or project rename reaches a conversation through the
+/// inputs it declared, so nothing fans out.
 async fn scan_diff(
     pool: &SqlitePool,
-    last_render_hash: Option<&str>,
+    range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
+    conversations: &[LoadedConversation],
+    projects: &[ProjectRow],
 ) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
-        last_render_hash,
+        range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &["users", "orgs", "projects"],
+            global_fanout_tables: &[],
             bucket_query: "
                 SELECT DISTINCT bucket_uuid FROM (
                     SELECT coalesce(to_id, from_id) AS bucket_uuid
@@ -508,9 +515,24 @@ async fn scan_diff(
         },
     )
     .await?;
+    // The driver names buckets by the minted page uuid; the load wants
+    // the upstream uuid.
+    let by_key: std::collections::HashMap<String, &str> = conversations
+        .iter()
+        .map(|c| (super::ids::conversation(&c.id).uuid, c.id.as_str()))
+        .chain(projects.iter().map(|p| {
+            (
+                super::ids::project(&p.project_uuid).uuid,
+                p.project_uuid.as_str(),
+            )
+        }))
+        .collect();
+    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
+        by_key.get(key).map(|id| id.to_string())
+    });
     Ok(ScanResult {
-        render: scan.render,
-        changed_buckets: scan.changed_buckets,
+        render: narrowed.render,
+        gone: narrowed.gone,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })
@@ -533,7 +555,7 @@ pub fn parse_loaded(raw: datalib_etl_claude::ingest::db::LoadedRaw) -> ParsedExp
     out.viewer_account_uuid = raw.first_user_uuid.clone();
     let account_uuid = raw.first_user_uuid.as_deref();
     for LoadedConversation {
-        id: _,
+        id,
         org_uuid,
         org_name,
         payload,
@@ -545,11 +567,14 @@ pub fn parse_loaded(raw: datalib_etl_claude::ingest::db::LoadedRaw) -> ParsedExp
             }
             None => payload,
         };
+        let inputs = Inputs::default();
+        inputs.read("conversations", &id);
         match build_conv_row(&normalized) {
             Ok(Some(conv)) => out.conversations.push(ClaudeConversation {
                 conv,
                 upstream_payload: normalized,
                 blobs: BlobBundle::default(),
+                inputs,
             }),
             Ok(None) => {}
             Err(e) => {
@@ -706,7 +731,7 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse(Path::new("/this/does/not/exist"), None).unwrap();
+        let parsed = parse(Path::new("/this/does/not/exist"), RawRange::cold()).unwrap();
         assert!(parsed.conversations.is_empty());
         assert!(parsed.accounts.is_empty());
         assert!(parsed.projects.is_empty());

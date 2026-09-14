@@ -17,6 +17,7 @@ use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::Inputs;
 
 use super::ids;
 use super::parse::{
@@ -110,9 +111,9 @@ pub fn render_all(
     tracing::info!(
         source = source_id,
         scan_elapsed_ms = elapsed_ms,
-        changed_buckets = parsed
+        buckets_to_render = parsed
             .scan
-            .changed_buckets
+            .render
             .as_ref()
             .map(|s| s.len() as i64)
             .unwrap_or(-1),
@@ -126,7 +127,7 @@ pub fn render_all(
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     for c in &parsed.conversations {
         let shredded = shred(c);
-        let chat = build_chat(&shredded, &parsed.project_name_by_uuid, parsed);
+        let chat = build_chat(&shredded, &c.inputs, &parsed.project_name_by_uuid, parsed);
         blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
         chats.push(chat);
     }
@@ -172,6 +173,7 @@ pub fn render_all(
 
 fn build_chat(
     shredded: &ShreddedConversation,
+    inputs: &Inputs,
     project_names: &HashMap<String, String>,
     parsed: &ParsedExport,
 ) -> NormalizedChat {
@@ -359,8 +361,11 @@ fn build_chat(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(&conv_uuid).uuid;
+    // The account row and the project row are looked up per chat, and
+    // declared as they are.
+    inputs.read("users", &conv.account_uuid);
+    let project_names = inputs.lookup("projects", project_names);
     NormalizedChat {
-        inputs: Vec::new(),
         path_prefix: None,
         id: chat_uuid.clone(),
         chat_uuid: chat_uuid.clone(),
@@ -388,6 +393,7 @@ fn build_chat(
             markdown_uuid: chat_uuid,
             items,
         }],
+        inputs: inputs.declared(),
     }
 }
 
@@ -477,8 +483,10 @@ fn build_project_page(
     }
     items.sort_by_key(|i| i.date_ms);
 
+    if let Some(viewer) = &parsed.viewer_account_uuid {
+        project.inputs.read("users", viewer);
+    }
     NormalizedChat {
-        inputs: Vec::new(),
         path_prefix: None,
         id: page_uuid.clone(),
         chat_uuid: page_uuid.clone(),
@@ -508,6 +516,7 @@ fn build_project_page(
             markdown_uuid: page_uuid,
             items,
         }],
+        inputs: project.inputs.declared(),
     }
 }
 
