@@ -619,8 +619,8 @@ onUnmounted(() => {
             <td class="progress-cell">
               <StepProgress :msg="j.progress_msg" :state="j.state" />
             </td>
-            <td>{{ fmtTime(j.started_at) }}</td>
-            <td>{{ fmtTime(j.finished_at) }}</td>
+            <td>{{ fmtTime(j.started_at_utc) }}</td>
+            <td>{{ fmtTime(j.finished_at_utc) }}</td>
             <td class="actions-cell">
               <button class="btn btn-log" @click="toggleLog(j)">
                 {{ expandedId === j.id ? "Hide log" : "Log" }}

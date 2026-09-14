@@ -62,7 +62,7 @@ landing in the architecture docs where they belong.
 **Everything that was misfiled now lives here**, with a pointer left
 behind at each old location: the backpointers bullet (§3), the
 `GridRow.when_ts` policy (§6 — the `datalib-time` crate contract stays
-in the ingestion doc, since download stamps its own `fetched_at` with
+in the ingestion doc, since download stamps its own `fetched_at_utc` with
 it), the render cursor and the render-side progress question (§5), the
 render-store contract (§2), and the `GridRow` family taxonomy (§3).
 

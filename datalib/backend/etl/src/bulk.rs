@@ -5,6 +5,7 @@
 //! [`insert_sql`] for the one path that deliberately does not upsert.
 
 use anyhow::{Context, Result};
+use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
@@ -50,11 +51,13 @@ pub fn push_placeholder_list(sql: &mut String, count: usize) {
     }
 }
 
+/// `now` is one stamp per batch — "the sync that wrote these rows" —
+/// stored as UTC with its offset beside it.
 pub async fn bulk_upsert_bookkeeping<'a, I>(
     tx: &mut Transaction<'_, Sqlite>,
     table: &str,
     ids: I,
-    now: &str,
+    now: &IsoOffsetTimestamp,
 ) -> Result<()>
 where
     I: IntoIterator<Item = &'a str>,
@@ -63,18 +66,21 @@ where
     if ids.is_empty() {
         return Ok(());
     }
+    let (now, tz_offset) = now.to_utc_and_offset();
     let bk_table = format!("{table}_bookkeeping");
     for chunk in ids.chunks(SQL_CHUNK) {
         let mut sql = format!(
-            "INSERT INTO {bk_table} (id, fetched_at, attempt_count, last_attempt_at, last_error) VALUES "
+            "INSERT INTO {bk_table} \
+                (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, tz_offset) VALUES "
         );
-        push_placeholders(&mut sql, chunk.len(), 5);
+        push_placeholders(&mut sql, chunk.len(), 6);
         sql.push_str(&format!(
             " ON CONFLICT(id) DO UPDATE SET
-                fetched_at = excluded.fetched_at,
+                fetched_at_utc = excluded.fetched_at_utc,
                 attempt_count = {bk_table}.attempt_count + 1,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL"
+                last_attempt_at_utc = excluded.last_attempt_at_utc,
+                last_error = NULL,
+                tz_offset = excluded.tz_offset"
         ));
         // Audited: only `bk_table` (= `{table}_bookkeeping`) is interpolated, and
         // the VALUES run is `push_placeholders` over `chunk.len()`. All bound.
@@ -82,10 +88,11 @@ where
         for id in chunk {
             q = q
                 .bind(*id)
-                .bind(now)
+                .bind(&now)
                 .bind(1_i64)
-                .bind(now)
-                .bind::<Option<&str>>(None);
+                .bind(&now)
+                .bind::<Option<&str>>(None)
+                .bind(&tz_offset);
         }
         q.execute(&mut **tx)
             .await
@@ -123,7 +130,7 @@ pub fn insert_sql<T: BulkUpsertable>() -> String {
 pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
     tx: &mut Transaction<'_, Sqlite>,
     rows: &[T],
-    now: &str,
+    now: &IsoOffsetTimestamp,
 ) -> Result<()> {
     bulk_upsert_entity_in_tx(tx, rows).await?;
     if rows.is_empty() {

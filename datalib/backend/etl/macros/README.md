@@ -138,5 +138,5 @@ Emits module-level `TABLES`, `DDL` and `COLUMNS`.
 The `BulkUpsertable` impl is **skipped for a composite primary key**:
 `BulkUpsertable` keys on one column by contract (`ID_COLUMN` is the
 `ON CONFLICT` target and `id()` returns one `&str`), and `disk_usage` is
-legitimately keyed on `(path, measured_at)`. Such a table still gets its DDL
+legitimately keyed on `(path, measured_at_utc)`. Such a table still gets its DDL
 and column metadata; it just keeps writing itself.

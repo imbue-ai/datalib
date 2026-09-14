@@ -34,9 +34,12 @@ invocation is a local event with no upstream identity.
 
 ## Bookkeeping lives in a sidecar table
 
-`payload` is content and stays on the object table. `fetched_at`,
-`attempt_count`, `last_attempt_at`, `last_error` and `volatile_payload` go
-in `<table>_bookkeeping` (see `bookkeeping_ddl_for`).
+`payload` is content and stays on the object table. `fetched_at_utc`,
+`attempt_count`, `last_attempt_at_utc`, `last_error`, `volatile_payload`
+and `tz_offset` go in `<table>_bookkeeping` (see `bookkeeping_ddl_for`).
+The two stamps are UTC and `tz_offset` is the offset the writer's clock
+was in — the pair every stamp we mint is stored as (AGENTS.md,
+"Timestamp convention").
 
 The split keeps `dolt diff` over the data tables reflecting upstream change
 only, not re-fetch churn — which is what makes the `--reset-and-redownload`

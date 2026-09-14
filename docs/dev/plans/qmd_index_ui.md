@@ -249,7 +249,7 @@ the truth about the content — just not about the file.
 The hash join *is* the freshness check, so the two options the original
 version of this section weighed are both moot for slice 1:
 
-1. ~~`documents.modified_at` vs `markdowns.rendered_at`~~ — comparing a
+1. ~~`documents.modified_at` vs `markdowns.rendered_at_utc`~~ — comparing a
    filesystem mtime against our own stamp across two clocks and two
    timestamp conventions. Not needed.
 

@@ -194,9 +194,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut client = ClaudeClient::with_latchkey(opts.latchkey.clone());
     let mut summary = FetchSummary::default();
     // One `now` per fetch — threaded into every bulk upsert so all
-    // `<table>_bookkeeping.fetched_at` stamps from a single sync share
+    // `<table>_bookkeeping.fetched_at_utc` stamps from a single sync share
     // a timestamp.
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = IsoOffsetTimestamp::now_local();
     // Run-scoped `(file_uuid → blake3)` cache, loaded once up-front
     // so the per-file dedupe check inside `fetch_files_for` is a
     // HashMap hit instead of a SQLite round trip. Successful
@@ -580,7 +580,7 @@ async fn sync_projects(
     only: &HashSet<String>,
     summary: &mut FetchSummary,
     progress: &datalib_etl::progress::Progress,
-    now: &str,
+    now: &IsoOffsetTimestamp,
 ) {
     // Track which requested UUIDs we actually saw, so a typo doesn't
     // silently mirror nothing.
@@ -769,7 +769,7 @@ async fn upsert_project(
     uuid: &str,
     org_uuid: &str,
     org_name: &str,
-    now: &str,
+    now: &IsoOffsetTimestamp,
 ) -> Result<()> {
     let payload = &canonicalize_project_payload(payload);
     let row = ProjectRow {
@@ -795,7 +795,7 @@ async fn upsert_project_docs(
     db: &RawDb,
     docs: &[Value],
     project_uuid: &str,
-    now: &str,
+    now: &IsoOffsetTimestamp,
 ) -> Result<usize> {
     let mut rows: Vec<ProjectDocRow> = Vec::with_capacity(docs.len());
     for doc in docs {
@@ -902,7 +902,7 @@ async fn fetch_single(
     conv_uuid: &str,
     summary: &mut FetchSummary,
     blake3_by_file: &mut HashMap<String, String>,
-    now: &str,
+    now: &IsoOffsetTimestamp,
 ) -> Result<SingleOutcome> {
     let mut forbidden_somewhere = false;
     for org in orgs {
@@ -1034,7 +1034,7 @@ async fn save_conversation(
     org_name: &str,
     uuid: &str,
     full: &Value,
-    now: &str,
+    now: &IsoOffsetTimestamp,
 ) -> Result<()> {
     let payload = serde_json::to_string(full).context("serialize conversation")?;
     let name = full.get("name").and_then(|v| v.as_str()).map(String::from);
@@ -1067,7 +1067,7 @@ fn org_identity(org: &Value) -> Option<(&str, String)> {
 async fn commit_rows<T: datalib_etl::bulk::BulkUpsertable>(
     db: &RawDb,
     rows: &[T],
-    now: &str,
+    now: &IsoOffsetTimestamp,
 ) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
@@ -1083,7 +1083,7 @@ async fn commit_rows<T: datalib_etl::bulk::BulkUpsertable>(
         .with_context(|| format!("commit {} upsert tx", T::TABLE))
 }
 
-async fn upsert_users(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
+async fn upsert_users(db: &RawDb, payloads: &[Value], now: &IsoOffsetTimestamp) -> Result<()> {
     if payloads.is_empty() {
         return Ok(());
     }
@@ -1113,7 +1113,7 @@ async fn upsert_users(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
     commit_rows(db, &rows, now).await
 }
 
-async fn upsert_orgs(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
+async fn upsert_orgs(db: &RawDb, payloads: &[Value], now: &IsoOffsetTimestamp) -> Result<()> {
     if payloads.is_empty() {
         return Ok(());
     }
@@ -1138,7 +1138,11 @@ async fn upsert_orgs(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
     commit_rows(db, &rows, now).await
 }
 
-async fn ingest_export_users(db: &RawDb, export_dir: &Path, now: &str) -> Result<()> {
+async fn ingest_export_users(
+    db: &RawDb,
+    export_dir: &Path,
+    now: &IsoOffsetTimestamp,
+) -> Result<()> {
     let path = export_dir.join("users.json");
     if !path.exists() {
         return Ok(());
@@ -1170,7 +1174,7 @@ async fn fetch_files_for(
     conv_uuid: &str,
     summary: &mut FetchSummary,
     blake3_by_file: &mut HashMap<String, String>,
-    now: &str,
+    now: &IsoOffsetTimestamp,
 ) {
     let messages = match conv.get("chat_messages").and_then(|v| v.as_array()) {
         Some(arr) => arr,

@@ -27,6 +27,7 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/media_config:datalib_etl_media_config",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:chrono",

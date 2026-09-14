@@ -71,9 +71,9 @@ function job(over: Partial<SyncJob> = {}): SyncJob {
     progress_pct: null,
     progress_msg: null,
     error: null,
-    created_at: T.jobStart,
-    started_at: T.jobStart,
-    finished_at: null,
+    created_at_utc: T.jobStart,
+    started_at_utc: T.jobStart,
+    finished_at_utc: null,
     ...over,
   };
 }
@@ -122,7 +122,7 @@ describe("what a single snapshot means", () => {
   it("a pending job queues the step it names and everything downstream", () => {
     // Nothing is running yet — the worker has not even claimed the job.
     // This is the window that used to show nothing at all.
-    const claims = claimedBy(steps(), [job({ state: "pending", started_at: null })]);
+    const claims = claimedBy(steps(), [job({ state: "pending", started_at_utc: null })]);
     expect([...claims.keys()].sort()).toEqual([
       "a/ingest",
       "a/render_markdown",
@@ -197,7 +197,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
   {
     note: "clicked: the job exists, the worker has not claimed it, and the runner's record is still last run's",
     frame: {
-      jobs: [job({ state: "pending", started_at: null })],
+      jobs: [job({ state: "pending", started_at_utc: null })],
       run: { ...liveRun, run_id: "older", started_at: T.yesterday, finished_at: T.yesterday, live: false },
       dag: {},
     },
@@ -249,7 +249,7 @@ const TIMELINE: { note: string; frame: Frame }[] = [
   {
     note: "settled: the queue has caught up",
     frame: {
-      jobs: [job({ state: "done", finished_at: T.runEnd })],
+      jobs: [job({ state: "done", finished_at_utc: T.runEnd })],
       run: { ...liveRun, finished_at: T.runEnd, live: false },
       dag: {
         "a/ingest": dagStep({
@@ -367,7 +367,7 @@ describe("the pushed sequence, with the polled record still stale", () => {
   function readPushed(frame: (typeof frames)[number], id: string) {
     const active = frame.state === "pending" || frame.state === "running";
     const overlay = active ? pushedOverlay(frame.tasks, T.runStart) : {};
-    const j = job({ state: frame.state, started_at: active ? T.jobStart : null });
+    const j = job({ state: frame.state, started_at_utc: active ? T.jobStart : null });
     return stepStatus({
       id,
       step: withOverlay(undefined, id, overlay[id]),
@@ -470,7 +470,7 @@ describe("what a queued row is waiting for", () => {
   });
 
   function queuedDetail(id: string, blockers: string[], state: SyncJob["state"]) {
-    const j = job({ state, source_ids: "a/ingest", started_at: state === "pending" ? null : T.jobStart });
+    const j = job({ state, source_ids: "a/ingest", started_at_utc: state === "pending" ? null : T.jobStart });
     return stepStatus({
       id,
       step: undefined,
@@ -542,7 +542,7 @@ describe("a second sync of a row that has already run", () => {
   }
 
   it("is queued the moment the job is, not still showing the last run", () => {
-    expect(paint([job({ state: "pending", started_at: null })], {}).key).toBe("queued");
+    expect(paint([job({ state: "pending", started_at_utc: null })], {}).key).toBe("queued");
   });
 
   it("stays queued once the worker starts it, before the record catches up", () => {
@@ -570,7 +570,7 @@ describe("a second sync of a row that has already run", () => {
     const board = pushedOverlay([{ id: "a/ingest", state: "running" }], T.jobStart);
     const finished = pushedOverlay([{ id: "a/ingest", state: "done" }], T.jobStart);
     const seen = [
-      paint([job({ state: "pending", started_at: null })], {}),
+      paint([job({ state: "pending", started_at_utc: null })], {}),
       paint([job({ state: "running" })], {}),
       paint([job({ state: "running" })], board),
       // The board moves on before the fetch does.

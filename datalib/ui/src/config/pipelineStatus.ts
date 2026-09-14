@@ -146,7 +146,7 @@ export function effectiveRun(
 ): EffectiveRun | null {
   if (!liveJob || liveJob.state !== "running") return fetched;
   if (fetched && !fetched.finished_at) return fetched;
-  const started = liveJob.started_at ?? liveJob.created_at;
+  const started = liveJob.started_at_utc ?? liveJob.created_at_utc;
   return {
     run_id: started,
     started_at: started,
@@ -248,11 +248,11 @@ function listOf(items: string[]): string {
 /// Has this step already been reached by the run `job` started?
 function reachedSince(
   last: { started_at: string; finished_at: string | null } | null,
-  job: { started_at: string | null },
+  job: { started_at_utc: string | null },
 ): boolean {
-  if (!last || !job.started_at) return false;
+  if (!last || !job.started_at_utc) return false;
   const at = Date.parse(last.finished_at ?? last.started_at);
-  const since = Date.parse(job.started_at);
+  const since = Date.parse(job.started_at_utc);
   return Number.isFinite(at) && Number.isFinite(since) && at >= since;
 }
 

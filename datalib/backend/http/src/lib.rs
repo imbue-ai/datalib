@@ -125,7 +125,7 @@ pub struct FeedbackRequest {
 #[derive(Debug, Serialize)]
 pub struct FeedbackResponse {
     pub feedback_uuid: String,
-    pub created_at: String,
+    pub created_at_utc: String,
     pub git_hash: &'static str,
 }
 
@@ -251,12 +251,14 @@ async fn submit_feedback(
     // client so each row carries a server-vouched provenance and so
     // `feedback_uuid` collisions are impossible from the wire.
     let feedback_uuid = uuid::Uuid::new_v4().to_string();
-    let created_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let (created_at_utc, tz_offset) =
+        datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let app_version = env!("CARGO_PKG_VERSION").to_string();
     let git_hash_str = git_hash().to_string();
     let row = FeedbackRow {
         feedback_uuid: feedback_uuid.clone(),
-        created_at: created_at.clone(),
+        created_at_utc: created_at_utc.clone(),
+        tz_offset: Some(tz_offset),
         sentiment: req.sentiment,
         comment: req.comment,
         app_version,
@@ -269,7 +271,7 @@ async fn submit_feedback(
     match s.app.insert_feedback(row).await {
         Ok(()) => Ok(Json(FeedbackResponse {
             feedback_uuid,
-            created_at,
+            created_at_utc,
             git_hash: git_hash(),
         })),
         Err(RepoError::ReadOnly) => Err(StatusCode::SERVICE_UNAVAILABLE),

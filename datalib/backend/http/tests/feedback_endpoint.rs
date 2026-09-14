@@ -89,7 +89,7 @@ async fn post_feedback_inserts_row() {
     let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let feedback_uuid = parsed["feedback_uuid"].as_str().unwrap().to_string();
     assert_eq!(feedback_uuid.len(), 36);
-    assert!(parsed["created_at"].is_string());
+    assert!(parsed["created_at_utc"].is_string());
 
     // Verify the row landed. context_json is stored as TEXT in SQLite so
     // we read it back and parse on the rust side.

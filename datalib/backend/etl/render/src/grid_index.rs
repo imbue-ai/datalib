@@ -539,7 +539,7 @@ pub struct RenderedMarkdown {
     pub source_fingerprint: String,
     /// A cheap probe the orchestrator can check *before* loading payloads to
     /// decide whether a markdown moved. Slack stamps each thread's
-    /// `MAX(fetched_at)`. None when the provider has nothing cheaper than the
+    /// `MAX(fetched_at_utc)`. None when the provider has nothing cheaper than the
     /// fingerprint.
     pub upstream_cursor: Option<String>,
     /// Absolute path to the rendered `.md`; `qmd_path` is this with the
@@ -724,9 +724,7 @@ pub async fn build_grid_index(
         .await?;
         // Cursors last and in the same transaction: a failure above rolls
         // back to both the old rows and the old cursors.
-        let now = now_override
-            .map(str::to_string)
-            .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339());
+        let now = run_stamp(now_override);
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
         for (source_id, store_commit) in &advanced {
@@ -735,7 +733,8 @@ pub async fn build_grid_index(
                 &SourceCursorRow {
                     source_id: source_id.clone(),
                     store_commit: store_commit.clone(),
-                    indexed_at: now.clone(),
+                    indexed_at_utc: now.utc.clone(),
+                    tz_offset: now.tz_offset.clone(),
                     documents_applied: summary.markdowns_loaded as i64,
                 },
             )
@@ -940,10 +939,7 @@ async fn apply_markdown(
         insert_edge(conn, edge).await?;
     }
 
-    let rendered_at = now_override
-        .map(str::to_string)
-        .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339());
-    upsert_markdown(conn, md, qmd_path, &rendered_at)
+    upsert_markdown(conn, md, qmd_path, &run_stamp(now_override))
         .await
         .context("upsert markdowns")?;
 
@@ -960,11 +956,26 @@ fn pick_canonical<'a>(rows: &'a [GridRow], markdown_uuid: &str) -> Option<&'a Gr
         .or_else(|| rows.first())
 }
 
+/// The run-pinned `--now` when there is one, else the clock, as the
+/// tables keep it.
+fn run_stamp(now_override: Option<&str>) -> datalib_time::StoredStamp {
+    match now_override {
+        Some(now) => datalib_time::split_stamp(now),
+        None => {
+            let (utc, offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+            datalib_time::StoredStamp {
+                utc,
+                tz_offset: Some(offset),
+            }
+        }
+    }
+}
+
 async fn upsert_markdown(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     md: &RenderedMarkdown,
     qmd_path: &str,
-    rendered_at: &str,
+    rendered_at: &datalib_time::StoredStamp,
 ) -> Result<()> {
     let Some(canonical) = pick_canonical(&md.rows, &md.markdown_uuid) else {
         return Ok(());
@@ -995,8 +1006,9 @@ async fn upsert_markdown(
     sqlx::query(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, updated_at, \
-          md_path, source_fingerprint, upstream_cursor, row_set_hash, renderer_version, rendered_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          md_path, source_fingerprint, upstream_cursor, row_set_hash, renderer_version, \
+          rendered_at_utc, tz_offset) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&source_id)
@@ -1010,7 +1022,8 @@ async fn upsert_markdown(
     .bind(md.upstream_cursor.as_deref())
     .bind(&row_set_hash)
     .bind(&version_str)
-    .bind(rendered_at)
+    .bind(&rendered_at.utc)
+    .bind(&rendered_at.tz_offset)
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;

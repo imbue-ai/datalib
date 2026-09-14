@@ -10,11 +10,12 @@ beeper_media_attachments
     blake3
 beeper_media_attachments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 events
     id
     source
@@ -32,11 +33,12 @@ events
     reaction_target_native_event_id
 events_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 rooms
     id
     source
@@ -52,11 +54,12 @@ rooms
     is_space
 rooms_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 users
     id
     source
@@ -68,11 +71,12 @@ users
     avatar_blob_id
 users_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == chatgpt/raw ==
 chatgpt_attachments
@@ -82,11 +86,12 @@ chatgpt_attachments
     blake3
 chatgpt_attachments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 conversations
     id
     payload
@@ -94,11 +99,12 @@ conversations
     update_time
 conversations_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 me
     id
     payload
@@ -106,11 +112,12 @@ me
     name
 me_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == claude/raw ==
 claude_attachments
@@ -120,11 +127,12 @@ claude_attachments
     blake3
 claude_attachments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 conversations
     id
     payload
@@ -134,22 +142,24 @@ conversations
     updated_at
 conversations_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 orgs
     id
     payload
     name
 orgs_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 project_docs
     id
     payload
@@ -158,11 +168,12 @@ project_docs
     created_at
 project_docs_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 projects
     id
     payload
@@ -172,11 +183,12 @@ projects
     updated_at
 projects_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 users
     id
     payload
@@ -184,11 +196,12 @@ users
     full_name
 users_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == contacts/raw ==
 accounts
@@ -198,11 +211,12 @@ accounts
     addressbook_home_set
 accounts_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 addressbooks
     id
     account_id
@@ -213,11 +227,12 @@ addressbooks
     sync_token
 addressbooks_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 contact_photos
     id
     owner_id
@@ -234,17 +249,19 @@ contacts
     revision
 contacts_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 ingested_files
     scope
     rel_path
     blake3
     size_bytes
-    last_finished_at
+    last_finished_at_utc
+    tz_offset
 
 == email/raw ==
 accounts
@@ -256,11 +273,12 @@ accounts
     is_read_only
 accounts_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 email_blobs
     id
     email_id
@@ -268,11 +286,12 @@ email_blobs
     blake3
 email_blobs_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 email_keywords
     id
     email_id
@@ -300,11 +319,12 @@ emails
     has_attachment
 emails_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 gmail_messages
     gmail_id
     email_id
@@ -314,7 +334,8 @@ ingested_files
     rel_path
     blake3
     size_bytes
-    last_finished_at
+    last_finished_at_utc
+    tz_offset
 mailboxes
     id
     payload
@@ -327,11 +348,12 @@ mailboxes
     unread_emails
 mailboxes_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 threads
     id
     payload
@@ -339,11 +361,12 @@ threads
     email_count
 threads_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == fsindex/raw ==
 dirs
@@ -365,7 +388,8 @@ scan_meta
     case_sensitive
     inode_stable
     options_fingerprint
-    last_scan_at
+    last_scan_at_utc
+    tz_offset
     scanner_version
 
 == github/raw ==
@@ -380,11 +404,12 @@ issue_comments
     updated_at
 issue_comments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 pr_review_comments
     id
     payload
@@ -403,11 +428,12 @@ pr_review_comments
     updated_at
 pr_review_comments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 pr_reviews
     id
     payload
@@ -420,11 +446,12 @@ pr_reviews
     html_url
 pr_reviews_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 pull_requests
     id
     payload
@@ -440,11 +467,12 @@ pull_requests
     merged_at
 pull_requests_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 self_identity
     id
     payload
@@ -452,11 +480,12 @@ self_identity
     html_url
 self_identity_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == gitlab/raw ==
 discussions
@@ -469,11 +498,12 @@ discussions
     max_note_updated_at
 discussions_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 merge_requests
     id
     payload
@@ -490,11 +520,12 @@ merge_requests
     merged_at
 merge_requests_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 self_identity
     id
     payload
@@ -502,11 +533,12 @@ self_identity
     web_url
 self_identity_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == google_takeout/raw ==
 chat_attachments
@@ -516,21 +548,23 @@ chat_attachments
     blake3
 chat_attachments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 chat_groups
     id
     payload
 chat_groups_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 chat_messages
     id
     payload
@@ -539,32 +573,35 @@ chat_messages
     when_ts
 chat_messages_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 chat_users
     id
     payload
 chat_users_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 gemini_activity
     id
     payload
     when_ts
 gemini_activity_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 gemini_attachments
     id
     activity_id
@@ -572,17 +609,19 @@ gemini_attachments
     blake3
 gemini_attachments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 ingested_files
     scope
     rel_path
     blake3
     size_bytes
-    last_finished_at
+    last_finished_at_utc
+    tz_offset
 maps_photos
     id
     payload
@@ -590,33 +629,36 @@ maps_photos
     blake3
 maps_photos_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 maps_reviews
     id
     payload
     when_ts
 maps_reviews_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 maps_saved_places
     id
     payload
     when_ts
 maps_saved_places_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 voice_attachments
     id
     message_id
@@ -624,32 +666,35 @@ voice_attachments
     blake3
 voice_attachments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 voice_bills
     id
     payload
 voice_bills_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 voice_greetings
     id
     payload
     blake3
 voice_greetings_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 voice_messages
     id
     payload
@@ -659,22 +704,24 @@ voice_messages
     folder
 voice_messages_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 youtube_subscriptions
     id
     payload
     channel_title
 youtube_subscriptions_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 youtube_watch_history
     id
     payload
@@ -683,11 +730,12 @@ youtube_watch_history
     channel_id
 youtube_watch_history_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == media/raw ==
 media_audio
@@ -710,7 +758,8 @@ media_audio
 media_files
     id
     blake3
-    last_seen_at
+    last_seen_at_utc
+    tz_offset
 media_items
     blake3
     size
@@ -720,7 +769,8 @@ media_items
     duration_ms
     payload_blake3
     payload_scheme
-    first_seen_at
+    first_seen_at_utc
+    tz_offset
 media_playlist_entries
     id
     playlist_id
@@ -736,11 +786,13 @@ media_playlists
     format
     title
     entry_count
-    last_seen_at
+    last_seen_at_utc
+    tz_offset
 media_scan_meta
     id
     abs_root
-    scanned_at
+    scanned_at_utc
+    tz_offset
 media_visual
     blake3
     width
@@ -771,11 +823,12 @@ comment_anchors
     plain_text
 comment_anchors_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 comments
     id
     discussion_id
@@ -787,11 +840,12 @@ comments
     payload
 comments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 notion_attachments
     id
     page_id
@@ -799,11 +853,12 @@ notion_attachments
     blake3
 notion_attachments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 page_markdown
     id
     markdown
@@ -812,11 +867,12 @@ page_markdown
     source_last_edited_time
 page_markdown_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 pages
     id
     parent_type
@@ -828,22 +884,24 @@ pages
     payload
 pages_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 users
     id
     name
     payload
 users_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == pdf/raw ==
 pdf_documents
@@ -864,15 +922,18 @@ pdf_documents
     xmp_document_id
     xmp_instance_id
     xmp_original_document_id
-    first_seen_at
+    first_seen_at_utc
+    tz_offset
 pdf_paths
     id
     blake3
-    last_seen_at
+    last_seen_at_utc
+    tz_offset
 pdf_scan_meta
     id
     abs_root
-    scanned_at
+    scanned_at_utc
+    tz_offset
 
 == signal/raw ==
 account
@@ -880,11 +941,12 @@ account
     payload
 account_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 chat_item_attachments
     id
     chat_item_id
@@ -892,11 +954,12 @@ chat_item_attachments
     blake3
 chat_item_attachments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 chat_items
     id
     payload
@@ -905,28 +968,31 @@ chat_items
     date_sent
 chat_items_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 chats
     id
     payload
     recipient_id
 chats_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 ingested_backups
     fingerprint
     blake3
     snapshot_dir
     total_byte_size
-    ingested_at
+    ingested_at_utc
+    tz_offset
 recipients
     id
     payload
@@ -934,11 +1000,12 @@ recipients
     display_name
 recipients_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == slack/raw ==
 channels
@@ -951,11 +1018,12 @@ channels
     dm_user_ids
 channels_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 messages
     id
     payload
@@ -968,11 +1036,12 @@ messages
     user_id
 messages_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 replies_pages
     id
     channel_id
@@ -980,11 +1049,12 @@ replies_pages
     latest_reply
 replies_pages_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 slack_attachments
     id
     message_uuid
@@ -992,11 +1062,12 @@ slack_attachments
     blake3
 slack_attachments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 users
     id
     payload
@@ -1006,11 +1077,12 @@ users
     display_name
 users_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 workspaces
     id
     payload
@@ -1019,11 +1091,12 @@ workspaces
     self_user_id
 workspaces_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == sms_backup_restore/raw ==
 ingested_files
@@ -1031,7 +1104,8 @@ ingested_files
     rel_path
     blake3
     size_bytes
-    last_finished_at
+    last_finished_at_utc
+    tz_offset
 sms_attachments
     id
     message_id
@@ -1039,11 +1113,12 @@ sms_attachments
     blake3
 sms_attachments_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 sms_calls
     id
     payload
@@ -1052,11 +1127,12 @@ sms_calls
     call_type
 sms_calls_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 sms_messages
     id
     payload
@@ -1066,11 +1142,12 @@ sms_messages
     box_kind
 sms_messages_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == whatsapp/raw ==
 wa_media_files
@@ -1088,11 +1165,12 @@ yolink_devices
     last_ts_ms
 yolink_devices_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 yolink_readings
     id
     payload
@@ -1102,11 +1180,12 @@ yolink_readings
     value
 yolink_readings_bookkeeping
     id
-    fetched_at
+    fetched_at_utc
     attempt_count
-    last_attempt_at
+    last_attempt_at_utc
     last_error
     volatile_payload
+    tz_offset
 
 == unified_index/grid ==
 edges
@@ -1160,7 +1239,8 @@ markdowns
     upstream_cursor
     row_set_hash
     renderer_version
-    rendered_at
+    rendered_at_utc
+    tz_offset
 render_problems
     uuid
     scope_key
@@ -1169,29 +1249,34 @@ render_problems
     stage
     outcome
     problems
-    first_seen_at
-    last_seen_at
+    first_seen_at_utc
+    last_seen_at_utc
+    tz_offset
     render_version
 source_cursors
     source_id
     store_commit
-    indexed_at
+    indexed_at_utc
+    tz_offset
     documents_applied
 source_measurements
     subject
     kind
-    measured_at
+    measured_at_utc
+    tz_offset
     bytes
     items
 
 == system ==
 disk_usage
     path
-    measured_at
+    measured_at_utc
+    tz_offset
     bytes
 feedback
     feedback_uuid
-    created_at
+    created_at_utc
+    tz_offset
     sentiment
     comment
     app_version
@@ -1205,9 +1290,10 @@ sync_jobs
     kind
     parent_job_id
     state
-    created_at
-    started_at
-    finished_at
+    created_at_utc
+    started_at_utc
+    finished_at_utc
+    tz_offset
     error
     pid
     progress_pct

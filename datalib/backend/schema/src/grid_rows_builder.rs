@@ -244,8 +244,9 @@ impl GridRowBuilder {
                     // layer that can see whether this uuid already had
                     // a row, and so the only one that can tell "first
                     // seen" from "seen again". See the field docs.
-                    first_seen_at: String::new(),
-                    last_seen_at: String::new(),
+                    first_seen_at_utc: String::new(),
+                    last_seen_at_utc: String::new(),
+                    tz_offset: None,
                     render_version: render_version as i64,
                 });
                 // Deliberately no `warn!` here. The render path's

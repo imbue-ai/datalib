@@ -188,7 +188,7 @@ impl RawDb {
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         let rows = sqlx::query(
-            "SELECT c.id, json(c.payload) AS payload, b.fetched_at
+            "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc
              FROM conversations c
              LEFT JOIN conversations_bookkeeping b ON b.id = c.id
              WHERE c.payload IS NOT NULL
@@ -204,14 +204,14 @@ impl RawDb {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let fetched_at: Option<String> = r.try_get("fetched_at").ok();
+            let fetched_at_utc: Option<String> = r.try_get("fetched_at_utc").ok();
             let Ok(payload_v) = serde_json::from_str::<Value>(&payload) else {
                 continue;
             };
             out.push(LoadedConversation {
                 id,
                 payload: payload_v,
-                fetched_at,
+                fetched_at_utc,
             });
         }
         Ok(out)
@@ -224,7 +224,7 @@ impl RawDb {
 pub struct LoadedConversation {
     pub id: String,
     pub payload: Value,
-    pub fetched_at: Option<String>,
+    pub fetched_at_utc: Option<String>,
 }
 
 /// Bag returned to the synchronous render / synthesize path.
@@ -280,7 +280,7 @@ mod tests {
                 email: Some("x@y".into()),
                 name: Some("X Y".into()),
             }],
-            "2026-06-11T00:00:00-07:00",
+            &datalib_time::parse_strict("2026-06-11T00:00:00-07:00").unwrap(),
         )
         .await
         .unwrap();
@@ -311,7 +311,7 @@ mod tests {
                 // cross-shape comparison (see ingest::update_time_secs).
                 update_time: Some("1.0".into()),
             }],
-            "2026-06-11T00:00:00-07:00",
+            &datalib_time::parse_strict("2026-06-11T00:00:00-07:00").unwrap(),
         )
         .await
         .unwrap();

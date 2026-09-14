@@ -31,7 +31,7 @@ pub struct IngestOptions {
     pub db: RawDb,
     /// The unpacked export directory (`common.input_path`).
     pub input_path: PathBuf,
-    /// Run timestamp, shared by every `<table>_bookkeeping.fetched_at`
+    /// Run timestamp, shared by every `<table>_bookkeeping.fetched_at_utc`
     /// stamp this ingest writes.
     pub now: String,
     pub progress: datalib_etl::progress::Progress,
@@ -86,10 +86,11 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
     })?;
     let projects = read_project_files(dir)?;
 
+    let now = datalib_time::parse_strict(&opts.now).context("run-pinned now")?;
     let mut tx = db.pool().begin().await.context("begin export ingest tx")?;
 
     if let Some(users) = users.as_ref() {
-        summary.users = upsert_users(&mut tx, users, &opts.now).await?;
+        summary.users = upsert_users(&mut tx, users, &now).await?;
         summary.pruned += prune_to(&mut tx, "users", &ids_of(users, "uuid")).await?;
     } else {
         // Not fatal: every export conversation already names its own
@@ -102,7 +103,7 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
     }
 
     if let Some(projects) = projects.as_ref() {
-        let (n_projects, n_docs) = upsert_projects(&mut tx, projects, &opts.now).await?;
+        let (n_projects, n_docs) = upsert_projects(&mut tx, projects, &now).await?;
         summary.projects = n_projects;
         summary.project_docs = n_docs;
         let project_ids = ids_of(projects, "uuid");
@@ -110,7 +111,7 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
         summary.pruned += prune_to(&mut tx, "project_docs", &project_doc_ids(projects)).await?;
     }
 
-    summary.conversations = upsert_conversations(&mut tx, &conversations, &opts.now).await?;
+    summary.conversations = upsert_conversations(&mut tx, &conversations, &now).await?;
     summary.pruned += prune_to(&mut tx, "conversations", &ids_of(&conversations, "uuid")).await?;
     opts.progress.set_message(&format!(
         "{} conversations, {} projects, {} knowledge docs",
@@ -207,7 +208,7 @@ fn str_field(v: &Value, k: &str) -> Option<String> {
 async fn upsert_users(
     tx: &mut Transaction<'_, Sqlite>,
     users: &[Value],
-    now: &str,
+    now: &datalib_time::IsoOffsetTimestamp,
 ) -> Result<usize> {
     let mut rows = Vec::with_capacity(users.len());
     for u in users {
@@ -233,7 +234,7 @@ async fn upsert_users(
 async fn upsert_conversations(
     tx: &mut Transaction<'_, Sqlite>,
     convs: &[Value],
-    now: &str,
+    now: &datalib_time::IsoOffsetTimestamp,
 ) -> Result<usize> {
     let mut rows = Vec::with_capacity(convs.len());
     for c in convs {
@@ -263,7 +264,7 @@ async fn upsert_conversations(
 async fn upsert_projects(
     tx: &mut Transaction<'_, Sqlite>,
     projects: &[Value],
-    now: &str,
+    now: &datalib_time::IsoOffsetTimestamp,
 ) -> Result<(usize, usize)> {
     let mut project_rows = Vec::with_capacity(projects.len());
     let mut doc_rows: Vec<ProjectDocRow> = Vec::new();

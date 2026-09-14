@@ -100,7 +100,7 @@ Every entity table `<t>` is paired with a sidecar `<t>_bookkeeping`. The split i
 
 1. **Upstream payload data** (a Slack `text`, a GitHub `state`, a Notion `last_edited_time`) → lives inside `payload`. If we need to query or index it, use a VIRTUAL generated column + index or an expression index over `payload->>'$.path'`. Do **not** copy it into a stored column.
 2. **Writer-supplied identity / joins** (synthesized-PK components, FK references to parent entities the walker knows but the payload doesn't, namespace discriminators like beeper's `source`/`network`) → stored typed columns on `<t>`. These are the only typed columns the entity table should grow.
-3. **Writer-supplied per-row state** (`fetched_at`, `attempt_count`, `last_attempt_at`, `last_error`, per-row cursors like CardDAV `etag`, ChatGPT `last_listing_update_time`, YoLink `last_ts_ms`, server-supplied freshness markers like `ctag`/`sync_token`) → `<t>_bookkeeping` sidecar.
+3. **Writer-supplied per-row state** (`fetched_at_utc`, `attempt_count`, `last_attempt_at_utc`, `last_error`, per-row cursors like CardDAV `etag`, ChatGPT `last_listing_update_time`, YoLink `last_ts_ms`, server-supplied freshness markers like `ctag`/`sync_token`) → `<t>_bookkeeping` sidecar.
 
 The split matters because bookkeeping changes on every attempt regardless of upstream change. Storing it on the entity table makes every `dolt diff` noisy, defeats the wire-fidelity of `payload`, and forces re-renders of unchanged content. Keeping it on the sidecar means `<t>` mutates only when upstream actually changed, and the sidecar churn stays out of any cross-stage fingerprint.
 
@@ -435,12 +435,12 @@ microsecond-bump recipe for sub-items, no-fabricated-timestamps, and
 which entity kinds legitimately have none — is a projection concern and
 lives in [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#6-timestamps).
 What stays here is the crate every stage shares, including download for
-its own `fetched_at` stamps.
+its own `fetched_at_utc` stamps.
 
 ### Single source of truth: `datalib-time`
 Every `now()` call and every inbound RFC 3339 parse in the workspace funnels through the `datalib-time` crate (`datalib/backend/time/`). The crate exposes:
 
-- `IsoOffsetTimestamp::now_local()` — the canonical "now," returning the wall clock with the **generating system's local-tz offset** (e.g. `2026-06-10T14:23:00-07:00`). An offset-bearing timestamp is strictly more information than the same instant in UTC: you can recover UTC from `-07:00`, but you can't recover the originating offset once it's been normalized away. This is the policy for every generated `fetched_at` / `created_at` / run-marker stamp.
+- `IsoOffsetTimestamp::now_local()` — the canonical "now," returning the wall clock with the **generating system's local-tz offset** (e.g. `2026-06-10T14:23:00-07:00`). An offset-bearing timestamp is strictly more information than the same instant in UTC: you can recover UTC from `-07:00`, but you can't recover the originating offset once it's been normalized away. That is the value in hand; **a table keeps it split**, as a `<x>_at_utc` column (`…+00:00`, microseconds) with a `tz_offset` column (`-07:00`) beside it, so that text order is instant order. `to_utc_and_offset()` does the split for a value, `split_stamp` for one that arrived as a string, and `bulk_upsert_in_tx` does it for the bookkeeping sidecar (AGENTS.md, "Timestamp convention").
 - `parse_strict(s)` — accepts only strings that already carry an explicit offset. Most parse callsites should use this.
 - `parse_with_assumed_utc(s)` — **the single function in the whole repo** where "the upstream string lacked an offset, assume UTC" is allowed. Reach for it only after auditing an upstream feed and confirming naive-means-UTC. Any other fallback (local time, midnight, run start, epoch) is fabrication.
 - `IsoOffsetTimestamp::bump_micros(n)` / `bump_micros_str(s, n)` — the canonical sub-item synthesized-stamp recipe.
@@ -466,7 +466,7 @@ Consequences:
 Why the discipline matters: the alternative is per-column conflict policies (COALESCE on some columns, replace on others), which makes the UPSERT shape diverge per table, makes the chunked-multi-row helper proliferate variants, makes `dolt diff` harder to read, and makes "which writer last touched this row?" an ambiguous question. None of that is value we want to maintain.
 
 ## Bulk-upsert as the standard write path
-Every download is shaped the same at the bottom: for some entity table `<t>`, upsert N rows of `(id, payload, …extras)`, paired with N rows on `<t>_bookkeeping` for `(id, fetched_at, attempt_count, last_error)`, and (if the source produced blobs) M rows on the CAS of `(blake3, byte_len, content_type, bytes)`. Doltlite charges a prolly-tree manifest mutation per `BEGIN … COMMIT`, so the right shape is **one entity-pool tx + one CAS-pool tx per batch**, each containing chunked multi-row `INSERT … ON CONFLICT(id) DO UPDATE` statements. Email's mbox downloader proved this in practice: 25k emails dropped from many minutes to ~75 seconds at FLUSH_BATCH=2000.
+Every download is shaped the same at the bottom: for some entity table `<t>`, upsert N rows of `(id, payload, …extras)`, paired with N rows on `<t>_bookkeeping` for `(id, fetched_at_utc, attempt_count, last_error)`, and (if the source produced blobs) M rows on the CAS of `(blake3, byte_len, content_type, bytes)`. Doltlite charges a prolly-tree manifest mutation per `BEGIN … COMMIT`, so the right shape is **one entity-pool tx + one CAS-pool tx per batch**, each containing chunked multi-row `INSERT … ON CONFLICT(id) DO UPDATE` statements. Email's mbox downloader proved this in practice: 25k emails dropped from many minutes to ~75 seconds at FLUSH_BATCH=2000.
 
 The principle: **every provider's download uses shared chunked-multi-row helpers for the entity-table UPSERT, the `<t>_bookkeeping` upsert, and the CAS write.** Per-row UPSERTs are an anti-pattern outside ad-hoc maintenance code.
 

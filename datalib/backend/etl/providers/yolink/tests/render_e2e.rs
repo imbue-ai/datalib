@@ -15,7 +15,7 @@ use sqlx::sqlite::SqlitePool;
 const STANZA: &str = "yolink";
 
 async fn seed(pool: &SqlitePool, rows: &[(&str, &str, i64, f64)], devices: &[(&str, &str)]) {
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
     let device_rows: Vec<YolinkDeviceRow> = devices
         .iter()
         .map(|(name, kind)| YolinkDeviceRow {

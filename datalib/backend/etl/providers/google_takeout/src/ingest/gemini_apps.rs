@@ -121,7 +121,7 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
     let n_activity = rows.len();
     progress.set_message(&format!("gemini: {n_activity} entries"));
 
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await.context("begin gemini_apps tx")?;
     bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
     file_checkpoint::record_file(&mut tx, SCOPE, f).await?;

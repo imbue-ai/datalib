@@ -87,7 +87,7 @@ const VOLATILE_KEYS: &[&str] = &[
     "duration_ms",
     "_item_hashes",
     "request_id",
-    "fetched_at",
+    "fetched_at_utc",
     "last_edited_time",
     "created_time",
     "cache_ts",
@@ -97,9 +97,12 @@ const VOLATILE_KEYS: &[&str] = &[
     // volatile `updated` shows up as golden churn, split it at the source —
     // don't re-add it here.
 
-    // Fields of `sync_summary_<now>.json` that don't reproduce byte-identically.
+    // Fields of `sync_summary_<now>.json` that don't reproduce byte-identically,
+    // and `sync_runs`' wall-clock pair in every raw store.
     "started_at",
     "finished_at",
+    "started_at_utc",
+    "finished_at_utc",
     "duration_secs",
     "data_root",
     // Per-source stats are provider-specific and capture counts of
@@ -118,7 +121,7 @@ const VOLATILE_KEYS: &[&str] = &[
     // Per-row bookkeeping in the doltlite raw stores. Stamped to
     // "now" on every fetch attempt, so they churn on every run even
     // when the upstream payload is byte-identical.
-    "last_attempt_at",
+    "last_attempt_at_utc",
     // NB: `captured_at` was here under the same heading and should not be —
     // the only emitter is `media_visual.captured_at`, the moment the shutter
     // opened, parsed out of fixed EXIF bytes. Redacting it meant the golden
@@ -126,15 +129,15 @@ const VOLATILE_KEYS: &[&str] = &[
 
     // CAS blob "first stored" wall-clock stamp. Identical bytes land at the
     // same PK, but the timestamp is whenever this run first wrote them.
-    "first_seen_at",
+    "first_seen_at_utc",
     // Resume-cursor / bookkeeping wall-clock stamps: `sync_scope_state`'s
-    // `last_finished_at` + `after` (real now when the scope ran, not the
-    // `--now` arg), and `last_seen_at` (when a row was last fetched). The
+    // `last_finished_at_utc` + `after` (real now when the scope ran, not the
+    // `--now` arg), and `last_seen_at_utc` (when a row was last fetched). The
     // cursor `before` is a `--now`-relative window start and stays put, as do
     // genuine upstream content times (`last_sign_in_at`, `latest_build_*`).
-    "last_finished_at",
+    "last_finished_at_utc",
     "after",
-    "last_seen_at",
+    "last_seen_at_utc",
     // GitLab's `local_time` is the user's *current* local time, so it ticks
     // every minute; `last_activity_on` is the same class one granularity
     // coarser. Genuine upstream data that tracks the observer, not the
@@ -172,7 +175,7 @@ const VOLATILE_KEYS: &[&str] = &[
     // start/stop timestamps and content fields stay put.
     "elapsed_ms",
     "network_seconds",
-    // fsindex's `scan_meta` columns. `last_scan_at` is wall-clock, so it
+    // fsindex's `scan_meta` columns. `last_scan_at_utc` is wall-clock, so it
     // churns run-to-run even when the scanned bytes are identical, and
     // `scanner_version` is redacted so a version bump doesn't churn the
     // golden.
@@ -180,7 +183,7 @@ const VOLATILE_KEYS: &[&str] = &[
     "ctime_ns",
     "inode",
     "dev",
-    "last_scan_at",
+    "last_scan_at_utc",
     "scanner_version",
 ];
 
@@ -1407,7 +1410,7 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         "duration_ms",
         "_item_hashes",
         "request_id",
-        "fetched_at",
+        "fetched_at_utc",
         "last_edited_time",
         "created_time",
         "cache_ts",
@@ -1415,14 +1418,16 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         // sidecar at extract time, not redacted here (see strip_volatile).
         "started_at",
         "finished_at",
+        "started_at_utc",
+        "finished_at_utc",
         "duration_secs",
         "data_root",
         "qmd_status",
         "source_fingerprint",
-        "last_attempt_at",
-        "first_seen_at",
-        "last_finished_at",
-        "last_seen_at",
+        "last_attempt_at_utc",
+        "first_seen_at_utc",
+        "last_finished_at_utc",
+        "last_seen_at_utc",
         "local_time",
         "expiry_time",
         // run-2-specific jitter inside the per-source `stats`:

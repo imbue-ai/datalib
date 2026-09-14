@@ -141,7 +141,7 @@ impl RawDb {
             principal_href: principal_href.map(String::from),
             addressbook_home_set: addressbook_home_set.map(String::from),
         };
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin account tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit account tx")?;
@@ -170,7 +170,7 @@ impl RawDb {
             description: description.map(String::from),
             ctag: ctag.map(String::from),
         };
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin addressbook tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit addressbook tx")?;
@@ -249,7 +249,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin contacts batch tx")?;
         bulk_upsert_in_tx(&mut tx, rows, &now).await?;
         tx.commit().await.context("commit contacts batch tx")?;
@@ -441,17 +441,17 @@ mod tests {
         assert_eq!(dn, "Pat Q");
 
         let r = sqlx::query(
-            "SELECT attempt_count, fetched_at, last_error FROM contacts_bookkeeping WHERE id = ?",
+            "SELECT attempt_count, fetched_at_utc, last_error FROM contacts_bookkeeping WHERE id = ?",
         )
         .bind(&id)
         .fetch_one(db.pool())
         .await
         .unwrap();
         let n: i64 = r.try_get("attempt_count").unwrap();
-        let fa: Option<String> = r.try_get("fetched_at").unwrap_or(None);
+        let fa: Option<String> = r.try_get("fetched_at_utc").unwrap_or(None);
         let le: Option<String> = r.try_get("last_error").unwrap_or(None);
         assert_eq!(n, 1, "attempt_count");
-        assert!(fa.is_some(), "fetched_at = {fa:?}");
+        assert!(fa.is_some(), "fetched_at_utc = {fa:?}");
         assert!(le.is_none(), "last_error = {le:?}");
     }
 

@@ -30,7 +30,12 @@ use api::call;
 use db::refresh_email_joins;
 use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, ThreadRow};
 
-async fn upsert_account(db: &RawDb, now: &str, id: &str, payload: &Value) -> Result<()> {
+async fn upsert_account(
+    db: &RawDb,
+    now: &IsoOffsetTimestamp,
+    id: &str,
+    payload: &Value,
+) -> Result<()> {
     let row = AccountRow::from_jmap_payload(id, payload)?;
     let mut tx = db.pool().begin().await.context("begin account tx")?;
     bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), now).await?;
@@ -40,7 +45,7 @@ async fn upsert_account(db: &RawDb, now: &str, id: &str, payload: &Value) -> Res
 
 async fn upsert_mailboxes(
     db: &RawDb,
-    now: &str,
+    now: &IsoOffsetTimestamp,
     account_id: &str,
     payloads: &[Value],
 ) -> Result<()> {
@@ -57,7 +62,7 @@ async fn upsert_mailboxes(
     Ok(())
 }
 
-async fn upsert_threads(db: &RawDb, now: &str, rows: &[ThreadRow]) -> Result<()> {
+async fn upsert_threads(db: &RawDb, now: &IsoOffsetTimestamp, rows: &[ThreadRow]) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
@@ -67,7 +72,7 @@ async fn upsert_threads(db: &RawDb, now: &str, rows: &[ThreadRow]) -> Result<()>
     Ok(())
 }
 
-async fn upsert_emails(db: &RawDb, now: &str, rows: &[EmailRow]) -> Result<()> {
+async fn upsert_emails(db: &RawDb, now: &IsoOffsetTimestamp, rows: &[EmailRow]) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
@@ -319,11 +324,11 @@ async fn run_sync(
 
     // One timestamp per fetch run, threaded into every
     // `bulk_upsert_in_tx` call below. Goes into the bookkeeping
-    // sidecars' `fetched_at` / `last_attempt_at` columns; the value
+    // sidecars' `fetched_at_utc` / `last_attempt_at_utc` columns; the value
     // means "the sync that wrote this row," not "the millisecond the
     // UPSERT query ran" — so consistency across tables matters more
     // than sub-second freshness.
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = IsoOffsetTimestamp::now_local();
 
     // Persist the account row.
     let account_payload = session
@@ -468,7 +473,7 @@ async fn run_sync(
 
 async fn sync_mailboxes(
     db: &RawDb,
-    now: &str,
+    now: &IsoOffsetTimestamp,
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
@@ -513,7 +518,7 @@ async fn sync_mailboxes(
 
 async fn incremental_mailboxes(
     db: &RawDb,
-    now: &str,
+    now: &IsoOffsetTimestamp,
     session: &Session,
     account_id: &str,
     since: &str,
@@ -577,7 +582,7 @@ async fn incremental_mailboxes(
 async fn sync_emails(
     db: &RawDb,
     sealer: Option<&datalib_etl::raw_store::Sealer>,
-    now: &str,
+    now: &IsoOffsetTimestamp,
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
@@ -651,7 +656,7 @@ async fn sync_emails(
 async fn incremental_emails(
     db: &RawDb,
     sealer: Option<&datalib_etl::raw_store::Sealer>,
-    now: &str,
+    now: &IsoOffsetTimestamp,
     session: &Session,
     account_id: &str,
     since: &str,
@@ -725,7 +730,7 @@ async fn incremental_emails(
 async fn full_enumerate_emails(
     db: &RawDb,
     sealer: Option<&datalib_etl::raw_store::Sealer>,
-    now: &str,
+    now: &IsoOffsetTimestamp,
     session: &Session,
     account_id: &str,
     mailbox_filter: Option<&HashSet<String>>,
@@ -858,7 +863,7 @@ async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Resul
 #[allow(clippy::too_many_arguments)]
 async fn ingest_email_list(
     db: &RawDb,
-    now: &str,
+    now: &IsoOffsetTimestamp,
     account_id: &str,
     list: Vec<Value>,
     mailbox_filter: Option<&HashSet<String>>,
@@ -889,7 +894,7 @@ async fn ingest_email_list(
 
 async fn sync_threads(
     db: &RawDb,
-    now: &str,
+    now: &IsoOffsetTimestamp,
     session: &Session,
     account_id: &str,
     touched: &HashSet<String>,

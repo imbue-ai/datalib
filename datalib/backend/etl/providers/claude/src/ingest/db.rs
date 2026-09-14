@@ -79,14 +79,14 @@ impl RawDb {
 
     pub async fn sweep_age(&self, key: &str) -> Result<Option<chrono::Duration>> {
         let scope = format!("claude:sweep:{key}");
-        let row = sqlx::query("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
+        let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(&scope)
             .fetch_optional(&self.pool)
             .await
             .context("select claude sweep marker")?;
         let Some(row) = row else { return Ok(None) };
         let s: String = row
-            .try_get("last_seen_at")
+            .try_get("last_seen_at_utc")
             .context("read claude sweep timestamp")?;
         let dt = datalib_time::parse_strict(&s)
             .with_context(|| format!("parse claude sweep timestamp {s:?}"))?
@@ -98,15 +98,9 @@ impl RawDb {
     pub async fn record_sweep(&self, key: &str) -> Result<()> {
         let scope = format!("claude:sweep:{key}");
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO sync_scope_state (scope, last_seen_at) VALUES (?, ?) \
-             ON CONFLICT(scope) DO UPDATE SET last_seen_at = excluded.last_seen_at",
-        )
-        .bind(&scope)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .context("record claude sweep marker")?;
+        dr::upsert_scope_state(&self.pool, &scope, &now)
+            .await
+            .context("record claude sweep marker")?;
         Ok(())
     }
 
@@ -458,7 +452,9 @@ mod tests {
     use datalib_etl::doltlite_raw::WirePayload;
     use serde_json::json;
 
-    const NOW: &str = "2026-06-11T00:00:00-07:00";
+    fn now() -> datalib_time::IsoOffsetTimestamp {
+        datalib_time::parse_strict("2026-06-11T00:00:00-07:00").unwrap()
+    }
 
     fn make_user(id: &str, email: &str, name: &str) -> UserRow {
         UserRow {
@@ -490,10 +486,10 @@ mod tests {
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
         {
             let mut tx = db.pool().begin().await.unwrap();
-            bulk_upsert_in_tx(&mut tx, &[make_user("u1", "x@y", "X")], NOW)
+            bulk_upsert_in_tx(&mut tx, &[make_user("u1", "x@y", "X")], &now())
                 .await
                 .unwrap();
-            bulk_upsert_in_tx(&mut tx, &[make_org("org-a", "A Org")], NOW)
+            bulk_upsert_in_tx(&mut tx, &[make_org("org-a", "A Org")], &now())
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
@@ -522,7 +518,7 @@ mod tests {
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
         {
             let mut tx = db.pool().begin().await.unwrap();
-            bulk_upsert_in_tx(&mut tx, &[make_org("org-a", "A Org")], NOW)
+            bulk_upsert_in_tx(&mut tx, &[make_org("org-a", "A Org")], &now())
                 .await
                 .unwrap();
             tx.commit().await.unwrap();

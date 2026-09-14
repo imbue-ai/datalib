@@ -553,9 +553,11 @@ export type SyncJob = {
   progress_pct: number | null;
   progress_msg: string | null;
   error: string | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
+  // UTC, with the server's offset beside them in `tz_offset`.
+  created_at_utc: string;
+  started_at_utc: string | null;
+  finished_at_utc: string | null;
+  tz_offset?: string | null;
   parent_job_id?: string | null;
   pid?: number | null;
 };
@@ -602,9 +604,9 @@ export type PipelineStorage = {
   /// assumed, so the plot and the data can't disagree about what
   /// "recent" means.
   window_secs: number;
-  /// When the last walk finished, or null when none has yet — the only
-  /// case in which a zero doesn't mean an empty disk.
-  measured_at: string | null;
+  /// When the last walk finished, in UTC, or null when none has yet —
+  /// the only case in which a zero doesn't mean an empty disk.
+  measured_at_utc: string | null;
 };
 
 /// The backend walks the disk on a tick *while a sync is running*, and
@@ -853,7 +855,7 @@ export type FeedbackRequest = {
 
 export type FeedbackResponse = {
   feedback_uuid: string;
-  created_at: string;
+  created_at_utc: string;
   git_hash: string;
 };
 

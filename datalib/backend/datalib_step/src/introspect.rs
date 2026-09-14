@@ -304,7 +304,7 @@ pub struct Measured {
     /// Written by [`Measured::write_report`], never by [`plan`]. The
     /// split is load-bearing: the caller skips a source whose numbers
     /// have not moved, and writing the file before that check would
-    /// restamp `measured_at` on every run — churning the rendered tree,
+    /// restamp `measured_at_utc` on every run — churning the rendered tree,
     /// whose content hash is what the scheduler uses to decide that
     /// `grid_index` has nothing to do.
     body: String,
@@ -326,7 +326,7 @@ impl Measured {
 ///
 /// **Byte sizes are deliberately not in here.** A doltlite store grows
 /// a little on every run that touches it at all — a bookkeeping
-/// `last_attempt_at` mutation rewrites chunks even though no row was
+/// `last_attempt_at_utc` mutation rewrites chunks even though no row was
 /// added — so a fingerprint over bytes never settles: every run would
 /// find a new number, rewrite the report, and give `grid_index` work to
 /// do on a pipeline where nothing changed. Row and file counts are
@@ -418,6 +418,7 @@ pub fn plan(
     let md_path = data_root.join(rendered_rel).join(REPORT_REL);
     let qmd_rel = format!("{rendered_rel}/{REPORT_REL}");
 
+    let measured_at = datalib_time::split_stamp(now);
     let mut rows = Vec::with_capacity(subjects.len());
     let mut samples = Vec::with_capacity(subjects.len());
     for s in &subjects {
@@ -456,7 +457,8 @@ pub fn plan(
         samples.push(SourceMeasurementRow {
             subject: s.path.clone(),
             kind: s.kind.as_str().to_string(),
-            measured_at: now.to_string(),
+            measured_at_utc: measured_at.utc.clone(),
+            tz_offset: measured_at.tz_offset.clone(),
             bytes: s.bytes,
             items: s.items,
         });
@@ -587,7 +589,7 @@ mod tests {
     ///
     /// This is the regression `ingested_tng_test`'s "run 2 reads 0
     /// documents" assertion caught: a doltlite store grows on any run
-    /// that touches it — a bookkeeping `last_attempt_at` mutation
+    /// that touches it — a bookkeeping `last_attempt_at_utc` mutation
     /// rewrites chunks with no row added — so a fingerprint over bytes
     /// never settles, and `grid_index` gets work to do forever on a
     /// pipeline where nothing changed.
@@ -756,10 +758,12 @@ mod tests {
         // A run's worth of bookkeeping, so the excluded tables are
         // non-empty and their absence from the report is a real
         // exclusion rather than an empty-table coincidence.
-        sqlx::query("INSERT INTO sync_runs (started_at, config, status) VALUES ('t', '{}', 'ok')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO sync_runs (started_at_utc, config, status) VALUES ('t', '{}', 'ok')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO messages (id) VALUES ('m1')")
             .execute(&pool)
             .await
@@ -804,10 +808,12 @@ mod tests {
         };
 
         let pool = open().await.expect("first run");
-        sqlx::query("INSERT INTO sync_runs (started_at, config, status) VALUES ('t1', '{}', 'ok')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO sync_runs (started_at_utc, config, status) VALUES ('t1', '{}', 'ok')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO messages (id) VALUES ('m1')")
             .execute(&pool)
             .await
@@ -817,10 +823,12 @@ mod tests {
 
         // A second run: another `sync_runs` row, no new content.
         let pool = open().await.expect("second run");
-        sqlx::query("INSERT INTO sync_runs (started_at, config, status) VALUES ('t2', '{}', 'ok')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO sync_runs (started_at_utc, config, status) VALUES ('t2', '{}', 'ok')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool.close().await;
         let second = fingerprint(&scan(td.path(), "src/ingest").await.unwrap());
 
@@ -967,10 +975,10 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(m.samples.len(), subjects.len());
-        assert!(m
-            .samples
-            .iter()
-            .all(|s| s.measured_at == "2026-09-07T10:00:00-07:00"));
+        assert!(m.samples.iter().all(|s| {
+            s.measured_at_utc == "2026-09-07T17:00:00.000000+00:00"
+                && s.tz_offset.as_deref() == Some("-07:00")
+        }));
     }
 
     /// The size must reach the row and the report, but never

@@ -19,10 +19,12 @@ pub struct FeedbackRow {
     /// human-readable handle in `dolt log` messages.
     #[col(sql = "VARCHAR(36)")]
     pub feedback_uuid: String,
-    /// ISO-8601 timestamp with explicit local offset (per AGENTS.md
-    /// timestamp convention), stamped server-side at insert time.
+    /// Stamped server-side at insert time, in UTC.
     #[col(sql = "VARCHAR(40)")]
-    pub created_at: String,
+    pub created_at_utc: String,
+    /// The server's offset when it stamped `created_at_utc` (`+02:00`).
+    #[col(sql = "VARCHAR(8)")]
+    pub tz_offset: Option<String>,
     /// Optional thumb up / down. NULL when the user submitted only a
     /// comment without choosing a direction.
     #[col(sql = "VARCHAR(8)")]

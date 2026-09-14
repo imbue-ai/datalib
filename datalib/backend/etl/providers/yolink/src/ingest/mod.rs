@@ -190,7 +190,7 @@ async fn upsert_readings(pool: &SqlitePool, device: &str, readings: &[Reading]) 
         .iter()
         .map(|r| YolinkReadingRow::new(device, r.ts_ms, r.metric, r.value, r.payload.clone()))
         .collect();
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = pool.begin().await?;
     bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
     tx.commit().await?;
@@ -370,7 +370,7 @@ async fn fetch_device(
         kind: dev.kind.clone(),
         start_ms,
     };
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await?;
     bulk_upsert_in_tx(&mut tx, &[device_row], &now).await?;
     tx.commit().await?;

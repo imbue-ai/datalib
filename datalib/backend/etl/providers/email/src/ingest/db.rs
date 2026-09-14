@@ -99,12 +99,12 @@ impl RawDb {
 
     /// Read a cursor under a caller-supplied scope key.
     pub async fn load_scope(&self, scope: &str) -> Result<Option<String>> {
-        let row = sqlx::query("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
+        let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(scope)
             .fetch_optional(&self.pool)
             .await
             .context("select state token")?;
-        Ok(row.and_then(|r| r.try_get::<String, _>("last_seen_at").ok()))
+        Ok(row.and_then(|r| r.try_get::<String, _>("last_seen_at_utc").ok()))
     }
 
     pub async fn save_scope(&self, scope: &str, token: &str) -> Result<()> {
@@ -455,8 +455,8 @@ mod tests {
         (d, db)
     }
 
-    fn now() -> String {
-        IsoOffsetTimestamp::now_local().to_rfc3339()
+    fn now() -> IsoOffsetTimestamp {
+        IsoOffsetTimestamp::now_local()
     }
 
     async fn bulk<T: datalib_etl::bulk::BulkUpsertable>(db: &RawDb, rows: &[T]) {

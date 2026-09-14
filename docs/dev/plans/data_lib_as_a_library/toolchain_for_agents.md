@@ -430,7 +430,7 @@ already has.
    an API-backed pull, where the batch is gone once the window closes,
    has thrown away data it cannot get back. One clause closes it.
 4. **Split per-attempt bookkeeping off the record row.** Anything that
-   moves per attempt (`fetched_at`, `attempt_count`, `last_error`)
+   moves per attempt (`fetched_at_utc`, `attempt_count`, `last_error`)
    belongs on a sidecar, or every diff is noisy and unchanged content
    looks changed. Their §7b puts problem *counts* in the ledger row,
    which is right; the general rule is worth stating.

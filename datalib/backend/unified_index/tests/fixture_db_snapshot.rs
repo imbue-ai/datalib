@@ -173,7 +173,7 @@ async fn snapshot_grid_rows_and_documents() {
     let drows = sqlx::query(
         "SELECT markdown_uuid, source_id, provider, kind, title, \
                 created_at, updated_at, md_path, source_fingerprint, \
-                row_set_hash, renderer_version, rendered_at \
+                row_set_hash, renderer_version, rendered_at_utc, tz_offset \
          FROM markdowns ORDER BY markdown_uuid",
     )
     .fetch_all(&pool)
@@ -198,7 +198,8 @@ async fn snapshot_grid_rows_and_documents() {
                     r.try_get::<Option<String>, _>("row_set_hash").ok().flatten(),
                 ),
                 "renderer_version": r.try_get::<Option<String>, _>("renderer_version").ok().flatten(),
-                "rendered_at": r.try_get::<Option<String>, _>("rendered_at").ok().flatten(),
+                "rendered_at_utc": r.try_get::<Option<String>, _>("rendered_at_utc").ok().flatten(),
+                "tz_offset": r.try_get::<Option<String>, _>("tz_offset").ok().flatten(),
             })
         })
         .collect();

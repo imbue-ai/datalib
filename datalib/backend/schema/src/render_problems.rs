@@ -234,14 +234,17 @@ pub struct RenderProblemRow {
     /// whole state atomically.
     #[col(sql = "JSONB")]
     pub problems: String,
-    /// When this problem was first recorded for this uuid (ISO-8601
-    /// with explicit offset, per AGENTS.md).
+    /// When this problem was first recorded for this uuid, in UTC.
+    /// Stamped by the store, not the renderer.
     #[col(sql = "VARCHAR(40)")]
-    pub first_seen_at: String,
-    /// When it was last re-recorded. Equal to `first_seen_at` on a
+    pub first_seen_at_utc: String,
+    /// When it was last re-recorded. Equal to `first_seen_at_utc` on a
     /// problem seen once. Also stamped by the store.
     #[col(sql = "VARCHAR(40)")]
-    pub last_seen_at: String,
+    pub last_seen_at_utc: String,
+    /// The offset the store's clock was in at `last_seen_at_utc`.
+    #[col(sql = "VARCHAR(8)")]
+    pub tz_offset: Option<String>,
     /// The `RENDER_VERSION` of the renderer that recorded it, so a row
     /// left by an older renderer is identifiable.
     #[col(sql = "INT")]

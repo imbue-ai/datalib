@@ -45,7 +45,10 @@ pub struct GridRow {
     /// and live in the DB but not on this struct. The grid sorts and filters
     /// on `when_ts_utc`, where one zone and a fixed width make lexical order
     /// match chronological order; `when_offset` recovers the local
-    /// wall-clock for display.
+    /// wall-clock for display. This column itself stays as the source
+    /// wrote it — it is the record's stamp and it feeds the fingerprint —
+    /// which is why it is not `when_ts_utc` + `tz_offset` like the stamps
+    /// we mint (AGENTS.md, "Timestamp convention").
     #[col(sql = "VARCHAR(40)")]
     #[derived(name = "when_ts_utc", sql = "VARCHAR(40)")]
     #[derived(name = "when_offset", sql = "VARCHAR(8)")]

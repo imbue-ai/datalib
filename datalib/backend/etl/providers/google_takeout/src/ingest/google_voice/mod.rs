@@ -153,7 +153,7 @@ pub async fn ingest(
         "voice: {n_messages} messages / {n_bills} bills / {n_greetings} greetings",
     ));
 
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await.context("begin google_voice tx")?;
     bulk_upsert_in_tx(&mut tx, &message_rows, &now).await?;
     bulk_upsert_in_tx(&mut tx, &bill_rows, &now).await?;

@@ -1033,7 +1033,7 @@ mod tests {
         assert_eq!(parsed[0].reason, Reason::NoIdentity);
         assert_eq!(parsed[0].field.as_deref(), Some("uuid"));
         // Stamping is the store's job, not the renderer's.
-        assert!(p.first_seen_at.is_empty() && p.last_seen_at.is_empty());
+        assert!(p.first_seen_at_utc.is_empty() && p.last_seen_at_utc.is_empty());
     }
 
     /// The surrogate is content-derived, so a record that stays broken
