@@ -50,15 +50,9 @@ impl RenderProcessor for WhatsappRender {
         // WhatsApp doesn't expose a `period` knob on its sync block today —
         // default to month bucketing, same as signal.
         let period = Period::from_config(None).context("default whatsapp period")?;
-        let parsed = parse(&self.raw_path, period, &self.name)
+        let parsed = parse(&self.raw_path, period, &self.name, ctx.raw_range())
             .with_context(|| format!("whatsapp parse {}", self.raw_path.display()))?;
-        let mut dropped = 0usize;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let mut on_chat_gone = |chat_jid: &str| -> Result<()> {
-            dropped +=
-                ctx.remove_conversation(&crate::render::whatsapp_chat_uuid(&self.name, chat_jid))?;
-            Ok(())
-        };
         let (consumed, buckets) = render_all(
             &parsed.chats,
             &parsed.blobs_by_chat,
@@ -66,9 +60,8 @@ impl RenderProcessor for WhatsappRender {
             ctx.root,
             &self.name,
             ctx.progress,
-            ctx.raw_cursor,
+            ctx.raw_range(),
             &mut on_doc,
-            &mut on_chat_gone,
         )
         .context("whatsapp render_all")?;
         for bucket in &buckets {
@@ -77,10 +70,6 @@ impl RenderProcessor for WhatsappRender {
         if let Some(head) = consumed.as_deref() {
             ctx.consumed(head);
         }
-        Ok(if dropped == 0 {
-            "rendered".into()
-        } else {
-            format!("rendered, {dropped} document(s) gone upstream")
-        })
+        Ok("rendered".into())
     }
 }

@@ -18,6 +18,7 @@ use datalib_etl_chat_common::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
 };
+use datalib_etl_render::inputs::{Inputs, RawRange};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -55,7 +56,12 @@ pub struct MsgKey {
     pub from_me: i64,
 }
 
-pub fn parse(raw_dir: &Path, period: Period, source_id: &str) -> Result<ParsedWhatsApp> {
+pub fn parse(
+    raw_dir: &Path,
+    period: Period,
+    source_id: &str,
+    range: RawRange<'_>,
+) -> Result<ParsedWhatsApp> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(raw_dir);
     if !db_path.exists() {
         return Ok(ParsedWhatsApp::default());
@@ -66,24 +72,27 @@ pub fn parse(raw_dir: &Path, period: Period, source_id: &str) -> Result<ParsedWh
     tokio::task::block_in_place(|| {
         let rt = tokio::runtime::Handle::try_current();
         match rt {
-            Ok(handle) => handle.block_on(parse_async(&db_path, period, source_id)),
-            Err(_) => {
-                tokio::runtime::Runtime::new()?.block_on(parse_async(&db_path, period, source_id))
-            }
+            Ok(handle) => handle.block_on(parse_async(&db_path, period, source_id, range)),
+            Err(_) => tokio::runtime::Runtime::new()?
+                .block_on(parse_async(&db_path, period, source_id, range)),
         }
     })
 }
 
-async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<ParsedWhatsApp> {
+async fn parse_async(
+    db_path: &Path,
+    period: Period,
+    source_id: &str,
+    range: RawRange<'_>,
+) -> Result<ParsedWhatsApp> {
     let pool: SqlitePool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open {}", db_path.display()))?;
 
-    // Pin before the first read. whatsapp diffs by hand rather than through
-    // `scan_buckets`, so it samples HEAD here; no commit means nothing has
-    // been committed to render, which is emptiness rather than a reason to
-    // read the working set.
-    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+    // Pin before the first read: the driver's pin when it made one,
+    // else HEAD. No commit means nothing has been committed to render,
+    // which is emptiness rather than a reason to read the working set.
+    let Some(pin) = range.pin(&pool).await? else {
         return Ok(ParsedWhatsApp::default());
     };
     datalib_etl::pin::install_views(&pool, &pin)
@@ -109,13 +118,24 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
             tracing::warn!(chat_rowid = rowid, "chat: jid_row_id not in jid; dropping");
             continue;
         };
+        // Every row this chat reads, recorded as it is read: its own
+        // row and its JID here, each message and media row below, each
+        // name lookup as `JidNames` makes it.
+        let inputs = Inputs::default();
+        inputs.read("chat", &rowid.to_string());
+        if let Some(jid_row_id) = jid_row_id {
+            inputs.read("jid", &jid_row_id.to_string());
+        }
         let subject: Option<String> = r.get("subject");
-        let display = subject.clone().unwrap_or_else(|| names.label(&chat_jid));
+        let display = subject
+            .clone()
+            .unwrap_or_else(|| names.label(&chat_jid, &inputs));
         chat_idx_by_rowid.insert(rowid, chats.len());
         chats.push(ChatHeader {
             chat_jid,
             display,
             items_by_period: HashMap::new(),
+            inputs,
         });
     }
 
@@ -130,6 +150,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
     .await
     .context("select message")?;
     let mut msg_key_by_rowid: HashMap<i64, MsgKey> = HashMap::with_capacity(msg_rows.len());
+    let mut msg_chat_by_rowid: HashMap<i64, usize> = HashMap::with_capacity(msg_rows.len());
     let mut seen_keys: HashSet<MsgKey> = HashSet::with_capacity(msg_rows.len());
     for r in &msg_rows {
         let rowid: i64 = r.get("_id");
@@ -157,6 +178,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
             key_id,
             from_me: r.get("from_me"),
         };
+        chats[idx].inputs.read("message", &rowid.to_string());
         // Two rows with one natural key would mint one uuid twice; keep
         // the first, the way the store's old unique key did.
         if !seen_keys.insert(key.clone()) {
@@ -168,6 +190,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
             continue;
         }
         msg_key_by_rowid.insert(rowid, key);
+        msg_chat_by_rowid.insert(rowid, idx);
     }
 
     // 3) Media joined to its `wa_media_files` row to pick up the blake3
@@ -186,7 +209,8 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
     let mut media_by_msg: HashMap<MsgKey, Vec<NormalizedAttachment>> = HashMap::new();
     let mut unresolved: Vec<String> = Vec::new();
     for r in &media_rows {
-        let Some(key) = msg_key_by_rowid.get(&r.get::<i64, _>("message_row_id")) else {
+        let message_row_id: i64 = r.get("message_row_id");
+        let Some(key) = msg_key_by_rowid.get(&message_row_id) else {
             continue;
         };
         let file_path: Option<String> = r.get("file_path");
@@ -195,6 +219,14 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
         let file_size: Option<i64> = r.get("file_size");
         let media_caption: Option<String> = r.get("media_caption");
         let ref_id: Option<String> = r.get("blake3");
+        let inputs = &chats[msg_chat_by_rowid[&message_row_id]].inputs;
+        inputs.read("message_media", &message_row_id.to_string());
+        // The registry row is keyed by its blake3; one that resolved is
+        // declared, one that did not reaches the chat by path through the
+        // render-side scan when it arrives.
+        if let Some(blake3) = ref_id.as_deref() {
+            inputs.read("wa_media_files", blake3);
+        }
         // `None` means either the file went missing between scan and put, or
         // the message's `file_path` didn't resolve to a `wa_media_files` row.
         // Either way the renderer's "(not yet fetched)" placeholder fires —
@@ -240,7 +272,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
 
     // 4) Reactions: an add-on row keyed like a message, plus its emoji.
     let react_rows = sqlx::query(
-        "SELECT a.chat_row_id, a.key_id, a.from_me, a.sender_jid_row_id, \
+        "SELECT a._id, a.chat_row_id, a.key_id, a.from_me, a.sender_jid_row_id, \
                 a.parent_message_row_id, a.timestamp, r.reaction \
          FROM pinned_message_add_on a \
          JOIN pinned_message_add_on_reaction r ON r.message_add_on_row_id = a._id \
@@ -255,22 +287,26 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
             continue;
         };
         let chat_row_id: Option<i64> = r.get("chat_row_id");
-        let Some(chat_jid) = chat_row_id
-            .and_then(|i| chat_idx_by_rowid.get(&i))
-            .map(|&i| chats[i].chat_jid.as_str())
-        else {
+        let Some(&chat_idx) = chat_row_id.and_then(|i| chat_idx_by_rowid.get(&i)) else {
             tracing::warn!("message_add_on: chat_row_id not in chat; dropping reaction");
             continue;
         };
+        let chat_jid = chats[chat_idx].chat_jid.as_str();
+        let inputs = &chats[chat_idx].inputs;
+        let addon_row_id: i64 = r.get("_id");
+        inputs.read("message_add_on", &addon_row_id.to_string());
+        inputs.read("message_add_on_reaction", &addon_row_id.to_string());
         let key_id: String = r.get("key_id");
         let from_me: i64 = r.get::<Option<i64>, _>("from_me").unwrap_or(0);
-        let sender_jid = r
-            .get::<Option<i64>, _>("sender_jid_row_id")
-            .and_then(|i| jids.get(&i));
+        let sender_jid_row_id: Option<i64> = r.get("sender_jid_row_id");
+        if let Some(i) = sender_jid_row_id {
+            inputs.read("jid", &i.to_string());
+        }
+        let sender_jid = sender_jid_row_id.and_then(|i| jids.get(&i));
         let emoji: Option<String> = r.get("reaction");
         let timestamp: Option<i64> = r.get("timestamp");
         let reactor_display = match sender_jid {
-            Some(j) => names.label(j),
+            Some(j) => names.label(j, inputs),
             None if from_me == 1 => "Me".to_string(),
             None => "?".to_string(),
         };
@@ -294,15 +330,18 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
             continue;
         };
         let idx = chat_idx_by_rowid[&r.get::<i64, _>("chat_row_id")];
-        let sender_jid = r
-            .get::<Option<i64>, _>("sender_jid_row_id")
-            .and_then(|i| jids.get(&i).cloned());
+        let sender_jid_row_id: Option<i64> = r.get("sender_jid_row_id");
+        if let Some(i) = sender_jid_row_id {
+            chats[idx].inputs.read("jid", &i.to_string());
+        }
+        let sender_jid = sender_jid_row_id.and_then(|i| jids.get(&i).cloned());
         let item = build_item(
             source_id,
             key,
             sender_jid,
             r,
             &names,
+            &chats[idx].inputs,
             media_by_msg.remove(key).unwrap_or_default(),
             reactions_by_parent.remove(key).unwrap_or_default(),
         );
@@ -341,7 +380,7 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
             });
         }
         out.push(NormalizedChat {
-            inputs: Vec::new(),
+            inputs: ch.inputs.declared(),
             path_prefix: None,
             id: ch.chat_jid.clone(),
             chat_uuid,
@@ -404,12 +443,14 @@ async fn parse_async(db_path: &Path, period: Period, source_id: &str) -> Result<
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_item(
     source_id: &str,
     key: &MsgKey,
     sender_jid: Option<String>,
     r: &sqlx::sqlite::SqliteRow,
     names: &JidNames,
+    inputs: &Inputs,
     attachments: Vec<NormalizedAttachment>,
     reactions: Vec<NormalizedReaction>,
 ) -> NormalizedChatItem {
@@ -420,10 +461,10 @@ fn build_item(
     let author_display = if key.from_me == 1 {
         "Me".to_string()
     } else if let Some(j) = sender_jid.as_deref() {
-        names.label(j)
+        names.label(j, inputs)
     } else {
         // 1:1 incoming: the chat JID IS the sender, by definition.
-        names.label(&key.chat_jid)
+        names.label(&key.chat_jid, inputs)
     };
     let author_id = sender_jid.unwrap_or_else(|| format!("chat:{}", key.chat_jid));
 
@@ -473,6 +514,7 @@ struct ChatHeader {
     chat_jid: String,
     display: String,
     items_by_period: HashMap<String, Vec<NormalizedChatItem>>,
+    inputs: Inputs,
 }
 
 /// `jid._id -> raw_string`. A few seed rows carry a NULL `raw_string`;
@@ -512,11 +554,18 @@ async fn has_table(pool: &SqlitePool, table: &str) -> Result<bool> {
 struct JidNames {
     display_name: HashMap<String, String>,
     phone_jid: HashMap<String, String>,
+    /// `jid` string → its row id, so a name lookup can declare the
+    /// `lid_display_name` and `jid_map` rows it consulted (both keyed by
+    /// the linked id's `jid._id`), found or not.
+    row_id: HashMap<String, i64>,
 }
 
 impl JidNames {
     async fn load(pool: &SqlitePool, jids: &HashMap<i64, String>) -> Result<Self> {
         let mut out = Self::default();
+        for (rowid, jid) in jids {
+            out.row_id.entry(jid.clone()).or_insert(*rowid);
+        }
         if has_table(pool, "lid_display_name").await? {
             let rows = sqlx::query(
                 "SELECT lid_row_id, display_name FROM pinned_lid_display_name lid_display_name",
@@ -549,11 +598,24 @@ impl JidNames {
         Ok(out)
     }
 
-    fn label(&self, jid: &str) -> String {
+    fn label(&self, jid: &str, inputs: &Inputs) -> String {
+        if let Some(rowid) = self.row_id.get(jid) {
+            let rowid = rowid.to_string();
+            inputs.read("lid_display_name", &rowid);
+            inputs.read("jid_map", &rowid);
+        }
         if let Some(name) = self.display_name.get(jid) {
             return name.clone();
         }
-        let jid = self.phone_jid.get(jid).map(String::as_str).unwrap_or(jid);
+        let jid = match self.phone_jid.get(jid) {
+            Some(phone) => {
+                if let Some(rowid) = self.row_id.get(phone) {
+                    inputs.read("jid", &rowid.to_string());
+                }
+                phone.as_str()
+            }
+            None => jid,
+        };
         label_from_jid(jid)
     }
 }
@@ -572,7 +634,7 @@ fn label_from_jid(jid: &str) -> String {
 
 #[cfg(test)]
 mod jid_names_tests {
-    use super::JidNames;
+    use super::{Inputs, JidNames};
 
     /// The precedence the issue asked for: a learned name, else the
     /// phone number behind the linked id, else the raw JID — and a
@@ -591,10 +653,14 @@ mod jid_names_tests {
         names
             .display_name
             .insert("2@lid".to_string(), "Will Riker".to_string());
-        assert_eq!(names.label("1@lid"), "+17015550101");
-        assert_eq!(names.label("2@lid"), "Will Riker");
-        assert_eq!(names.label("3@lid"), "3@lid");
-        assert_eq!(names.label("17015550105@s.whatsapp.net"), "+17015550105");
-        assert_eq!(names.label("bridge-crew@g.us"), "bridge-crew@g.us");
+        let inputs = Inputs::default();
+        assert_eq!(names.label("1@lid", &inputs), "+17015550101");
+        assert_eq!(names.label("2@lid", &inputs), "Will Riker");
+        assert_eq!(names.label("3@lid", &inputs), "3@lid");
+        assert_eq!(
+            names.label("17015550105@s.whatsapp.net", &inputs),
+            "+17015550105"
+        );
+        assert_eq!(names.label("bridge-crew@g.us", &inputs), "bridge-crew@g.us");
     }
 }
