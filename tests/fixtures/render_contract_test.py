@@ -59,15 +59,8 @@ KNOWN_GAPS: dict[str, str] = {
     "sms-backup-restore: tweak sms_attachments": "same",
     # ── a table the bucket query does not name ──
     # (contract clause 2)
-    "tng_email: delete email_blobs": "attachment bytes; no join from blob to thread in the scan",
     "tng_pdfs: delete pdf_scan_meta": "scan provenance shown on the page; not in the scan",
     "tng_pdfs: tweak pdf_scan_meta": "same",
-    "whatsapp: delete jid": "jid resolution; whatsapp's own scan has no fan-out tables",
-    "whatsapp: delete jid_map": "same",
-    "whatsapp: delete lid_display_name": "same",
-    "whatsapp: tweak jid": "same",
-    "whatsapp: tweak lid_display_name": "same",
-    "whatsapp: tweak wa_media_files": "media registry; not in whatsapp's scan",
 }
 
 # Columns of the render store whose value is a stamp of *when* rather

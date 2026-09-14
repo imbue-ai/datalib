@@ -212,6 +212,13 @@ async fn changed_chats(pool: &sqlx::SqlitePool, from: &Pin, to: &Pin) -> Result<
     for table in CHAT_ROWID_TABLES {
         chat_rowids.extend(diff_column::<i64>(pool, table, "chat_row_id", from, to).await?);
     }
+    // A chat's JID is its identity: a `jid` row that changed renames the
+    // bucket, so the chats on it are named on both sides — the old JID
+    // reads as gone, the new one as live.
+    let jid_rowids = diff_column::<i64>(pool, "jid", "_id", from, to).await?;
+    for pin in [to, from] {
+        chat_rowids.extend(in_list::<i64, i64>(pool, CHAT_BY_JID_SQL, &jid_rowids, pin).await?);
+    }
 
     let mut message_rowids: HashSet<i64> = HashSet::new();
     for table in MESSAGE_ROWID_TABLES {
@@ -266,6 +273,8 @@ const CHAT_BY_ADDON_SQL: &str =
     "SELECT chat_row_id FROM dolt_at_message_add_on('{pin}') WHERE _id IN ({placeholders})";
 const CHAT_BY_MESSAGE_SQL: &str =
     "SELECT chat_row_id FROM dolt_at_message('{pin}') WHERE _id IN ({placeholders})";
+const CHAT_BY_JID_SQL: &str =
+    "SELECT _id FROM dolt_at_chat('{pin}') WHERE jid_row_id IN ({placeholders})";
 const JID_BY_CHAT_SQL: &str = "SELECT coalesce(j.raw_string, j.user || '@' || j.server) \
      FROM dolt_at_chat('{pin}') c JOIN dolt_at_jid('{pin}') j ON j._id = c.jid_row_id \
      WHERE c._id IN ({placeholders})";

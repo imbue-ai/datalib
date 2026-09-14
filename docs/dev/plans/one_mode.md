@@ -448,10 +448,14 @@ and the list is exact — an entry that stops failing fails the run
 until it is removed. Removing the fingerprint skip altogether
 (2026-09-14, the `render_inputs` PR) closed nine of those at once —
 every one where a provider's input hash had left out something it
-rendered, so a change was hashed as "same" — and the twelve that
-remain are all tables a scan does not name (clause 2). pdf's is the
-one worth knowing: its bucket is the file's blake3, so text
-re-extracted at ingest never re-renders.*
+rendered, so a change was hashed as "same". The six diff-scanning chat
+providers declaring what each bucket reads (the `render_inputs` step 4
+PR, 2026-09-14) closed seven more — every whatsapp gap, and email's
+`.eml` edges — and the harness now also edits one row at a time and
+checks the run rendered exactly the documents declared as reading it.
+Five remain, all tables a whole-store renderer's walk never reads
+(clause 2). pdf's is the one worth knowing: its bucket is the file's
+blake3, so text re-extracted at ingest never re-renders.*
 
 A real provider is correct under the property if it keeps five
 promises. Written as a contract, so a provider author has a list and
