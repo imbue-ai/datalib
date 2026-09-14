@@ -92,7 +92,7 @@ pub struct Channel {
 impl Channel {
     pub fn display(
         &self,
-        users: &std::collections::BTreeMap<String, String>,
+        users: datalib_etl_render::inputs::Lookup<'_, String>,
         self_user_id: Option<&str>,
     ) -> String {
         if !self.is_dm {
@@ -103,17 +103,24 @@ impl Channel {
         }
         let counterparts =
             datalib_etl_slack::ingest::schema_raw::dm_counterparts(&self.dm_user_ids, self_user_id);
+        let labels: std::collections::BTreeMap<String, String> = counterparts
+            .iter()
+            .filter_map(|u| Some((u.clone(), users.get(u)?.clone())))
+            .collect();
         datalib_etl_slack::ingest::schema_raw::dm_display_name(
             &counterparts,
             self.name.as_deref(),
             &self.channel_id,
-            users,
+            &labels,
         )
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Workspace {
+    /// The `workspaces` row's primary key, which is what a thread
+    /// declares it read.
+    pub row_id: String,
     pub team_id: String,
     pub team_name: Option<String>,
     pub team_url: Option<String>,
@@ -169,12 +176,13 @@ pub fn slack_link(team_id: &str, channel_id: &str, ts: &str, thread_ts: Option<&
 #[cfg(test)]
 mod channel_display_tests {
     use super::*;
+    use datalib_etl_render::inputs::Inputs;
     use std::collections::BTreeMap;
 
     /// U1 is the account doing the mirroring.
     const SELF: Option<&str> = Some("U1");
 
-    fn labels() -> BTreeMap<String, String> {
+    fn users() -> BTreeMap<String, String> {
         [
             ("U1", "Jean-Luc Picard"),
             ("U2", "William Riker"),
@@ -199,26 +207,30 @@ mod channel_display_tests {
     /// across the DM change.
     #[test]
     fn a_channel_is_hash_name() {
+        let inputs = Inputs::default();
+        let users = users();
         let c = Channel {
             channel_id: "C1".into(),
             name: Some("general".into()),
             ..Default::default()
         };
-        assert_eq!(c.display(&labels(), SELF), "#general");
+        assert_eq!(c.display(inputs.lookup("users", &users), SELF), "#general");
 
         let unnamed = Channel {
             channel_id: "C2".into(),
             ..Default::default()
         };
-        assert_eq!(unnamed.display(&labels(), SELF), "#C2");
+        assert_eq!(unnamed.display(inputs.lookup("users", &users), SELF), "#C2");
     }
 
     /// The reason DMs need their own branch: a 1:1 DM has no name, so
     /// the channel path would title every one of them `#D0123ABCD`.
     #[test]
     fn a_dm_is_at_the_person() {
+        let inputs = Inputs::default();
+        let users = users();
         assert_eq!(
-            dm("D1", None, &["U2"]).display(&labels(), SELF),
+            dm("D1", None, &["U2"]).display(inputs.lookup("users", &users), SELF),
             "@William Riker"
         );
     }
@@ -228,38 +240,53 @@ mod channel_display_tests {
     /// is this conversation with".
     #[test]
     fn a_group_dm_names_the_others() {
+        let inputs = Inputs::default();
+        let users = users();
         assert_eq!(
             dm(
                 "G1",
                 Some("mpdm-picard--riker--data-1"),
                 &["U1", "U2", "U3"]
             )
-            .display(&labels(), SELF),
+            .display(inputs.lookup("users", &users), SELF),
             "@William Riker, Data"
         );
     }
 
     #[test]
     fn a_dm_with_an_unknown_user_falls_back_to_the_user_id() {
-        assert_eq!(dm("D9", None, &["U404"]).display(&labels(), SELF), "@U404");
+        let inputs = Inputs::default();
+        let users = users();
+        assert_eq!(
+            dm("D9", None, &["U404"]).display(inputs.lookup("users", &users), SELF),
+            "@U404"
+        );
     }
 
     /// A store written before `dm_user_ids` existed, or a shape without
     /// participants: Slack's own composite handle, then the raw id.
     #[test]
     fn a_dm_without_participants_falls_back_to_the_handle_then_the_id() {
+        let inputs = Inputs::default();
+        let users = users();
         assert_eq!(
-            dm("G1", Some("mpdm-picard--riker--data-1"), &[]).display(&labels(), SELF),
+            dm("G1", Some("mpdm-picard--riker--data-1"), &[])
+                .display(inputs.lookup("users", &users), SELF),
             "@mpdm-picard--riker--data-1"
         );
-        assert_eq!(dm("D9", None, &[]).display(&labels(), SELF), "D9");
+        assert_eq!(
+            dm("D9", None, &[]).display(inputs.lookup("users", &users), SELF),
+            "D9"
+        );
     }
 
     /// A DM with yourself still has to be nameable.
     #[test]
     fn a_note_to_self_keeps_your_own_name() {
+        let inputs = Inputs::default();
+        let users = users();
         assert_eq!(
-            dm("D0", None, &["U1"]).display(&labels(), SELF),
+            dm("D0", None, &["U1"]).display(inputs.lookup("users", &users), SELF),
             "@Jean-Luc Picard"
         );
     }

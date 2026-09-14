@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -369,6 +370,39 @@ class RenderContractTest(unittest.TestCase):
             )
         return root
 
+    def _rendered(self, source_dir: Path) -> int | None:
+        """How many documents the last render of this store wrote, off
+        its commit message — the only trace, since an unchanged rewrite
+        leaves no diff."""
+        db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
+        rows = self._rows(
+            db, "SELECT message FROM dolt_log() ORDER BY date DESC LIMIT 1;"
+        )
+        m = re.match(r"render \S+: (\d+) document\(s\)", rows[0]) if rows else None
+        return int(m.group(1)) if m else None
+
+    def _expected_rerender(
+        self, source_dir: Path, table: str, row_id: str
+    ) -> int | None:
+        """How many documents a change to one row should re-render, by
+        what the store declares: every document under a bucket that
+        recorded reading `(table, row_id)`. `None` when the provider has
+        declared nothing for the table — its scan is on its own then."""
+        db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
+        declared = self._rows(
+            db, f"SELECT COUNT(*) FROM render_inputs WHERE input_table = '{table}';"
+        )[0]
+        if declared == "0":
+            return None
+        return int(
+            self._rows(
+                db,
+                "SELECT COUNT(*) FROM markdowns WHERE bucket_key IN "
+                "(SELECT bucket_key FROM render_inputs "
+                f"WHERE input_table = '{table}' AND input_id = '{row_id}');",
+            )[0]
+        )
+
     def _check(
         self,
         source: str,
@@ -377,13 +411,19 @@ class RenderContractTest(unittest.TestCase):
         sqls: list[str],
         failures: list[str],
         skipped: list[str],
+        one_row: str | None = None,
     ) -> bool:
         """Apply the first of `sqls` the store accepts and that changes a
         row, then compare incremental against cold. `False` when none
-        applied — a mutation the store refuses proves nothing."""
+        applied — a mutation the store refuses proves nothing. With
+        `one_row` (the row's primary key), the mutation touched that row
+        alone, and the incremental run must also have rendered exactly
+        the documents the store declares as reading it: the contract's
+        clause 2 in its narrow form, which a whole-table mutation cannot
+        tell from "rendered everything"."""
         # Incremental: the copy carries the render store and its cursor.
         inc = self._scratch(
-            f"{source}-{table}-{kind}-inc",
+            f"{source}-{table}-{kind.replace(' ', '-')}-inc",
             source,
             self.workspace / source / "ingest",
             with_render_store=True,
@@ -401,10 +441,15 @@ class RenderContractTest(unittest.TestCase):
             shutil.rmtree(inc)
             return False
         self._rows(db, f"SELECT dolt_commit('-Am', 'contract: {kind} {table}');")
+        expected = (
+            self._expected_rerender(inc / source, table, one_row)
+            if one_row is not None
+            else None
+        )
         inc_err = self._render_step(inc, source)
         # Cold: the same mutated raw store, no render store.
         cold = self._scratch(
-            f"{source}-{table}-{kind}-cold",
+            f"{source}-{table}-{kind.replace(' ', '-')}-cold",
             source,
             inc / source / "ingest",
             with_render_store=False,
@@ -423,6 +468,13 @@ class RenderContractTest(unittest.TestCase):
             )
             if d:
                 failures.append(f"{source}: {kind} {table}\n{d}")
+            elif expected is not None:
+                rendered = self._rendered(inc / source)
+                if rendered != expected:
+                    failures.append(
+                        f"{source}: {kind} {table}\n  one row changed; the store declares "
+                        f"{expected} document(s) reading it, the run rendered {rendered}"
+                    )
         # `RENDER_CONTRACT_KEEP` leaves the scratch roots for inspection.
         if not os.environ.get("RENDER_CONTRACT_KEEP"):
             shutil.rmtree(inc)
@@ -462,6 +514,27 @@ class RenderContractTest(unittest.TestCase):
                     checked += self._check(
                         source, table, "tweak", tweaks, failures, skipped
                     )
+                # The same edit on one row — the first by primary key —
+                # for the narrow half of the contract. A composite key
+                # cannot be named in one column, so those tables get
+                # only the whole-table form.
+                pks = [name for name, _, pk in cols if pk]
+                if tweaks and len(pks) == 1:
+                    row_id = self._rows(
+                        db, f"SELECT CAST(MIN({pks[0]}) AS TEXT) FROM {table};"
+                    )[0]
+                    checked += self._check(
+                        source,
+                        table,
+                        "tweak one row",
+                        [
+                            f"{t[:-1]} WHERE CAST({pks[0]} AS TEXT) = '{row_id}';"
+                            for t in tweaks
+                        ],
+                        failures,
+                        skipped,
+                        one_row=row_id,
+                    )
         sys.stderr.write(
             f"[render contract] {checked} mutation(s) checked, {len(skipped)} skipped\n"
         )
@@ -469,8 +542,13 @@ class RenderContractTest(unittest.TestCase):
             sys.stderr.write(f"[render contract]   skipped {line}\n")
         self.assertGreater(checked, 0, "no source had a table to mutate")
 
-        failed = {f.split("\n", 1)[0] for f in failures}
-        new = [f for f in failures if f.split("\n", 1)[0] not in KNOWN_GAPS]
+        # A gap under the whole-table edit covers its one-row form: the
+        # same rows went unread either way.
+        def gap_key(failure: str) -> str:
+            return failure.split("\n", 1)[0].replace("tweak one row", "tweak")
+
+        failed = {gap_key(f) for f in failures}
+        new = [f for f in failures if gap_key(f) not in KNOWN_GAPS]
         fixed = sorted(k for k in KNOWN_GAPS if k not in failed and only is None)
         self.assertEqual(
             new,

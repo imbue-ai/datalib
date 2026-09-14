@@ -89,6 +89,7 @@ rust_test(
     },
     deps = [
         "//datalib/backend/etl/providers/slack_render:datalib_etl_slack_render",
+        "//datalib/backend/etl/render:datalib_etl_render",
     ],
 )
 

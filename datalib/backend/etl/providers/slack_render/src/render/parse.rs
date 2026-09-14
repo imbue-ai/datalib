@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::{self, BlobBundle};
+use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
+use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl_slack::ingest::db::db_path_for;
-use datalib_etl_slack::ingest::schema_raw::slack_thread_uuid;
+use datalib_etl_slack::ingest::schema_raw::{slack_thread_uuid, SlackAttachmentRow};
 use datalib_etl_slack::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 use super::{ts_to_iso, Channel, Message, User, Workspace};
@@ -33,12 +34,9 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → render only threads whose `thread_root_uuid` is
-    /// in `set`. `None` → render everything.
+    /// in `set`: the ones the driver found stale through their declared
+    /// inputs, plus the ones the diff named. `None` → render everything.
     pub render: Option<HashSet<String>>,
-    /// The threads the diff named, for the removal probe — still a set
-    /// when `render` is `None` because a workspace, user or channel
-    /// changed.
-    pub changed_threads: Option<HashSet<String>>,
     /// HEAD commit hash at scan time, ready to stamp into the render
     /// cursor on success.
     pub new_head: Option<String>,
@@ -53,6 +51,10 @@ pub struct SlackThreadBucket {
     pub thread_uuid: String,
     pub messages: Vec<Message>,
     pub blobs: BlobBundle,
+    /// Every raw row this thread reads — its messages and attachment
+    /// edges from the load here, its users and channel as render looks
+    /// them up.
+    pub inputs: Inputs,
 }
 
 #[derive(Default)]
@@ -68,10 +70,6 @@ pub struct ParsedSlack {
     /// Scan diagnostics propagated up to render so it can write the
     /// cursor + log elapsed_ms.
     pub scan: ScanResult,
-    /// Bucket keys the diff named that the raw store no longer has a row
-    /// for. Empty on a cold start, which looks at every bucket and so has
-    /// nothing to compare against.
-    pub vanished_buckets: Vec<String>,
 }
 
 impl ParsedSlack {
@@ -91,10 +89,10 @@ impl ParsedSlack {
     }
 }
 
-pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedSlack> {
+pub fn parse(path: &Path, range: RawRange<'_>) -> Result<ParsedSlack> {
     let db_path = db_path_for(path);
     if db_path.exists() {
-        return parse_doltlite(&db_path, last_render_hash);
+        return parse_doltlite(&db_path, range);
     }
     if path.is_dir() {
         return parse_raw_json_dir(path);
@@ -108,17 +106,14 @@ pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedSlack>
     Ok(ParsedSlack::default())
 }
 
-fn parse_doltlite(db_path: &Path, last_render_hash: Option<&str>) -> Result<ParsedSlack> {
+fn parse_doltlite(db_path: &Path, range: RawRange<'_>) -> Result<ParsedSlack> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_doltlite_async(db_path, last_render_hash).await })
+            .block_on(async move { parse_doltlite_async(db_path, range).await })
     })
 }
 
-async fn parse_doltlite_async(
-    db_path: &Path,
-    last_render_hash: Option<&str>,
-) -> Result<ParsedSlack> {
+async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<ParsedSlack> {
     let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open slack doltlite for render {}", db_path.display()))?;
@@ -140,7 +135,7 @@ async fn parse_doltlite_async(
     // No commit at all means nothing has been committed here to render, which
     // is emptiness, not a reason to read the working set.
 
-    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+    let Some(pin) = range.pin(&pool).await? else {
         return Ok(ParsedSlack::default());
     };
 
@@ -148,7 +143,7 @@ async fn parse_doltlite_async(
         .await
         .context("pin the slack raw store for render")?;
 
-    let scan = scan_diff(&pool, last_render_hash, &pin).await?;
+    let scan = scan_diff(&pool, range, &pin).await?;
 
     // Workspace + users + channels are cheap and shared across threads.
     let workspace = load_workspace(&pool).await?;
@@ -174,23 +169,36 @@ async fn parse_doltlite_async(
         .as_ref()
         .map(|w| w.team_id.clone())
         .unwrap_or_else(|| "unknown".into());
-    let mut by_thread: BTreeMap<String, Vec<Message>> = BTreeMap::new();
+    let mut by_thread: BTreeMap<String, (Vec<Message>, Inputs)> = BTreeMap::new();
     for m in messages {
         let msg = loaded_to_message(&m, &team_id);
-        by_thread
-            .entry(m.thread_root_uuid.clone())
-            .or_default()
-            .push(msg);
+        let (msgs, inputs) = by_thread.entry(m.thread_root_uuid.clone()).or_default();
+        inputs.read("messages", &m.id);
+        for file_id in attachment_ref_ids(&msg) {
+            inputs.read(
+                "slack_attachments",
+                &SlackAttachmentRow::pk_recipe(&m.id, &file_id),
+            );
+        }
+        msgs.push(msg);
     }
     let mut threads: Vec<SlackThreadBucket> = Vec::with_capacity(by_thread.len());
-    for (thread_uuid, mut msgs) in by_thread {
+    for (thread_uuid, (mut msgs, inputs)) in by_thread {
         msgs.sort_by(|a, b| {
             (a.ts_iso.as_deref(), a.ts.as_str()).cmp(&(b.ts_iso.as_deref(), b.ts.as_str()))
         });
+        // The login and its workspace name every document's header.
+        if let Some(ws) = &workspace {
+            inputs.read("workspaces", &ws.row_id);
+            if let Some(me) = &ws.self_user_id {
+                inputs.read("users", me);
+            }
+        }
         threads.push(SlackThreadBucket {
             thread_uuid,
             messages: msgs,
             blobs: BlobBundle::default(),
+            inputs,
         });
     }
 
@@ -208,22 +216,6 @@ async fn parse_doltlite_async(
         }
     }
 
-    // A thread the diff named that no message still belongs to. The
-    // bucket key is already the thread uuid render keys documents by, so
-    // unlike every other provider there is no id to re-derive.
-    let vanished_buckets = match scan.changed_threads.as_ref() {
-        Some(changed) => {
-            datalib_etl::doltlite_raw::buckets_without_rows(
-                &pool,
-                datalib_etl::pin::Reads::At(&pin),
-                changed,
-                &[("messages", "thread_root_uuid")],
-            )
-            .await?
-        }
-        None => Vec::new(),
-    };
-
     Ok(ParsedSlack {
         workspace,
         users,
@@ -231,25 +223,24 @@ async fn parse_doltlite_async(
         threads,
         docs_skipped,
         scan,
-        vanished_buckets,
     })
 }
 
 /// Phase 1: union over the per-table dolt_diff vtabs to project
-/// touched `thread_root_uuid`s. Workspace / users / channels changes
-/// fan out to "render everything" — channel renames + user renames
-/// appear inside every thread we render.
+/// touched `thread_root_uuid`s — what a new or changed message or
+/// attachment row maps to. A workspace, user or channel change reaches
+/// a thread through the inputs it declared, so none of them fans out.
 async fn scan_diff(
     pool: &SqlitePool,
-    last_render_hash: Option<&str>,
+    range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
-        last_render_hash,
+        range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &["workspaces", "users", "channels"],
+            global_fanout_tables: &[],
             bucket_query: "
                 SELECT DISTINCT thread_root_uuid FROM (
                     SELECT coalesce(to_thread_root_uuid, from_thread_root_uuid) AS thread_root_uuid
@@ -267,8 +258,7 @@ async fn scan_diff(
     )
     .await?;
     Ok(ScanResult {
-        render: scan.render,
-        changed_threads: scan.changed_buckets,
+        render: range.narrow(scan.render.as_ref()),
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })
@@ -276,7 +266,7 @@ async fn scan_diff(
 
 async fn load_workspace(pool: &SqlitePool) -> Result<Option<Workspace>> {
     let row = sqlx::query(
-        "SELECT json(payload) AS payload FROM pinned_workspaces workspaces ORDER BY id LIMIT 1",
+        "SELECT id, json(payload) AS payload FROM pinned_workspaces workspaces ORDER BY id LIMIT 1",
     )
     .fetch_optional(pool)
     .await
@@ -293,6 +283,7 @@ async fn load_workspace(pool: &SqlitePool) -> Result<Option<Workspace>> {
         return Ok(None);
     }
     Ok(Some(Workspace {
+        row_id: row.try_get("id").unwrap_or_default(),
         team_id,
         team_name: opt_str(&v, "team"),
         team_url: opt_str(&v, "url"),
@@ -387,6 +378,7 @@ async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
 /// Internal loaded-message shape carrying the thread_root_uuid column
 /// (which `LoadedMessage` doesn't surface).
 struct LoadedMessageWithThread {
+    id: String,
     team_id: String,
     channel_id: String,
     ts: String,
@@ -409,7 +401,7 @@ async fn thread_count(pool: &SqlitePool) -> Result<usize> {
 
 async fn load_all_messages(pool: &SqlitePool) -> Result<Vec<LoadedMessageWithThread>> {
     let rows = sqlx::query(
-        "SELECT team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
+        "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
                 json(payload) AS payload, thread_root_uuid
            FROM pinned_messages messages
           WHERE payload IS NOT NULL
@@ -436,7 +428,7 @@ async fn load_messages_for_threads(
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
+            "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
                     json(payload) AS payload, thread_root_uuid
                FROM pinned_messages messages
               WHERE payload IS NOT NULL AND thread_root_uuid IN ({placeholders})
@@ -469,6 +461,7 @@ fn rows_to_loaded(rows: Vec<sqlx::sqlite::SqliteRow>) -> Vec<LoadedMessageWithTh
         };
         let is_root_int: Option<i64> = r.try_get("is_thread_root").unwrap_or(None);
         out.push(LoadedMessageWithThread {
+            id: r.try_get("id").unwrap_or_default(),
             team_id: r.try_get("team_id").unwrap_or_default(),
             channel_id: r.try_get("channel_id").unwrap_or_default(),
             ts: r.try_get("ts").unwrap_or_default(),
@@ -506,18 +499,23 @@ fn collect_attachment_ref_ids(msgs: &[Message]) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
     for m in msgs {
-        let Some(files) = m.raw_json.get("files").and_then(|v| v.as_array()) else {
-            continue;
-        };
-        for f in files {
-            if let Some(id) = f.get("id").and_then(|v| v.as_str()) {
-                if seen.insert(id.to_string()) {
-                    out.push(id.to_string());
-                }
+        for id in attachment_ref_ids(m) {
+            if seen.insert(id.clone()) {
+                out.push(id);
             }
         }
     }
     out
+}
+
+fn attachment_ref_ids(m: &Message) -> Vec<String> {
+    m.raw_json
+        .get("files")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f.get("id").and_then(|v| v.as_str()).map(str::to_string))
+        .collect()
 }
 
 // Legacy JSON-tree reader (kept for the in-crate TNG render fixture).
@@ -536,6 +534,7 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
             continue;
         }
         workspace = Some(Workspace {
+            row_id: team_id.clone(),
             team_id: team_id.clone(),
             team_name: opt_str(&resp, "team"),
             team_url: opt_str(&resp, "url"),
@@ -645,6 +644,7 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
             thread_uuid,
             messages: msgs,
             blobs: BlobBundle::default(),
+            inputs: Inputs::default(),
         });
     }
 
@@ -655,7 +655,6 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
         threads,
         docs_skipped: 0,
         scan: ScanResult::default(),
-        vanished_buckets: Vec::new(),
     })
 }
 
@@ -786,7 +785,7 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse(Path::new("/this/does/not/exist"), None).unwrap();
+        let parsed = parse(Path::new("/this/does/not/exist"), RawRange::cold()).unwrap();
         assert!(parsed.threads.is_empty());
         assert!(parsed.channels.is_empty());
         assert!(parsed.workspace.is_none());
@@ -849,6 +848,10 @@ mod legacy_schema_tests {
         // the truthful reading of the absent columns.
         assert!(!c.is_dm);
         assert!(c.dm_user_ids.is_empty());
-        assert_eq!(c.display(&BTreeMap::new(), None), "#bridge");
+        let inputs = Inputs::default();
+        assert_eq!(
+            c.display(inputs.lookup("users", &BTreeMap::new()), None),
+            "#bridge"
+        );
     }
 }

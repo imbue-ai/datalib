@@ -19,6 +19,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 
 use super::mrkdwn::{emojize_shortcodes, resolve_mentions, to_commonmark, Labels};
 use super::{slack_link, ts_to_ms, Message, ParsedSlack};
+use datalib_etl_render::inputs::Lookup;
 use datalib_schema::providers::Provider;
 
 /// Bump when the on-disk render layout changes in a way that must
@@ -75,9 +76,9 @@ pub fn render_all(
     tracing::info!(
         source = source_id,
         scan_elapsed_ms = elapsed_ms,
-        changed_threads = parsed
+        threads_to_render = parsed
             .scan
-            .changed_threads
+            .render
             .as_ref()
             .map(|s| s.len() as i64)
             .unwrap_or(-1),
@@ -95,12 +96,7 @@ pub fn render_all(
         .iter()
         .filter_map(|(id, c)| Some((id.clone(), c.name.clone()?)))
         .collect();
-    let labels = Labels {
-        users: &user_labels,
-        channels: &channel_labels,
-    };
-
-    let (chats, blobs_by_chat) = build_chats(parsed, labels);
+    let (chats, blobs_by_chat) = build_chats(parsed, &user_labels, &channel_labels);
 
     let cc = cc_render_all(
         &profile(),
@@ -123,7 +119,8 @@ pub fn render_all(
 
 fn build_chats(
     parsed: &ParsedSlack,
-    labels: Labels<'_>,
+    user_labels: &BTreeMap<String, String>,
+    channel_labels: &BTreeMap<String, String>,
 ) -> (Vec<NormalizedChat>, HashMap<String, BlobBundle>) {
     // Who this mirror belongs to, from `auth.test`. Used to subtract
     // the account itself out of a group DM's participant list when
@@ -144,6 +141,14 @@ fn build_chats(
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
 
     for bucket in &parsed.threads {
+        // Every user and channel this thread resolves is recorded on the
+        // bucket as it is asked for, so the thread declares exactly what
+        // it read.
+        let labels = Labels {
+            users: bucket.inputs.lookup("users", user_labels),
+            channels: bucket.inputs.lookup("channels", channel_labels),
+        };
+        let channels = bucket.inputs.lookup("channels", &parsed.channels);
         let root: &Message = bucket
             .messages
             .iter()
@@ -152,7 +157,7 @@ fn build_chats(
         // `#general` for a channel, `@Jean-Luc Picard` for a DM, and
         // `#<channel_id>` when the channel row never arrived — the same
         // fallback this line has always had. See `Channel::display`.
-        let cname = match parsed.channels.get(&root.channel_id) {
+        let cname = match channels.get(&root.channel_id) {
             Some(c) => c.display(labels.users, self_user_id),
             None => format!("#{}", root.channel_id),
         };
@@ -169,7 +174,6 @@ fn build_chats(
         let title = format!("{cname}: {}", thread_title(&root.text, labels));
 
         chats.push(NormalizedChat {
-            inputs: Vec::new(),
             path_prefix: None,
             id: thread_uuid.clone(),
             chat_uuid: thread_uuid.clone(),
@@ -201,6 +205,7 @@ fn build_chats(
                 markdown_uuid: thread_uuid.clone(),
                 items,
             }],
+            inputs: bucket.inputs.declared(),
         });
         blobs_by_chat.insert(thread_uuid, bucket.blobs.clone());
     }
@@ -326,7 +331,7 @@ fn image_mime_for(filetype: &str) -> Option<String> {
 fn build_reactions(
     raw: &Value,
     m: &Message,
-    user_labels: &BTreeMap<String, String>,
+    user_labels: Lookup<'_, String>,
 ) -> Vec<NormalizedReaction> {
     let date_ms = ts_to_ms(&m.ts);
     let mut out = Vec::new();

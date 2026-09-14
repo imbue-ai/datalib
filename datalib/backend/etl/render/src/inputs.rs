@@ -7,8 +7,8 @@
 //! that records every key asked of it, found or not, so a lookup table
 //! (users, channels, recipients) cannot be read without being declared.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Mutex;
 
 use anyhow::Result;
 use datalib_etl::pin::{self, Pin};
@@ -63,15 +63,25 @@ impl<'a> RawRange<'a> {
 }
 
 /// The rows one bucket asked for, in the order the store diffs them.
+/// Interior-mutable so a lookup through a shared `&` still records.
 #[derive(Debug, Default)]
 pub struct Inputs {
-    seen: RefCell<BTreeSet<(String, String)>>,
+    seen: Mutex<BTreeSet<(String, String)>>,
+}
+
+impl Clone for Inputs {
+    fn clone(&self) -> Self {
+        Self {
+            seen: Mutex::new(self.seen.lock().unwrap().clone()),
+        }
+    }
 }
 
 impl Inputs {
     pub fn read(&self, table: &str, id: &str) {
         self.seen
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert((table.to_string(), id.to_string()));
     }
 
@@ -94,10 +104,12 @@ impl Inputs {
         }
     }
 
-    pub fn take(&self) -> Vec<Input> {
-        std::mem::take(&mut *self.seen.borrow_mut())
-            .into_iter()
-            .map(|(table, id)| Input { table, id })
+    pub fn declared(&self) -> Vec<Input> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(table, id)| Input::new(table, id))
             .collect()
     }
 }
@@ -105,12 +117,19 @@ impl Inputs {
 /// A read-only view of one raw table's rows, keyed by primary key, that
 /// declares every key it is asked for — a miss too, since the row's
 /// arrival is a change the bucket must see.
-#[derive(Clone, Copy)]
 pub struct Lookup<'a, V> {
     table: &'static str,
     map: &'a BTreeMap<String, V>,
     inputs: &'a Inputs,
 }
+
+impl<V> Clone for Lookup<'_, V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<V> Copy for Lookup<'_, V> {}
 
 impl<'a, V> Lookup<'a, V> {
     pub fn get(&self, id: &str) -> Option<&'a V> {
@@ -132,14 +151,13 @@ mod tests {
         assert_eq!(lookup.get("u2"), None);
         inputs.read("messages", "m1");
         assert_eq!(
-            inputs.take(),
+            inputs.declared(),
             vec![
                 Input::new("messages", "m1"),
                 Input::new("users", "u1"),
                 Input::new("users", "u2"),
             ]
         );
-        assert!(inputs.take().is_empty(), "take drains");
     }
 
     #[test]
