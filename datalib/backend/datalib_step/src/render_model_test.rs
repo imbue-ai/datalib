@@ -726,7 +726,6 @@ impl World {
             now: NOW.into(),
             cadence: if seal_often {
                 datalib_etl::checkpointer::Cadence {
-                    quiet_for: std::time::Duration::ZERO,
                     at_most_every: std::time::Duration::ZERO,
                 }
             } else {

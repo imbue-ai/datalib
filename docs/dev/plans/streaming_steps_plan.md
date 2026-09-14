@@ -584,14 +584,17 @@ A shared `Checkpointer` in `etl` the producer *asks* at its natural
 batch boundary. Three refinements over the obvious fixed interval, all
 from review:
 
-**It is a debounce with a ceiling, not a period.** Commit when writes
-have been quiet for `debounce` (default ~2s), or when `max_interval`
-(default ~15s) has passed since the last commit, whichever comes first.
-A fixed period makes a source that finishes a burst sit on its rows for
-the rest of the interval; a pure debounce never fires under a steady
-stream. Debounce-with-ceiling gets the good half of each: a burst that
-ends is published promptly, and a continuous writer still publishes
-every `max_interval`.
+**A ceiling, asked at the producer's consistent points** — at most
+`at_most_every` (default 15s) between commits. This was first built as
+a debounce with a ceiling, the debounce meant to publish a burst that
+ends without waiting out the interval. It never fired: a producer asks
+"should I seal?" in the same breath as it records a write, so "quiet
+for N seconds" is measured as zero at the only moment anyone asks, and
+`quiet_for_secs` in `config.toml` was a dial that turned nothing. It was
+removed (2026-09-14) rather than made to work, because nothing polls
+a producer between writes and the case it was for is covered anyway:
+a burst that ends is sealed by the next write past the ceiling, or by
+the run finishing, which is the last seal.
 
 **Nothing changed means no commit.** Check `dolt_status` before
 committing and skip when the store is clean, and emit no `checkpoint`
@@ -794,7 +797,7 @@ Each of these is a reviewable PR that leaves the tree green.
    cannot stream.
 
 
-3. **Producer checkpoints.** `Checkpointer` (debounce + ceiling, skip
+3. **Producer checkpoints.** `Checkpointer` (a ceiling, skip
    when clean, cadence from config), the two commit seams with **blobs
    committed before entities**, checkpointing disabled for
    wipe-and-re-ingest runs, the `checkpoint` event, `subprocess.rs`
@@ -993,10 +996,3 @@ judge the idea by before committing to the wide half.
   measured it. Revisit after step 5 has run against a real root. Note
   that with the whole chain streaming, every render's early passes and
   every `grid_index` pass share that one slot.
-- **The debounce half of the cadence never fires from a producer.**
-  `Checkpointer::wrote` records the write and is asked `should_seal`
-  in the same breath, so "quiet for `quiet_for`" is measured as zero
-  at the only moment anyone asks; in practice a producer seals on the
-  ceiling alone, and a burst that ends sits until the next write or the
-  end of the run. Harmless today — finishing is the last seal — but
-  `quiet_for_secs` in `config.toml` is a dial that turns nothing.

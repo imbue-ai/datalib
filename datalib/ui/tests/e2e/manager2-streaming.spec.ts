@@ -192,7 +192,6 @@ inputs = ["${id}/ingest"]
   const config = () => `data_root = "${dataRoot}"
 
 [checkpoint_cadence]
-quiet_for_secs = 1
 at_most_every_secs = 2
 
 [[groups]]
