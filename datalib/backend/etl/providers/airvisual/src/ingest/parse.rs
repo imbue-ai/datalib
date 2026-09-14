@@ -28,15 +28,12 @@ pub struct Sample {
     pub humidity_pct: Option<f64>,
     pub co2_ppm: Option<f64>,
     pub voc_ppb: Option<f64>,
-    /// `{header: value}` for the whole line.
-    pub payload: String,
 }
 
-/// Header → the column it fills. A header not listed here stays in the
-/// payload only; the parser warns once per file so a firmware that adds
-/// a column is noticed rather than silently kept as JSON.
-/// `Temperature(F)` is deliberately absent: it is `Temperature(C)`
-/// converted, and the payload keeps it.
+/// Header → the column it fills. A header not listed here is not
+/// stored; the parser warns once per file so a firmware that adds a
+/// column is noticed rather than silently dropped. `Temperature(F)` is
+/// deliberately absent: it is `Temperature(C)` converted.
 type Setter = fn(&mut Sample, f64);
 
 const COLUMNS: &[(&str, Setter)] = &[
@@ -106,7 +103,7 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
                 event = "airvisual_unknown_column",
                 file = file_label,
                 column = *h,
-                "column kept in the payload but not typed; add it to COLUMNS to store it",
+                "column not stored; add it to COLUMNS to keep it",
             );
         }
     }
@@ -134,19 +131,16 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
             );
             continue;
         };
-        let payload = {
+        if ts_s < CLOCK_SET_AFTER_S {
+            stats.clock_unset += 1;
             let mut m = serde_json::Map::with_capacity(headers.len());
             for (h, v) in headers.iter().zip(&fields) {
                 m.insert(h.to_string(), serde_json::Value::String(v.to_string()));
             }
-            serde_json::Value::Object(m).to_string()
-        };
-        if ts_s < CLOCK_SET_AFTER_S {
-            stats.clock_unset += 1;
             unplaced.push(Unplaced {
                 line_no: n as i64 + 2,
                 device_ts_s: ts_s,
-                payload,
+                payload: serde_json::Value::Object(m).to_string(),
             });
             continue;
         }
@@ -178,7 +172,6 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
         if bad {
             stats.bad_lines += 1;
         }
-        sample.payload = payload;
         out.push(sample);
     }
     stats.samples = out.len();
@@ -284,15 +277,6 @@ mod tests {
             (p.stats.lines, p.stats.bad_lines, p.samples.len()),
             (1, 0, 1)
         );
-    }
-
-    #[test]
-    fn the_payload_keeps_every_column() {
-        let p = parse(FULL, "t").unwrap();
-        let payload: serde_json::Value = serde_json::from_str(&p.samples[0].payload).unwrap();
-        assert_eq!(payload["Temperature(F)"], "74.3");
-        assert_eq!(payload["Date"], "2026/09/01");
-        assert_eq!(payload.as_object().unwrap().len(), 14);
     }
 
     #[test]

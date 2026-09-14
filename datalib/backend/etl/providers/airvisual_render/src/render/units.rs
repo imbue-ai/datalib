@@ -178,34 +178,21 @@ mod tests {
     /// are the same set, in both directions.
     #[test]
     fn metrics_cover_every_sample_column() {
-        let ddl = datalib_etl_airvisual::ingest::schema_raw::full_ddl().join("\n");
+        use datalib_etl_airvisual::ingest::schema_raw::SAMPLE_MEASUREMENTS;
         for m in METRICS {
             assert!(
-                ddl.contains(m.metric),
+                SAMPLE_MEASUREMENTS.contains(&m.metric),
                 "{} is not a sample column",
                 m.metric
             );
         }
-        let expected = [
-            "pm25_ugm3",
-            "pm10_ugm3",
-            "pm1_ugm3",
-            "aqi_us",
-            "aqi_cn",
-            "outdoor_aqi_us",
-            "outdoor_aqi_cn",
-            "temperature_c",
-            "humidity_pct",
-            "co2_ppm",
-            "voc_ppb",
-        ];
-        for col in expected {
+        for col in SAMPLE_MEASUREMENTS {
             assert!(
                 spec_for(col).is_some(),
                 "sample column {col} has no plot row"
             );
         }
-        assert_eq!(METRICS.len(), expected.len());
+        assert_eq!(METRICS.len(), SAMPLE_MEASUREMENTS.len());
     }
 
     #[test]

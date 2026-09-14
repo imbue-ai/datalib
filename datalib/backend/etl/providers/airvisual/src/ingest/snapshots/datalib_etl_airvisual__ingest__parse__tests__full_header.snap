@@ -14,7 +14,6 @@ expression: p.samples
   humidity_pct: 48
   co2_ppm: 425
   voc_ppb: ~
-  payload: "{\"AQI(CN)\":\"1\",\"AQI(US)\":\"6\",\"CO2(ppm)\":\"425\",\"Date\":\"2026/09/01\",\"Humidity(%RH)\":\"48\",\"Outdoor AQI(CN)\":\"0\",\"Outdoor AQI(US)\":\"0\",\"PM1(ug/m3)\":\"1.0\",\"PM10(ug/m3)\":\"1.0\",\"PM2_5(ug/m3)\":\"1.0\",\"Temperature(C)\":\"23.5\",\"Temperature(F)\":\"74.3\",\"Time\":\"00:00:36\",\"Timestamp\":\"1788220836\"}"
 - ts_ms: 1788221736000
   pm25_ugm3: ~
   pm10_ugm3: ~
@@ -27,7 +26,6 @@ expression: p.samples
   humidity_pct: ~
   co2_ppm: ~
   voc_ppb: ~
-  payload: "{\"AQI(CN)\":\"\",\"AQI(US)\":\"\",\"CO2(ppm)\":\"\",\"Date\":\"2026/09/01\",\"Humidity(%RH)\":\"\",\"Outdoor AQI(CN)\":\"17\",\"Outdoor AQI(US)\":\"56\",\"PM1(ug/m3)\":\"\",\"PM10(ug/m3)\":\"\",\"PM2_5(ug/m3)\":\"\",\"Temperature(C)\":\"\",\"Temperature(F)\":\"\",\"Time\":\"00:15:36\",\"Timestamp\":\"1788221736\"}"
 - ts_ms: 1788222636000
   pm25_ugm3: ~
   pm10_ugm3: ~
@@ -40,4 +38,3 @@ expression: p.samples
   humidity_pct: ~
   co2_ppm: ~
   voc_ppb: ~
-  payload: "{\"AQI(CN)\":\"-1\",\"AQI(US)\":\"-1\",\"CO2(ppm)\":\"\",\"Date\":\"2026/09/01\",\"Humidity(%RH)\":\"\",\"Outdoor AQI(CN)\":\"17\",\"Outdoor AQI(US)\":\"56\",\"PM1(ug/m3)\":\"\",\"PM10(ug/m3)\":\"\",\"PM2_5(ug/m3)\":\"-1.0\",\"Temperature(C)\":\"\",\"Temperature(F)\":\"\",\"Time\":\"00:30:36\",\"Timestamp\":\"1788222636\"}"

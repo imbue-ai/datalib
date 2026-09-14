@@ -1017,17 +1017,7 @@ airvisual_devices
     system_version
     timezone
     last_ts_ms
-airvisual_devices_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
 airvisual_samples
-    id
-    payload
     device_id
     ts_ms
     pm25_ugm3
@@ -1042,14 +1032,6 @@ airvisual_samples
     co2_ppm
     voc_ppb
     source_file
-airvisual_samples_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
 airvisual_unplaced_samples
     id
     payload
@@ -1057,14 +1039,6 @@ airvisual_unplaced_samples
     source_file
     line_no
     device_ts_s
-airvisual_unplaced_samples_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
 ingested_files
     scope
     rel_path

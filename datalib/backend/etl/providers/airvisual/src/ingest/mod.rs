@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::file_checkpoint;
@@ -306,9 +306,8 @@ async fn upsert_device(db: &RawDb, who: &Identity, info: &DeviceInfo) -> Result<
     if same {
         return Ok(());
     }
-    let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await?;
-    bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
+    bulk_upsert_entity_in_tx(&mut tx, &[row]).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -354,10 +353,9 @@ async fn ingest_one(
             device_ts_s: u.device_ts_s,
         })
         .collect();
-    let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await?;
-    bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
-    bulk_upsert_in_tx(&mut tx, &unplaced, &now).await?;
+    schema_raw::upsert_samples(&mut tx, &rows).await?;
+    bulk_upsert_entity_in_tx(&mut tx, &unplaced).await?;
     file_checkpoint::record_file(&mut tx, scope, f).await?;
     tx.commit().await?;
     let upsert_ms = t.elapsed().as_millis() - read_ms - parse_ms;
@@ -373,10 +371,6 @@ async fn ingest_one(
 
 fn sample_row(device: &str, s: parse::Sample, source_file: &str) -> AirvisualSampleRow {
     AirvisualSampleRow {
-        id_and_payload: dr::WirePayload {
-            id: schema_raw::sample_id_recipe(device, s.ts_ms),
-            payload: s.payload,
-        },
         device_id: device.to_string(),
         ts_ms: s.ts_ms,
         pm25_ugm3: s.pm25_ugm3,

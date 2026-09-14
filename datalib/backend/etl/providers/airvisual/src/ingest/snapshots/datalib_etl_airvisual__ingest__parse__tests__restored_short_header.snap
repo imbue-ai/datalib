@@ -14,4 +14,3 @@ expression: p.samples
   humidity_pct: ~
   co2_ppm: 423
   voc_ppb: ~
-  payload: "{\"CO2(ppm)\":\"423\",\"Date\":\"9/1/2025\",\"PM1(ug/m3)\":\"17.0\",\"PM10(ug/m3)\":\"17.0\",\"PM2_5(ug/m3)\":\"14.0\",\"Temperature(C)\":\"21.6\",\"Time\":\"00:00:00\",\"Timestamp\":\"1756684800\"}"

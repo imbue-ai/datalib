@@ -6,10 +6,26 @@ own history files into one doltlite raw store:
 ```
 <data_root>/<group>/ingest/entities.doltlite_db
   airvisual_devices            one row per device: serial (the id), name, model, firmware, timezone, last sample
-  airvisual_samples            one row per logged line, a REAL column per measurement
+  airvisual_samples            one row per logged line: (device_id, ts_ms) plus a REAL column per measurement
   airvisual_unplaced_samples   lines logged before the clock was set
   ingested_files               which history files have been read, by content hash, per device
 ```
+
+**Plain SQL, no payload, no bookkeeping sidecar.** `airvisual_samples`
+is keyed `PRIMARY KEY (device_id, ts_ms)` and holds typed columns only:
+every column of a line is typed (`Temperature(F)` is `temperature_c`
+converted), so keeping the line as JSON beside them would only repeat
+it, and a sensor sample has no fetch to retry, so the `_bookkeeping`
+row the shared upsert writes per entity would double the row count
+for nothing — `fsindex` makes the same call. `schema_raw::upsert_samples`
+is the chunked multi-row upsert. Measured on 2026-09-14 over both real
+Pros (384,622 samples from 24 MB of history text): the store went from
+275 MB with payload and sidecar to 80 MB without, 66 MB after
+`dolt_gc()`; the same rows as plain SQLite are 44 MB (33 MB of rows,
+11 MB of primary-key index), the rest being doltlite's chunk format.
+`source_file` is a third of each row; an integer reference into
+`ingested_files` would take ~13 MB off, at the cost of the column a
+person reads.
 
 The one method is `export`, with one `devices` entry per Pro: the folder
 it serves over Samba (`smb://<ip>/airvisual`, user `airvisual`, password
@@ -66,9 +82,10 @@ format between files (`2026/09/01` at the root, `9/1/2025` in a
 `restored_` file). A blank cell is the sensor being off — the
 `corrupt_` files are ~95% blank-sensor lines carrying only the followed
 outdoor station's index — and `-1` is a sentinel; both become NULL.
-`Temperature(F)` is `Temperature(C)` converted and is kept in the
-payload only. A column the parser does not know is kept in the payload
-and warned about once per file (`airvisual_unknown_column`).
+`Temperature(F)` is `Temperature(C)` converted and is not stored. A
+column the parser does not know is not stored either, and is warned
+about once per file (`airvisual_unknown_column`) so a firmware that
+adds one is noticed rather than silently dropped.
 
 **The month being written ends in a block of NULs** the device has
 reserved; the parser trims them. A line cut short by a concurrent write

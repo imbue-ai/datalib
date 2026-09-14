@@ -3,10 +3,9 @@
 
 use std::path::Path;
 
-use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::progress::Progress;
 use datalib_etl_airvisual::ingest::schema_raw::{
-    sample_id_recipe, AirvisualDeviceRow, AirvisualSampleRow,
+    upsert_samples, AirvisualDeviceRow, AirvisualSampleRow,
 };
 use datalib_etl_airvisual::ingest::{db_path_for, RawDb};
 use datalib_etl_airvisual_render::render::parse::{parse, Parsed};
@@ -27,10 +26,6 @@ fn sample(
     t: Option<f64>,
 ) -> AirvisualSampleRow {
     AirvisualSampleRow {
-        id_and_payload: WirePayload {
-            id: sample_id_recipe(device, ts_ms),
-            payload: "{}".into(),
-        },
         device_id: device.to_string(),
         ts_ms,
         pm25_ugm3: pm25,
@@ -49,7 +44,6 @@ fn sample(
 }
 
 async fn seed(pool: &SqlitePool, rows: &[Seed], devices: &[(&str, &str)]) {
-    let now = datalib_time::IsoOffsetTimestamp::now_local();
     let device_rows: Vec<AirvisualDeviceRow> = devices
         .iter()
         .map(|(id, name)| AirvisualDeviceRow {
@@ -69,16 +63,10 @@ async fn seed(pool: &SqlitePool, rows: &[Seed], devices: &[(&str, &str)]) {
         .collect();
 
     let mut tx = pool.begin().await.unwrap();
-    if !device_rows.is_empty() {
-        datalib_etl::bulk::bulk_upsert_in_tx(&mut tx, &device_rows, &now)
-            .await
-            .unwrap();
-    }
-    if !sample_rows.is_empty() {
-        datalib_etl::bulk::bulk_upsert_in_tx(&mut tx, &sample_rows, &now)
-            .await
-            .unwrap();
-    }
+    datalib_etl::bulk::bulk_upsert_entity_in_tx(&mut tx, &device_rows)
+        .await
+        .unwrap();
+    upsert_samples(&mut tx, &sample_rows).await.unwrap();
     tx.commit().await.unwrap();
     sqlx::query("SELECT dolt_commit('-Am', 'test seed')")
         .execute(pool)
