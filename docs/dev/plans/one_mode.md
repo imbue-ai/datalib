@@ -252,9 +252,12 @@ and small.
    … RENAME` with its history intact. Keyless tables cannot upsert and
    are already undiffable: refuse them at DDL time.
 3. **Render: documents in transactions, cursor in the store.** *Built.*
-   `IndexedMarkdownStore::put_document` and `remove_document` are each
-   one SQL transaction (`transaction()` joins an open one, so the
-   driver's end of run — sweep, storage report, cursor — is one more);
+   the documents between two checkpoints share one SQL transaction
+   (`begin_batch`/`commit_batch`, closed right before each
+   `dolt_commit`), each written whole inside it — `put_document` and
+   `remove_document` join the open batch, or run as a transaction of
+   their own outside one, so the driver's end of run — sweep, storage
+   report, cursor — is one more;
    the `render_cursor` table (one row: `raw_commit`, `params`) is
    written there by the driver; `render_cursor.rs` and every
    provider's read/write of the file are gone — a provider reads

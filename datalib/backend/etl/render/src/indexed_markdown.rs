@@ -10,7 +10,9 @@
 //! problems, never a document with its rows deleted and not yet re-inserted.
 //! That is what lets a doltlite commit land at any moment between them
 //! (checkpoint, Ctrl-C, rescue, end of run) without anyone checking what is
-//! in it. See `docs/dev/plans/one_mode.md`.
+//! in it. How many documents share one transaction is a throughput choice
+//! ([`IndexedMarkdownStore::begin_batch`]); doltlite charges ~50ms per
+//! statement outside one. See `docs/dev/plans/one_mode.md`.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -175,12 +177,28 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// Run `f` as one SQL transaction, or as part of the one already open.
+    /// Open a batch: one SQL transaction that every write until
+    /// [`Self::commit_batch`] joins. The driver holds one open across the
+    /// documents between two checkpoints, so a render of 200k documents
+    /// is a few hundred transactions rather than 200k.
+    pub fn begin_batch(&self) -> Result<()> {
+        blocking(self.write_lock.begin_transaction())
+    }
+
+    pub fn commit_batch(&self) -> Result<()> {
+        blocking(self.write_lock.commit_transaction())
+    }
+
+    pub fn rollback_batch(&self) -> Result<()> {
+        blocking(self.write_lock.rollback_transaction())
+    }
+
+    /// Run `f` as one SQL transaction, or as part of the batch already open.
     ///
     /// A unit of work — a document with its rows, the end-of-run sweep with
-    /// the cursor — is replaced whole or not at all. Joining an open
-    /// transaction is what lets the driver group several units into one
-    /// without the store asserting on a second `BEGIN`.
+    /// the cursor — is replaced whole or not at all, and never straddles a
+    /// batch boundary, because the boundary is only ever placed between two
+    /// calls to this.
     pub fn transaction<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
         if blocking(self.write_lock.in_transaction()) {
             return f();
@@ -219,9 +237,10 @@ impl IndexedMarkdownStore {
     /// The file matters as much as the rows. `md_path` is what
     /// `/applet/unified_index/chat/{uuid}` serves and what qmd indexed, so a
     /// document deleted from the store but left on disk stays searchable and
-    /// still resolves — a deletion the user can still read. It goes after
-    /// the rows commit: a rolled-back delete must not leave a document whose
-    /// rows say it exists and whose file is gone.
+    /// still resolves — a deletion the user can still read. The unlink
+    /// follows the rows; inside a batch that later rolls back it leaves
+    /// rows for a file that is gone, which the next run's removal of the
+    /// same document repairs (an absent file is the state wanted).
     pub fn remove_document(&self, out_dir: &Path, markdown_uuid: &str) -> Result<()> {
         let md_path = self.transaction(|| {
             blocking(async {

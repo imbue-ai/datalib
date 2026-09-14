@@ -562,10 +562,11 @@ collection per group so a `source_id:` search scopes retrieval instead
 of filtering its results). Both
 are read by
 the `unified_index` applet, which serves the grid — `datalib-http` does
-not open them. A render store is readable at every commit: each
-rendered document, and the end-of-run sweep with its cursor, is one
-SQL transaction, so a checkpoint, a Ctrl-C or a rescue commit can land
-between any two of them without publishing a fraction of one. The
+not open them. A render store is readable at every commit: the
+documents between two checkpoints share one SQL transaction, each
+written whole inside it, and the end-of-run sweep with its cursor is
+one more, so a checkpoint, a Ctrl-C or a rescue commit never publishes
+a fraction of a document. The
 streaming ingests already write that way; the ones that truncate before
 they refill do not yet — `docs/dev/plans/one_mode.md` is the rule and
 says which is which. Scheduler state lives at `system/dag_state.json`. A config entry the

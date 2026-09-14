@@ -127,12 +127,13 @@ pub async fn run(
         // Every document this run wrote. On a full render it is what the
         // walk produced, and the sweep below keeps exactly this.
         let mut emitted: BTreeSet<String> = BTreeSet::new();
-        // Every finished document goes into the per-source store, as one
-        // SQL transaction — rows, edges, markdown and problems together —
-        // so a commit landing between two documents never publishes a
-        // fraction of one. The providers hand us a `RenderedMarkdown`
-        // through `ctx.emit_doc`, the same value `grid_index::apply_one`
-        // consumes.
+        // The documents between two checkpoints share one SQL transaction
+        // (the batch), and each is written whole inside it — rows, edges,
+        // markdown and problems together — so a commit landing between
+        // two documents never publishes a fraction of one. The providers
+        // hand us a `RenderedMarkdown` through `ctx.emit_doc`, the same
+        // value `grid_index::apply_one` consumes.
+        store.begin_batch()?;
         let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
             store
                 .put_document(&data_root, &md)
@@ -146,6 +147,7 @@ pub async fn run(
             // on its next pass.
             checkpointer.wrote(1);
             if checkpointer.should_seal() {
+                store.commit_batch()?;
                 let sealed = store.commit(&format!(
                     "render {}: checkpoint at {} document(s)",
                     planned_name,
@@ -157,6 +159,7 @@ pub async fn run(
                 if let Some(hash) = sealed {
                     progress.checkpoint(&hash);
                 }
+                store.begin_batch()?;
             }
             Ok(())
         };
@@ -194,22 +197,33 @@ pub async fn run(
         // The raw commit each processor rendered from, or `None` for one
         // that read no store.
         let mut consumed: Vec<Option<String>> = Vec::with_capacity(processors.len());
-        for proc in &processors {
-            let ctx = RenderCtx::new(
-                &name,
-                &data_root,
-                &now,
-                &progress,
-                &prior,
-                raw_cursor.as_deref(),
-                &mut on_doc,
-                &mut on_remove,
-                &mut on_retain,
-            );
-            futures::executor::block_on(proc.run(&ctx))
-                .with_context(|| format!("processor {}", proc.id()))?;
-            consumed.push(ctx.consumed_commit());
+        let ran = (|| -> Result<()> {
+            for proc in &processors {
+                let ctx = RenderCtx::new(
+                    &name,
+                    &data_root,
+                    &now,
+                    &progress,
+                    &prior,
+                    raw_cursor.as_deref(),
+                    &mut on_doc,
+                    &mut on_remove,
+                    &mut on_retain,
+                );
+                futures::executor::block_on(proc.run(&ctx))
+                    .with_context(|| format!("processor {}", proc.id()))?;
+                consumed.push(ctx.consumed_commit());
+            }
+            Ok(())
+        })();
+        // A failed processor takes the open batch with it: what it wrote
+        // since the last checkpoint is neither complete nor described by
+        // any cursor, and the next run renders it again.
+        if let Err(e) = ran {
+            let _ = store.rollback_batch();
+            return Err(e);
         }
+        store.commit_batch()?;
         let raw_commit = one_consumed_commit(&name, &consumed);
 
         // A full render in which every processor read its store walked
