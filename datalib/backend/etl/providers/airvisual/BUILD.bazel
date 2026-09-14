@@ -1,0 +1,49 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "datalib_etl_airvisual",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_airvisual",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/airvisual_config:datalib_etl_airvisual_config",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+# Unit tests with insta snapshots; see yolink's BUILD for why
+# INSTA_WORKSPACE_ROOT is set.
+rust_test(
+    name = "airvisual_unittests",
+    size = "small",
+    crate = ":datalib_etl_airvisual",
+    data = glob(["src/ingest/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    deps = [
+        "@datalib_crates//:insta",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+insta_update(
+    name = "airvisual_unittests.update",
+    test = ":airvisual_unittests",
+)

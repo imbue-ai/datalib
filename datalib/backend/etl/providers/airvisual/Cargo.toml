@@ -1,0 +1,25 @@
+[package]
+name = "datalib-etl-airvisual"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_etl_airvisual"
+path = "src/lib.rs"
+
+[dependencies]
+datalib-etl = { path = "../.." }
+datalib-etl-macros = { path = "../../macros" }
+datalib-time = { path = "../../../time" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+sqlx = { workspace = true }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+insta = { version = "1.41", features = ["yaml"] }

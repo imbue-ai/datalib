@@ -1007,6 +1007,55 @@ recipients_bookkeeping
     volatile_payload
     tz_offset
 
+== airvisual/raw ==
+airvisual_devices
+    id
+    serial_number
+    model
+    timezone
+    node_name
+    last_ts_ms
+airvisual_devices_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+airvisual_samples
+    id
+    payload
+    device_name
+    ts_ms
+    pm25_ugm3
+    pm10_ugm3
+    pm1_ugm3
+    aqi_us
+    aqi_cn
+    outdoor_aqi_us
+    outdoor_aqi_cn
+    temperature_c
+    humidity_pct
+    co2_ppm
+    voc_ppb
+    source_file
+airvisual_samples_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at_utc
+    tz_offset
+
 == slack/raw ==
 channels
     id
