@@ -281,11 +281,18 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         let raw = raw_db_path.clone();
         let last_hash = cursor.clone();
         move || {
+            // What the driver hands a provider whose declared inputs are
+            // all unchanged: the cursor, and an empty stale set.
+            let stale = std::collections::HashSet::new();
             datalib_etl_signal_render::render::parse(
                 &raw,
                 datalib_etl::periodize::Period::Month,
                 "signal-tng",
-                Some(last_hash.as_str()),
+                datalib_etl_render::inputs::RawRange {
+                    cursor: Some(last_hash.as_str()),
+                    pin: None,
+                    stale: Some(&stale),
+                },
             )
         }
     })

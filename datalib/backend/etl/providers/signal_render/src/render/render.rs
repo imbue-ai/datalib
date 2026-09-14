@@ -73,9 +73,9 @@ pub fn render_all(
     tracing::info!(
         source = source_id,
         scan_elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64),
-        changed_chats = parsed
+        chats_to_render = parsed
             .scan
-            .changed_chats
+            .render
             .as_ref()
             .map(|s| s.len() as i64)
             .unwrap_or(-1),

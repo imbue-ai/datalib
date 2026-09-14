@@ -92,7 +92,7 @@ pub struct Channel {
 impl Channel {
     pub fn display(
         &self,
-        users: datalib_etl_render::inputs::Lookup<'_, String>,
+        users: datalib_etl_render::inputs::Lookup<'_, std::collections::BTreeMap<String, String>>,
         self_user_id: Option<&str>,
     ) -> String {
         if !self.is_dm {

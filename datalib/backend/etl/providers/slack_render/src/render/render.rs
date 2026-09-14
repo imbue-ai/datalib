@@ -331,7 +331,7 @@ fn image_mime_for(filetype: &str) -> Option<String> {
 fn build_reactions(
     raw: &Value,
     m: &Message,
-    user_labels: Lookup<'_, String>,
+    user_labels: Lookup<'_, BTreeMap<String, String>>,
 ) -> Vec<NormalizedReaction> {
     let date_ms = ts_to_ms(&m.ts);
     let mut out = Vec::new();

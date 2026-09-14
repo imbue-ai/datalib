@@ -55,23 +55,20 @@ impl RenderProcessor for SignalRender {
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse, render_all};
 
-        let parsed = parse(&self.raw_path, self.period, &self.name, ctx.raw_cursor)
+        let parsed = parse(&self.raw_path, self.period, &self.name, ctx.raw_range())
             .with_context(|| format!("signal parse {}", self.raw_path.display()))?;
-        // Chats the newest backup no longer carries. Signal periodizes,
-        // so one chat owns several documents; the store resolves how many.
-        let mut dropped = 0usize;
-        for chat_id in &parsed.vanished_buckets {
-            dropped +=
-                ctx.remove_conversation(&crate::render::signal_chat_uuid(&self.name, chat_id))?;
-        }
         let mut on_doc = |md| ctx.emit_doc(md);
         let summary = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("signal render_all")?;
-        // A chat the diff named that came back with no items builds no
-        // chat at all, so chat-common never sees it; declaring the named
-        // set first is what makes its old documents go.
-        for chat_id in parsed.scan.changed_chats.iter().flatten() {
+        // A chat this run looked at that came back with no items builds
+        // no chat at all, so chat-common never sees it: declared with
+        // nothing, its documents go. The rendered ones follow and
+        // replace that.
+        for chat_id in parsed.scan.render.iter().flatten() {
             ctx.declare_bucket(&crate::render::signal_chat_uuid(&self.name, chat_id), &[])?;
+        }
+        for bucket in &parsed.scan.gone {
+            ctx.declare_bucket(bucket, &[])?;
         }
         for bucket in &summary.buckets {
             ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
@@ -79,10 +76,6 @@ impl RenderProcessor for SignalRender {
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }
-        Ok(if dropped == 0 {
-            "rendered".into()
-        } else {
-            format!("rendered, {dropped} document(s) gone upstream")
-        })
+        Ok("rendered".into())
     }
 }

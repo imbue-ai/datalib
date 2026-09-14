@@ -1,6 +1,8 @@
 //! Slack mrkdwn → CommonMark converter. Port of `src/ingest/providers/
 //! slack/mrkdwn.py`.
 
+use std::collections::BTreeMap;
+
 use datalib_etl_render::inputs::Lookup;
 use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
@@ -44,8 +46,8 @@ pub fn emojize_shortcodes(text: &str) -> String {
 /// the thread being rendered.
 #[derive(Clone, Copy)]
 pub struct Labels<'a> {
-    pub users: Lookup<'a, String>,
-    pub channels: Lookup<'a, String>,
+    pub users: Lookup<'a, BTreeMap<String, String>>,
+    pub channels: Lookup<'a, BTreeMap<String, String>>,
 }
 
 /// Mentions and emoji only — what a thread title needs, without the
@@ -170,7 +172,6 @@ mod tests {
 
     use datalib_etl_render::inputs::Inputs;
     use once_cell::sync::Lazy;
-    use std::collections::BTreeMap;
 
     static USERS: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
         let mut m = BTreeMap::new();

@@ -7,7 +7,7 @@
 //! that records every key asked of it, found or not, so a lookup table
 //! (users, channels, recipients) cannot be read without being declared.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Mutex;
 
 use anyhow::Result;
@@ -54,12 +54,48 @@ impl<'a> RawRange<'a> {
 
     /// What to render: the driver's stale set joined with the provider's
     /// forward scan, or everything when either side could not narrow.
+    /// For a provider whose bucket key is the raw id.
     pub fn narrow(&self, forward: Option<&HashSet<String>>) -> Option<HashSet<String>> {
-        match (self.stale, forward) {
-            (Some(stale), Some(forward)) => Some(stale.union(forward).cloned().collect()),
-            _ => None,
+        self.narrow_by(forward, |key| Some(key.to_string())).render
+    }
+
+    /// The same, for a provider whose bucket key is minted from the raw
+    /// id: `to_raw` maps a stale bucket key back to the row to load, and
+    /// a key it cannot map — the row is gone — comes back in `gone`, for
+    /// the processor to declare with nothing so its documents go.
+    pub fn narrow_by(
+        &self,
+        forward: Option<&HashSet<String>>,
+        to_raw: impl Fn(&str) -> Option<String>,
+    ) -> Narrowed {
+        let (Some(stale), Some(forward)) = (self.stale, forward) else {
+            return Narrowed::default();
+        };
+        let mut render = forward.clone();
+        let mut gone = Vec::new();
+        for key in stale {
+            match to_raw(key) {
+                Some(raw) => {
+                    render.insert(raw);
+                }
+                None => gone.push(key.clone()),
+            }
+        }
+        gone.sort();
+        Narrowed {
+            render: Some(render),
+            gone,
         }
     }
+}
+
+/// [`RawRange::narrow_by`]'s answer.
+#[derive(Debug, Default)]
+pub struct Narrowed {
+    /// Raw ids to load and render; `None` renders everything.
+    pub render: Option<HashSet<String>>,
+    /// Bucket keys the driver found stale whose raw row no longer exists.
+    pub gone: Vec<String>,
 }
 
 /// The rows one bucket asked for, in the order the store diffs them.
@@ -92,11 +128,7 @@ impl Inputs {
     }
 
     /// A map over `table`'s rows that records every key asked of it.
-    pub fn lookup<'m, V>(
-        &'m self,
-        table: &'static str,
-        map: &'m BTreeMap<String, V>,
-    ) -> Lookup<'m, V> {
+    pub fn lookup<'m, M: Rows>(&'m self, table: &'static str, map: &'m M) -> Lookup<'m, M> {
         Lookup {
             table,
             map,
@@ -114,27 +146,47 @@ impl Inputs {
     }
 }
 
-/// A read-only view of one raw table's rows, keyed by primary key, that
-/// declares every key it is asked for — a miss too, since the row's
-/// arrival is a change the bucket must see.
-pub struct Lookup<'a, V> {
+/// One raw table's rows in memory, keyed by primary key.
+pub trait Rows {
+    type Row;
+    fn row(&self, id: &str) -> Option<&Self::Row>;
+}
+
+impl<V> Rows for BTreeMap<String, V> {
+    type Row = V;
+    fn row(&self, id: &str) -> Option<&V> {
+        self.get(id)
+    }
+}
+
+impl<V> Rows for HashMap<String, V> {
+    type Row = V;
+    fn row(&self, id: &str) -> Option<&V> {
+        self.get(id)
+    }
+}
+
+/// A read-only view of one raw table's rows that declares every key it
+/// is asked for — a miss too, since the row's arrival is a change the
+/// bucket must see.
+pub struct Lookup<'a, M> {
     table: &'static str,
-    map: &'a BTreeMap<String, V>,
+    map: &'a M,
     inputs: &'a Inputs,
 }
 
-impl<V> Clone for Lookup<'_, V> {
+impl<M> Clone for Lookup<'_, M> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<V> Copy for Lookup<'_, V> {}
+impl<M> Copy for Lookup<'_, M> {}
 
-impl<'a, V> Lookup<'a, V> {
-    pub fn get(&self, id: &str) -> Option<&'a V> {
+impl<'a, M: Rows> Lookup<'a, M> {
+    pub fn get(&self, id: &str) -> Option<&'a M::Row> {
         self.inputs.read(self.table, id);
-        self.map.get(id)
+        self.map.row(id)
     }
 }
 
@@ -171,6 +223,19 @@ mod tests {
         };
         let both = range.narrow(Some(&forward)).unwrap();
         assert_eq!(both.len(), 2);
+        let mapped = range.narrow_by(Some(&forward), |key| (key == "a").then(|| "raw-a".into()));
+        assert_eq!(
+            mapped.render.unwrap().len(),
+            2,
+            "a maps to its raw id, b is forward"
+        );
+        assert!(mapped.gone.is_empty());
+        let unmapped = range.narrow_by(Some(&forward), |_| None);
+        assert_eq!(
+            unmapped.gone,
+            vec!["a".to_string()],
+            "an unmappable stale key is gone"
+        );
         assert!(
             range.narrow(None).is_none(),
             "a fan-out hit renders everything"
