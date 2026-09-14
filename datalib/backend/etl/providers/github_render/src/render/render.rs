@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::{Bucket, Buckets, Input};
 use datalib_schema::render_problems::RenderProblemRow;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -22,6 +23,9 @@ static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
     pub rendered: usize,
+    /// Every PR rendered, with the rows it read, for the caller to
+    /// declare.
+    pub buckets: Buckets,
 }
 
 pub fn slugify(name: &str) -> String {
@@ -309,17 +313,9 @@ pub fn render_github(
     let mut summary = RenderSummary::default();
     tracing::info!(
         source = stanza,
-        scan_elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64),
-        changed_buckets = parsed
-            .scan
-            .changed_buckets
-            .as_ref()
-            .map(|s| s.len() as i64)
-            .unwrap_or(-1),
         prs = parsed.pull_requests.len(),
-        skipped = parsed.docs_skipped,
-        cold_start = parsed.scan.render.is_none(),
-        "[render] github dolt_diff scan"
+        cold_start = parsed.render.is_none(),
+        "[render] github scan"
     );
     // Group comments by PR.
     let mut by_pr: std::collections::HashMap<(String, u32), Vec<CommentRow>> = Default::default();
@@ -343,13 +339,19 @@ pub fn render_github(
             markdown_uuid: pr.uuid.clone(),
             source_id: String::new(),
             upstream_cursor: None,
-            bucket_key: None,
+            bucket_key: Some(pr.row_id.clone()),
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,
             edges: Vec::new(),
             problems,
         })?;
+        let mut inputs = vec![Input::new("pull_requests", &pr.row_id)];
+        inputs.extend(comments.iter().map(|c| Input::new(c.table, &c.row_id)));
+        summary.buckets.push(Bucket {
+            key: pr.row_id.clone(),
+            inputs,
+        });
         summary.rendered += 1;
         progress.inc(1);
     }

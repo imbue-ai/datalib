@@ -313,8 +313,8 @@ built.
 ### The property
 
 Every mechanism in incremental render — the cursor, the `dolt_diff`
-scan, `global_fanout_tables`, `remove_conversation`,
-`retain_documents`, the end-of-run sweep, checkpoints — exists so
+scan, the driver's reverse lookup over `render_inputs`, the sweep of
+a declared bucket, checkpoints — exists so
 that a run does *less* work than rendering
 from scratch. It is correct exactly when doing less work does not
 change the answer:
@@ -377,9 +377,9 @@ code, obviously correct by inspection, and never used in production.
 
 **The incremental implementation.** The same renderer wired through
 the framework the way a real provider is: `scan_buckets` with a bucket
-query over `dolt_diff_parents ∪ dolt_diff_children`, `authors` as the
-fan-out table, `buckets_without_rows` → `remove_conversation`, a
-`RenderProcessor` that reads `ctx.raw_cursor` and reports
+query over `dolt_diff_parents ∪ dolt_diff_children`, every bucket
+declared with the rows it read (`authors` included), a
+`RenderProcessor` that reads `ctx.raw_range()` and reports
 `ctx.consumed`. It lives in a test crate beside the driver
 (`datalib_step`'s render module is the thing under test), not in
 `providers/`.
@@ -458,7 +458,8 @@ last `retain_documents` walks among the chat sources; pdf and contacts
 closed all but one. The one left is a decision, not a miss: a pdf whose
 conversion fails keeps its last page where a cold render has none.
 yolink, garmin, perseus and notion followed with no new gap, and with
-perseus went `retain_documents` itself.*
+perseus went `retain_documents` itself; github and gitlab were the
+last, and with them `remove_conversation`.*
 
 A real provider is correct under the property if it keeps five
 promises. Written as a contract, so a provider author has a list and
@@ -479,9 +480,7 @@ a harness has something to check:
    every bucket it looked at, with nothing when the bucket's rows are
    gone, and the driver drops what the store holds under a declared
    bucket that the run did not emit. A whole-store renderer with no
-   diff (perseus) is one bucket. The two still on the old path,
-   github and gitlab, call `remove_conversation` for every named
-   bucket whose entity is gone (`buckets_without_rows`).
+   diff (perseus) is one bucket.
 4. **Byte-stable.** Rendering the same bucket from the same commit
    twice produces identical rows, so doltlite stores the second render
    as no change and a steady-state run moves nothing. Nothing per-run

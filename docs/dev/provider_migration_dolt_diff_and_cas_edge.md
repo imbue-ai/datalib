@@ -1,21 +1,20 @@
 # Provider migration recipe: dolt_diff incremental render + per-provider CAS edges
 
-**Render-side status (checked 2026-09-07).** github, gitlab, pdf and
-sms_backup_restore are now on a `dolt_diff` render cursor, along with the
-six that always were (chatgpt, claude, email, signal, slack, whatsapp).
-Still re-deriving every document on every run: google_takeout and
-linkedin (both portable, several document families each), notion and
-beeper (excluded — rework pending, poorly supported), and yolink (one
-document per store, already HEAD-gated). Two cannot be ported as they
-stand: **contacts**, because one `contacts` row can hold several vCards
-so a diff row does not name a document; and **perseus**, which has no
-doltlite store at all — its download writes `.xml` files and its render
-parses them.
+**Render-side status (checked 2026-09-14).** Every renderer declares
+the raw rows each of its buckets read (`render_inputs`, see
+[`plans/render_inputs.md`](plans/render_inputs.md)); the driver's
+reverse lookup over that table, joined with the provider's own forward
+scan, is what narrows a run, and a bucket declared with nothing is how
+a deletion reaches the render store. The deletion recipe below
+(`buckets_without_rows` → `remove_conversation`) is how the diff-scanned
+providers worked before that and is kept for the reasoning; the calls
+are gone.
 
 **The porting precondition, learned the hard way:** you must be able to
-compute a document's `conversation_uuid` from a diff row alone. That is
-what the deletion half needs, and a provider that fails it (contacts)
-cannot be ported without first changing how it keys its rows.
+compute a document's bucket from a diff row alone, or map the row to it
+through rows you load anyway. contacts failed the first and took the
+second: one `contacts` row can hold several vCards, so the parse maps
+the row to its cards.
 
 **And the coupling that makes each port dangerous:** narrowing a renderer
 makes the set it emits the set that *changed*, so a provider that

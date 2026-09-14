@@ -521,31 +521,6 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// Every `markdown_uuid` whose rows belong to `conversation_uuid`.
-    ///
-    /// The indirection exists because a provider that periodizes — slack per
-    /// thread-month, beeper and signal per period — turns one upstream
-    /// conversation into several documents, and their count is a fact about
-    /// what was rendered rather than anything the provider can recompute
-    /// once the conversation is gone from the raw store. The store is the
-    /// only thing that still knows.
-    pub fn documents_for_conversation(&self, conversation_uuid: &str) -> Result<Vec<String>> {
-        blocking(async {
-            let mut guard = self.write_lock.acquire().await?;
-            let rows = sqlx::query(
-                "SELECT DISTINCT markdown_uuid FROM grid_rows \
-                 WHERE conversation_uuid = ? AND markdown_uuid IS NOT NULL",
-            )
-            .bind(conversation_uuid)
-            .fetch_all(&mut **guard.conn())
-            .await
-            .with_context(|| format!("documents for conversation {conversation_uuid}"))?;
-            rows.into_iter()
-                .map(|r| r.try_get::<String, _>(0).map_err(Into::into))
-                .collect()
-        })
-    }
-
     /// Every document this store holds. The other half of a sweep: a
     /// renderer that walked its whole raw store says what should be here,
     /// and whatever else is here is what the store lost.

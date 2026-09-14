@@ -1816,42 +1816,35 @@ mod source_cursor_tests {
         store.close();
     }
 
-    /// A document that belongs to a conversation other than itself, and
-    /// whose `.md` actually exists on disk — the shape a periodizing
-    /// renderer produces, and the one the deletion path has to handle.
-    fn doc_in_conversation(
-        root: &Path,
-        source: &str,
-        uuid: &str,
-        conversation_uuid: &str,
-    ) -> RenderedMarkdown {
+    /// A document under a bucket other than itself, whose `.md` actually
+    /// exists on disk — the shape a periodizing renderer produces, and
+    /// the one the deletion path has to handle.
+    fn doc_in_bucket(root: &Path, source: &str, uuid: &str, bucket: &str) -> RenderedMarkdown {
         let mut md = doc(root, source, uuid, "body");
-        md.rows[0].conversation_uuid = conversation_uuid.to_string();
+        md.rows[0].conversation_uuid = bucket.to_string();
+        md.bucket_key = Some(bucket.to_string());
         std::fs::create_dir_all(md.md_path.parent().unwrap()).unwrap();
         std::fs::write(&md.md_path, "# rendered\n").unwrap();
         md
     }
 
-    /// One conversation, several rendered documents, all of them gone when
-    /// the conversation is.
+    /// One bucket, several rendered documents, all of them gone when the
+    /// bucket is.
     ///
-    /// The fan-out is the reason `documents_for_conversation` exists rather
-    /// than the renderer just naming the document it wants dropped: slack,
-    /// signal and beeper split one conversation across periods, and once
-    /// the conversation is gone from the raw store nothing but this store
-    /// still knows how many periods it had. A removal keyed on the
-    /// conversation drops all of them; one keyed on a recomputed document
-    /// id would drop whichever period the renderer guessed and silently
-    /// leave the rest.
+    /// The fan-out is the reason the store answers "which documents are
+    /// under this bucket" rather than the renderer naming the document it
+    /// wants dropped: slack, signal and beeper split one conversation
+    /// across periods, and once the conversation is gone from the raw
+    /// store nothing but this store still knows how many periods it had.
     #[tokio::test(flavor = "multi_thread")]
-    async fn removing_a_conversation_takes_every_period_it_rendered_into() {
+    async fn removing_a_bucket_takes_every_period_it_rendered_into() {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
         let conv = "conv-1";
-        let jan = doc_in_conversation(root, "src", "md-jan", conv);
-        let feb = doc_in_conversation(root, "src", "md-feb", conv);
-        let other = doc_in_conversation(root, "src", "md-other", "conv-2");
+        let jan = doc_in_bucket(root, "src", "md-jan", conv);
+        let feb = doc_in_bucket(root, "src", "md-feb", conv);
+        let other = doc_in_bucket(root, "src", "md-other", "conv-2");
         let (jan_md, feb_md, other_md) = (
             jan.md_path.clone(),
             feb.md_path.clone(),
@@ -1862,12 +1855,17 @@ mod source_cursor_tests {
         assert_eq!(index_row_count(&pool).await, 3);
 
         let store = IndexedMarkdownStore::open(&rendered_root(root, "src")).unwrap();
-        let mut gone = store.documents_for_conversation(conv).unwrap();
+        let mut gone: Vec<String> = store
+            .documents_for_buckets(&[conv])
+            .unwrap()
+            .into_iter()
+            .map(|(_, uuid)| uuid)
+            .collect();
         gone.sort();
         assert_eq!(
             gone,
             vec!["md-feb".to_string(), "md-jan".to_string()],
-            "both of the conversation's periods, and only those"
+            "both of the bucket's periods, and only those"
         );
         for uuid in &gone {
             store.remove_document(root, uuid).unwrap();

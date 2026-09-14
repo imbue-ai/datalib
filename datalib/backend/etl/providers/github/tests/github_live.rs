@@ -7,6 +7,7 @@
 
 use datalib_etl_github::ingest::{self as github, parse_pr_ref, FetchOptions};
 use datalib_etl_github_render::render::{parse_api_dir, render_github};
+use datalib_etl_render::inputs::RawRange;
 use insta::assert_json_snapshot;
 use serde_json::json;
 
@@ -43,7 +44,7 @@ async fn github_live_single_pr_snapshot() {
     r.expect("github fetch failed");
     sealed.expect("seal the raw store");
 
-    let parsed = parse_api_dir(&tmp, None).expect("parse_api_dir");
+    let parsed = parse_api_dir(&tmp, RawRange::cold()).expect("parse_api_dir");
     assert_eq!(parsed.pull_requests.len(), 1, "expected exactly one PR");
     let pr = &parsed.pull_requests[0];
 
