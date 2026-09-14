@@ -19,6 +19,7 @@ export type RootEvent =
   | { kind: "config_changed" }
   | { kind: "dag_changed" }
   | { kind: "frontend_changed" }
+  | { kind: "index_changed" }
   | { kind: "heartbeat" };
 
 export type LiveHandlers = {

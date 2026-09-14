@@ -6,7 +6,7 @@
 // ctx.host.openCards — structural changes never go through the bus.
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
   ModuleRegistry,
@@ -47,6 +47,7 @@ import {
   revealInFileManager,
 } from "@/desktop";
 import { openExternal } from "@/externalLinks";
+import { subscribeLive } from "@/live";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import slackIconUrl from "@/assets/slack.svg";
@@ -828,6 +829,19 @@ onMounted(async () => {
   void loadSourceNames();
   runSearch(query.value);
 });
+
+// The index moved under us — a `grid_index` pass committed, which under
+// streaming happens many times per sync, as each source's rows arrive.
+// Every cached answer is stale, so drop them all and ask the shown query
+// again; the row set updates in place while the download is still going.
+const unsubscribeLive = subscribeLive({
+  root: (e) => {
+    if (e.kind !== "index_changed") return;
+    searchCache.clear();
+    void runSearch(query.value);
+  },
+});
+onBeforeUnmount(unsubscribeLive);
 
 function docSource(md: string, anchor: string | null): string {
   const args = [md, anchor].map((a) => JSON.stringify(a)).join(", ");
