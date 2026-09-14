@@ -235,7 +235,14 @@ sh_test(
     # `--test_tag_filters=-manual,-external`). `requires-network`
     # already gates it out of hermetic / offline environments;
     # `external` would over-exclude.
+    #
+    # `cpu:4` claims the whole CI runner (ubuntu-latest has four vCPUs):
+    # nine backend processes, two browser engines and Playwright's own
+    # worker pool use all of it anyway, and without the tag bazel starts
+    # `:unit_test` and `:typecheck_test` beside it and all three run ~3x
+    # slower than they do alone.
     tags = [
+        "cpu:4",
         "no-remote-exec",
         "no-sandbox",
         "requires-network",
@@ -351,14 +358,23 @@ copy_to_bin(
     ],
 )
 
+#
+# `--maxWorkers=2` and `cpu:2` say the same thing to vitest and to bazel.
+# Left alone, vitest forks a jsdom worker per host core regardless of
+# what bazel budgeted it, which on a four-vCPU CI runner meant this
+# ~7s suite took 85-96s whenever the e2e suite ran beside it.
 vitest_bin.vitest_test(
     name = "unit_test",
-    args = ["--run"],
+    args = [
+        "--run",
+        "--maxWorkers=2",
+    ],
     chdir = package_name(),
     data = [
         ":node_modules",
         ":vitest_inputs",
     ],
+    tags = ["cpu:2"],
 )
 
 # The render preview: every provider's rendered markdown on one
