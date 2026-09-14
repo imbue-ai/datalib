@@ -36,7 +36,8 @@ import {
   type QmdDocState,
   type SearchRow,
 } from "@/api";
-import { listGroups, slugify } from "@/config/sourceSteps";
+import { entryForStep, listGroups, listSteps, slugify, sourceStepsOf } from "@/config/sourceSteps";
+import { iconUrl } from "@/config/icons";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import {
@@ -119,6 +120,10 @@ const accounts = ref<AccountsMap>({});
 
 // --- qmd index state (the Indexed / Embedded columns) ---------------
 const sourceNames = ref<Map<string, string>>(new Map());
+// Group id → the mark and label of the catalog entry its ingest step
+// matches. Finer than `SOURCE_ICONS`, which is keyed on the provider
+// and so cannot tell a Gmail source from a Fastmail one.
+const sourceMarks = ref<Map<string, { url: string; label: string }>>(new Map());
 
 const qmdState = ref<Map<string, QmdDocState>>(new Map());
 // Collection-wide totals, shown next to the row count.
@@ -152,11 +157,18 @@ async function loadSourceNames() {
     // group id → the group's name, and a group with no name shows its
     // id, the same as the column showed before names existed.
     const m = new Map<string, string>();
+    const marks = new Map<string, { url: string; label: string }>();
+    const steps = listSteps(cfg.text);
     for (const group of listGroups(cfg.text)) {
       if (group.name) m.set(group.id, group.name);
+      const ingest = sourceStepsOf(group.id, steps).ingest;
+      const entry = ingest && entryForStep(ingest, steps);
+      const url = iconUrl(entry?.icon);
+      if (entry && url) marks.set(group.id, { url, label: entry.label });
     }
     sourceNames.value = m;
-    gridApi?.refreshCells({ columns: ["source_id"], force: true });
+    sourceMarks.value = marks;
+    gridApi?.refreshCells({ columns: ["source", "source_id"], force: true });
   } catch {
     /* names are cosmetic; the column falls back to the source id */
   }
@@ -854,14 +866,18 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
       "Which service this came from. A property of the source's *type* — two Slack " +
       "workspaces share it; the Source column is what separates them.",
     width: 90,
-    cellRenderer: (params: { value: unknown }) => {
+    cellRenderer: (params: { value: unknown; data?: SearchRow }) => {
       const v = typeof params.value === "string" ? params.value : "";
-      const icon = SOURCE_ICONS[v];
-      if (!icon) return v;
+      // The configured source's own mark first — Gmail and Fastmail are
+      // both provider "Mail", and only the config knows which this is.
+      const mark = sourceMarks.value.get(params.data?.source_id ?? "");
+      const url = mark?.url ?? SOURCE_ICONS[v];
+      if (!url) return v;
+      const label = mark?.label ?? v;
       const img = document.createElement("img");
-      img.src = icon;
-      img.alt = v;
-      img.title = v;
+      img.src = url;
+      img.alt = label;
+      img.title = label;
       img.className = "source-icon";
       return img;
     },
