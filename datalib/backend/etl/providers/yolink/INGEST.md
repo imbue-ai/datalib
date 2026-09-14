@@ -163,8 +163,8 @@ SELECT  id, payload, device_name, ts_ms, metric, value
     ON CONFLICT(id) DO NOTHING;
 
 INSERT INTO yolink_readings_bookkeeping
-       (id, fetched_at, attempt_count, last_attempt_at, last_error, volatile_payload)
-SELECT  id, fetched_at, attempt_count, last_attempt_at, last_error, volatile_payload
+       (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, volatile_payload)
+SELECT  id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, volatile_payload
   FROM src.yolink_readings_bookkeeping
  WHERE true
     ON CONFLICT(id) DO NOTHING;
@@ -179,7 +179,7 @@ Notes on the shape of that statement:
   `ON CONFLICT` belongs to the `SELECT` or is the upsert clause; this is
   the documented workaround.
 - The bookkeeping sidecar comes along so imported rows keep their
-  original `fetched_at` provenance. Drop that second `INSERT` if you'd
+  original `fetched_at_utc` provenance. Drop that second `INSERT` if you'd
   rather they read as never-fetched.
 - **It is idempotent.** Running it twice leaves the row count and the
   commit count unchanged; the second run exits non-zero with

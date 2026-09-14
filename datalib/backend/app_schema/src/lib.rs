@@ -44,11 +44,11 @@ mod tests {
         assert_eq!(super::disk_usage::TABLES.len(), 1);
         let (_, cols) = super::disk_usage::COLUMNS[0];
         assert!(cols.contains(&"path"));
-        assert!(cols.contains(&"measured_at"));
+        assert!(cols.contains(&"measured_at_utc"));
         assert!(cols.contains(&"bytes"));
         let (_, ddl) = super::disk_usage::DDL[0];
         assert!(
-            ddl.contains("PRIMARY KEY (path, measured_at)"),
+            ddl.contains("PRIMARY KEY (path, measured_at_utc)"),
             "expected a composite key, got: {ddl}"
         );
     }

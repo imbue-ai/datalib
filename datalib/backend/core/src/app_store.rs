@@ -111,11 +111,13 @@ impl AppRepo for AppStore {
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
         sqlx::query(
             "INSERT INTO feedback \
-             (feedback_uuid, created_at, sentiment, comment, app_version, git_hash, context_json) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (feedback_uuid, created_at_utc, tz_offset, sentiment, comment, app_version, \
+              git_hash, context_json) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.feedback_uuid)
-        .bind(&row.created_at)
+        .bind(&row.created_at_utc)
+        .bind(&row.tz_offset)
         .bind(&row.sentiment)
         .bind(&row.comment)
         .bind(&row.app_version)
@@ -133,16 +135,17 @@ impl AppRepo for AppStore {
         only_active: bool,
         limit: usize,
     ) -> Result<Vec<SyncJobRow>, RepoError> {
-        let base = "SELECT id, source_ids, kind, parent_job_id, state, created_at, \
-                           started_at, finished_at, error, pid, progress_pct, progress_msg \
+        let base = "SELECT id, source_ids, kind, parent_job_id, state, created_at_utc, \
+                           started_at_utc, finished_at_utc, tz_offset, error, pid, \
+                           progress_pct, progress_msg \
                     FROM sync_jobs";
         let sql = if only_active {
             format!(
                 "{base} WHERE state IN (?, ?) \
-                 ORDER BY created_at DESC, id DESC LIMIT ?"
+                 ORDER BY created_at_utc DESC, id DESC LIMIT ?"
             )
         } else {
-            format!("{base} ORDER BY created_at DESC, id DESC LIMIT ?")
+            format!("{base} ORDER BY created_at_utc DESC, id DESC LIMIT ?")
         };
         // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `sql` is
         // `format!` over two `&'static str` templates selected by a bool, and
@@ -166,8 +169,9 @@ impl AppRepo for AppStore {
         Ok(out)
     }
     async fn get_job(&self, job_id: &str) -> Result<Option<SyncJobRow>, RepoError> {
-        let sql = "SELECT id, source_ids, kind, parent_job_id, state, created_at, \
-                          started_at, finished_at, error, pid, progress_pct, progress_msg \
+        let sql = "SELECT id, source_ids, kind, parent_job_id, state, created_at_utc, \
+                          started_at_utc, finished_at_utc, tz_offset, error, pid, \
+                          progress_pct, progress_msg \
                    FROM sync_jobs WHERE id = ? LIMIT 1";
         let row = sqlx::query(sql)
             .bind(job_id)
@@ -182,16 +186,18 @@ impl AppRepo for AppStore {
         source_ids: Option<&str>,
     ) -> Result<SyncJobRow, RepoError> {
         let id = uuid::Uuid::new_v4().to_string();
-        let created_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let (created_at_utc, tz_offset) =
+            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let row = SyncJobRow {
             id: id.clone(),
             source_ids: source_ids.map(|s| s.to_string()),
             kind: kind.as_str().to_string(),
             parent_job_id: None,
             state: JobState::Pending.as_str().to_string(),
-            created_at: created_at.clone(),
-            started_at: None,
-            finished_at: None,
+            created_at_utc,
+            started_at_utc: None,
+            finished_at_utc: None,
+            tz_offset: Some(tz_offset),
             error: None,
             pid: None,
             progress_pct: None,
@@ -204,18 +210,20 @@ impl AppRepo for AppStore {
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
         sqlx::query(
             "INSERT INTO sync_jobs \
-             (id, source_ids, kind, parent_job_id, state, created_at, \
-              started_at, finished_at, error, pid, progress_pct, progress_msg) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (id, source_ids, kind, parent_job_id, state, created_at_utc, \
+              started_at_utc, finished_at_utc, tz_offset, error, pid, progress_pct, \
+              progress_msg) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
         .bind(&row.source_ids)
         .bind(&row.kind)
         .bind(&row.parent_job_id)
         .bind(&row.state)
-        .bind(&row.created_at)
-        .bind(&row.started_at)
-        .bind(&row.finished_at)
+        .bind(&row.created_at_utc)
+        .bind(&row.started_at_utc)
+        .bind(&row.finished_at_utc)
+        .bind(&row.tz_offset)
         .bind(&row.error)
         .bind(row.pid)
         .bind(row.progress_pct)
@@ -257,7 +265,7 @@ impl AppRepo for AppStore {
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
         let id: Option<String> = sqlx::query_scalar(
             "SELECT id FROM sync_jobs WHERE state = ? \
-             ORDER BY created_at ASC, id ASC LIMIT 1",
+             ORDER BY created_at_utc ASC, id ASC LIMIT 1",
         )
         .bind(JobState::Pending.as_str())
         .fetch_optional(&mut *conn)
@@ -266,13 +274,15 @@ impl AppRepo for AppStore {
         let Some(id) = id else {
             return Ok(None);
         };
-        let started_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let (started_at_utc, tz_offset) =
+            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
         sqlx::query(
-            "UPDATE sync_jobs SET state = ?, started_at = ?, \
+            "UPDATE sync_jobs SET state = ?, started_at_utc = ?, tz_offset = ?, \
              progress_msg = 'starting…' WHERE id = ? AND state = ?",
         )
         .bind(JobState::Running.as_str())
-        .bind(&started_at)
+        .bind(&started_at_utc)
+        .bind(&tz_offset)
         .bind(&id)
         .bind(JobState::Pending.as_str())
         .execute(&mut *conn)
@@ -280,8 +290,9 @@ impl AppRepo for AppStore {
         .map_err(|e| RepoError::Internal(format!("claim update: {e}")))?;
         // No DOLT_COMMIT — see the note in `enqueue_job`.
         // Re-read so the caller gets the row exactly as persisted.
-        let sql = "SELECT id, source_ids, kind, parent_job_id, state, created_at, \
-                          started_at, finished_at, error, pid, progress_pct, progress_msg \
+        let sql = "SELECT id, source_ids, kind, parent_job_id, state, created_at_utc, \
+                          started_at_utc, finished_at_utc, tz_offset, error, pid, \
+                          progress_pct, progress_msg \
                    FROM sync_jobs WHERE id = ? LIMIT 1";
         let row = sqlx::query(sql)
             .bind(&id)
@@ -328,13 +339,15 @@ impl AppRepo for AppStore {
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let finished_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let (finished_at_utc, tz_offset) =
+            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
         sqlx::query(
-            "UPDATE sync_jobs SET state = ?, finished_at = ?, error = ?, pid = NULL \
-             WHERE id = ?",
+            "UPDATE sync_jobs SET state = ?, finished_at_utc = ?, tz_offset = ?, error = ?, \
+             pid = NULL WHERE id = ?",
         )
         .bind(state.as_str())
-        .bind(&finished_at)
+        .bind(&finished_at_utc)
+        .bind(&tz_offset)
         .bind(error)
         .bind(job_id)
         .execute(&mut *conn)
@@ -351,14 +364,16 @@ impl AppRepo for AppStore {
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let finished_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let (finished_at_utc, tz_offset) =
+            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let res = sqlx::query(
-            "UPDATE sync_jobs SET state = ?, finished_at = ?, pid = NULL, \
+            "UPDATE sync_jobs SET state = ?, finished_at_utc = ?, tz_offset = ?, pid = NULL, \
              error = 'interrupted: backend restarted while job was running' \
              WHERE state = ?",
         )
         .bind(JobState::Failed.as_str())
-        .bind(&finished_at)
+        .bind(&finished_at_utc)
+        .bind(&tz_offset)
         .bind(JobState::Running.as_str())
         .execute(&mut *conn)
         .await
@@ -379,15 +394,17 @@ impl AppRepo for AppStore {
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
         for row in rows {
             // INSERT OR REPLACE, not plain INSERT: the key is
-            // (path, measured_at) and the sampler stamps one instant per
+            // (path, measured_at_utc) and the sampler stamps one instant per
             // walk, so a second walk finishing inside the same
             // whole-microsecond would otherwise fail the whole batch
             // over a duplicate that carries the same number anyway.
             sqlx::query(
-                "INSERT OR REPLACE INTO disk_usage (path, measured_at, bytes) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO disk_usage (path, measured_at_utc, tz_offset, bytes) \
+                 VALUES (?, ?, ?, ?)",
             )
             .bind(&row.path)
-            .bind(&row.measured_at)
+            .bind(&row.measured_at_utc)
+            .bind(&row.tz_offset)
             .bind(row.bytes)
             .execute(&mut *conn)
             .await
@@ -400,8 +417,8 @@ impl AppRepo for AppStore {
 
     async fn recent_disk_usage(&self, limit: usize) -> Result<Vec<DiskUsageRow>, RepoError> {
         let rows = sqlx::query(
-            "SELECT path, measured_at, bytes FROM disk_usage \
-             ORDER BY measured_at DESC LIMIT ?",
+            "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage \
+             ORDER BY measured_at_utc DESC LIMIT ?",
         )
         .bind(limit as i64)
         .fetch_all(&self.usage_pool)
@@ -411,7 +428,8 @@ impl AppRepo for AppStore {
             .iter()
             .map(|r| DiskUsageRow {
                 path: r.try_get("path").unwrap_or_default(),
-                measured_at: r.try_get("measured_at").unwrap_or_default(),
+                measured_at_utc: r.try_get("measured_at_utc").unwrap_or_default(),
+                tz_offset: r.try_get("tz_offset").ok(),
                 bytes: r.try_get("bytes").unwrap_or_default(),
             })
             .collect())
@@ -439,9 +457,10 @@ fn row_to_sync_job(r: &sqlx::sqlite::SqliteRow) -> SyncJobRow {
         kind: r.try_get("kind").unwrap_or_default(),
         parent_job_id: r.try_get("parent_job_id").ok(),
         state: r.try_get("state").unwrap_or_default(),
-        created_at: r.try_get("created_at").unwrap_or_default(),
-        started_at: r.try_get("started_at").ok(),
-        finished_at: r.try_get("finished_at").ok(),
+        created_at_utc: r.try_get("created_at_utc").unwrap_or_default(),
+        started_at_utc: r.try_get("started_at_utc").ok(),
+        finished_at_utc: r.try_get("finished_at_utc").ok(),
+        tz_offset: r.try_get("tz_offset").ok(),
         error: r.try_get("error").ok(),
         pid: r.try_get::<i64, _>("pid").ok(),
         progress_pct: r.try_get("progress_pct").ok(),
@@ -457,7 +476,8 @@ mod tests {
     fn sample(path: &str, at: &str, bytes: i64) -> DiskUsageRow {
         DiskUsageRow {
             path: path.to_string(),
-            measured_at: at.to_string(),
+            measured_at_utc: at.to_string(),
+            tz_offset: None,
             bytes,
         }
     }
@@ -482,7 +502,7 @@ mod tests {
         let back = store.recent_disk_usage(50).await.unwrap();
         assert_eq!(back.len(), 3, "a series must keep more than its newest row");
         // Newest first, so the two root samples bracket the read.
-        assert_eq!(back[0].measured_at, "2026-09-02T10:00:05-07:00");
+        assert_eq!(back[0].measured_at_utc, "2026-09-02T10:00:05-07:00");
         let root: Vec<i64> = back
             .iter()
             .filter(|r| r.path == ROOT_PATH)

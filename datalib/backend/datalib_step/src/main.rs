@@ -61,7 +61,7 @@ struct Cli {
     #[arg(long, global = true)]
     inputs: Option<String>,
     /// Fixed "now" timestamp (RFC 3339), stamped wherever this step
-    /// type records times (raw bookkeeping, `markdowns.rendered_at`).
+    /// type records times (raw bookkeeping, `markdowns.rendered_at_utc`).
     /// Falls back to `$DATALIB_DAG_NOW` (the runner exports one
     /// value so the whole run agrees), then the local clock.
     #[arg(long, global = true)]
@@ -200,6 +200,12 @@ async fn main() {
         .clone()
         .or_else(|| std::env::var(ENV_NOW).ok())
         .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
+    // Every stamp a step writes is split off this one string, so a
+    // shape it cannot split is refused here rather than stored as-is.
+    if let Err(e) = datalib_time::validate_iso_offset(&now) {
+        datalib_obs::status_line!("--now / ${ENV_NOW} must be RFC 3339 with an offset: {e}");
+        std::process::exit(2);
+    }
     let control = datalib_etl::control::DownloadControl {
         reset_and_redownload: cli.reset_and_redownload || env_flag(ENV_RESET_AND_REDOWNLOAD),
         refetch_blobs: cli.refetch_blobs || env_flag(ENV_REFETCH_BLOBS),

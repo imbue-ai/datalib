@@ -23,7 +23,8 @@ pub const INGESTED_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_files 
     rel_path TEXT NOT NULL,
     blake3 TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
-    last_finished_at TEXT NOT NULL,
+    last_finished_at_utc TEXT NOT NULL,
+    tz_offset TEXT NULL,
     PRIMARY KEY (scope, rel_path)
 )";
 
@@ -87,20 +88,23 @@ pub async fn record_file(
     scope: &str,
     file: &ScannedFile,
 ) -> Result<()> {
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     sqlx::query(
-        "INSERT INTO ingested_files (scope, rel_path, blake3, size_bytes, last_finished_at)
-         VALUES (?, ?, ?, ?, ?)
+        "INSERT INTO ingested_files \
+            (scope, rel_path, blake3, size_bytes, last_finished_at_utc, tz_offset)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(scope, rel_path) DO UPDATE SET
             blake3 = excluded.blake3,
             size_bytes = excluded.size_bytes,
-            last_finished_at = excluded.last_finished_at",
+            last_finished_at_utc = excluded.last_finished_at_utc,
+            tz_offset = excluded.tz_offset",
     )
     .bind(scope)
     .bind(&file.rel)
     .bind(crate::fsscan::hex(&file.blake3))
     .bind(file.size)
     .bind(&now)
+    .bind(&tz_offset)
     .execute(&mut **tx)
     .await
     .with_context(|| format!("upsert ingested_files {scope}={}", file.rel))?;
@@ -147,7 +151,7 @@ where
     let rows = parse(&bytes)?;
     let n = rows.len();
 
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = pool
         .begin()
         .await
@@ -371,7 +375,7 @@ mod tests {
         sqlx::query(
             "CREATE TABLE ingested_files (scope TEXT NOT NULL, path TEXT NOT NULL,
              size_bytes INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
-             last_finished_at TEXT NOT NULL, PRIMARY KEY (scope, path))",
+             last_finished_at_utc TEXT NOT NULL, PRIMARY KEY (scope, path))",
         )
         .execute(&e.pool)
         .await

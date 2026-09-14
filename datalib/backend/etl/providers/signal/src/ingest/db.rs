@@ -83,17 +83,18 @@ impl RawDb {
         snapshot_dir: &str,
         total_byte_size: u64,
     ) -> Result<()> {
-        let now = IsoOffsetTimestamp::now_local().to_rfc3339_secs();
+        let (now, tz_offset) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         sqlx::query(
             "INSERT OR IGNORE INTO ingested_backups
-                 (fingerprint, blake3, snapshot_dir, total_byte_size, ingested_at)
-             VALUES (?, ?, ?, ?, ?)",
+                 (fingerprint, blake3, snapshot_dir, total_byte_size, ingested_at_utc, tz_offset)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(fingerprint)
         .bind(blake3_hex)
         .bind(snapshot_dir)
         .bind(total_byte_size as i64)
         .bind(now)
+        .bind(tz_offset)
         .execute(&self.pool)
         .await
         .context("record_snapshot_ingested")?;
@@ -103,7 +104,7 @@ impl RawDb {
     pub async fn last_ingested_snapshot(&self) -> Result<Option<(String, String)>> {
         let row = sqlx::query(
             "SELECT snapshot_dir, blake3 FROM ingested_backups
-             ORDER BY ingested_at DESC LIMIT 1",
+             ORDER BY ingested_at_utc DESC LIMIT 1",
         )
         .fetch_optional(&self.pool)
         .await

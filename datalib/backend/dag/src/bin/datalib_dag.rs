@@ -157,7 +157,7 @@ async fn main() -> Result<()> {
     // Run-wide environment for every step subprocess: PATH with the
     // binary dir prepended (so commands can say `datalib-step` bare),
     // one pinned timestamp for the whole run — whether given or
-    // sampled, every stamped output (raw bookkeeping, rendered_at)
+    // sampled, every stamped output (raw bookkeeping, rendered_at_utc)
     // agrees — and the reset flags for steps that fetch from origin.
     let mut child_env: std::collections::BTreeMap<String, String> = Default::default();
     if let Some(dir) = config::resolve_binary_dir(&cfg, binary_dir.as_deref()) {

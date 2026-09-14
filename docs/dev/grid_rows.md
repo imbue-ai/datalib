@@ -378,7 +378,7 @@ nothing else, so a re-render overwrites it and `dolt_diff` over the
 store reads as "these numbers moved". The series behind it accumulates
 in `source_measurements`, a table in the same per-source
 `indexed_markdown.doltlite_db` that `render_problems` lives in, keyed
-`(subject, measured_at)`.
+`(subject, measured_at_utc)`.
 
 Putting the series in `grid_rows` instead was considered and rejected
 for four reasons, each specific to that table: `when_ts` is the global
@@ -431,7 +431,7 @@ broken: `ingested_tng_test` asserts that a second run over unchanged
 data leaves `grid_index` with nothing to read, and the first version of
 this failed it. Two numbers move without the data moving — a doltlite
 store grows on any run that touches it (a bookkeeping
-`last_attempt_at` mutation rewrites chunks with no row added), and
+`last_attempt_at_utc` mutation rewrites chunks with no row added), and
 `sync_runs` gains a row per run. So:
 
 - byte sizes are **reported but not fingerprinted**; and

@@ -4,9 +4,15 @@
 //! two rules land in one place each instead of being re-litigated at every
 //! callsite.
 //!
-//! **Generated timestamps carry the generating system's local offset, not
-//! UTC.** An offset is strictly more information than the same instant in
-//! UTC: you can recover UTC from `-07:00`, but not `-07:00` from `Z`.
+//! **A generated timestamp carries the generating system's local offset,
+//! not UTC.** An offset is strictly more information than the same instant
+//! in UTC: you can recover UTC from `-07:00`, but not `-07:00` from `Z`.
+//! In memory and on the wire it is one string with the offset inside it.
+//! **A table keeps the two apart**: the stamp column holds UTC (`…+00:00`,
+//! microseconds), and a `tz_offset` column beside it holds the offset the
+//! stamp was made in, so that text order is instant order and `ORDER BY`
+//! a stamp is right without parsing. [`IsoOffsetTimestamp::to_utc_and_offset`]
+//! and [`split_stamp`] are the two ways to get from one form to the other.
 //!
 //! **A timestamp we cannot parse becomes a null, never a stand-in.** Every
 //! parse helper returns a `Result`, and callers are expected to let the
@@ -26,7 +32,7 @@ pub struct IsoOffsetTimestamp(DateTime<FixedOffset>);
 
 impl IsoOffsetTimestamp {
     /// Wall-clock now in the **local** timezone. The canonical "now"
-    /// for stamping `fetched_at`, `created_at`, run-start markers, and
+    /// for stamping `fetched_at_utc`, `created_at`, run-start markers, and
     /// the like. See module docs for why local-offset beats UTC.
     pub fn now_local() -> Self {
         Self(Local::now().fixed_offset())
@@ -435,6 +441,35 @@ pub fn validate_iso_offset(s: &str) -> Result<(), TimestampParseError> {
     parse_strict(s).map(|_| ())
 }
 
+/// A stamp as a table keeps it: the instant in UTC (`…+00:00`,
+/// microseconds) in a column named `<something>_at_utc`, and the offset
+/// it was made in (`+02:00`) in `tz_offset` beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredStamp {
+    pub utc: String,
+    pub tz_offset: Option<String>,
+}
+
+/// An offset-bearing stamp that arrived as a string — the run-pinned
+/// `DATALIB_DAG_NOW`, a cursor a provider chose — as the pair a table
+/// keeps. A stamp that will not parse is kept as written, with no
+/// offset: better a row with an odd clock than a row lost.
+pub fn split_stamp(iso: &str) -> StoredStamp {
+    match parse_strict(iso) {
+        Ok(t) => {
+            let (utc, offset) = t.to_utc_and_offset();
+            StoredStamp {
+                utc,
+                tz_offset: Some(offset),
+            }
+        }
+        Err(_) => StoredStamp {
+            utc: iso.to_string(),
+            tz_offset: None,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// The UTC half sorts as text the way the instants sort; the offset
@@ -454,6 +489,34 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn split_stamp_keeps_an_unparseable_stamp_as_written() {
+        assert_eq!(
+            split_stamp("2026-09-11T17:10:41+02:00"),
+            StoredStamp {
+                utc: "2026-09-11T15:10:41.000000+00:00".to_string(),
+                tz_offset: Some("+02:00".to_string()),
+            }
+        );
+        assert_eq!(
+            split_stamp("not a stamp"),
+            StoredStamp {
+                utc: "not a stamp".to_string(),
+                tz_offset: None,
+            }
+        );
+    }
+
+    /// Two instants whose offset-bearing strings sort the wrong way
+    /// round sort correctly once each is in the UTC column.
+    #[test]
+    fn utc_column_sorts_by_instant_where_the_raw_stamp_does_not() {
+        let later = "2026-01-01T23:00:00+00:00";
+        let earlier = "2026-01-02T00:00:00+05:00";
+        assert!(later < earlier, "the raw strings mis-sort");
+        assert!(split_stamp(earlier).utc < split_stamp(later).utc);
+    }
 
     #[test]
     fn now_local_has_explicit_offset() {

@@ -63,11 +63,9 @@ pub struct FetchOptions {
     /// paginated listing walk; `/me` is still fetched (cheap, captures
     /// account id).
     pub conv_uuids: Vec<String>,
-    /// Override the `fetched_at` stamp recorded on each conversation.
-    /// When `None`, uses `Local::now()`. The sync orchestrator passes
-    /// its `--now` value here so deterministic builds get a stable
-    /// stamp.
-    pub fetched_at: Option<String>,
+    /// The run-pinned `--now`, so deterministic builds get a stable
+    /// stamp; `None` samples the clock.
+    pub now: Option<String>,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (`--reset-and-redownload`, etc).
     pub control: datalib_etl::control::DownloadControl,
@@ -86,7 +84,7 @@ impl FetchOptions {
             sleep_between: Duration::ZERO,
             since: None,
             conv_uuids: Vec::new(),
-            fetched_at: None,
+            now: None,
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
         }
@@ -150,13 +148,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let run = DownloadRun::start(db.pool(), &run_config).await?;
 
     // One `now` per fetch — threaded into every bulk upsert so all
-    // `<table>_bookkeeping.fetched_at` stamps from a single sync share
+    // `<table>_bookkeeping.fetched_at_utc` stamps from a single sync share
     // a timestamp. The sync orchestrator passes its `--now` here so
     // deterministic builds get a stable stamp.
-    let now = opts
-        .fetched_at
-        .clone()
-        .unwrap_or_else(|| IsoOffsetTimestamp::now_local().to_rfc3339());
+    let now = match &opts.now {
+        Some(s) => datalib_time::parse_strict(s).context("--now")?,
+        None => IsoOffsetTimestamp::now_local(),
+    };
 
     let mut client = ChatGPTClient::with_latchkey(opts.latchkey.clone());
     let mut summary = FetchSummary::default();
@@ -455,7 +453,7 @@ struct ConversationUpsert {
     payload: String,
 }
 
-async fn upsert_me(db: &RawDb, payload: &Value, now: &str) -> Result<()> {
+async fn upsert_me(db: &RawDb, payload: &Value, now: &IsoOffsetTimestamp) -> Result<()> {
     let id = payload
         .get("id")
         .and_then(|v| v.as_str())
@@ -487,7 +485,11 @@ async fn upsert_me(db: &RawDb, payload: &Value, now: &str) -> Result<()> {
 /// we still flush one-at-a-time because each detail fetch is its own
 /// network round trip — but the path goes through the same shared
 /// machinery every other ported provider uses.
-async fn upsert_conversations(db: &RawDb, rows: &[ConversationUpsert], now: &str) -> Result<()> {
+async fn upsert_conversations(
+    db: &RawDb,
+    rows: &[ConversationUpsert],
+    now: &IsoOffsetTimestamp,
+) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
@@ -524,7 +526,7 @@ async fn fetch_attachments_for(
     conv: &Value,
     summary: &mut FetchSummary,
     blake3_by_file: &mut std::collections::HashMap<String, String>,
-    now: &str,
+    now: &IsoOffsetTimestamp,
 ) {
     let Some(cid) = conv
         .get("conversation_id")

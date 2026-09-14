@@ -69,7 +69,7 @@ impl DataProcessor for ChatgptIngest {
             sleep_between: Duration::ZERO,
             since: self.sync.since.clone(),
             conv_uuids: self.sync.conv_uuids.clone(),
-            fetched_at: Some(ctx.now.to_string()),
+            now: Some(ctx.now.to_string()),
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
             sealer: Some(session.sealer()),

@@ -32,7 +32,8 @@ pub const MEDIA_ITEMS_DDL: &str = "CREATE TABLE IF NOT EXISTS media_items (
     duration_ms     INTEGER NULL,
     payload_blake3  TEXT NULL,
     payload_scheme  TEXT NULL,
-    first_seen_at   TEXT NOT NULL
+    first_seen_at_utc   TEXT NOT NULL,
+    tz_offset       TEXT NULL
 )";
 
 pub const MEDIA_ITEMS_INDEXES: &[&str] = &[
@@ -108,7 +109,8 @@ pub const MEDIA_VISUAL_INDEXES: &[&str] = &[
 pub const MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS media_files (
     id           TEXT PRIMARY KEY,
     blake3       TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL
+    last_seen_at_utc TEXT NOT NULL,
+    tz_offset    TEXT NULL
 )";
 
 pub const MEDIA_FILES_INDEXES: &[&str] = &[
@@ -123,7 +125,8 @@ pub const MEDIA_PLAYLISTS_DDL: &str = "CREATE TABLE IF NOT EXISTS media_playlist
     format         TEXT NOT NULL,
     title          TEXT NULL,
     entry_count    INTEGER NOT NULL,
-    last_seen_at   TEXT NOT NULL
+    last_seen_at_utc   TEXT NOT NULL,
+    tz_offset      TEXT NULL
 )";
 
 pub const MEDIA_PLAYLIST_ENTRIES_DDL: &str = "CREATE TABLE IF NOT EXISTS media_playlist_entries (
@@ -153,7 +156,8 @@ pub const MEDIA_PLAYLIST_ENTRIES_INDEXES: &[&str] = &[
 pub const MEDIA_SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS media_scan_meta (
     id           TEXT PRIMARY KEY,
     abs_root     TEXT NOT NULL,
-    scanned_at   TEXT NOT NULL
+    scanned_at_utc   TEXT NOT NULL,
+    tz_offset    TEXT NULL
 )";
 
 pub fn full_ddl() -> Vec<String> {
@@ -199,7 +203,10 @@ pub struct MediaItemRow {
     /// one recipe, so the recipe is stored beside the digest and any
     /// change to what a recipe excludes bumps its version.
     pub payload_scheme: Option<String>,
-    pub first_seen_at: String,
+    /// UTC; `tz_offset` is the offset the scan's clock was in. The same
+    /// pair on every stamp-bearing table in this store.
+    pub first_seen_at_utc: String,
+    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for MediaItemRow {
@@ -216,7 +223,8 @@ impl BulkUpsertable for MediaItemRow {
         "duration_ms",
         "payload_blake3",
         "payload_scheme",
-        "first_seen_at",
+        "first_seen_at_utc",
+        "tz_offset",
     ];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
@@ -236,7 +244,8 @@ impl BulkUpsertable for MediaItemRow {
             .bind(self.duration_ms)
             .bind(self.payload_blake3.as_deref())
             .bind(self.payload_scheme.as_deref())
-            .bind(&self.first_seen_at)
+            .bind(&self.first_seen_at_utc)
+            .bind(self.tz_offset.as_deref())
     }
 }
 
@@ -403,12 +412,13 @@ pub struct MediaFileRow {
     /// Hex blake3 of the bytes at this path — the FK into
     /// `media_items`.
     pub blake3: String,
-    pub last_seen_at: String,
+    pub last_seen_at_utc: String,
+    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for MediaFileRow {
     const TABLE: &'static str = "media_files";
-    const TYPED_COLUMNS: &'static [&'static str] = &["blake3", "last_seen_at"];
+    const TYPED_COLUMNS: &'static [&'static str] = &["blake3", "last_seen_at_utc", "tz_offset"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -419,7 +429,10 @@ impl BulkUpsertable for MediaFileRow {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id).bind(&self.blake3).bind(&self.last_seen_at)
+        q.bind(&self.id)
+            .bind(&self.blake3)
+            .bind(&self.last_seen_at_utc)
+            .bind(self.tz_offset.as_deref())
     }
 }
 
@@ -435,13 +448,20 @@ pub struct MediaPlaylistRow {
     pub format: String,
     pub title: Option<String>,
     pub entry_count: i64,
-    pub last_seen_at: String,
+    pub last_seen_at_utc: String,
+    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for MediaPlaylistRow {
     const TABLE: &'static str = "media_playlists";
-    const TYPED_COLUMNS: &'static [&'static str] =
-        &["blake3", "format", "title", "entry_count", "last_seen_at"];
+    const TYPED_COLUMNS: &'static [&'static str] = &[
+        "blake3",
+        "format",
+        "title",
+        "entry_count",
+        "last_seen_at_utc",
+        "tz_offset",
+    ];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -457,7 +477,8 @@ impl BulkUpsertable for MediaPlaylistRow {
             .bind(&self.format)
             .bind(self.title.as_deref())
             .bind(self.entry_count)
-            .bind(&self.last_seen_at)
+            .bind(&self.last_seen_at_utc)
+            .bind(self.tz_offset.as_deref())
     }
 }
 
@@ -520,12 +541,13 @@ pub struct MediaScanMetaRow {
     /// The source name from config (`tng_media`), not the path.
     pub id: String,
     pub abs_root: String,
-    pub scanned_at: String,
+    pub scanned_at_utc: String,
+    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for MediaScanMetaRow {
     const TABLE: &'static str = "media_scan_meta";
-    const TYPED_COLUMNS: &'static [&'static str] = &["abs_root", "scanned_at"];
+    const TYPED_COLUMNS: &'static [&'static str] = &["abs_root", "scanned_at_utc", "tz_offset"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -536,7 +558,10 @@ impl BulkUpsertable for MediaScanMetaRow {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id).bind(&self.abs_root).bind(&self.scanned_at)
+        q.bind(&self.id)
+            .bind(&self.abs_root)
+            .bind(&self.scanned_at_utc)
+            .bind(self.tz_offset.as_deref())
     }
 }
 
@@ -546,7 +571,7 @@ mod tests {
 
     #[test]
     fn content_keyed_tables_are_never_swept() {
-        // Sweeping them would drop `first_seen_at` and re-parse every
+        // Sweeping them would drop `first_seen_at_utc` and re-parse every
         // item whose path merely moved. Only the path-keyed tables are.
         for t in ["media_items", "media_audio", "media_visual"] {
             assert!(

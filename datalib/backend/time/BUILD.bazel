@@ -4,8 +4,8 @@ exports_files(["Cargo.toml"])
 
 # Shared timestamp utilities. Every `now()` and every inbound-string
 # parse in the workspace funnels through here so the architectural
-# rules ("local-tz offset, not UTC", "never fabricate") live in one
-# place. See `src/lib.rs` and AGENTS.md's "Timestamp convention".
+# rules ("keep the offset; a table keeps it beside the UTC stamp", "never
+# fabricate") live in one place. See `src/lib.rs` and AGENTS.md's "Timestamp convention".
 rust_library(
     name = "datalib_time",
     srcs = ["src/lib.rs"],

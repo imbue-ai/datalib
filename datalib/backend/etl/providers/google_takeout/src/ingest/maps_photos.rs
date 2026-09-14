@@ -77,7 +77,7 @@ pub async fn ingest(
             .collect();
         db.cas().put_many(&cas).await?;
     }
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await.context("begin maps_photos tx")?;
     bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
     for f in &done {

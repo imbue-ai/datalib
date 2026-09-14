@@ -95,7 +95,7 @@ impl RawDb {
 
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
         let row = SelfIdentityRow::from_payload(payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit self_identity tx")?;
@@ -122,7 +122,7 @@ impl RawDb {
 
     pub async fn upsert_pull_request(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
         let row = PullRequestRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin pull_request tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit pull_request tx")?;
@@ -133,7 +133,7 @@ impl RawDb {
 
     pub async fn upsert_issue_comment(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
         let row = IssueCommentRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin issue_comment tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit issue_comment tx")?;
@@ -142,7 +142,7 @@ impl RawDb {
 
     pub async fn upsert_pr_review(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
         let row = PrReviewRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin pr_review tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit pr_review tx")?;
@@ -156,7 +156,7 @@ impl RawDb {
         payload: &Value,
     ) -> Result<()> {
         let row = PrReviewCommentRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self
             .pool
             .begin()
@@ -401,13 +401,15 @@ mod tests {
     async fn scope_state_round_trips() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("g.doltlite_db")).await.unwrap();
-        db.upsert_scope_state("author:@me", "2026-05-21T00:00:00Z")
+        db.upsert_scope_state("author:@me", "2026-05-21T02:00:00+02:00")
             .await
             .unwrap();
         let m = db.load_scope_state().await.unwrap();
+        // Stored as UTC; `since_for_scope` is what turns it back into an
+        // API-shaped value.
         assert_eq!(
             m.get("author:@me").map(String::as_str),
-            Some("2026-05-21T00:00:00Z")
+            Some("2026-05-21T00:00:00.000000+00:00")
         );
     }
 }

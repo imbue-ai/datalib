@@ -15,10 +15,13 @@ pub struct SourceCursorRow {
     /// finished consuming it. The next run passes this as `from_ref`.
     #[col(sql = "VARCHAR(64)")]
     pub store_commit: String,
-    /// When this cursor was last advanced (ISO-8601 with explicit
-    /// offset, per AGENTS.md).
+    /// When this cursor was last advanced, in UTC.
     #[col(sql = "VARCHAR(40)")]
-    pub indexed_at: String,
+    pub indexed_at_utc: String,
+    /// The offset the index step's clock was in when it stamped
+    /// `indexed_at_utc`.
+    #[col(sql = "VARCHAR(8)")]
+    pub tz_offset: Option<String>,
     /// How many documents the run that advanced this cursor applied.
     /// Diagnostic only — it is what makes "the index did nothing
     /// because nothing changed" distinguishable from "the index did

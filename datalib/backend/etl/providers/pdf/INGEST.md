@@ -218,7 +218,7 @@ coverage. CI caught this after a first fix that normalized only the
 `pdf_paths` is truncated and rebuilt every scan, so a deleted file
 disappears on its own. `pdf_documents` is **not** truncated — it is
 keyed on content, which has no notion of "no longer present," and
-dropping it would lose `first_seen_at` and force a re-convert of every
+dropping it would lose `first_seen_at_utc` and force a re-convert of every
 document whose path merely moved.
 
 The consequence is that deleting the last copy of a document leaves an

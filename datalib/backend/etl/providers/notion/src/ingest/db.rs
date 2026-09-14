@@ -573,7 +573,7 @@ impl RawDb {
             ref_id: ref_id.to_string(),
             blake3: Some(hash.clone()),
         };
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self
             .pool
             .begin()
@@ -595,7 +595,7 @@ impl RawDb {
             ref_id: ref_id.to_string(),
             blake3: None,
         };
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin blob error tx")?;
         datalib_etl::bulk::bulk_upsert_in_tx(&mut tx, &[edge], &now).await?;
         tx.commit().await.context("commit blob error tx")?;

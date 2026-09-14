@@ -7,6 +7,19 @@ use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
+/// The stored cursor, in the one spelling this module compares and the
+/// APIs accept: UTC, whole seconds, `Z`. The store keeps microseconds,
+/// and GitHub's `updated:>=` qualifier does not take them.
+fn api_form(cursor: &str) -> String {
+    match datalib_time::parse_strict(cursor) {
+        Ok(t) => t
+            .inner()
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
+        Err(_) => cursor.to_string(),
+    }
+}
+
 pub fn since_for_scope(
     state: &HashMap<String, String>,
     scope: &str,
@@ -18,11 +31,12 @@ pub fn since_for_scope(
         return None;
     }
     if let Some(s) = state.get(scope) {
+        let s = api_form(s);
         let Some(prev_window) = prior
             .and_then(|p| p.get(REFRESH_WINDOW_KEY))
             .and_then(serde_json::Value::as_u64)
         else {
-            return Some(s.clone());
+            return Some(s);
         };
         // `0` means "no floor", i.e. the widest possible window, so it
         // can't be compared as a plain number.
@@ -32,7 +46,7 @@ pub fn since_for_scope(
             (prev, cur) => cur > prev,
         };
         if !widened {
-            return Some(s.clone());
+            return Some(s);
         }
         if refresh_window_days == 0 {
             return None;
@@ -41,7 +55,7 @@ pub fn since_for_scope(
         let floor = floor.to_rfc3339_opts(SecondsFormat::Secs, true);
         // Both are RFC 3339 at seconds precision in UTC, so the
         // lexicographic min is the chronological one.
-        return Some(if floor < *s { floor } else { s.clone() });
+        return Some(if floor < s { floor } else { s });
     }
     if refresh_window_days == 0 {
         return None;
@@ -67,7 +81,7 @@ pub fn refresh_window_blob(refresh_window_days: u32) -> serde_json::Value {
 
 pub async fn snapshot(pool: &SqlitePool) -> Result<HashMap<String, String>> {
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT scope, last_seen_at FROM sync_scope_state")
+        sqlx::query_as("SELECT scope, last_seen_at_utc FROM sync_scope_state")
             .fetch_all(pool)
             .await
             .context("snapshot sync_scope_state")?;
@@ -121,6 +135,17 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect()
+    }
+
+    /// The store keeps a cursor as UTC microseconds; the API gets whole
+    /// seconds with a `Z`, whatever offset the provider wrote it in.
+    #[test]
+    fn a_stored_cursor_reaches_the_api_at_seconds_precision_in_utc() {
+        let s = state_with(&[("a", "2026-06-01T02:00:00.000000+02:00")]);
+        assert_eq!(
+            since_for_scope(&s, "a", 7, false, None).as_deref(),
+            Some("2026-06-01T00:00:00Z")
+        );
     }
 
     #[test]

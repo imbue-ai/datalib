@@ -90,7 +90,10 @@ impl std::fmt::Display for MeasurementKind {
 /// per subject. Pruning is a later problem — the rows are five short
 /// columns and a source produces on the order of tens per run.
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
-#[portable_table(table = "source_measurements", primary_key = "subject, measured_at")]
+#[portable_table(
+    table = "source_measurements",
+    primary_key = "subject, measured_at_utc"
+)]
 pub struct SourceMeasurementRow {
     /// What was measured, as a data-root-relative path — `slack/raw`,
     /// `slack/raw/entities.doltlite_db`, or
@@ -102,11 +105,14 @@ pub struct SourceMeasurementRow {
     /// [`MeasurementKind`], as its `as_str`.
     #[col(sql = "VARCHAR(16)")]
     pub kind: String,
-    /// The run-pinned `DATALIB_DAG_NOW` (ISO-8601 with explicit offset,
-    /// per AGENTS.md), so every row one run writes carries one stamp
-    /// and a run reads back as a single column in the series.
+    /// The run-pinned `DATALIB_DAG_NOW`, in UTC, so every row one run
+    /// writes carries one stamp and a run reads back as a single column
+    /// in the series.
     #[col(sql = "VARCHAR(40)")]
-    pub measured_at: String,
+    pub measured_at_utc: String,
+    /// The offset that run's clock was in.
+    #[col(sql = "VARCHAR(8)")]
+    pub tz_offset: Option<String>,
     /// Bytes on disk. NULL where no honest number exists — every
     /// `Table` row, since a prolly-tree store has no per-table byte
     /// layout.
@@ -157,7 +163,7 @@ mod tests {
             .map(|(_, d)| *d)
             .expect("source_measurements DDL");
         assert!(
-            ddl.contains("PRIMARY KEY (subject, measured_at)"),
+            ddl.contains("PRIMARY KEY (subject, measured_at_utc)"),
             "a subject-only key would overwrite the history: {ddl}"
         );
     }

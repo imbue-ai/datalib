@@ -342,7 +342,7 @@ const SCOPE_CONFIG_KEY: &str = "notion:download";
 ///
 /// One value, three names, so: the **resume cursor** is what
 /// `scope_state::since_for_scope` returns (hence the `since` argument)
-/// and what `sync_scope_state.last_seen_at` stores. It is *not*
+/// and what `sync_scope_state.last_seen_at_utc` stores. It is *not*
 /// `start_cursor` / `next_cursor`, which page within a single walk and
 /// do not survive it — that distinction is why the qualifier is worth
 /// carrying.

@@ -144,7 +144,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
 
     let mut throttle = QuotaThrottle::new(cfg.quota_units_per_minute());
     let mut summary = FetchSummary::default();
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let now = IsoOffsetTimestamp::now_local();
 
     // ── account ─────────────────────────────────────────────────────
     throttle.acquire(api::UNITS_GET_PROFILE).await;
@@ -412,7 +412,7 @@ struct RunState<'a> {
     account_id: &'a str,
     user_id: &'a str,
     latchkey: &'a LatchkeySettings,
-    now: &'a str,
+    now: &'a IsoOffsetTimestamp,
     /// Belt-and-braces client-side label check. The enumeration is
     /// already narrowed server-side; this catches the case where a
     /// configured label name matched no Gmail label at all, so the

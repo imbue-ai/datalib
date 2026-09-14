@@ -12,7 +12,7 @@ function progress(over: Partial<DagStepProgress> = {}): DagStepProgress {
     rates: {},
     progress_age_secs: null,
     log_age_secs: null,
-    updated_at: "2026-09-14T10:00:00.000000+00:00",
+    updated_at_utc: "2026-09-14T10:00:00.000000+00:00",
     ...over,
   };
 }

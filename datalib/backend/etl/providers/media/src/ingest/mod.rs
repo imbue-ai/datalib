@@ -16,6 +16,7 @@ use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
+use datalib_time::StoredStamp;
 
 pub use db::{db_path_for, RawDb, WriteBatch};
 use kind::{Container, MediaClass};
@@ -51,7 +52,9 @@ pub struct FetchOptions {
     /// framework's `--reset-and-redownload`.
     pub force_rehash: bool,
     /// Run-pinned "now", per AGENTS.md — steps prefer `DATALIB_DAG_NOW`
-    /// over sampling their own clock so one run's outputs agree.
+    /// over sampling their own clock so one run's outputs agree. Every
+    /// stamp this scan writes is this instant, as UTC with its offset
+    /// beside it.
     pub now: String,
     pub progress: Progress,
 }
@@ -101,6 +104,7 @@ pub struct FetchSummary {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
+    let stamp = datalib_time::split_stamp(&opts.now);
 
     // The rescan cache, read once so the walk never touches the
     // database. Nothing is deleted here: stale rows are swept at the
@@ -114,7 +118,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .write_scan_meta(&MediaScanMetaRow {
             id: opts.source_id.clone(),
             abs_root: opts.root.to_string_lossy().to_string(),
-            scanned_at: opts.now.clone(),
+            scanned_at_utc: stamp.utc.clone(),
+            tz_offset: stamp.tz_offset.clone(),
         })
         .await
         .context("record scan root")?;
@@ -177,7 +182,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
         // ── Identify, once per distinct content ──────────────────────
         if !prev.known_items.contains(&hash_hex) && !seen_items.contains(&hash_hex) {
-            match identify(&f.path, f.size, &hash_hex, &opts) {
+            match identify(&f.path, f.size, &hash_hex, &opts, &stamp) {
                 Ok(id) => {
                     seen_items.insert(hash_hex.clone());
                     summary.items += 1;
@@ -210,7 +215,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         batch.files.push(MediaFileRow {
             id: f.rel.clone(),
             blake3: hash_hex,
-            last_seen_at: opts.now.clone(),
+            last_seen_at_utc: stamp.utc.clone(),
+            tz_offset: stamp.tz_offset.clone(),
         });
 
         if batch.len() >= BATCH_SIZE {
@@ -221,7 +227,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.db.write_batch(&batch).await?;
 
     if opts.playlists {
-        scan_playlists(&opts, &playlist_files, &mut prev, &mut summary).await?;
+        scan_playlists(&opts, &stamp, &playlist_files, &mut prev, &mut summary).await?;
     }
 
     // Reconcile last. Whatever is still in the cache was never visited,
@@ -266,7 +272,13 @@ struct Identified {
     visual: Option<MediaVisualRow>,
 }
 
-fn identify(path: &Path, size: i64, blake3: &str, opts: &FetchOptions) -> Result<Identified> {
+fn identify(
+    path: &Path,
+    size: i64,
+    blake3: &str,
+    opts: &FetchOptions,
+    stamp: &StoredStamp,
+) -> Result<Identified> {
     let head = read_head(path)?;
     let container = Container::sniff(&head);
     let class = kind::resolve_class(container, path);
@@ -293,7 +305,8 @@ fn identify(path: &Path, size: i64, blake3: &str, opts: &FetchOptions) -> Result
         duration_ms: m.duration_ms,
         payload_blake3: payload.as_ref().map(|p| p.blake3.clone()),
         payload_scheme: payload.as_ref().map(|p| p.scheme.to_string()),
-        first_seen_at: opts.now.clone(),
+        first_seen_at_utc: stamp.utc.clone(),
+        tz_offset: stamp.tz_offset.clone(),
     };
 
     let audio = m.audio.map(|a| MediaAudioRow {
@@ -357,6 +370,7 @@ fn read_head(path: &Path) -> Result<Vec<u8>> {
 
 async fn scan_playlists(
     opts: &FetchOptions,
+    stamp: &StoredStamp,
     files: &[fsscan::ScannedFile],
     prev: &mut db::PrevCache,
     summary: &mut FetchSummary,
@@ -435,7 +449,8 @@ async fn scan_playlists(
             format: playlist::format_of(&f.path).to_string(),
             title: parsed.title.clone(),
             entry_count: parsed.entries.len() as i64,
-            last_seen_at: opts.now.clone(),
+            last_seen_at_utc: stamp.utc.clone(),
+            tz_offset: stamp.tz_offset.clone(),
         });
 
         if entries.len() >= BATCH_SIZE {

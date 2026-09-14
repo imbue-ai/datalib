@@ -21,7 +21,7 @@ pub struct MetricRow {
     pub value: i64,
     /// UTC.
     #[col(sql = "VARCHAR(40)")]
-    pub updated_at: String,
+    pub updated_at_utc: String,
     #[col(sql = "VARCHAR(8)")]
     pub tz_offset: Option<String>,
 }

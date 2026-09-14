@@ -106,10 +106,10 @@ pub struct PipelineStorage {
     /// sparklines against this rather than against a constant of its
     /// own, so the two can't disagree about what "recent" means.
     pub window_secs: u64,
-    /// When the last walk finished, or null when none has yet — the
-    /// state a just-booted server is in for its first walk, and the
-    /// only case where a zero here doesn't mean an empty disk.
-    pub measured_at: Option<String>,
+    /// When the last walk finished, in UTC, or null when none has yet
+    /// — the state a just-booted server is in for its first walk, and
+    /// the only case where a zero here doesn't mean an empty disk.
+    pub measured_at_utc: Option<String>,
 }
 
 /// What one walk found.
@@ -177,7 +177,7 @@ struct Series {
 #[derive(Debug, Default)]
 struct MonitorState {
     series: BTreeMap<String, Series>,
-    measured_at: Option<String>,
+    measured_at_utc: Option<String>,
     /// When a walk last *finished*. Finished, not started: the question
     /// a refresh asks is "has anything looked at the disk since I got
     /// here", and a walk that began before the caller arrived may have
@@ -222,8 +222,9 @@ impl UsageMonitor {
         now_mono: Instant,
         now_iso: &str,
     ) -> Vec<DiskUsageRow> {
+        let now = datalib_time::split_stamp(now_iso);
         let mut st = self.state.write().await;
-        st.measured_at = Some(now_iso.to_string());
+        st.measured_at_utc = Some(now.utc.clone());
         st.walk_finished = Some(now_mono);
         let mut rows = Vec::new();
         let mut record = |st: &mut MonitorState, path: &str, u: &TreeUsage| {
@@ -242,14 +243,15 @@ impl UsageMonitor {
                 return;
             }
             s.history.push_back(UsageSample {
-                at: now_iso.to_string(),
+                at: now.utc.clone(),
                 bytes: u.bytes,
             });
             s.last_recorded = Some(now_mono);
             prune(&mut s.history);
             rows.push(DiskUsageRow {
                 path: path.to_string(),
-                measured_at: now_iso.to_string(),
+                measured_at_utc: now.utc.clone(),
+                tz_offset: now.tz_offset.clone(),
                 bytes: u.bytes as i64,
             });
         };
@@ -279,13 +281,13 @@ impl UsageMonitor {
     pub async fn seed(&self, rows: Vec<DiskUsageRow>) {
         let mut by_series: BTreeMap<String, Vec<(i64, UsageSample)>> = BTreeMap::new();
         for r in rows {
-            let Ok(at) = datalib_time::parse_strict(&r.measured_at) else {
+            let Ok(at) = datalib_time::parse_strict(&r.measured_at_utc) else {
                 continue;
             };
             by_series.entry(r.path).or_default().push((
                 at.inner().timestamp_millis(),
                 UsageSample {
-                    at: r.measured_at,
+                    at: r.measured_at_utc,
                     bytes: r.bytes.max(0) as u64,
                 },
             ));
@@ -332,7 +334,7 @@ impl UsageMonitor {
             root: st.output(ROOT_PATH, root.to_path_buf()),
             outputs,
             window_secs: HISTORY_WINDOW.as_secs(),
-            measured_at: st.measured_at.clone(),
+            measured_at_utc: st.measured_at_utc.clone(),
         }
     }
 }
@@ -698,7 +700,7 @@ command = "my-step"
         assert_eq!(snap.outputs.len(), 1);
         assert!(!snap.outputs[0].present);
         assert!(snap.outputs[0].history.is_empty());
-        assert_eq!(snap.measured_at, None, "no walk has happened yet");
+        assert_eq!(snap.measured_at_utc, None, "no walk has happened yet");
     }
 
     /// When the loop walks, stated as a table.
@@ -783,12 +785,14 @@ command = "my-step"
         mon.seed(vec![
             DiskUsageRow {
                 path: "a/raw".into(),
-                measured_at: old.to_rfc3339(),
+                measured_at_utc: old.to_rfc3339(),
+                tz_offset: None,
                 bytes: 42,
             },
             DiskUsageRow {
                 path: "a/raw".into(),
-                measured_at: older.to_rfc3339(),
+                measured_at_utc: older.to_rfc3339(),
+                tz_offset: None,
                 bytes: 41,
             },
         ])

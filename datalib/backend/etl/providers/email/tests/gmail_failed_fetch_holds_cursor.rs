@@ -88,7 +88,7 @@ async fn run_with_bad_status(bad_status: u16) -> (FetchSummary, Option<String>) 
         .await
         .expect("reopen raw db");
     let cursor: Option<String> =
-        sqlx::query_scalar("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
+        sqlx::query_scalar("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind("gmail:t@example.test:historyId")
             .fetch_optional(db.pool())
             .await

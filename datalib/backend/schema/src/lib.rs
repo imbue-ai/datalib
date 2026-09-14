@@ -95,7 +95,8 @@ mod tests {
     upstream_cursor VARCHAR(64),
     row_set_hash CHAR(64),
     renderer_version VARCHAR(32),
-    rendered_at VARCHAR(40),
+    rendered_at_utc VARCHAR(40),
+    tz_offset VARCHAR(8),
     PRIMARY KEY (markdown_uuid)
 )"#;
         let derived = super::markdowns::DDL[0].1;

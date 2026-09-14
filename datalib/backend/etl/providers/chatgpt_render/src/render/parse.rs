@@ -645,7 +645,7 @@ async fn load_me_payload(pool: &SqlitePool) -> Result<Option<Value>> {
 
 async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
     let rows = sqlx::query(
-        "SELECT c.id, json(c.payload) AS payload, b.fetched_at
+        "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc
            FROM pinned_conversations c
            LEFT JOIN pinned_conversations_bookkeeping b ON b.id = c.id
           WHERE c.payload IS NOT NULL
@@ -663,11 +663,11 @@ async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>
         let Ok(payload) = serde_json::from_str::<Value>(&payload_str) else {
             continue;
         };
-        let fetched_at: Option<String> = r.try_get("fetched_at").ok();
+        let fetched_at_utc: Option<String> = r.try_get("fetched_at_utc").ok();
         out.push(LoadedConversation {
             id,
             payload,
-            fetched_at,
+            fetched_at_utc,
         });
     }
     Ok(out)

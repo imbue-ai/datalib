@@ -144,7 +144,8 @@ pub const SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS scan_meta (
     case_sensitive      INTEGER NOT NULL,
     inode_stable        INTEGER NOT NULL,
     options_fingerprint TEXT NOT NULL,
-    last_scan_at        TEXT NOT NULL,
+    last_scan_at_utc        TEXT NOT NULL,
+    tz_offset           TEXT NULL,
     scanner_version     TEXT NOT NULL
 )";
 
@@ -157,7 +158,9 @@ pub struct ScanMetaRow {
     pub case_sensitive: bool,
     pub inode_stable: bool,
     pub options_fingerprint: String,
-    pub last_scan_at: String,
+    /// UTC; `tz_offset` is the offset the scan's clock was in.
+    pub last_scan_at_utc: String,
+    pub tz_offset: Option<String>,
     pub scanner_version: String,
 }
 
@@ -169,7 +172,8 @@ impl BulkUpsertable for ScanMetaRow {
         "case_sensitive",
         "inode_stable",
         "options_fingerprint",
-        "last_scan_at",
+        "last_scan_at_utc",
+        "tz_offset",
         "scanner_version",
     ];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
@@ -186,7 +190,8 @@ impl BulkUpsertable for ScanMetaRow {
             .bind(self.case_sensitive as i64)
             .bind(self.inode_stable as i64)
             .bind(&self.options_fingerprint)
-            .bind(&self.last_scan_at)
+            .bind(&self.last_scan_at_utc)
+            .bind(&self.tz_offset)
             .bind(&self.scanner_version)
     }
 }
