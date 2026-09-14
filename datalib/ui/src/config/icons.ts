@@ -3,7 +3,11 @@
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import claudeIconUrl from "@/assets/claude.svg";
 import emailIconUrl from "@/assets/email.svg";
+// Fastmail publishes no mark on Simple Icons; this is the vector
+// favicon fastmail.com serves for itself.
+import fastmailIconUrl from "@/assets/fastmail.svg";
 import githubIconUrl from "@/assets/github.svg";
+import gmailIconUrl from "@/assets/gmail.svg";
 import gitlabIconUrl from "@/assets/gitlab.svg";
 import linkedinIconUrl from "@/assets/linkedin.svg";
 import notionIconUrl from "@/assets/notion.svg";
@@ -19,7 +23,9 @@ const ICONS: Record<string, string> = {
   chatgpt: chatgptIconUrl,
   claude: claudeIconUrl,
   email: emailIconUrl,
+  fastmail: fastmailIconUrl,
   github: githubIconUrl,
+  gmail: gmailIconUrl,
   gitlab: gitlabIconUrl,
   linkedin: linkedinIconUrl,
   notion: notionIconUrl,
