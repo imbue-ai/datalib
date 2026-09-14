@@ -5,11 +5,14 @@ second member of the time-series family that
 [`data_architecture_parse_and_render.md`](../data_architecture_parse_and_render.md)
 §"Examples where schema and data handling should be unified" lists as
 "IQ Air air quality planned", beside `yolink`. Every claim below about
-IQAir's endpoints was measured on 2026-09-14 against two *public*
-stations in Nakuru, Kenya (ids `6856994e52fb712759ff48a7` and
+IQAir's endpoints was measured on 2026-09-14: first against two
+*public* stations in Nakuru, Kenya (ids `6856994e52fb712759ff48a7` and
 `62b9caaf8e60f0ce6659e0c6`, taken from a public GitHub pipeline that
-reads them); claims marked *unverified* come from other people's code or
-IQAir's help pages and were not exercised here.
+reads them), then against the three devices on a real free-plan
+dashboard account — one published AirVisual Outdoor and two private
+AirVisual Pros (§"What a real account has"). Claims marked
+*unverified* come from other people's code or IQAir's help pages and
+were not exercised here.
 
 ## The answer in one paragraph
 
@@ -71,6 +74,40 @@ as a public outdoor station it is free. Whether an unpublished device's
 URL answers without a login was not tested — neither Nakuru station is
 ours.
 
+## What a real account has
+
+Three devices on one free-plan dashboard login, read off the
+dashboard on 2026-09-14 (device ids deliberately not written down here):
+
+| device | model | published? | device API | export |
+|---|---|---|---|---|
+| outdoor unit | AirVisual Outdoor | yes, as a public station | **works**, no credential: `instant` = 60 samples at 60 s = **one hour**, `hourly` 48, `daily` 30, `monthly` 12; same shape as station A above. Plus a second link, `…/validated-data`, the public *station's* hourly view (43 buckets, with weather) | offered |
+| indoor unit 1 | AirVisual Pro | no (private) | **padlocked** — the link is masked `https://dev-public-api.airvisual.net/devices/***` with a lock icon; neither of the ids visible in its dashboard URL answers on `device.iqair.com` | **"Only data from public devices can be exported on your current plan."** |
+| indoor unit 2 | AirVisual Pro, offline since 2026-09-13 | no (private) | padlocked, as above | same |
+
+The plan comparison behind the dashboard's "Upgrade" button settles
+what a private device gets on the free plan: real-time readings and
+the hourly/daily/monthly charts, and nothing programmatic. "My
+device's API", "Download historical raw data of devices (every
+measurement this monitor has taken)" and the validated-data download
+are each starred "available for the contributors who own public
+stations", which in practice means *for the public devices* — the
+padlock on the private Pro sits on an account that does own a public
+station. The paid tier is "Get in touch", a sales conversation rather
+than a price, so it is not a route.
+
+So for this fleet the routes divide by device, not by preference:
+
+- **The outdoor unit is Route A**, today, for free — and is also
+  the one device the dashboard *will* export, so its minute-level
+  history past the one-hour window is reachable, once, as a CSV.
+- **The two Pros are Route C** — the device's own disk over Samba —
+  which is also the only route that gives every sample the monitor
+  ever took, for any device. The cloud routes for a private Pro are
+  closed unless it is published as an "indoor sensor" (the dashboard
+  has that under *Publications*), which is a privacy decision: a
+  bedroom's CO₂ and PM2.5 series is an occupancy log.
+
 ## The three routes, and which to build
 
 ### Route A — device API (build this first)
@@ -78,14 +115,42 @@ ours.
 No credential, one request per device per run, JSON. Everything above.
 An `Origin` method called `api`, like yolink's.
 
-The cost is the retention window. To keep the minute-level tier of a
-1-minute station you have to sync inside every hour; the hourly tier
-gives you two days; daily, a month. That is not a reason not to build
-it — every fetched sample is in the mirror for good, which is the whole
-point — but it means the source is only as good as the sync schedule,
-and the Manage screen should say so rather than let a quiet lapse look
-like a quiet sensor. A `last_seen` column per device and per tier,
-compared against now, is the cheapest honest signal.
+The cost is the retention window, and the answer to it is cadence.
+Polled often enough, this route yields **complete** minute-level data,
+because every sample the device reports sits in the `instant` window
+for 60 reporting intervals and an upsert of an already-stored sample is
+a no-op. For the real outdoor unit (one sample a minute):
+
+| fetch at least every | you keep, permanently |
+|---|---|
+| ~50 min (60 samples, with margin) | every minute-level sample |
+| ~40 h (48 hourly buckets) | hourly averages |
+| ~28 days (30 daily buckets) | daily averages |
+
+A 15-minute cadence is 96 requests of ~23 KB a day per device, no
+credential, and leaves a 45-minute margin for a laptop asleep or a
+sync that ran long. No rate limit was met at the handful of requests
+made here; none is documented; a `429` should be treated as the
+failure it is rather than retried into. (A 15-minute-interval Pro, if
+its device API were open, would tolerate 15 hours between fetches.)
+
+That is not a reason not to build it — every fetched sample is in the
+mirror for good, which is the whole point — but it means the source is
+only as good as the sync schedule, and the Manage screen should say so
+rather than let a quiet lapse look like a quiet sensor. A `last_seen`
+column per device and per tier, compared against now, is the cheapest
+honest signal.
+
+**Nothing in datalib runs a sync on a clock.** A sync starts when the
+Manage screen's button is pressed or `datalib-dag` is run; the
+"scheduler" in `dag/` orders steps within one run. So "fetch every 15
+minutes" is, today, a `launchd`/`cron` entry invoking `datalib-dag
+<root>/config.toml` (or `POST /api/sync/jobs` against a running
+`datalib-http`), and the app itself never keeps the promise. yolink
+has lived with the same gap. A periodic sync — a per-group interval
+the http worker honours while the app is open — is the feature this
+source makes worth building, and it is out of scope here beyond
+naming it.
 
 ### Route B — dashboard export (deep history; later, and conditional)
 
@@ -128,13 +193,17 @@ and three things gate it:
 3. **Shape.** The CSV columns were not seen. IQAir's KB describes the
    export as "raw measurements and aggregated hourly data".
 
-Worth building only if the answer to §"Open questions" 2 and 3 is
-yes. If it is, it slots in as a second `Origin` method on the same
-group (`dashboard`), writing the same `airvisual_readings` table with
-`tier = 'export'`, and the device API keeps the tip fresh between
-exports — the same "seed from an export, keep fresh from the API"
-pattern the Claude provider has, with the same caveat that the two must
-agree on ids.
+On the account above this is available for the public outdoor unit
+only, and gate 2 is the free plan's own wording. That changes what is
+worth building: not an automated `dashboard` method with a captured
+login token, but a **`Local` `export` method that reads the CSV the
+dashboard hands you** — run the export by hand in the browser once (or
+once a season), point the step at the file, and let the device API
+keep the tip fresh. That is the "seed from an export, keep fresh from
+the API" pattern the Claude provider has, with the same caveat that the
+two must agree on ids and timestamps, and it costs no credential
+handling at all. The CSV's columns have not been seen yet; one export
+of the outdoor unit would show them.
 
 ### Route C — the Pro's Samba share (deep history; only for a Pro)
 
@@ -152,8 +221,17 @@ Humidity(%RH);CO2(ppm);SGPCO2(ppm);VOC(ppb);SGPCO2LTC(ppm);VOCLTC(ppb)
 
 This is a `Local` method (`export`, with a `path` to the mounted share
 or to copied files), the shape `fsindex`/`pdf`/`media` already have.
-Outdoor units have no share. Not worth designing further until we know
-there is a Pro in the house.
+Outdoor units have no share. **Two of the three devices on the real
+account are Pros, and it is the only route open to them**, so this is
+not optional. On a Mac the share mounts in Finder (⌘K,
+`smb://<ip>/airvisual`) and the step reads the mounted directory like
+any other folder; whether the files can be read while the device is
+also writing the current month's one, and what the columns are on a
+current-firmware Pro, are the two things to measure against a real
+unit before writing the parser. The offline Pro is the reminder that a
+share is only reachable while the device is up; a missed month is not
+lost the way a missed hour is on Route A, because the file is still on
+the device.
 
 ### Not routes
 
@@ -177,24 +255,40 @@ is `device.iqair.com`. `airvisual` is the product; `iqair` goes in the
 catalog keywords the way `anthropic` does. Open to being overruled —
 see §"Open questions" 5.
 
-**Config.** One device list, as yolink:
+**Config.** Two methods, one type, following the rule that a type
+names the thing mirrored and the method table says where it comes
+from. The real fleet needs both, on two groups, because a step carries
+one method:
 
 ```toml
 [[groups]]
-id = "airvisual"
+id = "air-outdoor"
 type = "airvisual"
-name = "Air quality"
+name = "Outdoor air"
 
 [[steps]]
-group = "airvisual"
+group = "air-outdoor"
 function = "ingest"
 [steps.params.api]
 [[steps.params.api.devices]]
 name = "backyard"                      # row key; keep it stable
-device_id = "6856994e52fb712759ff48a7" # the 24-hex id from the dashboard's device-API link
+device_id = "0123456789abcdef01234567" # the 24-hex id from the dashboard's device-API link
+
+[[groups]]
+id = "air-indoor"
+type = "airvisual"
+name = "Indoor air"
+
+[[steps]]
+group = "air-indoor"
+function = "ingest"
+[steps.params.export]
+path = "/Volumes/airvisual"            # a mounted Pro share, or copied *_AirVisual_values.txt files
 ```
 
-No `start`, no `window_days`, no `overlap` — there is nothing to walk.
+No `start`, no `window_days`, no `overlap` on `api` — there is nothing
+to walk. The `export` table will want a device `name` per share once
+there is more than one Pro, since the files do not carry one.
 `device_id` is not a secret in the yolink sense (it grants read access
 to the trailing windows of one device, which a public station already
 gives everyone), but it is the only thing between a stranger and a
@@ -274,19 +368,26 @@ which the KB says it has done at least once.
 the windowing and signing), render mostly copy, wiring ~10 files. A
 day or two, most of it the metric table and the fixtures.
 
-## Open questions
+## Settled, and still open
 
-1. **Which units?** "Monitoring stations" reads as AirVisual Outdoor,
-   which is Route A only; a Pro adds Route C.
-2. **Are they published as public stations?** If so the device API and
-   the dashboard export are both free; if not, both may be behind a
-   Dashboard subscription and the device-API URL for a private device
-   needs a real one to test against.
-3. **Is there a Dashboard subscription?** Decides whether Route B is
-   worth building at all.
-4. **A device id to probe.** One real id, from the dashboard's
-   device-API link, turns the private-device questions above from
-   guesses into a measurement in one `curl`. It is not a password.
-5. **`airvisual` or `iqair` as the type?** The rule says product; the
+Settled on 2026-09-14 from the real account: the fleet is one
+published Outdoor plus two private Pros; the outdoor unit's device API
+works and its export is offered; the Pros get neither on the free plan;
+the paid plan is a sales contact. Route A for the outdoor unit and
+Route C for the Pros, with a by-hand CSV export as the outdoor unit's
+one-time backfill.
+
+Still open:
+
+1. **The Pro's share, on a current unit.** Column set, file naming,
+   and whether the current month's file reads cleanly while the device
+   appends to it. Needs the share mounted once.
+2. **The dashboard export's columns**, for the outdoor unit. One export
+   from the browser shows them; the job is created on the account, so
+   it is the owner's to run.
+3. **Publish the Pros as indoor sensors, or not.** Would open Route A
+   for them; publishes a bedroom's occupancy pattern. Owner's call, and
+   Route C does not need it.
+4. **`airvisual` or `iqair` as the type?** The rule says product; the
    person says "IQ Air". One word to settle before the crate names are
    in git.
