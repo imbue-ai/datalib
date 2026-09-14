@@ -44,33 +44,23 @@ impl RenderProcessor for SlackRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(&self.raw_path, ctx.raw_cursor)
+        let parsed = parse(&self.raw_path, ctx.raw_range())
             .with_context(|| format!("slack parse {}", self.raw_path.display()))?;
-        // Threads no message belongs to any more — a deleted thread, or
-        // one whose every message was deleted. The bucket key is already
-        // the uuid render keys the thread's documents by.
-        let mut dropped = 0usize;
-        for thread_uuid in &parsed.vanished_buckets {
-            dropped += ctx.remove_conversation(thread_uuid)?;
-        }
         let mut on_doc = |md| ctx.emit_doc(md);
         let summary = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("slack render_all")?;
-        // A thread the diff named that has no message left builds no
-        // chat, so chat-common never sees it; the named set goes first.
-        for thread_uuid in parsed.scan.changed_threads.iter().flatten() {
+        // A thread this run looked at that has no message left builds no
+        // chat, so chat-common never sees it: declared with nothing, its
+        // documents go. The rendered ones follow and replace that.
+        for thread_uuid in parsed.scan.render.iter().flatten() {
             ctx.declare_bucket(thread_uuid, &[])?;
         }
         for bucket in &summary.buckets {
-            ctx.declare_bucket(bucket, &[])?;
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
         }
         if let Some(head) = parsed.scan.new_head.as_deref() {
             ctx.consumed(head);
         }
-        Ok(if dropped == 0 {
-            "rendered".into()
-        } else {
-            format!("rendered, {dropped} document(s) gone upstream")
-        })
+        Ok("rendered".into())
     }
 }

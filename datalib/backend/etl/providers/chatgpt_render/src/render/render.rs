@@ -63,9 +63,9 @@ pub fn render_all(
     tracing::info!(
         source = source_id,
         scan_elapsed_ms = elapsed_ms,
-        changed_conversations = parsed
+        conversations_to_render = parsed
             .scan
-            .changed_conversations
+            .render
             .as_ref()
             .map(|s| s.len() as i64)
             .unwrap_or(-1),
@@ -77,7 +77,8 @@ pub fn render_all(
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     for c in &parsed.conversations {
         let shredded = shred(c);
-        let chat = build_chat(&shredded, parsed);
+        let mut chat = build_chat(&shredded, parsed);
+        chat.inputs = c.inputs.declared();
         blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
         chats.push(chat);
     }
@@ -182,6 +183,7 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(&conv_id).uuid;
     NormalizedChat {
+        inputs: Vec::new(),
         path_prefix: None,
         id: chat_uuid.clone(),
         chat_uuid: chat_uuid.clone(),

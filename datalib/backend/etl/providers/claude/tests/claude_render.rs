@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use datalib_etl_claude::ingest::export::{ingest, IngestOptions};
 use datalib_etl_claude_render::render::parse::parse;
 use datalib_etl_claude_render::render::render::render_all;
+use datalib_etl_render::inputs::RawRange;
 
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("CLAUDE_FIXTURE_DIR") {
@@ -73,7 +74,7 @@ async fn ingest_fixture(raw: &Path) {
 async fn renders_tng_fixture() {
     let raw = tempfile::tempdir().expect("raw");
     ingest_fixture(raw.path()).await;
-    let parsed = parse(raw.path(), None).expect("parse");
+    let parsed = parse(raw.path(), RawRange::cold()).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
     let mut docs = Vec::new();
     render_all(

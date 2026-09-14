@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use datalib_etl_render::inputs::Lookup;
 use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
 
@@ -40,11 +41,13 @@ pub fn emojize_shortcodes(text: &str) -> String {
 
 /// What a mention resolves to: `user_id` → real name, `channel_id` →
 /// channel name. An id with no entry falls back to the id itself
-/// (`@U…`, `#C…`), so a mention is never silently dropped.
+/// (`@U…`, `#C…`), so a mention is never silently dropped. Both are
+/// recording lookups: every id asked for is declared as an input of
+/// the thread being rendered.
 #[derive(Clone, Copy)]
 pub struct Labels<'a> {
-    pub users: &'a BTreeMap<String, String>,
-    pub channels: &'a BTreeMap<String, String>,
+    pub users: Lookup<'a, BTreeMap<String, String>>,
+    pub channels: Lookup<'a, BTreeMap<String, String>>,
 }
 
 /// Mentions and emoji only — what a thread title needs, without the
@@ -167,6 +170,7 @@ fn terminate_blockquotes(text: &str) -> String {
 mod tests {
     use super::*;
 
+    use datalib_etl_render::inputs::Inputs;
     use once_cell::sync::Lazy;
 
     static USERS: Lazy<BTreeMap<String, String>> = Lazy::new(|| {
@@ -181,18 +185,19 @@ mod tests {
         m
     });
     static NONE: Lazy<BTreeMap<String, String>> = Lazy::new(BTreeMap::new);
+    static INPUTS: Lazy<Inputs> = Lazy::new(Inputs::default);
 
     fn labels() -> Labels<'static> {
         Labels {
-            users: &USERS,
-            channels: &CHANNELS,
+            users: INPUTS.lookup("users", &USERS),
+            channels: INPUTS.lookup("channels", &CHANNELS),
         }
     }
 
     fn no_labels() -> Labels<'static> {
         Labels {
-            users: &NONE,
-            channels: &NONE,
+            users: INPUTS.lookup("users", &NONE),
+            channels: INPUTS.lookup("channels", &NONE),
         }
     }
 

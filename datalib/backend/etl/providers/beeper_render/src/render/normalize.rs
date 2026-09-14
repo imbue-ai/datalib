@@ -114,6 +114,7 @@ fn to_chat(room: &Room, doc: &DocBucket) -> NormalizedChat {
         .collect();
 
     NormalizedChat {
+        inputs: Vec::new(),
         id: bundle_key(doc),
         chat_uuid: room.room_uuid.clone(),
         display: room

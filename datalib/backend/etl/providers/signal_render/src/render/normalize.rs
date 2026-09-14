@@ -11,8 +11,9 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
+use datalib_etl_render::inputs::{Inputs, Lookup};
 
-use super::parse::{ParsedChat, ParsedChatItem, ParsedSignal};
+use super::parse::{ParsedChat, ParsedChatItem, ParsedRecipient, ParsedSignal};
 use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
 
 /// One `NormalizedChat` per *bucket*, not per chat.
@@ -43,6 +44,11 @@ pub fn to_chats(
         };
         let chat_uuid = signal_chat_uuid(source_id, &chat.id);
         let bundle_key = format!("{}#{}", chat.id, doc.period_key);
+        // Recipients are declared as they are looked up, on the chat's
+        // inputs — every period of the chat shares one declaration.
+        let no_inputs = Inputs::default();
+        let inputs = parsed.inputs.get(&chat.id).unwrap_or(&no_inputs);
+        let recipients = inputs.lookup("recipients", &parsed.recipients);
 
         let items: Vec<NormalizedChatItem> = doc
             .items
@@ -53,14 +59,14 @@ pub fn to_chats(
             // them, so `message_index` disagreed with the rendered
             // order whenever one appeared.
             .filter(|i| i.text.is_some() || !i.attachments.is_empty())
-            .map(|item| to_item(parsed, chat, item, source_id))
+            .map(|item| to_item(recipients, chat, item, source_id))
             .collect();
 
         chats.push(NormalizedChat {
             path_prefix: None,
             id: bundle_key.clone(),
             chat_uuid: chat_uuid.clone(),
-            display: recipient_display(parsed, chat),
+            display: recipient_display(recipients, chat),
             // `None`, so chat-common derives the familiar
             // "Signal · {recipient}" heading rather than us restating it.
             title: None,
@@ -79,6 +85,7 @@ pub fn to_chats(
                 markdown_uuid: signal_markdown_uuid(&chat_uuid, &doc.period_key),
                 items,
             }],
+            inputs: inputs.declared(),
         });
         if !doc.blobs.is_empty() {
             blobs_by_chat.insert(bundle_key, doc.blobs.clone());
@@ -88,7 +95,7 @@ pub fn to_chats(
 }
 
 fn to_item(
-    parsed: &ParsedSignal,
+    recipients: Lookup<'_, HashMap<String, ParsedRecipient>>,
     chat: &ParsedChat,
     item: &ParsedChatItem,
     source_id: &str,
@@ -117,7 +124,7 @@ fn to_item(
     NormalizedChatItem {
         message_uuid: signal_message_uuid(source_id, &chat.id, &item.author_id, item.date_sent),
         author_id: item.author_id.clone(),
-        author_display: author_display(parsed, item),
+        author_display: author_display(recipients, item),
         date_ms: Some(item.date_sent),
         text: item.text.clone(),
         kind: if attachments.is_empty() {
@@ -135,20 +142,24 @@ fn to_item(
     }
 }
 
-fn recipient_display(parsed: &ParsedSignal, chat: &ParsedChat) -> String {
-    parsed
-        .recipients
+fn recipient_display(
+    recipients: Lookup<'_, HashMap<String, ParsedRecipient>>,
+    chat: &ParsedChat,
+) -> String {
+    recipients
         .get(&chat.recipient_id)
         .map(|r| r.display())
         .unwrap_or_else(|| format!("recipient_{}", chat.recipient_id))
 }
 
-fn author_display(parsed: &ParsedSignal, item: &ParsedChatItem) -> String {
+fn author_display(
+    recipients: Lookup<'_, HashMap<String, ParsedRecipient>>,
+    item: &ParsedChatItem,
+) -> String {
     if item.outgoing {
         return "Me".to_string();
     }
-    parsed
-        .recipients
+    recipients
         .get(&item.author_id)
         .map(|r| r.display())
         .unwrap_or_else(|| format!("recipient_{}", item.author_id))

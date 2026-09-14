@@ -201,6 +201,7 @@ fn build_post_chats(
         }
 
         chats.push(NormalizedChat {
+            inputs: Vec::new(),
             path_prefix: None,
             id: format!("posts:{key}"),
             chat_uuid: uuid5(&format!("chat:posts:{key}")),

@@ -10,7 +10,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::ENTITY_KIND_CONVERSATION;
+use datalib_etl_chat_common::render::{Buckets, ENTITY_KIND_CONVERSATION};
 use datalib_etl_chat_common::{RenderProfile, RenderSummary as ChatSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::providers::Provider;
@@ -34,7 +34,7 @@ pub struct RenderSummary {
     pub messages_rendered: usize,
     /// Every chat rendered, by uuid — what the processor declares
     /// through `RenderCtx::declare_bucket`.
-    pub buckets: Vec<String>,
+    pub buckets: Buckets,
 }
 
 /// The render params recorded alongside the cursor. `period` decides
@@ -73,9 +73,9 @@ pub fn render_all(
     tracing::info!(
         source = source_id,
         scan_elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64),
-        changed_chats = parsed
+        chats_to_render = parsed
             .scan
-            .changed_chats
+            .render
             .as_ref()
             .map(|s| s.len() as i64)
             .unwrap_or(-1),

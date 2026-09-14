@@ -11,13 +11,15 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use datalib_etl::blob_cas::{self, BlobBundle};
+use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
+use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::{Map, Value};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use super::sentinels::clean_text;
 use datalib_etl_chatgpt::ingest::db::{db_path_for, LoadedConversation, LoadedRaw};
+use datalib_etl_chatgpt::ingest::schema_raw::ConversationAttachmentRow;
 
 /// SQL projection that maps a ChatGPT `file_id` to its CAS blake3.
 /// Used by [`BlobBundle::load`] from `parse_doltlite_async`.
@@ -108,6 +110,9 @@ pub struct ChatGPTConversation {
     /// has no attachments or no doltlite db is present (legacy
     /// JSON-tree fixture).
     pub blobs: BlobBundle,
+    /// Every raw row this conversation reads — its row, its attachment
+    /// edges and the `me` row every page's account column comes from.
+    pub inputs: Inputs,
 }
 
 /// Shredded form of one conversation. Built by [`shred`] only for
@@ -125,13 +130,15 @@ pub struct ShreddedConversation {
 /// round-trip.
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
-    /// `Some(set)` → render only conversations whose id is in `set`.
-    /// `None` → render every conversation (first run, `me` changed, a
-    /// non-doltlite db, or `dolt_diff_<table>` unavailable).
+    /// `Some(set)` → render only conversations whose id is in `set`:
+    /// the ones the driver found stale through their declared inputs,
+    /// plus the ones the diff named. `None` → render every
+    /// conversation (first run, a non-doltlite db, or
+    /// `dolt_diff_<table>` unavailable).
     pub render: Option<HashSet<String>>,
-    /// The conversations the diff named, for the removal probe — still
-    /// a set when `render` is `None` because `me` changed.
-    pub changed_conversations: Option<HashSet<String>>,
+    /// Bucket keys the driver found stale whose conversation row is
+    /// gone — declared with nothing so their pages go.
+    pub gone: Vec<String>,
     /// The HEAD commit hash at scan time, ready to stamp into the
     /// render cursor on success. `None` if `dolt_log()` was
     /// unavailable; cursor stays unwritten.
@@ -151,10 +158,6 @@ pub struct ParsedChatGPTApi {
     /// Scan diagnostics propagated up to render so it can write the
     /// cursor + log elapsed_ms.
     pub scan: ScanResult,
-    /// Conversation ids the diff named that the raw store no longer has a
-    /// row for. Empty on a cold start, which looks at every bucket and so
-    /// has nothing to compare against.
-    pub vanished_buckets: Vec<String>,
 }
 
 impl ParsedChatGPTApi {
@@ -458,13 +461,13 @@ fn content_parts(message_id: &str, content: Option<&Value>) -> Vec<OAContentPart
 }
 
 pub fn parse_api_dir(path: &Path) -> Result<ParsedChatGPTApi> {
-    parse(path, None)
+    parse(path, RawRange::cold())
 }
 
-pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedChatGPTApi> {
+pub fn parse(path: &Path, range: RawRange<'_>) -> Result<ParsedChatGPTApi> {
     let db_path = db_path_for(path);
     if db_path.exists() {
-        return parse_doltlite(&db_path, last_render_hash);
+        return parse_doltlite(&db_path, range);
     }
     if path.is_dir() {
         return parse_api_json_dir(path);
@@ -478,17 +481,14 @@ pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedChatGP
     Ok(ParsedChatGPTApi::default())
 }
 
-fn parse_doltlite(db_path: &Path, last_render_hash: Option<&str>) -> Result<ParsedChatGPTApi> {
+fn parse_doltlite(db_path: &Path, range: RawRange<'_>) -> Result<ParsedChatGPTApi> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_doltlite_async(db_path, last_render_hash).await })
+            .block_on(async move { parse_doltlite_async(db_path, range).await })
     })
 }
 
-async fn parse_doltlite_async(
-    db_path: &Path,
-    last_render_hash: Option<&str>,
-) -> Result<ParsedChatGPTApi> {
+async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<ParsedChatGPTApi> {
     let pool = datalib_etl::doltlite_raw::open_reader(db_path)
         .await
         .with_context(|| format!("open chatgpt doltlite for render {}", db_path.display()))?;
@@ -510,7 +510,7 @@ async fn parse_doltlite_async(
     // No commit at all means nothing has been committed here to render, which
     // is emptiness, not a reason to read the working set.
 
-    let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+    let Some(pin) = range.pin(&pool).await? else {
         return Ok(ParsedChatGPTApi::default());
     };
 
@@ -518,13 +518,12 @@ async fn parse_doltlite_async(
         .await
         .context("pin the chatgpt raw store for render")?;
 
-    let scan = scan_diff(&pool, last_render_hash, &pin).await?;
-
     // Load `me` + `conversations` payloads (filtered if Phase 1
     // narrowed the set).
-    let me = load_me_payload(&pool).await?;
+    let (me_row_id, me) = load_me_payload(&pool).await?;
     let all_convs = load_conversations(&pool).await?;
     let total_convs = all_convs.len();
+    let scan = scan_diff(&pool, range, &pin, &all_convs).await?;
 
     let (filtered, docs_skipped): (Vec<LoadedConversation>, usize) = match &scan.render {
         None => (all_convs, 0usize),
@@ -545,15 +544,6 @@ async fn parse_doltlite_async(
 
     let mut parsed = parse_loaded(raw);
     parsed.docs_skipped = docs_skipped;
-    if let Some(changed) = scan.changed_conversations.as_ref() {
-        parsed.vanished_buckets = datalib_etl::doltlite_raw::buckets_without_rows(
-            &pool,
-            datalib_etl::pin::Reads::At(&pin),
-            changed,
-            &[("conversations", "id")],
-        )
-        .await?;
-    }
     parsed.scan = scan;
 
     // Per-doc BlobBundle: walk each conversation's payload to collect
@@ -561,16 +551,27 @@ async fn parse_doltlite_async(
     // from the per-provider edge table + CAS. Two SQL queries per
     // conversation (regardless of attachment count) replace 4N
     // queries the retired per-blob streaming reader did at render time.
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        for conv in &mut parsed.conversations {
-            let refs = collect_attachment_ref_ids(&conv.upstream_payload);
-            if refs.is_empty() {
-                continue;
-            }
-            let ref_strs: Vec<&str> = refs.iter().map(String::as_str).collect();
-            conv.blobs =
-                BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &ref_strs).await?;
+    for conv in &mut parsed.conversations {
+        // Every page's account column comes off the one `me` row.
+        if let Some(me_id) = &me_row_id {
+            conv.inputs.read("me", me_id);
         }
+        let refs = collect_attachment_ref_ids(&conv.upstream_payload);
+        for file_id in &refs {
+            conv.inputs.read(
+                "chatgpt_attachments",
+                &ConversationAttachmentRow::pk_recipe(&conv.conv.conversation_id, file_id),
+            );
+        }
+        let Some(cas_pool) = cas_pool.as_ref() else {
+            continue;
+        };
+        if refs.is_empty() {
+            continue;
+        }
+        let ref_strs: Vec<&str> = refs.iter().map(String::as_str).collect();
+        conv.blobs =
+            BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &ref_strs).await?;
     }
 
     Ok(parsed)
@@ -635,14 +636,19 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
     out
 }
 
-async fn load_me_payload(pool: &SqlitePool) -> Result<Option<Value>> {
-    let row = sqlx::query("SELECT json(payload) AS payload FROM pinned_me me ORDER BY id LIMIT 1")
-        .fetch_optional(pool)
-        .await
-        .context("select me")?;
-    let Some(row) = row else { return Ok(None) };
+/// The `me` row's primary key and payload, or neither.
+async fn load_me_payload(pool: &SqlitePool) -> Result<(Option<String>, Option<Value>)> {
+    let row =
+        sqlx::query("SELECT id, json(payload) AS payload FROM pinned_me me ORDER BY id LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .context("select me")?;
+    let Some(row) = row else {
+        return Ok((None, None));
+    };
+    let id: Option<String> = row.try_get("id").ok();
     let s: Option<String> = row.try_get("payload").ok();
-    Ok(s.and_then(|t| serde_json::from_str::<Value>(&t).ok()))
+    Ok((id, s.and_then(|t| serde_json::from_str::<Value>(&t).ok())))
 }
 
 async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
@@ -676,20 +682,20 @@ async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>
 }
 
 /// Phase 1: union over the per-table dolt_diff vtabs to project
-/// touched conversation ids. `dolt_diff_me` propagates as
-/// "render everything" because a renamed account shows up in every
-/// rendered conversation's frontmatter.
+/// touched conversation ids. A renamed account reaches every page
+/// through the `me` row each one declared, so nothing fans out.
 async fn scan_diff(
     pool: &SqlitePool,
-    last_render_hash: Option<&str>,
+    range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
+    conversations: &[LoadedConversation],
 ) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
-        last_render_hash,
+        range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &["me"],
+            global_fanout_tables: &[],
             bucket_query: "
                 SELECT DISTINCT conversation_id FROM (
                     SELECT coalesce(to_id, from_id) AS conversation_id
@@ -705,9 +711,18 @@ async fn scan_diff(
         },
     )
     .await?;
+    // The driver names buckets by the minted page uuid; the load wants
+    // the upstream id.
+    let by_key: HashMap<String, &str> = conversations
+        .iter()
+        .map(|c| (super::ids::conversation(&c.id).uuid, c.id.as_str()))
+        .collect();
+    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
+        by_key.get(key).map(|id| id.to_string())
+    });
     Ok(ScanResult {
-        render: scan.render,
-        changed_conversations: scan.changed_buckets,
+        render: narrowed.render,
+        gone: narrowed.gone,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })
@@ -735,14 +750,17 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedChatGPTApi {
     } else {
         None
     };
-    for LoadedConversation { id: _, payload, .. } in raw.conversations {
+    for LoadedConversation { id, payload, .. } in raw.conversations {
         let Some(conv) = build_conv_row(&payload, None, &account_id) else {
             continue;
         };
+        let inputs = Inputs::default();
+        inputs.read("conversations", &id);
         out.conversations.push(ChatGPTConversation {
             conv,
             upstream_payload: payload,
             blobs: BlobBundle::default(),
+            inputs,
         });
     }
     out
@@ -827,6 +845,7 @@ pub fn parse_api_json_dir(api_dir: &Path) -> Result<ParsedChatGPTApi> {
             conv,
             upstream_payload: d,
             blobs: BlobBundle::default(),
+            inputs: Inputs::default(),
         });
     }
 
@@ -989,7 +1008,7 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse(Path::new("/this/does/not/exist"), None).unwrap();
+        let parsed = parse(Path::new("/this/does/not/exist"), RawRange::cold()).unwrap();
         assert!(parsed.conversations.is_empty());
         assert!(parsed.accounts.is_empty());
     }

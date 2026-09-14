@@ -284,6 +284,7 @@ fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<Normalized
             .unwrap_or_else(|| space.clone());
 
         chats.push(NormalizedChat {
+            inputs: Vec::new(),
             path_prefix: None,
             id: space.clone(),
             chat_uuid: uuid5(&format!("chat:{space}")),
@@ -417,6 +418,7 @@ fn build_voice_chats(messages: &[Value]) -> Vec<NormalizedChat> {
             .collect();
 
         chats.push(NormalizedChat {
+            inputs: Vec::new(),
             path_prefix: None,
             id: chat_id.clone(),
             chat_uuid: uuid5(&format!("voice:chat:{chat_id}")),

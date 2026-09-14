@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
+use datalib_etl_render::inputs::RawRange;
 use datalib_etl_slack_render::render::{
     parse, render::render_all, slack_message_uuid, slack_thread_uuid,
 };
@@ -35,7 +36,7 @@ fn collect_md(root: &std::path::Path) -> BTreeMap<String, String> {
 
 #[test]
 fn renders_tng_fixture() {
-    let parsed = parse(&fixture_root(), None).expect("parse");
+    let parsed = parse(&fixture_root(), RawRange::cold()).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
     let mut docs: Vec<datalib_etl_render::grid_index::RenderedMarkdown> = Vec::new();
     let mut on_done =
@@ -79,7 +80,7 @@ fn renders_tng_fixture() {
 
 #[test]
 fn renders_tng_fixture_grid_rows() {
-    let parsed = parse(&fixture_root(), None).expect("parse");
+    let parsed = parse(&fixture_root(), RawRange::cold()).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
 
     // Capture every grid row the chat-common renderer emits.

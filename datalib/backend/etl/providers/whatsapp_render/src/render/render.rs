@@ -10,10 +10,11 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::{
-    render::{Buckets, RenderProfile, ENTITY_KIND_CONVERSATION},
+    render::{Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION},
     NormalizedChat,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::RawRange;
 use datalib_schema::providers::Provider;
 
 /// Bump when the rendered markdown / grid_rows layout changes enough
@@ -55,16 +56,14 @@ pub fn render_all(
     out_dir: &Path,
     source_id: &str,
     progress: &Progress,
-    cursor: Option<&str>,
+    range: RawRange<'_>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Chat JIDs the diff named that no `chat` row still carries. The
-    // scan happens in here rather than in `parse`, so the caller learns
-    // about them the same way it learns about documents.
-    on_chat_gone: &mut dyn FnMut(&str) -> Result<()>,
 ) -> Result<(Option<String>, Buckets)> {
     // Incremental gate: with a cursor, ask doltlite which chats changed
-    // between that hash and HEAD and skip the rest. Cold start (no
-    // cursor) or no doltlite db on disk renders every chat.
+    // between that hash and the pinned commit, join the buckets the
+    // driver found stale through their declared inputs, and skip the
+    // rest. Cold start (no cursor) or no doltlite db on disk renders
+    // every chat.
     let db_path = doltlite_raw::db_path_for(raw_dir);
 
     let (filtered_owned, new_head, named): (
@@ -72,18 +71,10 @@ pub fn render_all(
         Option<String>,
         Vec<String>,
     ) = if db_path.exists() {
-        let last = cursor;
         let scan = tokio::task::block_in_place(|| match tokio::runtime::Handle::try_current() {
-            Ok(h) => h.block_on(scan_diff(&db_path, last)),
-            Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(&db_path, last)),
+            Ok(h) => h.block_on(scan_diff(&db_path, range)),
+            Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(&db_path, range)),
         })?;
-        let filtered = scan.changed.as_ref().map(|c| {
-            chats
-                .iter()
-                .filter(|chat| c.live.contains(&chat.id))
-                .cloned()
-                .collect::<Vec<_>>()
-        });
         tracing::info!(
             source = source_id,
             scan_elapsed_ms = scan.elapsed.map(|d| d.as_millis() as u64),
@@ -100,19 +91,34 @@ pub fn render_all(
             cold_start = scan.changed.is_none(),
             "[render] whatsapp dolt_diff scan"
         );
-        // Every backup is a full snapshot (the mirror drops and refills),
-        // so a chat the diff named that HEAD no longer carries is one the
-        // phone deleted.
-        if let Some(c) = &scan.changed {
-            for jid in &c.gone {
-                on_chat_gone(jid)?;
-            }
-        }
-        let named = scan
-            .changed
-            .as_ref()
-            .map(|c| c.live.iter().cloned().collect())
-            .unwrap_or_default();
+        // The driver names stale buckets by chat uuid; the chats are by JID.
+        let by_uuid: HashMap<String, &str> = chats
+            .iter()
+            .map(|c| (c.chat_uuid.clone(), c.id.as_str()))
+            .collect();
+        let narrowed = range.narrow_by(scan.changed.as_ref().map(|c| &c.live), |key| {
+            by_uuid.get(key).map(|jid| jid.to_string())
+        });
+        let filtered = narrowed.render.as_ref().map(|live| {
+            chats
+                .iter()
+                .filter(|chat| live.contains(&chat.id))
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        // Every named JID, live or gone: every backup is a full snapshot
+        // (the mirror drops and refills), so a chat the diff named that
+        // HEAD no longer carries is one the phone deleted, and declaring
+        // it with nothing is what removes its documents. A stale bucket
+        // whose chat is gone is already a key.
+        let mut named: Vec<String> = narrowed
+            .render
+            .iter()
+            .flatten()
+            .chain(scan.changed.iter().flat_map(|c| c.gone.iter()))
+            .map(|jid| crate::render::whatsapp_chat_uuid(source_id, jid))
+            .collect();
+        named.extend(narrowed.gone);
         (filtered, scan.head, named)
     } else {
         (None, None, Vec::new())
@@ -129,9 +135,13 @@ pub fn render_all(
     )?;
     // Named chats first, with no documents: one the diff named whose
     // messages all went builds no chat, and chat-common never sees it.
+    // The rendered ones follow and replace that.
     let mut buckets: Buckets = named
-        .iter()
-        .map(|jid| crate::render::whatsapp_chat_uuid(source_id, jid))
+        .into_iter()
+        .map(|key| Bucket {
+            key,
+            inputs: Vec::new(),
+        })
         .collect();
     buckets.extend(summary.buckets);
     Ok((new_head, buckets))
@@ -162,17 +172,17 @@ struct DiffScan {
 const CHAT_ROWID_TABLES: &[&str] = &["message", "message_add_on"];
 const MESSAGE_ROWID_TABLES: &[&str] = &["message_text", "message_media"];
 
-/// Ask doltlite what changed since `last_hash`, resolved to chat JIDs.
-async fn scan_diff(db_path: &Path, last_hash: Option<&str>) -> Result<DiffScan> {
+/// Ask doltlite what changed since the cursor, resolved to chat JIDs.
+async fn scan_diff(db_path: &Path, range: RawRange<'_>) -> Result<DiffScan> {
     let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
-    let head = datalib_etl::pin::head(&pool).await?;
+    let head = range.pin(&pool).await?;
 
     // Both refs, or neither: with no commit to scan *to* there is nothing
     // committed to diff against, and cold-starting is the only honest answer.
-    // Scanning to the sampled hash rather than to the symbolic `HEAD` keeps
+    // Scanning to the pinned hash rather than to the symbolic `HEAD` keeps
     // this diff and the reads that follow it naming one commit even while a
     // producer is still committing — see `datalib_etl::pin`.
-    let scan = match (last_hash, head.as_ref()) {
+    let scan = match (range.cursor, head.as_ref()) {
         (Some(from), Some(to)) => {
             let from = datalib_etl::pin::Pin::at(from).context("render cursor")?;
             let started = std::time::Instant::now();
@@ -201,6 +211,13 @@ async fn changed_chats(pool: &sqlx::SqlitePool, from: &Pin, to: &Pin) -> Result<
     chat_rowids.extend(diff_column::<i64>(pool, "chat", "_id", from, to).await?);
     for table in CHAT_ROWID_TABLES {
         chat_rowids.extend(diff_column::<i64>(pool, table, "chat_row_id", from, to).await?);
+    }
+    // A chat's JID is its identity: a `jid` row that changed renames the
+    // bucket, so the chats on it are named on both sides — the old JID
+    // reads as gone, the new one as live.
+    let jid_rowids = diff_column::<i64>(pool, "jid", "_id", from, to).await?;
+    for pin in [to, from] {
+        chat_rowids.extend(in_list::<i64, i64>(pool, CHAT_BY_JID_SQL, &jid_rowids, pin).await?);
     }
 
     let mut message_rowids: HashSet<i64> = HashSet::new();
@@ -256,6 +273,8 @@ const CHAT_BY_ADDON_SQL: &str =
     "SELECT chat_row_id FROM dolt_at_message_add_on('{pin}') WHERE _id IN ({placeholders})";
 const CHAT_BY_MESSAGE_SQL: &str =
     "SELECT chat_row_id FROM dolt_at_message('{pin}') WHERE _id IN ({placeholders})";
+const CHAT_BY_JID_SQL: &str =
+    "SELECT _id FROM dolt_at_chat('{pin}') WHERE jid_row_id IN ({placeholders})";
 const JID_BY_CHAT_SQL: &str = "SELECT coalesce(j.raw_string, j.user || '@' || j.server) \
      FROM dolt_at_chat('{pin}') c JOIN dolt_at_jid('{pin}') j ON j._id = c.jid_row_id \
      WHERE c._id IN ({placeholders})";
@@ -487,7 +506,13 @@ mod tests {
             docs4.is_empty(),
             "a deletion re-renders nothing, got {docs4:?}"
         );
-        assert_eq!(gone4, vec!["bob@s.whatsapp.net".to_string()]);
+        assert_eq!(
+            gone4,
+            vec![crate::render::whatsapp_chat_uuid(
+                "test",
+                "bob@s.whatsapp.net"
+            )]
+        );
     }
 
     /// One jid, chat and message, all sharing `rowid` — the shape the
@@ -535,31 +560,47 @@ mod tests {
         // parse + render are sync but call into tokio::task::block_in_place,
         // so we have to push the whole thing off the test's reactor thread.
         tokio::task::spawn_blocking(move || {
-            let parsed = parse(&raw_dir, Period::All, "test").expect("parse");
+            // What the driver hands a provider whose declared inputs are
+            // all unchanged: the cursor, and an empty stale set.
+            let stale = HashSet::new();
+            let range = RawRange {
+                cursor: cursor.as_deref(),
+                pin: None,
+                stale: Some(&stale),
+            };
+            let parsed = parse(&raw_dir, Period::All, "test", range).expect("parse");
             let mut emitted: Vec<String> = Vec::new();
-            let mut gone: Vec<String> = Vec::new();
             let progress = datalib_etl::progress::Progress::noop();
             let mut on_complete =
                 |md: datalib_etl_render::grid_index::RenderedMarkdown| -> Result<()> {
                     emitted.push(md.markdown_uuid);
                     Ok(())
                 };
-            let mut on_chat_gone = |jid: &str| -> Result<()> {
-                gone.push(jid.to_string());
-                Ok(())
-            };
-            let (consumed, _) = render_all(
+            let (consumed, buckets) = render_all(
                 &parsed.chats,
                 &parsed.blobs_by_chat,
                 &raw_dir,
                 &out_dir,
                 "test",
                 &progress,
-                cursor.as_deref(),
+                range,
                 &mut on_complete,
-                &mut on_chat_gone,
             )
             .expect("render_all");
+            // A chat declared with nothing and never rendered is one the
+            // run found gone, reported here as the JID it was named by.
+            let rendered: HashSet<&str> = buckets
+                .iter()
+                .filter(|b| !b.inputs.is_empty())
+                .map(|b| b.key.as_str())
+                .collect();
+            let mut gone: Vec<String> = buckets
+                .iter()
+                .filter(|b| b.inputs.is_empty() && !rendered.contains(b.key.as_str()))
+                .map(|b| b.key.clone())
+                .collect();
+            gone.sort();
+            gone.dedup();
             (emitted, gone, consumed)
         })
         .await

@@ -13,6 +13,7 @@ use datalib_etl_email::ingest::mbox;
 use datalib_etl_email_render::render::parse::parse;
 use datalib_etl_email_render::render::render::{render_all, thread_uuid, OutlinkFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::RawRange;
 
 fn fixture_path() -> PathBuf {
     if let Ok(dir) = std::env::var("JMAP_FIXTURE_DIR") {
@@ -200,7 +201,7 @@ async fn mbox_only_labels_filters_extraction() {
 #[tokio::test(flavor = "multi_thread")]
 async fn render_only_labels_filters_to_thread_subset() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let parsed = parse(&db_path_for(&db_path), None).expect("parse cold start");
+    let parsed = parse(&db_path_for(&db_path), RawRange::cold(), false).expect("parse cold start");
 
     // "Sent" is a flat mbox label, so its full path equals its name.
     let sent_id = parsed
@@ -254,7 +255,7 @@ async fn render_only_labels_filters_to_thread_subset() {
 #[tokio::test(flavor = "multi_thread")]
 async fn star_trek_mbox_renders_through_render_all() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let parsed = parse(&db_path_for(&db_path), None).expect("parse cold start");
+    let parsed = parse(&db_path_for(&db_path), RawRange::cold(), false).expect("parse cold start");
 
     let tmp = tempfile::tempdir().unwrap();
     let progress = Progress::noop();

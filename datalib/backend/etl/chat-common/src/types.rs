@@ -1,6 +1,7 @@
 //! Normalized chat types. Each provider populates these from its own
 //! row model before handing off to [`crate::render::render_all`].
 
+use datalib_etl_render::inputs::Input;
 use serde::Serialize;
 
 /// What flavor of item this is. Collapses each provider's richer event
@@ -256,4 +257,10 @@ pub struct NormalizedChat {
     pub path_prefix: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
+    /// Every raw row this chat was built from, found or not — what the
+    /// processor declares through `RenderCtx::declare_bucket` so a
+    /// change to any of them renders this chat again. Empty only for a
+    /// provider that has not declared its inputs yet.
+    #[serde(skip)]
+    pub inputs: Vec<Input>,
 }
