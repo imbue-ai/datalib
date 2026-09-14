@@ -230,34 +230,6 @@ reference doc it relates to.
 - [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md)
   — the live recipe for porting the remaining providers to CAS blobs +
   incremental render.
-- [`docs/dev/plans/one_mode.md`](docs/dev/plans/one_mode.md) —
-  *agreed design (2026-09-14)*, nothing built: **read before touching
-  how any step commits, truncates, checkpoints, or handles Ctrl-C.**
-  Every step writes its doltlite store the same way — additive first,
-  prune at the end scoped to what it enumerated, cursor in the store in
-  the same commit, commit whenever, consumers propagate deletions — on
-  one rule: every SQL transaction leaves a state a consumer may read,
-  because the working set is in the file and *somebody* will commit
-  it. There is no wiping mode and no `Policy::Never`; a reset is
-  "re-verify" (clear the skip bookkeeping, same run) or "start over"
-  (one truncating commit, published honestly, then a normal run).
-- [`docs/dev/plans/render_inputs.md`](docs/dev/plans/render_inputs.md)
-  — *proposal (2026-09-11)*, nothing built: a `render_inputs` table in
-  each render store recording which raw rows every bucket was rendered
-  from, so "which documents does this changed row reach?" and "which
-  documents are gone?" are both one reverse lookup. Read it before
-  adding a `global_fanout_tables` entry, a `bucket_query`, or another
-  guard around `retain_documents` — it inventories the five guards that
-  exist today and the routes by which a document gets deleted and
-  added back, and says which of those it fixes and which (a checkpoint
-  taken mid-wipe) it cannot — `one_mode.md` closes that last one.
-  [`deletion_record_audit_2026_09_11.md`](docs/dev/plans/deletion_record_audit_2026_09_11.md)
-  is that proposal's first two conditions checked against the tree —
-  measurement, not intent. Read it before touching `discard_tree`,
-  `_render_cursor.json`, the Ctrl-C checkpoint hook, or
-  `rescue_dirty_working_tree`: each is a way the deletion record is
-  lost or a torn commit lands in history, and it says which are
-  reachable through the runner (none) and by hand (two).
 - [`docs/dev/plans/multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md)
   — *proposal*, nothing built: replacing the `qmd_index` step with a
   retrieval layer that takes an arbitrary `grid_rows` metadata
@@ -493,6 +465,10 @@ datalib/
                    shared crate.
     table/         `datalib_table`: the `BulkUpsertable` row-write
                    contract, alone, with `sqlx` as its only dependency.
+    probe/         `datalib_probe`: the "Test connection" report shape,
+                   alone (serde + strum). Taken only by providers that
+                   implement a probe, so the wire format can change
+                   without rebuilding every `<p>_config` crate.
     migrate_config/ `datalib-migrate-config`: rewrites a `config.toml`
                    from a shape nothing writes any more into the one the
                    wizard writes. One rewrite at a time (today: ungrouped
@@ -519,6 +495,13 @@ datalib/
                    per applet (slack, unified_index). An applet
                    contributes card components and/or the endpoints
                    behind them.
+    history/       `datalib_history`: a doltlite store's commit log —
+                   `dolt_log` walked from HEAD with what each commit did
+                   to each table. Third-party deps only (Bazel-only, no
+                   `Cargo.toml`), so `datalib-http` serves it at
+                   `GET /api/pipeline/history` without linking `etl`,
+                   and the two-process doltlite test runs its statements
+                   against a live writer.
     http/          `datalib-http`: API server + sync worker + UI host +
                    the applet gateway (src/applets.rs). Every route is
                    behind a per-process API token (src/auth.rs) — read
@@ -921,7 +904,11 @@ after DDL`. `two_live_pools_on_one_store_break_each_others_commits` in
 **A reader can be the peer.** "Read-only costs the writer nothing" is
 measured for what a pinned pass issues — `dolt_hashof`, `sqlite_master`,
 `pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_` views,
-`dolt_diff_*` — and is false for `dolt_status`. Issued from a read-only
+`dolt_diff_*` — and for what the commit-history panel issues —
+`dolt_log()`, `dolt_commit_ancestors`, `dolt_diff_summary`,
+`dolt_diff_stat`, a `COUNT(*)` per table
+(`a_history_reader_never_makes_the_writers_commit_fail`) — and is false
+for `dolt_status`. Issued from a read-only
 connection while the writer commits, it fails that commit with the same
 `commit conflict` for as long as the statement is running, and the rows
 the writer inserted before each failed commit are gone afterwards
