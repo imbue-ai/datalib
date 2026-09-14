@@ -15,7 +15,7 @@ use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySetting
 use serde::Serialize;
 use serde_json::{json, Value};
 
-pub use db::{db_path_for, LoadedRaw, PageState, RawDb};
+pub use db::{db_path_for, AttachmentRow, PageState, RawDb};
 pub use official::{NotionOfficialClient, NotionOfficialError};
 
 #[derive(Debug, Clone)]

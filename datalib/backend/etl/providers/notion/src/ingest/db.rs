@@ -4,15 +4,13 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::str::FromStr;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::blob_cas::{self, BlobBundle, BlobCas, CasEdgeRow as _};
+use datalib_etl::blob_cas::{self, BlobCas, CasEdgeRow as _};
 use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -111,8 +109,18 @@ impl RawDb {
     /// no commit to pin, or a build without the dolt extensions. See the
     /// plan's "The sink contract".
     pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
+        Self::open_reader_at(db_path, None).await
+    }
+
+    /// A reader pinned at `commit`, or at HEAD when `None`; `None` back
+    /// when nothing is committed.
+    pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
-        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        let pin = match commit {
+            Some(commit) => Some(datalib_etl::pin::Pin::at(commit)?),
+            None => datalib_etl::pin::head(&pool).await?,
+        };
+        let Some(pin) = pin else {
             pool.close().await;
             return Ok(None);
         };
@@ -537,6 +545,28 @@ impl RawDb {
         Ok(out)
     }
 
+    /// Every `notion_attachments` row, bytes fetched or not: a page
+    /// declares them all, so the fetch landing re-renders it.
+    pub async fn load_attachments(&self) -> Result<Vec<AttachmentRow>> {
+        // Audited: as `load_comment_anchors`.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT id, page_id, ref_id, blake3 FROM {} ORDER BY page_id, ref_id",
+            self.reads().table("notion_attachments")
+        )))
+        .fetch_all(&self.pool)
+        .await
+        .context("select notion_attachments for render")?;
+        Ok(rows
+            .into_iter()
+            .map(|r| AttachmentRow {
+                id: r.try_get("id").unwrap_or_default(),
+                page_id: r.try_get("page_id").unwrap_or_default(),
+                ref_id: r.try_get("ref_id").unwrap_or_default(),
+                blake3: r.try_get("blake3").ok().flatten(),
+            })
+            .collect())
+    }
+
     /// Have we already stored bytes for this image-block's ref_id?
     /// One SELECT against `notion_attachments` — the universal
     /// CAS-edge "have we got these bytes yet?" skip-check shape every
@@ -603,282 +633,13 @@ impl RawDb {
     }
 }
 
-/// Synchronous helper for non-async callers (render, synthesize) that
-/// already run under `#[tokio::main]`. Uses `block_in_place` + the
-/// current Handle, so it must be invoked on a multi-thread runtime.
-/// Which pages changed since `last_render_hash`.
-///
-/// Every table that can change a rendered page projects a page id
-/// directly, so the union needs no joins — `comments`, `comment_anchors`
-/// and `notion_attachments` all carry `page_id` because the download
-/// side records it. That is the payoff for storing it there rather than
-/// deriving it at render time from a block tree.
-///
-/// `users` fans out globally: a display name reaches every page that
-/// person authored, and the store does not say which those are.
-/// Resolving a single new user therefore re-renders everything — which
-/// is rare, because a user is fetched once ever.
-async fn scan_changed_pages(
-    pool: &sqlx::SqlitePool,
-    last_render_hash: Option<&str>,
-    pin: &datalib_etl::pin::Pin,
-) -> Result<dr::DiffScan> {
-    dr::scan_buckets(
-        pool,
-        last_render_hash,
-        pin,
-        &dr::DiffScanSpec {
-            global_fanout_tables: &["users"],
-            bucket_query: "
-                SELECT DISTINCT page_uuid FROM (
-                    SELECT coalesce(to_id, from_id) AS page_uuid
-                      FROM dolt_diff_pages
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    UNION
-                    SELECT coalesce(to_id, from_id)
-                      FROM dolt_diff_page_markdown
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    UNION
-                    SELECT coalesce(to_page_id, from_page_id)
-                      FROM dolt_diff_comments
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    UNION
-                    SELECT coalesce(to_page_id, from_page_id)
-                      FROM dolt_diff_comment_anchors
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    UNION
-                    SELECT coalesce(to_page_id, from_page_id)
-                      FROM dolt_diff_notion_attachments
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                )
-                WHERE page_uuid IS NOT NULL
-            ",
-        },
-    )
-    .await
-}
-
-/// The discussions named by the diff, so a thread whose last comment
-/// went away can be noticed.
-///
-/// A page and its threads are separate documents with separate
-/// `conversation_uuid`s, so removing the page does not remove them: each
-/// has to be named. This asks the diff which discussions were touched;
-/// [`RawDb::discussions_without_comments`] then asks which of those have
-/// no comment rows left.
-async fn scan_touched_discussions(
-    pool: &sqlx::SqlitePool,
-    last_render_hash: Option<&str>,
-    to_ref: &str,
-) -> Result<std::collections::HashSet<String>> {
-    let Some(from_ref) = last_render_hash else {
-        return Ok(Default::default());
-    };
-    let rows = sqlx::query(
-        "SELECT DISTINCT coalesce(to_discussion_id, from_discussion_id) AS d
-           FROM dolt_diff_comments
-          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
-    )
-    .bind(from_ref)
-    .bind(to_ref)
-    .fetch_all(pool)
-    .await
-    .context("scan touched discussions")?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| r.try_get::<Option<String>, _>("d").ok().flatten())
-        .collect())
-}
-
-pub fn block_on_load_all(db_path: &Path, last_render_hash: Option<&str>) -> Result<LoadedRaw> {
-    let path = db_path.to_path_buf();
-    let last = last_render_hash.map(str::to_string);
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async move {
-            // `open_reader` pins to HEAD and installs the views, so every
-            // load below and the diff all name one commit.
-            let Some(db) = RawDb::open_reader(&path).await? else {
-                return Ok(Default::default());
-            };
-            let loaded = async {
-                let pin = db
-                    .pin()
-                    .expect("open_reader returns a pinned handle")
-                    .clone();
-                let pin = &pin;
-                let scan = scan_changed_pages(db.pool(), last.as_deref(), pin).await?;
-
-                // A bucket the diff named whose `pages` row is gone is a
-                // page Notion no longer has. Asked of the store, not
-                // inferred from the load: `load_pages` filters on
-                // `payload IS NOT NULL`, so a page absent from the result
-                // may simply be one whose body never arrived.
-                let (vanished_pages, vanished_discussions) = match scan.changed_buckets.as_ref() {
-                    Some(changed) => {
-                        let pages = dr::buckets_without_rows(
-                            db.pool(),
-                            datalib_etl::pin::Reads::At(pin),
-                            changed,
-                            &[("pages", "id")],
-                        )
-                        .await?;
-                        let touched = scan_touched_discussions(
-                            db.pool(),
-                            last.as_deref(),
-                            scan.new_head.as_deref().unwrap_or("HEAD"),
-                        )
-                        .await?;
-                        let discussions = dr::buckets_without_rows(
-                            db.pool(),
-                            datalib_etl::pin::Reads::At(pin),
-                            &touched,
-                            &[("comments", "discussion_id")],
-                        )
-                        .await?;
-                        (pages, discussions)
-                    }
-                    // A cold start examined nothing to compare against.
-                    None => (Vec::new(), Vec::new()),
-                };
-
-                let keep = scan.render.clone();
-                let in_scope = |id: &str| keep.as_ref().is_none_or(|k| k.contains(id));
-
-                // The two lookup maps stay whole: any page being rendered
-                // may reference any user or any anchor.
-                let user_names = db.load_user_names().await?;
-                let comment_anchors = db.load_comment_anchors().await?;
-
-                let mut pages = db.load_pages().await?;
-                pages.retain(|p| p.get("id").and_then(|v| v.as_str()).is_some_and(&in_scope));
-                let mut page_markdown = db.load_page_markdown().await?;
-                page_markdown.retain(|(id, _)| in_scope(id));
-                let mut comments = db.load_comments().await?;
-                comments.retain(|(_, pid)| pid.as_deref().is_some_and(&in_scope));
-
-                let blobs_by_page =
-                    load_blobs_by_page(db.pool(), &blob_cas::cas_path_for(&path)).await?;
-                Ok::<_, anyhow::Error>(LoadedRaw {
-                    pages,
-                    page_markdown,
-                    comments,
-                    user_names,
-                    comment_anchors,
-                    blobs_by_page,
-                    scan,
-                    vanished_pages,
-                    vanished_discussions,
-                })
-            }
-            .await;
-            // Closed, not dropped: the next open of this store is a
-            // second connection until this one is actually gone.
-            db.close().await;
-            loaded
-        })
-    })
-}
-
-/// SQL projection used by [`BlobBundle::load`] to map an image
-/// block's `ref_id` (`"{block_uuid}:image"`) to its CAS `blake3`.
-/// Read through the pinned view and aliased back, the way every other
-/// provider's attachment projection is: `load_blobs_by_page` runs only on
-/// the render path, and a blob edge read from the working set can name a
-/// row the producer has not committed.
-const ATTACHMENTS_PROJECTION_SQL: &str = "
-    SELECT ref_id, blake3,
-           NULL AS content_type,
-           NULL AS upstream_name
-      FROM pinned_notion_attachments notion_attachments
-     WHERE ref_id IN ({placeholders}) AND blake3 IS NOT NULL";
-
-/// Build the per-page BlobBundle map render reads from. Walks every
-/// loaded block's `(page_id, block_id)` pair, derives the
-/// `"{block_id}:image"` ref_id convention download uses, and per-page
-/// loads a BlobBundle from the sibling CAS via
-/// `ATTACHMENTS_PROJECTION_SQL`. Pages with no image blocks get no
-/// entry (render falls through to the upstream-URL placeholder).
-async fn load_blobs_by_page(
-    refs_pool: &SqlitePool,
-    cas_path: &Path,
-) -> Result<HashMap<String, BlobBundle>> {
-    // The edge table already says which slots belong to which page, so
-    // this reads it directly rather than re-deriving the mapping from
-    // block payloads the way it had to when blocks were mirrored.
-    let mut by_page: HashMap<String, Vec<String>> = HashMap::new();
-    // Pinned, like the projection below it: this runs only on the render
-    // path, and an edge read from the working set can name a slot whose
-    // blob row the producer has not committed.
-    let rows = sqlx::query(
-        "SELECT page_id, ref_id FROM pinned_notion_attachments \
-         WHERE blake3 IS NOT NULL ORDER BY page_id, ref_id",
-    )
-    .fetch_all(refs_pool)
-    .await
-    .context("select notion_attachments for render")?;
-    for r in rows {
-        let (Ok(page_id), Ok(ref_id)) = (
-            r.try_get::<String, _>("page_id"),
-            r.try_get::<String, _>("ref_id"),
-        ) else {
-            continue;
-        };
-        by_page.entry(page_id).or_default().push(ref_id);
-    }
-    if by_page.is_empty() || !cas_path.is_file() {
-        return Ok(HashMap::new());
-    }
-    let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))
-        .with_context(|| format!("sqlite uri for {}", cas_path.display()))?
-        .read_only(true);
-    let cas_pool: SqlitePool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_secs(60))
-        .connect_with(cas_opts)
-        .await
-        .with_context(|| format!("open CAS for render at {}", cas_path.display()))?;
-    let mut out: HashMap<String, BlobBundle> = HashMap::new();
-    for (page_id, refs) in by_page {
-        let mut seen: HashSet<&str> = HashSet::new();
-        let refs_vec: Vec<&str> = refs
-            .iter()
-            .map(String::as_str)
-            .filter(|r| seen.insert(*r))
-            .collect();
-        let bundle =
-            BlobBundle::load(refs_pool, &cas_pool, ATTACHMENTS_PROJECTION_SQL, &refs_vec).await?;
-        if !bundle.is_empty() {
-            out.insert(page_id, bundle);
-        }
-    }
-    cas_pool.close().await;
-    Ok(out)
-}
-
-/// Bag of payloads returned by [`block_on_load_all`]. Attachment bytes
-/// arrive per-page in `blobs_by_page` — one `BlobBundle` per page with
-/// at least one attachment in the CAS — the same shape slack /
-/// whatsapp / email use.
-#[derive(Clone, Default)]
-pub struct LoadedRaw {
-    pub pages: Vec<Value>,
-    /// `(page_id, markdown)` — bodies as Notion rendered them, with
-    /// attachment URLs already reduced to slots.
-    pub page_markdown: Vec<(String, String)>,
-    pub comments: Vec<(Value, Option<String>)>,
-    /// `user_id -> display name`, for the authors Notion does not
-    /// resolve inline (page `created_by`, people properties).
-    pub user_names: HashMap<String, String>,
-    /// `block_id -> the text a comment on that block hangs off`.
-    pub comment_anchors: HashMap<String, String>,
-    pub blobs_by_page: HashMap<String, BlobBundle>,
-    /// What the `dolt_diff` scan concluded. `changed_buckets: None` is a
-    /// cold start — render everything.
-    pub scan: dr::DiffScan,
-    /// Pages the diff named whose row is gone: deleted upstream.
-    pub vanished_pages: Vec<String>,
-    /// Discussions the diff named that have no comment rows left.
-    pub vanished_discussions: Vec<String>,
+/// One `notion_attachments` row as render reads it.
+#[derive(Debug, Clone)]
+pub struct AttachmentRow {
+    pub id: String,
+    pub page_id: String,
+    pub ref_id: String,
+    pub blake3: Option<String>,
 }
 
 #[cfg(test)]

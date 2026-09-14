@@ -235,25 +235,17 @@ re-derivation is paid in full. That is a real cost the
 [provider migration recipe](provider_migration_dolt_diff_and_cas_edge.md)
 exists to pay down; it is not what the deletion work fixes.
 
-**Incremental (`dolt_diff`-narrowed): `RunCtx::remove_conversation`.**
-claude, chatgpt, email, signal, slack, whatsapp. They must name the
-vanished ids, because most of what they did not produce this run they
-simply did not look at.
+**Declared buckets: `RenderCtx::declare_bucket`.** Every provider but
+github and gitlab. A run declares each bucket it looked at with the raw
+rows it read — with nothing when the rows are gone — and the driver
+drops what the store holds under a declared bucket that the run did
+not emit. A bucket the run never looked at says nothing about its
+documents, so a narrowed run cannot delete its own steady state. The
+design is [`plans/render_inputs.md`](plans/render_inputs.md).
 
-**Whole-store: `RunCtx::retain_documents`.** contacts, github, gitlab,
-google_takeout, linkedin, pdf, perseus, sms_backup_restore. They declare
-the complete set they considered and the driver sweeps the rest. No diff
-needed, and it cannot miss a deletion the diff failed to mention.
-
-The retain form has one trap, and it is the reason the set is "considered"
-rather than "emitted": documents whose render *failed* belong in the set
-too — that is a document we could not rewrite, not one the source lost.
-Report only what rendered cleanly and one bad payload deletes a document
-the source still holds.
-
-Not wired: **notion** (being reworked) and **beeper** (poorly supported;
-its `index.db` evicts, so absence there is not deletion). **yolink** is
-append-only telemetry with one document per store.
+**Still named one at a time: `RenderCtx::remove_conversation`.**
+github and gitlab. They diff, then probe the ids the diff named
+(`buckets_without_rows`) and name the vanished ones.
 
 The original argument, which still reads correctly:
 

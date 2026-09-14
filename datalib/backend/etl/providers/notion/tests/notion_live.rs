@@ -7,6 +7,7 @@
 
 use datalib_etl_notion::ingest::{self as notion, FetchOptions};
 use datalib_etl_notion_render::render::parse_api_dir;
+use datalib_etl_render::inputs::RawRange;
 use insta::assert_json_snapshot;
 use serde_json::json;
 
@@ -42,7 +43,7 @@ async fn notion_live_single_page_snapshot() {
     r.expect("notion fetch failed");
     sealed.expect("seal the raw store");
 
-    let parsed = parse_api_dir(&tmp, None).expect("parse_api_dir");
+    let parsed = parse_api_dir(&tmp, RawRange::cold()).expect("parse_api_dir");
     assert_eq!(parsed.pages.len(), 1, "expected exactly one page");
 
     let p = &parsed.pages[0];

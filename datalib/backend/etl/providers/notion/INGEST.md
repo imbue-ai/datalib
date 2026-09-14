@@ -176,17 +176,20 @@ so instead of quoting something that no longer exists.
 
 ## Incremental render, and what it costs
 
-Render asks the raw store what changed since the commit it last
-completed against (`dolt_diff`, via the shared `scan_buckets`), and is
-handed only those pages. The resume cursor is the `render_cursor` row
-in the render store, written by the render step in the same transaction
-as the last document of the run.
-
-Every table that can change a page projects a page id directly, so the
-union needs no joins — `comments`, `comment_anchors` and
-`notion_attachments` all carry `page_id`. `users` is the one global
-fanout: a display name reaches every page that person authored, so
-resolving a new user re-renders everything.
+A page is one bucket and a comment thread another, each keyed by its
+Notion id. When a bucket renders it declares every raw row it read
+(`render_inputs` in the render store): a page its `pages` row, its
+`page_markdown` row, every `notion_attachments` row — bytes fetched or
+not — and its author's `users` row, found or not; a thread its
+`comments`, its page (for the title) and its `comment_anchors` block.
+The render step diffs those tables from the commit it last completed
+against and hands render the buckets whose rows moved; render's own
+scan adds what a new row names through the rows still there (a new
+comment its thread, a new attachment its page, an edited page its
+threads). A bucket whose rows are gone is declared with nothing, and
+its documents go. The resume cursor is the `render_cursor` row in the
+render store, written in the same transaction as the last document of
+the run.
 
 What this narrows is the **render** — writing files, building
 `grid_rows`, hashing — which is where the cost is. It does not narrow

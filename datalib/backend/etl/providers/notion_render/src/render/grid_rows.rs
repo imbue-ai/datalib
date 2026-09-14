@@ -5,12 +5,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 use anyhow::Result;
+use datalib_etl_render::inputs::{Inputs, Lookup};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
 use serde_json::Value;
 
-use super::parse::ParsedNotion;
+use super::parse::{parent_block_of, ParsedNotion};
 use super::render::{notion_thread_url, notion_url, page_qmd_path_rel, thread_qmd_path_rel};
 
 pub const RENDER_VERSION: u32 = 1;
@@ -91,8 +92,8 @@ fn comment_author(c: &Value) -> Option<String> {
 /// A page author. Unlike a comment, a page object carries only
 /// `created_by.id`, so this needs the `users` table the download side
 /// fills one id at a time.
-fn resolved_author(uid: &str, user_names: &HashMap<String, String>) -> Option<String> {
-    match user_names.get(uid) {
+fn resolved_author(uid: &str, users: Lookup<'_, HashMap<String, String>>) -> Option<String> {
+    match users.get(uid) {
         Some(n) if !n.is_empty() => Some(n.clone()),
         _ => short_id_author(uid),
     }
@@ -108,7 +109,7 @@ fn page_row(
     page: &Value,
     title: &str,
     stanza: &str,
-    user_names: &HashMap<String, String>,
+    users: Lookup<'_, HashMap<String, String>>,
     problems: &mut Vec<RenderProblemRow>,
 ) -> Option<GridRow> {
     let pid = page
@@ -133,7 +134,7 @@ fn page_row(
         .kind("Notion Page")
         .source_label("Notion")
         .when_ts(when_ts)
-        .author(resolved_author(author_id, user_names))
+        .author(resolved_author(author_id, users))
         .conversation_name(Some(title.to_string()))
         .conversation_uuid(pid.clone())
         .entire_chat(format!("/notion/page/{pid}"))
@@ -239,6 +240,9 @@ pub struct DocumentRows {
 pub struct PageDocument {
     pub page_uuid: String,
     pub page_title: String,
+    /// Every raw row this document read; render adds its own reads and
+    /// declares the bucket with the total.
+    pub inputs: Inputs,
     pub rows: Vec<GridRow>,
     /// What this document lost on the way here; travels with the rows
     /// so both commit together.
@@ -252,6 +256,8 @@ pub struct ThreadDocument {
     /// The block this thread hangs off, when it hangs off one. Render
     /// resolves it to the quoted text via `ParsedNotion::anchor_text`.
     pub anchor_block_uuid: Option<String>,
+    /// See [`PageDocument::inputs`].
+    pub inputs: Inputs,
     pub rows: Vec<GridRow>,
     /// See [`PageDocument::problems`].
     pub problems: Vec<RenderProblemRow>,
@@ -291,15 +297,23 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         let Some(pid) = page.get("id").and_then(|v| v.as_str()).map(String::from) else {
             continue;
         };
+        // A page loaded only because one of its threads renders.
+        if !parsed.renders(&pid) {
+            continue;
+        }
         let title = page_titles.get(&pid).cloned().unwrap_or_default();
+        let inputs = Inputs::default();
+        inputs.read("pages", &pid);
         let mut problems: Vec<RenderProblemRow> = Vec::new();
         let mut rows: Vec<GridRow> = Vec::new();
-        if let Some(r) = page_row(page, &title, stanza, &parsed.user_names, &mut problems) {
+        let users = inputs.lookup("users", &parsed.user_names);
+        if let Some(r) = page_row(page, &title, stanza, users, &mut problems) {
             rows.push(r);
         }
         pages.push(PageDocument {
             page_uuid: pid,
             page_title: title,
+            inputs,
             rows,
             problems,
         });
@@ -316,22 +330,31 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         else {
             continue;
         };
-        let title = page_titles
-            .get(&page_id)
-            .cloned()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "(untitled)".into());
-        let parent_block_id = first
-            .get("parent")
-            .filter(|p| p.get("type").and_then(|v| v.as_str()) == Some("block_id"))
-            .and_then(|p| p.get("block_id"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let inputs = Inputs::default();
+        inputs.read("pages", &page_id);
+        // Comment rows outlive their page, and nothing prunes them: a
+        // thread whose page Notion no longer has is not a document.
+        let Some(title) = page_titles.get(&page_id) else {
+            continue;
+        };
+        let title = if title.is_empty() {
+            "(untitled)".to_string()
+        } else {
+            title.clone()
+        };
+        let parent_block_id = parent_block_of(first).map(String::from);
         let owned: Vec<Value> = members.iter().map(|v| (*v).clone()).collect();
+        inputs.read_all(
+            "comments",
+            owned
+                .iter()
+                .filter_map(|c| c.get("id").and_then(Value::as_str)),
+        );
         let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let anchors = inputs.lookup("comment_anchors", &parsed.anchor_text);
         let anchor = parent_block_id
             .as_deref()
-            .and_then(|b| parsed.anchor_text.get(b))
+            .and_then(|b| anchors.get(b))
             .map(String::as_str);
         let rows = thread_rows(
             disc_id,
@@ -348,6 +371,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
             page_uuid: page_id,
             page_title: title,
             anchor_block_uuid: parent_block_id.clone(),
+            inputs,
             rows,
             problems,
         });

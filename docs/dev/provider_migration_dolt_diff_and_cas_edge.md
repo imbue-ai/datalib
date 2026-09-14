@@ -18,10 +18,12 @@ what the deletion half needs, and a provider that fails it (contacts)
 cannot be ported without first changing how it keys its rows.
 
 **And the coupling that makes each port dangerous:** narrowing a renderer
-makes the set it emits the set that *changed*, so any provider still
-calling `RunCtx::retain_documents` must switch to `remove_conversation`
-**in the same commit**. Left as-is, the first quiet run deletes every
-document that merely held still.
+makes the set it emits the set that *changed*, so a provider that
+swept everything it did not emit had to stop doing so **in the same
+commit**. Left as-is, the first quiet run deletes every document that
+merely held still. (`retain_documents`, the whole-store sweep, is gone
+now; a provider declares the buckets it looked at instead — see
+`plans/render_inputs.md`.)
 
 This doc is the migration recipe for the remaining ETL providers
 (notion, github, gitlab, beeper, contacts, perseus, yolink). It
