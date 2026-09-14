@@ -284,17 +284,15 @@ Each slice is one PR that leaves the tree green.
 ## Loose ends
 
 What did not land, with an honest weight on each. None blocks
-anything; the first is the only one worth doing soon.
+anything.
 
-- **The rate query reads every sample of the run.** `snapshot_of`
-  takes the two newest samples per series with a window over all of
-  the run's `metric_samples`, and `/api/dag` calls it on every
-  `dag_changed` frame — several times a second while a run goes. At
-  one sample per changed series per five seconds a busy download
-  writes ~700 rows an hour per series, so a day-long run with twenty
-  series is a few hundred thousand rows read per frame. A `ts >
-  now - 10min` bound on that query is the fix; a cap on the table
-  itself can wait for a measurement. **Medium; cheap.**
+- **Whether `metric_samples` wants a cap of its own.** The rate query
+  reads only the last ten minutes of a run's samples (`RATE_WINDOW` in
+  `runs/src/store.rs`), so the table's size no longer costs anything
+  per `dag_changed` frame; what remains is disk. At one sample per
+  changed series per five seconds a busy download writes ~700 rows an
+  hour per series, bounded by run retention. Measure before deciding.
+  **Low.**
 - **A download's outcome carries no `rows`.** The count of its last
   segment lives inside the `RawStoreSession` that sealed it, and
   `ingest.rs` builds the claim after the session is gone. A consumer's
