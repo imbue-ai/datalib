@@ -163,8 +163,8 @@ export type Preset = {
   phase?: FieldPhase;
 };
 
-/// Fields shared by the two wizard-capable sources. Kept inline per
-/// entry rather than factored out — the design's whole point is that a
+/// Fields are kept inline per entry rather than factored out, even
+/// where two entries agree — the design's whole point is that a
 /// descriptor is data owned by one provider, not a class hierarchy.
 export const CATALOG: CatalogEntry[] = [
   {
@@ -328,8 +328,62 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
 
+  {
+    type: "chatgpt",
+    method: "api",
+    label: "ChatGPT",
+    blurb: "Mirror your ChatGPT conversations.",
+    keywords: ["chatgpt", "openai", "gpt", "chat", "llm", "conversations"],
+    kind: "api",
+    icon: "chatgpt",
+    defaultName: "chatgpt",
+    nameHint: "ChatGPT Account 1",
+    wizard: true,
+    credentialService: "chatgpt",
+    // The credential is the bearer token chatgpt.com's own session
+    // endpoint hands the page, so token-capture is the flow that fits.
+    // Same registration `docs/user/getting_your_data.md` gives by hand.
+    credentialRegister: {
+      base_api_url: "https://chatgpt.com/",
+      login_url: "https://chatgpt.com/auth/login",
+      login_flow: "token-capture",
+      login_flow_params: {
+        tokenUrl: "https://chatgpt.com/api/auth/session",
+        tokenField: "accessToken",
+      },
+    },
+    canProbe: true,
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "ChatGPT account",
+        placeholder: "you@example.com",
+        help:
+          "Which stored chatgpt.com login to mirror. Leave it empty if latchkey holds only " +
+          "one — naming the wrong one mirrors someone else's conversations.",
+      },
+      {
+        kind: "date",
+        target: "api.since",
+        label: "Mirror conversations updated since",
+        help: "YYYY-MM-DD. Leave empty to sync everything.",
+      },
+      {
+        kind: "string_list",
+        probe: "conversations",
+        target: "api.conv_uuids",
+        label: "Only these conversations",
+        placeholder: "https://chatgpt.com/c/…",
+        help:
+          "Bare ids or paste-able chat URLs. Leave empty to walk everything — this is a " +
+          "scoping tool for a first run against a large account.",
+      },
+    ],
+  },
+
   // Listed for completeness; no form yet.
-  { type: "chatgpt", method: "api", label: "ChatGPT", blurb: "Mirror your ChatGPT conversations.", keywords: ["chatgpt", "openai", "gpt"], kind: "api", icon: "chatgpt", defaultName: "chatgpt", nameHint: "My ChatGPT", wizard: false, credentialService: "chatgpt" },
   { type: "github", method: "api", label: "GitHub", blurb: "Mirror pull requests and their review threads.", keywords: ["github", "pr", "code", "review"], kind: "api", icon: "github", defaultName: "github", nameHint: "Work GitHub", wizard: false, credentialService: "github" },
   { type: "gitlab", method: "api", label: "GitLab", blurb: "Mirror merge requests and their discussions.", keywords: ["gitlab", "mr", "code"], kind: "api", icon: "gitlab", defaultName: "gitlab", nameHint: "Work GitLab", wizard: false, credentialService: "gitlab" },
   { type: "notion", method: "api", label: "Notion", blurb: "Mirror pages and comment threads.", keywords: ["notion", "wiki", "docs", "pages"], kind: "api", icon: "notion", defaultName: "notion", nameHint: "Team Notion", wizard: false, credentialService: "notion" },

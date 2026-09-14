@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl_slack_config::SlackConfig;
-use datalib_source_common::probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
+use datalib_probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
 
 use crate::ingest::api::call_slack;
 use crate::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_USERS};

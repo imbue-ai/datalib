@@ -1,13 +1,13 @@
 //! Read-only account probe: "can these credentials reach this
 //! mailbox, and what labels does it have?" The report's shape is
 //! shared with every other probeable provider — see
-//! `datalib_source_common::probe`.
+//! `datalib_probe`.
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 
 use datalib_etl_email_config::{EmailConfig, EmailLiveMode};
-use datalib_source_common::probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
+use datalib_probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
 
 use crate::ingest::gmail_api::api as gmail;
 use crate::ingest::labels::{self, LabelMap};

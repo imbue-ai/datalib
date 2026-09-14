@@ -39,7 +39,7 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/email_config:datalib_etl_email_config",
-        "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",

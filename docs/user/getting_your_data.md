@@ -87,7 +87,9 @@ table pointing at the unpacked folder instead.
 
 A one-time registration, then a browser login. ChatGPT uses a bearer
 access token rather than a cookie, and latchkey can go and fetch it
-for you:
+for you. The app's Add Data Source wizard does both from its
+**Latchkey auth** button (and **Test connection** then lists the
+account's conversations to pick from); by hand it is:
 
 ```sh
 npx -y latchkey services register chatgpt \
