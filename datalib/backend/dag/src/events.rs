@@ -97,15 +97,27 @@ pub enum Event {
         msg: String,
     },
     /// One log line. A line that arrived as structured tracing output
-    /// is unwrapped here: `msg` is its message, `target` its target, and
-    /// `fields` whatever else it carried — so no reader has to parse a
-    /// JSON envelope out of a string a second time.
+    /// is unwrapped here: `msg` is its message, `target`, `thread` and
+    /// `ts` its own, and `fields` whatever else it carried — so no reader
+    /// has to parse a JSON envelope out of a string a second time. A
+    /// plain line has only `msg` and `stream`.
     Log {
         step: StepId,
         level: LogLevel,
         msg: String,
+        /// The line's own timestamp, when it carried one. The sink stamps
+        /// arrival time on every event regardless; this is the more
+        /// accurate of the two for a line the step wrote itself.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ts: Option<String>,
+        /// Which pipe of the subprocess it came from; `None` for a line
+        /// the runner itself wrote.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stream: Option<Stream>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fields: Option<serde_json::Map<String, serde_json::Value>>,
     },
@@ -168,6 +180,32 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+/// Which of a subprocess's two pipes a log line arrived on.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum Stream {
+    Stdout,
+    Stderr,
+}
+
+impl Stream {
     pub fn as_str(self) -> &'static str {
         self.into()
     }
@@ -278,7 +316,10 @@ impl StepProgress {
             step: self.step.clone(),
             level,
             msg: msg.into(),
+            ts: None,
+            stream: None,
             target: None,
+            thread: None,
             fields: None,
         });
     }
@@ -363,6 +404,12 @@ mod tests {
             assert_eq!(
                 serde_json::to_string(&l).unwrap(),
                 format!("\"{}\"", l.as_str())
+            );
+        }
+        for &s in <Stream as strum::VariantArray>::VARIANTS {
+            assert_eq!(
+                serde_json::to_string(&s).unwrap(),
+                format!("\"{}\"", s.as_str())
             );
         }
     }

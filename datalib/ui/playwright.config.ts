@@ -419,8 +419,10 @@ export default defineConfig({
         /url-sync\.spec\.ts/,
         /yolink-plots\.spec\.ts/,
         /gallery\.spec\.ts/,
-        // /sources2 — the Manager2 Pipeline table.
+        // /sources2 — the Manager2 Pipeline table, and the commit-history
+        // grid it opens in a modal.
         /manager2-grid\.spec\.ts/,
+        /manager2-history\.spec\.ts/,
       ],
     },
   ],

@@ -44,6 +44,7 @@ async fn main() -> Result<()> {
         "double-open" => double_open(&args).await,
         "read" => read(&args).await,
         "churn" => churn(&args).await,
+        "history" => history(&args).await,
         "probe" => probe(&args).await,
         other => bail!("unknown role {other:?}"),
     }?;
@@ -189,6 +190,41 @@ async fn churn(args: &Args) -> Result<Value> {
         "role": "churn",
         "opened": opened,
         "pinned": pinned,
+        "samples": samples,
+        "errors": errors,
+    }))
+}
+
+/// What the Manage screen's commit-history panel does, in a loop: open
+/// read-only, walk `dolt_log` with a `dolt_diff_stat` per commit, close.
+/// Every statement is a read, and `dolt_status` showed that is not the same
+/// as being harmless to a writer -- this is where the history reader's
+/// statements earn the same verdict.
+async fn history(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let until = args.opt_path("until");
+    let rounds = args.num("rounds", 300) as usize;
+    let mut errors: Vec<String> = Vec::new();
+    let mut samples: Vec<Value> = Vec::new();
+    let mut opened = 0usize;
+    let mut commits_seen = 0usize;
+    for round in 0..rounds {
+        if until.as_deref().is_some_and(Path::exists) {
+            break;
+        }
+        samples.push(json!({ "at_ms": now_ms() }));
+        match datalib_history::read(&db, 50).await {
+            Ok(h) => {
+                opened += 1;
+                commits_seen = commits_seen.max(h.commits.len());
+            }
+            Err(e) => errors.push(format!("round {round}: {e:#}")),
+        }
+    }
+    Ok(json!({
+        "role": "history",
+        "opened": opened,
+        "commits_seen": commits_seen,
         "samples": samples,
         "errors": errors,
     }))

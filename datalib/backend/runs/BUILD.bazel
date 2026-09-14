@@ -43,6 +43,7 @@ rust_test(
     deps = [
         ":datalib_runs",
         "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],

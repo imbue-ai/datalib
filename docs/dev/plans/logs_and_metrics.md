@@ -217,6 +217,14 @@ Each slice is one PR that leaves the tree green.
    tables with stdlib sqlite3. Found on the way: `DownloadMetrics`'s
    `api=… rows[…]` suffix had no caller — the counters were never
    shown anywhere before this.
+1b. ~~**Run ids and log columns**~~ **Done.** The run id is a UUID v7
+   the runner mints (or `--run-id`; the worker passes its job id), in
+   `DATALIB_DAG_RUN_ID` beside `DATALIB_DAG_ATTEMPT` so a step can stamp
+   what it writes. `log` rows carry `attempt`, `stream` (which pipe),
+   `thread`, and the line's own timestamp when it had one; `filename`
+   and `line_number` stay in `fields`. `PYTHONUNBUFFERED=1` on every
+   child. `PRAGMA user_version` gates the schema: a store from another
+   version is remade.
 2. **Delete the other two paths and repoint the UI** — the worker,
    the endpoints, the log grid, the three cells. #161 and #164 close
    here.
@@ -228,6 +236,11 @@ Each slice is one PR that leaves the tree green.
 
 ## Open questions
 
+- **Joining a raw store's `sync_runs` row to the run.** Steps now
+  receive `DATALIB_DAG_RUN_ID`; nothing stamps it yet. A `dag_run_id`
+  column on `sync_runs` (and on the render cursor) is the obvious next
+  step, and would let the Manage screen link a log line to the commit
+  it produced.
 - **Bytes.** `DownloadMetrics` counts requests and rows; nothing counts
   bytes fetched or bytes written. The HTTP chokepoint sees the response
   body length, so `bytes_fetched` is a one-line addition there. Bytes

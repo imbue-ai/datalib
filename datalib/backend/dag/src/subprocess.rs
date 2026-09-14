@@ -8,10 +8,16 @@ use anyhow::Context;
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::events::{Event, EventSink, LogLevel};
+use crate::events::{Event, EventSink, LogLevel, Stream};
 use crate::step::{ArtifactState, FailureKind, StepCtx, StepError, StepOutcome};
 
 pub const ENV_STEP: &str = "DATALIB_DAG_STEP";
+/// The run this invocation belongs to — the id every row of
+/// `system/runs.sqlite` carries — and which attempt of the step this is
+/// within it (1 for the first). Stamp them into anything you write that
+/// should be joinable back to the run.
+pub const ENV_RUN_ID: &str = "DATALIB_DAG_RUN_ID";
+pub const ENV_ATTEMPT: &str = "DATALIB_DAG_ATTEMPT";
 /// The step's group id, its group's `type`, and its function — the two
 /// halves the step id is composed from, plus the type. Only set for a
 /// step declared under a `[[groups]]` entry; `ENV_GROUP_TYPE` only when
@@ -70,7 +76,10 @@ impl WireOutcome {
                          output — see docs/dev/step_protocol.md",
                         row.path.as_str()
                     ),
+                    ts: None,
+                    stream: None,
                     target: None,
+                    thread: None,
                     fields: None,
                 }),
             }
@@ -83,6 +92,7 @@ pub(crate) async fn run_subprocess(
     argv: &[String],
     env: &BTreeMap<String, String>,
     extra_env: &BTreeMap<String, String>,
+    attempt: u32,
     ctx: &StepCtx,
     sink: &Arc<dyn EventSink>,
 ) -> Result<StepOutcome, StepError> {
@@ -108,6 +118,7 @@ pub(crate) async fn run_subprocess(
     }
     cmd.args(args)
         .env(ENV_STEP, &ctx.step_id)
+        .env(ENV_ATTEMPT, attempt.to_string())
         .env(ENV_DATA_ROOT, &ctx.data_root)
         .env(ENV_INPUTS, inputs.join("\n"))
         .env(ENV_CHANGED_INPUTS, changed.join("\n"))
@@ -145,7 +156,7 @@ pub(crate) async fn run_subprocess(
         let mut tail: Vec<String> = Vec::new();
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            stderr_sink.emit(&unwrap_stderr_line(&stderr_step, &line));
+            stderr_sink.emit(&unwrap_line(&stderr_step, Stream::Stderr, &line));
             tail.push(line);
             if tail.len() > 20 {
                 tail.remove(0);
@@ -189,9 +200,9 @@ pub(crate) async fn run_subprocess(
                     }
                     sink.emit(&retag(ev, &ctx.step_id))
                 }
-                Err(_) => forward_text(sink, ctx, &line),
+                Err(_) => sink.emit(&unwrap_line(&ctx.step_id, Stream::Stdout, &line)),
             },
-            Err(_) => forward_text(sink, ctx, &line),
+            Err(_) => sink.emit(&unwrap_line(&ctx.step_id, Stream::Stdout, &line)),
         }
     }
 
@@ -225,35 +236,33 @@ pub(crate) async fn run_subprocess(
     }
 }
 
-/// Keys of tracing-subscriber's JSON envelope that say where a line came
-/// from rather than what happened. Dropped from `fields`: a file and a
-/// line number are the right thing to log and the wrong thing to show
-/// someone asking why their sync is red.
-const ENVELOPE_NOISE: &[&str] = &[
+/// Keys of tracing-subscriber's JSON envelope that become columns of the
+/// event rather than entries in `fields`. Everything else the envelope
+/// carries — `filename`, `line_number`, `spans` — stays in `fields`.
+const ENVELOPE_LIFTED: &[&str] = &[
     "timestamp",
     "level",
     "target",
-    "filename",
-    "line_number",
     "threadId",
     "threadName",
     "fields",
-    "span",
-    "spans",
 ];
 
-/// A forwarded stderr line. Structured tracing output (JSON with a
-/// `level` field, e.g. tracing-subscriber's JSON format) is unwrapped —
-/// its message, target and severity become the event's, and its other
-/// fields ride along as `fields` — so nothing downstream parses an
-/// envelope out of a string. Everything else — progress bars, plain
-/// chatter — is the line itself at `info`.
-fn unwrap_stderr_line(step: &str, line: &str) -> Event {
+/// A forwarded line from either pipe. Structured tracing output (JSON
+/// with a `level` field, e.g. tracing-subscriber's JSON format) is
+/// unwrapped — its message, severity, target, thread and timestamp
+/// become the event's, and its other fields ride along as `fields` — so
+/// nothing downstream parses an envelope out of a string. Everything
+/// else — progress bars, plain chatter — is the line itself at `info`.
+fn unwrap_line(step: &str, stream: Stream, line: &str) -> Event {
     let plain = || Event::Log {
         step: step.to_string(),
         level: LogLevel::Info,
         msg: line.to_string(),
+        ts: None,
+        stream: Some(stream),
         target: None,
+        thread: None,
         fields: None,
     };
     let Ok(serde_json::Value::Object(mut env)) = serde_json::from_str::<serde_json::Value>(line)
@@ -268,10 +277,12 @@ fn unwrap_stderr_line(step: &str, line: &str) -> Event {
         l if l.eq_ignore_ascii_case("error") => LogLevel::Error,
         _ => LogLevel::Info,
     };
-    let target = env
-        .get("target")
-        .and_then(|t| t.as_str())
-        .map(str::to_string);
+    let string_at = |key: &str| env.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    let ts = string_at("timestamp");
+    let target = string_at("target");
+    // The name when the subscriber recorded one ("tokio-runtime-worker",
+    // "run-store"), else the id ("ThreadId(7)").
+    let thread = string_at("threadName").or_else(|| string_at("threadId"));
     let mut fields = match env.remove("fields") {
         Some(serde_json::Value::Object(f)) => f,
         _ => serde_json::Map::new(),
@@ -288,7 +299,7 @@ fn unwrap_stderr_line(step: &str, line: &str) -> Event {
         })
         .unwrap_or_else(|| line.to_string());
     for (k, v) in env {
-        if !ENVELOPE_NOISE.contains(&k.as_str()) {
+        if !ENVELOPE_LIFTED.contains(&k.as_str()) {
             fields.entry(k).or_insert(v);
         }
     }
@@ -296,19 +307,12 @@ fn unwrap_stderr_line(step: &str, line: &str) -> Event {
         step: step.to_string(),
         level,
         msg,
+        ts,
+        stream: Some(stream),
         target,
+        thread,
         fields: (!fields.is_empty()).then_some(fields),
     }
-}
-
-fn forward_text(sink: &Arc<dyn EventSink>, ctx: &StepCtx, line: &str) {
-    sink.emit(&Event::Log {
-        step: ctx.step_id.clone(),
-        level: LogLevel::Info,
-        msg: line.to_string(),
-        target: None,
-        fields: None,
-    });
 }
 
 fn retag(ev: Event, id: &str) -> Event {
@@ -342,14 +346,20 @@ fn retag(ev: Event, id: &str) -> Event {
         Event::Log {
             level,
             msg,
+            ts,
+            stream,
             target,
+            thread,
             fields,
             ..
         } => Event::Log {
             step: id,
             level,
             msg,
+            ts,
+            stream,
             target,
+            thread,
             fields,
         },
         Event::Hint { msg, .. } => Event::Hint { step: id, msg },
@@ -545,7 +555,7 @@ mod tests {
                 echo '{"event":"progress_message","step":"me","msg":"halfway"}'
                 echo plain text line
                 echo "downloading 3/10..." >&2
-                echo '{"timestamp":"t","level":"ERROR","target":"slack::ingest","filename":"x.rs","fields":{"message":"boom","channel":"C1"}}' >&2
+                echo '{"timestamp":"2026-09-11T08:00:00.000Z","level":"ERROR","target":"slack::ingest","threadName":"main","threadId":"ThreadId(1)","filename":"x.rs","fields":{"message":"boom","channel":"C1"}}' >&2
                 echo '{"event":"outcome","outputs":[{"path":"shell/raw","version":"v1"}]}'
             "#),
         );
@@ -602,18 +612,37 @@ mod tests {
         match boom {
             Event::Log {
                 msg,
+                ts,
+                stream,
                 target,
+                thread,
                 fields,
                 ..
             } => {
                 assert_eq!(msg, "boom");
+                assert_eq!(ts.as_deref(), Some("2026-09-11T08:00:00.000Z"));
+                assert_eq!(*stream, Some(Stream::Stderr));
                 assert_eq!(target.as_deref(), Some("slack::ingest"));
-                let fields = fields.as_ref().expect("the extra field survives");
+                assert_eq!(thread.as_deref(), Some("main"), "the name beats the id");
+                let fields = fields.as_ref().expect("the extra fields survive");
                 assert_eq!(fields["channel"], "C1");
-                assert!(!fields.contains_key("filename"));
+                assert_eq!(
+                    fields["filename"], "x.rs",
+                    "where it came from stays, as a field"
+                );
+                assert!(!fields.contains_key("threadId"), "lifted, not repeated");
             }
             _ => unreachable!(),
         }
+        // A plain line says which pipe it came from and nothing more.
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Log { msg, stream: Some(Stream::Stdout), ts: None, .. } if msg == "plain text line"
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Log { msg, stream: Some(Stream::Stderr), .. } if msg == "downloading 3/10..."
+        )));
     }
 
     #[tokio::test]

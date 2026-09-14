@@ -31,6 +31,7 @@ import { catalogFor } from "../src/config/catalog";
 
 const SLACK = catalogFor("slack")!;
 const CLAUDE = catalogFor("claude")!;
+const CHATGPT = catalogFor("chatgpt")!;
 const LIGHTROOM = catalogFor("lightroom")!;
 const APPLE_PHOTOS = catalogFor("apple_photos")!;
 const SIGNAL = catalogFor("signal")!;
@@ -764,5 +765,50 @@ describe("what Test connection authenticates as", () => {
     // The method table still has to be there: it is what says this
     // source is the live API rather than an unpacked export.
     expect(params).toHaveProperty("api");
+  });
+});
+
+describe("the ChatGPT descriptor", () => {
+  /// ChatGPT's form is Claude's with the Claude-only knobs left out:
+  /// same connection block, same probe, same scoping fields, writing the
+  /// same `api` table `datalib-step` dispatches on.
+  it("mirrors Claude's connection block", () => {
+    expect(CHATGPT.wizard).toBe(true);
+    expect(CHATGPT.canProbe).toBe(true);
+    expect(CHATGPT.credentialService).toBe("chatgpt");
+    // The registration has to be the one the hand-run recipe in
+    // docs/user/getting_your_data.md gives, or the two produce services
+    // that behave differently under the same name.
+    expect(CHATGPT.credentialRegister).toEqual({
+      base_api_url: "https://chatgpt.com/",
+      login_url: "https://chatgpt.com/auth/login",
+      login_flow: "token-capture",
+      login_flow_params: {
+        tokenUrl: "https://chatgpt.com/api/auth/session",
+        tokenField: "accessToken",
+      },
+    });
+    const targets = (CHATGPT.fields ?? []).map((f) => f.target);
+    expect(targets).toEqual(["latchkey_settings.account", "api.since", "api.conv_uuids"]);
+  });
+
+  it("writes an api table even with nothing filled in", () => {
+    const params = paramsObject(CHATGPT, seedFieldValues(CHATGPT), "download");
+    expect(params).toEqual({ api: {} });
+  });
+
+  it("keeps a source it wrote editable", () => {
+    const values = seedFieldValues(CHATGPT);
+    values["api.since"] = "2026-01-01";
+    values["api.conv_uuids"] = ["https://chatgpt.com/c/abc", "def"];
+    const { stepsBody } = buildSource({
+      entry: CHATGPT,
+      group: "chatgpt",
+      name: "",
+      values,
+      withGroup: false,
+    });
+    const [ingest] = listSteps(stepsBody);
+    expect(paramsAreRepresentable(ingest, CHATGPT)).toEqual({ ok: true });
   });
 });

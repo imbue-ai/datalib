@@ -82,6 +82,8 @@ in the environment.
 | variable | meaning |
 | --- | --- |
 | `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/ingest`) |
+| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the runner mints, or whatever the caller passed as `--run-id` (the app passes its job id). Every row in `system/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run |
+| `DATALIB_DAG_ATTEMPT` | which invocation of this step within the run, starting at `1`; a retry or a streaming pass counts up |
 | `DATALIB_DAG_GROUP` | the group it is filed under (`weather`); unset for a step outside any group |
 | `DATALIB_DAG_GROUP_TYPE` | the group's `type`, when it declares one |
 | `DATALIB_DAG_FUNCTION` | what this step does within its group (`ingest`); unset for a step outside any group |
@@ -277,12 +279,27 @@ exist hashes to the distinguished version `absent`
 
 stderr is yours for humans: every line is captured into the event
 stream as an `info` log, and the last ~20 lines become the error
-message if you exit non-zero. A structured tracing-JSON line (with a
-`level` field, as tracing-subscriber's JSON format writes) is
-unwrapped rather than quoted: its `fields.message` becomes the log's
-`msg`, its `target` and severity are kept, and its other fields ride
-along as `fields` — so the Manage screen shows the sentence, not the
-envelope.
+message if you exit non-zero. So is every stdout line that is not an
+event. Each line records which pipe it came from (`stream`) and is
+timestamped as the runner reads it, and the two pipes are read
+concurrently, so the log is in arrival order across both.
+
+**Flush per line.** Arrival order is only as good as the child's
+buffering: a program that block-buffers its stdout when it is a pipe
+(C's stdio, Python's by default) hands the runner its progress in 4KB
+lumps, minutes after the stderr they belonged beside. The runner sets
+`PYTHONUNBUFFERED=1` for every child; Rust's stdout is line-buffered
+regardless and `sh` writes through. Anything else should flush after
+each line it wants seen on time.
+
+A structured tracing-JSON line (with a `level` field, as
+tracing-subscriber's JSON format writes) is unwrapped rather than
+quoted: its `fields.message` becomes the log's `msg`; its `timestamp`,
+`level`, `target` and thread (`threadName`, else `threadId`) become
+columns — the line's own timestamp wins over the runner's arrival time
+— and everything else it carried (`filename`, `line_number`, the
+remaining `fields`) rides along as `fields`. The Manage screen shows
+the sentence, not the envelope, and can still sort by thread.
 
 ## Signals: graceful cancellation (optional)
 

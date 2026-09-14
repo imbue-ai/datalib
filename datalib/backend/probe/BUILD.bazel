@@ -1,0 +1,28 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The wire format of "Test connection" — `ProbeReport` and the items in
+# it — and nothing else. Its own crate, not part of `source_common`, so
+# that a change here rebuilds the four providers that can be probed
+# rather than everything that composes a config (135 test targets
+# behind source_common, measured 2026-09-11). Bazel-only by design (no
+# Cargo.toml), like the `<p>_config` crates.
+rust_library(
+    name = "datalib_probe",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_probe",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:serde",
+        "@datalib_crates//:strum",
+    ],
+)
+
+rust_test(
+    name = "probe_unittests",
+    size = "small",
+    crate = ":datalib_probe",
+    edition = "2021",
+    # Test-only: the strum/serde agreement test needs a concrete format.
+    deps = ["@datalib_crates//:serde_json"],
+)

@@ -30,13 +30,14 @@ use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     const USAGE: &str = "usage: datalib-dag <config.toml> [--binary-dir DIR] \
-         [--sync STEP_ID[,STEP_ID…]]… [--now RFC3339] [--parallelism N] \
+         [--sync STEP_ID[,STEP_ID…]]… [--now RFC3339] [--run-id ID] [--parallelism N] \
          [--reset-and-redownload] [--refetch-blobs]\n       \
          datalib-dag --check <config.toml>";
     let mut config_path: Option<PathBuf> = None;
     let mut binary_dir: Option<PathBuf> = None;
     let mut sync_only: Vec<String> = Vec::new();
     let mut now: Option<String> = None;
+    let mut run_id: Option<String> = None;
     let mut parallelism: Option<usize> = None;
     let mut reset_and_redownload = false;
     let mut refetch_blobs = false;
@@ -54,6 +55,7 @@ async fn main() -> Result<()> {
                 sync_only.extend(v.split(',').map(|s| s.trim().to_string()));
             }
             "--now" => now = Some(args.next().context("--now needs a value")?),
+            "--run-id" => run_id = Some(args.next().context("--run-id needs a value")?),
             "--parallelism" => {
                 parallelism = Some(
                     args.next()
@@ -168,10 +170,17 @@ async fn main() -> Result<()> {
     }
     let now =
         now.unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
-    // The scheduler takes its run id from ENV_NOW, so this is the same
-    // string it will stamp on the run — keep it for the run store.
-    let run_id = now.clone();
-    child_env.insert(subprocess::ENV_NOW.into(), now);
+    // The run id: the caller's (the http worker passes its job id, so
+    // the job row *is* the run) or a fresh one. The scheduler reads it
+    // back out of ENV_RUN_ID, so the record, the store and every step
+    // name the same run.
+    let run_id = run_id.unwrap_or_else(datalib_dag::scheduler::new_run_id);
+    child_env.insert(subprocess::ENV_RUN_ID.into(), run_id.clone());
+    child_env.insert(subprocess::ENV_NOW.into(), now.clone());
+    // A child's stdout is a pipe here, and Python block-buffers a pipe
+    // by default — its progress lines would arrive in 4KB lumps, long
+    // after the stderr they belong beside. Rust and sh need no help.
+    child_env.insert("PYTHONUNBUFFERED".into(), "1".into());
     if reset_and_redownload {
         child_env.insert(subprocess::ENV_RESET_AND_REDOWNLOAD.into(), "1".into());
     }
@@ -229,7 +238,7 @@ async fn main() -> Result<()> {
     let code = {
         let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
         let retention = cfg.run_history.map(|h| h.retention()).unwrap_or_default();
-        match RunStoreSink::start(&data_root, &run_id, &run_id, retention) {
+        match RunStoreSink::start(&data_root, &run_id, &now, retention) {
             Some(store) => sinks.push(Arc::new(store)),
             None => {
                 // This binary has no tracing subscriber and no indicatif

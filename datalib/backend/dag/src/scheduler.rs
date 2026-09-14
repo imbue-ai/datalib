@@ -224,14 +224,21 @@ impl Runner {
         // mid-plan sees "started, nothing finished" rather than an empty
         // file. One clock for the whole run — the same value the steps
         // get in `DATALIB_DAG_NOW`, so a run's timestamps agree with
-        // what its steps stamped into their own stores.
+        // what its steps stamped into their own stores — and one id, the
+        // one the steps get in `DATALIB_DAG_RUN_ID` and the run store is
+        // keyed by. A library caller that set neither gets both minted.
         let started_at = self
             .child_env
             .get(crate::subprocess::ENV_NOW)
             .cloned()
             .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
+        let run_id = self
+            .child_env
+            .get(crate::subprocess::ENV_RUN_ID)
+            .cloned()
+            .unwrap_or_else(new_run_id);
         state.current_run = Some(CurrentRun {
-            run_id: started_at.clone(),
+            run_id,
             started_at: started_at.clone(),
             finished_at: None,
             plan: graph
@@ -512,7 +519,10 @@ impl Runner {
                                           streams_output; no consumer will be \
                                           dispatched early"
                                         .to_string(),
+                                    ts: None,
+                                    stream: None,
                                     target: None,
+                                    thread: None,
                                     fields: None,
                                 });
                             }
@@ -645,7 +655,10 @@ impl Runner {
                             "streaming pass failed, deferring to the final pass: {}",
                             errors[i].as_deref().unwrap_or("")
                         ),
+                        ts: None,
+                        stream: None,
                         target: None,
+                        thread: None,
                         fields: None,
                     });
                     errors[i] = None;
@@ -1021,7 +1034,10 @@ fn resolve_outputs(
                 msg: format!(
                     "reported no version for {path}; reading the whole tree to hash it.                      A version the step derives from what it wrote would be cheaper."
                 ),
+                ts: None,
+                stream: None,
                 target: None,
+                thread: None,
                 fields: None,
             });
             tree_version(&data_root.join(path))?
@@ -1109,6 +1125,13 @@ fn release_dependents(
     }
 }
 
+/// A fresh run id. UUID v7, so ids sort in the order the runs started
+/// while still being unique by construction — two runs pinned to the
+/// same `--now` (the tests do this) get different ids.
+pub fn new_run_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
 async fn invoke_with_retry(
     run: &StepRun,
     ctx: StepCtx,
@@ -1125,7 +1148,7 @@ async fn invoke_with_retry(
         let res = match run {
             StepRun::InProcess(f) => f(ctx.clone()).await,
             StepRun::Subprocess { argv, env } => {
-                crate::subprocess::run_subprocess(argv, env, child_env, &ctx, sink).await
+                crate::subprocess::run_subprocess(argv, env, child_env, attempt, &ctx, sink).await
             }
         };
         match res {
@@ -2116,25 +2139,52 @@ mod tests {
 
     /// The run record is the only thing that makes a run visible to
     /// anyone who did not spawn it — a terminal `datalib-dag` and the
-    /// UI's worker write the same file, so the UI can show either.
+    /// UI's worker write the same file, so the UI can show either. Its
+    /// id is the one the caller chose, so the run store (keyed by the
+    /// same id) and the record describe the same run.
     #[tokio::test]
-    async fn the_run_id_is_the_pinned_now_so_the_bus_can_match_it() {
+    async fn the_run_id_is_the_one_handed_to_the_steps() {
         let fx = Fixture::new();
         let g = fx.graph();
         let pinned = "2026-08-31T12:34:56+02:00";
-        let r = runner(fx.root.path()).child_env(BTreeMap::from([(
-            crate::subprocess::ENV_NOW.to_string(),
-            pinned.to_string(),
-        )]));
+        let r = runner(fx.root.path()).child_env(BTreeMap::from([
+            (crate::subprocess::ENV_NOW.to_string(), pinned.to_string()),
+            (
+                crate::subprocess::ENV_RUN_ID.to_string(),
+                "run-abc".to_string(),
+            ),
+        ]));
         assert!(r.run(&g).await.unwrap().all_ok());
 
         let st = DagState::load(fx.root.path()).unwrap();
-        assert_eq!(
-            st.current_run.expect("a run leaves a record").run_id,
-            pinned,
-            "the run id must be DATALIB_DAG_NOW verbatim — the binary \
-             passes that same string to the progress bus"
-        );
+        let run = st.current_run.expect("a run leaves a record");
+        assert_eq!(run.run_id, "run-abc");
+        assert_eq!(run.started_at, pinned);
+    }
+
+    /// Without a caller-chosen id the runner mints one, and two runs
+    /// pinned to the same clock still get different ids.
+    #[tokio::test]
+    async fn a_run_without_a_given_id_mints_a_unique_one() {
+        let fx = Fixture::new();
+        let g = fx.graph();
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let r = runner(fx.root.path()).child_env(BTreeMap::from([(
+                crate::subprocess::ENV_NOW.to_string(),
+                "2026-08-31T12:34:56+02:00".to_string(),
+            )]));
+            assert!(r.run(&g).await.unwrap().all_ok());
+            ids.push(
+                DagState::load(fx.root.path())
+                    .unwrap()
+                    .current_run
+                    .unwrap()
+                    .run_id,
+            );
+        }
+        assert_ne!(ids[0], ids[1]);
+        assert!(uuid::Uuid::parse_str(&ids[0]).is_ok(), "{}", ids[0]);
     }
 
     #[tokio::test]

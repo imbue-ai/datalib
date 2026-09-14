@@ -21,10 +21,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-# Pinned so the run id is predictable: `datalib-dag` uses `--now`
-# verbatim as the run id, which is what lets a reader tell whether the
-# store's newest run is the one it is looking at.
+# Pinned so the run's clock and id are predictable: `datalib-dag` uses
+# `--now` verbatim as the start time and `--run-id` verbatim as the run
+# id, which is what lets a reader tell whether the store's newest run
+# is the one it is looking at.
 NOW = "2369-04-15T00:00:00+00:00"
+RUN_ID = "0193c7e0-0000-7000-8000-000000000001"
 
 # A step that reports progress both ways a step can — the sugar (a total
 # up front, then increments) and a metric with a label — logs a line on
@@ -37,6 +39,10 @@ echo '{"event":"progress_inc","step":"me","delta":1}'
 echo '{"event":"progress_inc","step":"me","delta":3}'
 echo '{"event":"metric","step":"me","name":"rows_upserted","labels":{"table":"t"},"value":12}'
 echo 'a plain line on stderr' >&2
+echo 'a plain line on stdout'
+echo '{"timestamp":"2369-04-15T00:00:01Z","level":"WARN","target":"fake::fetch","threadName":"main","fields":{"message":"slow","attempts":3}}' >&2
+test "$DATALIB_DAG_RUN_ID" = "%(run_id)s" || { echo "run id not passed: $DATALIB_DAG_RUN_ID" >&2; exit 1; }
+test "$DATALIB_DAG_ATTEMPT" = "1" || { echo "attempt not passed: $DATALIB_DAG_ATTEMPT" >&2; exit 1; }
 mkdir -p "$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP"
 echo hi > "$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP/x.txt"
 printf '{"event":"outcome","outputs":[{"path":"%s","version":"v1"}]}\\n' \
@@ -63,11 +69,18 @@ class RunStoreEndToEnd(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
 
         script = self.root / "step.sh"
-        script.write_text(STEP_SH)
+        script.write_text(STEP_SH.replace("%(run_id)s", RUN_ID))
         (self.root / "config.toml").write_text(CONFIG.format(script=script))
 
         proc = subprocess.run(
-            [str(self.dag), str(self.root / "config.toml"), "--now", NOW],
+            [
+                str(self.dag),
+                str(self.root / "config.toml"),
+                "--now",
+                NOW,
+                "--run-id",
+                RUN_ID,
+            ],
             capture_output=True,
             text=True,
             timeout=120,
@@ -88,7 +101,9 @@ class RunStoreEndToEnd(unittest.TestCase):
 
         con = sqlite3.connect(f"file:{self.store}?mode=ro", uri=True)
         try:
-            runs = con.execute("SELECT run_id, finished_at FROM runs").fetchall()
+            runs = con.execute(
+                "SELECT run_id, started_at, finished_at FROM runs"
+            ).fetchall()
             steps = {
                 r[0]: r
                 for r in con.execute(
@@ -99,18 +114,21 @@ class RunStoreEndToEnd(unittest.TestCase):
                 (r[0], r[1], r[2]): r[3]
                 for r in con.execute(
                     "SELECT step, name, labels, value FROM metrics WHERE run_id = ?",
-                    (NOW,),
+                    (RUN_ID,),
                 )
             }
             log = con.execute(
-                "SELECT step, level, msg FROM log WHERE run_id = ? ORDER BY seq",
-                (NOW,),
+                "SELECT step, attempt, stream, level, thread, ts, msg, fields "
+                "FROM log WHERE run_id = ? ORDER BY seq",
+                (RUN_ID,),
             ).fetchall()
+            version = con.execute("PRAGMA user_version").fetchone()[0]
         finally:
             con.close()
 
-        self.assertEqual([r[0] for r in runs], [NOW])
-        self.assertIsNotNone(runs[0][1], "a finished run has a finish time")
+        self.assertEqual([(r[0], r[1]) for r in runs], [(RUN_ID, NOW)])
+        self.assertIsNotNone(runs[0][2], "a finished run has a finish time")
+        self.assertGreater(version, 0, "the store names its schema version")
         self.assertEqual(
             sorted(steps),
             ["fake/raw", "fake/rendered_md"],
@@ -118,7 +136,7 @@ class RunStoreEndToEnd(unittest.TestCase):
         )
         for step, (_, run_id, state, attempt, msg) in steps.items():
             with self.subTest(step=step):
-                self.assertEqual(run_id, NOW)
+                self.assertEqual(run_id, RUN_ID)
                 self.assertEqual(state, "succeeded")
                 self.assertEqual(attempt, 1)
                 self.assertEqual(msg, "conversations.list")
@@ -128,10 +146,26 @@ class RunStoreEndToEnd(unittest.TestCase):
                 self.assertEqual(metrics[(step, "done", "")], 4)
                 self.assertEqual(metrics[(step, "queued", "")], 0)
                 self.assertEqual(metrics[(step, "rows_upserted", "table=t")], 12)
+                lines = {
+                    (msg, stream, level, thread, fields)
+                    for (s, _, stream, level, thread, _, msg, fields) in log
+                    if s == step
+                }
+                # Both pipes are captured, each line saying which it
+                # came from; a structured line is unwrapped into columns.
                 self.assertIn(
-                    (step, "info", "a plain line on stderr"),
-                    log,
-                    "a step's stderr is captured as log rows",
+                    ("a plain line on stderr", "stderr", "info", None, None), lines
+                )
+                self.assertIn(
+                    ("a plain line on stdout", "stdout", "info", None, None), lines
+                )
+                self.assertIn(
+                    ("slow", "stderr", "warn", "main", '{"attempts":3}'), lines
+                )
+                slow = next(r for r in log if r[0] == step and r[6] == "slow")
+                self.assertEqual(slow[1], 1, "the line names its attempt")
+                self.assertEqual(
+                    slow[5], "2369-04-15T00:00:01Z", "a line's own clock is kept"
                 )
 
     def test_the_store_leaves_no_doltlite_lock_sidecar(self) -> None:

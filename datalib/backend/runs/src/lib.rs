@@ -68,6 +68,12 @@ impl Default for Retention {
     }
 }
 
+/// Bumped whenever [`SCHEMA`] changes shape. A store carrying another
+/// version is deleted and remade rather than migrated: nothing in it is
+/// load-bearing, and a migration is code that would exist only to keep
+/// old log lines.
+pub const SCHEMA_VERSION: i32 = 2;
+
 /// The schema. `IF NOT EXISTS` throughout so opening an existing store is
 /// the same code path as making one. `log.seq` is the rowid, so a reader
 /// tailing "everything after N" needs no timestamp arithmetic.
@@ -93,9 +99,12 @@ CREATE TABLE IF NOT EXISTS log (
     seq     INTEGER PRIMARY KEY,
     run_id  TEXT NOT NULL,
     step    TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0,
     ts      TEXT NOT NULL,
+    stream  TEXT,
     level   TEXT NOT NULL,
     target  TEXT,
+    thread  TEXT,
     msg     TEXT NOT NULL,
     fields  TEXT
 );

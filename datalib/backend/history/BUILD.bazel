@@ -1,0 +1,31 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# A doltlite store's commit history, read the way the Manage screen shows
+# it: `dolt_log` walked from HEAD, with what each commit did to each
+# table. Read-only. Its own crate — third-party deps only, so Bazel-only
+# like the `<p>_config` crates — so that `datalib-http` can serve it
+# without linking the ingest framework, and so that the two-process
+# doltlite test can run exactly these statements against a live writer.
+rust_library(
+    name = "datalib_history",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_history",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "history_unittests",
+    size = "small",
+    crate = ":datalib_history",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

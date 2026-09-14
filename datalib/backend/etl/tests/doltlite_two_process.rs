@@ -233,6 +233,68 @@ fn a_churning_reader_never_makes_the_writers_commit_fail() {
     assert_committed_throughout(&writer, &reader);
 }
 
+/// The Manage screen's commit-history panel reads `dolt_log`,
+/// `dolt_commit_ancestors`, `dolt_diff_summary`, `dolt_diff_stat` and a
+/// `COUNT(*)` per table, none of which the churning reader above issues.
+/// Same bar: the writer must never see `commit conflict`.
+#[test]
+fn a_history_reader_never_makes_the_writers_commit_fail() {
+    let t = Scratch::new();
+    let mut writer = t.spawn(&[
+        "write",
+        "--db",
+        &t.db(),
+        "--seed",
+        "--pin-out",
+        &t.path("pin"),
+        "--max-commits",
+        "500",
+        "--interval-ms",
+        "0",
+        "--out",
+        &t.path("writer.json"),
+    ]);
+    t.await_file("pin", &mut writer);
+
+    let mut reader = t.spawn(&[
+        "history",
+        "--db",
+        &t.db(),
+        "--until",
+        &t.path("writer.json"),
+        "--rounds",
+        "100000",
+        "--out",
+        &t.path("history.json"),
+    ]);
+    t.wait("writer", &mut writer);
+    t.wait("reader", &mut reader);
+
+    let writer = t.report("writer.json");
+    if writer["dolt"] == Value::Bool(false) {
+        return;
+    }
+    let reader = t.report("history.json");
+    let commits = writer["commits"].as_array().map_or(0, Vec::len);
+    assert_eq!(
+        errors(&reader),
+        Vec::<String>::new(),
+        "reader errors (writer commits={commits})"
+    );
+    assert_eq!(
+        errors(&writer),
+        Vec::<String>::new(),
+        "writer errors (writer commits={commits}, reader opened={} commits_seen={})",
+        reader["opened"],
+        reader["commits_seen"]
+    );
+    assert!(
+        reader["commits_seen"].as_u64().unwrap_or(0) > 1,
+        "the reader never walked a history: {reader:?}"
+    );
+    assert_committed_throughout(&writer, &reader);
+}
+
 /// The shape `AGENTS.md`'s "One open per doltlite file" rule warns about, and
 /// the one neither scenario above reaches: two read-write pools on one file
 /// inside a single process. The rule is worth keeping — a second pool shares
