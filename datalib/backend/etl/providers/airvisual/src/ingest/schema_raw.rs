@@ -6,7 +6,11 @@
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
 use datalib_etl_macros::RawTable;
 
-pub const DATA_TABLES: &[&str] = &["airvisual_devices", "airvisual_samples"];
+pub const DATA_TABLES: &[&str] = &[
+    "airvisual_devices",
+    "airvisual_samples",
+    "airvisual_unplaced_samples",
+];
 
 /// The `file_checkpoint` scope holding which history files this source
 /// has finished with.
@@ -56,15 +60,37 @@ pub struct AirvisualSampleRow {
     pub source_file: String,
 }
 
+/// A line logged before the device's clock was set. Its timestamp is
+/// seconds since that boot, not since 1970, and every pre-clock boot
+/// counts from zero again — so it is keyed on its place in the file,
+/// which is stable because the device only appends. Kept whole so a
+/// re-ingest is idempotent and nothing the device wrote is thrown away.
+#[derive(Debug, Clone, RawTable)]
+#[raw_table(table = "airvisual_unplaced_samples")]
+pub struct AirvisualUnplacedSampleRow {
+    pub id_and_payload: WirePayload,
+    pub device_name: String,
+    pub source_file: String,
+    /// 1-based line number in `source_file`, the header being line 1.
+    pub line_no: i64,
+    /// The `Timestamp` cell as logged: seconds since the boot.
+    pub device_ts_s: i64,
+}
+
 /// Same shape as `yolink_readings`' id, minus the metric, so a
 /// time-series consumer keys every device's samples the same way.
 pub fn sample_id_recipe(device_name: &str, ts_ms: i64) -> String {
     format!("{device_name}#{ts_ms}")
 }
 
+pub fn unplaced_id_recipe(device_name: &str, source_file: &str, line_no: i64) -> String {
+    format!("{device_name}#{source_file}#{line_no}")
+}
+
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![AirvisualDeviceRow::ddl()];
     out.extend(AirvisualSampleRow::all_ddl());
+    out.push(AirvisualUnplacedSampleRow::ddl());
     out.push(datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));

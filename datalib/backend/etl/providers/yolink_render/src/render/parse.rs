@@ -11,6 +11,8 @@ use sqlx::Row;
 
 use datalib_etl_yolink::ingest::db_path_for;
 
+pub use datalib_etl_timeseries_render::series::Series;
+
 /// Outcome of a parse attempt.
 pub enum Parsed {
     /// The store's HEAD matches the render cursor: the single rendered
@@ -40,19 +42,6 @@ pub struct DeviceRow {
     /// re-open the store, and so the omission from the document is a
     /// visible decision rather than an accident of the query.
     pub family_device_id: String,
-}
-
-/// All readings for one (device, metric) pair, ascending by timestamp.
-/// Values are **as stored** — conversion to SI happens in the renderer,
-/// through [`crate::render::units`].
-#[derive(Debug, Clone)]
-pub struct Series {
-    pub device: String,
-    pub metric: String,
-    /// Unix milliseconds, ascending.
-    pub ts_ms: Vec<i64>,
-    /// Raw stored values, parallel to `ts_ms`.
-    pub values: Vec<f64>,
 }
 
 /// One `dolt_log()` entry — the store's own account of how it got here.
@@ -221,16 +210,12 @@ async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
         let ts_ms: i64 = r.get("ts_ms");
         let value: f64 = r.get("value");
         match out.last_mut() {
-            Some(s) if s.device == device && s.metric == metric => {
-                s.ts_ms.push(ts_ms);
-                s.values.push(value);
+            Some(s) if s.device == device && s.metric == metric => s.push(ts_ms, value),
+            _ => {
+                let mut s = Series::new(device, metric);
+                s.push(ts_ms, value);
+                out.push(s);
             }
-            _ => out.push(Series {
-                device,
-                metric,
-                ts_ms: vec![ts_ms],
-                values: vec![value],
-            }),
         }
     }
     Ok(out)
@@ -276,35 +261,14 @@ async fn load_scope_config(pool: &SqlitePool) -> Vec<ScopeConfigRow> {
 
 impl ParsedYolink {
     pub fn series_by_device(&self) -> BTreeMap<&str, Vec<&Series>> {
-        let mut out: BTreeMap<&str, Vec<&Series>> = BTreeMap::new();
-        for s in &self.series {
-            out.entry(s.device.as_str()).or_default().push(s);
-        }
-        out
+        datalib_etl_timeseries_render::series::by_device(&self.series)
     }
 
     pub fn latest_ts_ms(&self) -> Option<i64> {
-        self.series
-            .iter()
-            .filter_map(|s| s.ts_ms.last())
-            .max()
-            .copied()
+        datalib_etl_timeseries_render::series::latest_ts_ms(&self.series)
     }
 
     pub fn earliest_ts_ms(&self) -> Option<i64> {
-        self.series
-            .iter()
-            .filter_map(|s| s.ts_ms.first())
-            .min()
-            .copied()
-    }
-}
-
-impl Series {
-    pub fn len(&self) -> usize {
-        self.ts_ms.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.ts_ms.is_empty()
+        datalib_etl_timeseries_render::series::earliest_ts_ms(&self.series)
     }
 }

@@ -22,7 +22,10 @@ use datalib_etl::progress::Progress;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 
-use schema_raw::{full_ddl, AirvisualDeviceRow, AirvisualSampleRow, CURSOR_SCOPE, DATA_TABLES};
+use schema_raw::{
+    full_ddl, AirvisualDeviceRow, AirvisualSampleRow, AirvisualUnplacedSampleRow, CURSOR_SCOPE,
+    DATA_TABLES,
+};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -236,9 +239,24 @@ async fn ingest_one(db: &RawDb, device: &str, f: &ScannedFile) -> Result<parse::
         .into_iter()
         .map(|s| sample_row(device, s, &f.rel))
         .collect();
+    let unplaced: Vec<AirvisualUnplacedSampleRow> = parsed
+        .unplaced
+        .into_iter()
+        .map(|u| AirvisualUnplacedSampleRow {
+            id_and_payload: dr::WirePayload {
+                id: schema_raw::unplaced_id_recipe(device, &f.rel, u.line_no),
+                payload: u.payload,
+            },
+            device_name: device.to_string(),
+            source_file: f.rel.clone(),
+            line_no: u.line_no,
+            device_ts_s: u.device_ts_s,
+        })
+        .collect();
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = db.pool().begin().await?;
     bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+    bulk_upsert_in_tx(&mut tx, &unplaced, &now).await?;
     file_checkpoint::record_file(&mut tx, CURSOR_SCOPE, f).await?;
     tx.commit().await?;
     Ok(parsed.stats)
@@ -426,6 +444,44 @@ mod tests {
             .await,
             1
         );
+        e.db.close().await;
+    }
+
+    #[tokio::test]
+    async fn pre_clock_lines_land_in_the_unplaced_table_once() {
+        let e = env().await;
+        std::fs::write(
+            e.root.join("archive1/197001_AirVisual_values.txt"),
+            format!(
+                "{HEADER}{}{}",
+                line(254, "0.0", "683"),
+                line(338027, "", "350")
+            ),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let s = fetch(opts(&e, Some("kitchen"))).await.unwrap();
+            assert_eq!(s.samples, 0, "nothing placeable in time");
+        }
+        assert_eq!(
+            count(e.db.pool(), "SELECT COUNT(*) FROM airvisual_samples").await,
+            0
+        );
+        assert_eq!(
+            count(
+                e.db.pool(),
+                "SELECT COUNT(*) FROM airvisual_unplaced_samples"
+            )
+            .await,
+            2
+        );
+        let id: String = sqlx::query_scalar(
+            "SELECT id FROM airvisual_unplaced_samples ORDER BY line_no LIMIT 1",
+        )
+        .fetch_one(e.db.pool())
+        .await
+        .unwrap();
+        assert_eq!(id, "kitchen#archive1/197001_AirVisual_values.txt#2");
         e.db.close().await;
     }
 

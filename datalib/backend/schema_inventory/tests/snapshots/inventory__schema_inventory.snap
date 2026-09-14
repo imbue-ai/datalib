@@ -1048,6 +1048,21 @@ airvisual_samples_bookkeeping
     last_error
     volatile_payload
     tz_offset
+airvisual_unplaced_samples
+    id
+    payload
+    device_name
+    source_file
+    line_no
+    device_ts_s
+airvisual_unplaced_samples_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
 ingested_files
     scope
     rel_path

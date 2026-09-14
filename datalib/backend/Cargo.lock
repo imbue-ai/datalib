@@ -1056,6 +1056,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-etl-airvisual-render"
+version = "0.31.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "datalib-etl",
+ "datalib-etl-airvisual",
+ "datalib-etl-render",
+ "datalib-etl-timeseries-render",
+ "datalib-id",
+ "datalib-schema",
+ "sha2 0.11.0",
+ "sqlx",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "datalib-etl-apple-photos"
 version = "0.31.1"
 dependencies = [
@@ -1969,6 +1987,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-etl-timeseries-render"
+version = "0.31.1"
+dependencies = [
+ "anyhow",
+ "datalib-time",
+ "serde_json",
+]
+
+[[package]]
 name = "datalib-etl-whatsapp"
 version = "0.31.1"
 dependencies = [
@@ -2050,6 +2077,7 @@ dependencies = [
  "datalib-etl",
  "datalib-etl-macros",
  "datalib-etl-render",
+ "datalib-etl-timeseries-render",
  "datalib-etl-yolink",
  "datalib-schema",
  "datalib-time",

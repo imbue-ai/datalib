@@ -69,8 +69,19 @@ pub struct ParseStats {
     pub bad_lines: usize,
 }
 
+/// A line whose timestamp predates the clock being set. See
+/// `schema_raw::AirvisualUnplacedSampleRow`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Unplaced {
+    /// 1-based line number, the header being line 1.
+    pub line_no: i64,
+    pub device_ts_s: i64,
+    pub payload: String,
+}
+
 pub struct Parsed {
     pub samples: Vec<Sample>,
+    pub unplaced: Vec<Unplaced>,
     pub stats: ParseStats,
 }
 
@@ -104,6 +115,7 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
     }
 
     let mut out = Vec::new();
+    let mut unplaced = Vec::new();
     let mut stats = ParseStats::default();
     for (n, line) in lines.enumerate() {
         if line.trim().is_empty() {
@@ -122,8 +134,20 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
             );
             continue;
         };
+        let payload = {
+            let mut m = serde_json::Map::with_capacity(headers.len());
+            for (h, v) in headers.iter().zip(&fields) {
+                m.insert(h.to_string(), serde_json::Value::String(v.to_string()));
+            }
+            serde_json::Value::Object(m).to_string()
+        };
         if ts_s < CLOCK_SET_AFTER_S {
             stats.clock_unset += 1;
+            unplaced.push(Unplaced {
+                line_no: n as i64 + 2,
+                device_ts_s: ts_s,
+                payload,
+            });
             continue;
         }
         let mut sample = Sample {
@@ -154,16 +178,13 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
         if bad {
             stats.bad_lines += 1;
         }
-        let mut m = serde_json::Map::with_capacity(headers.len());
-        for (h, v) in headers.iter().zip(&fields) {
-            m.insert(h.to_string(), serde_json::Value::String(v.to_string()));
-        }
-        sample.payload = serde_json::Value::Object(m).to_string();
+        sample.payload = payload;
         out.push(sample);
     }
     stats.samples = out.len();
     Ok(Parsed {
         samples: out,
+        unplaced,
         stats,
     })
 }
@@ -232,13 +253,16 @@ mod tests {
     }
 
     #[test]
-    fn pre_clock_lines_are_dropped_and_counted() {
+    fn pre_clock_lines_are_kept_apart_with_their_place_in_the_file() {
         let body = "Date;Time;Timestamp;PM2_5(ug/m3);CO2(ppm);\n\
             1970/01/01;00:04:14;254;0.0;683;\n\
             2026/09/01;00:00:36;1788220836;1.0;425;\n";
         let p = parse(body, "t").unwrap();
         assert_eq!(p.stats.clock_unset, 1);
         assert_eq!(p.samples.len(), 1);
+        assert_eq!(p.unplaced.len(), 1);
+        assert_eq!((p.unplaced[0].line_no, p.unplaced[0].device_ts_s), (2, 254));
+        assert!(p.unplaced[0].payload.contains("\"CO2(ppm)\":\"683\""));
     }
 
     #[test]

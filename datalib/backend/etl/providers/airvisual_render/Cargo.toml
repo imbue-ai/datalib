@@ -1,0 +1,23 @@
+[package]
+name = "datalib-etl-airvisual-render"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_etl_airvisual_render"
+path = "src/lib.rs"
+
+[dependencies]
+datalib-etl = { path = "../.." }
+datalib-etl-render = { path = "../../render" }
+datalib-etl-timeseries-render = { path = "../../timeseries_render" }
+datalib-etl-airvisual = { path = "../airvisual" }
+datalib-id = { path = "../../../id" }
+datalib-schema = { path = "../../../schema" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing = "0.1"

@@ -274,10 +274,11 @@ pub fn plan(
             datalib_etl_google_takeout,
             datalib_etl_google_takeout_render
         ),
-        SourceType::Airvisual => ingest_only!(
+        SourceType::Airvisual => arm!(
             datalib_etl_airvisual_config::AirvisualConfig,
             datalib_etl_airvisual_config::AirvisualRenderConfig,
-            datalib_etl_airvisual
+            datalib_etl_airvisual,
+            datalib_etl_airvisual_render
         ),
         SourceType::Media => ingest_only!(
             datalib_etl_media_config::MediaConfig,

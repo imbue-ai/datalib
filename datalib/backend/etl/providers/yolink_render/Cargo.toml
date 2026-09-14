@@ -31,6 +31,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 
 datalib-schema = { path = "../../../schema" }
 datalib-etl-yolink = { path = "../yolink" }
+datalib-etl-timeseries-render = { path = "../../timeseries_render" }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,4 +1,4 @@
-//! Turn a whole YoLink raw store into one markdown page plus its plots.
+//! Turn a whole AirVisual raw store into one markdown page plus its plots.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -8,48 +8,47 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_timeseries_render::plot::{standalone_html, Trace};
+use datalib_etl_timeseries_render::text::{
+    human_gap, iso, median_gap, short, short_ts, thousands, yaml_safe,
+};
+use datalib_id::{entity_id_str, IdNamespace, Scope};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
-use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
-use super::parse::{ParsedYolink, Series};
-use datalib_etl_timeseries_render::plot::{standalone_html, Trace};
-use datalib_etl_timeseries_render::text::{
-    human_gap, iso, median_gap, pretty_json, short, short_ts, thousands, yaml_safe,
-};
-
+use super::parse::{ParsedAirvisual, Series};
 use super::units::{self, series_label, spec_for, Quantity, QUANTITIES};
 use super::RENDER_VERSION;
 
-/// Namespace for every UUIDv5 this renderer mints. A fixed, arbitrary
-/// UUID — the same role `GITHUB_UUID_NS` plays for that provider.
-pub static YOLINK_UUID_NS: Lazy<Uuid> = Lazy::new(|| {
-    Uuid::parse_str("6b1d6f2c-9c1a-5f7e-b0d4-2f9a7c4e0001").expect("valid yolink ns uuid")
-});
+const ID_NAMESPACE: IdNamespace = IdNamespace::Airvisual;
+const SOURCE_LABEL: &str = "AirVisual";
 
-/// The page's `markdown_uuid`. Derived from the stanza name, not from
-/// anything upstream: there is exactly one page per stanza, and it must
-/// keep its identity across every re-render.
+/// The page's `markdown_uuid`. There is exactly one page per source and
+/// no AirVisual-side object behind it, so the scope is the source id —
+/// the `SourceInstance` case `entity_ids.md` reserves for exactly this.
 pub fn document_uuid(source_id: &str) -> String {
-    Uuid::new_v5(
-        &YOLINK_UUID_NS,
-        format!("yolink:{source_id}:timeseries").as_bytes(),
+    entity_id_str(
+        ID_NAMESPACE,
+        Scope::SourceInstance(source_id),
+        "timeseries",
+        source_id,
     )
-    .to_string()
 }
 
+/// A device's row. Keyed on the configured device name rather than the
+/// serial because a copied folder may carry no serial, and a scope has
+/// to be present-or-never.
 pub fn device_uuid(source_id: &str, device: &str) -> String {
-    Uuid::new_v5(
-        &YOLINK_UUID_NS,
-        format!("yolink:{source_id}:device:{device}").as_bytes(),
+    entity_id_str(
+        ID_NAMESPACE,
+        Scope::SourceInstance(source_id),
+        "device",
+        device,
     )
-    .to_string()
 }
 
-/// Counts for the step's one-line run summary.
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
     pub devices: usize,
@@ -59,7 +58,7 @@ pub struct RenderSummary {
 }
 
 pub fn render_all(
-    parsed: &ParsedYolink,
+    parsed: &ParsedAirvisual,
     root: &Path,
     source_id: &str,
     progress: &Progress,
@@ -120,7 +119,7 @@ pub fn render_all(
     progress.inc(1);
     if parsed.head.is_none() {
         tracing::warn!(
-            event = "yolink_render_no_head",
+            event = "airvisual_render_no_head",
             source = source_id,
             "dolt_log() returned no HEAD; the render cursor stays put and the next run re-renders"
         );
@@ -138,7 +137,7 @@ struct PlotFacts {
 }
 
 fn render_plot(
-    parsed: &ParsedYolink,
+    parsed: &ParsedAirvisual,
     quantity: &Quantity,
     plots_dir: &Path,
 ) -> Result<Option<PlotFacts>> {
@@ -169,7 +168,6 @@ fn render_plot(
     if traces.is_empty() {
         return Ok(None);
     }
-    // Stable legend order regardless of how the rows came back.
     traces.sort_by(|a, b| a.name.cmp(&b.name));
 
     let subtitle = format!(
@@ -177,7 +175,7 @@ fn render_plot(
         traces.len(),
         thousands(points as i64),
         span.map(|(a, b)| format!("{} — {}", short_ts(a), short_ts(b)))
-            .unwrap_or_else(|| "no readings".into()),
+            .unwrap_or_else(|| "no samples".into()),
     );
     let html = standalone_html(quantity, &subtitle, &traces)?;
     let file = format!("{}.html", quantity.key);
@@ -192,25 +190,23 @@ fn render_plot(
     }))
 }
 
-/// [`spec_for`] with the failure spelled out. A metric with no entry in
-/// [`units::METRICS`] is a hard error, not a dropped series: silently
-/// omitting it would mean a new sensor kind renders a page that looks
-/// complete and isn't.
+/// [`spec_for`] with the failure spelled out. A column with no entry in
+/// [`units::METRICS`] is a hard error, not a dropped series.
 fn metric_spec(metric: &str) -> Result<&'static units::MetricSpec> {
     spec_for(metric).with_context(|| {
         format!(
-            "yolink metric {metric:?} has no unit mapping — add it to \
+            "airvisual column {metric:?} has no plot mapping — add it to \
              `render/units.rs::METRICS` (which quantity it plots on, its \
-             axis, and its conversion to SI)"
+             axis, and its unit)"
         )
     })
 }
 
-fn compute_fingerprint(parsed: &ParsedYolink) -> String {
+fn compute_fingerprint(parsed: &ParsedAirvisual) -> String {
     let mut h = Sha256::new();
     h.update(RENDER_VERSION.to_be_bytes());
-    h.update(b"|readings:");
-    h.update(parsed.reading_count.to_be_bytes());
+    h.update(b"|samples:");
+    h.update(parsed.sample_count.to_be_bytes());
     for s in &parsed.series {
         h.update(b"\n");
         h.update(s.device.as_bytes());
@@ -232,7 +228,7 @@ fn compute_fingerprint(parsed: &ParsedYolink) -> String {
 // ---------------------------------------------------------------- markdown
 
 fn render_markdown(
-    parsed: &ParsedYolink,
+    parsed: &ParsedAirvisual,
     source_id: &str,
     m_uuid: &str,
     fingerprint: &str,
@@ -245,7 +241,7 @@ fn render_markdown(
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
     let _ = writeln!(out, "source_fingerprint: {fingerprint}");
     let _ = writeln!(out, "source_id: {source_id}");
-    out.push_str("provider: yolink\n");
+    out.push_str("provider: airvisual\n");
     let _ = writeln!(out, "title: {}", yaml_safe(&page_title(source_id)));
     if let Some(ts) = &when_ts {
         let _ = writeln!(out, "when_ts: {}", yaml_safe(ts));
@@ -264,10 +260,10 @@ fn render_markdown(
 
     let _ = writeln!(
         out,
-        "{} device{} · {} readings across {} series{}.\n",
+        "{} device{} · {} samples across {} series{}.\n",
         parsed.devices.len(),
         if parsed.devices.len() == 1 { "" } else { "s" },
-        thousands(parsed.reading_count),
+        thousands(parsed.sample_count),
         parsed.series.len(),
         match (parsed.earliest_ts_ms(), parsed.latest_ts_ms()) {
             (Some(a), Some(b)) => format!(", {} — {}", short_ts(a), short_ts(b)),
@@ -275,8 +271,9 @@ fn render_markdown(
         }
     );
     out.push_str(
-        "Values are converted to SI on the way into each plot, so devices \
-         reporting in different units share one axis.\n\n",
+        "Every value is as the device logged it; the sampling interval follows \
+         the device's own sensor-mode schedule, so the markers are unevenly spaced \
+         by design.\n\n",
     );
 
     render_plot_sections(&mut out, plots);
@@ -287,7 +284,7 @@ fn render_markdown(
 
 fn render_plot_sections(out: &mut String, plots: &[(&Quantity, PlotFacts)]) {
     if plots.is_empty() {
-        out.push_str("## Plots\n\n*(no readings yet — nothing to plot)*\n\n");
+        out.push_str("## Plots\n\n*(no samples yet — nothing to plot)*\n\n");
         return;
     }
     out.push_str("## Plots\n\n");
@@ -325,50 +322,45 @@ fn render_plot_sections(out: &mut String, plots: &[(&Quantity, PlotFacts)]) {
     }
 }
 
-fn render_device_sections(out: &mut String, parsed: &ParsedYolink, source_id: &str) {
+fn render_device_sections(out: &mut String, parsed: &ParsedAirvisual, source_id: &str) {
     out.push_str("## Devices\n\n");
     if parsed.devices.is_empty() {
-        out.push_str("*(no devices configured)*\n\n");
+        out.push_str("*(no devices)*\n\n");
         return;
     }
-    // Device secrets stay out of the document on purpose — say so, so
-    // nobody \"fixes\" the omission later.
-    out.push_str(
-        "Per-device read credentials (`family_device_id`, `device_udid`) are \
-         deliberately omitted: the pair grants access to that device's entire \
-         history.\n\n",
-    );
 
     let by_device = parsed.series_by_device();
-    for (idx, dev) in parsed.devices.iter().enumerate() {
+    for dev in &parsed.devices {
         let uuid = device_uuid(source_id, &dev.name);
         let _ = writeln!(
             out,
-            "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--yolink\">\n"
+            "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--airvisual\">\n"
         );
         let _ = writeln!(out, "### {}\n", dev.name);
-        let _ = writeln!(
-            out,
-            "*{} · configured from {}{}*\n",
-            dev.kind,
-            iso(dev.start_ms).unwrap_or_else(|| dev.start_ms.to_string()),
-            match dev.last_ts_ms.and_then(iso) {
-                Some(t) => format!(" · cursor at {t}"),
-                None => " · no readings fetched yet".to_string(),
-            },
-        );
-        let series = by_device.get(dev.name.as_str());
-        match series {
+        let mut facts: Vec<String> = Vec::new();
+        if let Some(m) = &dev.model {
+            facts.push(format!("model {m}"));
+        }
+        if let Some(s) = &dev.serial_number {
+            facts.push(format!("serial `{s}`"));
+        }
+        if let Some(tz) = &dev.timezone {
+            facts.push(format!("clock in {tz}"));
+        }
+        facts.push(match dev.last_ts_ms.and_then(iso) {
+            Some(t) => format!("last sample {t}"),
+            None => "no samples yet".to_string(),
+        });
+        let _ = writeln!(out, "*{}*\n", facts.join(" · "));
+        match by_device.get(dev.name.as_str()) {
             Some(list) if !list.is_empty() => render_metric_table(out, list),
-            _ => out.push_str("*(no readings)*\n\n"),
+            _ => out.push_str("*(no samples)*\n\n"),
         }
         out.push_str("</div>\n\n");
-        let _ = idx;
     }
 
-    // A device row can exist with no readings; readings can also exist
-    // for a device the config no longer lists. Surface the second case
-    // rather than dropping it silently — those series still plot.
+    // Samples can exist for a device the config no longer names. Say so
+    // rather than dropping them — those series still plot.
     let orphans: Vec<&str> = by_device
         .keys()
         .copied()
@@ -377,9 +369,9 @@ fn render_device_sections(out: &mut String, parsed: &ParsedYolink, source_id: &s
     if !orphans.is_empty() {
         let _ = writeln!(
             out,
-            "> **{} device{} with readings but no `yolink_devices` row:** {}. \
-             Their series still plot; they were most likely renamed or removed \
-             from the download config.\n",
+            "> **{} device{} with samples but no `airvisual_devices` row:** {}. \
+             Their series still plot; the device was most likely renamed in the \
+             config.\n",
             orphans.len(),
             if orphans.len() == 1 { "" } else { "s" },
             orphans
@@ -393,13 +385,10 @@ fn render_device_sections(out: &mut String, parsed: &ParsedYolink, source_id: &s
 
 fn render_metric_table(out: &mut String, series: &[&Series]) {
     out.push_str(
-        "| Metric | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |\n",
+        "| Column | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |\n",
     );
     out.push_str("| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |\n");
     for s in series {
-        // A metric with no unit mapping already failed the render in
-        // `render_plot`; if that ever changes, show the raw tag rather
-        // than panicking here.
         let (unit, si): (&str, Box<dyn Fn(f64) -> f64>) = match spec_for(&s.metric) {
             Some(spec) => (spec.si_unit, Box::new(|v| (spec.to_si)(v))),
             None => ("?", Box::new(|v| v)),
@@ -410,7 +399,7 @@ fn render_metric_table(out: &mut String, series: &[&Series]) {
         let mean = vals.iter().sum::<f64>() / vals.len() as f64;
         let _ = writeln!(
             out,
-            "| `{}` | {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} | {} |",
+            "| `{}` | {} | {} | {:.1} | {:.1} | {:.1} | {:.1} | {} | {} | {} |",
             s.metric,
             unit,
             thousands(s.len() as i64),
@@ -428,43 +417,35 @@ fn render_metric_table(out: &mut String, series: &[&Series]) {
     out.push('\n');
 }
 
-/// The store's own provenance — the doltlite HEAD hash and the per-commit
-/// hashes and wall-clock dates — is deliberately NOT rendered here, only
-/// the counts.
-fn render_store_section(out: &mut String, parsed: &ParsedYolink) {
+/// Counts only — the doltlite hashes and dates stay out of the page.
+fn render_store_section(out: &mut String, parsed: &ParsedAirvisual) {
     out.push_str("## Store\n\n");
     out.push_str("| | |\n| --- | --- |\n");
     let _ = writeln!(out, "| Commits | {} |", parsed.commits.len());
-    let _ = writeln!(out, "| Readings | {} |", thousands(parsed.reading_count));
+    let _ = writeln!(out, "| Samples | {} |", thousands(parsed.sample_count));
+    let _ = writeln!(out, "| History files read | {} |", parsed.files.len());
     let _ = writeln!(
         out,
-        "| Readings with a recorded fetch error | {} |",
-        thousands(parsed.reading_errors)
+        "| History bytes read | {} |",
+        thousands(parsed.files.iter().map(|f| f.size_bytes).sum())
     );
     out.push('\n');
-
-    for scope in &parsed.scope_config {
-        let _ = writeln!(
-            out,
-            "### Configured scope — `{}`\n\n*Recorded {}.*\n\n```json\n{}\n```\n",
-            scope.scope,
-            scope.updated_at,
-            pretty_json(&scope.config),
-        );
+    if !parsed.files.is_empty() {
+        out.push_str("| File | Bytes |\n| --- | ---: |\n");
+        for f in &parsed.files {
+            let _ = writeln!(out, "| `{}` | {} |", f.rel_path, thousands(f.size_bytes));
+        }
+        out.push('\n');
     }
 }
 
 // ------------------------------------------------------------- grid rows
 
-/// One row for the page plus one per device. The device rows are what
-/// make a sensor findable in the grid at all — searching `main_fridge`
-/// should land on something, and the page row's text is a summary, not
-/// an index of every device.
-/// A row that will not validate is dropped and recorded on `problems`
-/// rather than failing the source's render — see
-/// `GridRowBuilder::build_or_record`.
+/// One row for the page plus one per device, so a device is findable in
+/// the grid by name. A row that will not validate is dropped and
+/// recorded on `problems` rather than failing the source's render.
 fn build_grid_rows(
-    parsed: &ParsedYolink,
+    parsed: &ParsedAirvisual,
     source_id: &str,
     m_uuid: &str,
     md_rel: &str,
@@ -474,9 +455,9 @@ fn build_grid_rows(
     let by_device = parsed.series_by_device();
 
     let mut doc_text = format!(
-        "{title}\n{} devices, {} readings",
+        "{title}\n{} devices, {} samples",
         parsed.devices.len(),
-        parsed.reading_count
+        parsed.sample_count
     );
     for q in QUANTITIES {
         doc_text.push('\n');
@@ -485,9 +466,9 @@ fn build_grid_rows(
 
     let mut rows: Vec<GridRow> = GridRow::builder()
         .uuid(m_uuid.to_string())
-        .provider(Provider::Yolink)
+        .provider(Provider::Airvisual)
         .kind("Sensor Timeseries")
-        .source_label("YoLink")
+        .source_label(SOURCE_LABEL)
         .when_ts(parsed.latest_ts_ms().and_then(iso))
         .conversation_name(Some(title.clone()))
         .conversation_uuid(m_uuid.to_string())
@@ -495,6 +476,9 @@ fn build_grid_rows(
         .text(doc_text)
         .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(m_uuid.to_string()))
+        .upstream_id(Some(source_id.to_string()))
+        .upstream_entity_kind(Some("timeseries".to_string()))
+        .upstream_scope(Some(source_id.to_string()))
         .build_or_record(source_id, m_uuid, RENDER_VERSION, problems)
         .into_iter()
         .collect();
@@ -502,7 +486,10 @@ fn build_grid_rows(
     for (idx, dev) in parsed.devices.iter().enumerate() {
         let uuid = device_uuid(source_id, &dev.name);
         let series = by_device.get(dev.name.as_str());
-        let mut text = format!("{} ({})", dev.name, dev.kind);
+        let mut text = dev.name.clone();
+        if let Some(m) = &dev.model {
+            let _ = write!(text, " (AirVisual model {m})");
+        }
         if let Some(list) = series {
             for s in list {
                 let unit = spec_for(&s.metric).map(|x| x.si_unit).unwrap_or("?");
@@ -516,9 +503,9 @@ fn build_grid_rows(
         rows.extend(
             GridRow::builder()
                 .uuid(uuid)
-                .provider(Provider::Yolink)
+                .provider(Provider::Airvisual)
                 .kind("Sensor Device")
-                .source_label("YoLink")
+                .source_label(SOURCE_LABEL)
                 .when_ts(when)
                 .author(Some(dev.name.clone()))
                 .channel(Some(dev.name.clone()))
@@ -528,8 +515,9 @@ fn build_grid_rows(
                 .entire_chat(format!("/chat/{m_uuid}"))
                 .text(text)
                 .qmd_path(Some(md_rel.to_string()))
-                .upstream_id(Some(dev.kind.clone()))
+                .upstream_id(Some(dev.name.clone()))
                 .upstream_entity_kind(Some("device".to_string()))
+                .upstream_scope(Some(source_id.to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
                 .build_or_record(source_id, m_uuid, RENDER_VERSION, problems),
         );
@@ -537,10 +525,8 @@ fn build_grid_rows(
     rows
 }
 
-// ---------------------------------------------------------------- helpers
-
 fn page_title(source_id: &str) -> String {
-    format!("YoLink sensors — {source_id}")
+    format!("AirVisual monitors — {source_id}")
 }
 
 pub fn output_paths(root: &Path, source_id: &str) -> (PathBuf, PathBuf) {
@@ -553,21 +539,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn uuids_are_stable_and_stanza_scoped() {
-        let a = document_uuid("yolink");
-        assert_eq!(a, document_uuid("yolink"), "must be deterministic");
-        assert_ne!(a, document_uuid("yolink-2"), "must be stanza-scoped");
+    fn uuids_are_stable_and_source_scoped() {
+        let a = document_uuid("air-cucina");
+        assert_eq!(a, document_uuid("air-cucina"), "must be deterministic");
+        assert_ne!(a, document_uuid("air-2"), "must be source-scoped");
         assert_ne!(
-            device_uuid("yolink", "fridge"),
-            device_uuid("yolink", "freezer")
+            device_uuid("air-cucina", "Cucina"),
+            device_uuid("air-cucina", "Schlafzimmer")
         );
-        assert_ne!(document_uuid("yolink"), device_uuid("yolink", "fridge"));
+        assert_ne!(
+            document_uuid("air-cucina"),
+            device_uuid("air-cucina", "Cucina")
+        );
     }
 
     #[test]
     fn unknown_metric_is_an_error_naming_the_fix() {
-        let err = metric_spec("pressure_psi").unwrap_err().to_string();
-        assert!(err.contains("pressure_psi"), "{err}");
+        let err = metric_spec("pressure_pa").unwrap_err().to_string();
+        assert!(err.contains("pressure_pa"), "{err}");
         assert!(err.contains("units.rs"), "{err}");
     }
 }
