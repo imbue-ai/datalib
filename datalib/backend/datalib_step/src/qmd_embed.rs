@@ -2,9 +2,10 @@
 //! semantic search reaches it. Optional per source — a group without
 //! this step is keyword-searchable and nothing more.
 //!
-//! Runs `qmd embed -c <group>` until the collection has nothing pending,
-//! or until `params.budget_minutes` runs out, in which case the step
-//! stops with an `incomplete` outcome and the next run resumes it.
+//! Reads the shared `unified_index/qmd_index` (its input) and runs
+//! `qmd embed -c <group>` until the collection has nothing pending, or
+//! until `params.budget_minutes` runs out, in which case the step stops
+//! with an `incomplete` outcome and the next run resumes it.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -102,8 +103,8 @@ pub async fn run(
         "qmd_embed: done"
     );
 
-    // As with `qmd_index`: the vectors live in the shared store, and the
-    // step's own tree is an empty directory.
+    // The vectors live in the shared store; the step's own tree is an
+    // empty directory, created so the tree the id names exists.
     std::fs::create_dir_all(data_root.join(&env.step))?;
 
     if !outcome.complete {

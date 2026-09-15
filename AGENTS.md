@@ -291,15 +291,15 @@ reference doc it relates to.
   proposal, only partly built — read its banner); the descriptors you
   actually edit are `datalib/ui/src/config/catalog.ts`.
 - [`docs/dev/plans/completed/per_source_qmd_steps.md`](docs/dev/plans/completed/per_source_qmd_steps.md)
-  — **built (2026-09-15)**: the qmd work is `<g>/qmd_index` +
-  `<g>/qmd_embed` per source, not one global step. `qmd_index` writes
-  qmd's `documents` rows itself (measured: qmd cannot tell — its own
-  `update` cannot be scoped to a collection); `qmd_embed` runs
-  `qmd embed -c` under the scheduler's `lock`, reading qmd's output
-  rather than its exit code, which lies twice (a refused second embed
-  and a timed-out session both exit 0). Read it before touching
-  `qmd_indexer`, and for the `render_version`-style rule that makes a
-  qmd bump re-embed.
+  — **built (2026-09-15)**: embedding is `<g>/qmd_embed` per source,
+  under the scheduler's `lock`, stoppable and resumable on its own;
+  the keyword index stays one `qmd update` over every collection,
+  reporting a content version so the embed steps go stale exactly when
+  something changed. The embed loop reads qmd's output rather than its
+  exit code, which lies twice (a refused second embed and a timed-out
+  session both exit 0). Read it before touching `qmd_indexer`, and for
+  what was tried and backed out (a per-source keyword index that wrote
+  qmd's tables itself).
 - [`docs/dev/plans/qmd_index_ui.md`](docs/dev/plans/qmd_index_ui.md) — the grid's
   `Indexed` / `Embedded` columns and the `qmd_state` endpoint behind
   them (built), plus the design for selective re-indexing and live
@@ -467,8 +467,8 @@ datalib/
                    need to actually run a pipeline.
     datalib_step/  `datalib-step`: the built-in step program. A step
                    with no `command` runs it; it reads its function
-                   (ingest, render_markdown, qmd_index, qmd_embed,
-                   grid_index) and its group's type from the environment.
+                   (ingest, render_markdown, qmd_embed, grid_index,
+                   qmd_index) and its group's type from the environment.
     etl/           shared ingest machinery (raw stores, blob CAS,
                    render cursors) — the download side, and the one
                    place a downloader's dependencies stop.
@@ -589,17 +589,18 @@ A built-in step writes no `command`: it runs `datalib-step`, which
 reads its function and its group's `type` from the environment and
 writes the tree its id names. Each source is a group with an `ingest`
 step (bring the data in, from an origin or from files on disk), a
-`render_markdown` step, a `qmd_index` step (its documents in the shared
-qmd store at `unified_index/qmd_index/`, as one collection per group,
-so a `source_id:` search scopes retrieval instead of filtering its
-results) and, optionally, a `qmd_embed` step (the vectors behind
-semantic search — the slow one, run one source at a time under
-`lock = "qmd_embed"`, and stoppable and resumable per source). One
-shared fan-in step under the `unified_index` group stacks every
-source's `render_markdown` tree: `grid_index` (the SQL index at
-`unified_index/grid_index/db.doltlite_db`). Both stores are read by
-the `unified_index` applet, which serves the grid — `datalib-http` does
-not open them. A render store is readable at every commit: the
+`render_markdown` step and, optionally, a `qmd_embed` step (the vectors
+behind semantic search — the slow one, so it is per source, run one at
+a time under `lock = "qmd_embed"`, and stoppable and resumable on its
+own). Two shared fan-in steps under the `unified_index` group index
+every source's `render_markdown` tree: `grid_index` (the SQL index at
+`unified_index/grid_index/db.doltlite_db`) and `qmd_index` (the qmd
+keyword index at `unified_index/qmd_index/`, one qmd collection per
+group so a `source_id:` search scopes retrieval instead of filtering
+its results; `qmd update` rescans every collection, which is fast, and
+the step reports a content version so each `qmd_embed` re-runs exactly
+when something changed). Both stores are read by the `unified_index`
+applet, which serves the grid — `datalib-http` does not open them. A render store is readable at every commit: the
 documents between two checkpoints share one SQL transaction, each
 written whole inside it, and the end-of-run sweep with its cursor is
 one more, so a checkpoint, a Ctrl-C or a rescue commit never publishes

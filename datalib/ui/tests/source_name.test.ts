@@ -110,6 +110,23 @@ command = "datalib-applet unified_index"
     expect(byId.get("unified_index/qmd_index")?.name).toBe("Unified Index (QMD)");
   });
 
+  it("labels a source's embedding step from the group's name", () => {
+    const text = `${OTHER}
+[[groups]]
+id = "slack"
+name = "Work Slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+`;
+    const embed = listSteps(text).find((e) => e.id === "slack/qmd_embed");
+    expect(embed?.name).toBe("Work Slack (embeddings)");
+    expect(embed?.phase).toBe("embed");
+  });
+
   it("labels the applet too, which has no config key to name it", () => {
     const applet = listSteps(OTHER).find((e) => e.kind === "applet");
     expect(applet?.id).toBe("unified_index");

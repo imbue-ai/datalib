@@ -54,6 +54,7 @@ import {
   listSteps,
   appendSource,
   ownedSteps,
+  QMD_INDEX_STEP,
   removeSteps,
   describeGroup,
   renameGroup,
@@ -232,6 +233,12 @@ function downstreamOf(step: ConfiguredStep): ConfiguredStep[] {
   }
   return out;
 }
+
+/// Whether the config has the shared qmd index an embedding step reads;
+/// the wizard offers semantic search only when it does.
+const hasQmdIndex = computed(() =>
+  sources.value.some((s) => s.kind === "step" && s.id === QMD_INDEX_STEP),
+);
 
 /// What a row stands for: a `[[groups]]` entry, or one of the two
 /// kinds of entry filed under it. The server assembles the row
@@ -2409,6 +2416,7 @@ onUnmounted(() => {
       v-if="wizardOpen"
       :key="wizardKey"
       :taken-ids="takenIds"
+      :has-qmd-index="hasQmdIndex"
       :editing="editing"
       @close="closeWizard"
       @submit="onWizardSubmit"

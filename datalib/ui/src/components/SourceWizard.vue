@@ -40,6 +40,7 @@ import {
   seedFieldValues,
   slugify,
   stepIdFor,
+  QMD_INDEX_STEP,
   suggestId,
   type ConfiguredGroup,
   type FieldValues,
@@ -72,6 +73,11 @@ const props = defineProps<{
   /// Group ids already in the config, plus the id of every step outside
   /// a group, so a new source can't land on a tree that exists.
   takenIds: Set<string>;
+  /// Whether the config has the shared qmd index step an embedding step
+  /// reads. Without it there is nothing for one to read, so the form
+  /// offers none — an input naming a step that does not exist is a
+  /// config the loader refuses outright.
+  hasQmdIndex: boolean;
   /// Present → edit that source instead of creating one. `steps` holds
   /// whichever of its two steps the config has; one it lacks is written
   /// on save, and the form says so.
@@ -154,8 +160,9 @@ const renders = computed(() => providerRenders.value && renderWanted.value);
 /// that way until they say otherwise.
 const embedWanted = ref(props.editing ? !!props.editing.steps.embed : true);
 
-/// Does this source write an embedding step — it renders, and asked.
-const embeds = computed(() => renders.value && embedWanted.value);
+/// Does this source write an embedding step — it renders, asked, and
+/// there is a shared index for the step to read.
+const embeds = computed(() => renders.value && embedWanted.value && props.hasQmdIndex);
 
 /// The fields the form shows for one phase: the descriptor's, less any
 /// whose gate is shut.
@@ -1065,13 +1072,25 @@ function submit() {
             </label>
             <label v-if="renders" class="wiz-field wiz-inline">
               <span class="wiz-label">Semantic search</span>
-              <input v-model="embedWanted" type="checkbox" class="wiz-bool" />
+              <input
+                v-model="embedWanted"
+                type="checkbox"
+                class="wiz-bool"
+                :disabled="!hasQmdIndex"
+              />
               <small class="wiz-help">
-                Keyword search covers every rendered source through the shared index. Semantic
-                search needs a further step, <code>{{ stepIdFor(groupId || "…", "embed") }}</code>,
-                which computes a vector for every document — slow the first time, one source at
-                a time, and stoppable and resumable from this screen. Turn it off for a source
-                that is large and rarely searched by meaning.
+                <template v-if="hasQmdIndex">
+                  Keyword search covers every rendered source through the shared index. Semantic
+                  search needs a further step,
+                  <code>{{ stepIdFor(groupId || "…", "embed") }}</code>, which computes a vector for
+                  every document — slow the first time, one source at a time, and stoppable and
+                  resumable from this screen. Turn it off for a source that is large and rarely
+                  searched by meaning.
+                </template>
+                <template v-else>
+                  Not available: this config has no <code>{{ QMD_INDEX_STEP }}</code> step for an
+                  embedding step to read.
+                </template>
               </small>
             </label>
           </section>

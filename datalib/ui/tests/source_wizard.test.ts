@@ -3,7 +3,7 @@ import { mount, type VueWrapper } from "@vue/test-utils";
 import SourceWizard from "../src/components/SourceWizard.vue";
 
 function open() {
-  return mount(SourceWizard, { props: { takenIds: new Set<string>() } });
+  return mount(SourceWizard, { props: { takenIds: new Set<string>(), hasQmdIndex: true } });
 }
 
 /// Advance past the type picker into the form, on the first type that

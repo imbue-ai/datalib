@@ -187,6 +187,12 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(toml).toContainText(`path = "${SCAN_DIR}"`);
     await expect(toml).toContainText('function = "render_markdown"');
     await expect(toml).toContainText('inputs = ["pdfs/ingest"]');
+    // Semantic search reads the shared qmd index, which this test
+    // removed above, so the form offers none and writes none.
+    await expect(
+      wizard.locator('.wiz-field:has(> .wiz-label:text-is("Semantic search")) input.wiz-bool'),
+    ).toBeDisabled();
+    await expect(toml).not.toContainText("qmd_embed");
 
     await wizard.getByRole("button", { name: "Add source" }).click();
     await expect(wizard).toHaveCount(0);

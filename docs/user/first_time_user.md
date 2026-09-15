@@ -407,7 +407,7 @@ faster.
 │   └── …
 ├── unified_index/                  # the shared indexes, rebuildable
 │   ├── grid_index/db.doltlite_db   #   grid rows + markdowns + edges
-│   └── qmd_index/qmd/index.sqlite  #   the search index, one collection per source
+│   └── qmd_index/qmd/index.sqlite  #   the qmd search index, one collection per source
 └── system/                         # everything that isn't a source
     ├── dag_state.json              # scheduler state (which steps are up to date)
     ├── api-token                   # the running server's bearer token
