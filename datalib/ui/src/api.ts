@@ -30,6 +30,13 @@ export type SearchRow = {
   // *type*. Two Slack workspaces both say "Slack"; source_id is what
   // separates them.
   source: string;
+  // The `grid_rows.provider` tag behind `source` (`slack`, `claude`).
+  provider: string;
+  // `source` and `source_id` resolved for the grid's Provider and
+  // Source columns, by the applet from the config: the configured
+  // source's own mark (Gmail, not Mail) and the group's name.
+  provider_ref?: Identity;
+  source_ref?: Identity;
   // The **id** of the configured source this row came from: the group's
   // directory under the data root (the first segment of its qmd_path).
   // Empty when the row has no rendered document. The name a person gave
@@ -82,6 +89,8 @@ export type QueryEcho = {
 
 export type SearchResponse = {
   query_echo: QueryEcho;
+  // The columns the rows carry, typed — see `ColumnSpec`.
+  columns: ColumnSpec[];
   rows: SearchRow[];
   total_estimated: number;
   // Backend-side errors that don't fail the response — e.g. the
@@ -649,8 +658,10 @@ export type ManagePhase = "ingest" | "render" | "index" | "other";
 export type ColumnType =
   | "text"
   | "count"
+  | "number"
   | "bytes"
   | "timestamp"
+  | "datetime"
   | "timeseries"
   | "identity"
   | "status"

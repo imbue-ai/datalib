@@ -9,7 +9,6 @@
 //! label.
 
 mod activity;
-mod catalog;
 mod group;
 mod status;
 
@@ -19,7 +18,7 @@ use std::sync::{LazyLock, Mutex};
 use axum::extract::{Query, State};
 use axum::Json;
 use datalib_columns::{
-    Action, Chip, ColumnSpec, ColumnType, Identity, Sample, Segment, Timeseries,
+    source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Sample, Segment, Timeseries,
 };
 use datalib_dag::written::{WrittenApplet, WrittenEntries, WrittenGroup, WrittenStep};
 use datalib_dag::{Diagnostic, EntryKind, Severity};
@@ -707,7 +706,7 @@ impl RowCtx<'_> {
                     .as_deref()
                     .and_then(|g| self.snap.written.groups.iter().find(|x| x.id == g))
                     .and_then(|g| g.r#type.as_deref())
-                    .map(|t| catalog::source_type(t, &s.params));
+                    .map(|t| source_catalog::source_type(t, &s.params));
                 let name = Identity {
                     id: id.clone(),
                     label,
@@ -728,7 +727,7 @@ impl RowCtx<'_> {
                 Phase::Other,
                 a.r#type
                     .as_deref()
-                    .map(|t| catalog::source_type(t, &serde_json::Value::Null)),
+                    .map(|t| source_catalog::source_type(t, &serde_json::Value::Null)),
             ),
         };
 
@@ -966,7 +965,7 @@ impl RowCtx<'_> {
                     })
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
-                catalog::source_type(t, &ingest)
+                source_catalog::source_type(t, &ingest)
             }),
             dropped: dropped.cloned(),
             status,

@@ -7,12 +7,16 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # that downloads. See docs/dev/plans/data_centric_ui.md §2.
 rust_library(
     name = "datalib_columns",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/lib.rs",
+        "src/source_catalog.rs",
+    ],
     crate_name = "datalib_columns",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:strum",
     ],
 )
@@ -22,6 +26,5 @@ rust_test(
     size = "small",
     crate = ":datalib_columns",
     edition = "2021",
-    # Test-only: the strum/serde agreement test needs a concrete format.
-    deps = ["@datalib_crates//:serde_json"],
+    deps = [],
 )

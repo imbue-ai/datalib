@@ -34,7 +34,6 @@ rust_library(
         "src/lib.rs",
         "src/lock.rs",
         "src/manage/activity.rs",
-        "src/manage/catalog.rs",
         "src/manage/group.rs",
         "src/manage/mod.rs",
         "src/manage/status.rs",

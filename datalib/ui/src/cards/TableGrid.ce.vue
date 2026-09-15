@@ -17,6 +17,8 @@ import {
   type ColDef,
   type GetContextMenuItemsParams,
   type GridApi,
+  type GridOptions,
+  type RowClickedEvent,
   type GridReadyEvent,
   type ICellRendererComp,
   type ICellRendererParams,
@@ -56,8 +58,16 @@ const props = withDefaults(
     actions?: Record<string, (row: T) => void>;
     /// Columns the card adds beside the declared ones, AG Grid's way.
     extraColumns?: ColDef<T>[];
+    /// Per-field refinements of a declared column, AG Grid's way —
+    /// a width, a tooltip, a formatter the type cannot know. Merged
+    /// over the typed definition, so a card can also override it.
+    columnOverrides?: Record<string, ColDef<T>>;
     contextMenu?: (params: GetContextMenuItemsParams<T>) => (MenuItemDef<T> | DefaultMenuItem)[];
     selectable?: boolean;
+    /// Everything else AG Grid takes, for the card that needs it. The
+    /// viewer's own settings — columns, rows, theme — win.
+    gridOptions?: GridOptions<T>;
+    defaultColDef?: ColDef<T>;
   }>(),
   { rowKey: "key", tree: false, windowSecs: 300, selectable: false },
 );
@@ -70,6 +80,7 @@ const emit = defineEmits<{
   edit: [row: T, field: string, value: string];
   /// A `markdown_uuid` cell was clicked.
   openDocument: [uuid: string];
+  rowClick: [e: RowClickedEvent<T>];
   rowGroupOpened: [e: RowGroupOpenedEvent<T>];
 }>();
 
@@ -403,8 +414,10 @@ class ActionsRenderer implements ICellRendererComp<T> {
 const WIDTH: Record<ColumnType, number> = {
   text: 150,
   count: 90,
+  number: 90,
   bytes: 110,
   timestamp: 150,
+  datetime: 165,
   timeseries: 140,
   identity: 120,
   status: 96,
@@ -497,6 +510,19 @@ function colDef(spec: ColumnSpec, index: number): ColDef<T> {
           cellStyle: { "text-align": "right" },
           valueFormatter: (p) => (typeof p.value === "number" ? p.value.toLocaleString() : ""),
         };
+      case "number":
+        return {
+          cellStyle: { "text-align": "right" },
+          valueFormatter: (p) =>
+            typeof p.value === "number"
+              ? p.value.toLocaleString(undefined, { maximumFractionDigits: 3 })
+              : "",
+        };
+      case "datetime":
+        return {
+          comparator: compareStamps,
+          valueFormatter: (p) => (typeof p.value === "string" && p.value ? formatStamp(p.value) : ""),
+        };
       case "actions":
         return {
           sortable: false,
@@ -530,7 +556,7 @@ function colDef(spec: ColumnSpec, index: number): ColDef<T> {
         return {};
     }
   })();
-  return { ...base, ...typed };
+  return { ...base, ...typed, ...props.columnOverrides?.[f] };
 }
 
 const columnDefs = computed<ColDef<T>[]>(() => [
@@ -590,6 +616,8 @@ const pathOf = (r: T) => r.path as string[];
   <div class="tg-root">
     <AgGridVue
       class="tg-grid"
+      :gridOptions="gridOptions"
+      :defaultColDef="defaultColDef"
       :theme="gridTheme"
       :columnDefs="columnDefs"
       :rowData="rows"
@@ -605,6 +633,7 @@ const pathOf = (r: T) => r.path as string[];
       :getContextMenuItems="contextMenu"
       @grid-ready="onGridReady"
       @cell-double-clicked="onCellDoubleClicked"
+      @row-clicked="(e: RowClickedEvent<T>) => emit('rowClick', e)"
       @row-group-opened="(e: RowGroupOpenedEvent<T>) => emit('rowGroupOpened', e)"
     />
   </div>

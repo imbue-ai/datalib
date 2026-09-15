@@ -11,6 +11,8 @@
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
+pub mod source_catalog;
+
 /// What a cell holds, and so how it is drawn.
 #[derive(
     Debug,
@@ -31,11 +33,18 @@ pub enum ColumnType {
     Text,
     /// An integer count, shown with grouped digits.
     Count,
+    /// A float, shown to a few decimals, right-aligned.
+    Number,
     /// A byte count, shown as a human size with the exact figure on hover.
     Bytes,
     /// An ISO-8601 stamp, shown relative ("7 days ago") with the exact
-    /// stamp on hover; sorts on the instant.
+    /// stamp on hover; sorts on the instant. For a stamp about *now* —
+    /// when something last ran.
     Timestamp,
+    /// An ISO-8601 stamp, shown as the date and time it names; sorts on
+    /// the instant. For a stamp that is the record's — when a message
+    /// was sent.
+    Datetime,
     /// A [`Timeseries`]: its latest value over a sparkline of recent
     /// samples, calibrated across the column.
     Timeseries,
