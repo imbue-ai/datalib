@@ -284,7 +284,11 @@ than complicating it. If render's rows already live in a per-source
 doltlite database with a single writer, the problem table belongs in
 **that same database** — so a document's rows and the record of what was
 dropped or nulled getting them there commit in one transaction, and can
-never disagree about which run they came from.
+never disagree about which run they came from. A document whose every
+row was dropped is stored as no document at all — no `markdowns` row,
+no `.md` file — and its problem rows are the whole record of it; a
+`markdowns` row with nothing pointing at it would carry a title and a
+`bucket_key` from whichever render last had rows.
 
 [`data_architecture_ingestion.md`](data_architecture_ingestion.md) said
 the `source_fingerprint` compare stays, and this section claimed it

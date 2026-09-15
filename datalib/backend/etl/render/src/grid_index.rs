@@ -502,6 +502,8 @@ pub struct RenderedMarkdown {
     /// out-dir prefix stripped.
     pub md_path: PathBuf,
     pub render_version: u32,
+    /// Empty means there is no document: the store drops it, `.md` and
+    /// all, keeping only its `problems`.
     pub rows: Vec<GridRow>,
     /// Outgoing edges (`src_markdown_uuid == markdown_uuid`). Empty for
     /// renderers that don't emit edges; the DELETE still runs, so stale rows
@@ -816,7 +818,16 @@ async fn write_source_cursor(
 /// conversation used to stay in the grid forever.
 pub async fn delete_markdown(write_lock: &WriteLock, markdown_uuid: &str) -> Result<()> {
     let mut guard = write_lock.acquire().await?;
-    let conn = guard.conn();
+    delete_document_rows(guard.conn(), markdown_uuid).await
+}
+
+/// The rows a document owns: its grid rows, its outgoing edges and its
+/// `markdowns` row. Not its `render_problems`, which say why a document
+/// is the way it is and outlive one that ends with nothing.
+pub(crate) async fn delete_document_rows(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    markdown_uuid: &str,
+) -> Result<()> {
     for sql in [
         "DELETE FROM grid_rows WHERE markdown_uuid = ?",
         "DELETE FROM edges WHERE src_markdown_uuid = ?",
@@ -859,6 +870,20 @@ async fn apply_markdown(
     let mut guard = write_lock.acquire().await?;
     let conn = guard.conn();
 
+    // A document is its rows: the grid reaches it through them and
+    // nothing else does. One that ends with none — every row rejected
+    // by validation — is absent, and its `markdowns` row goes with the
+    // rest, or a stale `bucket_key` and title would outlive the render
+    // that replaced them. The problems recording why stay.
+    let Some(canonical) = pick_canonical(&md.rows, &md.markdown_uuid) else {
+        delete_document_rows(conn, &md.markdown_uuid).await?;
+        tracing::info!(
+            document = %md.markdown_uuid,
+            "render: this document has no rows left; dropped it",
+        );
+        return Ok(0);
+    };
+
     sqlx::query("DELETE FROM grid_rows WHERE markdown_uuid = ?")
         .bind(&md.markdown_uuid)
         .execute(&mut **conn)
@@ -881,7 +906,7 @@ async fn apply_markdown(
         insert_edge(conn, edge).await?;
     }
 
-    upsert_markdown(conn, md, qmd_path)
+    upsert_markdown(conn, md, canonical, qmd_path)
         .await
         .context("upsert markdowns")?;
     write_lock.note_written(&md.markdown_uuid);
@@ -917,11 +942,9 @@ fn run_stamp(now_override: Option<&str>) -> datalib_time::StoredStamp {
 async fn upsert_markdown(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     md: &RenderedMarkdown,
+    canonical: &GridRow,
     qmd_path: &str,
 ) -> Result<()> {
-    let Some(canonical) = pick_canonical(&md.rows, &md.markdown_uuid) else {
-        return Ok(());
-    };
     let kind = doc_kind_for(&canonical.kind);
     let timestamps: Vec<&str> = md
         .rows
@@ -1533,6 +1556,46 @@ mod write_lock_tests {
             .await
             .unwrap();
         assert_eq!(grid_n, 0, "ROLLBACK must leave grid_rows untouched");
+    }
+
+    /// A document re-rendered with every row rejected keeps no
+    /// `markdowns` row: before this, the old render's title, timestamps
+    /// and `bucket_key` outlived the rows they described. Found by the
+    /// contract harness on a gitlab merge request re-keyed under another
+    /// bucket whose rows all failed `when_ts`.
+    #[tokio::test]
+    async fn a_document_re_rendered_with_no_rows_loses_its_markdowns_row() {
+        let dir = tempdir().unwrap();
+        let pool = open_pool(&dir.path().join("empty.doltlite_db"), 2).await;
+        super::init_schema(&pool).await.expect("init_schema");
+        let lock = WriteLock::new(pool.clone());
+        let out_dir = PathBuf::from("/tmp");
+
+        let mut md = mk_md(0, 0);
+        md.bucket_key = Some("mr!17".into());
+        apply_one(&lock, &out_dir, &md).await.unwrap();
+
+        let mut moved = mk_md(0, 0);
+        moved.bucket_key = Some("mr!17~new".into());
+        moved.rows.clear();
+        let inserted = apply_one(&lock, &out_dir, &moved).await.unwrap();
+        assert_eq!(inserted, 0);
+
+        let buckets: Vec<Option<String>> =
+            sqlx::query_scalar("SELECT bucket_key FROM markdowns WHERE markdown_uuid = ?")
+                .bind(&md.markdown_uuid)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            buckets.is_empty(),
+            "no markdowns row, old bucket or new: {buckets:?}"
+        );
+        let grid_n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(grid_n, 0);
     }
 
     #[tokio::test]
