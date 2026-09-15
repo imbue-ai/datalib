@@ -243,17 +243,17 @@ pub fn parse_yyyy_mm_dd_assumed_utc(s: &str) -> Result<IsoOffsetTimestamp, Times
     ))
 }
 
-/// Coerce an upstream ISO-8601 timestamp into a grid-ready `when_ts`:
+/// Coerce an upstream ISO-8601 timestamp into a grid-ready `created_at`:
 /// RFC 3339 with an explicit offset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WhenTsPrecision {
+pub enum RecordStampPrecision {
     /// `2026-06-05T19:18:39+00:00` — chat-common, signal.
     Seconds,
     /// `2026-06-05T19:18:39.123+00:00` — beeper.
     Millis,
 }
 
-/// An upstream epoch-millis stamp as a grid-ready `when_ts`, or `None` when
+/// An upstream epoch-millis stamp as a grid-ready `created_at`, or `None` when
 /// there is no answer.
 ///
 /// **Both ways of having no answer land on `None`, and that is the point.**
@@ -263,18 +263,21 @@ pub enum WhenTsPrecision {
 ///
 /// `precision` is per-provider and not a free choice: the value is stored
 /// on every grid row, so changing it rewrites that provider's whole tree.
-pub fn when_ts_from_unix_millis(ms: Option<i64>, precision: WhenTsPrecision) -> Option<String> {
+pub fn record_stamp_from_unix_millis(
+    ms: Option<i64>,
+    precision: RecordStampPrecision,
+) -> Option<String> {
     let ms = ms?;
     match IsoOffsetTimestamp::from_unix_millis(ms) {
         Some(t) => Some(match precision {
-            WhenTsPrecision::Seconds => t.to_rfc3339_secs(),
-            WhenTsPrecision::Millis => t.to_rfc3339_millis(),
+            RecordStampPrecision::Seconds => t.to_rfc3339_secs(),
+            RecordStampPrecision::Millis => t.to_rfc3339_millis(),
         }),
         None => {
             tracing::warn!(
                 ms,
-                "when_ts_from_unix_millis: epoch-ms is not a representable instant; \
-                 when_ts left null"
+                "record_stamp_from_unix_millis: epoch-ms is not a representable instant; \
+                 created_at left null"
             );
             None
         }
@@ -290,7 +293,7 @@ pub fn when_ts_from_unix_millis(ms: Option<i64>, precision: WhenTsPrecision) -> 
 /// nothing", and the number is the only lead a reader has.
 ///
 /// Display only — nothing derived from this reaches the index, so unlike
-/// [`when_ts_from_unix_millis`] the formatting here is safe to change.
+/// [`record_stamp_from_unix_millis`] the formatting here is safe to change.
 pub fn display_ts_from_unix_millis(ms: Option<i64>) -> String {
     let Some(ms) = ms else {
         return "(no timestamp)".to_string();
@@ -347,7 +350,7 @@ fn ordinal_suffix(day: u32) -> &'static str {
 /// `.grid_rows.json`. This normalizes it; already-valid values pass
 /// through **verbatim** so callers that persist them don't churn
 /// historical strings.
-pub fn coerce_when_ts(s: &str) -> Option<String> {
+pub fn coerce_record_stamp(s: &str) -> Option<String> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -371,7 +374,7 @@ pub fn coerce_when_ts(s: &str) -> Option<String> {
     None
 }
 
-pub fn split_when_ts(s: &str) -> Option<(String, String)> {
+pub fn split_record_stamp(s: &str) -> Option<(String, String)> {
     if s.is_empty() {
         return None;
     }
@@ -387,20 +390,20 @@ pub fn split_when_ts(s: &str) -> Option<(String, String)> {
     Some((utc_micros(dt), offset))
 }
 
-/// Render an offsetted instant in the canonical `when_ts_utc` form:
+/// Render an offsetted instant in the canonical `created_at_utc` form:
 /// UTC, fixed microsecond precision, `Z` suffix. The `Z` (rather than
 /// `+00:00`) states the intent — *this column is UTC* — instead of a
 /// local zone that merely happens to sit at zero offset. The single
 /// spelling is also what keeps the column lexically sortable; the
-/// original local offset is preserved separately in `when_offset` (see
-/// [`split_when_ts`]).
+/// original local offset is preserved separately in `created_offset` (see
+/// [`split_record_stamp`]).
 fn utc_micros(dt: DateTime<FixedOffset>) -> String {
     dt.with_timezone(&Utc)
         .to_rfc3339_opts(SecondsFormat::Micros, true)
 }
 
 /// Normalize a user-typed time bound (the value behind a `before:` / `after:`
-/// search filter) into the **same canonical UTC form** as the `when_ts_utc`
+/// search filter) into the **same canonical UTC form** as the `created_at_utc`
 /// index column, so the two compare correctly as plain strings.
 ///
 /// **A user-typed timestamp with no offset means local machine time**, since
@@ -539,30 +542,30 @@ mod tests {
     }
 
     #[test]
-    fn coerce_when_ts_canonicalizes_basic_iso_and_preserves_valid() {
+    fn coerce_record_stamp_canonicalizes_basic_iso_and_preserves_valid() {
         // Basic ISO 8601 (no separators), Fastmail's vCard REV shape.
         assert_eq!(
-            coerce_when_ts("20260605T191839Z").as_deref(),
+            coerce_record_stamp("20260605T191839Z").as_deref(),
             Some("2026-06-05T19:18:39+00:00")
         );
         // Basic ISO 8601 with a numeric offset.
         assert_eq!(
-            coerce_when_ts("20260605T121839-0700").as_deref(),
+            coerce_record_stamp("20260605T121839-0700").as_deref(),
             Some("2026-06-05T12:18:39-07:00")
         );
         // Already grid-valid extended forms pass through verbatim (no churn).
         assert_eq!(
-            coerce_when_ts("2370-04-15T00:00:00Z").as_deref(),
+            coerce_record_stamp("2370-04-15T00:00:00Z").as_deref(),
             Some("2370-04-15T00:00:00Z")
         );
         assert_eq!(
-            coerce_when_ts("2026-06-05T12:18:39-07:00").as_deref(),
+            coerce_record_stamp("2026-06-05T12:18:39-07:00").as_deref(),
             Some("2026-06-05T12:18:39-07:00")
         );
         // Unparseable / offset-less → None (caller drops it).
-        assert_eq!(coerce_when_ts("not a timestamp"), None);
-        assert_eq!(coerce_when_ts("20260605T191839"), None);
-        assert_eq!(coerce_when_ts(""), None);
+        assert_eq!(coerce_record_stamp("not a timestamp"), None);
+        assert_eq!(coerce_record_stamp("20260605T191839"), None);
+        assert_eq!(coerce_record_stamp(""), None);
     }
 
     #[test]
@@ -661,43 +664,43 @@ mod tests {
     }
 
     #[test]
-    fn split_when_ts_normalizes_utc_and_keeps_offset() {
+    fn split_record_stamp_normalizes_utc_and_keeps_offset() {
         // Local-offset input: UTC column shifts by the offset and is
         // spelled with `Z`; the offset column preserves the original zone.
-        let (utc, off) = split_when_ts("2026-06-10T14:23:00-07:00").unwrap();
+        let (utc, off) = split_record_stamp("2026-06-10T14:23:00-07:00").unwrap();
         assert_eq!(utc, "2026-06-10T21:23:00.000000Z");
         assert_eq!(off, "-07:00");
 
         // Already-UTC input (explicit +00:00): UTC column uses `Z`, but
         // the offset column keeps the input's literal `+00:00`.
-        let (utc, off) = split_when_ts("2026-06-10T21:23:00+00:00").unwrap();
+        let (utc, off) = split_record_stamp("2026-06-10T21:23:00+00:00").unwrap();
         assert_eq!(utc, "2026-06-10T21:23:00.000000Z");
         assert_eq!(off, "+00:00");
 
         // Bare `Z` input is tolerated; offset column reports `+00:00`.
-        let (utc, off) = split_when_ts("2026-06-10T21:23:00Z").unwrap();
+        let (utc, off) = split_record_stamp("2026-06-10T21:23:00Z").unwrap();
         assert_eq!(utc, "2026-06-10T21:23:00.000000Z");
         assert_eq!(off, "+00:00");
 
         // Half-hour offset round-trips.
-        let (_utc, off) = split_when_ts("2026-06-10T21:23:00+05:30").unwrap();
+        let (_utc, off) = split_record_stamp("2026-06-10T21:23:00+05:30").unwrap();
         assert_eq!(off, "+05:30");
 
         // Far-future (24th-century TNG-era) dates parse and render fine —
         // chrono supports 4-digit years through 9999, so the fixture
         // corpus's stardate-era timestamps are well within range.
-        let (utc, off) = split_when_ts("2369-04-15T14:00:00-07:00").unwrap();
+        let (utc, off) = split_record_stamp("2369-04-15T14:00:00-07:00").unwrap();
         assert_eq!(utc, "2369-04-15T21:00:00.000000Z");
         assert_eq!(off, "-07:00");
 
         // Empty / unparseable → None, so the caller leaves columns NULL.
-        assert!(split_when_ts("").is_none());
-        assert!(split_when_ts("2026-06-10T21:23:00").is_none());
+        assert!(split_record_stamp("").is_none());
+        assert!(split_record_stamp("2026-06-10T21:23:00").is_none());
     }
 
     #[test]
-    fn split_when_ts_utc_column_sorts_chronologically() {
-        // Two instants whose raw `when_ts` strings sort the *opposite* way
+    fn split_record_stamp_utc_column_sorts_chronologically() {
+        // Two instants whose raw `created_at` strings sort the *opposite* way
         // from true chronological order, because the offsets differ:
         //   a = 2026-01-01T23:00:00+00:00  → 23:00 UTC (the later instant)
         //   b = 2026-01-02T00:00:00+05:00  → 19:00 UTC (the earlier instant)
@@ -705,8 +708,8 @@ mod tests {
         // four hours before a. The UTC column must put b first.
         let a = "2026-01-01T23:00:00+00:00";
         let b = "2026-01-02T00:00:00+05:00";
-        let (a_utc, _) = split_when_ts(a).unwrap();
-        let (b_utc, _) = split_when_ts(b).unwrap();
+        let (a_utc, _) = split_record_stamp(a).unwrap();
+        let (b_utc, _) = split_record_stamp(b).unwrap();
         assert!(
             a < b,
             "raw strings mis-sort: text order puts the later instant first"

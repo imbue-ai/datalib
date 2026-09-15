@@ -68,7 +68,7 @@ pub struct NormalizedReaction {
     /// The emoji or short string (`🫡`, `🔥`, …).
     pub emoji: String,
     /// Unix milliseconds when the reaction was sent, or `None` when
-    /// upstream gave none. Used for the reaction row's `when_ts` — see [`NormalizedChatItem::date_ms`]
+    /// upstream gave none. Used for the reaction row's `created_at` — see [`NormalizedChatItem::date_ms`]
     /// for why this is an `Option` and what `None` costs downstream.
     pub date_ms: Option<i64>,
     /// What this reaction is upstream, for its grid_row's backpointer

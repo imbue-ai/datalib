@@ -162,7 +162,7 @@ fn renders_tng_fixture_grid_rows() {
     rows.sort_by_key(|v| {
         (
             field(v, "kind").unwrap_or_default(),
-            field(v, "when_ts").unwrap_or_default(),
+            field(v, "created_at").unwrap_or_default(),
             field(v, "uuid").unwrap_or_default(),
         )
     });

@@ -32,26 +32,51 @@ pub struct GridRow {
     /// Human-friendly provider name for the Source column.
     #[col(sql = "VARCHAR(32)")]
     pub source_label: String,
-    /// ISO-8601 with explicit offset; the global sort key and what
-    /// `before:`/`after:` filter on. Synthesized for blocks and messages with
-    /// no timestamp of their own by bumping microseconds off the parent, so
-    /// within-conversation order stays stable.
+    /// When the thing this row describes came into being, as the source
+    /// wrote it: ISO-8601 with explicit offset. A message's own stamp; for
+    /// a document row (`is_document`) the earliest moment in it — the
+    /// first message of a thread, a PR's `created_at`, a page's
+    /// `created_time`. Synthesized for blocks and messages with no stamp
+    /// of their own by bumping microseconds off the parent, so
+    /// within-conversation order stays stable. The global sort key, and
+    /// what `before:`/`after:` filter on.
     ///
     /// Null means the source has no timestamp — some entities aren't
     /// event-shaped, and we never fabricate one. Null rows are excluded by
     /// `before:`/`after:`.
     ///
-    /// `when_ts_utc` and `when_offset` are derived from this at index time
-    /// and live in the DB but not on this struct. The grid sorts and filters
-    /// on `when_ts_utc`, where one zone and a fixed width make lexical order
-    /// match chronological order; `when_offset` recovers the local
-    /// wall-clock for display. This column itself stays as the source
-    /// wrote it — it is the record's stamp — which is why it is not `when_ts_utc` + `tz_offset` like the stamps
-    /// we mint (AGENTS.md, "Timestamp convention").
+    /// `created_at_utc` and `created_offset` are derived from this at index
+    /// time and live in the DB but not on this struct. The grid sorts and
+    /// filters on `created_at_utc`, where one zone and a fixed width make
+    /// lexical order match chronological order; `created_offset` recovers
+    /// the local wall-clock for display. This column itself stays as the
+    /// source wrote it — it is the record's stamp — which is why it is
+    /// not `created_at_utc` + `tz_offset` like the stamps we mint
+    /// (AGENTS.md, "Timestamp convention").
     #[col(sql = "VARCHAR(40)")]
-    #[derived(name = "when_ts_utc", sql = "VARCHAR(40)")]
-    #[derived(name = "when_offset", sql = "VARCHAR(8)")]
-    pub when_ts: Option<String>,
+    #[derived(name = "created_at_utc", sql = "VARCHAR(40)")]
+    #[derived(name = "created_offset", sql = "VARCHAR(8)")]
+    pub created_at: Option<String>,
+    /// When the thing this row describes last changed, as the source wrote
+    /// it. For a document row the latest moment in it — the last message
+    /// of a thread, a PR's `updated_at`, a page's `last_edited_time`. For
+    /// an inner row, the edit stamp where the source keeps one, else null:
+    /// null means "not known to have changed since `created_at`", never a
+    /// copy of it. Same form and the same derived twins as `created_at`.
+    #[col(sql = "VARCHAR(40)")]
+    #[derived(name = "modified_at_utc", sql = "VARCHAR(40)")]
+    #[derived(name = "modified_offset", sql = "VARCHAR(8)")]
+    pub modified_at: Option<String>,
+    /// True on the one row per rendered markdown document that *is* that
+    /// document — the thread, the conversation, the PR, the page, the PDF
+    /// — and false on every row inside it. Every row carries a
+    /// `markdown_uuid`, so this is not "has a document": it is "opening
+    /// this row opens a whole document rather than a place in one". A
+    /// Browse of a source starts on these rows (`is:document` in the
+    /// search bar), and the render store refuses a document with any
+    /// number of them other than one.
+    #[col(sql = "INTEGER")]
+    pub is_document: bool,
     /// Display name of the author: the model slug for LLM responses, the
     /// account for user input, the real name for Slack.
     #[col(sql = "VARCHAR(255)")]

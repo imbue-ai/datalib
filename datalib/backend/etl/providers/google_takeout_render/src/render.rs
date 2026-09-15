@@ -24,7 +24,7 @@ use datalib_etl_google_takeout::ingest::google_voice::schema_raw::VoiceAttachmen
 use datalib_etl_google_takeout::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
 
-/// v2: a `created_date` / `when` we cannot parse gets a null `when_ts`
+/// v2: a `created_date` / `when` we cannot parse gets a null `created_at`
 ///     instead of a real-looking `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
 pub const RENDER_VERSION: u32 = 2;
@@ -49,7 +49,7 @@ fn uuid5(recipe: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::GoogleTakeout,
         source_label: "Google Chat".to_string(),
         chat_kind: "Google Chat".to_string(),
@@ -62,7 +62,7 @@ fn profile() -> RenderProfile {
 
 fn voice_profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::GoogleTakeout,
         source_label: "Google Voice".to_string(),
         chat_kind: "Google Voice Conversation".to_string(),
@@ -447,7 +447,7 @@ fn space_of_dir(dir: &str) -> String {
 }
 
 /// TODO(problem-sink): a shape we don't recognize is dropped silently.
-/// `None` is the right *value* for `when_ts`, but nothing anywhere
+/// `None` is the right *value* for `created_at`, but nothing anywhere
 /// records that we discarded something upstream actually sent — that is
 /// only half of R1 ("drop, count, log; never abort, never hide"). When
 /// the problem sink exists (see
@@ -703,9 +703,9 @@ fn party_id(party: Option<&Value>) -> String {
 }
 
 /// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
-/// is the right value for `when_ts`, but nothing records that upstream
+/// is the right value for `created_at`, but nothing records that upstream
 /// sent something we could not read — half of R1. See the note on
-/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
+/// `datalib_time::record_stamp_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Unix millis from the canonical `when` (RFC 3339), falling back to the
 /// raw value, then to `None`.
 fn voice_date_ms(m: &Value) -> Option<i64> {

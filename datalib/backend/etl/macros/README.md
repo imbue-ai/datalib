@@ -129,7 +129,7 @@ source of truth the same way `schema_raw.rs` already was.
 - `#[col(sql = "VARCHAR(96)")]` — required on every field. Nullability is
   inferred from the Rust type: `Option<T>` is nullable, anything else gets
   `NOT NULL`.
-- `#[derived(name = "when_ts_utc", sql = "VARCHAR(40)")]` — repeatable, on
+- `#[derived(name = "created_at_utc", sql = "VARCHAR(40)")]` — repeatable, on
   the column it follows. Declares a column that lives in the DB but is
   computed at load time and so is absent from the struct.
 

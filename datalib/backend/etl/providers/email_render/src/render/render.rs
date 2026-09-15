@@ -23,7 +23,7 @@ use datalib_schema::providers::Provider;
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v3: render via chat-common (+ quoted-text folding, label chips).
 /// v4: an email with a missing or malformed `Date` header gets a null
-///     `when_ts` instead of a real-looking `1970-01-01T00:00:00` — see
+///     `created_at` instead of a real-looking `1970-01-01T00:00:00` — see
 ///     `docs/dev/data_architecture_parse_and_render.md` §6. Malformed
 ///     `Date` headers are common in real mail, so this changes real
 ///     output and stale docs must be re-rendered.
@@ -103,7 +103,7 @@ fn percent_encode(s: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Email,
         source_label: "Mail".to_string(),
         chat_kind: "Email Thread".to_string(),
@@ -419,7 +419,7 @@ fn build_chat(
                 parsed_eml.from_display.clone()
             },
             // No `Date` header, or one we cannot parse, is a null
-            // `when_ts` — not the epoch. There is no parent stamp to
+            // `created_at` — not the epoch. There is no parent stamp to
             // inherit here: an email thread's items are the emails.
             date_ms: em.received_at.as_deref().and_then(iso_to_ms),
             text: (!text.trim().is_empty()).then_some(text),
@@ -494,9 +494,9 @@ fn labels_for_email(
 }
 
 /// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
-/// is the right value for `when_ts`, but nothing records that upstream
+/// is the right value for `created_at`, but nothing records that upstream
 /// sent something we could not read — half of R1. See the note on
-/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
+/// `datalib_time::record_stamp_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse an ISO-8601 timestamp to unix millis; `None` on anything
 /// unparseable.
 fn iso_to_ms(s: &str) -> Option<i64> {

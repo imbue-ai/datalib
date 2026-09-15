@@ -44,7 +44,7 @@ fn build_export(root: &Path) -> Result<()> {
     // export → a comment-only thread).
     // The third row is the undated case, and it is real: the live
     // manual-e2e corpus contains a comment whose `Date` the export left
-    // blank, on a post that isn't in Shares. Before `when_ts` learned to
+    // blank, on a post that isn't in Shares. Before `created_at` learned to
     // be null it rendered as `1970-01-01 00:00:00 UTC` in the transcript
     // and sorted to the top of the grid as a genuine-looking 1970 row.
     // No checked-in fixture had an undated record, so nothing caught it.
@@ -295,13 +295,13 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             })
             .expect("undated comment thread rendered");
         assert!(
-            thread_d.rows.iter().all(|r| r.when_ts.is_none()),
-            "a comment with a blank Date must leave when_ts null on every row it \
+            thread_d.rows.iter().all(|r| r.created_at.is_none()),
+            "a comment with a blank Date must leave created_at null on every row it \
              produces, never a fabricated epoch: {:?}",
             thread_d
                 .rows
                 .iter()
-                .map(|r| (r.kind.clone(), r.when_ts.clone()))
+                .map(|r| (r.kind.clone(), r.created_at.clone()))
                 .collect::<Vec<_>>()
         );
         assert_eq!(thread_d.rows.len(), 3, "chat row + placeholder + comment");

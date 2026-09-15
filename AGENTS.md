@@ -177,7 +177,7 @@ reference doc it relates to.
   — the **parse and render** stage, the third sibling: deserializing a
   stored payload, projecting it to `GridRow` + markdown, the
   data-quality rules (§4 — adopted in principle, *not implemented*),
-  incrementality, and the `GridRow.when_ts` policy. Read it before
+  incrementality, and the `GridRow.created_at` policy. Read it before
   adding a renderer or changing a projection. There is no "parse
   step": a record that "fails to parse" is one **render** could not
   deserialize, and the fix is always a re-render, never a re-fetch.
@@ -1737,15 +1737,15 @@ check.
   sorts a column there, and one string is the transport form.
 
 **A stamp that belongs to the record stays as the source wrote it.**
-`grid_rows.when_ts`, `markdowns.created_at` / `updated_at`,
+`grid_rows.created_at` / `modified_at`, `markdowns.created_at` / `modified_at`,
 `emails.received_at`, a payload's `created_time` — an ISO-8601 string
 preserving the offset the source gave it, because that offset is
 information (it is how the moment read to the person who saw it) and
 once dropped it cannot be recovered. A `Z` stays `Z`; a unix epoch
 renders as UTC with `+00:00`. Where such a column needs to sort, it gets
-a derived UTC twin rather than being rewritten: `grid_rows.when_ts_utc`
-+ `when_offset`, split from `when_ts` at index time, is what the grid
-sorts and filters on, and `when_ts` itself is the record and feeds the
+a derived UTC twin rather than being rewritten: `grid_rows.created_at_utc`
++ `created_offset`, split from `created_at` at index time, is what the grid
+sorts and filters on, and `created_at` itself is the record and feeds the
 fingerprint.
 
 `system/runs.sqlite` follows the same rule (`started_at_utc`, `log.ts_utc`,

@@ -22,9 +22,9 @@ pub use datalib_etl_slack::ingest::schema_raw::{slack_message_uuid, slack_thread
 pub use parse::{parse, ParsedSlack, ScanResult, SlackThreadBucket};
 
 /// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
-/// is the right value for `when_ts`, but nothing records that upstream
+/// is the right value for `created_at`, but nothing records that upstream
 /// sent something we could not read — half of R1. See the note on
-/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
+/// `datalib_time::record_stamp_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse a Slack `ts` — unix seconds with a fractional part, always UTC
 /// (`"1728499573.123456"`) — into an offsetted instant.
 pub fn parse_slack_ts(ts: &str) -> Option<IsoOffsetTimestamp> {

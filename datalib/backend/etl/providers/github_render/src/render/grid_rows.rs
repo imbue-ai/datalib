@@ -97,7 +97,9 @@ pub fn rows_for_pr(
             .provider(Provider::Github)
             .kind("GitHub PR")
             .source_label("GitHub")
-            .when_ts(pr.updated_at.clone().or_else(|| pr.created_at.clone()))
+            .is_document(true)
+            .created_at(pr.created_at.clone())
+            .modified_at(pr.updated_at.clone())
             .author(pr.user_login.clone())
             .project(Some(pr.repo_full_name.clone()))
             .conversation_name(Some(pr.title.clone()))
@@ -124,7 +126,10 @@ pub fn rows_for_pr(
                 .provider(Provider::Github)
                 .kind(c.kind)
                 .source_label("GitHub")
-                .when_ts(Some(c.created_at.clone()))
+                .created_at(Some(c.created_at.clone()))
+                // GitHub stamps `updated_at` on every comment, equal to
+                // `created_at` until it is edited; only an edit is a change.
+                .modified_at(c.updated_at.clone().filter(|u| *u != c.created_at))
                 .author(c.user_login.clone())
                 .project(Some(pr.repo_full_name.clone()))
                 .conversation_name(Some(pr.title.clone()))

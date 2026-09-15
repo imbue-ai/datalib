@@ -275,6 +275,9 @@ enum PromotedKind {
     IntegerNullable,
     RealNotNull,
     RealNullable,
+    /// `bool`. SQLite has no boolean type, so the column is an INTEGER
+    /// holding 0 or 1, which is also what sqlx binds a `bool` as.
+    BoolNotNull,
 }
 
 impl PromotedKind {
@@ -286,6 +289,7 @@ impl PromotedKind {
             PromotedKind::IntegerNullable => "INTEGER NULL",
             PromotedKind::RealNotNull => "REAL NOT NULL",
             PromotedKind::RealNullable => "REAL NULL",
+            PromotedKind::BoolNotNull => "INTEGER NOT NULL",
         }
     }
 }
@@ -303,7 +307,7 @@ impl<'a> PromotedField<'a> {
                 &f.ty,
                 "unsupported field type for #[derive(WirePayloadRow)]; \
                  supported types: String, Option<String>, i64, Option<i64>, \
-                 f64, Option<f64>",
+                 f64, Option<f64>, bool",
             )
         })?;
         Ok(Self {
@@ -326,7 +330,8 @@ impl<'a> PromotedField<'a> {
             PromotedKind::IntegerNotNull
             | PromotedKind::IntegerNullable
             | PromotedKind::RealNotNull
-            | PromotedKind::RealNullable => quote! { self.#name },
+            | PromotedKind::RealNullable
+            | PromotedKind::BoolNotNull => quote! { self.#name },
         }
     }
 }
@@ -340,6 +345,7 @@ fn classify(ty: &Type) -> Option<PromotedKind> {
         "String" => Some(PromotedKind::TextNotNull),
         "i64" => Some(PromotedKind::IntegerNotNull),
         "f64" => Some(PromotedKind::RealNotNull),
+        "bool" => Some(PromotedKind::BoolNotNull),
         "Option" => {
             let PathArguments::AngleBracketed(args) = &seg.arguments else {
                 return None;
@@ -865,15 +871,14 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
                 PromotedKind::IntegerNotNull
                 | PromotedKind::IntegerNullable
                 | PromotedKind::RealNotNull
-                | PromotedKind::RealNullable,
+                | PromotedKind::RealNullable
+                | PromotedKind::BoolNotNull,
             ) => quote! { self.#ident },
-            None => {
-                return Err(syn::Error::new_spanned(
-                    &f.ty,
-                    "PortableTable can only bind String, i64, f64 or Option of those; \
+            None => return Err(syn::Error::new_spanned(
+                &f.ty,
+                "PortableTable can only bind String, i64, f64, bool or Option of the first three; \
                      add support to `classify` rather than binding this column by hand",
-                ))
-            }
+            )),
         };
         columns.push(PortableColumn { name, decl, bind });
         // Load-time-derived columns trail their host field, always

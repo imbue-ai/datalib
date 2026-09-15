@@ -16,7 +16,9 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         provider: provider.into(),
         kind: kind.into(),
         source_label: provider.into(),
-        when_ts: Some("2369-04-14T10:00:00+00:00".into()),
+        created_at: Some("2369-04-14T10:00:00+00:00".into()),
+        modified_at: None,
+        is_document: false,
         author: None,
         account: None,
         project: None,
@@ -62,6 +64,7 @@ impl Rendered {
                 kind: r.kind.clone(),
                 qmd_path: r.qmd_path.clone().unwrap_or_default(),
                 provider: r.provider.clone(),
+                is_document: r.is_document,
             })
             .collect()
     }

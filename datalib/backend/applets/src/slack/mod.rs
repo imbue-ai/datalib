@@ -125,7 +125,7 @@ struct Thread {
     markdown_uuid: String,
     /// Who wrote the opening message, when, and what it said.
     author: String,
-    when_ts: String,
+    created_at: String,
     text: String,
     /// Messages after the opening one. Zero means there is nothing more
     /// to open, which is what the card keys the "N replies" link on.
@@ -145,8 +145,8 @@ struct ThreadData {
     messages: usize,
 }
 
-fn when_key(when_ts: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc3339(when_ts)
+fn when_key(created_at: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(created_at)
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
@@ -224,7 +224,7 @@ fn read_rows(
         let pool = datalib_etl::doltlite_raw::open_reader(store).await?;
         let rows = sqlx::query(
             "SELECT channel, markdown_uuid, message_index, \
-                        IFNULL(when_ts, ''), IFNULL(author, ''), text \
+                        IFNULL(created_at, ''), IFNULL(author, ''), text \
                  FROM grid_rows \
                  WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL",
         )
@@ -289,7 +289,7 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
                 .map(|(md, t)| Thread {
                     markdown_uuid: md.clone(),
                     author: t.author.clone(),
-                    when_ts: t.when_raw.clone(),
+                    created_at: t.when_raw.clone(),
                     text: preview(&t.text),
                     // Everything after the opening message.
                     replies: t.messages.saturating_sub(1),
@@ -301,8 +301,8 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
     // the order is identical on every request over unchanged data (the
     // directory walk itself is unordered).
     threads.sort_by(|a, b| {
-        when_key(&a.when_ts)
-            .cmp(&when_key(&b.when_ts))
+        when_key(&a.created_at)
+            .cmp(&when_key(&b.created_at))
             .then_with(|| a.markdown_uuid.cmp(&b.markdown_uuid))
     });
     ChannelResponse {
@@ -467,8 +467,9 @@ mod tests {
                     "Slack Thread"
                 })
                 .source_label("Slack")
+                .is_document(index.is_none())
                 .channel(Some(channel.to_string()))
-                .when_ts(Some(when.to_string()))
+                .created_at(Some(when.to_string()))
                 .author((!author.is_empty()).then(|| author.to_string()))
                 .message_index(index)
                 .conversation_uuid(md)
@@ -505,22 +506,37 @@ mod tests {
     }
 
     /// Like [`write_thread`], but the caller supplies each message's
-    /// index explicitly — so a test can insert them out of order.
+    /// index explicitly — so a test can insert them out of order. The
+    /// thread row the store requires is written first, stamped with the
+    /// first message's time.
     fn write_thread_rows(dir: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
         use datalib_etl_render::grid_index::RenderedMarkdown;
         use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
         use datalib_schema::grid_rows::GridRow;
 
-        let rows: Vec<GridRow> = msgs
-            .iter()
-            .map(|(index, author, text, when)| {
+        let thread = GridRow::builder()
+            .uuid(md)
+            .provider(Provider::Slack)
+            .kind("Slack Thread")
+            .source_label("Slack")
+            .is_document(true)
+            .channel(Some(channel.to_string()))
+            .created_at(msgs.first().map(|m| m.3.to_string()))
+            .conversation_uuid(md)
+            .entire_chat(format!("/chat/{md}"))
+            .text("")
+            .markdown_uuid(Some(md.to_string()))
+            .build()
+            .unwrap();
+        let rows: Vec<GridRow> = std::iter::once(thread)
+            .chain(msgs.iter().map(|(index, author, text, when)| {
                 GridRow::builder()
                     .uuid(format!("{md}-m{index}"))
                     .provider(Provider::Slack)
                     .kind("Slack Message")
                     .source_label("Slack")
                     .channel(Some(channel.to_string()))
-                    .when_ts(Some((*when).to_string()))
+                    .created_at(Some((*when).to_string()))
                     .author(Some((*author).to_string()))
                     .message_index(Some(*index))
                     .conversation_uuid(md)
@@ -529,7 +545,7 @@ mod tests {
                     .markdown_uuid(Some(md.to_string()))
                     .build()
                     .unwrap()
-            })
+            }))
             .collect();
 
         let store = IndexedMarkdownStore::open(dir).unwrap();

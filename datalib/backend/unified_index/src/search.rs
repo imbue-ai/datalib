@@ -19,7 +19,13 @@ pub struct SearchRow {
     /// without a `REV:` field, or any row whose underlying entity isn't
     /// event-shaped). See data_architecture_ingestion.md §"Entities
     /// without a time-shape".
-    pub when: Option<String>,
+    pub created_at: Option<String>,
+    /// When the thing last changed, where the source says; null for a
+    /// row not known to have changed since `created_at`.
+    pub modified_at: Option<String>,
+    /// True on the row that is a whole rendered document, false on a
+    /// row inside one. `is:document` in the search bar.
+    pub is_document: bool,
     pub conversation_name: String,
     pub project: String,
     pub account: String,
