@@ -127,4 +127,8 @@ export type ViewLibs = {
   perseusView: () => CardRender;
   // Visualize the sync pipeline's step DAG, with live run states.
   sourceDagView: () => CardRender;
+  // The typed table viewer over any endpoint that declares its columns
+  // (`{columns, rows}`), e.g. `tableView({ url: "/api/manage/rows" })`.
+  // See cards/TableGrid.ce.vue for the column-type vocabulary.
+  tableView: (opts: { url: string }) => CardRender;
 };

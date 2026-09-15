@@ -97,7 +97,7 @@ async function recordFrames(page: Page, ids: readonly string[]): Promise<void> {
         status[id] =
           row?.querySelector('[col-id="status"] [role="img"]')?.getAttribute("aria-label") ?? null;
         activity[id] =
-          row?.querySelector('[col-id="activity"] .m2-activity')?.getAttribute("title") ?? "";
+          row?.querySelector('[col-id="activity"] .tg-chips')?.getAttribute("title") ?? "";
       }
       return { t: Date.now(), status, activity };
     };

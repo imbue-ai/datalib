@@ -282,6 +282,43 @@ programs against:
   minted, agent-bound component is seeded with (the gallery's agent
   entry stores `() => agentSeedView("<name>")` as the alias source);
   the agent's first save replaces it.
+- `tableView({ url })` — the typed table viewer over any endpoint that
+  answers `{columns, rows}` (plus `tree: true` when each row carries a
+  `path`). See "Typed tables" below.
+
+## Typed tables
+
+A table's producer declares its columns and the viewer draws each cell
+by the column's *type* rather than by the field's name. The vocabulary
+is `datalib_columns` (`datalib/backend/columns/src/lib.rs`), mirrored
+by hand in `datalib/ui/src/api.ts` — change both halves together —
+and the one renderer for all of it is `cards/TableGrid.ce.vue`:
+
+| type | the cell's value | drawn as |
+|---|---|---|
+| `text` | a string | as is |
+| `count` | an integer | grouped digits |
+| `bytes` | an integer | a base-10 size, exact figure on hover |
+| `timestamp` | an ISO stamp | "7 days ago", exact stamp on hover; sorts on the instant |
+| `timeseries` | `{value, unit, samples, detail}` | the value over a sparkline, calibrated across the column |
+| `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
+| `status` | `{key, label, at, detail, fraction, segments}` | a glyph for the key, the reason on hover, a bar while running |
+| `chips` | `[{kind, text, title}]` | a row of chips |
+| `actions` | `[{id, label, enabled, disabled_reason, danger}]` | buttons; the card supplies the handler for each id, and an id with no handler draws nothing |
+| `markdown_uuid` | a uuid or `{id, label}` | the title; click opens the document |
+
+The producer resolves, the viewer presents: an `identity` arrives with
+its label already looked up, because only the producer can, and the
+viewer decides what the icon token looks like. An action is an *id*,
+never a URL — a URL arriving as data would be a capability.
+
+`GET /api/manage/rows` is the first producer; `TableGrid` mounts
+inside `Manager2View` and inside `tableView`. Its styles live in
+`cards/tableGrid.css` rather than the component's `<style>`: a
+`.ce.vue`'s styles attach to the component for the card adapter to
+drop into a shadow root, so a page importing the viewer directly has
+to import the file into the head, and a card passes it as a style
+source.
 
 Adding a view = adding a factory to `ViewLibs` in
 `datalib/ui/src/cards/libs/index.ts` (and its name to the

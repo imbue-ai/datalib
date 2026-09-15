@@ -18,13 +18,10 @@ import {
   type GridApi,
   type GridReadyEvent,
   type IRowNode,
-  type ICellRendererComp,
   type ICellRendererParams,
   type IsGroupOpenByDefaultParams,
   type MenuItemDef,
   type RowGroupOpenedEvent,
-  type RowSelectionOptions,
-  type ValueGetterParams,
 } from "ag-grid-community";
 // Tree data — one row per group with its steps under a chevron — and
 // the right-click menu are enterprise modules. GridCard already links
@@ -42,8 +39,6 @@ import {
   fetchTreeHistory,
   enqueueJob,
   cancelJob,
-  type DagStepProgress,
-  progressFraction,
   type ManageResponse,
   type ManageRow,
   type SyncJob,
@@ -69,18 +64,19 @@ import {
   type SourceSteps,
   type StepPhase,
 } from "@/config/sourceSteps";
-import { calibrationMax, sparkline, type UsageSample } from "@/config/sparkline";
+import { sparkline, type Sample } from "@/config/sparkline";
+import { formatBytes } from "@/config/bytes";
+import TableGrid from "@/cards/TableGrid.ce.vue";
+// The viewer's cell styles, into the head: this is a page, not a card.
+import "@/cards/tableGrid.css";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
-import { iconUrl } from "@/config/icons";
 import { browseColumns, browseQuery } from "@/config/browsePresets";
 import { encodeColumns } from "@/router/columns";
-import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
 import RunLogPanel from "@/components/RunLogPanel.vue";
-import { activityChips, activityText } from "@/config/activity";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
-import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
+import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
@@ -210,17 +206,10 @@ function renderSiblingOf(fetchId: string): ConfiguredStep | undefined {
 
 /// What a row stands for: a `[[groups]]` entry, or one of the two
 /// kinds of entry filed under it. The server assembles the row
-/// (`GET /api/manage/rows`); what is added here is what needs the
-/// wizard's catalog, which lives in the browser.
+/// (`GET /api/manage/rows`), typed by the columns it declares; what is
+/// added here is what needs the wizard's descriptors, which live in
+/// the browser.
 type Row = ManageRow & {
-  /// The word behind the step-role glyph that follows the name —
-  /// its `title`, and its accessible name.
-  kindLabel: string;
-  /// The catalog's name for the provider ("Slack"), shown under Type —
-  /// a property of the entry's type, not of this entry.
-  typeLabel: string;
-  icon: string | null;
-  entry: CatalogEntry | undefined;
   /// Null when the wizard can edit this row; otherwise why not.
   editBlocked: string | null;
   /// The group whose form Edit opens: the row's own group, or for a
@@ -233,51 +222,25 @@ type Row = ManageRow & {
   browseSource: string;
 };
 
-/// The word behind a row's step-role glyph. A step is labelled by its
-/// phase rather than the word "step", because that is the distinction a
-/// reader actually wants: which of these brings data in, which turns it
-/// into markdown, which is shared index plumbing.
-const PHASE_LABEL: Record<StepPhase, string> = {
-  ingest: "Ingest",
-  render: "Render",
-  index: "Index",
-  other: "Step",
-};
-
 /// The tree the grid shows, as the server assembled it, with the
-/// catalog's knowledge added per row.
+/// wizard's knowledge added per row.
 const rows = computed<Row[]>(() => (manage.value?.rows ?? []).map(decorate));
 
-/// The parsed config entry behind a row, for the catalog lookups. Absent
-/// until the config text has loaded, or for an entry the parser could
-/// not list.
-function configuredEntry(row: ManageRow): ConfiguredStep | undefined {
-  return sources.value.find((s) => s.id === row.id && s.kind === row.kind);
+function droppedWhy(r: ManageRow): string | null {
+  if (!r.dropped) return null;
+  return `Not in the pipeline: ${r.dropped.message}${r.dropped.help ? ` — ${r.dropped.help}` : ""}`;
 }
 
 function decorate(r: ManageRow): Row {
   if (r.kind === "group") {
-    const g = configGroups.value.find((x) => x.id === r.id);
-    const entry = g ? groupEntry(g, sourceStepsOf(g.id, sources.value)) : undefined;
     const editBlocked = groupEditBlocked(r.id);
-    const droppedWhy = r.dropped ? `Not in the pipeline: ${r.dropped.message}${r.dropped.help ? ` — ${r.dropped.help}` : ""}` : null;
     return {
       ...r,
-      kindLabel: "Group",
-      typeLabel: entry?.label ?? r.type ?? "—",
-      icon: entry?.icon ?? null,
-      entry,
       editBlocked,
       editGroup: editBlocked ? null : r.id,
-      ...groupBrowse(r, droppedWhy),
+      ...groupBrowse(r, droppedWhy(r)),
     };
   }
-  // Not `catalogFor(r.type)`: one step type can have several descriptors
-  // (Gmail and Fastmail are both `email`), and which one a step is comes
-  // from its params — or, for a render step, from the params of the step
-  // it reads.
-  const s = configuredEntry(r);
-  const entry = s ? entryForStep(s, sources.value) : undefined;
   // Edit: the wizard's one form describes a source — a group and its two
   // steps — so a step under a group edits through its group. Everything
   // else is hand-written config, and the honest answer is to say so.
@@ -297,15 +260,11 @@ function decorate(r: ManageRow): Row {
   }
   // "Download" or "Import", read off the step's params against what its
   // provider declares; the server's "Ingest" only when they name no method.
-  const name =
-    r.group && r.phase === "ingest" ? (ingestLabel(r.type, r.params) ?? r.name) : r.name;
+  const ingestLabelled =
+    r.group && r.phase === "ingest" ? ingestLabel(r.type?.id ?? null, r.params) : null;
   return {
     ...r,
-    name,
-    kindLabel: r.kind === "applet" ? "Applet" : PHASE_LABEL[r.phase],
-    typeLabel: entry?.label ?? r.type ?? "—",
-    icon: entry?.icon ?? null,
-    entry,
+    name: ingestLabelled ? { ...r.name, label: ingestLabelled } : r.name,
     editBlocked,
     editGroup: editBlocked ? null : r.group,
     // A source is browsed as one thing, from its group's row — the same
@@ -330,7 +289,8 @@ function groupBrowse(
   g: ManageRow,
   dropped: string | null,
 ): { browseBlocked: string | null; browseSource: string } {
-  if (!g.type) {
+  const type = g.type?.id ?? null;
+  if (!type) {
     return { browseBlocked: dropped, browseSource: "gridView()" };
   }
   if (dropped) return { browseBlocked: dropped, browseSource: "" };
@@ -345,7 +305,7 @@ function groupBrowse(
       browseSource: "",
     };
   }
-  const columns = browseColumns(g.type);
+  const columns = browseColumns(type);
   const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id))}`];
   if (columns) args.push(`columns: ${JSON.stringify(columns)}`);
   return { browseBlocked: null, browseSource: `gridView({ ${args.join(", ")} })` };
@@ -383,32 +343,14 @@ function groupEntry(g: ConfiguredGroup, steps: SourceSteps): CatalogEntry | unde
   return step ? entryForStep(step, sources.value) : catalogForStep(g.type, {});
 }
 
-/// Base-10 units, matching what a file manager shows — the question
-/// behind this column is "how much of my disk is this", not a precise
-/// block count.
-function formatBytes(n: number): string {
-  if (n < 1000) return `${n} B`;
-  const units = ["kB", "MB", "GB", "TB"];
-  let v = n / 1000;
-  let i = 0;
-  while (v >= 1000 && i < units.length - 1) {
-    v /= 1000;
-    i++;
-  }
-  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
-}
-
-/// The value the top of every sparkline in the size column stands for.
-const maxBytes = computed(() => calibrationMax(rows.value));
-
-/// The plot box for a size cell, in user units. Small and fixed: the
-/// column is 140px and the cell has a number sitting over it.
-const ROW_SPARK = { width: 120, height: 18 };
+/// The status bar's plot box, in user units. Wider than a row's,
+/// because it is the only thing on its line.
+const ROOT_SPARK = { width: 260, height: 20 };
 
 /// Build the `<svg>` for one series, or null when there is nothing to
 /// draw yet.
 function sparkSvg(
-  history: UsageSample[],
+  history: Sample[],
   box: { width: number; height: number },
   scale: { min?: number; max: number },
   nowMs: number,
@@ -451,423 +393,20 @@ const windowPhrase = computed(() => {
     : `the last ${secs} seconds`;
 });
 
-/// 24×24 Material-ish glyphs, drawn in `currentColor` so they follow the
-/// button's own colour through hover, disabled and the dark theme.
-const ICON_PATHS: Record<string, string> = {
-  run: "M8 5v14l11-7z",
-  // The play button's other face. A row whose work is already queued or
-  // in flight can't usefully be started again, so the button becomes
-  // the one thing left to do with it.
-  stop: "M6 6h12v12H6z",
+/// What each Sync-column button does. The rows say which button a row
+/// carries and whether it is enabled; this is the code behind the id.
+const rowActions: Record<string, (row: Row) => void> = {
+  sync: (row) => void runRow(row),
+  stop: (row) => {
+    if (row.stop_job_id) void stopJob(row.stop_job_id);
+  },
 };
 
-/// The Sync cell's button. Built once per cell; its face is set by
-/// `setButton`, and re-set in place on every repaint.
-function iconButton(
-  icon: keyof typeof ICON_PATHS,
-  label: string,
-  disabledWhy: string | null,
-  danger: boolean,
-  onClick: () => void,
-): HTMLButtonElement {
-  const b = document.createElement("button");
-  b.className = `m2-icon-btn${danger ? " danger" : ""}`;
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("width", "15");
-  svg.setAttribute("height", "15");
-  svg.setAttribute("aria-hidden", "true");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("fill", "currentColor");
-  svg.appendChild(path);
-  b.appendChild(svg);
-  setButton(b, icon, label, disabledWhy);
-  b.addEventListener("click", (e) => {
-    e.stopPropagation();
-    onClick();
-  });
-  return b;
-}
-
-function setButton(
-  b: HTMLButtonElement,
-  icon: keyof typeof ICON_PATHS,
-  label: string,
-  disabledWhy: string | null,
-): void {
-  b.title = disabledWhy ?? label;
-  b.setAttribute("aria-label", label);
-  b.disabled = !!disabledWhy;
-  b.querySelector("path")!.setAttribute("d", ICON_PATHS[icon]);
-}
-
-/// The one button a row keeps: Sync, or Stop while a job has the row
-/// claimed. Everything else a row can do is in its right-click menu.
-///
-/// A class rather than a function so that `refresh` can update the
-/// button in place and return true: `repaint()` runs on every job
-/// event — a few times a second during a sync — and a function
-/// renderer is torn down and rebuilt on each, so a click whose
-/// mousedown landed on the old button and mouseup on its replacement
-/// fired nothing. The button is created once and reads the row current
-/// at click time.
-class ActionsRenderer implements ICellRendererComp<Row> {
-  private wrap!: HTMLSpanElement;
-  private row!: Row;
-  private run!: HTMLButtonElement;
-
-  init(p: ICellRendererParams<Row>): void {
-    this.row = p.data!;
-    this.wrap = document.createElement("span");
-    this.wrap.className = "m2-actions";
-    // One button, two faces. While a job has this row claimed the only
-    // useful thing to do with it is call it off — starting a second
-    // sync of work already queued is never what was meant. A group is
-    // claimed when any step under it is.
-    this.run = iconButton("run", "Sync now", null, false, () => {
-      if (this.row.stop_job_id) void stopJob(this.row.stop_job_id);
-      else void runRow(this.row);
-    });
-    this.wrap.appendChild(this.run);
-    this.apply();
-  }
-
-  getGui(): HTMLElement {
-    return this.wrap;
-  }
-
-  refresh(p: ICellRendererParams<Row>): boolean {
-    this.row = p.data!;
-    this.apply();
-    return true;
-  }
-
-  private apply(): void {
-    const row = this.row;
-    if (row.stop_job_id) {
-      setButton(this.run, "stop", row.stop_label ?? "Stop the sync in progress", null);
-      this.run.classList.add("danger");
-    } else {
-      setButton(this.run, "run", "Sync now", row.run_blocked);
-      this.run.classList.remove("danger");
-    }
-  }
-}
-
-const columnDefs: ColDef<Row>[] = [
-  {
-    headerName: "Name",
-    field: "name",
-    // The only flexing column: it absorbs slack on a wide window, and
-    // stops shrinking at a width a stanza name still fits in.
-    flex: 1,
-    minWidth: 200,
-    // A group's name is edited in place — from the menu's Rename, or a
-    // double-click on the cell. The value never lands in the row: the
-    // setter writes the config, and the row comes back from the reload.
-    editable: (p) => p.data?.kind === "group",
-    cellEditor: "agTextCellEditor",
-    valueSetter: (p) => {
-      const next = String(p.newValue ?? "").trim();
-      if (p.data && next !== p.oldValue) void renameRow(p.data, next);
-      return false;
-    },
-    // The column the tree hangs off: AG Grid's group renderer draws the
-    // chevron and the indent, and hands the cell's content to the
-    // renderer below. The label leads and the directory name follows
-    // it, muted, whenever they differ. Showing only the label would
-    // hide which folder this is — the whole reason the name stays fixed
-    // is that the on-disk layout is meant to be legible, and a grid
-    // that stopped naming it would give that away for a prettier row.
-    showRowGroup: true,
-    cellRenderer: "agGroupCellRenderer",
-    cellRendererParams: {
-      suppressCount: true,
-      innerRenderer: (p: ICellRendererParams<Row>) => {
-        const wrap = document.createElement("span");
-        wrap.className = "m2-cell-source";
-        const row = p.data;
-        const text = document.createElement("span");
-        if (row?.kind === "group") text.className = "m2-group-name";
-        text.textContent = row?.name ?? "";
-        wrap.appendChild(text);
-        // The step-role mark. A group row has none: the chevron before
-        // it already says what it is.
-        if (row && row.kind !== "group") {
-          const glyph = row.kind === "applet" ? STEP_GLYPHS.applet : STEP_GLYPHS[row.phase];
-          const mark = document.createElement("span");
-          mark.className = "m2-name-step";
-          mark.title = row.kindLabel;
-          mark.appendChild(glyphSvg(glyph, row.kindLabel, 14));
-          wrap.appendChild(mark);
-        }
-        if (row && row.name !== row.id) {
-          const dir = document.createElement("span");
-          dir.className = "m2-cell-dir";
-          dir.textContent = row.id;
-          dir.title = `Id — stored in ${row.id}/ under the data root`;
-          wrap.appendChild(dir);
-        }
-        return wrap;
-      },
-    },
-  },
-  {
-    // The service, as its own mark. No text: a brand mark is more
-    // legible at a glance than its name is, and the name is one hover
-    // away — which is the trade the whole row makes.
-    headerName: "Type",
-    field: "typeLabel",
-    width: 70,
-    minWidth: 70,
-    cellRenderer: (p: ICellRendererParams<Row>) => {
-      const row = p.data;
-      const wrap = document.createElement("span");
-      wrap.className = "m2-cell-type";
-      if (!row) return wrap;
-      // A group that mirrors nothing — the unified index — has no type,
-      // and a blank cell is the honest mark for it.
-      if (row.kind === "group" && !row.type) return wrap;
-      const url = iconUrl(row.icon);
-      if (url) {
-        const img = document.createElement("img");
-        img.src = url;
-        img.alt = row.typeLabel;
-        img.title = row.typeLabel;
-        wrap.appendChild(img);
-      } else {
-        // No brand mark for this type. The word is what we have, and a
-        // blank cell would read as "no type" rather than "no logo".
-        const abbr = document.createElement("span");
-        abbr.className = "m2-type-word";
-        abbr.textContent = row.typeLabel;
-        abbr.title = row.typeLabel;
-        wrap.appendChild(abbr);
-      }
-      return wrap;
-    },
-  },
-  {
-    headerName: "Status",
-    field: "status",
-    colId: "status",
-    width: 96,
-    minWidth: 96,
-    // Sort and filter on the word, not on the object — otherwise both
-    // operate on "[object Object]" and quietly do nothing useful.
-    valueGetter: (p: ValueGetterParams<Row>) => p.data?.status.label ?? "",
-    // No `tooltipValueGetter` here: the renderer sets a native `title`,
-    // and AG Grid's own tooltip on top of it means two tooltips racing
-    // on one cell. One mechanism, carrying the whole sentence.
-    cellRenderer: (p: ICellRendererParams<Row>) => {
-      const row = p.data;
-      const wrap = document.createElement("span");
-      if (!row) return wrap;
-      const { key, label } = row.status;
-      wrap.className = `m2-status m2-status-${key.replace(/[\s_]+/g, "-")}`;
-      // The word, and then why it is that word: a failure message, how
-      // a run died, or which steps a queued row is behind. The column
-      // is icons, so this is the only place either appears.
-      const why = row.progress?.msg ?? row.status.detail;
-      wrap.title = why ? `${label} — ${why}` : label;
-
-      // A group with a run in flight: one segment per step, in pipeline
-      // order, each in its own step's colour — the running one pulsing.
-      // No arithmetic across children; the bar *is* the children.
-      if (row.segments) {
-        if (key === "running") {
-          const spin = document.createElement("span");
-          spin.className = "m2-spinner";
-          spin.setAttribute("role", "img");
-          spin.setAttribute("aria-label", label);
-          wrap.appendChild(spin);
-        } else {
-          const glyph = STATUS_GLYPHS[key];
-          if (glyph) wrap.appendChild(glyphSvg(glyph, label));
-        }
-        const bar = document.createElement("span");
-        bar.className = "m2-segs";
-        for (const seg of row.segments) {
-          const cell = document.createElement("span");
-          cell.className = `m2-seg m2-seg-${seg.key.replace(/[\s_]+/g, "-")}`;
-          cell.title = `${seg.id}: ${seg.label}`;
-          bar.appendChild(cell);
-        }
-        wrap.appendChild(bar);
-        return wrap;
-      }
-
-      if (key === "running") {
-        // A still frame can't say "still going", so running is the one
-        // state drawn rather than glyphed.
-        const spin = document.createElement("span");
-        spin.className = "m2-spinner";
-        spin.setAttribute("role", "img");
-        spin.setAttribute("aria-label", label);
-        wrap.appendChild(spin);
-
-        // A step that said how much is ahead of it gets a bar. One that
-        // did not gets none: a bar at an invented fraction claims more
-        // than we know, and the spinner is already the honest signal
-        // that something is happening.
-        const frac = progressFraction(row.progress);
-        if (frac != null) {
-          const bar = document.createElement("span");
-          bar.className = "m2-progress";
-          const fill = document.createElement("span");
-          fill.style.width = `${frac * 100}%`;
-          bar.appendChild(fill);
-          wrap.appendChild(bar);
-        }
-        return wrap;
-      }
-
-      const glyph = STATUS_GLYPHS[key];
-      if (glyph) {
-        wrap.appendChild(glyphSvg(glyph, label));
-      } else {
-        // A status this sheet hasn't met. Say the word rather than
-        // drawing nothing — an unknown state is exactly when a reader
-        // most needs to know what it was.
-        wrap.textContent = label;
-      }
-      return wrap;
-    },
-  },
-  {
-    // What the step has reported in the run in flight, as numbers: how
-    // much is queued in front of it, what it has counted so far, and how
-    // many warnings and errors it has logged — the three USE questions,
-    // per step. Empty for a step that is not running or has said nothing.
-    headerName: "Activity",
-    colId: "activity",
-    width: 260,
-    minWidth: 160,
-    valueGetter: (p: ValueGetterParams<Row>) => activityText(p.data?.progress ?? null),
-    cellRenderer: (p: ICellRendererParams<Row>) => {
-      const wrap = document.createElement("span");
-      wrap.className = "m2-activity";
-      // The chips are cut at the column's edge; the whole row of them
-      // is one hover away.
-      wrap.title = activityText(p.data?.progress ?? null);
-      const prog = p.data?.progress;
-      if (!prog) return wrap;
-      for (const chip of activityChips(prog)) {
-        const el = document.createElement("span");
-        el.className = `m2-chip ${chip.kind}`;
-        el.textContent = chip.text;
-        el.title = chip.title;
-        wrap.appendChild(el);
-      }
-      return wrap;
-    },
-  },
-  {
-    headerName: "Last synced",
-    field: "last_synced",
-    width: 150,
-    minWidth: 150,
-      // Sort on the instant. AG Grid sorts the row's value rather than what a
-      // renderer drew, and the value is an ISO string carrying its own UTC
-      // offset, which does not compare correctly as text. See `compareStamps`.
-    comparator: compareStamps,
-    cellRenderer: (p: ICellRendererParams<Row>) => {
-      const iso = p.data?.last_synced ?? null;
-      const span = document.createElement("span");
-      span.textContent = formatRelative(iso, Date.now());
-      // The exact stamp, for when "7 days ago" isn't the answer you
-      // needed. Only when there is one — "—" has nothing to reveal.
-      if (iso) span.title = formatStamp(iso);
-      else span.className = "m2-none";
-      return span;
-    },
-  },
-  {
-    headerName: "Bytes on disk",
-    field: "bytes",
-    width: 140,
-    minWidth: 140,
-    // The breakdown is what answers "why is this 40 GB?" — attachments
-    // routinely dwarf both the entity store and the rendered markdown.
-    tooltipValueGetter: (p: { data?: Row }) => {
-      const row = p.data;
-      if (!row) return undefined;
-      if (row.kind === "applet") return "An applet owns no artifacts.";
-      const present = row.outputs.filter((o) => o.present);
-      if (present.length === 0) return "Nothing on disk yet — this hasn't produced anything.";
-      // The total leads, because it is the number the bar stands for
-      // and the bar alone can't say it. The per-output breakdown —
-      // entities vs attachments, where the backend found a split —
-      // follows, and is the answer to "why is this so big" far more
-      // often than the total is.
-      const detail = present
-        .map((o) =>
-          o.parts?.length
-            ? `${o.path}: ${o.parts.map((x) => `${x.label} ${formatBytes(x.bytes)}`).join(", ")}`
-            : `${o.path}: ${formatBytes(o.bytes)}`,
-        )
-        .join(" · ");
-      const total = formatBytes(row.bytes ?? 0);
-      // A group's total is its folder, measured as one tree — which
-      // also counts anything in it no step wrote — and the breakdown
-      // under it is its steps' trees.
-      const size =
-        row.kind === "group"
-          ? `${total} in ${row.id}/ — ${detail}`
-          : present.length === 1 && !present[0].parts?.length
-            ? total
-            : `${total} — ${detail}`;
-      return `${size} · the line is ${windowPhrase.value}, drawn against the largest row`;
-    },
-    // The recent history rather than a bar, on a linear scale against
-    // the largest row. Two things at once, and the column has room for
-    // both because they stack: the sparkline says which way this tree
-    // is going and how fast, the number says how big it is now.
-    cellRenderer: (p: ICellRendererParams<Row>) => {
-      const row = p.data;
-      const wrap = document.createElement("span");
-      wrap.className = "m2-bytes";
-      if (!row || row.bytes === null) {
-        // Null is "nothing on disk yet", which is not a flat line at
-        // zero — it's the absence of a plot.
-        wrap.textContent = "—";
-        wrap.classList.add("m2-none");
-        return wrap;
-      }
-      const track = document.createElement("span");
-      track.className = "m2-plot";
-      const svg = sparkSvg(row.history, ROW_SPARK, { max: maxBytes.value }, Date.now());
-      // No history yet means the backend hasn't finished its first walk
-      // of the root. The size still shows; there is just nothing behind
-      // it to draw.
-      if (svg) track.appendChild(svg);
-      // The size, centred over the plot. Neither replaces the other,
-      // and stacking them costs no width in a column that has little to
-      // spare.
-      const label = document.createElement("span");
-      label.className = "m2-plot-label";
-      label.textContent = formatBytes(row.bytes);
-      track.appendChild(label);
-      wrap.appendChild(track);
-      return wrap;
-    },
-  },
-  {
-    headerName: "Sync",
-    colId: "actions",
-    sortable: false,
-    filter: false,
-    width: 64,
-    minWidth: 64,
-    resizable: false,
-    valueGetter: (p: ValueGetterParams<Row>) => p.data?.id,
-    cellRenderer: ActionsRenderer,
-  },
-];
+const tableGrid = ref<{ refreshCells: (fields?: string[]) => void } | null>(null);
 
 let gridApi: GridApi<Row> | null = null;
-function onGridReady(e: GridReadyEvent<Row>) {
-  gridApi = e.api;
+function onGridReady(api: GridApi<Row>) {
+  gridApi = api;
 }
 
 /// Commit only the newest answer, whatever order the answers arrive in.
@@ -955,10 +494,6 @@ async function openStepLog(row: Row, runId: string | null = null) {
 
 // ── The status bar ───────────────────────────────────────────────────
 
-/// The width of the status bar's plot, in user units. Wider than a
-/// row's, because it is the only thing on its line.
-const ROOT_SPARK = { width: 260, height: 20 };
-
 /// The root's series, scaled to its own range rather than to zero.
 const rootScale = computed(() => {
   const h = storage.value?.root.history ?? [];
@@ -1012,7 +547,7 @@ function paintRootSpark() {
   if (!host) return;
   host.replaceChildren();
   const svg = sparkSvg(
-    storage.value?.root.history ?? [],
+    (storage.value?.root.history ?? []).map((h) => ({ at: h.at, value: h.bytes })),
     ROOT_SPARK,
     rootScale.value,
     Date.now(),
@@ -1029,14 +564,19 @@ const helpOpen = ref(false);
 /// Double-click on Status opens that row's log. Only that column: the
 /// rest of the row has its own meanings for a double-click, and
 /// overloading all of them would make the gesture unguessable.
-function onCellDoubleClicked(e: { column?: { getColId: () => string }; data?: Row }) {
-  if (e.column?.getColId() !== "status" || !e.data) return;
+function onCellDoubleClicked(data: Row, field: string) {
+  if (field !== "status") return;
   // A group's status is one child's, and that child's log is the answer.
   const row =
-    e.data.kind === "group"
-      ? rows.value.find((r) => r.kind !== "group" && r.id === e.data!.status_from)
-      : e.data;
+    data.kind === "group"
+      ? rows.value.find((r) => r.kind !== "group" && r.id === data.status_from)
+      : data;
   if (row) void openStepLog(row);
+}
+
+/// An in-place edit of the Name cell: a group's rename.
+function onCellEdit(row: Row, field: string, value: string) {
+  if (field === "name" && row.kind === "group") void renameRow(row, value);
 }
 
 // ── A tree's commit history. Every doltlite store keeps its own log —
@@ -1091,7 +631,7 @@ function refreshHistory() {
 }
 
 /// What the panel is titled: one row's name, or the names joined.
-const historyTitle = computed(() => historyFor.value.map((r) => r.name).join(", "));
+const historyTitle = computed(() => historyFor.value.map((r) => r.name.label).join(", "));
 
 let historyGridApi: GridApi<HistoryRow> | null = null;
 let lastHistoryPaint = "";
@@ -1136,12 +676,6 @@ function openRunLog(row: HistoryRow) {
 // the selection stays as it was. An entry that does not apply stays,
 // disabled, with the reason as its tooltip — see `config/rowMenu.ts`.
 
-const rowSelection: RowSelectionOptions<Row> = {
-  mode: "multiRow",
-  checkboxes: false,
-  headerCheckbox: false,
-  enableClickSelection: true,
-};
 
 /// The rows a right-click acts on, in table order: the selection when
 /// the row under the pointer is in it, that row alone when it is not.
@@ -1159,11 +693,11 @@ function menuTargets(api: GridApi<Row>, anchor: IRowNode<Row> | null | undefined
 function menuTarget(row: Row): MenuTarget {
   return {
     id: row.id,
-    name: row.name,
+    name: row.name.label,
     kind: row.kind,
-    type: row.type,
+    type: row.type?.id ?? null,
     func: row.function,
-    runBlocked: row.run_blocked,
+    runBlocked: row.actions.find((a) => a.id === "sync")?.disabled_reason ?? null,
     editBlocked: row.editBlocked,
     revealBlocked: row.reveal_blocked,
     browseBlocked: row.browseBlocked,
@@ -1487,7 +1021,7 @@ function reparse() {
   // disabled state is baked in at first render and does not follow the
   // row: a hand-edit that makes a source editable again has to reach
   // its Edit button, and that row id didn't change.
-  gridApi?.refreshCells({ columns: ["actions"], force: true });
+  tableGrid.value?.refreshCells(["actions"]);
 }
 
 async function loadConfig() {
@@ -1529,10 +1063,7 @@ const droppedRows = computed(() => rows.value.filter((r) => r.dropped));
 /// Repaint the columns whose content is a `cellRenderer` over state
 /// that lives outside the row's identity.
 function repaint() {
-  gridApi?.refreshCells({
-    columns: ["status", "last_synced", "bytes", "actions"],
-    force: true,
-  });
+  tableGrid.value?.refreshCells();
 }
 
 const commitJobs = freshest<SyncJob[]>((list) => {
@@ -1867,7 +1398,7 @@ async function runRows(targets: Row[]) {
   const shown = targets
     .map((row) => {
       const step = sources.value.find((s) => s.id === row.id);
-      return row.kind === "group" ? row.name : (step?.name ?? row.id);
+      return row.kind === "group" ? row.name.label : (step?.name ?? row.id);
     })
     .join(", ");
   busy.value = true;
@@ -1990,30 +1521,18 @@ function mergeJob(e: JobProgressEvent) {
 }
 
 let unsubscribe: (() => void) | null = null;
-let relativePoll: ReturnType<typeof setInterval> | null = null;
-
-/// The Last synced column reads "5 minutes ago", which goes stale on its own,
-/// so this is the one clock the column needs. It ticks every second but
-/// repaints only when a row would actually read differently — which keeps the
-/// crossing prompt without doing DOM work most seconds.
-let lastRelativePaint = "";
-function tickRelative() {
-  const now = Date.now();
-  const next = rows.value.map((r) => formatRelative(r.last_synced, now)).join("\u0000");
-  if (next !== lastRelativePaint) {
-    lastRelativePaint = next;
-    gridApi?.refreshCells({ columns: ["last_synced"], force: true });
-  }
-  tickHistoryRelative(now);
-}
 
 /// Everything this table shows, refetched together — which is the point, and
-/// why this is one function rather than five calls at five cadences. Rows come
+/// why this is one function rather than three calls at three cadences. Rows come
 /// from the config, Status and Last synced from the runner's record; fetch the
 /// first without the second and a row that has run paints as "Never run".
 async function reloadAll(freshStorage = false) {
   await Promise.all([loadConfig(), loadJobs(), loadRows(freshStorage)]);
 }
+
+/// The history panel's "seconds ago" needs a clock; the main grid's
+/// Last synced column has its own inside `TableGrid`.
+let historyPoll: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
   // Fresh sizes on the first paint. The backend only walks the disk
@@ -2041,19 +1560,14 @@ onMounted(async () => {
     // sampler's own last walk with it. Ask for a fresh one.
     resync: () => void reloadAll(true),
   });
-
-  // The one timer left, and the only one that was ever right: "5
-  // minutes ago" goes stale with nothing happening, so it needs a
-  // clock rather than an event. See `tickRelative` — it repaints only
-  // when a row would actually read differently.
-  relativePoll = setInterval(tickRelative, 1000);
+  historyPoll = setInterval(() => tickHistoryRelative(Date.now()), 1000);
 });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onWindowKeydown);
   unsubscribe?.();
   unsubscribe = null;
-  if (relativePoll) clearInterval(relativePoll);
+  if (historyPoll) clearInterval(historyPoll);
   gridApi = null;
 });
 </script>
@@ -2132,27 +1646,22 @@ onUnmounted(() => {
     <p v-if="banner" class="m2-msg" :class="banner.ok ? 'good' : 'bad'">{{ banner.text }}</p>
 
     <div class="m2-grid">
-      <!-- Tree data: a group row with its steps and applets under it.
-           `treeDataDisplayType: custom` keeps the Name column as the
-           column the chevron lives in, rather than a generated one. -->
-      <AgGridVue
-        class="m2-ag"
-        :theme="gridTheme"
-        :columnDefs="columnDefs"
-        :rowData="rows"
-        :getRowId="(p: { data: Row }) => p.data.key"
-        :treeData="true"
-        treeDataDisplayType="custom"
-        :getDataPath="(r: Row) => r.path"
-        :groupDefaultExpanded="0"
+      <!-- The typed viewer over the rows the server assembled: a tree,
+           one group row with its steps and applets under it. -->
+      <TableGrid
+        ref="tableGrid"
+        :columns="manage?.columns ?? []"
+        :rows="rows"
+        :tree="true"
+        :windowSecs="storage?.window_secs ?? 300"
+        :actions="rowActions"
+        :contextMenu="contextMenuItems"
+        :selectable="true"
         :isGroupOpenByDefault="isGroupOpenByDefault"
-        :tooltipShowDelay="200"
-        :rowSelection="rowSelection"
-        :preventDefaultOnContextMenu="true"
-        :getContextMenuItems="contextMenuItems"
-        @grid-ready="onGridReady"
-        @cell-double-clicked="onCellDoubleClicked"
-        @row-group-opened="onRowGroupOpened"
+        @ready="onGridReady"
+        @cellDoubleClick="onCellDoubleClicked"
+        @edit="onCellEdit"
+        @rowGroupOpened="onRowGroupOpened"
       />
     </div>
 
@@ -2305,7 +1814,7 @@ onUnmounted(() => {
       <div class="m2-logs m2-runlog" role="dialog" aria-modal="true" aria-label="Step log">
         <header class="m2-logs-head">
           <div>
-            <h3>{{ logFor.row.name }}</h3>
+            <h3>{{ logFor.row.name.label }}</h3>
             <p>
               <code>{{ logFor.row.id }}</code>
               <span v-if="logFor.runId">

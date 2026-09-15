@@ -172,6 +172,7 @@ mod tests {
             label: key.into(),
             at: at.map(str::to_string),
             detail: detail.map(str::to_string),
+            ..Default::default()
         }
     }
     fn child(id: &str, key: &str, kind: ChildKind, at: Option<&str>) -> ChildStatus {

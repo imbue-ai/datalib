@@ -54,6 +54,11 @@ const BUILTIN_GALLERY: GalleryEntry[] = [
       "See your sources' step graph and watch syncs flow through it live.",
   },
   {
+    source: 'tableView({ url: "/api/manage/rows" })',
+    title: "Table",
+    description: "Any endpoint that declares its columns, drawn as a typed table.",
+  },
+  {
     source: "aliasView()",
     title: "Component library",
     description: "List the custom components stored on this instance.",

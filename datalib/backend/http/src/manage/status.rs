@@ -6,7 +6,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use app_schema::sync_jobs::SyncJobRow;
 use datalib_dag::{Diagnostic, Severity};
-use serde::Serialize;
 
 use crate::{DagRunInfo, DagStepRun};
 
@@ -111,16 +110,10 @@ pub fn status_rank(key: &str) -> Option<i32> {
     })
 }
 
-/// One row's status, reduced to a vocabulary the Status column can draw.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct StatusView {
-    pub key: String,
-    pub label: String,
-    /// When this status was reached. Feeds the "Last synced" column, so
-    /// the two can never disagree about which run they describe.
-    pub at: Option<String>,
-    pub detail: Option<String>,
-}
+/// One row's status, in the shape the Status column draws. The rules
+/// here fill `key`, `label`, `at` and `detail`; the assembly adds a
+/// fraction and segments where a run is in flight.
+pub type StatusView = datalib_columns::Status;
 
 /// The word each status key stands for. `skipped_up_to_date` is the
 /// runner's word; "Up to date" is what it means to someone looking at
@@ -154,6 +147,7 @@ pub fn view(key: &str, at: Option<String>, detail: Option<String>) -> StatusView
         label: status_label(key),
         at,
         detail,
+        ..Default::default()
     }
 }
 
@@ -1087,8 +1081,7 @@ mod tests {
             StatusView {
                 key: key.into(),
                 label: key.into(),
-                at: None,
-                detail: None,
+                ..Default::default()
             }
         }
 
@@ -1133,6 +1126,7 @@ mod tests {
                 label: "Running".into(),
                 at: Some(RUN_START.into()),
                 detail: Some("downloading 3/10".into()),
+                ..Default::default()
             };
             hold.hold("a/ingest", "job-1", running.clone());
             assert_eq!(hold.hold("a/ingest", "job-1", v("queued")), running);

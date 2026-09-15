@@ -106,19 +106,43 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     let got = get_rows(tmp.path()).await;
     assert_eq!(got["ok"], true, "{got}");
     assert_eq!(got["run"], serde_json::Value::Null);
+    assert_eq!(got["tree"], true);
+    let types: Vec<&str> = got["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        types,
+        [
+            "identity",
+            "identity",
+            "status",
+            "chips",
+            "timestamp",
+            "timeseries",
+            "actions"
+        ]
+    );
     let rows = by_key(&got);
     assert_eq!(rows.len(), 6, "{got}");
 
     let slack = &rows["group:slack"];
     assert_eq!(slack["kind"], "group");
-    assert_eq!(slack["name"], "Work Slack");
-    assert_eq!(slack["type"], "slack");
+    assert_eq!(slack["name"]["label"], "Work Slack");
+    assert_eq!(slack["name"]["id"], "slack");
+    assert_eq!(slack["type"]["id"], "slack");
+    assert_eq!(slack["type"]["label"], "Slack");
+    assert_eq!(slack["type"]["icon"], "slack");
     assert_eq!(slack["path"], serde_json::json!(["group:slack"]));
     assert_eq!(slack["status"]["key"], "never_run");
     assert_eq!(slack["status"]["from"], serde_json::Value::Null);
     assert_eq!(slack["seeds"], serde_json::json!(["slack/ingest"]));
-    assert_eq!(slack["run_blocked"], serde_json::Value::Null);
-    assert_eq!(slack["bytes"], serde_json::Value::Null);
+    assert_eq!(slack["actions"][0]["id"], "sync");
+    assert_eq!(slack["actions"][0]["enabled"], true);
+    assert_eq!(slack["disk"]["value"], serde_json::Value::Null);
+    assert_eq!(slack["disk"]["unit"], "bytes");
 
     let ingest = &rows["slack/ingest"];
     assert_eq!(
@@ -126,13 +150,15 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         serde_json::json!(["group:slack", "slack/ingest"])
     );
     assert_eq!(ingest["phase"], "ingest");
-    assert_eq!(ingest["type"], "slack");
-    assert_eq!(ingest["name"], "Ingest");
+    assert_eq!(ingest["type"]["label"], "Slack");
+    assert_eq!(ingest["name"]["label"], "Ingest");
+    assert_eq!(ingest["name"]["icon"], "step:ingest");
     assert_eq!(ingest["seeds"], serde_json::json!(["slack/ingest"]));
 
     let render = &rows["slack/render_markdown"];
-    assert_eq!(render["name"], "Render markdown");
-    assert!(render["run_blocked"]
+    assert_eq!(render["name"]["label"], "Render markdown");
+    assert_eq!(render["actions"][0]["enabled"], false);
+    assert!(render["actions"][0]["disabled_reason"]
         .as_str()
         .unwrap()
         .contains("Run slack/ingest"));
@@ -151,7 +177,9 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert!(label == "Up" || label == "Failed to start", "{applet}");
     assert_eq!(applet["status"]["at"], serde_json::Value::Null);
     assert_eq!(applet["last_synced"], serde_json::Value::Null);
-    assert_eq!(applet["name"], "Unified Index (Applet)");
+    assert_eq!(applet["name"]["label"], "Unified Index (Applet)");
+    assert_eq!(applet["name"]["icon"], "applet");
+    assert_eq!(applet["type"]["label"], "unified_index");
     // The group reads a failed applet as its own failure, else its
     // last step, which has never run.
     let index = &rows["group:unified_index"];
@@ -162,10 +190,12 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         assert_eq!(index["status"]["key"], "failed");
         assert_eq!(index["status_from"], "unified_index");
     }
-    assert!(index["run_blocked"]
+    assert!(index["actions"][0]["disabled_reason"]
         .as_str()
         .unwrap()
         .contains("none of this group's steps"));
+    // The index group mirrors nothing, so it has no type to show.
+    assert_eq!(index["type"], serde_json::Value::Null);
 }
 
 /// A finished run: the step rows read the record, and the group reads
@@ -235,7 +265,7 @@ async fn a_finished_run_reaches_the_rows() {
         "slack/render_markdown: bad json at line 3"
     );
     assert_eq!(slack["last_synced"], "2026-08-31T10:00:09+01:00");
-    assert_eq!(slack["segments"], serde_json::Value::Null);
+    assert!(slack["status"].get("segments").is_none(), "{slack}");
 }
 
 /// An entry the loader drops still has a row — it is still in the
@@ -263,7 +293,7 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
             .contains("title"),
         "{render}"
     );
-    assert!(render["run_blocked"]
+    assert!(render["actions"][0]["disabled_reason"]
         .as_str()
         .unwrap()
         .starts_with("Not in the pipeline"));

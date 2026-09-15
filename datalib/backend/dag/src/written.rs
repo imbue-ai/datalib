@@ -127,9 +127,12 @@ pub fn entries_as_written(text: &str) -> Result<WrittenEntries, String> {
 /// else, which is legitimate — an applet may be any executable.
 fn applet_type(command: &str) -> Option<String> {
     let mut words = command.split_whitespace();
-    let program = words.next()?;
+    // A quoted path, as a config written by a tool spells it; the
+    // bazel-built binary is `datalib_applet` under its target name.
+    let program = words.next()?.trim_matches(|c| c == '\'' || c == '"');
     let word = words.next()?;
-    let is_ours = program == "datalib-applet" || program.ends_with("/datalib-applet");
+    let base = program.rsplit('/').next().unwrap_or(program);
+    let is_ours = base == "datalib-applet" || base == "datalib_applet";
     is_ours.then(|| word.to_string())
 }
 
@@ -166,6 +169,10 @@ command = "/opt/bin/datalib-applet unified_index"
 [[applets]]
 id = "other"
 command = "python serve.py"
+
+[[applets]]
+id = "built"
+command = "'/x/bin/datalib_applet' slack"
 "#;
         let got = entries_as_written(text).unwrap();
         assert_eq!(
@@ -184,6 +191,7 @@ command = "python serve.py"
         assert_eq!(got.steps[1].name.as_deref(), Some("Custom"));
         assert_eq!(got.applets[0].r#type.as_deref(), Some("unified_index"));
         assert_eq!(got.applets[1].r#type, None);
+        assert_eq!(got.applets[2].r#type.as_deref(), Some("slack"));
     }
 
     #[test]

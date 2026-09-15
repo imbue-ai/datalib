@@ -2,11 +2,14 @@
 //! per entry in the config *file* — a group with its steps and applets
 //! under it — with the status, timestamps, sizes and actions the screen
 //! draws, joined here from the config, the runner's record, the run
-//! store, the job queue, the usage sampler and the applet supervisor.
-//! What stays in the browser is what needs the wizard's catalog: type
-//! labels and icons, whether the form can edit a row, and what Browse
-//! opens.
+//! store, the job queue, the usage sampler and the applet supervisor,
+//! and typed by the columns the response declares. What stays in the
+//! browser is what needs the wizard's descriptors: whether the form can
+//! edit a row, what Browse opens, and an ingest step's Download/Import
+//! label.
 
+mod activity;
+mod catalog;
 mod group;
 mod status;
 
@@ -15,12 +18,15 @@ use std::sync::{LazyLock, Mutex};
 
 use axum::extract::{Query, State};
 use axum::Json;
+use datalib_columns::{
+    Action, Chip, ColumnSpec, ColumnType, Identity, Sample, Segment, Timeseries,
+};
 use datalib_dag::written::{WrittenApplet, WrittenEntries, WrittenGroup, WrittenStep};
 use datalib_dag::{Diagnostic, EntryKind, Severity};
 use serde::{Deserialize, Serialize};
 
-use crate::usage::{OutputStorage, UsageSample};
-use crate::{usage, AppState, DagRecord, DagRunInfo, DagStepProgress};
+use crate::usage::OutputStorage;
+use crate::{usage, AppState, DagRecord, DagRunInfo};
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
 use status::{EffectiveRun, StatusArgs, StatusFloor, StatusView, StepEdges, StepRecord};
 
@@ -60,15 +66,43 @@ impl Phase {
             _ => Phase::Other,
         }
     }
+
+    /// The word behind the step-role glyph, and the glyph's token.
+    fn label(self) -> &'static str {
+        match self {
+            Phase::Ingest => "Ingest",
+            Phase::Render => "Render",
+            Phase::Index => "Index",
+            Phase::Other => "Step",
+        }
+    }
+    fn icon(self) -> &'static str {
+        match self {
+            Phase::Ingest => "step:ingest",
+            Phase::Render => "step:render",
+            Phase::Index => "step:index",
+            Phase::Other => "step:other",
+        }
+    }
 }
 
-/// One segment of a group's in-flight progress bar: a step and the
-/// status it is drawn in.
-#[derive(Debug, Clone, Serialize)]
-pub struct Segment {
-    pub id: String,
-    pub key: String,
-    pub label: String,
+/// The columns the rows carry, in the order the screen shows them.
+pub fn columns() -> Vec<ColumnSpec> {
+    vec![
+        ColumnSpec::new("name", "Name", ColumnType::Identity)
+            .describe("What the config calls it; its id — the folder under the data root — beside it when they differ.")
+            .editable(),
+        ColumnSpec::new("type", "Type", ColumnType::Identity)
+            .describe("The service this source mirrors."),
+        ColumnSpec::new("status", "Status", ColumnType::Status)
+            .describe("What it is doing now, or did last. Hover for why; double-click for the log."),
+        ColumnSpec::new("activity", "Activity", ColumnType::Chips)
+            .describe("What a running step has reported: what is queued ahead of it, what it has counted, and how fast."),
+        ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp),
+        ColumnSpec::new("disk", "Bytes on disk", ColumnType::Timeseries)
+            .describe("What this tree weighs, with the last few minutes behind it."),
+        ColumnSpec::new("actions", "Sync", ColumnType::Actions),
+    ]
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,14 +129,17 @@ pub struct ManageRow {
     pub inputs: Vec<String>,
     pub phase: Phase,
     pub function: Option<String>,
-    pub r#type: Option<String>,
-    /// What the Name column shows. Under a group a step is labelled by
-    /// what it does there ("Render markdown"); the browser reads an
-    /// ingest step's "Download" / "Import" off `params` against what
-    /// its provider declares, and overrides this one.
-    pub name: String,
     /// A step's `params`, as JSON. `{}` off a step.
     pub params: serde_json::Value,
+    /// The Name column: the label the config gives it and the glyph for
+    /// its role. Under a group a step is labelled by what it does there
+    /// ("Render markdown"); the browser reads an ingest step's
+    /// "Download" / "Import" off `params` against what its provider
+    /// declares, and overrides that one label.
+    pub name: Identity,
+    /// The Type column: the source type, resolved. None for a group
+    /// that mirrors nothing and the steps under it.
+    pub r#type: Option<Identity>,
     /// The loader's reason this entry is not in the pipeline, or null
     /// if it is. A dropped entry still has a row — it is still in the
     /// file, and the file is what the user edits.
@@ -111,42 +148,28 @@ pub struct ManageRow {
     /// For a group row, the child whose status it shows — the row a
     /// double-click on Status opens the log of.
     pub status_from: Option<String>,
+    /// What the step has reported in the run in flight.
+    pub activity: Vec<Chip>,
     pub last_synced: Option<String>,
-    /// For a group row with a run in flight: its steps in pipeline
-    /// order, one segment each. Null when idle or not a group.
-    pub segments: Option<Vec<Segment>>,
+    /// Bytes on disk, with the recent measurements behind the number.
+    pub disk: Timeseries,
+    /// The Sync column: a Sync button, or a Stop button while a job has
+    /// this row claimed.
+    pub actions: Vec<Action>,
     /// What a sync of this row starts at: the step itself, or for a
-    /// group its steps with no inputs. Empty exactly when `run_blocked`
-    /// says why.
+    /// group its steps with no inputs. Empty exactly when the sync
+    /// action says why.
     pub seeds: Vec<String>,
-    /// Null when the action applies; otherwise the reason it doesn't,
-    /// which becomes the disabled button's tooltip.
-    pub run_blocked: Option<String>,
     pub reveal_blocked: Option<String>,
-    /// The active job that has claimed this step, when one has.
-    /// Non-null is exactly the condition that turns Run into Stop.
+    /// The active job that has claimed this step, when one has: what
+    /// the Stop action cancels.
     pub stop_job_id: Option<String>,
-    /// The step to call the job off through — this step, or for a
-    /// group the child that holds the claim.
-    pub stop_target: Option<String>,
-    /// The Stop button's tooltip.
-    pub stop_label: Option<String>,
-    /// What the step has reported in the run in flight. Null when it
-    /// isn't running or hasn't reported anything.
-    pub progress: Option<DagStepProgress>,
     /// The run the step's `last_run` happened in — where its log is.
     /// Empty when it has never run, or ran before runs had ids.
     pub last_run_id: String,
     /// The run in flight, when this step is in it — where its live log
     /// is.
     pub live_run_id: Option<String>,
-    /// Null when nothing is on disk yet — rendered as "—", not "0 B".
-    pub bytes: Option<u64>,
-    /// Recent measurements of this row's tree, oldest first.
-    pub history: Vec<UsageSample>,
-    /// Storage rows for this entry's declared outputs — for a group,
-    /// its children's, for the tooltip's breakdown.
-    pub outputs: Vec<OutputStorage>,
     /// Absolute path to reveal: the first output that exists.
     pub reveal_path: Option<String>,
 }
@@ -165,6 +188,9 @@ pub struct ManageResponse {
     /// Why there are no rows: the file is not TOML at all. An entry
     /// with a problem is a row with a `dropped` reason, not an error.
     pub error: Option<String>,
+    pub columns: Vec<ColumnSpec>,
+    /// The rows form a tree; each carries its `path`.
+    pub tree: bool,
     /// The run in flight, or the one that finished last.
     pub run: Option<DagRunInfo>,
     pub storage: RootStorage,
@@ -204,6 +230,8 @@ pub async fn get_manage_rows(
             return Json(ManageResponse {
                 ok: false,
                 error: Some(e),
+                columns: columns(),
+                tree: true,
                 run: record.run,
                 storage: root_storage,
                 rows: Vec::new(),
@@ -231,6 +259,8 @@ pub async fn get_manage_rows(
     Json(ManageResponse {
         ok: true,
         error: None,
+        columns: columns(),
+        tree: true,
         run: record.run,
         storage: root_storage,
         rows,
@@ -384,6 +414,59 @@ struct RowCtx<'a> {
     stale: bool,
 }
 
+/// Base-10 units, matching what a file manager shows — the question
+/// behind the column is "how much of my disk is this".
+fn human_bytes(n: u64) -> String {
+    if n < 1000 {
+        return format!("{n} B");
+    }
+    let units = ["kB", "MB", "GB", "TB"];
+    let mut v = n as f64 / 1000.0;
+    let mut i = 0;
+    while v >= 1000.0 && i < units.len() - 1 {
+        v /= 1000.0;
+        i += 1;
+    }
+    if v < 10.0 {
+        format!("{v:.1} {}", units[i])
+    } else {
+        format!("{} {}", v.round() as u64, units[i])
+    }
+}
+
+fn samples(o: &OutputStorage) -> Vec<Sample> {
+    o.history
+        .iter()
+        .map(|s| Sample {
+            at: s.at.clone(),
+            value: s.bytes as i64,
+        })
+        .collect()
+}
+
+/// The breakdown behind a size: per output, split into parts where the
+/// backend found a split — entities vs attachments — which answers "why
+/// is this so big" far more often than the total does.
+fn breakdown(present: &[&OutputStorage]) -> String {
+    present
+        .iter()
+        .map(|o| {
+            if o.parts.is_empty() {
+                format!("{}: {}", o.path, human_bytes(o.bytes))
+            } else {
+                let parts = o
+                    .parts
+                    .iter()
+                    .map(|x| format!("{} {}", x.label, human_bytes(x.bytes)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}: {parts}", o.path)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ")
+}
+
 impl RowCtx<'_> {
     /// The reason this entry is not in the pipeline, or None if it is.
     /// Keyed on the kind as well as the id: a group and an applet may
@@ -428,6 +511,10 @@ impl RowCtx<'_> {
             .is_some_and(|st| st != "running")
     }
 
+    fn progress(&self, id: &str) -> Option<&crate::DagStepProgress> {
+        self.snap.record.progress.get(id).filter(|_| !self.stale)
+    }
+
     fn step_status(
         &self,
         id: &str,
@@ -449,15 +536,44 @@ impl RowCtx<'_> {
             .map(|j| j.id.as_str())
             .or(self.run.map(|r| r.run_id.as_str()))
             .unwrap_or("");
-        floor.hold(id, key, view)
+        let mut held = floor.hold(id, key, view);
+        // The step's own words and how far along it is, while it runs.
+        if let Some(p) = self.progress(id) {
+            if let Some(msg) = &p.msg {
+                held.detail = Some(msg.clone());
+            }
+            if held.key == "running" {
+                held.fraction = activity::fraction(p);
+            }
+        }
+        held
     }
 
-    fn stop_label(&self, id: &str) -> Option<String> {
-        let job = self.claims.get(id)?;
-        Some(match job.source_ids.as_deref().filter(|s| !s.is_empty()) {
-            Some(ids) => format!("Stop the sync of {ids}"),
-            None => "Stop the sync in progress".to_string(),
-        })
+    /// Sync, or Stop while a job has the row claimed: the one button
+    /// the Sync column draws.
+    fn sync_action(&self, id: &str, run_blocked: Option<String>) -> (Vec<Action>, Option<String>) {
+        if let Some(job) = self.claims.get(id) {
+            let label = match job.source_ids.as_deref().filter(|s| !s.is_empty()) {
+                Some(ids) => format!("Stop the sync of {ids}"),
+                None => "Stop the sync in progress".to_string(),
+            };
+            let stop = Action {
+                id: "stop".into(),
+                label,
+                enabled: true,
+                disabled_reason: None,
+                danger: true,
+            };
+            return (vec![stop], Some(job.id.clone()));
+        }
+        let sync = Action {
+            id: "sync".into(),
+            label: "Sync now".into(),
+            enabled: run_blocked.is_none(),
+            disabled_reason: run_blocked,
+            danger: false,
+        };
+        (vec![sync], None)
     }
 
     fn entry_row(&self, e: &Entry<'_>, floor: &mut StatusFloor) -> ManageRow {
@@ -465,15 +581,14 @@ impl RowCtx<'_> {
         let dropped = self.dropped(&id, e.entry_kind());
         let dropped_why = dropped.map(not_in_pipeline);
         let group = self.declared_group(e.group());
-        let outputs = self.snap.outputs;
         // A step writes exactly one tree, and it is the step's id.
-        let trees: Vec<OutputStorage> = match e {
-            Entry::Step(_) => outputs.iter().filter(|o| o.path == id).cloned().collect(),
-            Entry::Applet(_) => Vec::new(),
+        let tree = match e {
+            Entry::Step(_) => self.snap.outputs.iter().find(|o| o.path == id),
+            Entry::Applet(_) => None,
         };
-        let on_disk: Vec<&OutputStorage> = trees.iter().filter(|o| o.present).collect();
+        let on_disk = tree.filter(|o| o.present);
 
-        let (status, run_blocked, seeds, progress, last_run_id, live_run_id) = match e {
+        let (status, run_blocked, seeds, last_run_id, live_run_id) = match e {
             Entry::Step(s) => {
                 let status = self.step_status(&id, dropped, floor);
                 // A sync starts at a *source* step — one with no declared
@@ -506,13 +621,6 @@ impl RowCtx<'_> {
                     vec![]
                 };
                 let now = self.step_now(&id);
-                let progress = self
-                    .snap
-                    .record
-                    .progress
-                    .get(&id)
-                    .filter(|_| !self.stale)
-                    .cloned();
                 let last_run_id = self
                     .snap
                     .record
@@ -525,14 +633,7 @@ impl RowCtx<'_> {
                     .filter(|r| r.in_flight())
                     .filter(|_| now.as_ref().is_some_and(|n| n.current_state.is_some()))
                     .map(|r| r.run_id.clone());
-                (
-                    status,
-                    run_blocked,
-                    seeds,
-                    progress,
-                    last_run_id,
-                    live_run_id,
-                )
+                (status, run_blocked, seeds, last_run_id, live_run_id)
             }
             Entry::Applet(_) => {
                 // An applet's health is its own thing: it isn't
@@ -545,15 +646,15 @@ impl RowCtx<'_> {
                     StatusView {
                         key: "failed".into(),
                         label: "Failed to start".into(),
-                        at: None,
                         detail: Some(err.clone()),
+                        ..Default::default()
                     }
                 } else {
                     StatusView {
                         key: "succeeded".into(),
                         label: "Up".into(),
-                        at: None,
                         detail: Some("The gateway has this applet up.".into()),
+                        ..Default::default()
                     }
                 };
                 (
@@ -563,7 +664,6 @@ impl RowCtx<'_> {
                             .to_string(),
                     ),
                     vec![],
-                    None,
                     String::new(),
                     None,
                 )
@@ -574,7 +674,7 @@ impl RowCtx<'_> {
             Entry::Applet(_) => {
                 Some("An applet owns no files \u{2014} it serves endpoints.".to_string())
             }
-            Entry::Step(_) if on_disk.is_empty() => {
+            Entry::Step(_) if on_disk.is_none() => {
                 Some("Nothing on disk yet \u{2014} this hasn't produced anything.".to_string())
             }
             Entry::Step(_) => None,
@@ -582,11 +682,12 @@ impl RowCtx<'_> {
 
         let (name, params, function, phase, r#type) = match e {
             Entry::Step(s) => {
+                let phase = Phase::of_function(s.function.as_deref());
                 // Under a group the name is the group's; the step's
                 // label says what it does there. At the top level the
                 // step is its own thing and keeps the name the config
                 // gave it.
-                let name = if group.is_some() {
+                let label = if group.is_some() {
                     child_label(s)
                 } else {
                     s.name.clone().unwrap_or_else(|| default_name(&id))
@@ -595,25 +696,57 @@ impl RowCtx<'_> {
                     .group
                     .as_deref()
                     .and_then(|g| self.snap.written.groups.iter().find(|x| x.id == g))
-                    .and_then(|g| g.r#type.clone());
-                (
-                    name,
-                    s.params.clone(),
-                    s.function.clone(),
-                    Phase::of_function(s.function.as_deref()),
-                    r#type,
-                )
+                    .and_then(|g| g.r#type.as_deref())
+                    .map(|t| catalog::source_type(t, &s.params));
+                let name = Identity {
+                    id: id.clone(),
+                    label,
+                    icon: Some(phase.icon().into()),
+                    detail: Some(phase.label().into()),
+                };
+                (name, s.params.clone(), s.function.clone(), phase, r#type)
             }
             Entry::Applet(a) => (
-                default_name(&id),
+                Identity {
+                    id: id.clone(),
+                    label: default_name(&id),
+                    icon: Some("applet".into()),
+                    detail: Some("Applet".into()),
+                },
                 serde_json::Value::Object(Default::default()),
                 None,
                 Phase::Other,
-                a.r#type.clone(),
+                a.r#type
+                    .as_deref()
+                    .map(|t| catalog::source_type(t, &serde_json::Value::Null)),
             ),
         };
 
-        let stop_job_id = self.claims.get(&id).map(|j| j.id.clone());
+        let disk = match e {
+            Entry::Applet(_) => Timeseries {
+                detail: Some("An applet owns no artifacts.".into()),
+                unit: "bytes".into(),
+                ..Default::default()
+            },
+            Entry::Step(_) => Timeseries {
+                value: on_disk.map(|o| o.bytes as i64),
+                unit: "bytes".into(),
+                samples: tree.map(samples).unwrap_or_default(),
+                detail: Some(match on_disk {
+                    None => {
+                        "Nothing on disk yet \u{2014} this hasn't produced anything.".to_string()
+                    }
+                    Some(o) if o.parts.is_empty() => human_bytes(o.bytes),
+                    Some(o) => format!("{} \u{2014} {}", human_bytes(o.bytes), breakdown(&[o])),
+                }),
+            },
+        };
+
+        let activity = match e {
+            Entry::Step(_) => self.progress(&id).map(activity::chips).unwrap_or_default(),
+            Entry::Applet(_) => vec![],
+        };
+        let (actions, stop_job_id) = self.sync_action(&id, run_blocked);
         ManageRow {
             key: id.clone(),
             path: match &group {
@@ -629,27 +762,22 @@ impl RowCtx<'_> {
             inputs: e.inputs().to_vec(),
             phase,
             function,
-            r#type,
-            name,
             params,
+            name,
+            r#type,
             dropped: dropped.cloned(),
             last_synced: status.at.clone(),
             status,
             status_from: None,
-            segments: None,
+            activity,
+            disk,
+            actions,
             seeds,
-            run_blocked,
             reveal_blocked,
-            stop_target: stop_job_id.as_ref().map(|_| id.clone()),
-            stop_label: self.stop_label(&id),
             stop_job_id,
-            progress,
             last_run_id,
             live_run_id,
-            bytes: (!on_disk.is_empty()).then(|| trees.iter().map(|o| o.bytes).sum()),
-            history: trees.first().map(|o| o.history.clone()).unwrap_or_default(),
-            reveal_path: on_disk.first().map(|o| o.abs.clone()),
-            outputs: trees,
+            reveal_path: on_disk.map(|o| o.abs.clone()),
             id,
         }
     }
@@ -682,7 +810,7 @@ impl RowCtx<'_> {
                 })
                 .collect::<Vec<_>>(),
         );
-        let (status, status_from) = if let Some(d) = dropped {
+        let (mut status, status_from) = if let Some(d) = dropped {
             (
                 status::step_status(StatusArgs {
                     id: &g.id,
@@ -706,12 +834,56 @@ impl RowCtx<'_> {
                 None,
             )
         };
+        // A group with a run in flight: one segment per step, in
+        // pipeline order, drawn as a bar instead of the glyph. No
+        // arithmetic across children; the bar *is* the children.
+        let in_flight = status.key == "running" || status.key == "queued";
+        if in_flight && !steps.is_empty() {
+            status.segments = Some(
+                steps
+                    .iter()
+                    .map(|c| Segment {
+                        id: c.id().to_string(),
+                        key: row_of(c.id()).status.key.clone(),
+                        label: row_of(c.id()).status.label.clone(),
+                    })
+                    .collect(),
+            );
+        }
+        status.fraction = None;
 
         // The folder the group's steps write into, measured as a tree
         // of its own by the usage walker — not the sum of two series
-        // sampled at different instants.
+        // sampled at different instants. It also counts anything else
+        // in the folder, which is the right answer for "what does this
+        // source weigh".
         let tree = self.snap.outputs.iter().find(|o| o.path == g.id);
-        let on_disk = tree.is_some_and(|t| t.present);
+        let on_disk = tree.filter(|t| t.present);
+        let child_trees: Vec<&OutputStorage> = children
+            .iter()
+            .filter_map(|(e, _)| {
+                self.snap
+                    .outputs
+                    .iter()
+                    .find(|o| o.path == e.id() && o.present)
+            })
+            .collect();
+        let disk = Timeseries {
+            value: on_disk.map(|t| t.bytes as i64),
+            unit: "bytes".into(),
+            samples: tree.map(samples).unwrap_or_default(),
+            detail: Some(match on_disk {
+                None => {
+                    "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()
+                }
+                Some(t) => format!(
+                    "{} in {}/ \u{2014} {}",
+                    human_bytes(t.bytes),
+                    g.id,
+                    breakdown(&child_trees)
+                ),
+            }),
+        };
 
         let seeds = group::group_seeds(&ordered, |c| row_of(c.id()).dropped.is_some());
         let run_blocked = dropped_why.or_else(|| {
@@ -727,12 +899,20 @@ impl RowCtx<'_> {
                 Some("Nothing under this group runs.".to_string())
             }
         });
-
         let claimed = ordered
             .iter()
             .map(|c| row_of(c.id()))
             .find(|r| r.stop_job_id.is_some());
-        let in_flight = status.key == "running" || status.key == "queued";
+        let (actions, stop_job_id) = match claimed {
+            Some(r) => (r.actions.clone(), r.stop_job_id.clone()),
+            None => self.sync_action(&g.id, run_blocked),
+        };
+        let activity = ordered
+            .iter()
+            .map(|c| row_of(c.id()))
+            .find(|r| r.status.key == "running")
+            .map(|r| r.activity.clone())
+            .unwrap_or_default();
         let last_synced = if dropped.is_some() {
             None
         } else {
@@ -758,46 +938,42 @@ impl RowCtx<'_> {
             inputs: vec![],
             phase: Phase::Other,
             function: None,
-            r#type: g.r#type.clone(),
-            name: g.name.clone().unwrap_or_else(|| g.id.clone()),
             params: serde_json::Value::Object(Default::default()),
+            name: Identity {
+                id: g.id.clone(),
+                label: g.name.clone().unwrap_or_else(|| g.id.clone()),
+                icon: None,
+                detail: Some("Group".into()),
+            },
+            // A group that mirrors nothing — the unified index — has no
+            // type, and a blank cell is the honest mark for it.
+            r#type: g.r#type.as_deref().map(|t| {
+                let ingest = children
+                    .iter()
+                    .find_map(|(e, r)| match e {
+                        Entry::Step(s) if r.phase == Phase::Ingest => Some(&s.params),
+                        _ => None,
+                    })
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                catalog::source_type(t, &ingest)
+            }),
             dropped: dropped.cloned(),
             status,
             status_from,
+            activity,
             last_synced,
-            segments: (in_flight && !steps.is_empty()).then(|| {
-                steps
-                    .iter()
-                    .map(|c| Segment {
-                        id: c.id().to_string(),
-                        key: row_of(c.id()).status.key.clone(),
-                        label: row_of(c.id()).status.label.clone(),
-                    })
-                    .collect()
-            }),
+            disk,
+            actions,
             seeds,
-            run_blocked,
-            reveal_blocked: (!on_disk).then(|| {
+            reveal_blocked: on_disk.is_none().then(|| {
                 "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()
             }),
-            stop_job_id: claimed.and_then(|r| r.stop_job_id.clone()),
-            stop_target: claimed.map(|r| r.id.clone()),
-            stop_label: claimed.and_then(|r| r.stop_label.clone()),
-            progress: ordered
-                .iter()
-                .map(|c| row_of(c.id()))
-                .find(|r| r.status.key == "running")
-                .and_then(|r| r.progress.clone()),
+            stop_job_id,
             // A group's log is a child's; `status_from` names which.
             last_run_id: String::new(),
             live_run_id: None,
-            bytes: on_disk.then(|| tree.map(|t| t.bytes).unwrap_or(0)),
-            history: tree.map(|t| t.history.clone()).unwrap_or_default(),
-            outputs: children
-                .iter()
-                .flat_map(|(_, r)| r.outputs.iter().cloned())
-                .collect(),
-            reveal_path: on_disk.then(|| tree.map(|t| t.abs.clone()).unwrap_or_default()),
+            reveal_path: on_disk.map(|t| t.abs.clone()),
         }
     }
 }

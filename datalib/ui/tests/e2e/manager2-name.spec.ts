@@ -26,7 +26,7 @@ const idField = (page: Page) => field(page, "Id");
 /// column any more — and `aria-label` is the only place the word
 /// survives, which is also what a person gets by hovering it.
 const stepMark = (page: Page, id: string) =>
-  row(page, id).locator('[col-id="name"] .m2-name-step [role="img"]');
+  row(page, id).locator('[col-id="name"] .tg-mark [role="img"]');
 
 async function pickClaude(page: Page) {
   await page.getByRole("button", { name: "+ Data Source" }).click();
@@ -95,7 +95,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // which is the whole point of the row.
   const group = groupRow(page, "personal-claude");
   await expect(group).toContainText("Personal Claude");
-  await expect(group.locator(".m2-cell-dir")).toHaveText("personal-claude");
+  await expect(group.locator(".tg-id")).toHaveText("personal-claude");
   await expect(row(page, "personal-claude/ingest")).toHaveCount(0);
 
   // Opened, the two steps are labelled by what they do; the group owns

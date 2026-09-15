@@ -88,7 +88,7 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await input.press("Enter");
 
   await expect(page.getByText("Renamed unified_index to Everything, indexed.")).toBeVisible();
-  await expect(row.locator(".m2-group-name")).toHaveText("Everything, indexed");
+  await expect(row.locator(".tg-parent")).toHaveText("Everything, indexed");
   await expect(editor).toHaveValue(/name = "Everything, indexed"/);
 
   // Put the root back for the next spec on this sandbox.

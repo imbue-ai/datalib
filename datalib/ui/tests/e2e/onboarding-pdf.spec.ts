@@ -44,7 +44,7 @@ const SYNCED_ROWS = ["pdfs/ingest", "pdfs/render_markdown", "unified_index/grid_
 /// nothing on disk, which the column renders as an em dash rather than
 /// as a flat line at zero.
 async function bytesOf(page: Page, id: string): Promise<number | null> {
-  const label = row(page, id).locator('[col-id="bytes"] .m2-plot-label');
+  const label = row(page, id).locator('[col-id="disk"] .tg-plot-label');
   if ((await label.count()) === 0) return null;
   const text = ((await label.first().textContent()) ?? "").trim();
   const m = /^([\d.]+)\s*(B|kB|MB|GB|TB)$/.exec(text);

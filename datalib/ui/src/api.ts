@@ -640,8 +640,59 @@ export function fetchPipelineStorage(
 export type ManageRowKind = "group" | "step" | "applet";
 export type ManagePhase = "ingest" | "render" | "index" | "other";
 
+// ── The column-type vocabulary ─────────────────────────────────────
+// Mirrors `datalib_columns` (datalib/backend/columns/src/lib.rs), by
+// hand: change both halves together. A table's producer declares a
+// `ColumnSpec` per column and the typed viewer (`cards/TableGrid.ce.vue`)
+// draws each cell by its type.
+
+export type ColumnType =
+  | "text"
+  | "count"
+  | "bytes"
+  | "timestamp"
+  | "timeseries"
+  | "identity"
+  | "status"
+  | "chips"
+  | "actions"
+  | "markdown_uuid";
+
+export type ColumnSpec = {
+  field: string;
+  header: string;
+  type: ColumnType;
+  description?: string;
+  default_visible: boolean;
+  editable: boolean;
+};
+
+/// Something resolved before it was sent: the id the producer joins on,
+/// the label a person reads, and an icon *token* the viewer maps to an
+/// asset (`"slack"`, `"step:ingest"`).
+export type Identity = {
+  id: string;
+  label: string;
+  icon?: string | null;
+  detail?: string | null;
+};
+
+export type Sample = { at: string; value: number };
+
+export type Timeseries = {
+  /// Null is "nothing measured yet" — the absence of a plot, not zero.
+  value: number | null;
+  /// What the value counts; `bytes` is drawn as a size.
+  unit: string;
+  /// Oldest first; compacted, so a step function rather than a grid.
+  samples: Sample[];
+  detail?: string | null;
+};
+
+export type Segment = { id: string; key: string; label: string };
+
 /// One row's status, reduced to a vocabulary the Status column can
-/// draw. Mirrors `datalib_http::manage::StatusView`.
+/// draw. Mirrors `datalib_columns::Status`.
 export type StatusView = {
   key: string;
   label: string;
@@ -649,6 +700,24 @@ export type StatusView = {
   /// the two can never disagree about which run they describe.
   at: string | null;
   detail: string | null;
+  /// How far along, in [0, 1], while `key` is `running`.
+  fraction?: number | null;
+  /// For a status aggregating several things in flight: one segment
+  /// each, drawn as a bar instead of the glyph.
+  segments?: Segment[] | null;
+};
+
+export type ChipKind = "info" | "idle" | "metric" | "warning" | "error";
+export type Chip = { kind: ChipKind; text: string; title: string };
+
+/// A button on a row. Data decides whether it appears and what it says;
+/// the viewer's code decides what it does.
+export type Action = {
+  id: string;
+  label: string;
+  enabled: boolean;
+  disabled_reason?: string | null;
+  danger?: boolean;
 };
 
 /// One row of the Manage screen's tree, as `GET /api/manage/rows`
@@ -664,26 +733,21 @@ export type ManageRow = {
   inputs: string[];
   phase: ManagePhase;
   function: string | null;
-  type: string | null;
-  name: string;
   params: Record<string, unknown>;
+  name: Identity;
+  type: Identity | null;
   dropped: Diagnostic | null;
   status: StatusView;
   status_from: string | null;
+  activity: Chip[];
   last_synced: string | null;
-  segments: { id: string; key: string; label: string }[] | null;
+  disk: Timeseries;
+  actions: Action[];
   seeds: string[];
-  run_blocked: string | null;
   reveal_blocked: string | null;
   stop_job_id: string | null;
-  stop_target: string | null;
-  stop_label: string | null;
-  progress: DagStepProgress | null;
   last_run_id: string;
   live_run_id: string | null;
-  bytes: number | null;
-  history: UsageSample[];
-  outputs: OutputStorage[];
   reveal_path: string | null;
 };
 
@@ -692,6 +756,9 @@ export type ManageResponse = {
   /// Why there are no rows: the file is not TOML at all. An entry with
   /// a problem is a row with a `dropped` reason, not an error.
   error: string | null;
+  columns: ColumnSpec[];
+  /// The rows form a tree; each carries its `path`.
+  tree: boolean;
   run: DagRun | null;
   storage: {
     root: OutputStorage;
@@ -707,6 +774,20 @@ export type ManageResponse = {
 export function fetchManageRows(refresh = false, signal?: AbortSignal): Promise<ManageResponse> {
   const q = refresh ? "?refresh=1" : "";
   return getJson<ManageResponse>(`/api/manage/rows${q}`, signal);
+}
+
+/// What any endpoint that serves a typed table answers with, as far as
+/// the viewer needs: the columns it declares and the rows. Extra keys
+/// are the endpoint's own.
+export type TableResponse = {
+  columns: ColumnSpec[];
+  rows: Record<string, unknown>[];
+  tree?: boolean;
+  error?: string | null;
+};
+
+export function fetchTable(url: string, signal?: AbortSignal): Promise<TableResponse> {
+  return getJson<TableResponse>(url, signal);
 }
 
 /// One table as it stood after one commit. Mirrors
