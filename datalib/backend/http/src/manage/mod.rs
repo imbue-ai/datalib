@@ -131,6 +131,10 @@ pub struct ManageRow {
     pub stop_target: Option<String>,
     /// The Stop button's tooltip.
     pub stop_label: Option<String>,
+    /// Why the Stop button takes no click: the job has already been
+    /// told to stop and its steps are winding down. Null while a click
+    /// would do something.
+    pub stop_blocked: Option<String>,
     /// What the step has reported in the run in flight. Null when it
     /// isn't running or hasn't reported anything.
     pub progress: Option<DagStepProgress>,
@@ -454,10 +458,28 @@ impl RowCtx<'_> {
 
     fn stop_label(&self, id: &str) -> Option<String> {
         let job = self.claims.get(id)?;
-        Some(match job.source_ids.as_deref().filter(|s| !s.is_empty()) {
-            Some(ids) => format!("Stop the sync of {ids}"),
-            None => "Stop the sync in progress".to_string(),
+        let of = match job.source_ids.as_deref().filter(|s| !s.is_empty()) {
+            Some(ids) => format!("the sync of {ids}"),
+            None => "the sync in progress".to_string(),
+        };
+        Some(if status::job_stopping(job) {
+            format!("Stopping {of}")
+        } else {
+            format!("Stop {of}")
         })
+    }
+
+    // Once asked to stop there is nothing more to ask: the steps in
+    // flight are checkpointing, and the face says so until they exit.
+    fn stop_blocked(&self, id: &str) -> Option<String> {
+        let job = self.claims.get(id)?;
+        if !status::job_stopping(job) {
+            return None;
+        }
+        Some(format!(
+            "{} \u{2014} its steps are checkpointing and exiting.",
+            self.stop_label(id)?
+        ))
     }
 
     fn entry_row(&self, e: &Entry<'_>, floor: &mut StatusFloor) -> ManageRow {
@@ -642,6 +664,7 @@ impl RowCtx<'_> {
             reveal_blocked,
             stop_target: stop_job_id.as_ref().map(|_| id.clone()),
             stop_label: self.stop_label(&id),
+            stop_blocked: self.stop_blocked(&id),
             stop_job_id,
             progress,
             last_run_id,
@@ -783,6 +806,7 @@ impl RowCtx<'_> {
             stop_job_id: claimed.and_then(|r| r.stop_job_id.clone()),
             stop_target: claimed.map(|r| r.id.clone()),
             stop_label: claimed.and_then(|r| r.stop_label.clone()),
+            stop_blocked: claimed.and_then(|r| r.stop_blocked.clone()),
             progress: ordered
                 .iter()
                 .map(|c| row_of(c.id()))
