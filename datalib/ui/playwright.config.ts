@@ -162,6 +162,7 @@ command = "'${APPLET_BIN}' unified_index"
 }
 const ROOT_OF: Record<string, (prefix: string) => string> = {
   "manager2-streaming": bareRoot,
+  "manager2-control": bareRoot,
 };
 
 // What a sandbox's backend gets in its environment beyond the common
@@ -177,6 +178,12 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
   // rows arrive downstream while it is still going.
   "manager2-streaming": PLAYBACK_DIR
     ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "1500" }
+    : {},
+  // The control spec starts, stops and restarts those same downloads
+  // from the table, so each has to last long enough to be acted on
+  // partway through: slower still.
+  "manager2-control": PLAYBACK_DIR
+    ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "2500" }
     : {},
 };
 
