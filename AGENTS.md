@@ -268,9 +268,10 @@ reference doc it relates to.
   *proposal*, nothing built (revised 2026-09-15): one typed table
   viewer plus the markdown one, with column types declared by whoever
   serves the rows, and the Manage screen's sources tree ported onto it
-  as an ordinary card. Its first piece is the one worth doing
-  regardless: the row join `Manager2View` does in the browser across
-  six endpoints moves into one `datalib-http` endpoint. The crate
+  as an ordinary card. Its first piece — the row join `Manager2View`
+  did in the browser across six endpoints, moved into
+  `GET /api/manage/rows` (`http/src/manage/`) — is **built
+  (2026-09-15)**; the typed viewer and the card are not. The crate
   split and the run store it depended on have both landed.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md)
   — **read before adding a source to the Add/Edit wizard**: a field

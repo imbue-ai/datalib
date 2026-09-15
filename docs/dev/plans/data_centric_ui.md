@@ -1,8 +1,8 @@
 # Design: a data-centric UI
 
-**Status: proposal, nothing built.** Written 2026-09-09 against
-`a4752fb5`; revised 2026-09-15 against `9a45cff4`. Per
-[`AGENTS.md`](../../../AGENTS.md), don't cite this file as a
+**Status: proposal; §1 built (2026-09-15), the rest not.** Written
+2026-09-09 against `a4752fb5`; revised 2026-09-15 against `9a45cff4`.
+Per [`AGENTS.md`](../../../AGENTS.md), don't cite this file as a
 description of the tree. Where it says "today", that was checked
 against the later commit; where it says "would", nothing exists.
 
@@ -75,18 +75,14 @@ to get the scope wrong.
 
 ## What is missing
 
-**Each Manage row is assembled in the browser from six endpoints.**
-`Manager2View` fetches `/api/config`, `/api/dag`, `/api/sync/jobs/all`,
-`/api/pipeline/storage`, `/api/frontend` and `/api/runs`, then derives
-each row — its status word and reason, what "last synced" means for a
-group, which child a group's status comes from, which buttons apply
-and why not — in `ui/src/config/pipelineStatus.ts` (341 lines) and
-`ui/src/config/groupRows.ts` (114 lines), keyed by a client-side
-catalog (`ui/src/config/catalog.ts`) that says what a source type is
-called and which icon it gets. The view is 3376 lines, and most of them
-are that join and the panels around it, not the grid. "It's just a
-table" is the goal, not the current fact — and a card cannot be handed
-six endpoints and a rulebook.
+**Each Manage row *was* assembled in the browser from six endpoints**
+— `/api/config`, `/api/dag`, `/api/sync/jobs/all`,
+`/api/pipeline/storage`, `/api/frontend` and `/api/runs` — with the
+status rules in two TypeScript modules and a 3376-line view around
+them. A card cannot be handed six endpoints and a rulebook, so that
+was the first thing to fix, and §1 is it. What is still in the browser
+after it is the catalog (`ui/src/config/catalog.ts`): what a source
+type is called and which icon it gets.
 
 **The wire carries no types.** There is no column schema on any
 endpoint at all: `GridCard`'s `columnDefs` are hardcoded in the Vue
@@ -98,36 +94,38 @@ comparison. (The first draft extended a `ColumnSpec`
 
 ## The pieces
 
-### 1. The join moves server-side
+### 1. The join moves server-side — built
 
-One endpoint serves the Manage rows, assembled: `GET /api/manage/rows`
-(the name is a placeholder). It lives in `datalib-http`, not in an
-applet, because every input is something `datalib-http` already reads
-and serves — the config, `dag_state.json`, the run store, the job
-store, the usage store, the frontend registry — and none of it is the
-grid index, which is the one thing the applet opens and the one thing
-this join never needs.
+`GET /api/manage/rows` serves the Manage rows assembled
+(`datalib/backend/http/src/manage/`). It lives in `datalib-http`, not
+in an applet, because every input is something `datalib-http` already
+reads — the config, `dag_state.json`, the run store, the job store,
+the usage store, the applet supervisor — and none of it is the grid
+index, which is the one thing the applet opens and the one thing this
+join never needs.
 
-The rules it applies are the ones `pipelineStatus.ts` and
-`groupRows.ts` hold today, ported to Rust: they are already pure
-functions over the config entries and each child's status view, and
-their unit tests port with them. The aggregation table in
+The rules are the ones `pipelineStatus.ts` and `groupRows.ts` held,
+ported to Rust with their tests (`manage/status.rs`, `manage/group.rs`);
+the assembly is `Manager2View`'s old `entryRow`/`groupRow`
+(`manage/mod.rs`). The aggregation table in
 [`groups_and_functions.md`](groups_and_functions.md) is the spec for
-the group row.
+the group row. A row carries the entry's id and kind, its `path` in
+the tree, its group, its name, its type, status with reason, last
+synced, bytes with the measured series, what a sync of it starts at,
+and why each action is or isn't available. The tree is a `path` on
+every row, not a column type.
 
-A row is what `Manager2View`'s `Row` type is now, minus the fields
-that exist only to drive a Vue template: the entry's id and kind, its
-`path` in the tree, its group, its display name, its resolved type
-(§2), status with reason, last synced, bytes with the measured series,
-row count, what a sync of it starts at, and its actions (§4). Rows
-form a tree, so the response says so once — `tree: true` and a `path`
-on every row — rather than pretending the tree is a column type.
+What stayed in the browser is what needs the wizard's catalog, which
+is where the wizard is: the type's label and icon, whether the form
+can edit a row, what Browse opens, and an ingest step's
+"Download"/"Import" label (which reads the step's `params` against
+the provider's declared methods — so a step row carries `params`).
+`Manager2View.decorate` adds those per row. §3 is what would move the
+first three of them server-side.
 
-**This step is worth doing on its own.** `Manager2View` reads the new
-endpoint from its own route, `pipelineStatus.ts`, `groupRows.ts` and
-the catalog lookups go, and the existing `manager2-*` e2e specs say
-whether the rows still mean the same thing. Nothing about cards has to
-exist yet.
+It was worth doing on its own: `Manager2View` went from 3376 lines to
+2974 and lost four endpoints, and the `manager2-*` e2e specs passed
+unchanged apart from a column id.
 
 ### 2. A column-type vocabulary
 
@@ -292,10 +290,11 @@ ones are the speculative ones.
 2. **The run store.** Done, by `logs_and_metrics.md`, in a different
    shape from this draft's: one file per data root, written by the
    runner, and `GET /api/dag` already reads it.
-3. **The join** (§1, with §3's identities and §4's actions as row
-   fields). `Manager2View` reads the new endpoint from its own route;
-   `pipelineStatus.ts`, `groupRows.ts` and the catalog's naming go.
-   Verified by the existing `manager2-*` e2e specs — no new UI.
+3. **The join** (§1). Done. `Manager2View` reads the endpoint from
+   its own route; `pipelineStatus.ts` and `groupRows.ts` are gone. The
+   catalog's naming (§3) and the actions' ids (§4) are not on the wire
+   yet — the row carries the reasons, the browser still maps them to
+   buttons.
 4. **The vocabulary and the viewer** (§2, §6). `tableView` plus the
    type crate, with the sources tree's columns as the first
    implementation. Manager2 keeps working from its own route while the
