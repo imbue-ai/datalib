@@ -75,7 +75,7 @@ pub async fn open_or_create(path: &Path) -> Result<SqlitePool, sqlx::Error> {
 
 /// Open an existing store read-only-ish. Never creates: a reader that
 /// created the file would race the runner for which engine claims it.
-async fn open_existing(path: &Path) -> Result<SqlitePool, sqlx::Error> {
+pub(crate) async fn open_existing(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(options(path, false))
@@ -363,6 +363,16 @@ pub async fn log_after(
     after_seq: i64,
     limit: i64,
 ) -> Vec<LogRow> {
+    log_where(data_root, Some(run_id), step, after_seq, limit).await
+}
+
+async fn log_where(
+    data_root: &Path,
+    run_id: Option<&str>,
+    step: Option<&str>,
+    after_seq: i64,
+    limit: i64,
+) -> Vec<LogRow> {
     let path = runs_path(data_root);
     if !path.exists() {
         return Vec::new();
@@ -371,10 +381,12 @@ pub async fn log_after(
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT seq, step, attempt, ts_utc, tz_offset, stream, level, target, thread, msg, fields \
-         FROM log WHERE run_id = ? AND seq > ? AND (? IS NULL OR step = ?) \
+        "SELECT seq, run_id, step, attempt, ts_utc, tz_offset, stream, level, target, thread, \
+         msg, fields \
+         FROM log WHERE (? IS NULL OR run_id = ?) AND seq > ? AND (? IS NULL OR step = ?) \
          ORDER BY seq LIMIT ?",
     )
+    .bind(run_id)
     .bind(run_id)
     .bind(after_seq)
     .bind(step)
@@ -387,7 +399,7 @@ pub async fn log_after(
     rows.iter()
         .map(|r| LogRow {
             seq: r.get("seq"),
-            run_id: run_id.to_string(),
+            run_id: r.get("run_id"),
             step: r.get("step"),
             attempt: r.get("attempt"),
             ts_utc: r.get("ts_utc"),

@@ -912,19 +912,23 @@ const logFor = ref<{ row: Row; runId: string; live: boolean; startedAt: string |
   null,
 );
 const logError = ref<string | null>(null);
+/// What `logFor.runId` holds while the panel shows every run at once.
+const ALL_RUNS_LOG = "*";
 /// The run the panel was opened on. Its picker can move to another run,
 /// which updates `logFor` for the header but must not remount the panel.
 const logOpenedOn = ref("");
 
 /// The picker in the panel moved: say so in the header.
-function onLogRunChanged(run: RunInfo) {
+function onLogRunChanged(run: RunInfo | null) {
   if (!logFor.value) return;
-  logFor.value = {
-    ...logFor.value,
-    runId: run.run_id,
-    live: run.finished_at_utc == null,
-    startedAt: run.started_at_utc,
-  };
+  logFor.value = run
+    ? {
+        ...logFor.value,
+        runId: run.run_id,
+        live: run.finished_at_utc == null,
+        startedAt: run.started_at_utc,
+      }
+    : { ...logFor.value, runId: ALL_RUNS_LOG, live: logFor.value.live, startedAt: null };
 }
 
 /// The run whose log answers "what was this step doing": the one in
@@ -2317,7 +2321,8 @@ onUnmounted(() => {
             <h3>{{ logFor.row.name }}</h3>
             <p>
               <code>{{ logFor.row.id }}</code>
-              <span v-if="logFor.runId">
+              <span v-if="logFor.runId === ALL_RUNS_LOG"> · every run the store holds</span>
+              <span v-else-if="logFor.runId">
                 · {{ logFor.live ? "a run in flight" : "a past run" }}<span
                   v-if="logFor.startedAt"
                   :title="formatStamp(logFor.startedAt)"

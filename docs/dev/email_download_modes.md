@@ -163,6 +163,21 @@ same namespacing discipline as the JMAP path's `jmap:` keys.
   window (documented as "typically at least one week"). That is not an
   error — it is the documented signal to fall back to a full sync,
   structurally the same as JMAP's `cannotCalculateChanges`.
+- a cursor, and `only_extract_labels` wider than when the cursor was
+  stored → both: `history.list` as above, then a `messages.list` walk
+  over the newly-added labels, or the whole account when the filter was
+  removed. `history.list` only names what *changed*, and mail that
+  already sat outside the old labels did not, so without the walk a
+  widened filter mirrors nothing (2026-09-15). The filter the cursor was
+  taken under is recorded in `sync_scope_config` under `gmail:download`,
+  the same mechanism the JMAP mode uses; see
+  `docs/dev/data_architecture_ingestion.md` § "When the cursor swallows
+  a config change".
+
+The cursor and the recorded filter both advance only when the run
+drained its work — no `message_budget` stop, no failed `messages.get` —
+because either one stored after a partial run tells the next run it is
+caught up.
 
 Deletions carry Gmail's own message id, but rows are keyed by
 `Message-ID`, so the mapping is not local. Ingest stamps

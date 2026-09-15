@@ -892,6 +892,34 @@ export function fetchRunLog(
   );
 }
 
+// Log lines across every run the store holds, or one run's with `run`;
+// `step` narrows to a step. `q` is the search bar, in the grammar every
+// grid shares (`level:warn -target:sqlx "history"`); a key a log line
+// does not have is a 400 whose text says so. Tails with `afterSeq` the
+// way `fetchRunLog` does: `seq` is monotone across runs too.
+export function fetchLog(
+  opts: { run?: string; step?: string; q?: string; afterSeq?: number; limit?: number },
+  signal?: AbortSignal,
+): Promise<RunLogLine[]> {
+  const params = new URLSearchParams();
+  if (opts.run) params.set("run", opts.run);
+  if (opts.step) params.set("step", opts.step);
+  if (opts.q) params.set("q", opts.q);
+  if (opts.afterSeq != null) params.set("after_seq", String(opts.afterSeq));
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  return fetchLogLines(`/api/log?${params.toString()}`, signal);
+}
+
+// A query the log cannot read comes back 400 with a sentence for the
+// search bar; that sentence is the whole error, shown where the lines
+// would be rather than toasted with the URL in front of it.
+async function fetchLogLines(url: string, signal?: AbortSignal): Promise<RunLogLine[]> {
+  const r = await fetch(url, { signal });
+  if (r.status === 400) throw new Error((await r.text()).trim());
+  if (!r.ok) throw new Error(`${url} → ${r.status}`);
+  return (await r.json()) as RunLogLine[];
+}
+
 /// One job by id — a run the commit history names, which may be older
 /// than the list the Manage screen holds. Null when the app never ran
 /// it, without the toast `getJson` would raise: a run started from a

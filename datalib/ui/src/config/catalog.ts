@@ -456,10 +456,13 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "bytes",
         target: "common.blob_size_limit_bytes",
-        label: "Skip attachments larger than",
+        label: "Skip messages larger than",
         help:
-          "Attachments are most of a mailbox's bytes and almost none of its text. Leave " +
-          "empty for no limit.",
+          "Attachments are most of a mailbox's bytes and almost none of its text; a message " +
+          "over the limit keeps its headers and loses its body. Decide before the first " +
+          "download: Gmail's sync never asks again about a message it already has, so " +
+          "raising this later does not go back for the ones it skipped. Leave empty for " +
+          "no limit.",
       },
       {
         kind: "string_list",

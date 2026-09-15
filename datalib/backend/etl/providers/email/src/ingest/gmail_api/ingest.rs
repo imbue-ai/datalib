@@ -28,7 +28,7 @@ impl LabelIndex {
         }
     }
 
-    fn name(&self, id: &str) -> String {
+    pub fn name(&self, id: &str) -> String {
         match self.by_id.get(id) {
             Some(label) => label.name.clone(),
             None => id.to_string(),
@@ -117,23 +117,12 @@ impl LabelIndex {
     /// into a full one is not a partial result, it is the wrong run.
     pub fn ids_for_names(&self, names: &[String]) -> anyhow::Result<ResolvedLabels> {
         let out = download_problems::resolve_configured(K_ONLY_EXTRACT_LABELS, names, |name| {
-            self.by_id
-                .values()
-                .find(|l| {
-                    let canonical = if l.is_system {
-                        labels::canonical_name(&l.name)
-                    } else {
-                        l.name.clone()
-                    };
-                    canonical == name || l.name == name
-                })
-                .map(|l| l.id.clone())
-                .ok_or_else(|| {
-                    format!(
-                        "not a label on this Gmail account. Known labels: {}",
-                        self.known_names().join(", ")
-                    )
-                })
+            self.id_for_name(name).ok_or_else(|| {
+                format!(
+                    "not a label on this Gmail account. Known labels: {}",
+                    self.known_names().join(", ")
+                )
+            })
         });
         if out.nothing_resolved() {
             anyhow::bail!(
@@ -144,6 +133,23 @@ impl LabelIndex {
             );
         }
         Ok(out)
+    }
+
+    /// A configured name is matched against the canonical path for a
+    /// system label (`inbox`, not `INBOX`) and the raw name for a user
+    /// label, or the raw name either way.
+    pub fn id_for_name(&self, name: &str) -> Option<String> {
+        self.by_id
+            .values()
+            .find(|l| {
+                let canonical = if l.is_system {
+                    labels::canonical_name(&l.name)
+                } else {
+                    l.name.clone()
+                };
+                canonical == name || l.name == name
+            })
+            .map(|l| l.id.clone())
     }
 
     fn known_names(&self) -> Vec<String> {

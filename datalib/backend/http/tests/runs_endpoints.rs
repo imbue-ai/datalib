@@ -195,3 +195,63 @@ async fn a_runs_log_is_tailed_by_seq_and_narrowed_by_step() {
     assert_eq!(old.as_array().unwrap().len(), 1);
     assert_eq!(old[0]["level"], "error");
 }
+
+/// `/api/log` reads the search-bar grammar: a term narrows by column, a
+/// negated one drops, free text is a substring, and a key a log line
+/// does not have is refused by name rather than matched against nothing.
+#[tokio::test]
+async fn the_log_is_read_through_the_shared_query_grammar() {
+    let td = tempfile::tempdir().unwrap();
+    write_two_runs(td.path());
+
+    let all = get(td.path(), "/api/log?step=slack/ingest").await;
+    assert_eq!(all.as_array().unwrap().len(), 4, "both runs' lines");
+
+    let q = |q: &str| format!("/api/log?step=slack/ingest&q={}", urlencoding(q));
+    let warned = get(td.path(), &q("level:warn")).await;
+    assert_eq!(warned.as_array().unwrap().len(), 1);
+    assert_eq!(warned[0]["msg"], "slow");
+
+    let not_first = get(td.path(), &q("-run:run-1 -level:warn")).await;
+    let msgs: Vec<&str> = not_first
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["msg"].as_str().unwrap())
+        .collect();
+    assert_eq!(msgs, ["hello", "still here"]);
+
+    let phrase = get(td.path(), &q("\"still h\"")).await;
+    assert_eq!(phrase.as_array().unwrap().len(), 1);
+
+    let app = router(state(td.path()).await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(q("author:thad"))
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("`author:`"), "{text}");
+}
+
+fn urlencoding(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' | b':' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}

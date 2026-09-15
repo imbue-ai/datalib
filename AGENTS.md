@@ -512,6 +512,15 @@ datalib/
     core/          the feedback + job stores, plus re-exports of
                    `runtime`'s layout and host-runtime helpers. Knows
                    nothing about the index.
+    query/         `datalib_query`: the search-bar grammar every grid
+                   shares — `key:value`, `-` to negate, quotes, free
+                   text — and nothing about what a key means. No
+                   dependencies. `unified_index` reads keys as
+                   `grid_rows` fields; `runs` reads them as `log`
+                   columns (`GET /api/log?q=`); the UI's
+                   `ui/src/grid/query.ts` is the same grammar's
+                   writer, which is what makes right-click "Keep only"
+                   / "Exclude all" one control on both grids.
     unified_index/ the grid index, the qmd index, the query language
                    over them, and the repo that reads them. Linked by
                    datalib-step (writes it) and datalib-applet (serves
@@ -1488,6 +1497,19 @@ saved queries and in people's fingers. New callers emit `source_id:` and
 `source_ids`.
 
 Background: [#279](https://github.com/imbue-ai/datalib/issues/279).
+
+## A cursor is only valid under the config that set it
+
+A provider that resumes from a stored cursor never re-reads the config
+that narrowed its first walk, so *widening* that config (removing a
+label filter, moving `since` back) is a silent no-op unless the
+provider records the scope beside the cursor and diffs it next run —
+`datalib_etl::scope_config`, and the convention is written up in
+[`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md#when-the-cursor-swallows-a-config-change)
+§ "When the cursor swallows a config change", with the table of who
+records what. Slack hit this first, then Gmail, added after the sweep
+that fixed everyone else; `lint_repo.py` check 8 now catches a new
+provider that keeps a cursor without the record.
 
 ## Unordered collections: give a bag an order before storing it
 

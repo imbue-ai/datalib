@@ -191,6 +191,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs", get(runs_list))
         .route("/api/runs/{run}/steps", get(run_steps))
         .route("/api/runs/{run}/log", get(run_log))
+        .route("/api/log", get(log_lines))
         .route("/api/sync/stream", get(sync_stream))
         .route("/api/frontend", get(get_frontend))
         // Component code, addressed by content. Flat across every
@@ -1593,6 +1594,44 @@ async fn run_log(
         )
         .await,
     )
+}
+
+#[derive(Debug, Deserialize)]
+struct LogParams {
+    #[serde(default)]
+    run: Option<String>,
+    #[serde(default)]
+    step: Option<String>,
+    /// The search bar, in the grammar every grid shares (`datalib_query`):
+    /// `level:warn -target:sqlx "history"`.
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    after_seq: Option<i64>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// `GET /api/log?run=…&step=…&q=…` — log lines, oldest first, across
+/// every run the store holds unless `run` narrows it. Tails the same way
+/// `/api/runs/{run}/log` does. A `q` naming a key a log line does not
+/// have is a 400 with the key spelled out.
+async fn log_lines(
+    State(s): State<AppState>,
+    Query(p): Query<LogParams>,
+) -> Result<Json<Vec<datalib_runs::LogRow>>, (StatusCode, String)> {
+    let limit = p.limit.unwrap_or(5000).clamp(1, 50_000);
+    let q = datalib_runs::LogQuery {
+        run: p.run.as_deref(),
+        step: p.step.as_deref(),
+        q: &p.q,
+        after_seq: p.after_seq.unwrap_or(0),
+        limit,
+    };
+    datalib_runs::log_query(&s.root, &q)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
 }
 
 fn repo_err_to_status(e: RepoError) -> StatusCode {
