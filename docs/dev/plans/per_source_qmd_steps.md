@@ -355,8 +355,13 @@ its `qmd_index` step.
    the exact busy line qmd prints, and that the loop sees through its
    exit 0. `run_index` composes them, so the fixture and the global
    step run on the new writer already; the CLI takes `--embed-group`.
-2. **Runner.** `lock` key, `Incomplete`, the dispatch gate; unit tests
-   in `scheduler.rs`.
+2. **Runner** — *built 2026-09-15*. `lock` on `[[steps]]` and
+   `StepSpec`, the dispatch gate (a waiter goes back to the front of
+   the queue when the holder lands, holding no slot meanwhile),
+   `FailureKind::Incomplete` → `RunState::Incomplete`, no retry,
+   dependents blocked, the run's exit code unaffected. Both halves of
+   the vocabulary (`DagRunState`, the status labels, the DAG view) and
+   `step_protocol.md`.
 3. **Steps.** `qmd_embed` function, `qmd_index` rewrite,
    `state.json`. Config examples and scaffold. At this
    point a hand-written config runs the new shape.

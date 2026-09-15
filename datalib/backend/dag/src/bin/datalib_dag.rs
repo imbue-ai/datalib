@@ -304,7 +304,7 @@ async fn main() -> Result<()> {
         });
         if cancelled {
             130
-        } else if report.all_ok() && dropped_entries == 0 {
+        } else if !report.any_failed() && dropped_entries == 0 {
             0
         } else {
             2

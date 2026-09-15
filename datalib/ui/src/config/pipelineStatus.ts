@@ -77,6 +77,7 @@ export const STATUS_RANK: Record<string, number> = {
   skipped_up_to_date: 2,
   failed: 2,
   blocked: 2,
+  incomplete: 2,
   interrupted: 2,
 };
 
@@ -129,6 +130,8 @@ export const STATUS_LABEL: Record<string, string> = {
   skipped_up_to_date: "Up to date",
   failed: "Failed",
   blocked: "Blocked",
+  // Stopped on its budget with work left; the next sync resumes it.
+  incomplete: "Incomplete",
   interrupted: "Interrupted",
   never_run: "Never run",
 };

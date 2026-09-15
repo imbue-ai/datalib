@@ -12,6 +12,7 @@ const NODE_CLASS: Record<string, string> = {
   skipped_up_to_date: "skipped",
   failed: "failed",
   blocked: "blocked",
+  incomplete: "incomplete",
   not_selected: "not_selected",
 };
 
@@ -45,6 +46,7 @@ export function sourceDagView(): CardRender {
       .dv-node.skipped { fill: #2e8b5718; stroke: #2e8b5788; }
       .dv-node.failed { fill: #c0392b33; stroke: #c0392b; }
       .dv-node.blocked { fill: #88888822; stroke: #888888; }
+      .dv-node.incomplete { fill: #d4a01722; stroke: #d4a017; stroke-dasharray: 4 3; }
       .dv-node.not_selected { fill: none; stroke: #88888866; stroke-dasharray: 2 3; }
       @keyframes dv-flash { 0%, 100% { fill-opacity: 1; } 50% { fill-opacity: .35; } }
       .dv-label { fill: currentColor; }
@@ -210,6 +212,7 @@ export function sourceDagView(): CardRender {
         ["skipped", "up to date", "#2e8b5788"],
         ["failed", "failed", "#c0392b"],
         ["blocked", "blocked", "#888888"],
+        ["incomplete", "incomplete", "#d4a01788"],
         ["not_selected", "not in this sync", "#88888866"],
       ] as const) {
         const item = document.createElement("span");

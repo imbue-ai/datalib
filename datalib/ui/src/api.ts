@@ -481,7 +481,10 @@ export type DagRunState =
   | "not_selected"
   // Something upstream failed, so this was not invoked.
   | "blocked"
-  | "failed";
+  | "failed"
+  // Stopped on purpose with work left (its per-run budget ran out);
+  // the next run resumes it.
+  | "incomplete";
 
 export type DagStepRun = {
   // The run it happened in — what `/api/runs/{run}/log` takes. Empty

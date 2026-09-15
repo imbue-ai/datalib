@@ -221,6 +221,12 @@ pub struct StepEntry {
     /// without their command line changing. Bumping it re-runs the step once,
     /// even though none of its inputs moved.
     pub code_version: Option<String>,
+    /// A name shared by steps that must not run at the same time — every
+    /// `qmd_embed` step writes `lock = "qmd_embed"`, because qmd refuses a
+    /// second concurrent embed of one store. The runner dispatches one
+    /// step per name at a time, and a waiting step holds no parallelism
+    /// slot.
+    pub lock: Option<String>,
 }
 
 /// A `[[steps]]` table exactly as a person writes it. Either `group` and
@@ -247,6 +253,8 @@ struct StepTable {
     env: BTreeMap<String, String>,
     #[serde(default)]
     code_version: Option<String>,
+    #[serde(default)]
+    lock: Option<String>,
 }
 
 impl TryFrom<StepTable> for StepEntry {
@@ -295,6 +303,7 @@ impl TryFrom<StepTable> for StepEntry {
             params: t.params,
             env: t.env,
             code_version: t.code_version,
+            lock: t.lock,
         })
     }
 }
@@ -1064,6 +1073,7 @@ fn spec_of(e: &StepEntry, group_type: Option<&str>) -> Result<StepSpec> {
         },
     );
     spec.code_version = e.code_version.clone();
+    spec.lock = e.lock.clone();
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
     spec.function = e.function.clone();

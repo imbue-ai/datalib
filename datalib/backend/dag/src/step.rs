@@ -59,6 +59,12 @@ pub struct StepSpec {
     /// What this step does within its group: the second segment of its
     /// id, and the directory it writes under the group's.
     pub function: Option<String>,
+    /// A name shared by steps that must not run at the same time. The
+    /// scheduler dispatches at most one step per name at once, and a
+    /// step waiting for one waits in the ready set rather than in a
+    /// parallelism slot. Like `streams_output`, not fingerprinted: it
+    /// changes when a step may run, never what it produces.
+    pub lock: Option<String>,
 }
 
 impl StepSpec {
@@ -106,6 +112,7 @@ impl StepSpec {
             run,
             code_version: None,
             streams_output: false,
+            lock: None,
             group: None,
             group_type: None,
             function: None,
@@ -127,6 +134,11 @@ impl StepSpec {
     /// written, so consumers may be dispatched on its checkpoints.
     pub fn streams_output(mut self) -> Self {
         self.streams_output = true;
+        self
+    }
+
+    pub fn lock(mut self, name: impl Into<String>) -> Self {
+        self.lock = Some(name.into());
         self
     }
 
@@ -369,6 +381,12 @@ pub enum FailureKind {
     Data,
     /// The run was cancelled from outside.
     Cancelled,
+    /// Stopped on purpose with work left — a per-run budget ran out —
+    /// and will pick up where it left off next run. Not an error, and
+    /// never retried within a run; it is reported apart from `Failed`
+    /// so a pipeline that is merely not finished does not read as
+    /// broken.
+    Incomplete,
 }
 
 impl FailureKind {
