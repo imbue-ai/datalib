@@ -2,33 +2,7 @@
 //! quantity a metric belongs to, which axis it draws on, and how to get
 //! from the unit the downloader stored to the SI unit we plot.
 
-/// Which y-axis a metric draws on within its quantity's plot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Axis {
-    /// The plot's primary (left-hand) y-axis, Plotly's `y`.
-    Left,
-    /// A secondary (right-hand) overlaying y-axis, Plotly's `y2`.
-    Right,
-}
-
-/// A physical quantity — one scatter plot, one HTML file, N device
-/// series.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Quantity {
-    /// Stable slug: the plot's filename stem (`plots/<key>.html`) and
-    /// the markdown section anchor. Never derived from a display
-    /// string, so retitling a plot doesn't orphan its file.
-    pub key: &'static str,
-    /// Section heading + plot title.
-    pub title: &'static str,
-    /// SI unit label on the primary y-axis.
-    pub left_unit: &'static str,
-    /// SI unit label on the secondary y-axis, when any metric in this
-    /// quantity draws on [`Axis::Right`]. `None` → single-axis plot.
-    pub right_unit: Option<&'static str>,
-    /// One-line explanation rendered under the section heading.
-    pub blurb: &'static str,
-}
+pub use datalib_etl_timeseries_render::units::{series_label, Axis, MetricSpec, Quantity};
 
 pub const TEMPERATURE: Quantity = Quantity {
     key: "temperature",
@@ -65,34 +39,14 @@ pub const VOLUME: Quantity = Quantity {
 /// Every quantity, in the order their sections appear in the document.
 pub const QUANTITIES: &[Quantity] = &[TEMPERATURE, HUMIDITY, VOLUME];
 
-/// How one `yolink_readings.metric` value maps onto a plot.
-#[derive(Debug, Clone, Copy)]
-pub struct MetricSpec {
-    /// The literal `yolink_readings.metric` string.
-    pub metric: &'static str,
-    /// Which plot this metric's series belong on.
-    pub quantity: Quantity,
-    pub axis: Axis,
-    /// Appended to the device name in the legend, e.g. `water_valve
-    /// (consumption)`. `None` when the quantity has only one metric and
-    /// the device name alone is unambiguous.
-    pub series_suffix: Option<&'static str>,
-    /// Unit the plotted (converted) value is in. Distinct from
-    /// [`Quantity::left_unit`], which is an axis label.
-    pub si_unit: &'static str,
-    /// Stored value → SI value.
-    pub to_si: fn(f64) -> f64,
-}
-
 /// US liquid gallon, exactly. The YoLink CSV header says `GAL`; YoLink
 /// is a US-market product line, so that is the US liquid gallon
 /// (231 in³), not the imperial one — a 20% difference, so it is worth
 /// being explicit about which.
 pub const US_GALLON_LITRES: f64 = 3.785_411_784;
 
-fn identity(v: f64) -> f64 {
-    v
-}
+use datalib_etl_timeseries_render::units::identity;
+
 fn gallons_to_litres(v: f64) -> f64 {
     v * US_GALLON_LITRES
 }
@@ -166,14 +120,7 @@ pub const METRICS: &[MetricSpec] = &[
 /// [`METRICS`] — callers should fail loudly (see the module docs for
 /// why a silent drop is the wrong response).
 pub fn spec_for(metric: &str) -> Option<&'static MetricSpec> {
-    METRICS.iter().find(|m| m.metric == metric)
-}
-
-pub fn series_label(device: &str, spec: &MetricSpec) -> String {
-    match spec.series_suffix {
-        Some(s) => format!("{device} ({s})"),
-        None => device.to_string(),
-    }
+    datalib_etl_timeseries_render::units::spec_in(METRICS, metric)
 }
 
 #[cfg(test)]
@@ -181,32 +128,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_metric_is_unique_and_agrees_with_its_quantity() {
-        let mut seen = std::collections::HashSet::new();
-        for m in METRICS {
-            assert!(seen.insert(m.metric), "duplicate metric row {}", m.metric);
-            assert!(
-                QUANTITIES.contains(&m.quantity),
-                "{} points at a quantity missing from QUANTITIES",
-                m.metric
-            );
-            if m.axis == Axis::Right {
-                assert!(
-                    m.quantity.right_unit.is_some(),
-                    "{} draws on y2 but {} declares no right_unit",
-                    m.metric,
-                    m.quantity.key
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn quantity_keys_are_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for q in QUANTITIES {
-            assert!(seen.insert(q.key), "duplicate quantity key {}", q.key);
-        }
+    fn the_table_is_consistent() {
+        datalib_etl_timeseries_render::units::check_table(METRICS, QUANTITIES);
     }
 
     #[test]

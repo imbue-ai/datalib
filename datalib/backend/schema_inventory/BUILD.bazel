@@ -30,6 +30,7 @@ rust_test(
         "//datalib/backend/etl/providers/pdf:datalib_etl_pdf",
         "//datalib/backend/etl/providers/signal:datalib_etl_signal",
         "//datalib/backend/etl/providers/slack:datalib_etl_slack",
+        "//datalib/backend/etl/providers/airvisual:datalib_etl_airvisual",
         "//datalib/backend/etl/providers/sms_backup_restore:datalib_etl_sms_backup_restore",
         "//datalib/backend/etl/providers/whatsapp:datalib_etl_whatsapp",
         "//datalib/backend/etl/providers/yolink:datalib_etl_yolink",

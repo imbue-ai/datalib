@@ -15,7 +15,12 @@ import { clickRowByUuid } from "./grid-helpers";
 // `test.use({ extraHTTPHeaders: {} })` and a `?token=` navigation if you
 // ever need the real library.
 
-type Row = { uuid: string; kind: string; markdown_uuid: string | null };
+type Row = {
+  uuid: string;
+  kind: string;
+  source_id: string;
+  markdown_uuid: string | null;
+};
 
 /** The figure spec `render/plot.rs` inlines into every plot page. */
 type Figure = {
@@ -74,7 +79,11 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({
   const resp = await request.get("/applet/unified_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
-  const pageRow = rows.find((r) => r.kind === "Sensor Timeseries");
+  // Every time-series source renders a `Sensor Timeseries` page (the
+  // fixture has yolink's and airvisual's), so the source id picks it.
+  const pageRow = rows.find(
+    (r) => r.kind === "Sensor Timeseries" && r.source_id === "yolink",
+  );
   expect(pageRow, "the TNG fixture must contain the yolink page row").toBeTruthy();
   const mdUuid = pageRow!.markdown_uuid ?? pageRow!.uuid;
 

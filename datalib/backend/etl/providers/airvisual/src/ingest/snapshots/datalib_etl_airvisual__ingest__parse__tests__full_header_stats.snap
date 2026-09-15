@@ -1,0 +1,9 @@
+---
+source: datalib/backend/etl/providers/airvisual/src/ingest/parse.rs
+expression: p.stats
+---
+lines: 3
+samples: 3
+sentinels: 16
+clock_unset: 0
+bad_lines: 0

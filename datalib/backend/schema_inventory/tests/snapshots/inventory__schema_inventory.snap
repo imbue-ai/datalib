@@ -1007,6 +1007,46 @@ recipients_bookkeeping
     volatile_payload
     tz_offset
 
+== airvisual/raw ==
+airvisual_devices
+    id
+    name
+    model
+    mac_address
+    app_version
+    system_version
+    timezone
+    last_ts_ms
+airvisual_samples
+    device_id
+    ts_ms
+    pm25_ugm3
+    pm10_ugm3
+    pm1_ugm3
+    aqi_us
+    aqi_cn
+    outdoor_aqi_us
+    outdoor_aqi_cn
+    temperature_c
+    humidity_pct
+    co2_ppm
+    voc_ppb
+    source_file
+airvisual_unplaced_samples
+    id
+    payload
+    device_id
+    source_file
+    line_no
+    device_ts_s
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at_utc
+    tz_offset
+
 == slack/raw ==
 channels
     id

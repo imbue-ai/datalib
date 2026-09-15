@@ -1,0 +1,52 @@
+{
+    "date_and_time": {
+        "date": "2024/09/01",
+        "time": "05:25:00",
+        "timestamp": "1725168300"
+    },
+    "measurements": [
+        {
+            "co2_ppm": "612",
+            "humidity_RH": "41",
+            "pm01_ugm3": "2",
+            "pm10_ugm3": "3",
+            "pm25_AQICN": "3",
+            "pm25_AQIUS": "11",
+            "pm25_ugm3": "2.0",
+            "temperature_C": "21.5",
+            "temperature_F": "70.7",
+            "voc_ppb": "-1"
+        }
+    ],
+    "serial_number": "SICKBAY01",
+    "settings": {
+        "follow_mode": "station",
+        "followed_station": "1701",
+        "is_aqi_usa": true,
+        "is_indoor": true,
+        "language": "en-US",
+        "node_name": "Sickbay",
+        "sensor_mode": {
+            "custom_mode_interval": 3,
+            "mode": 1
+        },
+        "timezone": "Earth/San_Francisco"
+    },
+    "status": {
+        "app_version": "1.1937",
+        "battery": 100,
+        "datetime": 1725168300,
+        "device_name": "AIRVISUAL-SICKBAY01",
+        "ip_address": "10.1.7.2",
+        "mac_address": "7c25da8d1702",
+        "model": 30,
+        "sensor_life": {
+            "pm25": 5182009360
+        },
+        "sensor_pm25_serial": "00000125480073144579",
+        "sync_time": 60000,
+        "system_version": "KBG66F85",
+        "used_memory": 3,
+        "wifi_strength": 4
+    }
+}

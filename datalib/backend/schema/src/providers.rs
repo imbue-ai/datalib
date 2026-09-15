@@ -27,6 +27,8 @@
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum Provider {
+    /// IQAir's AirVisual monitors.
+    Airvisual,
     Beeper,
     Chatgpt,
     /// Both `claude_api` and `claude_export`: one raw store, one tag.

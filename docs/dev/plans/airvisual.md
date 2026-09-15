@@ -1,6 +1,15 @@
 # AirVisual (IQAir) air-quality monitors as a source
 
-**Status: investigation (2026-09-14). Nothing is built.** This is the
+**Status: Route C is built (2026-09-14); Route A is not.** The `airvisual`
+provider reads an AirVisual Pro's own history files off its Samba share
+into doltlite and renders them as one page of plots —
+[`providers/airvisual/INGEST.md`](../../../datalib/backend/etl/providers/airvisual/INGEST.md)
+is the reference for what the share holds and how the ingest reads it,
+and `datalib_etl_timeseries_render` is the crate yolink's render and
+this one now share. What follows is the investigation that led there,
+kept for the measurements of the cloud routes, which are the reason the
+device API (`api`) is still worth building for the *published* outdoor
+unit and nothing else. This is the
 second member of the time-series family that
 [`data_architecture_parse_and_render.md`](../data_architecture_parse_and_render.md)
 §"Examples where schema and data handling should be unified" lists as
@@ -373,21 +382,18 @@ day or two, most of it the metric table and the fixtures.
 Settled on 2026-09-14 from the real account: the fleet is one
 published Outdoor plus two private Pros; the outdoor unit's device API
 works and its export is offered; the Pros get neither on the free plan;
-the paid plan is a sales contact. Route A for the outdoor unit and
-Route C for the Pros, with a by-hand CSV export as the outdoor unit's
-one-time backfill.
+the paid plan is a sales contact. Route C is built and measured against
+a real Pro (`INGEST.md`); the type is `airvisual`.
 
 Still open:
 
-1. **The Pro's share, on a current unit.** Column set, file naming,
-   and whether the current month's file reads cleanly while the device
-   appends to it. Needs the share mounted once.
-2. **The dashboard export's columns**, for the outdoor unit. One export
-   from the browser shows them; the job is created on the account, so
-   it is the owner's to run.
+1. **Route A, the `api` method**, for the published outdoor unit: one
+   `curl` per run into the same `airvisual_samples` table, with the
+   tiers folded in as the plan above says. Its cadence argument stands,
+   and so does the missing periodic sync.
+2. **The dashboard export's columns**, for the outdoor unit's one-time
+   backfill. One export from the browser shows them; the job is created
+   on the account, so it is the owner's to run.
 3. **Publish the Pros as indoor sensors, or not.** Would open Route A
    for them; publishes a bedroom's occupancy pattern. Owner's call, and
    Route C does not need it.
-4. **`airvisual` or `iqair` as the type?** The rule says product; the
-   person says "IQ Air". One word to settle before the crate names are
-   in git.

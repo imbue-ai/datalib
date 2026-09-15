@@ -144,6 +144,8 @@ UUID_SQL_REGEX = (
 
 EXPECTED_PROVIDERS = frozenset(
     {
+        # File-backed, from two Pros' data folders; one page of plots.
+        "airvisual",
         "claude",
         "beeper",
         "contacts",

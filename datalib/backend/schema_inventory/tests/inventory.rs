@@ -138,6 +138,10 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
             datalib_etl_signal::ingest::schema_raw::full_ddl(),
         ),
         (
+            "airvisual/raw",
+            datalib_etl_airvisual::ingest::schema_raw::full_ddl(),
+        ),
+        (
             "slack/raw",
             datalib_etl_slack::ingest::schema_raw::full_ddl(),
         ),

@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Map, Value};
 
-use super::units::{Axis, Quantity};
+use crate::units::{Axis, Quantity};
 
 /// Pinned Plotly build. Version-pinned rather than floating (`latest`)
 /// so a rendered page keeps behaving the way it did the day it was
@@ -178,7 +178,21 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::units::{TEMPERATURE, VOLUME};
+
+    const TEMPERATURE: Quantity = Quantity {
+        key: "temperature",
+        title: "Temperature",
+        left_unit: "°C",
+        right_unit: None,
+        blurb: "",
+    };
+    const VOLUME: Quantity = Quantity {
+        key: "volume",
+        title: "Liquid volume",
+        left_unit: "L (per sample)",
+        right_unit: Some("L (cumulative)"),
+        blurb: "",
+    };
 
     fn trace(name: &str, axis: Axis) -> Trace {
         Trace {
