@@ -38,8 +38,7 @@ async function seed() {
 
 function onProgress(ev: JobProgressEvent) {
   const m = active.value;
-  const terminal = ev.state === "done" || ev.state === "failed" || ev.state === "canceled";
-  if (terminal) {
+  if (!ev.active) {
     m.delete(ev.id);
   } else {
     const prev = m.get(ev.id);

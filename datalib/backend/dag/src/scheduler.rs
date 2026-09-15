@@ -152,6 +152,11 @@ impl StepStatus {
             StepStatus::SkippedUpToDate => RunState::SkippedUpToDate,
             StepStatus::NotSelected => RunState::NotSelected,
             StepStatus::Blocked { .. } => RunState::Blocked,
+            // A cancel is the one failure kind that is not a failure:
+            // the person asked for it, and the step did as asked.
+            StepStatus::Failed {
+                kind: FailureKind::Cancelled,
+            } => RunState::Stopped,
             StepStatus::Failed { .. } => RunState::Failed,
         }
     }
@@ -2970,6 +2975,72 @@ mod tests {
         let blocked = st.steps["unified_index/grid"].last_run.as_ref().unwrap();
         assert_eq!(blocked.status, "blocked");
         assert!(blocked.finished_at.is_some());
+    }
+
+    /// A step that answers a cancel is recorded as stopped, not failed:
+    /// the person asked for it. Its dependents still wait, and the next
+    /// run takes the step again — a stop is not "done".
+    #[tokio::test]
+    async fn a_cancelled_step_is_recorded_as_stopped_and_runs_again_next_time() {
+        let fx = Fixture::new();
+        let stops = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let stop_once = stops.clone();
+        let stopping = StepSpec::new(
+            "email/rendered_md",
+            StepRun::in_process(move |_ctx| {
+                let first = stop_once.swap(false, std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    if first {
+                        Err(StepError::new(
+                            FailureKind::Cancelled,
+                            anyhow::anyhow!("interrupted"),
+                        ))
+                    } else {
+                        Ok(StepOutcome::default())
+                    }
+                }
+            }),
+        )
+        .input("email/raw");
+        let g = Graph::build(vec![
+            download(
+                "email",
+                fx.email_content.clone(),
+                fx.runs["email/raw"].clone(),
+            ),
+            stopping,
+            StepSpec::new(
+                "unified_index/grid",
+                StepRun::in_process(|_ctx| async { Ok(StepOutcome::default()) }),
+            )
+            .input("email/rendered_md"),
+        ])
+        .unwrap();
+        let r = runner(fx.root.path());
+        let rep = r.run(&g).await.unwrap();
+        assert!(!rep.all_ok(), "a stopped run is not a clean one");
+
+        let st = DagState::load(fx.root.path()).unwrap();
+        let run = st.current_run.unwrap();
+        assert_eq!(run.states["email/rendered_md"], "stopped");
+        assert_eq!(run.states["unified_index/grid"], "blocked");
+        let stopped = st.steps["email/rendered_md"].last_run.as_ref().unwrap();
+        assert_eq!(stopped.status, "stopped");
+        assert_eq!(stopped.attempts, 1, "a cancel is not retried");
+
+        // Next run: the stopped step is taken again, and the chain
+        // completes.
+        let rep = r.run(&g).await.unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        let st = DagState::load(fx.root.path()).unwrap();
+        assert_eq!(
+            st.steps["email/rendered_md"]
+                .last_run
+                .as_ref()
+                .unwrap()
+                .status,
+            "succeeded"
+        );
     }
 
     #[tokio::test]

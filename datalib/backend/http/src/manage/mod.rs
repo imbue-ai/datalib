@@ -462,7 +462,7 @@ impl RowCtx<'_> {
             Some(ids) => format!("the sync of {ids}"),
             None => "the sync in progress".to_string(),
         };
-        Some(if status::job_stopping(job) {
+        Some(if job.is_stopping() {
             format!("Stopping {of}")
         } else {
             format!("Stop {of}")
@@ -473,7 +473,7 @@ impl RowCtx<'_> {
     // flight are checkpointing, and the face says so until they exit.
     fn stop_blocked(&self, id: &str) -> Option<String> {
         let job = self.claims.get(id)?;
-        if !status::job_stopping(job) {
+        if !job.is_stopping() {
             return None;
         }
         Some(format!(

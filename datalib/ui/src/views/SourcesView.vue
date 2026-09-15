@@ -362,7 +362,7 @@ async function toggleLog(job: SyncJob) {
 }
 
 function isActive(j: SyncJob): boolean {
-  return j.state === "pending" || j.state === "running";
+  return j.active;
 }
 
 function fmtTime(s: string | null): string {

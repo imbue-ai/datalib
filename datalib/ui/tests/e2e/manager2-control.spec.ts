@@ -10,8 +10,8 @@
 // today — every sync is its own job and the worker runs them one at a
 // time, so a source started during another's sync waits its turn — and
 // has to stay green. The second is what the workflow needs and does not
-// have yet, marked `test.fail()`: each one passes as an expected failure
-// today, and the day the feature lands Playwright fails it as
+// have yet, marked `test.fail()` or `test.fixme()`: an expected failure
+// passes today, and the day the feature lands Playwright fails it as
 // "expected to fail, but passed", which is the reminder to turn it into
 // a plain test.
 //
@@ -28,7 +28,6 @@ import {
   settleRunner,
   stampsBefore,
   statusOf,
-  TERMINAL,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -58,8 +57,10 @@ type SyncJob = {
   id: string;
   source_ids: string | null;
   state: "pending" | "running" | "done" | "failed" | "canceled";
-  started_at_utc: string | null;
-  finished_at_utc: string | null;
+  /// The server's word on whether the job still holds the runner: a
+  /// cancel flips `state` at once, and this only once the worker has
+  /// stamped the job finished.
+  active: boolean;
 };
 type DagStep = { id: string; current_state: string | null };
 
@@ -138,7 +139,7 @@ async function untilRunning(page: Page, id: string, timeout = 45_000) {
 
 /// Wait until a job has *finished* in one of the given states — the
 /// worker has stamped it, so nothing is still running on its behalf.
-/// A cancel flips the state the moment it is asked for; the stamp is
+/// A cancel flips the state the moment it is asked for; `active` is
 /// what says the runner has actually gone.
 async function untilJobFinished(
   request: APIRequestContext,
@@ -151,7 +152,7 @@ async function untilJobFinished(
     .poll(
       async () => {
         seen = await jobFor(request, s);
-        return seen ? `${seen.state}${seen.finished_at_utc ? "" : " (unfinished)"}` : "(no job)";
+        return seen ? `${seen.state}${seen.active ? " (still active)" : ""}` : "(no job)";
       },
       { timeout, intervals: [200], message: `the job for ${s.id} never finished as ${states.join("/")}` },
     )
@@ -163,16 +164,12 @@ async function untilJobFinished(
 /// the next test starts from nothing in flight.
 async function drainQueue(page: Page) {
   for (const j of await jobs(page.request)) {
-    if (j.state === "pending" || j.state === "running") {
+    if (j.active) {
       await page.request.post(`/api/sync/jobs/${encodeURIComponent(j.id)}/cancel`);
     }
   }
-  // Pending or running, or canceled and not yet stamped finished — a
-  // stop the worker is still carrying out.
-  const active = (j: SyncJob) =>
-    j.state === "pending" || j.state === "running" || (j.state === "canceled" && !j.finished_at_utc && !!j.started_at_utc);
   await expect
-    .poll(async () => (await jobs(page.request)).filter(active).length, {
+    .poll(async () => (await jobs(page.request)).filter((j) => j.active).length, {
       timeout: 60_000,
       intervals: [250],
       message: "the queue never emptied",
@@ -357,7 +354,7 @@ test.describe("sources run independently, one job at a time", () => {
       .poll(
         async () => {
           stopped = await jobFor(request, CHATGPT);
-          if (stopped?.finished_at_utc) return "finished";
+          if (stopped && !stopped.active) return "finished";
           if (await stopping.isVisible()) {
             windingDown = {
               disabled: (windingDown?.disabled ?? true) && (await stopping.isDisabled()),
@@ -384,20 +381,25 @@ test.describe("sources run independently, one job at a time", () => {
     // …and once the runner has gone, both stand down.
     await expect(banner).toBeHidden({ timeout: 10_000 });
     await expect(stopping).toHaveCount(0);
-    // Its download's row is terminal and does not claim to have finished
-    // the work. (What word it uses is the test.fail below.)
-    let word = "";
+    // Its download's row says what happened: stopped — not failed,
+    // nothing went wrong, and not finished, the work is not done. The
+    // step answered SIGINT with a `cancelled` outcome, which the
+    // scheduler records as `stopped`; its render step, never reached,
+    // is blocked on it.
     await expect
-      .poll(
-        async () => {
-          word = (await statusOf(page, ingestOf(CHATGPT))) ?? "";
-          return TERMINAL.test(word);
-        },
-        { timeout: 30_000, intervals: [200], message: `${ingestOf(CHATGPT)} never settled after the stop` },
-      )
-      .toBe(true);
-    expect(word, "a stopped download must not read as finished").not.toMatch(/^(Succeeded|Up to date)$/);
-    console.log(`[e2e] after Stop, ${ingestOf(CHATGPT)} reads ${JSON.stringify(word)}`);
+      .poll(() => statusOf(page, ingestOf(CHATGPT)), {
+        timeout: 30_000,
+        intervals: [200],
+        message: `${ingestOf(CHATGPT)} never settled after the stop`,
+      })
+      .toBe("Stopped");
+    await expect
+      .poll(() => statusOf(page, renderOf(CHATGPT)), { timeout: 10_000, intervals: [200] })
+      .toBe("Blocked");
+    // …and the group reads the same, off that child.
+    await expect
+      .poll(() => statusOf(page, `group:${CHATGPT.id}`), { timeout: 10_000, intervals: [200] })
+      .toBe("Stopped");
 
     // The other source's job was never touched by the stop: it is still
     // in the queue, and it goes on to finish.
@@ -460,29 +462,6 @@ test.describe("what independent control still needs", () => {
     const when = await currentStates(request);
     expect(when[ingestOf(CHATGPT)], `runner: ${JSON.stringify(when)}`).toBe("running");
     expect(when[ingestOf(CLAUDE)], `runner: ${JSON.stringify(when)}`).toBe("running");
-  });
-
-  test("a stopped download reads as stopped, not as failed", async ({ page, request }) => {
-    // The step answers SIGINT with a `cancelled` outcome, and the
-    // scheduler files that under Failed like any other failure kind —
-    // so a person who pressed Stop is told the download failed.
-    test.fail();
-    await writeConfigAndOpen(page, [CHATGPT]);
-    await start(page, CHATGPT);
-    await untilRunning(page, ingestOf(CHATGPT));
-    await stopBtn(page, `group:${CHATGPT.id}`).click();
-    await untilJobFinished(request, CHATGPT, ["canceled"]);
-    let word = "";
-    await expect
-      .poll(
-        async () => {
-          word = (await statusOf(page, ingestOf(CHATGPT))) ?? "";
-          return TERMINAL.test(word);
-        },
-        { timeout: 30_000, intervals: [200] },
-      )
-      .toBe(true);
-    expect(word).not.toBe("Failed");
   });
 
   test.fixme("a backlogged step can be put on ice, and taken off it", async ({ page }) => {

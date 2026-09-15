@@ -481,7 +481,9 @@ export type DagRunState =
   | "not_selected"
   // Something upstream failed, so this was not invoked.
   | "blocked"
-  | "failed";
+  | "failed"
+  // Told to stop, and did: not done, so it runs again next time.
+  | "stopped";
 
 export type DagStepRun = {
   // The run it happened in — what `/api/runs/{run}/log` takes. Empty
@@ -572,6 +574,12 @@ export type SyncJob = {
   finished_at_utc: string | null;
   tz_offset?: string | null;
   parent_job_id?: string | null;
+  // Whether the job still holds the runner — queued, running, or told
+  // to stop and not yet stopped. The server's answer
+  // (`SyncJobRow::is_active`); nothing here derives it from `state`.
+  active: boolean;
+  // Told to stop, and still winding down.
+  stopping: boolean;
   pid?: number | null;
 };
 
@@ -777,6 +785,9 @@ export type JobProgressEvent = {
   kind: string;
   source_ids: string | null;
   state: SyncJobState;
+  // As on `SyncJob`: whether the job still holds the runner after this
+  // event.
+  active: boolean;
   progress_msg: string | null;
 };
 

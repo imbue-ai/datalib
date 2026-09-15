@@ -34,6 +34,9 @@ export const STATUS_GLYPHS: Record<string, string> = {
   // alert/warning — a run that died is not a reported failure, but it
   // is not a success either.
   interrupted: "M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z",
+  // av/stop_circle — told to stop, and did. Not a failure, and not
+  // done: it runs again next time.
+  stopped: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4 14H8V8h8v8z",
   // action/hourglass_empty — due to run, and not started.
   queued:
     "M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01H18V2H6zm10 14.5V20H8v-3.5l4-4 4 4zm-4-5l-4-4V4h8v3.5l-4 4z",
