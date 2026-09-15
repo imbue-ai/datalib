@@ -352,7 +352,6 @@ pub fn render_source(
                 }),
         },
     )?;
-    docs += sealed.stored;
     removed += sealed.removed;
     if !buckets.is_empty() {
         tracing::info!(
@@ -366,11 +365,17 @@ pub fn render_source(
     // put thousands of entries in `dolt_log` per run; committing
     // once is also what makes `dolt_diff` over this store answer
     // "what did this render change?".
-    let msg = if removed == 0 {
-        format!("render {name}: {docs} document(s)")
-    } else {
-        format!("render {name}: {docs} document(s), {removed} removed upstream")
-    };
+    // The provider's documents, then the driver's own storage report
+    // when its counts moved, so the number reads as what the provider
+    // rendered.
+    let mut msg = format!("render {name}: {docs} document(s)");
+    if removed > 0 {
+        msg.push_str(&format!(", {removed} removed upstream"));
+    }
+    if sealed.stored > 0 {
+        msg.push_str(", storage report");
+    }
+    docs += sealed.stored;
     store
         .commit(&msg)
         .with_context(|| format!("commit render store for {}", name))?;

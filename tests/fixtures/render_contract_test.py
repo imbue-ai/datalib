@@ -12,13 +12,17 @@ pipeline once, then for every source and every table of its raw store,
 mutate the table in a scratch copy, commit, render the source
 *incrementally* (the copy carries the render store and its cursor) and
 render it *cold* (a copy with no render store at all), and compare the
-two render stores' logical content. Two mutations per table: delete
-every row, and append a marker to every text column and every top-level
-string in every JSON payload — the first is what a source losing an
-entity looks like, the second what an edit looks like. A whole table at
-a time rather than a row at a time, so this is tables×2 renders per
-source rather than rows×2; a failure names the source, the table and the
-mutation, which is the fix in one line.
+two render stores' logical content. Per table: delete every row, and
+append a marker to every text column and every top-level string in
+every JSON payload — the first is what a source losing an entity looks
+like, the second what an edit looks like; then, on one row (the first
+by primary key), the same edit, a deletion, and an insertion of a copy
+under a fresh key — an edit, a loss and an arrival of one entity, with
+the incremental run also checked to have rendered exactly the documents
+that declared the row; and for a table that points at blob bytes, two
+rows' digests swapped — an attachment whose bytes changed. A failure
+names the source, the table and the mutation, which is the fix in one
+line.
 
 Runs `datalib-step` the way the runner would, with the params the
 generated config gives the step, so the provider code under test is
@@ -133,6 +137,7 @@ class RenderContractTest(unittest.TestCase):
         )
         if result.returncode != 0:
             if not must_succeed:
+                self.last_refusal = result.stderr.strip().splitlines()[-1:]
                 return None
             self.fail(f"doltlite failed on {db.name}:\n  {sql[:300]}\n{result.stderr}")
         return [ln for ln in result.stdout.splitlines() if ln.strip()]
@@ -244,38 +249,201 @@ class RenderContractTest(unittest.TestCase):
         is a state ingest never writes; and as a fallback for a table
         whose CHECK constraints refuse the general form."""
         payload_only = payload_only or any(name == "payload" for name, _, _ in cols)
-        sets = []
-        for name, _typ, pk in cols:
-            if pk or self._identity_like(name):
-                continue
-
-            # A payload is a JSONB blob or JSON text, depending on the
-            # provider; rewritten in kind, the marker lands on the
-            # top-level content strings and nowhere else.
-            def rewrite(agg: str, col: str = name) -> str:
-                return (
-                    f"(SELECT {agg}(key, CASE WHEN type = 'text' THEN "
-                    f"(CASE WHEN {self._JSON_ID_KEY} THEN value ELSE value || '~' END) "
-                    f"ELSE json(value) END) FROM json_each({table}.{col}))"
-                )
-
-            text_case = (
-                ""
-                if payload_only
-                else f"WHEN typeof({name}) = 'text' THEN {name} || '~' "
-            )
-            sets.append(
-                f"{name} = CASE "
-                f"WHEN typeof({name}) = 'blob' AND json_valid({name}, 8) "
-                f"AND json_type({name}) = 'object' THEN {rewrite('jsonb_group_object')} "
-                f"WHEN typeof({name}) = 'text' AND json_valid({name}) "
-                f"AND json_type({name}) = 'object' THEN {rewrite('json_group_object')} "
-                f"{text_case}"
-                f"ELSE {name} END"
-            )
+        sets = [
+            f"{name} = {self._tweak_expr(table, name, payload_only=payload_only)}"
+            for name, _typ, pk in cols
+            if not pk and not self._identity_like(name)
+        ]
         if not sets:
             return None
         return f"UPDATE {table} SET {', '.join(sets)};"
+
+    def _tweak_expr(self, table: str, name: str, *, payload_only: bool) -> str:
+        """The marked value of column `name`, as an expression."""
+
+        # A payload is a JSONB blob or JSON text, depending on the
+        # provider; rewritten in kind, the marker lands on the
+        # top-level content strings and nowhere else.
+        def rewrite(agg: str) -> str:
+            return (
+                f"(SELECT {agg}(key, CASE WHEN type = 'text' THEN "
+                f"(CASE WHEN {self._JSON_ID_KEY} THEN value ELSE value || '~' END) "
+                f"ELSE json(value) END) FROM json_each({table}.{name}))"
+            )
+
+        text_case = (
+            "" if payload_only else f"WHEN typeof({name}) = 'text' THEN {name} || '~' "
+        )
+        return (
+            f"CASE "
+            f"WHEN typeof({name}) = 'blob' AND json_valid({name}, 8) "
+            f"AND json_type({name}) = 'object' THEN {rewrite('jsonb_group_object')} "
+            f"WHEN typeof({name}) = 'text' AND json_valid({name}) "
+            f"AND json_type({name}) = 'object' THEN {rewrite('json_group_object')} "
+            f"{text_case}"
+            f"ELSE {name} END"
+        )
+
+    def _insert_sql(
+        self,
+        db: Path,
+        table: str,
+        cols: list[tuple[str, str, bool]],
+        row_id: str,
+    ) -> tuple[str, str] | None:
+        """Copy row `row_id` under a fresh primary key, content marked
+        and its own identity made fresh in kind (see [`_fresh_payload`]),
+        so the copy is a new entity in the same place: a message that
+        arrived in a thread, a page in a workspace. Returns the SQL and
+        the new key."""
+        pk_col, pk_type = next((name, typ) for name, typ, pk in cols if pk)
+        if "INT" in pk_type:
+            new_key = str(
+                int(self._rows(db, f"SELECT MAX({pk_col}) FROM {table};")[0]) + 1
+            )
+            new_literal = new_key
+        else:
+            new_key = f"{row_id}~new"
+            new_literal = f"'{new_key}'"
+        payload_only = any(name == "payload" for name, _, _ in cols)
+        exprs = []
+        for name, _typ, pk in cols:
+            if pk:
+                exprs.append(new_literal)
+            elif name == "payload":
+                exprs.append(
+                    self._fresh_payload_sql(db, table, pk_col, row_id, new_key)
+                )
+            elif self._own_time_key(name):
+                exprs.append(self._bumped_ts(name))
+            elif self._identity_like(name):
+                exprs.append(name)
+            else:
+                exprs.append(self._tweak_expr(table, name, payload_only=payload_only))
+        names = ", ".join(name for name, _, _ in cols)
+        sql = (
+            f"INSERT INTO {table} ({names}) SELECT {', '.join(exprs)} FROM {table} "
+            f"WHERE CAST({pk_col} AS TEXT) = '{row_id}';"
+        )
+        return sql, new_key
+
+    @staticmethod
+    def _bumped_ts(value: str) -> str:
+        """`value` one second later, in the shape it came: Slack's
+        `"1700000000.000100"` text, or a plain number."""
+        return (
+            f"CASE WHEN typeof({value}) = 'text' AND {value} GLOB '[0-9]*.[0-9]*' "
+            f"AND {value} NOT GLOB '*[^0-9.]*' "
+            f"THEN printf('%.6f', CAST({value} AS REAL) + 1) "
+            f"WHEN typeof({value}) IN ('integer', 'real') THEN {value} + 1 "
+            f"ELSE {value} END"
+        )
+
+    def _fresh_payload_sql(
+        self, db: Path, table: str, pk_col: str, row_id: str, new_key: str
+    ) -> str:
+        """The copy's payload as a literal, in the store's own encoding."""
+        raw = self._rows(
+            db,
+            f"SELECT typeof(payload) || '|' || json(payload) FROM {table} "
+            f"WHERE CAST({pk_col} AS TEXT) = '{row_id}';",
+        )[0]
+        kind, text = raw.split("|", 1)
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            return "payload"
+        if not isinstance(doc, dict):
+            return "payload"
+        fresh = json.dumps(self._fresh_payload(doc, row_id, new_key)).replace("'", "''")
+        return f"jsonb('{fresh}')" if kind == "blob" else f"'{fresh}'"
+
+    # A payload key that is the row's own identity rather than a
+    # reference to another row's: its `id`, and the send time several
+    # providers mint a message's id from (Slack's `ts`, Signal's
+    # `date_sent`, an SMS `date`). A reference — `channel_id`,
+    # `page_id` — stays, so the copy lands where the original did.
+    @staticmethod
+    def _own_time_key(key: str) -> bool:
+        k = key.lower()
+        return k == "ts" or k.endswith(("_ts", "_ms")) or "date" in k or "time" in k
+
+    def _fresh_payload(self, doc: dict, row_id: str, new_key: str) -> object:
+        """The copy's payload: content marked as an edit would, and every
+        key that is its own identity made fresh — the top-level `id`,
+        any value equal to the old key, its send time bumped, and each
+        nested `id` / `uuid` (a message inside a conversation) — since a
+        row whose payload says another row's id is a state ingest never
+        writes, and a uuid minted from it would collide with the
+        original's."""
+
+        def fresh_id(v):
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, int):
+                return v + 1_000_000
+            if isinstance(v, str):
+                return f"{v}~new"
+            return v
+
+        def bump(v):
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, (int, float)):
+                return v + 1
+            if isinstance(v, str) and re.fullmatch(r"[0-9]+\.[0-9]+", v):
+                return f"{float(v) + 1:.6f}"
+            return v
+
+        def walk(node, top: bool):
+            if isinstance(node, dict):
+                out = {}
+                for k, v in node.items():
+                    if k in ("id", "uuid"):
+                        out[k] = fresh_id(v)
+                    elif top and isinstance(v, str) and v == row_id:
+                        out[k] = new_key
+                    elif top and self._own_time_key(k):
+                        out[k] = bump(v)
+                    elif isinstance(v, str) and not self._identity_like(k):
+                        out[k] = v + "~"
+                    else:
+                        out[k] = walk(v, False)
+                return out
+            if isinstance(node, list):
+                return [walk(v, False) for v in node]
+            return node
+
+        return walk(doc, True)
+
+    def _swap_blobs_sql(
+        self, db: Path, table: str, cols: list[tuple[str, str, bool]]
+    ) -> str | None:
+        """Exchange two rows' `blake3` — the bytes behind two attachments
+        swapped, which is the only shape a changed blob can take: bytes
+        are content-addressed, so different bytes are a different digest
+        on the edge row."""
+        if not any(name == "blake3" for name, _, _ in cols):
+            return None
+        pks = [name for name, _, pk in cols if pk]
+        if len(pks) != 1:
+            return None
+        rows = self._rows(
+            db,
+            f"SELECT CAST({pks[0]} AS TEXT), blake3 FROM {table} "
+            "WHERE blake3 IS NOT NULL GROUP BY blake3 ORDER BY 1 LIMIT 2;",
+        )
+        if len(rows) < 2:
+            return None
+        (a, ha), (b, hb) = (r.split("|", 1) for r in rows)
+        # Through a placeholder, for a table where the digest is unique.
+        hold = "0" * 64
+        where = f"WHERE CAST({pks[0]} AS TEXT) ="
+        return (
+            f"UPDATE {table} SET blake3 = '{hold}' {where} '{a}'; "
+            f"UPDATE {table} SET blake3 = '{ha}' {where} '{b}'; "
+            f"UPDATE {table} SET blake3 = '{hb}' {where} '{a}';"
+        )
 
     # ── the render store, logically ─────────────────────────────────
 
@@ -411,6 +579,7 @@ class RenderContractTest(unittest.TestCase):
         failures: list[str],
         skipped: list[str],
         one_row: str | None = None,
+        no_effect: list[str] | None = None,
     ) -> bool:
         """Apply the first of `sqls` the store accepts and that changes a
         row, then compare incremental against cold. `False` when none
@@ -429,6 +598,7 @@ class RenderContractTest(unittest.TestCase):
         )
         db = inc / source / "ingest" / "entities.doltlite_db"
         applied = False
+        self.last_refusal: list[str] = []
         for sql in sqls:
             if self._doltlite(db, sql, must_succeed=False) is None:
                 continue
@@ -436,7 +606,8 @@ class RenderContractTest(unittest.TestCase):
                 applied = True
                 break
         if not applied:
-            skipped.append(f"{source}: {kind} {table}")
+            why = f" ({self.last_refusal[0][:120]})" if self.last_refusal else ""
+            skipped.append(f"{source}: {kind} {table}{why}")
             shutil.rmtree(inc)
             return False
         self._rows(db, f"SELECT dolt_commit('-Am', 'contract: {kind} {table}');")
@@ -446,12 +617,20 @@ class RenderContractTest(unittest.TestCase):
             else None
         )
         # The documents under those buckets before the run; the edit may
-        # move a message into another period, so the count after the run
-        # is the other bound.
+        # move a message into another period, and an inserted row has
+        # readers only afterwards, so the count after the run — under
+        # whichever buckets declare the row then — is the other bound.
         before = (
             self._documents_under(inc / source, readers)
             if readers is not None
             else None
+        )
+        # What the store held before this run, for the insert: a copied
+        # row that changes nothing in the output — an attachment edge no
+        # payload points at, a reaction with no emoji row — was read by
+        # nobody, and nobody has to declare it.
+        untouched = (
+            self._logical_dump(inc / source) if kind == "insert one row" else None
         )
         inc_err = self._render_step(inc, source)
         # Cold: the same mutated raw store, no render store.
@@ -470,20 +649,24 @@ class RenderContractTest(unittest.TestCase):
             else:
                 skipped.append(f"{source}: {kind} {table} (both refuse: {inc_err})")
         else:
-            d = self._diff(
-                self._logical_dump(cold / source), self._logical_dump(inc / source)
-            )
+            cold_dump = self._logical_dump(cold / source)
+            d = self._diff(cold_dump, self._logical_dump(inc / source))
             if d:
                 failures.append(f"{source}: {kind} {table}\n{d}")
-            elif readers is not None and before is not None:
-                after = self._documents_under(inc / source, readers)
+            elif untouched is not None and not self._diff(untouched, cold_dump):
+                if no_effect is not None:
+                    no_effect.append(f"{source}: {table}")
+            elif readers is not None and before is not None and one_row is not None:
+                readers_after = self._readers_of(inc / source, table, one_row) or []
+                after = self._documents_under(inc / source, readers_after)
                 rendered = self._rendered(inc / source)
                 lo, hi = min(before, after), max(before, after)
                 if rendered is None or not lo <= rendered <= hi:
                     failures.append(
-                        f"{source}: {kind} {table}\n  one row changed; the store declares "
-                        f"{len(readers)} bucket(s) reading it, holding {before} document(s) "
-                        f"before the run and {after} after; the run rendered {rendered}"
+                        f"{source}: {kind} {table}\n  one row changed; the store declared "
+                        f"{len(readers)} bucket(s) reading it, holding {before} document(s), "
+                        f"before the run and {len(readers_after)} holding {after} after; "
+                        f"the run rendered {rendered}"
                     )
         # `RENDER_CONTRACT_KEEP` leaves the scratch roots for inspection.
         if not os.environ.get("RENDER_CONTRACT_KEEP"):
@@ -496,6 +679,11 @@ class RenderContractTest(unittest.TestCase):
     ) -> None:
         failures: list[str] = []
         skipped: list[str] = []
+        # Inserted copies that changed no output: a row nothing reads on
+        # its own — an attachment edge no payload points at, an account
+        # row — proves only that rendering it is harmless. Listed so a
+        # provider whose messages land here is visibly unchecked.
+        no_effect: list[str] = []
         checked = 0
         # `RENDER_CONTRACT_ONLY=<source>` narrows a debugging run.
         only = os.environ.get("RENDER_CONTRACT_ONLY")
@@ -524,32 +712,61 @@ class RenderContractTest(unittest.TestCase):
                     checked += self._check(
                         source, table, "tweak", tweaks, failures, skipped
                     )
-                # The same edit on one row — the first by primary key —
-                # for the narrow half of the contract. A composite key
-                # cannot be named in one column, so those tables get
-                # only the whole-table form.
+                # One row — the first by primary key — edited, deleted
+                # and copied in under a fresh key, for the narrow half
+                # of the contract. A composite key cannot be named in
+                # one column, so those tables get only the whole-table
+                # forms.
                 pks = [name for name, _, pk in cols if pk]
-                if tweaks and len(pks) == 1:
+                if len(pks) == 1:
                     row_id = self._rows(
                         db, f"SELECT CAST(MIN({pks[0]}) AS TEXT) FROM {table};"
                     )[0]
+                    where = f"WHERE CAST({pks[0]} AS TEXT) = '{row_id}';"
+                    if tweaks:
+                        checked += self._check(
+                            source,
+                            table,
+                            "tweak one row",
+                            [f"{t[:-1]} {where}" for t in tweaks],
+                            failures,
+                            skipped,
+                            one_row=row_id,
+                        )
                     checked += self._check(
                         source,
                         table,
-                        "tweak one row",
-                        [
-                            f"{t[:-1]} WHERE CAST({pks[0]} AS TEXT) = '{row_id}';"
-                            for t in tweaks
-                        ],
+                        "delete one row",
+                        [f"DELETE FROM {table} {where}"],
                         failures,
                         skipped,
                         one_row=row_id,
+                    )
+                    if inserted := self._insert_sql(db, table, cols, row_id):
+                        sql, new_key = inserted
+                        checked += self._check(
+                            source,
+                            table,
+                            "insert one row",
+                            [sql],
+                            failures,
+                            skipped,
+                            one_row=new_key,
+                            no_effect=no_effect,
+                        )
+                if swap := self._swap_blobs_sql(db, table, cols):
+                    checked += self._check(
+                        source, table, "swap blobs", [swap], failures, skipped
                     )
         sys.stderr.write(
             f"[render contract] {checked} mutation(s) checked, {len(skipped)} skipped\n"
         )
         for line in skipped:
             sys.stderr.write(f"[render contract]   skipped {line}\n")
+        for line in no_effect:
+            sys.stderr.write(
+                f"[render contract]   an inserted copy changed no output: {line}\n"
+            )
         self.assertGreater(checked, 0, "no source had a table to mutate")
 
         # A gap under the whole-table edit covers its one-row form: the
