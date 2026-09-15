@@ -4,7 +4,6 @@
 //! device a series on its quantity's plot.
 
 pub mod parse;
-pub mod plot;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
 // an accident — see the same allow in the perseus provider.
 #[allow(clippy::module_inception)]

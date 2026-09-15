@@ -45,6 +45,9 @@ pub const DATALIB_ID_NS: Uuid = Uuid::from_bytes([
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum IdNamespace {
+    /// IQAir's AirVisual monitors: the page datalib composes per source
+    /// and the device rows under it.
+    Airvisual,
     /// Both `claude_api` and `claude_export` — one raw store, one
     /// keyspace, so an export-seeded mirror kept fresh by the API does
     /// not mint two ids for one conversation.

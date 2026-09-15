@@ -232,3 +232,35 @@ anyone holding the pair can pull that device's entire CSV history (see
 `schema_raw.rs`). Never commit a real one. The render step deliberately
 keeps them off the rendered page, and says so on the page itself so the
 omission doesn't get "fixed" later.
+
+## What the `airvisual` provider does differently, and why this one is left alone
+
+`airvisual` is the second time-series source (2026-09-14) and made
+four choices this provider did not; they are recorded here so nobody
+mistakes the difference for an oversight, and because **this store is
+deliberately left as it is** — its upstream history expires, so any
+schema change here is a migration of the only copy, not a re-download,
+and the data is more valuable than the tidiness.
+
+1. **Wide rows, typed columns, no payload, no bookkeeping sidecar.**
+   `yolink_readings` is long form — one row per (device, ts, metric),
+   each carrying the whole CSV line as JSON, plus a `_bookkeeping` row
+   — so a THSensor line is stored twice over, four rows in all. The
+   same data as one row per (device, ts) with a `REAL` column per
+   metric measured at about a tenth of the size on airvisual's data.
+2. **One transaction per device**, not per fetched window. A full
+   re-walk here is cheap and idempotent, and every SQL commit rewrites
+   the store's tree.
+3. **A device has an `id` and a `name`.** `devices[].name` here is
+   both the display label and the row key, so renaming a device
+   orphans its history (the config doc says so). The step id does not
+   help — it names the source, and a source has several devices. The
+   fix would be the split the config already makes for groups: a
+   per-device `id`, chosen once and read-only in the wizard, keying the
+   rows and the grid uuid, beside a free-text `name`.
+4. **The device row is written only when it changed.** Here it is
+   upserted every run through the sidecar path, which stamps
+   `fetched_at_utc` and bumps `attempt_count` on an unchanged row, so
+   every run dirties the store and commits. The render no longer cares
+   (it gates on the driver's stale set, not on HEAD), but it is a
+   commit and dead chunks per run for nothing.

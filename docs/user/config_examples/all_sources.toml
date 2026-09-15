@@ -63,15 +63,16 @@ data_root = "~/datalib"  # Base dir; everything is written under here. `~` is ex
 
 # --- Shared index steps -------------------------------------------------
 
-# Every source's rendered markdown feeds these two fan-ins: the SQL
-# index behind the grid UI, and the qmd semantic-search index.
+# Every source's rendered markdown feeds this fan-in: the SQL index
+# behind the grid UI. The search index is per source — each source's
+# `qmd_index` and `qmd_embed` steps below.
 [[groups]]
 id = "unified_index"
 
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -813,6 +814,54 @@ inputs = ["garmin/render_markdown"]
 group = "garmin"
 function = "qmd_embed"
 inputs = ["garmin/qmd_index"]
+lock = "qmd_embed"
+# --- AirVisual (IQAir) monitors -----------------------------------------
+
+# AirVisual Pros' own history files, read off each unit's Samba share
+# (`smb://<ip>/airvisual`, user `airvisual`, password on the device under
+# Settings › Network › Access Pro data) mounted at its `path`, or from a
+# copy of that folder. Every `YYYYMM_AirVisual_values.txt` under a path
+# is read, the `archive*/` folders the device starts on each clock
+# change too; a later run re-reads only the month being written. One
+# `devices` entry per Pro. Each device's identity is its serial and its
+# name is what it calls itself, both read from the folder's
+# latest_config_measurements.json; set `serial` for a copy without it,
+# and `name` to override what the device says.
+[[groups]]
+id = "ship-air"
+type = "airvisual"
+name = "Air quality"
+
+[[steps]]
+group = "ship-air"
+function = "ingest"
+
+[[steps.params.export.devices]]
+path = "/Volumes/airvisual"
+# serial = "4133WV2JB9Z"
+# name = "Kitchen"
+
+[[steps.params.export.devices]]
+path = "/Volumes/airvisual-1"
+
+# One page — `ship-air/render_markdown/index.md` — with one interactive
+# plot per quantity (particulates, AQI, CO2, temperature, humidity, VOC),
+# every device a series, same shape as yolink's. The page declares its
+# tables whole, so it re-renders only when a row of one of them moved.
+[[steps]]
+group = "ship-air"
+function = "render_markdown"
+inputs = ["ship-air/ingest"]
+
+[[steps]]
+group = "ship-air"
+function = "qmd_index"
+inputs = ["ship-air/render_markdown"]
+
+[[steps]]
+group = "ship-air"
+function = "qmd_embed"
+inputs = ["ship-air/qmd_index"]
 lock = "qmd_embed"
 
 # --- Signal (Android backup) --------------------------------------------

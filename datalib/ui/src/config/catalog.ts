@@ -847,6 +847,21 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
+    type: "airvisual",
+    method: "export",
+    label: "AirVisual",
+    blurb: "IQAir AirVisual Pros' own history, read off each unit's network share.",
+    keywords: ["airvisual", "iqair", "air quality", "co2", "pm2.5", "sensor", "samba"],
+    kind: "local",
+    icon: null,
+    defaultName: "airvisual",
+    nameHint: "Air quality",
+    // One `devices` entry per Pro, each with its own share path; the
+    // wizard has no list field yet, so this one is written by hand
+    // (see docs/user/config_examples/all_sources.toml).
+    wizard: false,
+  },
+  {
     type: "lightroom",
     label: "Lightroom",
     blurb: "Mirror a Lightroom Classic catalog, with full history.",

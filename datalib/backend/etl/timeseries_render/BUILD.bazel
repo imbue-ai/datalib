@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# What the time-series providers' render crates share: the Plotly
+# page, the quantity/metric vocabulary, the series type and the text
+# helpers. A provider's render crate contributes its metric table, its
+# parse and its page, and nothing else.
+rust_library(
+    name = "datalib_etl_timeseries_render",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_timeseries_render",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "timeseries_render_unittests",
+    size = "small",
+    crate = ":datalib_etl_timeseries_render",
+    edition = "2021",
+)

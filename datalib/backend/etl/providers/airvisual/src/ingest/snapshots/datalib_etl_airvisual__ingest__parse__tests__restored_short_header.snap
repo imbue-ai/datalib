@@ -1,0 +1,16 @@
+---
+source: datalib/backend/etl/providers/airvisual/src/ingest/parse.rs
+expression: p.samples
+---
+- ts_ms: 1756684800000
+  pm25_ugm3: 14
+  pm10_ugm3: 17
+  pm1_ugm3: 17
+  aqi_us: ~
+  aqi_cn: ~
+  outdoor_aqi_us: ~
+  outdoor_aqi_cn: ~
+  temperature_c: 21.6
+  humidity_pct: ~
+  co2_ppm: 423
+  voc_ppb: ~

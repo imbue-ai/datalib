@@ -1,4 +1,10 @@
 {
+  "airvisual": [
+    {
+      "path": "export",
+      "reach": "local"
+    }
+  ],
   "apple_photos": [
     {
       "path": "library",

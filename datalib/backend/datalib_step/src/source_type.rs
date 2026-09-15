@@ -38,6 +38,9 @@ use strum::VariantArray;
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum SourceType {
+    /// IQAir's AirVisual monitors — the product, not the vendor, as
+    /// `claude` is to Anthropic.
+    Airvisual,
     /// An Apple Photos library — the product's name is just "Photos",
     /// which next to `media` would name nothing; the vendor earns its
     /// place here the way it does in `google_takeout`.
