@@ -69,6 +69,10 @@ export type Field =
   /// `default` pre-fills the box on a **new** source only, and is
   /// deliberately not applied when editing an existing one.
   | ({ kind: "int" } & FieldBase & { default?: number })
+  /// A byte count. Stored and written as plain bytes, like an `int`,
+  /// but drawn as a number beside a B/KB/MB/GB unit so nobody has to
+  /// count zeros. The label should therefore not say "(bytes)".
+  | ({ kind: "bytes" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & {
       placeholder?: string;
       /// Offer a picker built from `POST /api/probe`, alongside the
@@ -207,10 +211,10 @@ export const CATALOG: CatalogEntry[] = [
         help: "Off stores JSON metadata only.",
       },
       {
-        kind: "int",
+        kind: "bytes",
         target: "common.blob_size_limit_bytes",
         requires: "api.media",
-        label: "Skip attachments larger than (bytes)",
+        label: "Skip attachments larger than",
         default: 5_000_000,
         help:
           "5 MB by default. A workspace's few largest uploads — screen recordings, design " +
@@ -450,9 +454,9 @@ export const CATALOG: CatalogEntry[] = [
           "fails and poisons everything downstream. Leave empty for no limit.",
       },
       {
-        kind: "int",
+        kind: "bytes",
         target: "common.blob_size_limit_bytes",
-        label: "Skip attachments larger than (bytes)",
+        label: "Skip attachments larger than",
         help:
           "Attachments are most of a mailbox's bytes and almost none of its text. Leave " +
           "empty for no limit.",
@@ -514,9 +518,9 @@ export const CATALOG: CatalogEntry[] = [
           "whole mailbox.",
       },
       {
-        kind: "int",
+        kind: "bytes",
         target: "common.blob_size_limit_bytes",
-        label: "Skip attachments larger than (bytes)",
+        label: "Skip attachments larger than",
         help:
           "Attachments are most of a mailbox's bytes and almost none of its text. Leave " +
           "empty for no limit.",
@@ -749,9 +753,9 @@ export const CATALOG: CatalogEntry[] = [
           "found in the tree. Leave empty to walk everything.",
       },
       {
-        kind: "int",
+        kind: "bytes",
         target: "max_bytes",
-        label: "Skip files larger than (bytes)",
+        label: "Skip files larger than",
         help:
           "A multi-gigabyte PDF is nearly always a scanned book, and either way one " +
           "document shouldn't stall a whole scan. Leave empty for the 512 MiB default.",

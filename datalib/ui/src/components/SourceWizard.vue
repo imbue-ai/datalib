@@ -58,6 +58,14 @@ import {
 import { iconUrl } from "@/config/icons";
 import { ingestReach } from "@/config/ingestMethods";
 import { isDesktopApp, pickPath } from "@/desktop";
+import {
+  BYTE_UNITS,
+  DEFAULT_BYTE_UNIT,
+  UNIT_BYTES,
+  joinBytes,
+  splitBytes,
+  type ByteUnit,
+} from "@/config/byteSize";
 import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
 
 const props = defineProps<{
@@ -180,7 +188,7 @@ const sections = computed(() => [
 /// Kinds whose control is small enough to sit beside its label rather
 /// than under it. A tickbox and a spinner are each narrower than the
 /// words naming them, so a row apiece is mostly empty space.
-const INLINE_KINDS = new Set<Field["kind"]>(["bool", "int"]);
+const INLINE_KINDS = new Set<Field["kind"]>(["bool", "int", "bytes"]);
 
 /// Steps this source is missing, which saving writes. Only while
 /// editing — a hand-edited group can have one step and not the other —
@@ -239,7 +247,45 @@ function selectOptions(f: Field & { kind: "select" }): { value: string; label: s
   return [...f.options, { value: current, label: `${current} (not a known value)` }];
 }
 
-if (props.editing) values.value = seedFieldValues(props.editing.entry, props.editing.steps);
+/// The unit each `bytes` field is shown in. Only the wizard knows it:
+/// the config holds plain bytes, and `values` does too, so a stored
+/// value opens on whichever unit shows it as a whole number and an
+/// empty one on the default.
+const byteUnits = ref<Record<string, ByteUnit>>({});
+
+function seed(entry: CatalogEntry, steps?: SourceSteps) {
+  values.value = seedFieldValues(entry, steps);
+  byteUnits.value = {};
+  for (const f of entry.fields ?? []) {
+    if (f.kind !== "bytes") continue;
+    const v = values.value[f.target];
+    byteUnits.value[f.target] = typeof v === "number" ? splitBytes(v).unit : DEFAULT_BYTE_UNIT;
+  }
+}
+
+function byteUnit(f: Field): ByteUnit {
+  return byteUnits.value[f.target] ?? DEFAULT_BYTE_UNIT;
+}
+function byteAmount(f: Field): string {
+  const v = Number(values.value[f.target]);
+  if (values.value[f.target] === "" || !Number.isFinite(v)) return "";
+  return String(v / UNIT_BYTES[byteUnit(f)]);
+}
+function setByteAmount(f: Field, text: string) {
+  const amount = Number(text);
+  values.value[f.target] =
+    text.trim() === "" || !Number.isFinite(amount) ? "" : joinBytes(amount, byteUnit(f));
+}
+/// Changing the unit keeps the number — "5 MB" becomes "5 GB", the way a
+/// phone's data-limit dialog does it — rather than re-expressing the
+/// same bytes in the new unit.
+function setByteUnit(f: Field, unit: ByteUnit) {
+  const amount = byteAmount(f);
+  byteUnits.value[f.target] = unit;
+  if (amount !== "") values.value[f.target] = joinBytes(Number(amount), unit);
+}
+
+if (props.editing) seed(props.editing.entry, props.editing.steps);
 
 function choose(entry: CatalogEntry) {
   if (!entry.wizard) return;
@@ -248,7 +294,7 @@ function choose(entry: CatalogEntry) {
   // Typing a name re-derives it, until the id is touched directly.
   id.value = suggestId(props.takenIds, "", entry.defaultName);
   idTouched.value = false;
-  values.value = seedFieldValues(entry);
+  seed(entry);
   stage.value = "configure";
 }
 
@@ -1082,6 +1128,23 @@ function submit() {
               :value="values[f.target] as string"
               @input="values[f.target] = ($event.target as HTMLInputElement).value"
             />
+            <span v-else-if="f.kind === 'bytes'" class="wiz-bytes">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                class="wiz-input wiz-num"
+                :value="byteAmount(f)"
+                @input="setByteAmount(f, ($event.target as HTMLInputElement).value)"
+              />
+              <select
+                class="wiz-input wiz-select wiz-unit"
+                :value="byteUnit(f)"
+                @change="setByteUnit(f, ($event.target as HTMLSelectElement).value as ByteUnit)"
+              >
+                <option v-for="u in BYTE_UNITS" :key="u" :value="u">{{ u }}</option>
+              </select>
+            </span>
             <!-- Typed path + native picker. The input stays even in the
                  app: paste is a legitimate way in, and in a browser it is
                  the only one. docs/dev/wizard_file_pickers.md. -->
@@ -1245,6 +1308,11 @@ function submit() {
 /* Wide enough for the counts anyone types here, instead of stretching
    across the dialog the way a text field does. */
 .wiz-num { width: 7em; }
+/* Amount and unit read as one control: the boxes touch, and only the
+   outer corners are rounded. */
+.wiz-bytes { display: inline-flex; }
+.wiz-bytes .wiz-num { border-radius: 5px 0 0 5px; }
+.wiz-unit { width: auto; border-radius: 0 5px 5px 0; border-left: none; }
 /* Shares `.wiz-input`'s box; keeps the platform disclosure arrow so it
    doesn't read as a text field you can type into. */
 .wiz-select { cursor: pointer; }

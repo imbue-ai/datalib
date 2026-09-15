@@ -215,7 +215,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(row(page, "pdfs/render_markdown")).toHaveCount(1);
     expect(await statusOf(page, "pdfs/ingest")).toBe("Never run");
     expect(await bytesOf(page, "pdfs/ingest")).toBeNull();
-    await expect(row(page, "pdfs/ingest").locator('[col-id="lastSynced"]')).toHaveText("—");
+    await expect(row(page, "pdfs/ingest").locator('[col-id="last_synced"]')).toHaveText("—");
 
     // The render step was wired into the surviving fan-in, which is
     // what gets these documents indexed rather than merely converted.
@@ -236,7 +236,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(firstDone["unified_index/grid_index"]).toMatch(/^(Succeeded|Up to date)$/);
 
     // ── 9. the two columns that report it ────────────────────────────
-    const cell = row(page, "pdfs/ingest").locator('[col-id="lastSynced"]');
+    const cell = row(page, "pdfs/ingest").locator('[col-id="last_synced"]');
     await expect(cell).toHaveText("seconds ago");
     const stamp = await stampOf(page, "pdfs/ingest");
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
@@ -370,7 +370,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // instant to report it at.
     expect(await statusOf(page, "pdfs/ingest")).toBe("Succeeded");
     expect(await statusOf(page, "signal/ingest")).toBe("Never run");
-    await expect(row(page, "signal/ingest").locator('[col-id="lastSynced"]')).toHaveText("—");
+    await expect(row(page, "signal/ingest").locator('[col-id="last_synced"]')).toHaveText("—");
     expect(
       await stampOf(page, "signal/ingest"),
       "a row that never ran has no instant to reveal",
@@ -405,7 +405,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // per-row button was pressed for it.
     for (const id of ALL) {
       await expect(
-        row(page, id).locator('[col-id="lastSynced"]'),
+        row(page, id).locator('[col-id="last_synced"]'),
         `${id} should report when it last ran`,
       ).not.toHaveText("—");
       expect(await bytesOf(page, id), `${id} should have bytes on disk`).toBeGreaterThan(0);

@@ -435,6 +435,12 @@ export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
 
 export type FieldValues = Record<string, unknown>;
 
+/// `bytes` is an `int` with a different control: the value it holds
+/// and writes is the same plain number.
+function isNumeric(field: Field): field is Field & { kind: "int" | "bytes" } {
+  return field.kind === "int" || field.kind === "bytes";
+}
+
 /// The option a stored value corresponds to, or the value unchanged.
 function matchOption(options: { value: string }[], value: unknown): unknown {
   if (typeof value !== "string") return value;
@@ -447,10 +453,11 @@ function matchOption(options: { value: string }[], value: unknown): unknown {
 /// reads the ingest step's params and a render field the render step's.
 ///
 /// `steps` present means *editing*, absent means *creating*, and the
-/// difference is load-bearing for `int` fields: an `int` default is a
-/// policy this wizard imposes where the backend has none, so applying it
-/// on edit would cap a deliberately-uncapped source. `bool` and `select`
-/// defaults mirror the backend's own and seed either way.
+/// difference is load-bearing for numeric fields: an `int` or `bytes`
+/// default is a policy this wizard imposes where the backend has none,
+/// so applying it on edit would cap a deliberately-uncapped source.
+/// `bool` and `select` defaults mirror the backend's own and seed
+/// either way.
 export function seedFieldValues(entry: CatalogEntry, steps?: SourceSteps): FieldValues {
   const next: FieldValues = {};
   for (const field of entry.fields ?? []) {
@@ -463,7 +470,7 @@ export function seedFieldValues(entry: CatalogEntry, steps?: SourceSteps): Field
           : field.kind === "select"
             ? matchOption(field.options, existing)
             : existing;
-    } else if (field.kind === "int" && field.default !== undefined && !steps) {
+    } else if (isNumeric(field) && field.default !== undefined && !steps) {
       next[field.target] = field.default;
     } else if (field.kind === "bool") {
       next[field.target] = field.default ?? false;
@@ -538,6 +545,7 @@ function jsonValue(field: Field | undefined, value: unknown): unknown {
     case "bool":
       return !!value;
     case "int":
+    case "bytes":
       return Number(value);
     case "string_list":
       return value as string[];
@@ -592,7 +600,7 @@ function isSet(field: Field, value: unknown): boolean {
   if (value === undefined || value === null) return false;
   if (field.kind === "string_list") return Array.isArray(value) && value.length > 0;
   if (field.kind === "text" || field.kind === "date") return String(value).trim() !== "";
-  if (field.kind === "int") return value !== "" && Number.isFinite(Number(value));
+  if (isNumeric(field)) return value !== "" && Number.isFinite(Number(value));
     // A select normally holds one of its options, so it is always written. The
     // membership test is deliberately *not* here: a hand-edited config can hold
     // a value the dropdown doesn't know, and dropping it on save would silently
@@ -616,6 +624,7 @@ function tomlValue(field: Field | undefined, value: unknown): string {
     case "bool":
       return value ? "true" : "false";
     case "int":
+    case "bytes":
       return String(Number(value));
     case "string_list":
       return `[${(value as string[]).map(quote).join(", ")}]`;

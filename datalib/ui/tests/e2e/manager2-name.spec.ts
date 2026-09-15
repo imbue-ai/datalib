@@ -341,10 +341,11 @@ test("deleting the group takes every step under it", async ({ page }) => {
   await expect(groupRow(page, "whole-group")).toBeVisible();
   await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "render_markdown"/);
 
-  // The confirm says what goes: the group and the two steps under it.
+  // The confirm says what goes: the group and the four steps under it
+  // (ingest, render, and the search-index pair).
   page.on("dialog", (d) => {
     expect(d.message()).toContain("Whole Group");
-    expect(d.message()).toContain("2 steps");
+    expect(d.message()).toContain("4 steps");
     void d.accept();
   });
   await pickRowMenu(

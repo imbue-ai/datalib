@@ -640,6 +640,78 @@ export function fetchPipelineStorage(
   return getJson<PipelineStorage>(`/api/pipeline/storage${q}`, signal);
 }
 
+export type ManageRowKind = "group" | "step" | "applet";
+export type ManagePhase = "ingest" | "render" | "index" | "embed" | "other";
+
+/// One row's status, reduced to a vocabulary the Status column can
+/// draw. Mirrors `datalib_http::manage::StatusView`.
+export type StatusView = {
+  key: string;
+  label: string;
+  /// When this status was reached. Feeds the "Last synced" column, so
+  /// the two can never disagree about which run they describe.
+  at: string | null;
+  detail: string | null;
+};
+
+/// One row of the Manage screen's tree, as `GET /api/manage/rows`
+/// assembles it. Mirrors `datalib_http::manage::ManageRow`; the field
+/// comments are there.
+export type ManageRow = {
+  id: string;
+  key: string;
+  path: string[];
+  kind: ManageRowKind;
+  group: string | null;
+  written_group: string | null;
+  inputs: string[];
+  phase: ManagePhase;
+  function: string | null;
+  type: string | null;
+  name: string;
+  params: Record<string, unknown>;
+  dropped: Diagnostic | null;
+  status: StatusView;
+  status_from: string | null;
+  last_synced: string | null;
+  segments: { id: string; key: string; label: string }[] | null;
+  seeds: string[];
+  run_blocked: string | null;
+  reveal_blocked: string | null;
+  stop_job_id: string | null;
+  stop_target: string | null;
+  stop_label: string | null;
+  progress: DagStepProgress | null;
+  last_run_id: string;
+  live_run_id: string | null;
+  bytes: number | null;
+  history: UsageSample[];
+  outputs: OutputStorage[];
+  reveal_path: string | null;
+};
+
+export type ManageResponse = {
+  ok: boolean;
+  /// Why there are no rows: the file is not TOML at all. An entry with
+  /// a problem is a row with a `dropped` reason, not an error.
+  error: string | null;
+  run: DagRun | null;
+  storage: {
+    root: OutputStorage;
+    window_secs: number;
+    measured_at_utc: string | null;
+  };
+  rows: ManageRow[];
+};
+
+/// The Manage screen's rows, joined server-side. `refresh` walks the
+/// disk before answering — see `fetchPipelineStorage` for when that is
+/// worth asking for.
+export function fetchManageRows(refresh = false, signal?: AbortSignal): Promise<ManageResponse> {
+  const q = refresh ? "?refresh=1" : "";
+  return getJson<ManageResponse>(`/api/manage/rows${q}`, signal);
+}
+
 /// One table as it stood after one commit. Mirrors
 /// `datalib_history::TableState`.
 export type HistoryTable = {
