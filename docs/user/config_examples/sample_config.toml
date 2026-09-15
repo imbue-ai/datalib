@@ -67,7 +67,7 @@ group = "slack"
 function = "ingest"
 
 [steps.params.common]
-blob_size_limit_bytes = 1000000  # 1 MB — skip larger file uploads
+blob_size_limit_bytes = "1 MB"  # skip larger file uploads
 # Bound how long the download keeps retrying upstream rate limits
 # before giving up. The shared HTTP layer always honors a 429
 # `Retry-After` (else backs off exponentially); these decide when

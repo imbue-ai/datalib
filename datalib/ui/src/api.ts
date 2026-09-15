@@ -681,6 +681,7 @@ export type ManageRow = {
   stop_job_id: string | null;
   stop_target: string | null;
   stop_label: string | null;
+  stop_blocked: string | null;
   progress: DagStepProgress | null;
   last_run_id: string;
   live_run_id: string | null;
