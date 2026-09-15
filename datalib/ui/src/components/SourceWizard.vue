@@ -67,6 +67,7 @@ import {
   type ByteUnit,
 } from "@/config/byteSize";
 import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
+import { STATUS_GLYPHS } from "@/config/glyphs";
 
 const props = defineProps<{
   /// Group ids already in the config, plus the id of every step outside
@@ -935,8 +936,16 @@ function submit() {
           <p v-if="connect.state !== 'idle'" class="wiz-help wiz-conn-note">
             {{ connect.message }}
           </p>
-          <div v-if="probe.state === 'failed'" class="wiz-conn-note wiz-probe-note">
-            <p class="wiz-error wiz-probe-headline">{{ probeHeadline }}</p>
+          <!-- The verdict is a mark before the words — the Manage
+               screen's own tick and "!", in its colours — so the eye
+               gets the answer before reading what it was. -->
+          <div v-if="probe.state === 'failed'" class="wiz-conn-note wiz-probe-note wiz-probe-failed">
+            <p class="wiz-error wiz-probe-headline">
+              <svg class="wiz-probe-mark" viewBox="0 0 24 24" role="img" aria-label="Failed">
+                <path :d="STATUS_GLYPHS.failed" fill="currentColor" />
+              </svg>
+              {{ probeHeadline }}
+            </p>
             <details v-if="probeDetail">
               <summary class="wiz-help">How to fix it</summary>
               <pre class="wiz-probe-detail">{{ probeDetail }}</pre>
@@ -944,8 +953,11 @@ function submit() {
           </div>
           <p
             v-else-if="probe.state === 'ok' && probe.report"
-            class="wiz-help wiz-conn-note wiz-probe-note"
+            class="wiz-help wiz-conn-note wiz-probe-note wiz-probe-ok"
           >
+            <svg class="wiz-probe-mark" viewBox="0 0 24 24" role="img" aria-label="Connected">
+              <path :d="STATUS_GLYPHS.succeeded" fill="currentColor" />
+            </svg>
             Reached
             <b>{{
               probe.report.account.address ||
@@ -1362,6 +1374,14 @@ function submit() {
 .wiz-error { color: #b8481a; font-size: 11.5px; }
 .wiz-permanent { color: #b8481a; }
 .wiz-probe-headline { margin: 0 0 4px; }
+.wiz-probe-mark {
+  width: 14px;
+  height: 14px;
+  vertical-align: -3px;
+  margin-right: 3px;
+}
+.wiz-probe-ok .wiz-probe-mark { color: var(--datalib-log-ok); }
+.wiz-probe-failed .wiz-probe-mark { color: var(--datalib-log-error); }
 .wiz-probe-aside { display: block; margin-top: 2px; }
 /* The step's recipe, in the shape it was written: numbered steps and
    shell commands, which reflowed into a paragraph are unreadable. */
