@@ -217,21 +217,63 @@ system and is not needed to authenticate.
 Auth belongs in `latchkey` (Imbue's own credential tool), exactly as the
 `claude` and `chatgpt` providers do it, so the datalib provider embeds
 **no auth code and no secrets** — it just calls `latchkey_curl` with its
-service name. Two rungs:
+service name.
 
-1. **Works today, no latchkey change.** latchkey already supports custom
-   services: `latchkey services register bchydro
+**The capture rig is a dev tool, not the shipping story.** The
+emulator + Frida + mitmproxy setup used above exists only to *discover*
+how the app authenticates — a one-time reverse-engineering cost, the
+same kind yolink's signing scheme needed once. **No end user ever runs
+it.** The app's real auth is an ordinary browser sign-in plus a token
+exchange, which is a normal, shippable flow (the same shape Claude and
+ChatGPT already have here): the user signs into BC Hydro SSO once in a
+browser, and the resulting assertion is exchanged at `/v3/login/12` for
+the bearer + refresh token. Do not conflate "how a developer grabs a
+token today" (the rig) with "how the shipped provider authenticates" (a
+one-time browser login).
+
+Three rungs, in increasing polish:
+
+1. **Static injection — works today [verified 2026-09-14].** latchkey's
+   generic custom-service path: `latchkey services register bchydro
    --base-api-url=https://bch-coreapi.pwly.io` then `latchkey auth set
-   bchydro <bearer>`. Obtain the bearer from a browser SSO login (or,
-   for a first test, from a capture). The provider is then structurally
-   identical to `chatgpt/src/ingest/api.rs`. Downside: a static bearer
-   expires, so re-run `auth set` — the same manual re-auth `claude` /
-   `chatgpt` already have here.
-2. **The seamless version** — add a `hydrohome` browser-login service to
-   latchkey (your repo) that drives `app.bchydro.com/sso/ui/login`,
-   captures the token, and refreshes it. This is latchkey's
-   browser-capture pattern (cf. `latchkey auth browser chatgpt`), just
-   with BC Hydro's SSO. It is a latchkey code change, not a datalib one.
+   bchydro -H "Authorization: Bearer <token>"`. Verified end to end — a
+   dummy bearer through `latchkey curl` reached `bch-coreapi.pwly.io` and
+   got `401` (so a real token gets `200`), and the provider is then
+   structurally identical to `chatgpt/src/ingest/api.rs`. This is the
+   working v1; downside is the manual re-`auth set` on expiry, the same
+   re-auth `claude` / `chatgpt` already have. Its gap is only that
+   *obtaining* the token is manual (see below).
+2. **The generic browser capture does NOT fit — tested and ruled out
+   [verified 2026-09-14].** latchkey ships two generic browser flows
+   (`cookie-capture`, `token-capture`); `token-capture` is the ChatGPT
+   pattern. Registering `bchydro` with it and running `latchkey auth
+   browser bchydro` failed for two independent reasons, both confirmed:
+   (a) the login URL `app.bchydro.com/sso/ui/login` **404s opened bare** —
+   it only renders inside the app's OAuth authorize flow, with the
+   client_id / redirect_uri / state parameters the mobile app appends;
+   and (b) even past that, the token is minted by a mobile **POST** to
+   `/v3/login/12` carrying the SSO assertion, so there is no
+   browser-minted token for `token-capture` to watch. The generic flow
+   assumes a standalone login page and a browser-minted token; HydroHome
+   has neither.
+3. **The seamless, shippable version — a purpose-built `hydrohome`
+   service in latchkey** (your repo). It constructs the *real* authorize
+   URL (with the app's OAuth params, which is what makes the login page
+   render), drives the SSO login in latchkey's own browser, catches the
+   redirect — including the app's custom-scheme `redirect_uri`, since
+   latchkey controls the browser — and performs the `/v3/login/12`
+   exchange, holding the refresh token for silent renewal. latchkey
+   already has the hook for registering OAuth client details:
+   `latchkey auth prepare <service> <json>`. This is a latchkey code
+   change, not a datalib one, and it is what turns auth into a one-time
+   browser login for shipping.
+
+**What building rung 3 needs:** one *focused* capture session (same rig,
+one sitting) to recover the login flow's exact shape — the authorize URL
+and its parameters, the redirect target, and the `/v3/login/12` request
+body — **structure, not secret values**. That single capture also
+settles the publishability gate below. After it, shipping is a normal
+browser login with no dev tooling in sight.
 
 ### The one credential-bearing call still unexamined
 
