@@ -1,19 +1,23 @@
 //! The run store: one plain-SQLite file per data root that the runner
 //! writes and anything can read. Holds what every run did — each step's
 //! state, its log lines, and its metrics — across runs, until retention
-//! removes the old ones. The tables are `app_schema::runs`; this crate
-//! is the writer and the reader over them.
+//! removes the old ones, and the app server's own log between them. The
+//! tables are `app_schema::runs`; this crate is the writers and the
+//! reader over them, and the tracing layer that feeds a writer.
 
 pub mod query;
 pub mod store;
+pub mod tracing_layer;
 
 pub use app_schema::runs::{
-    LogLevel, LogRow, MetricRow, MetricSampleRow, RunRow, StepRunRow, Stream,
+    LogLevel, LogRow, MetricRow, MetricSampleRow, Process, RunRow, StepRunRow, Stream,
 };
 pub use query::{log_query, LogQuery, QueryError};
 pub use store::{
-    canonical_labels, log_after, open_or_create, runs, snapshot, snapshot_of, RunWriter, Snapshot,
+    canonical_labels, log_after, open_or_create, runs, snapshot, snapshot_of, LogSink,
+    ProcessLogWriter, RunWriter, Snapshot,
 };
+pub use tracing_layer::StoreLayer;
 
 use std::path::{Path, PathBuf};
 
@@ -56,7 +60,8 @@ pub fn is_terminal(state: &str) -> bool {
 }
 
 /// How much history to keep. Both limits apply; a run older than
-/// `max_age_days` goes even when fewer than `max_runs` exist.
+/// `max_age_days` goes even when fewer than `max_runs` exist. A log
+/// line outside any run has only the age limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Retention {
     pub max_runs: u32,
@@ -76,7 +81,7 @@ impl Default for Retention {
 /// version is deleted and remade rather than migrated: nothing in it is
 /// load-bearing, and a migration is code that would exist only to keep
 /// old log lines.
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
 /// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so
 /// a reader tailing "everything after N" needs no timestamp arithmetic;

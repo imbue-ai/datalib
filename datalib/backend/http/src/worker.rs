@@ -19,7 +19,7 @@ use tokio::sync::broadcast;
 /// (`GET /api/sync/stream`) the instant the worker writes it — so the UI
 /// reflects a job starting or ending without polling. What the run is
 /// doing in between reaches the UI another way: the runner's writes to
-/// `system/runs.sqlite` are pushed as `dag_changed` root frames.
+/// `system/runs.sqlite` are pushed as `run_store_changed` root frames.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProgressEvent {
     pub id: String,
@@ -98,7 +98,7 @@ fn resolve_bin(env: &str, names: &[&str]) -> Option<PathBuf> {
         if p.is_file() {
             return Some(p);
         }
-        eprintln!("worker: ${env}={} is not a file", p.display());
+        tracing::warn!("worker: ${env}={} is not a file", p.display());
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -123,7 +123,7 @@ pub fn resolve_step_bin() -> Option<PathBuf> {
         if p.is_file() {
             return Some(p);
         }
-        eprintln!("worker: $DATALIB_STEP_BIN={} is not a file", p.display());
+        tracing::warn!("worker: $DATALIB_STEP_BIN={} is not a file", p.display());
     }
     if let Some(dir) = resolve_binary_dir() {
         for name in ["datalib-step", "datalib_step"] {
@@ -147,7 +147,7 @@ pub fn resolve_binary_dir() -> Option<PathBuf> {
         if p.is_dir() {
             return Some(p);
         }
-        eprintln!(
+        tracing::warn!(
             "worker: $DATALIB_BINARY_DIR={} is not a directory",
             p.display()
         );
@@ -162,12 +162,12 @@ pub fn resolve_binary_dir() -> Option<PathBuf> {
 pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
     match repo.recover_running_jobs().await {
         Ok(0) => {}
-        Ok(n) => eprintln!("worker: recovered {n} orphaned running job(s) → failed"),
-        Err(e) => eprintln!("worker: startup recovery failed: {e}"),
+        Ok(n) => tracing::warn!("worker: recovered {n} orphaned running job(s) → failed"),
+        Err(e) => tracing::error!("worker: startup recovery failed: {e}"),
     }
     match &cfg.dag_bin {
-        Some(p) => eprintln!("worker: ready (dag runner: {})", p.display()),
-        None => eprintln!(
+        Some(p) => tracing::info!("worker: ready (dag runner: {})", p.display()),
+        None => tracing::warn!(
             "worker: no `datalib-dag` binary found (set $DATALIB_DAG_BIN). \
              UI-triggered syncs will fail until it's available; search still works."
         ),
@@ -177,7 +177,7 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
             Ok(Some(job)) => {
                 let id = job.id.clone();
                 if let Err(e) = run_job(&repo, &cfg, job).await {
-                    eprintln!("worker: job {id} errored: {e:#}");
+                    tracing::error!("worker: job {id} errored: {e:#}");
                     let msg = format!("{e:#}");
                     let _ = repo.finish_job(&id, JobState::Failed, Some(&msg)).await;
                     // Minimal terminal event so the UI stops showing it as
@@ -194,7 +194,7 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
             }
             Ok(None) => tokio::time::sleep(POLL_IDLE).await,
             Err(e) => {
-                eprintln!("worker: claim failed: {e}");
+                tracing::error!("worker: claim failed: {e}");
                 tokio::time::sleep(POLL_IDLE).await;
             }
         }

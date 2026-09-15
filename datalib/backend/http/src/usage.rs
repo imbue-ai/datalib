@@ -450,7 +450,7 @@ pub async fn sample_once(
     let now_iso = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let rows = monitor.observe(&m, Instant::now(), &now_iso).await;
     if let Err(e) = repo.record_disk_usage(&rows).await {
-        eprintln!("usage: could not record {} sample(s): {e}", rows.len());
+        tracing::warn!("usage: could not record {} sample(s): {e}", rows.len());
     }
     true
 }
@@ -480,7 +480,7 @@ pub async fn run(
 ) {
     match repo.recent_disk_usage(SEED_ROWS).await {
         Ok(rows) => monitor.seed(rows).await,
-        Err(e) => eprintln!("usage: could not read the recorded history: {e}"),
+        Err(e) => tracing::warn!("usage: could not read the recorded history: {e}"),
     }
     // Subscribe before the startup walk, so a run that begins during it
     // is not missed.

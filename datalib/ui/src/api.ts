@@ -778,8 +778,9 @@ export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
 // `GET /api/sync/stream`. The worker + enqueue/cancel handlers emit
 // these the instant they write a job's state, so the UI updates without
 // polling. What a running job's steps are doing is not here: the runner
-// writes that to the run store, and its writes arrive as `dag_changed`
-// root frames, on which the page refetches `/api/dag`.
+// writes that to the run store, and its writes arrive as
+// `run_store_changed` root frames (its record's as `dag_changed`), on
+// which the page refetches `/api/dag`.
 export type JobProgressEvent = {
   id: string;
   kind: string;
@@ -843,6 +844,11 @@ export async function cancelJob(id: string, signal?: AbortSignal): Promise<void>
 // other vocabularies here. Every stamp is UTC (`…+00:00`), with the
 // offset it was written in beside it as `tz_offset` (`+02:00`).
 
+// Which datalib program put a log line in the store: the runner (its
+// own lines, and every step's), or the app's server (its own, and its
+// applets').
+export type LogProcess = "dag" | "http";
+
 // One run. A job started from the app has the job's id as its run id.
 export type RunInfo = {
   run_id: string;
@@ -855,7 +861,11 @@ export type RunInfo = {
 export type RunLogLine = {
   // Assigned by the store, monotone within it; the tail cursor.
   seq: number;
-  run_id: string;
+  // Null for a line written outside any run: the server's own.
+  run_id: string | null;
+  // A word this build may not know, like `level`.
+  process: LogProcess | string;
+  // Null for a line about the run, or the server, rather than one step.
   step: string | null;
   attempt: number;
   // The line's own clock when it carried one, else when the runner read
@@ -886,7 +896,8 @@ export function fetchRuns(
 }
 
 // A run's log lines, oldest first. Tail by remembering the last `seq`
-// seen and passing it as `afterSeq` on the next `dag_changed` frame.
+// seen and passing it as `afterSeq` on the next `run_store_changed`
+// frame.
 export function fetchRunLog(
   run: string,
   opts: { step?: string; afterSeq?: number; limit?: number } = {},

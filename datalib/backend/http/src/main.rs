@@ -1,8 +1,3 @@
-// Standalone HTTP server binary — runs standalone, no
-// MultiProgress / no indicatif bars in this process. Exempt from the
-// workspace-wide ban defined in clippy.toml.
-#![allow(clippy::disallowed_macros)]
-
 //! `datalib-http` — single-binary search backend.
 
 use clap::Parser;
@@ -42,21 +37,27 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let root = args.data_root;
     let bind = std::env::var("DATALIB_BIND").unwrap_or_else(|_| DEFAULT_BIND.into());
-
-    // `build_state` creates the root when absent; the log line here just
-    // makes the first-run case visible.
-    if root.exists() {
-        eprintln!("data root: {}", root.display());
-    } else {
-        eprintln!("data root: {} (created)", root.display());
-    }
+    let created = !root.exists();
 
     // Claim the root before anything under `system/` is written —
     // including the token below, which a refused server would
-    // otherwise clobber on its way out. Held for the life of the
-    // process; the kernel releases it if we die.
+    // otherwise clobber on its way out, and the run store the log
+    // goes to. Held for the life of the process; the kernel releases
+    // it if we die. A refusal is the one message that reaches only
+    // stderr, through the error this returns.
     let mut root_lock =
         datalib_http::lock::DataRootLock::acquire(&root).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // Dropped at the very end of `main`: that drop is the final flush.
+    let _log = datalib_http::logging::init(&root);
+
+    // `build_state` creates the root when absent; the log line here just
+    // makes the first-run case visible.
+    if created {
+        tracing::info!("data root: {} (created)", root.display());
+    } else {
+        tracing::info!("data root: {}", root.display());
+    }
 
     // Minted before the announcement below because the announced URL
     // carries it: the browser (and the Tauri webview) authenticate by
@@ -69,9 +70,16 @@ async fn main() -> anyhow::Result<()> {
     // Record where we ended up, so a later would-be owner's refusal can
     // point at this server instead of just saying "taken".
     root_lock.announce(&base_url);
-    eprintln!("datalib-http listening on {base_url}");
-    eprintln!("open: {url}");
-    eprintln!("api token: {}", api_token.token_file().display());
+    tracing::info!("datalib-http listening on {base_url}");
+    tracing::info!("api token: {}", api_token.token_file().display());
+    // The one line that stays off the record: the URL carries the token,
+    // and the store is readable by anything that can read the root. A
+    // person at a terminal still gets it to click; there are no bars in
+    // this process for it to collide with.
+    #[allow(clippy::disallowed_macros)]
+    {
+        eprintln!("open: {url}");
+    }
 
     // Announce the bound URL to a waiting parent process as soon as it
     // is known — before the (potentially slow) backend assembly below,
@@ -90,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
         // because most users will already have the tab from a prior
         // run (and `webbrowser::open` returns Ok in that case anyway).
         if let Err(e) = webbrowser::open(&url) {
-            eprintln!("could not open browser at {url}: {e} (pass --no-open to silence)");
+            tracing::warn!("could not open browser at {base_url}: {e} (pass --no-open to silence)");
         }
     }
 
@@ -105,14 +113,14 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    eprintln!("config: {}", state.config_path().display());
+    tracing::info!("config: {}", state.config_path().display());
 
     // Serve until a signal, then stop the applets on the way out.
     let applets = state.applets.clone();
     axum::serve(listener, router(state))
         .with_graceful_shutdown(terminated())
         .await?;
-    eprintln!("datalib-http: shutting down, stopping applets");
+    tracing::info!("datalib-http: shutting down, stopping applets");
     applets.shutdown();
     Ok(())
 }
@@ -131,7 +139,7 @@ async fn terminated() {
             // both are survivable: the applet's own parent watch is the
             // backstop either way.
             Err(e) => {
-                eprintln!("datalib-http: cannot listen for SIGTERM: {e}");
+                tracing::warn!("datalib-http: cannot listen for SIGTERM: {e}");
                 std::future::pending::<()>().await;
             }
         }

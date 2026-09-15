@@ -26,12 +26,18 @@ pub enum RootEvent {
     /// `<root>/config.toml` was written — by this server's own
     /// `PUT /api/config`, by an agent, or by hand in an editor.
     ConfigChanged,
-    /// The runner's record or its run store moved:
-    /// `system/dag_state.json`, `system/runs.sqlite`. This is the
-    /// one that covers a `datalib-dag` run started from a terminal,
-    /// which the job stream can never see because no job row exists
-    /// for it.
+    /// The runner's record moved: `system/dag_state.json`, written on
+    /// every step state change. This is the one that covers a
+    /// `datalib-dag` run started from a terminal, which the job stream
+    /// can never see because no job row exists for it.
     DagChanged,
+    /// The run store moved: `system/runs.sqlite`, written several times
+    /// a second by a run in flight (progress, metrics, log lines) and,
+    /// between runs, by this server's own log. Kept apart from
+    /// `DagChanged` for that second writer: a subscriber that refetched
+    /// on every one of these would refetch on its own log lines — and
+    /// a refetch that logs would never stop.
+    RunStoreChanged,
     /// A component appeared, changed or vanished under
     /// `system/frontend/`.
     FrontendChanged,
@@ -63,10 +69,13 @@ fn classify(root: &Path, path: &Path) -> Option<RootEvent> {
         return Some(RootEvent::FrontendChanged);
     }
     if path.parent() == Some(system.as_path()) {
+        if name == "dag_state.json" {
+            return Some(RootEvent::DagChanged);
+        }
         // `runs.sqlite-wal` / `-journal` are the same write as the
         // database itself, so match on the stem rather than equality.
-        if name == "dag_state.json" || name.starts_with("runs.sqlite") {
-            return Some(RootEvent::DagChanged);
+        if name.starts_with("runs.sqlite") {
+            return Some(RootEvent::RunStoreChanged);
         }
     }
     if path.parent() == Some(datalib_core::layout::grid_index_dir(root).as_path())
@@ -130,7 +139,7 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
         }) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!(
+                tracing::warn!(
                     "watch: could not create a filesystem watcher ({e}); \
                  the UI will not see external changes to this root"
                 );
@@ -148,7 +157,7 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
         (frontend.as_path(), RecursiveMode::Recursive),
     ] {
         if let Err(e) = watcher.watch(dir, mode) {
-            eprintln!("watch: {} ({e})", dir.display());
+            tracing::warn!("watch: {} ({e})", dir.display());
         }
     }
     let mut index_watched = watcher
@@ -210,7 +219,7 @@ mod tests {
         );
         assert_eq!(
             classify(root, &root.join("system/runs.sqlite-wal")),
-            Some(RootEvent::DagChanged)
+            Some(RootEvent::RunStoreChanged)
         );
         assert_eq!(
             classify(root, &root.join("system/frontend/user/abc.js")),

@@ -50,6 +50,10 @@ tokio = { workspace = true }
 tower-http = { workspace = true }
 uuid = { workspace = true }
 strum = { workspace = true }
+# The server's own log: every event to stderr and, through
+# `datalib_runs::StoreLayer`, to the run store (src/logging.rs).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 sqlx = { workspace = true }

@@ -1,7 +1,9 @@
 // The run store, `system/runs.sqlite`: what every run did — each step's
-// state, its log lines and its metrics — kept across runs. One table
-// per file below; the writer is the DAG runner alone, the readers are
-// `datalib-http` and anyone with `sqlite3`.
+// state, its log lines and its metrics — kept across runs, plus the
+// app server's own log between them. One table per file below. The DAG
+// runner writes the run tables; `log` is written by the runner and by
+// `datalib-http`, which also reads all of it, as does anyone with
+// `sqlite3`.
 //
 // Every stamp is a `<x>_utc` column — UTC with a `+00:00` suffix — and
 // each table carries a `tz_offset` column holding the offset the stamp
@@ -28,7 +30,7 @@ pub mod step_runs {
     include!("step_runs.rs");
 }
 
-pub use log::{LogLevel, LogRow, Stream};
+pub use log::{LogLevel, LogRow, Process, Stream};
 pub use metric_samples::MetricSampleRow;
 pub use metrics::MetricRow;
 pub use run::RunRow;
@@ -74,7 +76,7 @@ mod tests {
     /// strum and serde spell these independently; the store writes the
     /// strum word and the UI switches on the serde one.
     #[test]
-    fn log_level_and_stream_agree_between_strum_and_serde() {
+    fn log_words_agree_between_strum_and_serde() {
         for &l in LogLevel::VARIANTS {
             assert_eq!(
                 serde_json::to_string(&l).unwrap(),
@@ -88,6 +90,13 @@ mod tests {
                 format!("\"{}\"", s.as_str())
             );
             assert_eq!(Stream::parse(s.as_str()), Some(s));
+        }
+        for &p in Process::VARIANTS {
+            assert_eq!(
+                serde_json::to_string(&p).unwrap(),
+                format!("\"{}\"", p.as_str())
+            );
+            assert_eq!(Process::parse(p.as_str()), Some(p));
         }
         assert_eq!(LogLevel::parse("fatal"), None, "no guessing");
     }
