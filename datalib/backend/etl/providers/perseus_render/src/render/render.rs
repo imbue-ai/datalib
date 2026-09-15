@@ -42,6 +42,12 @@ pub struct RenderSummary {
     pub rows_emitted: usize,
 }
 
+/// The whole tree renders as one unit every run, so it is one bucket:
+/// what the store holds under it that a run did not emit is gone.
+pub fn bucket_key(source_id: &str) -> String {
+    source_id.to_string()
+}
+
 pub fn render_all(
     parsed: &ParsedPerseus,
     alignments: &PerseusAlignments,
@@ -49,10 +55,6 @@ pub fn render_all(
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    // Every document this render considered, skipped ones included — the
-    // caller hands it to `RunCtx::retain_documents`, which drops whatever
-    // the store holds and this does not name.
-    seen: &mut std::collections::HashSet<String>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
 
@@ -79,14 +81,7 @@ pub fn render_all(
     progress.set_length(Some(total as u64));
 
     for book in &parsed.books {
-        render_book(
-            book,
-            out_dir,
-            source_id,
-            &mut summary,
-            on_doc_complete,
-            seen,
-        )?;
+        render_book(book, out_dir, source_id, &mut summary, on_doc_complete)?;
         progress.inc(1);
 
         for chapter in &book.chapters {
@@ -103,7 +98,6 @@ pub fn render_all(
                     source_id,
                     &mut summary,
                     on_doc_complete,
-                    seen,
                 )?;
                 progress.inc(1);
             }
@@ -125,14 +119,11 @@ fn render_book(
     source_id: &str,
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let m_uuid = book_uuid(&book.n);
     let book_dir = render_markdown_root(out_dir, source_id).join(book_content_rel(&book.n));
     fs::create_dir_all(&book_dir).with_context(|| format!("mkdir -p {}", book_dir.display()))?;
     let md_path = book_dir.join("index.md");
-
-    seen.insert(m_uuid.clone());
 
     let md = render_book_md(book);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
@@ -148,7 +139,7 @@ fn render_book(
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: None,
+        bucket_key: Some(bucket_key(source_id)),
         md_path,
         render_version: RENDER_VERSION,
         rows,
@@ -171,13 +162,10 @@ fn render_chapter(
     source_id: &str,
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    seen: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
     let m_uuid = chapter_uuid(&book.n, &chapter.n, &edition.id);
     let rel = chapter_md_rel(source_id, &book.n, &chapter.n, &edition.id);
     let md_path = out_dir.join(&rel);
-
-    seen.insert(m_uuid.clone());
 
     if let Some(parent) = md_path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
@@ -226,7 +214,7 @@ fn render_chapter(
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: None,
+        bucket_key: Some(bucket_key(source_id)),
         md_path,
         render_version: RENDER_VERSION,
         rows,

@@ -99,14 +99,6 @@ pub struct RenderSummary {
     pub docs_rendered: usize,
     pub items_rendered: usize,
     pub reactions_rendered: usize,
-    /// Every document this call *considered*, rendered and skipped alike.
-    ///
-    /// Skipped ones belong here and that is the whole point: a caller uses
-    /// this to tell "still there, unchanged" from "gone", and one that saw
-    /// only re-rendered documents would read its own steady state as a
-    /// mass deletion. Meaningful only to a caller that handed over every
-    /// chat its store holds — see `RunCtx::retain_documents`.
-    pub documents: Vec<String>,
     /// Every chat rendered, with what it was built from — the buckets
     /// the caller declares through `RenderCtx::declare_bucket`. A chat
     /// handed in that produced nothing is here too, which is how its
@@ -149,7 +141,6 @@ pub fn render_all(
                 bundle,
                 on_doc_complete,
             )?;
-            summary.documents.push(doc.markdown_uuid.clone());
             summary.docs_rendered += 1;
             summary.items_rendered += items;
             summary.reactions_rendered += reactions;

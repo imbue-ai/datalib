@@ -5,7 +5,8 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_perseus_config::PerseusRenderConfig;
-use datalib_etl_render::processor::{RenderCtx, RenderPass, RenderProcessor};
+use datalib_etl_render::inputs::Input;
+use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 use std::path::PathBuf;
 
 pub fn plan_render(
@@ -56,10 +57,12 @@ impl RenderProcessor for PerseusRender {
         let alignments = tokio::runtime::Handle::current()
             .block_on(align::align_all(&parsed, &self.pairs))
             .context("perseus align_all")?;
-        // This renderer walks the whole raw store every run, so the set it
-        // considered is the complete one: anything else the render store
-        // holds is a document whose source is gone. The driver sweeps.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let inputs: Vec<Input> = parsed
+            .files
+            .iter()
+            .map(|f| Input::new("file", f.clone()))
+            .collect();
+        ctx.declare_bucket(&render::bucket_key(&self.name), &inputs)?;
         let mut on_doc = |md| ctx.emit_doc(md);
         render::render_all(
             &parsed,
@@ -68,11 +71,8 @@ impl RenderProcessor for PerseusRender {
             &self.name,
             ctx.progress,
             &mut on_doc,
-            &mut seen,
         )
         .context("perseus render_all")?;
-        // `render_all` has no early return: reaching here means it walked.
-        ctx.retain_documents(RenderPass::Walked, &seen);
         Ok("rendered".into())
     }
 }

@@ -1,13 +1,12 @@
-//! Read the whole AirVisual raw store into memory for the renderer, and
-//! decide up front whether there is anything to do. The store is wide
-//! (one column per measurement); the plots want one series per
-//! (device, measurement), so this is where the pivot happens.
+//! Read the whole AirVisual raw store into memory for the renderer.
+//! The store is wide (one column per measurement); the plots want one
+//! series per (device, measurement), so this is where the pivot happens.
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
+use datalib_etl_render::inputs::{Input, RawRange};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -16,15 +15,6 @@ use datalib_etl_airvisual::ingest::db_path_for;
 pub use datalib_etl_timeseries_render::series::Series;
 
 use super::units::METRICS;
-
-pub enum Parsed {
-    /// The store's HEAD matches the render cursor: the single rendered
-    /// page is already current.
-    UpToDate { head: String },
-    /// The store moved (or there was no usable cursor). Everything the
-    /// document needs, loaded.
-    Fresh(Box<ParsedAirvisual>),
-}
 
 /// One row of `airvisual_devices`: the serial that keys the samples,
 /// and the name a person knows it by.
@@ -51,11 +41,9 @@ pub struct IngestedFile {
 /// Everything the single rendered document is built from.
 #[derive(Debug, Clone)]
 pub struct ParsedAirvisual {
-    /// HEAD at scan time, to stamp into the cursor after a successful
-    /// render. `None` when `dolt_log()` is unavailable — then the cursor
-    /// stays unwritten and the next run re-renders.
+    /// The commit everything was read at; `None` when nothing is
+    /// committed yet, so the cursor stays unwritten.
     pub head: Option<String>,
-    pub scan_elapsed: Option<Duration>,
     pub devices: Vec<DeviceRow>,
     /// `Series::device` is the device *id*; sorted by (device, metric)
     /// so the document and the plot legends are stable run to run.
@@ -65,7 +53,16 @@ pub struct ParsedAirvisual {
     pub sample_count: i64,
 }
 
-pub fn parse(raw_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> {
+/// The tables the page reads, whole: any row of any of them moving
+/// re-renders it.
+pub fn inputs() -> Vec<Input> {
+    ["airvisual_devices", "airvisual_samples", "ingested_files"]
+        .into_iter()
+        .map(Input::whole_table)
+        .collect()
+}
+
+pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedAirvisual> {
     let db_path = db_path_for(raw_path);
     if !db_path.exists() {
         anyhow::bail!(
@@ -74,62 +71,52 @@ pub fn parse(raw_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> 
         );
     }
     // The render phase is driven by `futures`' executor, which enters no
-    // tokio context of its own; `block_in_place` + the ambient handle is
+    // tokio context of its own; `block_in_place` + `block_on` is exactly
     // the same shape every other provider's parse uses.
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, last_render_hash).await })
+        tokio::runtime::Handle::current().block_on(async move {
+            let pool = datalib_etl::doltlite_raw::open_reader(&db_path)
+                .await
+                .with_context(|| {
+                    format!("open airvisual doltlite for render {}", db_path.display())
+                })?;
+            let parsed = parse_pinned(&pool, range).await;
+            pool.close().await;
+            parsed
+        })
     })
 }
 
-async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> {
-    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
-        .await
-        .with_context(|| format!("open airvisual doltlite for render {}", db_path.display()))?;
-
-    let started = std::time::Instant::now();
-    let pin = datalib_etl::pin::head(&pool).await?;
-    let scan_elapsed = Some(started.elapsed());
-    let Some(pin) = pin else {
-        return Ok(Parsed::Fresh(Box::new(ParsedAirvisual {
+async fn parse_pinned(pool: &SqlitePool, range: RawRange<'_>) -> Result<ParsedAirvisual> {
+    let Some(pin) = range.pin(pool).await? else {
+        return Ok(ParsedAirvisual {
             head: None,
-            scan_elapsed,
             devices: Vec::new(),
             series: Vec::new(),
             files: Vec::new(),
             sample_count: 0,
-        })));
+        });
     };
-    datalib_etl::pin::install_views(&pool, &pin)
+    datalib_etl::pin::install_views(pool, &pin)
         .await
         .context("pin the airvisual raw store for render")?;
-    let head = Some(pin.commit().to_string());
 
-    if let (Some(head), Some(last)) = (head.as_deref(), last_render_hash) {
-        if head == last {
-            return Ok(Parsed::UpToDate {
-                head: head.to_string(),
-            });
-        }
-    }
-
-    let devices = load_devices(&pool).await?;
-    let series = load_series(&pool).await?;
-    let files = load_files(&pool).await;
+    let devices = load_devices(pool).await?;
+    let series = load_series(pool).await?;
+    let files = load_files(pool).await;
     let sample_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM pinned_airvisual_samples airvisual_samples")
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .context("count airvisual_samples")?;
 
-    Ok(Parsed::Fresh(Box::new(ParsedAirvisual {
-        head,
-        scan_elapsed,
+    Ok(ParsedAirvisual {
+        head: Some(pin.commit().to_string()),
         devices,
         series,
         files,
         sample_count,
-    })))
+    })
 }
 
 async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {

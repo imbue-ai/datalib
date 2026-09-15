@@ -8,9 +8,10 @@ use datalib_etl_airvisual::ingest::schema_raw::{
     upsert_samples, AirvisualDeviceRow, AirvisualSampleRow,
 };
 use datalib_etl_airvisual::ingest::{db_path_for, RawDb};
-use datalib_etl_airvisual_render::render::parse::{parse, Parsed};
+use datalib_etl_airvisual_render::render::parse::parse;
 use datalib_etl_airvisual_render::render::render::{document_uuid, render_all};
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::RawRange;
 use sqlx::sqlite::SqlitePool;
 
 const STANZA: &str = "air-cucina";
@@ -74,24 +75,26 @@ async fn seed(pool: &SqlitePool, rows: &[Seed], devices: &[(&str, &str)]) {
         .unwrap();
 }
 
+/// Parse at `pin` (HEAD when `None`) and render, the way the processor
+/// does once the driver has decided the page is stale. Returns the
+/// emitted documents and the commit the pass read at.
 fn render_once(
     raw_path: &Path,
     root: &Path,
-    cursor: Option<&str>,
+    pin: Option<&str>,
 ) -> (Vec<RenderedMarkdown>, Option<String>) {
     let mut emitted = Vec::new();
-    let head = match parse(raw_path, cursor).unwrap() {
-        Parsed::UpToDate { head } => Some(head),
-        Parsed::Fresh(parsed) => {
-            let mut on_doc = |md: RenderedMarkdown| {
-                emitted.push(md);
-                Ok(())
-            };
-            render_all(&parsed, root, STANZA, &Progress::noop(), &mut on_doc).unwrap();
-            parsed.head.clone()
-        }
+    let range = RawRange {
+        pin,
+        ..RawRange::cold()
     };
-    (emitted, head)
+    let parsed = parse(raw_path, range).unwrap();
+    let mut on_doc = |md: RenderedMarkdown| {
+        emitted.push(md);
+        Ok(())
+    };
+    render_all(&parsed, root, STANZA, &Progress::noop(), &mut on_doc).unwrap();
+    (emitted, parsed.head.clone())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -201,17 +204,25 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
 
     let md_1 = md.clone();
 
-    // ---- second render, nothing appended ------------------------------
+    assert_eq!(
+        doc.bucket_key.as_deref(),
+        Some(document_uuid(STANZA).as_str()),
+        "the page declares itself as one bucket"
+    );
+    assert!(
+        doc.upstream_cursor.is_none(),
+        "the raw HEAD is per-run and stays off the row"
+    );
+
+    // ---- second render, nothing appended, read at the same commit ----
     let cursor = cursor.expect("a successful render pins the commit it consumed");
     let (emitted, cursor_2) = render_once(&raw_path, root, Some(&cursor));
     assert_eq!(cursor_2.as_deref(), Some(cursor.as_str()));
-    assert!(
-        emitted.is_empty(),
-        "HEAD did not move, so nothing should have been rendered"
-    );
+    assert_eq!(emitted.len(), 1);
     assert_eq!(
         std::fs::read_to_string(page_dir.join("index.md")).unwrap(),
-        md_1
+        md_1,
+        "an unchanged store must render the same page, so the store records no change"
     );
 
     // ---- third render, one new sample ---------------------------------
@@ -227,7 +238,7 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
         &[],
     )
     .await;
-    let (emitted, cursor_3) = render_once(&raw_path, root, Some(&cursor));
+    let (emitted, cursor_3) = render_once(&raw_path, root, None);
     assert_ne!(
         cursor_3,
         Some(cursor),

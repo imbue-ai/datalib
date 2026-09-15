@@ -101,13 +101,15 @@ pub fn render_all(
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
-        upstream_cursor: parsed.head.clone(),
+        // Not the raw HEAD: it moves on every ingest, and a row whose
+        // content did not change may carry nothing per-run.
+        upstream_cursor: None,
         md_path,
         render_version: RENDER_VERSION,
         rows,
         edges: Vec::new(),
         problems,
-        bucket_key: None,
+        bucket_key: Some(m_uuid.clone()),
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
     progress.inc(1);

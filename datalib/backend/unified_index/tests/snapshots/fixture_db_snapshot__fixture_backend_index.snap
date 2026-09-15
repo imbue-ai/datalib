@@ -233,7 +233,7 @@ expression: snapshot
       "updated_at": "2369-04-15T00:00:00+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "3b570c00-a0c4-5acd-8c55-d957292d6822",
       "created_at": "2369-04-14T06:45:00+00:00",
       "kind": "chat",
       "markdown_uuid": "3b570c00-a0c4-5acd-8c55-d957292d6822",
@@ -401,7 +401,7 @@ expression: snapshot
       "updated_at": "2369-05-28T15:15:00+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "enterprise-d/replicator-firmware#42",
       "created_at": "2369-04-15T09:30:00Z",
       "kind": "pr",
       "markdown_uuid": "6a0d7000-3fa1-5479-9d32-6ba74d546fa8",
@@ -425,7 +425,7 @@ expression: snapshot
       "updated_at": null
     },
     {
-      "bucket_key": null,
+      "bucket_key": "enterprise-d/holodeck!18",
       "created_at": "2369-04-15T14:00:00.000Z",
       "kind": "mr",
       "markdown_uuid": "6fc719a5-94c3-5757-a26f-2f34579d2508",
@@ -437,7 +437,7 @@ expression: snapshot
       "updated_at": "2369-04-15T14:30:00.000Z"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "enterprise-d/holodeck!17",
       "created_at": "2369-04-15T10:00:00.000Z",
       "kind": "mr",
       "markdown_uuid": "743537a5-d2bc-54f5-a660-97cb674ba8c8",
@@ -521,7 +521,7 @@ expression: snapshot
       "updated_at": "2364-04-11T00:13:00+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "enterprise-d/replicator-firmware#43",
       "created_at": "2369-04-15T13:30:00Z",
       "kind": "pr",
       "markdown_uuid": "8365cf2d-2561-5cc5-bba0-657a8b9f35a2",
@@ -653,37 +653,37 @@ expression: snapshot
       "updated_at": "2369-05-28T15:21:43+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "b1d6e000-1701-4d00-8000-000000000001",
       "created_at": "2369-04-15T00:02:00.000Z",
       "kind": "page",
       "markdown_uuid": "b1d6e000-1701-4d00-8000-000000000001",
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/index.md",
       "provider": "notion",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "notion",
       "title": "Bridge Operations Handbook",
       "updated_at": "2369-04-15T00:02:00.000Z"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "b1d6e000-1701-4d00-8000-000000000002",
       "created_at": "2369-04-15T00:02:00.000Z",
       "kind": "page",
       "markdown_uuid": "b1d6e000-1701-4d00-8000-000000000002",
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000002/index.md",
       "provider": "notion",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "notion",
       "title": "Shift Roster",
       "updated_at": "2369-04-15T00:02:00.000Z"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "b1d6e000-1701-4d00-8000-000000000003",
       "created_at": "2369-04-15T00:02:00.000Z",
       "kind": "page",
       "markdown_uuid": "b1d6e000-1701-4d00-8000-000000000003",
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000003/index.md",
       "provider": "notion",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "notion",
       "title": "Incident Log: Stardate 47988.1",
       "updated_at": "2369-04-15T00:02:00.000Z"
@@ -785,25 +785,25 @@ expression: snapshot
       "updated_at": "2364-03-03T19:00:00+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "d0000001-1701-4d00-8000-000000000001",
       "created_at": "2369-04-15T01:00:00.000Z",
       "kind": "thread",
       "markdown_uuid": "d0000001-1701-4d00-8000-000000000001",
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000001.md",
       "provider": "notion",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "notion",
       "title": "Bridge Operations Handbook",
       "updated_at": "2369-04-15T01:05:00.000Z"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "d0000001-1701-4d00-8000-000000000002",
       "created_at": "2369-04-15T01:10:00.000Z",
       "kind": "thread",
       "markdown_uuid": "d0000001-1701-4d00-8000-000000000002",
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000002.md",
       "provider": "notion",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "source_id": "notion",
       "title": "Bridge Operations Handbook",
       "updated_at": "2369-04-15T01:10:00.000Z"
@@ -905,7 +905,7 @@ expression: snapshot
       "updated_at": "2025-02-11T11:33:35+00:00"
     },
     {
-      "bucket_key": null,
+      "bucket_key": "ea19f544-e204-5348-9d08-3acdf605dc8a",
       "created_at": "2369-04-14T23:55:00+00:00",
       "kind": "chat",
       "markdown_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",

@@ -8,8 +8,8 @@ use datalib_etl::processor::PlanContext;
 use datalib_etl_garmin_config::GarminRenderConfig;
 use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
 
-/// Always planned: the page's own HEAD-vs-cursor check decides whether
-/// there is work, at the cost of one `dolt_log()` query on a no-op run.
+/// Always planned: the driver's reverse lookup says whether the page's
+/// tables moved, so a no-op run costs one `dolt_log()` query.
 pub fn plan_render(
     ctx: PlanContext,
     config: GarminRenderConfig,
@@ -40,34 +40,33 @@ impl RenderProcessor for GarminRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
-        use crate::render::parse::{parse, Parsed};
-        use crate::render::render::render_all;
+        use crate::render::parse::{inputs, parse};
+        use crate::render::render::{document_uuid, render_all};
 
-        match parse(&self.raw_path, ctx.raw_cursor)
-            .with_context(|| format!("garmin parse {}", self.raw_path.display()))?
-        {
-            Parsed::UpToDate { head } => {
-                tracing::info!(
-                    event = "garmin_render_skipped",
-                    source = %self.name,
-                    head = %head,
-                    "raw store HEAD unchanged since last render",
-                );
-                ctx.consumed(&head);
-                Ok(format!("up to date at {head}"))
-            }
-            Parsed::Fresh(parsed) => {
-                let mut on_doc = |md| ctx.emit_doc(md);
-                let s = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
-                    .context("garmin render_all")?;
-                if let Some(head) = parsed.head.as_deref() {
-                    ctx.consumed(head);
-                }
-                Ok(format!(
-                    "weigh_ins={} devices={} plots={}",
-                    s.weigh_ins, s.devices, s.plots
-                ))
-            }
+        let range = ctx.raw_range();
+        let page = document_uuid(&self.name);
+        if let (Some(pin), false) = (range.pin, range.is_stale(&page)) {
+            tracing::info!(
+                event = "garmin_render_skipped",
+                source = %self.name,
+                head = %pin,
+                "nothing the page reads changed since the last render",
+            );
+            ctx.consumed(pin);
+            return Ok(format!("up to date at {pin}"));
         }
+        let parsed = parse(&self.raw_path, range)
+            .with_context(|| format!("garmin parse {}", self.raw_path.display()))?;
+        ctx.declare_bucket(&page, &inputs())?;
+        let mut on_doc = |md| ctx.emit_doc(md);
+        let s = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
+            .context("garmin render_all")?;
+        if let Some(head) = parsed.head.as_deref() {
+            ctx.consumed(head);
+        }
+        Ok(format!(
+            "weigh_ins={} devices={} plots={}",
+            s.weigh_ins, s.devices, s.plots
+        ))
     }
 }

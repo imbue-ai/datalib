@@ -209,16 +209,17 @@ loader filters (`payload IS NOT NULL` at minimum), so a bucket missing
 from a parse result may be one whose body we have not fetched yet, and
 deleting on that reading destroys a live document.
 
-The signal is **the raw store has no row with this id**, asked directly:
-`doltlite_raw::buckets_without_rows` takes the ids the `dolt_diff` scan
-named and returns those no entity table still carries. The renderer hands
-each one to `RunCtx::remove_conversation`, and the store drops every
-document belonging to it — rows and the `.md` file both. The file is not
-an afterthought: `md_path` is what `/applet/unified_index/chat/{uuid}`
-serves and what qmd indexed, so a document deleted from the store but left
-on disk is a deletion the user can still read.
+The signal is **the raw store has no row with this id**, and it is read
+where the rows are loaded: a bucket the run set out to render — because
+the driver found its declared inputs moved, or the provider's own scan
+named it — that comes back with no rows is declared with nothing, and the
+driver drops every document under it — rows and the `.md` file both. The
+file is not an afterthought: `md_path` is what
+`/applet/unified_index/chat/{uuid}` serves and what qmd indexed, so a
+document deleted from the store but left on disk is a deletion the user
+can still read.
 
-Keyed on the conversation rather than the document because a periodizing
+Keyed on the bucket rather than the document because a periodizing
 renderer (slack, signal, beeper) turned one conversation into several
 documents, and once the conversation is gone from the raw store the render
 store is the only thing that still knows how many. `grid_index` needs no
@@ -235,25 +236,13 @@ re-derivation is paid in full. That is a real cost the
 [provider migration recipe](provider_migration_dolt_diff_and_cas_edge.md)
 exists to pay down; it is not what the deletion work fixes.
 
-**Incremental (`dolt_diff`-narrowed): `RunCtx::remove_conversation`.**
-claude, chatgpt, email, signal, slack, whatsapp. They must name the
-vanished ids, because most of what they did not produce this run they
-simply did not look at.
-
-**Whole-store: `RunCtx::retain_documents`.** contacts, github, gitlab,
-google_takeout, linkedin, pdf, perseus, sms_backup_restore. They declare
-the complete set they considered and the driver sweeps the rest. No diff
-needed, and it cannot miss a deletion the diff failed to mention.
-
-The retain form has one trap, and it is the reason the set is "considered"
-rather than "emitted": documents whose render *failed* belong in the set
-too — that is a document we could not rewrite, not one the source lost.
-Report only what rendered cleanly and one bad payload deletes a document
-the source still holds.
-
-Not wired: **notion** (being reworked) and **beeper** (poorly supported;
-its `index.db` evicts, so absence there is not deletion). **yolink** is
-append-only telemetry with one document per store.
+**Declared buckets: `RenderCtx::declare_bucket`.** Every provider. A
+run declares each bucket it looked at with the raw rows it read — with
+nothing when the rows are gone — and the driver drops what the store
+holds under a declared bucket that the run did not emit. A bucket the
+run never looked at says nothing about its documents, so a narrowed run
+cannot delete its own steady state. The design is
+[`plans/render_inputs.md`](plans/render_inputs.md).
 
 The original argument, which still reads correctly:
 

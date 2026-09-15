@@ -1,28 +1,16 @@
-//! Read the whole YoLink raw store into memory for the renderer, and
-//! decide up front whether there is anything to do.
+//! Read the whole YoLink raw store into memory for the renderer.
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
+use datalib_etl_render::inputs::{Input, RawRange};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl_yolink::ingest::db_path_for;
 
 pub use datalib_etl_timeseries_render::series::Series;
-
-/// Outcome of a parse attempt.
-pub enum Parsed {
-    /// The store's HEAD matches the render cursor: the single rendered
-    /// page is already current. Carries the hash purely for logging —
-    /// the cursor file already holds it, so nothing needs rewriting.
-    UpToDate { head: String },
-    /// The store moved (or there was no usable cursor). Everything the
-    /// document needs, loaded.
-    Fresh(Box<ParsedYolink>),
-}
 
 /// One row of `yolink_devices`, plus its observed extent.
 #[derive(Debug, Clone)]
@@ -44,31 +32,16 @@ pub struct DeviceRow {
     pub family_device_id: String,
 }
 
-/// One `dolt_log()` entry — the store's own account of how it got here.
-#[derive(Debug, Clone)]
-pub struct CommitRow {
-    pub hash: String,
-    pub date: String,
-    pub message: String,
-}
-
 /// Everything the single rendered document is built from.
 #[derive(Debug, Clone)]
 pub struct ParsedYolink {
-    /// HEAD at scan time, to stamp into the cursor after a successful
-    /// render. `None` when `dolt_log()` is unavailable (stock
-    /// libsqlite3) — then the cursor stays unwritten and the next run
-    /// re-renders, which is the safe direction.
+    /// The commit everything was read at; `None` when nothing is
+    /// committed yet, so the cursor stays unwritten.
     pub head: Option<String>,
-    /// Wall-clock cost of the HEAD lookup, recorded in the cursor so the
-    /// "is the scan getting slower?" question stays answerable.
-    pub scan_elapsed: Option<Duration>,
     pub devices: Vec<DeviceRow>,
     /// Sorted by (device, metric) so the document and the plot legends
     /// are stable run to run.
     pub series: Vec<Series>,
-    /// `dolt_log()`, newest first.
-    pub commits: Vec<CommitRow>,
     /// `sync_scope_config` rows: what the download step was configured
     /// to fetch, as of `updated_at`.
     pub scope_config: Vec<ScopeConfigRow>,
@@ -86,7 +59,21 @@ pub struct ScopeConfigRow {
     pub updated_at: String,
 }
 
-pub fn parse(raw_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> {
+/// The tables the page reads, whole: any row of any of them moving
+/// re-renders it.
+pub fn inputs() -> Vec<Input> {
+    [
+        "yolink_devices",
+        "yolink_readings",
+        "yolink_readings_bookkeeping",
+        "sync_scope_config",
+    ]
+    .into_iter()
+    .map(Input::whole_table)
+    .collect()
+}
+
+pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedYolink> {
     let db_path = db_path_for(raw_path);
     if !db_path.exists() {
         anyhow::bail!(
@@ -95,78 +82,60 @@ pub fn parse(raw_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> 
         );
     }
     // The render phase is driven by `futures`' executor, which enters no
-    // tokio context of its own; `block_in_place` + the ambient handle is
+    // tokio context of its own; `block_in_place` + `block_on` is exactly
     // the same shape every other provider's parse uses.
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, last_render_hash).await })
+        tokio::runtime::Handle::current().block_on(async move {
+            let pool = datalib_etl::doltlite_raw::open_reader(&db_path)
+                .await
+                .with_context(|| {
+                    format!("open yolink doltlite for render {}", db_path.display())
+                })?;
+            let parsed = parse_pinned(&pool, range).await;
+            pool.close().await;
+            parsed
+        })
     })
 }
 
-async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<Parsed> {
-    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
-        .await
-        .with_context(|| format!("open yolink doltlite for render {}", db_path.display()))?;
-
-    // The HEAD lookup this already did *is* the pin, so it does both jobs
-    // now: it decides whether the cursor is current, and it is the commit
-    // every read below is taken at. No commit means nothing has been
-    // committed here to render, which is emptiness rather than a reason to
-    // read whatever is sitting in the working set.
-    let started = std::time::Instant::now();
-    let pin = datalib_etl::pin::head(&pool).await?;
-    let scan_elapsed = Some(started.elapsed());
-    let Some(pin) = pin else {
-        return Ok(Parsed::Fresh(Box::new(ParsedYolink {
+async fn parse_pinned(pool: &SqlitePool, range: RawRange<'_>) -> Result<ParsedYolink> {
+    let Some(pin) = range.pin(pool).await? else {
+        return Ok(ParsedYolink {
             head: None,
-            scan_elapsed,
             devices: Vec::new(),
             series: Vec::new(),
-            commits: Vec::new(),
             scope_config: Vec::new(),
             reading_errors: 0,
             reading_count: 0,
-        })));
+        });
     };
-    datalib_etl::pin::install_views(&pool, &pin)
+    datalib_etl::pin::install_views(pool, &pin)
         .await
         .context("pin the yolink raw store for render")?;
-    let head = Some(pin.commit().to_string());
 
-    if let (Some(head), Some(last)) = (head.as_deref(), last_render_hash) {
-        if head == last {
-            return Ok(Parsed::UpToDate {
-                head: head.to_string(),
-            });
-        }
-    }
-
-    let devices = load_devices(&pool).await?;
-    let series = load_series(&pool).await?;
-    let commits = load_commits(&pool).await;
-    let scope_config = load_scope_config(&pool).await;
+    let devices = load_devices(pool).await?;
+    let series = load_series(pool).await?;
+    let scope_config = load_scope_config(pool).await;
     let reading_errors: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM pinned_yolink_readings_bookkeeping yolink_readings_bookkeeping WHERE last_error IS NOT NULL",
     )
-    .fetch_one(&pool)
+    .fetch_one(pool)
     .await
     .unwrap_or(0);
     let reading_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM pinned_yolink_readings yolink_readings")
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .context("count yolink_readings")?;
 
-    Ok(Parsed::Fresh(Box::new(ParsedYolink {
-        head,
-        scan_elapsed,
+    Ok(ParsedYolink {
+        head: Some(pin.commit().to_string()),
         devices,
         series,
-        commits,
         scope_config,
         reading_errors,
         reading_count,
-    })))
+    })
 }
 
 async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
@@ -219,27 +188,6 @@ async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
         }
     }
     Ok(out)
-}
-
-/// `dolt_log()`, newest first. Best-effort: a store opened through a
-/// libsqlite3 without doltlite's SQL surface has no commit log, and a
-/// missing provenance section is not worth failing a render over.
-async fn load_commits(pool: &SqlitePool) -> Vec<CommitRow> {
-    let Ok(rows) = sqlx::query(
-        "SELECT commit_hash, date, message FROM dolt_log() ORDER BY date DESC LIMIT 50",
-    )
-    .fetch_all(pool)
-    .await
-    else {
-        return Vec::new();
-    };
-    rows.into_iter()
-        .map(|r| CommitRow {
-            hash: r.get::<String, _>("commit_hash"),
-            date: r.get::<String, _>("date"),
-            message: r.get::<String, _>("message"),
-        })
-        .collect()
 }
 
 async fn load_scope_config(pool: &SqlitePool) -> Vec<ScopeConfigRow> {

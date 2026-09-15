@@ -108,7 +108,7 @@ pub fn render_all(
         // Not the raw HEAD: it moves on every ingest, and a row whose
         // content did not change may carry nothing per-run.
         upstream_cursor: None,
-        bucket_key: None,
+        bucket_key: Some(m_uuid.clone()),
         md_path,
         render_version: RENDER_VERSION,
         rows,

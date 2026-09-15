@@ -1,9 +1,11 @@
-//! The `dolt_diff` scan that narrows notion's render, and the deletions
-//! it has to notice now that render no longer walks everything.
+//! The forward scan that narrows notion's render: which page and
+//! thread buckets a change names, through the rows still there.
 
 use datalib_etl_notion::ingest::db::{CommentUpsert, PageMarkdownUpsert, PageUpsert, RawDb};
 use datalib_etl_notion_render::render::parse_api_dir;
+use datalib_etl_render::inputs::RawRange;
 use serde_json::json;
+use std::collections::HashSet;
 use tempfile::tempdir;
 
 const A: &str = "aaaaaaaa-1111-2222-3333-444444444444";
@@ -48,25 +50,44 @@ async fn seed(path: &std::path::Path) -> String {
     head
 }
 
+fn ids(pages: &[serde_json::Value]) -> Vec<&str> {
+    pages.iter().map(|p| p["id"].as_str().unwrap()).collect()
+}
+
+fn set(keys: &[&str]) -> HashSet<String> {
+    keys.iter().map(|k| k.to_string()).collect()
+}
+
+/// The range the driver hands a warm run: a cursor to diff from and
+/// its own stale set — empty, when nothing declared moved.
+fn warm<'a>(cursor: &'a str, stale: &'a HashSet<String>) -> RawRange<'a> {
+    RawRange {
+        cursor: Some(cursor),
+        pin: None,
+        stale: Some(stale),
+    }
+}
+
 /// The whole point: a second render with nothing changed upstream is
-/// handed no pages at all.
+/// handed no buckets at all.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unchanged_store_yields_no_pages_to_render() {
     let d = tempdir().unwrap();
     let f = d.path().join("notion.doltlite_db");
     seed(&f).await;
 
-    let cold = parse_api_dir(&f, None).unwrap();
+    let cold = parse_api_dir(&f, RawRange::cold()).unwrap();
     assert_eq!(cold.pages.len(), 2, "a cold start renders everything");
     assert!(
-        cold.scan.changed_buckets.is_none(),
+        cold.render.is_none(),
         "no cursor means no diff was asked for"
     );
-    let head = cold.scan.new_head.clone().expect("a head to resume from");
+    let head = cold.head.clone().expect("a head to resume from");
+    let none: HashSet<String> = HashSet::new();
 
-    let warm = parse_api_dir(&f, Some(&head)).unwrap();
+    let warm = parse_api_dir(&f, warm(&head, &none)).unwrap();
     assert!(warm.pages.is_empty(), "nothing changed, so nothing renders");
-    assert_eq!(warm.scan.changed_buckets.as_ref().unwrap().len(), 0);
+    assert_eq!(warm.render, Some(HashSet::new()));
 }
 
 /// And a run where one page moved is handed exactly that page — not the
@@ -76,6 +97,7 @@ async fn only_the_changed_page_is_handed_to_render() {
     let d = tempdir().unwrap();
     let f = d.path().join("notion.doltlite_db");
     let head = seed(&f).await;
+    let none: HashSet<String> = HashSet::new();
 
     let db = RawDb::open(&f).await.unwrap();
     db.upsert_page_markdown(&[body(B, "# B\n\nnew paragraph\n")])
@@ -84,31 +106,28 @@ async fn only_the_changed_page_is_handed_to_render() {
     commit(&db, "edit B").await;
     db.close().await;
 
-    let parsed = parse_api_dir(&f, Some(&head)).unwrap();
-    let ids: Vec<&str> = parsed
-        .pages
-        .iter()
-        .map(|p| p["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, vec![B], "only the edited page");
+    let parsed = parse_api_dir(&f, warm(&head, &none)).unwrap();
+    assert_eq!(parsed.render, Some(set(&[B])));
+    assert_eq!(ids(&parsed.pages), vec![B], "only the edited page");
     assert!(parsed.markdown_by_page.contains_key(B));
     assert!(!parsed.markdown_by_page.contains_key(A));
 }
 
-/// A comment reaches its page's bucket through `comments.page_id`, with
-/// no join — which is why the download side records it there.
+/// A new comment names its thread, and the thread brings its page
+/// along for the title — as a page to read, not one to render.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_new_comment_marks_its_page_changed() {
+async fn a_new_comment_names_its_thread() {
     let d = tempdir().unwrap();
     let f = d.path().join("notion.doltlite_db");
     let head = seed(&f).await;
+    let none: HashSet<String> = HashSet::new();
 
     let db = RawDb::open(&f).await.unwrap();
     db.upsert_comments(&[CommentUpsert {
         id: "c1".into(),
         discussion_id: Some("d1".into()),
         page_id: Some(A.into()),
-        payload: serde_json::to_string(&json!({"id": "c1"})).unwrap(),
+        payload: serde_json::to_string(&json!({"id": "c1", "discussion_id": "d1"})).unwrap(),
         ..Default::default()
     }])
     .await
@@ -116,23 +135,59 @@ async fn a_new_comment_marks_its_page_changed() {
     commit(&db, "comment on A").await;
     db.close().await;
 
-    let parsed = parse_api_dir(&f, Some(&head)).unwrap();
-    let ids: Vec<&str> = parsed
-        .pages
-        .iter()
-        .map(|p| p["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, vec![A]);
+    let parsed = parse_api_dir(&f, warm(&head, &none)).unwrap();
+    assert_eq!(parsed.render, Some(set(&["d1"])));
+    assert_eq!(
+        ids(&parsed.pages),
+        vec![A],
+        "the thread's page, for its title"
+    );
+    assert!(!parsed.renders(A), "the page itself did not change");
+    assert_eq!(parsed.comments.len(), 1);
 }
 
-/// Deletion. Render no longer walks the whole store, so absence from a
-/// run means nothing — the page has to be named. This is the half that
-/// `retain_documents` used to cover for free.
+/// A page's own row changing names its threads too, since they carry
+/// its title.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_deleted_page_is_named_as_vanished() {
+async fn a_changed_page_names_its_threads() {
+    let d = tempdir().unwrap();
+    let f = d.path().join("notion.doltlite_db");
+
+    let db = RawDb::open(&f).await.unwrap();
+    db.upsert_pages(&[page(A)]).await.unwrap();
+    db.upsert_comments(&[CommentUpsert {
+        id: "c1".into(),
+        discussion_id: Some("d1".into()),
+        page_id: Some(A.into()),
+        payload: serde_json::to_string(&json!({"id": "c1", "discussion_id": "d1"})).unwrap(),
+        ..Default::default()
+    }])
+    .await
+    .unwrap();
+    let head = commit(&db, "seed with a thread").await;
+    let none: HashSet<String> = HashSet::new();
+    db.upsert_pages(&[PageUpsert {
+        last_edited_time: Some("2026-09-09T00:00:00.000Z".into()),
+        ..page(A)
+    }])
+    .await
+    .unwrap();
+    commit(&db, "A edited").await;
+    db.close().await;
+
+    let parsed = parse_api_dir(&f, warm(&head, &none)).unwrap();
+    assert_eq!(parsed.render, Some(set(&[A, "d1"])));
+}
+
+/// Deletion. A page the diff names whose row is gone is a bucket to
+/// render with nothing in it: the processor declares it empty and the
+/// driver drops its documents.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_deleted_page_is_a_bucket_with_no_rows() {
     let d = tempdir().unwrap();
     let f = d.path().join("notion.doltlite_db");
     let head = seed(&f).await;
+    let none: HashSet<String> = HashSet::new();
 
     let db = RawDb::open(&f).await.unwrap();
     sqlx::query("DELETE FROM pages WHERE id = ?")
@@ -143,49 +198,19 @@ async fn a_deleted_page_is_named_as_vanished() {
     commit(&db, "A deleted upstream").await;
     db.close().await;
 
-    let parsed = parse_api_dir(&f, Some(&head)).unwrap();
-    assert_eq!(parsed.vanished_pages, vec![A.to_string()]);
+    let parsed = parse_api_dir(&f, warm(&head, &none)).unwrap();
+    assert_eq!(parsed.render, Some(set(&[A])));
     assert!(
         parsed.pages.is_empty(),
         "the deleted page has no rows left to render"
     );
 }
 
-/// A page that merely has no body yet must never read as deleted — its
-/// row is there, and `load_pages` filtering on `payload IS NOT NULL` is
-/// exactly the trap `buckets_without_rows` exists to avoid.
+/// A thread whose last comment went: the comment's row is gone, so the
+/// forward scan cannot name the thread — the driver does, from the
+/// `(comments, c1)` input the thread declared when it rendered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_page_awaiting_its_body_is_not_vanished() {
-    let d = tempdir().unwrap();
-    let f = d.path().join("notion.doltlite_db");
-    let head = seed(&f).await;
-
-    let db = RawDb::open(&f).await.unwrap();
-    // Discovery-shaped upsert: the row exists, the payload does not.
-    db.upsert_pages(&[PageUpsert {
-        id: "cccccccc-1111-2222-3333-444444444444".into(),
-        last_edited_time: Some("2026-09-08T00:00:00.000Z".into()),
-        payload: None,
-        ..Default::default()
-    }])
-    .await
-    .unwrap();
-    commit(&db, "discovered C").await;
-    db.close().await;
-
-    let parsed = parse_api_dir(&f, Some(&head)).unwrap();
-    assert!(
-        parsed.vanished_pages.is_empty(),
-        "a body-less page is pending, not deleted: {:?}",
-        parsed.vanished_pages
-    );
-}
-
-/// A thread whose last comment went, on a page that survived. The page
-/// and its threads are separate documents with separate
-/// `conversation_uuid`s, so removing the page would not have caught it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_thread_whose_last_comment_went_is_named_as_vanished() {
+async fn a_thread_whose_last_comment_went_is_the_drivers_to_name() {
     let d = tempdir().unwrap();
     let f = d.path().join("notion.doltlite_db");
 
@@ -196,12 +221,13 @@ async fn a_thread_whose_last_comment_went_is_named_as_vanished() {
         id: "c1".into(),
         discussion_id: Some("d1".into()),
         page_id: Some(A.into()),
-        payload: serde_json::to_string(&json!({"id": "c1"})).unwrap(),
+        payload: serde_json::to_string(&json!({"id": "c1", "discussion_id": "d1"})).unwrap(),
         ..Default::default()
     }])
     .await
     .unwrap();
     let head = commit(&db, "seed with a thread").await;
+    let none: HashSet<String> = HashSet::new();
     db.close().await;
 
     let db = RawDb::open(&f).await.unwrap();
@@ -212,10 +238,14 @@ async fn a_thread_whose_last_comment_went_is_named_as_vanished() {
     commit(&db, "thread resolved away").await;
     db.close().await;
 
-    let parsed = parse_api_dir(&f, Some(&head)).unwrap();
-    assert_eq!(parsed.vanished_discussions, vec!["d1".to_string()]);
+    let forward = parse_api_dir(&f, warm(&head, &none)).unwrap();
+    assert_eq!(forward.render, Some(HashSet::new()));
+
+    let stale = set(&["d1"]);
+    let parsed = parse_api_dir(&f, warm(&head, &stale)).unwrap();
+    assert_eq!(parsed.render, Some(set(&["d1"])));
     assert!(
-        parsed.vanished_pages.is_empty(),
-        "the page itself is still there"
+        parsed.comments.is_empty(),
+        "nothing left to render under it"
     );
 }

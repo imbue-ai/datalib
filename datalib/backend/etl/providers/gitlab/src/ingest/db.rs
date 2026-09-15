@@ -43,8 +43,18 @@ impl RawDb {
     /// no commit to pin, or a build without the dolt extensions. See the
     /// plan's "The sink contract".
     pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
+        Self::open_reader_at(db_path, None).await
+    }
+
+    /// A reader pinned at `commit`, or at HEAD when `None`; `None` back
+    /// when nothing is committed.
+    pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         let pool = dr::open_reader(db_path).await?;
-        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+        let pin = match commit {
+            Some(commit) => Some(datalib_etl::pin::Pin::at(commit)?),
+            None => datalib_etl::pin::head(&pool).await?,
+        };
+        let Some(pin) = pin else {
             pool.close().await;
             return Ok(None);
         };

@@ -388,7 +388,7 @@ class RenderContractTest(unittest.TestCase):
         return self._rows(
             db,
             "SELECT DISTINCT bucket_key FROM render_inputs "
-            f"WHERE input_table = '{table}' AND input_id = '{row_id}';",
+            f"WHERE input_table = '{table}' AND input_id IN ('{row_id}', '*');",
         )
 
     def _documents_under(self, source_dir: Path, buckets: list[str]) -> int:

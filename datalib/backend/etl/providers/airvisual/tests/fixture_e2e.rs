@@ -9,9 +9,10 @@ use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl_airvisual::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_airvisual_config::AirvisualDevice;
-use datalib_etl_airvisual_render::render::parse::{parse, Parsed};
+use datalib_etl_airvisual_render::render::parse::{inputs, parse};
 use datalib_etl_airvisual_render::render::render::render_all;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::inputs::RawRange;
 
 const STANZA: &str = "ship-air";
 
@@ -141,9 +142,13 @@ async fn the_tng_fixture_ingests_and_renders() {
         .unwrap();
     db.close().await;
 
-    let Parsed::Fresh(parsed) = parse(&raw_path, None).unwrap() else {
-        panic!("a fresh store must render");
-    };
+    let parsed = parse(&raw_path, RawRange::cold()).unwrap();
+    assert!(parsed.head.is_some(), "a committed store pins a commit");
+    assert_eq!(
+        inputs().len(),
+        3,
+        "the page declares the devices, samples and files tables whole"
+    );
     assert_eq!(parsed.devices.len(), 2);
     assert_eq!(parsed.sample_count, 75);
     let mut emitted = Vec::new();

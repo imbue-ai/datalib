@@ -7,6 +7,7 @@
 
 use datalib_etl_gitlab::ingest::{self as gitlab, parse_mr_ref, FetchOptions};
 use datalib_etl_gitlab_render::render::{parse_api_dir, render_gitlab};
+use datalib_etl_render::inputs::RawRange;
 use insta::assert_json_snapshot;
 use serde_json::json;
 
@@ -43,7 +44,7 @@ async fn gitlab_live_single_mr_snapshot() {
     r.expect("gitlab fetch failed");
     sealed.expect("seal the raw store");
 
-    let parsed = parse_api_dir(&tmp, None).expect("parse_api_dir");
+    let parsed = parse_api_dir(&tmp, RawRange::cold()).expect("parse_api_dir");
     assert_eq!(parsed.merge_requests.len(), 1, "expected exactly one MR");
     let mr = &parsed.merge_requests[0];
 

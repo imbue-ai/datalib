@@ -674,8 +674,8 @@ path = "/Volumes/airvisual-1"
 
 # One page — `ship-air/render_markdown/index.md` — with one interactive
 # plot per quantity (particulates, AQI, CO2, temperature, humidity, VOC),
-# every device a series, same shape as yolink's. Incrementality is the
-# raw store's HEAD: nothing appended, nothing re-rendered.
+# every device a series, same shape as yolink's. The page declares its
+# tables whole, so it re-renders only when a row of one of them moved.
 [[steps]]
 group = "ship-air"
 function = "render_markdown"

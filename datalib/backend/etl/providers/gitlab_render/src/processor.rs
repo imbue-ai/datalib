@@ -38,32 +38,23 @@ impl RenderProcessor for GitlabRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render_gitlab};
-        let parsed = parse_api_dir(&self.raw_path, ctx.raw_cursor)
+        let parsed = parse_api_dir(&self.raw_path, ctx.raw_range())
             .with_context(|| format!("gitlab parse {}", self.raw_path.display()))?;
-
-        // Named, not swept: this render is narrowed by the diff, so what it
-        // emits is only what changed. Handing that to `retain_documents`
-        // would delete every MR that merely held still.
-        let mut dropped = 0usize;
-        for bucket in &parsed.vanished_buckets {
-            let Some((proj, iid)) = bucket.rsplit_once('!') else {
-                continue;
-            };
-            let Ok(iid) = iid.parse::<u32>() else {
-                continue;
-            };
-            dropped += ctx.remove_conversation(&crate::render::parse::gitlab_mr_uuid(proj, iid))?;
+        // Every MR this run renders is declared first with nothing, so
+        // one whose row is gone loses its document; the render below
+        // re-declares the ones it produced.
+        for key in parsed.render.iter().flatten() {
+            ctx.declare_bucket(key, &[])?;
         }
-
         let mut on_doc = |md| ctx.emit_doc(md);
         let s = render_gitlab(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
             .context("render_gitlab")?;
-        if let Some(head) = parsed.scan.new_head.as_deref() {
+        for bucket in &s.buckets {
+            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
+        }
+        if let Some(head) = parsed.head.as_deref() {
             ctx.consumed(head);
         }
-        Ok(format!(
-            "rendered={} skipped={} dropped={}",
-            s.rendered, parsed.docs_skipped, dropped
-        ))
+        Ok(format!("rendered={}", s.rendered))
     }
 }

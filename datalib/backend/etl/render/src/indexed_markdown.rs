@@ -67,12 +67,20 @@ pub struct Input {
     pub id: String,
 }
 
+/// The `input_id` that stands for every row of a table: a bucket that
+/// reads a table whole declares this rather than each key.
+pub const WHOLE_TABLE: &str = "*";
+
 impl Input {
     pub fn new(table: impl Into<String>, id: impl Into<String>) -> Self {
         Self {
             table: table.into(),
             id: id.into(),
         }
+    }
+
+    pub fn whole_table(table: impl Into<String>) -> Self {
+        Self::new(table, WHOLE_TABLE)
     }
 }
 
@@ -365,11 +373,25 @@ impl IndexedMarkdownStore {
     }
 
     /// The buckets that declared any of `changed` as an input — the
-    /// reverse lookup. `changed` is `(table, id)` as the diff named them.
+    /// reverse lookup. `changed` is `(table, id)` as the diff named them;
+    /// a bucket that declared a whole table matches any row of it.
     pub fn buckets_reading(&self, changed: &[Input]) -> Result<HashSet<String>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let mut out = HashSet::new();
+            let tables: BTreeSet<&str> = changed.iter().map(|i| i.table.as_str()).collect();
+            for table in tables {
+                out.extend(
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT DISTINCT bucket_key FROM render_inputs WHERE input_table = ? AND input_id = ?",
+                    )
+                    .bind(table)
+                    .bind(WHOLE_TABLE)
+                    .fetch_all(&mut **guard.conn())
+                    .await
+                    .context("reverse lookup of whole-table inputs")?,
+                );
+            }
             for chunk in changed.chunks(datalib_etl::bulk::SQL_CHUNK / 2) {
                 let mut sql = String::from(
                     "SELECT DISTINCT bucket_key FROM render_inputs WHERE (input_table, input_id) IN (",
@@ -496,31 +518,6 @@ impl IndexedMarkdownStore {
                 .await
                 .context("write the render cursor")?;
             Ok(())
-        })
-    }
-
-    /// Every `markdown_uuid` whose rows belong to `conversation_uuid`.
-    ///
-    /// The indirection exists because a provider that periodizes — slack per
-    /// thread-month, beeper and signal per period — turns one upstream
-    /// conversation into several documents, and their count is a fact about
-    /// what was rendered rather than anything the provider can recompute
-    /// once the conversation is gone from the raw store. The store is the
-    /// only thing that still knows.
-    pub fn documents_for_conversation(&self, conversation_uuid: &str) -> Result<Vec<String>> {
-        blocking(async {
-            let mut guard = self.write_lock.acquire().await?;
-            let rows = sqlx::query(
-                "SELECT DISTINCT markdown_uuid FROM grid_rows \
-                 WHERE conversation_uuid = ? AND markdown_uuid IS NOT NULL",
-            )
-            .bind(conversation_uuid)
-            .fetch_all(&mut **guard.conn())
-            .await
-            .with_context(|| format!("documents for conversation {conversation_uuid}"))?;
-            rows.into_iter()
-                .map(|r| r.try_get::<String, _>(0).map_err(Into::into))
-                .collect()
         })
     }
 
@@ -1338,5 +1335,30 @@ mod tests {
             s.problem_counts().unwrap().is_empty(),
             "reprocessed clean ⇒ no problem rows left"
         );
+    }
+
+    /// A bucket that declared a whole table is stale when any row of it
+    /// moves, and one that declared a row is not stale for its neighbours.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_whole_table_input_matches_any_row_of_it() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let s = store(root);
+        s.put_inputs("page", &[Input::whole_table("readings")])
+            .unwrap();
+        s.put_inputs("one", &[Input::new("readings", "r-1")])
+            .unwrap();
+
+        let stale = s.buckets_reading(&[Input::new("readings", "r-2")]).unwrap();
+        assert_eq!(stale, ["page".to_string()].into_iter().collect());
+        let stale = s.buckets_reading(&[Input::new("readings", "r-1")]).unwrap();
+        assert_eq!(
+            stale,
+            ["page".to_string(), "one".to_string()]
+                .into_iter()
+                .collect()
+        );
+        let stale = s.buckets_reading(&[Input::new("devices", "d-1")]).unwrap();
+        assert!(stale.is_empty());
     }
 }

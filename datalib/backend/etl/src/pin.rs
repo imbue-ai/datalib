@@ -165,7 +165,8 @@ fn store_filename(pool: &sqlx::SqlitePool) -> String {
 /// - `install_views` finds the tables in `sqlite_master` but no `dolt_at_`
 ///   module for them, so every view becomes the empty `WHERE 0` one;
 /// - the consumer reads zero rows and reports a *completed* walk;
-/// - and `retain_documents` deletes every document the source had.
+/// - and a sweep over what the walk did not produce deletes every
+///   document the source had.
 ///
 /// It is reachable: a download that created its tables and wrote rows, then
 /// died before its first commit, leaves exactly this.
