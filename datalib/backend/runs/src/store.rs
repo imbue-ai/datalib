@@ -75,7 +75,7 @@ pub async fn open_or_create(path: &Path) -> Result<SqlitePool, sqlx::Error> {
 
 /// Open an existing store read-only-ish. Never creates: a reader that
 /// created the file would race the runner for which engine claims it.
-async fn open_existing(path: &Path) -> Result<SqlitePool, sqlx::Error> {
+pub(crate) async fn open_existing(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(options(path, false))
@@ -364,19 +364,6 @@ pub async fn log_after(
     limit: i64,
 ) -> Vec<LogRow> {
     log_where(data_root, Some(run_id), step, after_seq, limit).await
-}
-
-/// One step's lines across every run the store holds, oldest first —
-/// "what has this step been doing", not "what did it do in this run".
-/// Runs never overlap (the runner holds a lock), so `seq` order is also
-/// run order, and the same tail cursor works across them.
-pub async fn step_log_after(
-    data_root: &Path,
-    step: &str,
-    after_seq: i64,
-    limit: i64,
-) -> Vec<LogRow> {
-    log_where(data_root, None, Some(step), after_seq, limit).await
 }
 
 async fn log_where(

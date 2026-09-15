@@ -1,5 +1,7 @@
-//! F4: Query parser. Tokenizes the search-bar string into structured filters
-//! plus free-text. Pure function, table-driven tests.
+//! The unified grid's reading of the shared search-bar grammar
+//! (`datalib_query`): which keys are `grid_rows` fields, how `type:`
+//! resolves, and the `qmd:` / `qmd_vsearch:` predicates that route free
+//! text to the semantic index.
 
 use std::collections::BTreeMap;
 
@@ -155,54 +157,51 @@ pub fn parse_query(s: &str) -> ParsedQuery {
     // portion. Multiple occurrences: last one wins (matches the
     // single-string Python parser, which never accumulates these).
     let mut free_text_mode: FreeTextMode = FreeTextMode::Hybrid;
-    for tok in tokenize(s) {
-        let (negate, body) = if let Some(rest) = tok.strip_prefix('-') {
-            (true, rest.to_string())
-        } else {
-            (false, tok)
-        };
-        if let Some((k, v)) = split_field(&body) {
-            if !k.is_empty() && !v.is_empty() {
-                // `qmd:` and `qmd_vsearch:` are NOT structured grid-row
-                // filters — they route the embedded free text through
-                // qmd. Treat the value as free text and switch modes.
-                if !negate && (k == "qmd" || k == "qmd_vsearch") {
-                    free_text_mode = if k == "qmd_vsearch" {
-                        FreeTextMode::Vsearch
-                    } else {
-                        FreeTextMode::Hybrid
-                    };
-                    // Re-quote multi-word values so the runner can route
-                    // them as a single lex phrase. `qmd:"earl grey"` and
-                    // `qmd:earl` both work; quotes survive into free_text
-                    // only when the user actually typed a phrase.
-                    let term = if v.contains(char::is_whitespace) {
-                        format!("\"{v}\"")
-                    } else {
-                        v
-                    };
-                    free_terms.push(term);
-                    continue;
-                }
-                let field = Field::from_key(k);
-                if !negate {
-                    filters.entry(field.clone()).or_default().push(v.clone());
+    for tok in datalib_query::parse(s) {
+        match tok {
+            // `qmd:` and `qmd_vsearch:` are NOT structured grid-row
+            // filters — they route the embedded free text through
+            // qmd. Treat the value as free text and switch modes.
+            datalib_query::Token::Term(t)
+                if !t.negate && (t.key == "qmd" || t.key == "qmd_vsearch") =>
+            {
+                free_text_mode = if t.key == "qmd_vsearch" {
+                    FreeTextMode::Vsearch
+                } else {
+                    FreeTextMode::Hybrid
+                };
+                // Re-quote multi-word values so the runner can route
+                // them as a single lex phrase. `qmd:"earl grey"` and
+                // `qmd:earl` both work; quotes survive into free_text
+                // only when the user actually typed a phrase.
+                let term = if t.value.contains(char::is_whitespace) {
+                    format!("\"{}\"", t.value)
+                } else {
+                    t.value
+                };
+                free_terms.push(term);
+            }
+            datalib_query::Token::Term(t) => {
+                let field = Field::from_key(&t.key);
+                if !t.negate {
+                    filters
+                        .entry(field.clone())
+                        .or_default()
+                        .push(t.value.clone());
                 }
                 terms.push(FilterTerm {
                     field,
-                    value: v,
-                    negate,
+                    value: t.value,
+                    negate: t.negate,
                 });
-                continue;
             }
+            // Bare term: surrounding quotes and a leading `-` stay
+            // verbatim so the runner can forward lex-meaningful syntax to
+            // qmd. `"earl grey"` → qmd exact-phrase match; `-foo` → qmd
+            // term exclusion; `-"earl grey"` → qmd phrase exclusion. See
+            // `qmd::runner::build_qmd_query`. Plain words pass through too.
+            datalib_query::Token::Free(raw) => free_terms.push(raw),
         }
-        // Bare term: preserve any surrounding quotes and leading `-`
-        // verbatim so the runner can forward lex-meaningful syntax to
-        // qmd. `"earl grey"` → qmd exact-phrase match; `-foo` → qmd
-        // term exclusion; `-"earl grey"` → qmd phrase exclusion. See
-        // `qmd::runner::build_qmd_query`. Plain words pass through too.
-        let raw = if negate { format!("-{}", body) } else { body };
-        free_terms.push(raw);
     }
     let free_text = free_terms.join(" ");
     let resolved_type = match filters.get(&Field::Type).and_then(|v| v.first()) {
@@ -219,85 +218,6 @@ pub fn parse_query(s: &str) -> ParsedQuery {
         free_text_mode,
         resolved_type,
     }
-}
-
-fn split_field(tok: &str) -> Option<(&str, String)> {
-    let mut in_quote = false;
-    let mut escape = false;
-    for (i, ch) in tok.char_indices() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_quote => escape = true,
-            '"' => in_quote = !in_quote,
-            ':' if !in_quote => {
-                let key = &tok[..i];
-                let val = unquote(&tok[i + 1..]);
-                return Some((key, val));
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn unquote(s: &str) -> String {
-    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        let inner = &s[1..s.len() - 1];
-        let mut out = String::with_capacity(inner.len());
-        let mut escape = false;
-        for ch in inner.chars() {
-            if escape {
-                out.push(ch);
-                escape = false;
-            } else if ch == '\\' {
-                escape = true;
-            } else {
-                out.push(ch);
-            }
-        }
-        out
-    } else {
-        s.to_string()
-    }
-}
-
-/// Whitespace-split, but respect double-quoted spans (with `\\` and `\"`
-/// escapes) so that quoted values can contain spaces, colons, or quotes.
-fn tokenize(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_quote = false;
-    let mut escape = false;
-    for ch in s.chars() {
-        if escape {
-            cur.push(ch);
-            escape = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_quote => {
-                cur.push('\\');
-                escape = true;
-            }
-            '"' => {
-                cur.push('"');
-                in_quote = !in_quote;
-            }
-            c if c.is_whitespace() && !in_quote => {
-                if !cur.is_empty() {
-                    out.push(std::mem::take(&mut cur));
-                }
-            }
-            c => cur.push(c),
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
-    out
 }
 
 #[cfg(test)]

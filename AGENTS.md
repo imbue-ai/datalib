@@ -512,6 +512,15 @@ datalib/
     core/          the feedback + job stores, plus re-exports of
                    `runtime`'s layout and host-runtime helpers. Knows
                    nothing about the index.
+    query/         `datalib_query`: the search-bar grammar every grid
+                   shares — `key:value`, `-` to negate, quotes, free
+                   text — and nothing about what a key means. No
+                   dependencies. `unified_index` reads keys as
+                   `grid_rows` fields; `runs` reads them as `log`
+                   columns (`GET /api/log?q=`); the UI's
+                   `ui/src/grid/query.ts` is the same grammar's
+                   writer, which is what makes right-click "Keep only"
+                   / "Exclude all" one control on both grids.
     unified_index/ the grid index, the qmd index, the query language
                    over them, and the repo that reads them. Linked by
                    datalib-step (writes it) and datalib-applet (serves

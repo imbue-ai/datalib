@@ -4,14 +4,15 @@
 //! removes the old ones. The tables are `app_schema::runs`; this crate
 //! is the writer and the reader over them.
 
+pub mod query;
 pub mod store;
 
 pub use app_schema::runs::{
     LogLevel, LogRow, MetricRow, MetricSampleRow, RunRow, StepRunRow, Stream,
 };
+pub use query::{log_query, LogQuery, QueryError};
 pub use store::{
-    canonical_labels, log_after, open_or_create, runs, snapshot, snapshot_of, step_log_after,
-    RunWriter, Snapshot,
+    canonical_labels, log_after, open_or_create, runs, snapshot, snapshot_of, RunWriter, Snapshot,
 };
 
 use std::path::{Path, PathBuf};

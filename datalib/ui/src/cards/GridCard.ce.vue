@@ -60,7 +60,7 @@ import {
   revealInFileManager,
 } from "@/desktop";
 import { openExternal } from "@/externalLinks";
-import { keepExcludeItems } from "@/grid/keepExclude";
+import { keepExcludeItems, withToken } from "@/grid/query";
 import { subscribeLive } from "@/live";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
@@ -469,38 +469,8 @@ function openFeedbackForSearchBar(ev: MouseEvent) {
   feedbackOpen.value = true;
 }
 
-/// Quote a value for the search bar. Quotes when it contains whitespace,
-/// `:`, leading `-`, or is empty. Mirrors the backend tokenizer's
-/// quoted-span handling (`\"` and `\\` escapes inside quotes).
-function quoteValue(v: string): string {
-  const needsQuotes =
-    v === "" || /[\s:"]/.test(v) || v.startsWith("-") || v.startsWith('"');
-  if (!needsQuotes) return v;
-  const escaped = v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return `"${escaped}"`;
-}
-
-function formatFilterToken(
-  key: string,
-  value: string,
-  exclude: boolean,
-): string {
-  return `${exclude ? "-" : ""}${key}:${quoteValue(value)}`;
-}
-
 function appendFilterToQuery(token: string) {
-  const current = query.value.trim();
-  // Skip if the exact token is already present as its own whitespace-
-  // delimited word (cheap dedupe; doesn't try to canonicalize quoting
-  // variants, which is fine — duplicates only widen on free-text and
-  // these tokens are field-prefixed, so they collapse on a re-click).
-  const re = new RegExp(`(^|\\s)${escapeRegExp(token)}(\\s|$)`);
-  if (re.test(current)) return;
-  query.value = current.length === 0 ? token : `${current} ${token}`;
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  query.value = withToken(query.value, token);
 }
 
 const UUID_RE =
@@ -1179,11 +1149,9 @@ const gridOptions: GridOptions<SearchRow> = {
       items.push(
         ...keepExcludeItems<SearchRow>({
           header: ctx.header,
+          key: ctx.key,
           value: ctx.value,
-          keep: () =>
-            appendFilterToQuery(formatFilterToken(ctx.key, ctx.value, false)),
-          exclude: () =>
-            appendFilterToQuery(formatFilterToken(ctx.key, ctx.value, true)),
+          apply: appendFilterToQuery,
         }),
       );
     }

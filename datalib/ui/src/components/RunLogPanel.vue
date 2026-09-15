@@ -1,9 +1,14 @@
 <script setup lang="ts">
 // One run's log, as a grid: every line the run store holds for it,
-// sortable and filterable by AG Grid, appended to as the run goes — and
+// sortable and groupable by AG Grid, appended to as the run goes — and
 // a picker for the other runs the step took part in, since "what did
 // it do last time" is the question right after "what is it doing". The
 // picker's last entry is every run at once, with a column saying which.
+//
+// The search box is the same query bar the unified grid has —
+// `level:warn -target:sqlx "history"` — read by the server, so a query
+// is a string a person can keep, and right-click on a cell adds a
+// token to it the same way there.
 //
 // The tail is a cursor, not a stream: the store assigns each line a
 // monotone `seq`, and each `dag_changed` frame (the runner touched the
@@ -26,23 +31,16 @@ import {
   type MenuItemDef,
   type ValueFormatterParams,
 } from "ag-grid-community";
-// The drag-to-group bar, the right-click menu and the set filter are
-// enterprise modules. GridCard already links the whole enterprise bundle,
-// so this costs nothing new; only the four are registered here.
+// The drag-to-group bar and the right-click menu are enterprise
+// modules. GridCard already links the whole enterprise bundle, so this
+// costs nothing new; only the three are registered here.
 import {
   ContextMenuModule,
   RowGroupingModule,
   RowGroupingPanelModule,
-  SetFilterModule,
 } from "ag-grid-enterprise";
-import { keepExcludeItems } from "@/grid/keepExclude";
-import {
-  fetchRunLog,
-  fetchRuns,
-  fetchStepLog,
-  type RunInfo,
-  type RunLogLine,
-} from "@/api";
+import { keepExcludeItems, withToken } from "@/grid/query";
+import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
 import { subscribeLive } from "@/live";
 import {
   compareStamps,
@@ -56,7 +54,6 @@ ModuleRegistry.registerModules([
   ContextMenuModule,
   RowGroupingModule,
   RowGroupingPanelModule,
-  SetFilterModule,
 ]);
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
@@ -97,6 +94,10 @@ const live = computed(() => {
 });
 
 const stepOnly = ref(true);
+/// The query bar. Sent to the server as typed; a change reloads from
+/// the start, since the lines it drops are exactly the ones wanted back.
+const query = ref("");
+let queryTimer: ReturnType<typeof setTimeout> | null = null;
 const lines = shallowRef<RunLogLine[]>([]);
 const busy = ref(false);
 const error = ref<string | null>(null);
@@ -123,13 +124,12 @@ async function load(fresh: boolean) {
   }
   error.value = null;
   try {
-    const got =
-      allRuns.value && props.step
-        ? await fetchStepLog(props.step, { afterSeq: lastSeq })
-        : await fetchRunLog(runId.value, {
-            step: stepFilter(),
-            afterSeq: lastSeq,
-          });
+    const got = await fetchLog({
+      run: allRuns.value ? undefined : runId.value,
+      step: stepFilter(),
+      q: query.value,
+      afterSeq: lastSeq,
+    });
     if (got.length > 0) {
       lastSeq = got[got.length - 1].seq;
       lines.value = fresh ? got : [...lines.value, ...got];
@@ -160,6 +160,18 @@ function onBodyScrollEnd() {
 function toggleScope() {
   stepOnly.value = !stepOnly.value;
   void load(true);
+}
+
+function setQuery(q: string) {
+  query.value = q;
+  void load(true);
+}
+
+/// Typing waits for a pause; a token from the menu applies at once.
+function onQueryInput(ev: Event) {
+  const q = (ev.target as HTMLInputElement).value;
+  if (queryTimer) clearTimeout(queryTimer);
+  queryTimer = setTimeout(() => setQuery(q), 250);
 }
 
 async function loadRuns() {
@@ -227,7 +239,7 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     field: "run_id",
     width: 100,
     hide: !allRuns.value,
-    filter: "agSetColumnFilter",
+    filter: true,
     valueFormatter: (p: ValueFormatterParams<RunLogLine>) =>
       shortRunId(String(p.value ?? "")),
     tooltipField: "run_id",
@@ -237,42 +249,39 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     field: "step",
     width: 180,
     hide: stepOnly.value && !!props.step,
-    filter: "agSetColumnFilter",
+    filter: true,
   },
   {
     headerName: "Level",
     field: "level",
     width: 80,
-    filter: "agSetColumnFilter",
+    filter: true,
     cellClass: levelClass,
   },
   {
     headerName: "Stream",
     field: "stream",
     width: 84,
-    filter: "agSetColumnFilter",
+    filter: true,
   },
   {
     headerName: "Thread",
     field: "thread",
     width: 150,
-    filter: "agSetColumnFilter",
+    filter: true,
   },
   {
     headerName: "Target",
     field: "target",
     width: 200,
-    filter: "agSetColumnFilter",
+    filter: true,
   },
   {
     headerName: "Message",
     field: "msg",
     flex: 1,
     minWidth: 320,
-    // Free text, unlike the columns above: the text filter, with room
-    // for one condition per "Exclude all".
-    filter: "agTextColumnFilter",
-    filterParams: { maxNumConditions: 12 },
+    filter: true,
     wrapText: false,
     cellClass: levelClass,
     tooltipField: "msg",
@@ -281,7 +290,7 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     headerName: "Fields",
     field: "fields",
     width: 220,
-    filter: "agTextColumnFilter",
+    filter: true,
     tooltipField: "fields",
     // One of a kind per line: grouping by it would be a group per row.
     enableRowGroup: false,
@@ -314,115 +323,51 @@ function onGridReady(e: GridReadyEvent<RunLogLine>) {
 }
 
 // Right-click on a cell: keep only the lines sharing its value, or drop
-// them, as the unified grid does — here through the column's own filter,
-// so the header's filter icon shows what is in force and clears it.
-// The facet columns use the set filter, so a second "Exclude" narrows
-// the same set rather than replacing the first; Message uses the text
-// filter, so it adds a condition.
-type SetModel = { filterType: "set"; values: string[] };
-type TextCondition = {
-  filterType: "text";
-  type: "equals" | "notEqual";
-  filter: string;
+// them — a token on the query bar, as in the unified grid. The key is the
+// column's name in the log's vocabulary (`datalib_runs::query::KEYS`);
+// a column with none, like Time, offers nothing.
+const QUERY_KEYS: Partial<Record<keyof RunLogLine, string>> = {
+  run_id: "run",
+  step: "step",
+  level: "level",
+  stream: "stream",
+  target: "target",
+  thread: "thread",
+  msg: "msg",
 };
-type TextModel =
-  | TextCondition
-  | { filterType: "text"; operator: "AND"; conditions: TextCondition[] };
-
-function distinctValues(colId: string): string[] {
-  const seen = new Set<string>();
-  gridApi?.forEachNode((n) => {
-    const v = n.data?.[colId as keyof RunLogLine];
-    if (v != null) seen.add(String(v));
-  });
-  return [...seen];
-}
-
-async function applyKeepOrExclude(
-  colId: string,
-  value: string,
-  exclude: boolean,
-) {
-  if (!gridApi) return;
-  const isSet =
-    gridApi.getColumn(colId)?.getColDef().filter === "agSetColumnFilter";
-  let next: SetModel | TextModel;
-  if (isSet) {
-    const cur = gridApi.getColumnFilterModel(colId) as SetModel | null;
-    const allowed = cur?.values ?? distinctValues(colId);
-    next = {
-      filterType: "set",
-      values: exclude ? allowed.filter((v) => v !== value) : [value],
-    };
-  } else if (exclude) {
-    const cur = gridApi.getColumnFilterModel(colId) as TextModel | null;
-    const prior: TextCondition[] =
-      cur == null ? [] : "conditions" in cur ? cur.conditions : [cur];
-    next = {
-      filterType: "text",
-      operator: "AND",
-      conditions: [
-        ...prior.filter((c) => c.type === "notEqual"),
-        { filterType: "text", type: "notEqual", filter: value },
-      ],
-    };
-  } else {
-    next = { filterType: "text", type: "equals", filter: value };
-  }
-  await gridApi.setColumnFilterModel(colId, next);
-  gridApi.onFilterChanged();
-}
 
 function contextMenuItems(
   params: GetContextMenuItemsParams<RunLogLine>,
 ): (MenuItemDef<RunLogLine> | DefaultMenuItem)[] {
   const defaults = params.defaultItems ?? [];
-  const colId = params.column?.getColId();
-  const colDef = params.column?.getColDef();
+  const colId = params.column?.getColId() as keyof RunLogLine | undefined;
+  const key = colId && QUERY_KEYS[colId];
   const raw = params.value;
-  if (
-    !gridApi ||
-    !colId ||
-    !colDef?.filter ||
-    !params.node ||
-    raw == null ||
-    raw === ""
-  ) {
+  if (!gridApi || !colId || !key || !params.node || raw == null || raw === "") {
     return defaults;
   }
   const value = String(raw);
-  const shown = colDef.valueFormatter
-    ? String(
-        gridApi.getCellValue({
-          rowNode: params.node,
-          colKey: colId,
-          useFormatter: true,
-        }),
-      )
-    : value;
+  const shown = String(
+    gridApi.getCellValue({
+      rowNode: params.node,
+      colKey: colId,
+      useFormatter: true,
+    }) ?? value,
+  );
   const items = keepExcludeItems<RunLogLine>({
-    header: colDef.headerName ?? colId,
-    value: shown,
-    keep: () => void applyKeepOrExclude(colId, value, false),
-    exclude: () => void applyKeepOrExclude(colId, value, true),
+    header: params.column?.getColDef().headerName ?? key,
+    key,
+    value,
+    shown,
+    apply: (token) => setQuery(withToken(query.value, token)),
   });
-  if (gridApi.isAnyFilterPresent()) {
+  if (query.value.trim()) {
     items.push(
-      {
-        name: "Clear all filters",
-        action: () => gridApi?.setFilterModel(null),
-      },
+      { name: "Clear the query", action: () => setQuery("") },
       "separator",
     );
   }
   return [...items, ...defaults];
-}
-
-function onQuickFilter(ev: Event) {
-  gridApi?.setGridOption(
-    "quickFilterText",
-    (ev.target as HTMLInputElement).value,
-  );
 }
 
 onMounted(() => {
@@ -451,9 +396,10 @@ onUnmounted(() => {
       <input
         class="rl-search"
         type="search"
-        placeholder="Search the log…"
+        placeholder='Search the log — words, or level:warn -target:sqlx "a phrase"'
         aria-label="Search the log"
-        @input="onQuickFilter"
+        :value="query"
+        @input="onQueryInput"
       />
       <button v-if="props.step && !allRuns" class="m2-btn" @click="toggleScope">
         {{ stepOnly ? "Show the whole run" : "Only this step" }}
@@ -478,8 +424,11 @@ onUnmounted(() => {
     <p v-if="error" class="rl-note bad">{{ error }}</p>
     <p v-else-if="busy" class="rl-note">Reading the run store…</p>
     <p v-else-if="lines.length === 0" class="rl-note">
-      Nothing logged yet<span v-if="!allRuns"> for this run</span
-      ><span v-if="stepOnly && props.step"> by this step</span>.
+      <template v-if="query.trim()">Nothing matches the query.</template>
+      <template v-else>
+        Nothing logged yet<span v-if="!allRuns"> for this run</span
+        ><span v-if="stepOnly && props.step"> by this step</span>.
+      </template>
     </p>
     <AgGridVue
       v-show="lines.length > 0"
