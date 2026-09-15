@@ -1,0 +1,31 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+exports_files(["Cargo.toml"])
+
+# A small, Messages-shaped `chat.db`, minted by Python for the reasons
+# //datalib/backend/etl/sqlite_mirror:tng_catalog gives (a Rust tool here
+# cannot produce a plain SQLite file).
+genrule(
+    name = "tng_chat_db",
+    srcs = ["//tests/fixtures:make_apple_messages_db.py"],
+    outs = ["tng_chat_db/chat.db"],
+    cmd = "python3 $(execpath //tests/fixtures:make_apple_messages_db.py) $@",
+    visibility = ["//datalib:__subpackages__"],
+)
+
+rust_library(
+    name = "datalib_etl_apple_messages",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_apple_messages",
+    edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/apple_messages_config:datalib_etl_apple_messages_config",
+        "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
+        "@datalib_crates//:anyhow",
+    ],
+)

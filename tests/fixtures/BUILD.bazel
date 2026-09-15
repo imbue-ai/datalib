@@ -13,6 +13,7 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 # tooling.
 exports_files([
     "BUILD.bazel",
+    "make_apple_messages_db.py",
     "make_apple_photos_library.py",
     "make_lightroom_catalog.py",
 ])

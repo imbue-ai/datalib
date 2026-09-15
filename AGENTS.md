@@ -195,6 +195,10 @@ reference doc it relates to.
   measured against, the R-tree and its shadow tables, and the macOS
   permission the library sits behind. It also records why Apple Music
   is *not* the same case (`Library.musicdb` is not SQLite).
+  [`apple_messages/INGEST.md`](datalib/backend/etl/providers/apple_messages/INGEST.md)
+  is the fourth and the smallest — read it for the one thing it adds,
+  the body that is not in `message.text` but in a `typedstream` blob,
+  and for why it copies no attachment bytes.
   [`whatsapp/INGEST.md`](datalib/backend/etl/providers/whatsapp/INGEST.md)
   is the third, and the first that renders: why the mirror keys on
   rowids (measured stable between backups of one phone), the
@@ -475,19 +479,19 @@ datalib/
                    etl/src/fswalk.rs (blake3 + Unison's rescan cursor):
                    fsindex (path-keyed, no render), pdf and media (both
                    content-keyed; media has no render side either).
-                   Three mirror a SQLite file through etl/sqlite_mirror/
-                   (lightroom, apple_photos, whatsapp — the last after
-                   decrypting it). Two are sensor time series (yolink
+                   Four mirror a SQLite file through etl/sqlite_mirror/
+                   (lightroom, apple_photos, apple_messages, whatsapp —
+                   the last after decrypting it). Two are sensor time series (yolink
                    over a signed-URL CSV API, airvisual off a device's
                    Samba share) and render through etl/timeseries_render/.
                    fsindex, media, lightroom and apple_photos have no
                    <p>_render.
     etl/sqlite_mirror/ `datalib_etl_sqlite_mirror`: the table-for-table
                    SQLite→doltlite mirror engine behind lightroom,
-                   apple_photos and whatsapp. Its own crate, not part of
-                   datalib_etl, so an engine change rebuilds three
-                   providers rather than everything downstream of the
-                   shared crate.
+                   apple_photos, apple_messages and whatsapp. Its own
+                   crate, not part of datalib_etl, so an engine change
+                   rebuilds four providers rather than everything
+                   downstream of the shared crate.
     table/         `datalib_table`: the `BulkUpsertable` row-write
                    contract, alone, with `sqlx` as its only dependency.
     probe/         `datalib_probe`: the "Test connection" report shape,

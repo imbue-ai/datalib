@@ -29,6 +29,9 @@
 pub enum Provider {
     /// IQAir's AirVisual monitors.
     Airvisual,
+    /// Apple's Messages app. The vendor stays for the reason it does on
+    /// `apple_photos`: "messages" alone names nothing.
+    AppleMessages,
     Beeper,
     Chatgpt,
     /// Both `claude_api` and `claude_export`: one raw store, one tag.

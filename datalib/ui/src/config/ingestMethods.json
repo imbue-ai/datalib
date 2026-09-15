@@ -5,6 +5,12 @@
       "reach": "local"
     }
   ],
+  "apple_messages": [
+    {
+      "path": "database",
+      "reach": "local"
+    }
+  ],
   "apple_photos": [
     {
       "path": "library",

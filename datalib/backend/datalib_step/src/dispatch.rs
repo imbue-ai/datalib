@@ -332,6 +332,12 @@ pub fn plan(
             datalib_etl_lightroom_config::LightroomRenderConfig,
             datalib_etl_lightroom
         ),
+        SourceType::AppleMessages => arm!(
+            datalib_etl_apple_messages_config::AppleMessagesConfig,
+            datalib_etl_apple_messages_config::AppleMessagesRenderConfig,
+            datalib_etl_apple_messages,
+            datalib_etl_apple_messages_render
+        ),
         SourceType::ApplePhotos => ingest_only!(
             datalib_etl_apple_photos_config::ApplePhotosConfig,
             datalib_etl_apple_photos_config::ApplePhotosRenderConfig,
