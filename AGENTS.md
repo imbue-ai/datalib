@@ -273,10 +273,14 @@ reference doc it relates to.
   and decoration module, so a rendering change is reviewed by opening a
   file rather than by building a data root.
 - [`docs/dev/plans/data_centric_ui.md`](docs/dev/plans/data_centric_ui.md) —
-  *proposal*, nothing built: one typed table viewer plus the markdown
-  one, with column types declared by whoever serves the rows, and the
-  Manage screen ported onto it as an ordinary card. The crate split it
-  depended on has landed.
+  *proposal*, nothing built (revised 2026-09-15): one typed table
+  viewer plus the markdown one, with column types declared by whoever
+  serves the rows, and the Manage screen's sources tree ported onto it
+  as an ordinary card. Its first piece — the row join `Manager2View`
+  did in the browser across six endpoints, moved into
+  `GET /api/manage/rows` (`http/src/manage/`) — is **built
+  (2026-09-15)**; the typed viewer and the card are not. The crate
+  split and the run store it depended on have both landed.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md)
   — **read before adding a source to the Add/Edit wizard**: a field
   that asks for a file or folder must offer a native OS picker, not a

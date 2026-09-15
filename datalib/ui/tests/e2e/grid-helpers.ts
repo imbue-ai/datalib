@@ -295,7 +295,7 @@ export async function statusOf(page: Page, id: string): Promise<string | null> {
 /// clocks rather than two records. Null for a row that has never run,
 /// which renders "—" with no title to read.
 export async function stampOf(page: Page, id: string): Promise<string | null> {
-  const el = pipelineRow(page, id).locator('[col-id="lastSynced"] [title]');
+  const el = pipelineRow(page, id).locator('[col-id="last_synced"] [title]');
   if ((await el.count()) === 0) return null;
   return await el.first().getAttribute("title");
 }

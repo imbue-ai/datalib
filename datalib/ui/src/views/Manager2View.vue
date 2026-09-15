@@ -36,29 +36,23 @@ import {
   fetchConfigScaffold,
   saveConfig,
   fetchAllJobs,
-  fetchDag,
+  fetchManageRows,
   fetchRuns,
   type RunInfo,
-  fetchPipelineStorage,
   fetchTreeHistory,
-  fetchFrontend,
   enqueueJob,
   cancelJob,
-  type DagRun,
-  type DagStep,
   type DagStepProgress,
   progressFraction,
-  type Diagnostic,
+  type ManageResponse,
+  type ManageRow,
   type SyncJob,
   type SyncJobState,
   type JobProgressEvent,
-  type OutputStorage,
-  type PipelineStorage,
 } from "@/api";
 import {
   listGroups,
   listSteps,
-  type EntryKind,
   appendSource,
   removeSteps,
   describeGroup,
@@ -77,13 +71,6 @@ import {
 } from "@/config/sourceSteps";
 import { calibrationMax, sparkline, type UsageSample } from "@/config/sparkline";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
-import {
-  groupLastSynced,
-  groupRowKey,
-  groupSeeds,
-  groupStatus,
-  pipelineOrder,
-} from "@/config/groupRows";
 import { ingestLabel } from "@/config/ingestMethods";
 import { iconUrl } from "@/config/icons";
 import { browseColumns, browseQuery } from "@/config/browsePresets";
@@ -94,17 +81,6 @@ import { activityChips, activityText } from "@/config/activity";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
-import {
-  claimedBy as claimedByJob,
-  sourcesFeeding as sourcesFeedingIn,
-  stepStatus as statusOf,
-  waitingOn,
-  stepForRun,
-  effectiveRun,
-  statusFloor,
-  STATUS_LABEL,
-  type StatusView,
-} from "@/config/pipelineStatus";
 import { subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
@@ -117,23 +93,6 @@ const configPath = ref("");
 // Two independent verdicts on the config, and both matter.
 const parseError = ref<string | null>(null);
 const configError = ref<string | null>(null);
-/// What the loader dropped from this config and why, from
-/// `GET /api/config`. Keyed onto rows by entry id below: an entry that
-/// was dropped is still *in the file*, so it still has a row here — it
-/// just isn't in the pipeline, and this is what says so.
-const configDiagnostics = ref<Diagnostic[]>([]);
-
-/// The reason this entry is not in the pipeline, or null if it is.
-/// Keyed on the kind as well as the id: a group and an applet may share
-/// an id (`unified_index` does), and a problem with one is not a
-/// problem with the other.
-function droppedReason(id: string, kind: "group" | EntryKind): Diagnostic | null {
-  return (
-    configDiagnostics.value.find(
-      (d) => d.entry?.id === id && d.entry.kind === kind && d.severity !== "warning",
-    ) ?? null
-  );
-}
 // What the backend's own loader made of the same file. Held so the
 // empty state can cross-check itself against it — see
 // `emptyTableDiagnosis`.
@@ -167,27 +126,20 @@ function retireBanner(jobId: string, state: SyncJobState) {
 }
 const busy = ref(false);
 const jobs = ref<SyncJob[]>([]);
-/// Bytes on disk, per declared tree and for the root as a whole, each
-/// with the last few minutes behind it. Measured by the backend on a
-/// tick *while a sync is running*, rather than walked per request —
-/// see `datalib/backend/http/src/usage.rs`. Between runs nothing walks,
-/// which is why the two loads that matter ask for a fresh one.
-const storage = ref<PipelineStorage | null>(null);
-const outputs = computed(() => storage.value?.outputs ?? []);
+/// The rows, joined server-side from the config, the runner's record,
+/// the run store, the queue and the usage sampler — see
+/// `datalib/backend/http/src/manage/`. Bytes are measured by the backend
+/// on a tick *while a sync is running*, not walked per request; between
+/// runs nothing walks, which is why the two loads that matter ask for a
+/// fresh one.
+const manage = ref<ManageResponse | null>(null);
+const storage = computed(() => manage.value?.storage ?? null);
 /// How far back the histories reach, in ms. Read from the response
 /// rather than hardcoded here, so the plot can't disagree with the data
 /// about what "recent" means.
 const historyWindowMs = computed(() => (storage.value?.window_secs ?? 300) * 1000);
-/// The runner's own per-step record, from `GET /api/dag`. What makes
-/// "last synced" and "last status" exact per step — and what makes a
-/// run started from a terminal visible here at all, since the runner
-/// writes it whoever spawned it.
-const dagSteps = ref<Record<string, DagStep>>({});
-const dagRun = ref<DagRun | null>(null);
-/// applet id → why it failed to start, from `GET /api/frontend`. An
-/// applet that won't come up is otherwise only visible as a 502 from
-/// whatever tab needed it.
-const appletErrors = ref<Record<string, string>>({});
+/// The config's entries as the browser parses them, for the wizard —
+/// which edits the text — and the catalog lookups in `decorate`.
 const sources = ref<ConfiguredStep[]>([]);
 /// The `[[groups]]` entries, for what a new source may not collide with
 /// and for taking a group with its last step.
@@ -257,102 +209,28 @@ function renderSiblingOf(fetchId: string): ConfiguredStep | undefined {
 }
 
 /// What a row stands for: a `[[groups]]` entry, or one of the two
-/// kinds of entry filed under it.
-type RowKind = "group" | EntryKind;
-
-type Row = {
-  /// Identity: the tree this entry writes — for a group, the directory
-  /// its steps write into — and what every action here is keyed on.
-  id: string;
-  /// The grid's row id. The entry id for a step or an applet; for a
-  /// group, `group:<id>`, because the `unified_index` applet shares its
-  /// group's id and both are rows.
-  key: string;
-  /// Where the row sits in the tree: `[key]` at the top level, or
-  /// `[<group key>, key]` under its group.
-  path: string[];
-  kind: RowKind;
-  /// The group this entry is filed under, when it is and the config
-  /// declares it. An entry naming a group the config lacks is shown at
-  /// the top level, where its dropped status says what is wrong.
-  group: string | null;
-  inputs: string[];
-  phase: StepPhase;
-  /// The step's function — `ingest`, `qmd_index` — or null off a step.
-  func: string | null;
+/// kinds of entry filed under it. The server assembles the row
+/// (`GET /api/manage/rows`); what is added here is what needs the
+/// wizard's catalog, which lives in the browser.
+type Row = ManageRow & {
   /// The word behind the step-role glyph that follows the name —
-  /// its `title`, and its accessible name. The only place the word
-  /// survives now that the mark has no column of its own.
+  /// its `title`, and its accessible name.
   kindLabel: string;
-  type: string | null;
-  /// What to show in the Name column. Equal to `id` until someone sets
-  /// a `name =` on one of this entry's steps.
-  name: string;
   /// The catalog's name for the provider ("Slack"), shown under Type —
   /// a property of the entry's type, not of this entry.
   typeLabel: string;
   icon: string | null;
   entry: CatalogEntry | undefined;
-  /// The loader's reason this entry is not in the pipeline, or null if
-  /// it is. An entry that was dropped still has a row — it is still in
-  /// the file, and the file is what the user edits.
-  dropped: Diagnostic | null;
-  /// Null when the action applies to this row; otherwise the reason it
-  /// doesn't, which becomes the disabled button's tooltip.
-  runBlocked: string | null;
+  /// Null when the wizard can edit this row; otherwise why not.
   editBlocked: string | null;
-  revealBlocked: string | null;
-  /// Why this row has nothing to browse, or null when it does. A source
-  /// reaches the grid only through a `render_markdown` step — the three
-  /// download-only providers (fsindex, media, lightroom, apple_photos)
-  /// declare none,
-  /// and even their storage rows come from render, so they have no rows
-  /// at all rather than a few.
+  /// The group whose form Edit opens: the row's own group, or for a
+  /// step under one, that group. Null where there is no form.
+  editGroup: string | null;
+  /// Why this row has nothing to browse, or null when it does.
   browseBlocked: string | null;
   /// The card source a Browse of this row opens. Empty for the index
   /// group, whose browse is the unified projection over every source.
   browseSource: string;
-  /// What a sync of this row starts at: the step itself, or for a group
-  /// its steps with no inputs. Empty exactly when `runBlocked` says why.
-  seeds: string[];
-  /// The group whose form Edit opens: the row's own group, or for a
-  /// step under one, that group. A source is edited as one thing, from
-  /// its row or from any step under it. Null where there is no form.
-  editGroup: string | null;
-  lastSynced: string | null;
-  status: StatusView;
-  /// For a group row, the child whose status it shows — the row a
-  /// double-click on Status opens the log of.
-  statusFrom: string | null;
-  /// For a group row with a run in flight: its steps in pipeline order,
-  /// one segment each, drawn as the bar under the status. Null when the
-  /// group is idle or is not a group.
-  segments: { id: string; key: string; label: string }[] | null;
-  /// The active job that has claimed this step, when one has. Non-null
-  /// is exactly the condition that turns Run into Stop: work is already
-  /// queued or in flight for this row, so the useful button is the one
-  /// that calls it off.
-  stopJobId: string | null;
-  /// The step to call the job off through — this step, or for a group
-  /// the child that holds the claim.
-  stopTarget: string | null;
-  /// What the step has reported in the run in flight, from the run
-  /// store. Null when it isn't running or hasn't reported anything.
-  progress: DagStepProgress | null;
-  /// The run the step's `last_run` happened in — where its log is.
-  /// Empty when it has never run, or ran before runs had ids.
-  lastRunId: string;
-  /// Null when nothing is on disk yet — rendered as "—", not "0 B",
-  /// which would read as "ran, and produced nothing".
-  bytes: number | null;
-  /// Recent measurements of this row's tree, oldest first — what the
-  /// size cell's sparkline draws. Compacted (see `api.ts`), so it is a
-  /// step function, not an evenly-spaced series.
-  history: UsageSample[];
-  /// Storage rows for this entry's declared outputs.
-  outputs: OutputStorage[];
-  /// Absolute path to reveal: the first output that exists.
-  revealPath: string | null;
 };
 
 /// The word behind a row's step-role glyph. A step is labelled by its
@@ -366,228 +244,78 @@ const PHASE_LABEL: Record<StepPhase, string> = {
   other: "Step",
 };
 
-/// What a step under a group is called in the Name column. Derived from
-/// the phase, never written: the group owns the name, and a step's
-/// label says what it does with that group's data. The composed id
-/// shows muted beside it.
-const CHILD_LABEL: Record<StepPhase, string> = {
-  ingest: "Ingest",
-  render: "Render markdown",
-  index: "Index",
-  other: "Step",
-};
+/// The tree the grid shows, as the server assembled it, with the
+/// catalog's knowledge added per row.
+const rows = computed<Row[]>(() => (manage.value?.rows ?? []).map(decorate));
 
-/// The index steps, by function.
-const INDEX_LABEL: Record<string, string> = {
-  grid_index: "Grid index",
-  qmd_index: "QMD index",
-};
-
-function childLabel(s: ConfiguredStep): string {
-  if (s.kind === "applet") return s.name;
-  if (s.phase === "index") return INDEX_LABEL[s.function ?? ""] ?? CHILD_LABEL.index;
-  if (s.phase === "other") return s.function ?? s.name;
-  // "Download" or "Import", read off the step's params against what its
-  // provider declares; "Ingest" only when they name no method.
-  if (s.phase === "ingest") return ingestLabel(s.type, s.params) ?? CHILD_LABEL.ingest;
-  return CHILD_LABEL[s.phase];
+/// The parsed config entry behind a row, for the catalog lookups. Absent
+/// until the config text has loaded, or for an entry the parser could
+/// not list.
+function configuredEntry(row: ManageRow): ConfiguredStep | undefined {
+  return sources.value.find((s) => s.id === row.id && s.kind === row.kind);
 }
 
-/// The sentence the Status cell carries for an entry the loader dropped.
-function notInPipeline(d: Diagnostic): string {
-  return `Not in the pipeline: ${d.message}${d.help ? ` — ${d.help}` : ""}`;
-}
-
-/// The DAG edges and the claimed-step map, recomputed whenever the
-/// config or the queue moves. The logic itself is in
-/// `config/pipelineStatus.ts`, where it is testable without a grid.
-const claimedBy = computed(() => claimedByJob(sources.value, jobs.value));
-
-/// The job in flight. Only one job runs at a time (the worker claims
-/// them one by one), so this is unambiguous — and its id is the run id.
-const liveJob = computed(() => jobs.value.find((j) => j.state === "running"));
-
-/// The runner's record for one step, as it applies to the run in
-/// flight: the last `/api/dag`, with its `current_state` dropped when
-/// that fetch still describes a *previous* run (`run.synthesized` — see
-/// `stepForRun`).
-function stepNow(id: string): DagStep | undefined {
-  const run = effectiveRun(dagRun.value, liveJob.value);
-  return stepForRun(dagSteps.value[id], !!run?.synthesized);
-}
-
-/// Has this step reached a terminal state in the run now in flight?
-function finishedThisRun(id: string): boolean {
-  const state = stepNow(id)?.current_state;
-  return !!state && state !== "running";
-}
-
-/// The floor that keeps a row's status from going backwards within one
-/// run. See `statusFloor` for why this cannot live inside `stepStatus`.
-const holdRank = statusFloor();
-
-function stepStatus(id: string, dropped: Diagnostic | null): StatusView {
-  const claim = claimedBy.value.get(id);
-  const run = effectiveRun(dagRun.value, liveJob.value);
-  const view = statusOf({
-    id,
-    step: stepNow(id),
-    run,
-    claim,
-    waitingOn: waitingOn(sources.value, id, finishedThisRun),
-    dropped,
-  });
-  // Keyed on the claiming job, which exists from the enqueue frame —
-  // before the runner has minted a run id of its own. When the job
-  // finishes the key changes, the floor lifts, and the next sync is
-  // free to start at Queued again.
-  return holdRank(id, claim?.id ?? run?.run_id ?? "", view);
-}
-
-/// The tree the grid shows: one row per `[[groups]]` entry with its
-/// steps and applets under it, and a top-level row for every entry
-/// filed under no group. The rules a group row aggregates by are in
-/// `config/groupRows.ts`, where they are tested without a grid.
-const rows = computed<Row[]>(() => {
-  const declared = new Set(configGroups.value.map((g) => g.id));
-  const entries = sources.value.map((s) => entryRow(s, declared));
-  const groups = configGroups.value.map((g) =>
-    groupRow(
-      g,
-      entries.filter((r) => r.group === g.id),
-    ),
-  );
-  return [...groups, ...entries];
-});
-
-function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
-  // Not `catalogFor(s.type)`: one step type can have several
-  // descriptors (Gmail and Fastmail are both `email`), and which one
-  // a step is comes from its params — or, for a render step, from
-  // the params of the step it reads.
-  const entry = entryForStep(s, sources.value);
-  const dropped = droppedReason(s.id, s.kind);
-  const run = s.kind === "applet" ? null : stepStatus(s.id, dropped);
-  // A step writes exactly one tree, and it is the step's id.
-  const trees =
-    s.kind === "applet"
-      ? []
-      : [outputs.value.find((x) => x.path === s.id)].filter(
-          (x): x is OutputStorage => !!x,
-        );
-  const onDisk = trees.filter((o) => o.present);
-  const group = s.group !== null && declaredGroups.has(s.group) ? s.group : null;
-
-    // A sync starts at a *source* step — one with no declared inputs — and
-    // everything downstream follows change propagation. `datalib-dag` rejects
-    // a `--sync` naming anything else, so offering the button on a render row
-    // would only queue a job that fails on startup.
-  const seeds = s.kind === "step" ? sourcesFeedingIn(sources.value, s.id) : [];
-    // A dropped entry outranks every other reason a step action is
-    // unavailable, because it is the reason: the step is not in the graph.
-    // Not for an applet's Run, though — an applet is never scheduled
-    // whatever the config says.
-  const droppedWhy = dropped ? notInPipeline(dropped) : null;
-  const runBlocked =
-    s.kind === "applet"
-      ? "Applets aren't scheduled — the server starts one when something asks for it."
-      : (droppedWhy ??
-        (s.inputs.length === 0
-          ? null
-          : seeds.length === 1
-            ? `A sync starts at a source step. Run ${seeds[0]} — this runs with it.`
-            : `A sync starts at a source step. This one runs whenever any of its ` +
-              `sources does: ${seeds.join(", ") || "none it can reach"}.`));
-
-  // Edit: the wizard's one form describes a source — a group and its
-  // two steps — so a step under a group edits through its group.
-  // Everything else is hand-written config, and the honest answer is
-  // to say so. `editBlocked` deliberately gets no dropped-entry
-  // override: editing is how the entry gets fixed.
-  let editBlocked: string | null = null;
-  if (s.kind === "applet") {
+function decorate(r: ManageRow): Row {
+  if (r.kind === "group") {
+    const g = configGroups.value.find((x) => x.id === r.id);
+    const entry = g ? groupEntry(g, sourceStepsOf(g.id, sources.value)) : undefined;
+    const editBlocked = groupEditBlocked(r.id);
+    const droppedWhy = r.dropped ? `Not in the pipeline: ${r.dropped.message}${r.dropped.help ? ` — ${r.dropped.help}` : ""}` : null;
+    return {
+      ...r,
+      kindLabel: "Group",
+      typeLabel: entry?.label ?? r.type ?? "—",
+      icon: entry?.icon ?? null,
+      entry,
+      editBlocked,
+      editGroup: editBlocked ? null : r.id,
+      ...groupBrowse(r, droppedWhy),
+    };
+  }
+  // Not `catalogFor(r.type)`: one step type can have several descriptors
+  // (Gmail and Fastmail are both `email`), and which one a step is comes
+  // from its params — or, for a render step, from the params of the step
+  // it reads.
+  const s = configuredEntry(r);
+  const entry = s ? entryForStep(s, sources.value) : undefined;
+  // Edit: the wizard's one form describes a source — a group and its two
+  // steps — so a step under a group edits through its group. Everything
+  // else is hand-written config, and the honest answer is to say so.
+  // Deliberately no dropped-entry override: editing is how the entry
+  // gets fixed.
+  let editBlocked: string | null;
+  if (r.kind === "applet") {
     editBlocked = "No form for applets — edit this one in Advanced below.";
-  } else if (s.phase === "index") {
+  } else if (r.phase === "index") {
     editBlocked = "A shared index step has no options — its inputs are its whole config.";
-  } else if (s.group !== null) {
+  } else if (r.written_group !== null) {
     // The written group, not the declared one: a step naming a group
     // the config lacks should hear that, not "outside any group".
-    editBlocked = groupEditBlocked(s.group);
+    editBlocked = groupEditBlocked(r.written_group);
   } else {
     editBlocked = "No guided form for a step outside a group — edit it in Advanced below.";
   }
-
-  const revealBlocked =
-    s.kind === "applet"
-      ? "An applet owns no files — it serves endpoints."
-      : onDisk.length === 0
-        ? "Nothing on disk yet — this hasn't produced anything."
-        : null;
-
-  // An applet's health is its own thing: it isn't scheduled, so the
-  // runner's record says nothing about it. `GET /api/frontend` does.
-  // It is up or it is not — there is no history to show, which is why
-  // the timestamp stays null on these rows rather than borrowing one.
-  const appletErr = appletErrors.value[s.id];
-  const status: StatusView =
-    s.kind === "applet"
-      ? dropped
-        ? {
-            key: "config_rejected",
-            label: "Not loaded",
-            at: null,
-            detail: droppedWhy,
-          }
-        : appletErr
-        ? { key: "failed", label: "Failed to start", at: null, detail: appletErr }
-        : { key: "succeeded", label: "Up", at: null, detail: "The gateway has this applet up." }
-      : run!;
-
-  const stopJobId = claimedBy.value.get(s.id)?.id ?? null;
+  // "Download" or "Import", read off the step's params against what its
+  // provider declares; the server's "Ingest" only when they name no method.
+  const name =
+    r.group && r.phase === "ingest" ? (ingestLabel(r.type, r.params) ?? r.name) : r.name;
   return {
-    id: s.id,
-    key: s.id,
-    path: group ? [groupRowKey(group), s.id] : [s.id],
-    kind: s.kind,
-    group,
-    inputs: s.inputs,
-    dropped,
-    phase: s.phase,
-    func: s.function,
-    kindLabel: s.kind === "applet" ? "Applet" : PHASE_LABEL[s.phase],
-    type: s.type,
-    // Under a group the name is the group's; the step's label says
-    // what it does there. At the top level the step is its own thing
-    // and keeps the name the config gave it.
-    name: group ? childLabel(s) : s.name,
-    typeLabel: entry?.label ?? s.type ?? "—",
+    ...r,
+    name,
+    kindLabel: r.kind === "applet" ? "Applet" : PHASE_LABEL[r.phase],
+    typeLabel: entry?.label ?? r.type ?? "—",
     icon: entry?.icon ?? null,
     entry,
-    runBlocked,
     editBlocked,
-    revealBlocked,
+    editGroup: editBlocked ? null : r.group,
     // A source is browsed as one thing, from its group's row — the same
     // rule Edit follows. A step's own rows are not a separate view of
     // the data; they are the same rows.
     browseBlocked:
-      s.kind === "applet"
+      r.kind === "applet"
         ? "An applet serves endpoints; it has no rows of its own."
         : "Browse a source from its group's row.",
     browseSource: "",
-    seeds: s.kind === "step" && s.inputs.length === 0 ? [s.id] : [],
-    editGroup: editBlocked ? null : group,
-    lastSynced: status.at,
-    status,
-    statusFrom: null,
-    segments: null,
-    stopJobId,
-    stopTarget: stopJobId ? s.id : null,
-    progress: s.kind === "applet" ? null : (stepNow(s.id)?.progress ?? null),
-    lastRunId: s.kind === "applet" ? "" : (dagSteps.value[s.id]?.last_run?.run_id ?? ""),
-    bytes: onDisk.length ? trees.reduce((n, o) => n + o.bytes, 0) : null,
-    history: trees[0]?.history ?? [],
-    outputs: trees,
-    revealPath: onDisk[0]?.abs ?? null,
   };
 }
 
@@ -599,15 +327,17 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
 /// unified projection across every source, which is the card the app
 /// already opens on.
 function groupBrowse(
-  g: ConfiguredGroup,
-  steps: Row[],
+  g: ManageRow,
   dropped: string | null,
 ): { browseBlocked: string | null; browseSource: string } {
   if (!g.type) {
     return { browseBlocked: dropped, browseSource: "gridView()" };
   }
   if (dropped) return { browseBlocked: dropped, browseSource: "" };
-  if (!steps.some((r) => r.kind === "step" && r.phase === "render")) {
+  const hasRender = (manage.value?.rows ?? []).some(
+    (r) => r.kind === "step" && r.group === g.id && r.phase === "render",
+  );
+  if (!hasRender) {
     return {
       browseBlocked:
         "This source has no render step, so none of what it downloads " +
@@ -651,92 +381,6 @@ function groupEditBlocked(groupId: string): string | null {
 function groupEntry(g: ConfiguredGroup, steps: SourceSteps): CatalogEntry | undefined {
   const step = steps.ingest ?? steps.render;
   return step ? entryForStep(step, sources.value) : catalogForStep(g.type, {});
-}
-
-/// The row for one `[[groups]]` entry, read off its children's rows.
-function groupRow(g: ConfiguredGroup, children: Row[]): Row {
-  const ordered = pipelineOrder(children.map((r) => ({ ...r, kind: r.kind as EntryKind })));
-  const steps = ordered.filter((r) => r.kind === "step");
-  const dropped = droppedReason(g.id, "group");
-  const droppedWhy = dropped ? notInPipeline(dropped) : null;
-
-  const agg = groupStatus(ordered.map((r) => ({ id: r.id, kind: r.kind, status: r.status })));
-  const status: StatusView = dropped
-    ? statusOf({ id: g.id, step: undefined, run: null, claim: undefined, dropped })
-    : (agg?.status ?? {
-        key: "never_run",
-        label: STATUS_LABEL.never_run,
-        at: null,
-        detail: "Nothing is filed under this group yet.",
-      });
-
-  const entry = groupEntry(g, sourceStepsOf(g.id, sources.value));
-  const editBlocked = groupEditBlocked(g.id);
-
-  // The folder the group's steps write into, measured as a tree of its
-  // own by the usage walker — not the sum of two series sampled at
-  // different instants. It also counts anything else in the folder,
-  // which is the right answer for "what does this source weigh".
-  const tree = outputs.value.find((x) => x.path === g.id);
-  const onDisk = !!tree?.present;
-
-  const seeds = groupSeeds(steps, (r) => !!r.dropped);
-  const runBlocked =
-    droppedWhy ??
-    (seeds.length
-      ? null
-      : steps.length
-        ? `A sync starts at a source step, and none of this group's steps is one — ` +
-          `they run whenever the sources feeding them do.`
-        : "Nothing under this group runs.");
-
-  const claimed = ordered.find((r) => r.stopJobId);
-  const inFlight = status.key === "running" || status.key === "queued";
-
-  return {
-    id: g.id,
-    key: groupRowKey(g.id),
-    path: [groupRowKey(g.id)],
-    kind: "group",
-    group: null,
-    inputs: [],
-    dropped,
-    phase: "other",
-    func: null,
-    kindLabel: "Group",
-    type: g.type,
-    name: g.name ?? g.id,
-    typeLabel: entry?.label ?? g.type ?? "—",
-    icon: entry?.icon ?? null,
-    entry,
-    runBlocked,
-    editBlocked,
-    revealBlocked: onDisk ? null : "Nothing on disk yet — this group hasn't produced anything.",
-    ...groupBrowse(g, ordered, droppedWhy),
-    seeds,
-    editGroup: editBlocked ? null : g.id,
-    lastSynced: dropped
-      ? null
-      : groupLastSynced(ordered.map((r) => ({ kind: r.kind, phase: r.phase, at: r.status.at }))),
-    status,
-    statusFrom: agg?.from ?? null,
-    segments:
-      inFlight && steps.length
-        ? steps.map((r) => ({ id: r.id, key: r.status.key, label: r.status.label }))
-        : null,
-    stopJobId: claimed?.stopJobId ?? null,
-    stopTarget: claimed?.id ?? null,
-    progress: ordered.find((r) => r.status.key === "running")?.progress ?? null,
-    // A group's log is a child's; `statusFrom` names which. See the
-    // double-click handler.
-    lastRunId: "",
-    bytes: onDisk ? tree!.bytes : null,
-    history: tree?.history ?? [],
-    // The children's trees, for the tooltip's breakdown; the total is
-    // the folder's own measurement.
-    outputs: children.flatMap((r) => r.outputs),
-    revealPath: onDisk ? tree!.abs : null,
-  };
 }
 
 /// Base-10 units, matching what a file manager shows — the question
@@ -881,8 +525,7 @@ class ActionsRenderer implements ICellRendererComp<Row> {
     // sync of work already queued is never what was meant. A group is
     // claimed when any step under it is.
     this.run = iconButton("run", "Sync now", null, false, () => {
-      const { stopJobId, stopTarget } = this.row;
-      if (stopJobId && stopTarget) void stopSource(stopTarget);
+      if (this.row.stop_job_id) void stopJob(this.row.stop_job_id);
       else void runRow(this.row);
     });
     this.wrap.appendChild(this.run);
@@ -901,17 +544,11 @@ class ActionsRenderer implements ICellRendererComp<Row> {
 
   private apply(): void {
     const row = this.row;
-    if (row.stopJobId && row.stopTarget) {
-      const claim = claimedBy.value.get(row.stopTarget);
-      setButton(
-        this.run,
-        "stop",
-        claim?.source_ids ? `Stop the sync of ${claim.source_ids}` : "Stop the sync in progress",
-        null,
-      );
+    if (row.stop_job_id) {
+      setButton(this.run, "stop", row.stop_label ?? "Stop the sync in progress", null);
       this.run.classList.add("danger");
     } else {
-      setButton(this.run, "run", "Sync now", row.runBlocked);
+      setButton(this.run, "run", "Sync now", row.run_blocked);
       this.run.classList.remove("danger");
     }
   }
@@ -1127,7 +764,7 @@ const columnDefs: ColDef<Row>[] = [
   },
   {
     headerName: "Last synced",
-    field: "lastSynced",
+    field: "last_synced",
     width: 150,
     minWidth: 150,
       // Sort on the instant. AG Grid sorts the row's value rather than what a
@@ -1135,7 +772,7 @@ const columnDefs: ColDef<Row>[] = [
       // offset, which does not compare correctly as text. See `compareStamps`.
     comparator: compareStamps,
     cellRenderer: (p: ICellRendererParams<Row>) => {
-      const iso = p.data?.lastSynced ?? null;
+      const iso = p.data?.last_synced ?? null;
       const span = document.createElement("span");
       span.textContent = formatRelative(iso, Date.now());
       // The exact stamp, for when "7 days ago" isn't the answer you
@@ -1285,12 +922,11 @@ function onLogRunChanged(run: RunInfo) {
 /// for a record from before runs had ids — the newest run the store says
 /// it took part in.
 async function runFor(row: Row): Promise<{ runId: string; live: boolean; startedAt: string | null } | null> {
-  const run = effectiveRun(dagRun.value, liveJob.value);
-  if (run && !run.finished_at && stepNow(row.id)?.current_state) {
-    return { runId: run.run_id, live: true, startedAt: run.started_at };
+  if (row.live_run_id) {
+    return { runId: row.live_run_id, live: true, startedAt: manage.value?.run?.started_at ?? null };
   }
-  if (row.lastRunId) {
-    return { runId: row.lastRunId, live: false, startedAt: row.lastSynced };
+  if (row.last_run_id) {
+    return { runId: row.last_run_id, live: false, startedAt: row.last_synced };
   }
   const [newest] = await fetchRuns({ step: row.id, limit: 1 });
   return newest ? { runId: newest.run_id, live: !newest.finished_at_utc, startedAt: newest.started_at_utc } : null;
@@ -1302,7 +938,7 @@ async function openStepLog(row: Row, runId: string | null = null) {
   logError.value = null;
   try {
     const run = runId
-      ? { runId, live: liveJob.value?.id === runId, startedAt: null }
+      ? { runId, live: !!manage.value?.run?.live && manage.value.run.run_id === runId, startedAt: null }
       : await runFor(row);
     if (!run) {
       logError.value = "This step has not taken part in any run the store remembers.";
@@ -1398,7 +1034,7 @@ function onCellDoubleClicked(e: { column?: { getColId: () => string }; data?: Ro
   // A group's status is one child's, and that child's log is the answer.
   const row =
     e.data.kind === "group"
-      ? rows.value.find((r) => r.kind !== "group" && r.id === e.data!.statusFrom)
+      ? rows.value.find((r) => r.kind !== "group" && r.id === e.data!.status_from)
       : e.data;
   if (row) void openStepLog(row);
 }
@@ -1526,14 +1162,14 @@ function menuTarget(row: Row): MenuTarget {
     name: row.name,
     kind: row.kind,
     type: row.type,
-    func: row.func,
-    runBlocked: row.runBlocked,
+    func: row.function,
+    runBlocked: row.run_blocked,
     editBlocked: row.editBlocked,
-    revealBlocked: row.revealBlocked,
+    revealBlocked: row.reveal_blocked,
     browseBlocked: row.browseBlocked,
-    stopJobId: row.stopJobId,
-    statusFrom: row.statusFrom,
-    revealPath: row.revealPath,
+    stopJobId: row.stop_job_id,
+    statusFrom: row.status_from,
+    revealPath: row.reveal_path,
   };
 }
 
@@ -1571,9 +1207,9 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: IRowNod
       // One stop per job: several rows can be claimed by the same one.
       const jobs = new Set<string>();
       for (const t of targets) {
-        if (t.stopJobId && t.stopTarget && !jobs.has(t.stopJobId)) {
-          jobs.add(t.stopJobId);
-          await stopSource(t.stopTarget);
+        if (t.stop_job_id && !jobs.has(t.stop_job_id)) {
+          jobs.add(t.stop_job_id);
+          await stopJob(t.stop_job_id);
         }
       }
       return;
@@ -1591,13 +1227,13 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: IRowNod
       return;
     case "copy_path":
       await copyToClipboard(
-        targets.map((t) => t.revealPath).filter((p): p is string => !!p).join("\n"),
+        targets.map((t) => t.reveal_path).filter((p): p is string => !!p).join("\n"),
       );
       return;
     case "log": {
       const row =
         first.kind === "group"
-          ? rows.value.find((r) => r.kind !== "group" && r.id === first.statusFrom)
+          ? rows.value.find((r) => r.kind !== "group" && r.id === first.status_from)
           : first;
       if (row) void openStepLog(row);
       return;
@@ -1865,7 +1501,6 @@ async function loadConfig() {
     // this is belt and braces. Ordinary per-entry problems are not
     // errors of the whole config and live in `configDiagnostics`.
     configError.value = cfg.parsed_ok ? null : (cfg.error ?? "The config was rejected.");
-    configDiagnostics.value = cfg.diagnostics;
     serverSourceCount.value = cfg.source_count;
     configExists.value = cfg.exists;
     // A reload must never overwrite what someone is typing into the
@@ -1895,7 +1530,7 @@ const droppedRows = computed(() => rows.value.filter((r) => r.dropped));
 /// that lives outside the row's identity.
 function repaint() {
   gridApi?.refreshCells({
-    columns: ["status", "lastSynced", "bytes", "actions"],
+    columns: ["status", "last_synced", "bytes", "actions"],
     force: true,
   });
 }
@@ -1934,47 +1569,22 @@ const jobActive = computed(() =>
   jobs.value.some((j) => j.state === "pending" || j.state === "running"),
 );
 
-/// The runner's per-step record.
-const commitDag = freshest<Awaited<ReturnType<typeof fetchDag>>>((dag) => {
-  dagSteps.value = Object.fromEntries(dag.steps.map((st) => [st.id, st]));
-  dagRun.value = dag.run;
+const commitRows = freshest<ManageResponse>((m) => {
+  manage.value = m;
+  // Several columns are `cellRenderer`s over data outside the row's
+  // identity, so a new answer only reaches the screen if the cells are
+  // told to repaint.
   repaint();
 });
 
-async function loadDag() {
+/// Read the rows. `refresh` asks the backend to walk the disk before
+/// answering rather than serving its last tick — see `fetchManageRows`.
+async function loadRows(refresh = false) {
   try {
-    await commitDag(() => fetchDag());
+    await commitRows(() => fetchManageRows(refresh));
   } catch {
-    // A missing record reads as "never run", which is what a fresh root
-    // looks like anyway.
-  }
-}
-
-const commitStorage = freshest<PipelineStorage>((s) => {
-  storage.value = s;
-  // The size column is a `cellRenderer` over data that lives outside
-  // the row's identity, so a new measurement only reaches the screen if
-  // the cells are told to repaint.
-  gridApi?.refreshCells({ columns: ["bytes"], force: true });
-});
-
-/// Read the sizes. `refresh` asks the backend to walk before answering
-/// rather than serving its last tick — see `fetchPipelineStorage`.
-async function loadStorage(refresh = false) {
-  try {
-    await commitStorage(() => fetchPipelineStorage(refresh));
-  } catch {
-    // Same: a missing size column beats an error banner over the grid.
-  }
-}
-
-async function loadAppletHealth() {
-  try {
-    const view = await fetchFrontend();
-    appletErrors.value = view.applet_errors ?? {};
-  } catch {
-    // Leave the last known state; an applet row without a status beats
-    // claiming it failed because one fetch did.
+    // The last answer stands; an empty table over an error banner would
+    // read as "no sources".
   }
 }
 
@@ -2213,7 +1823,7 @@ function openBrowse(row: Row) {
 }
 
 async function reveal(key: string) {
-  const path = rows.value.find((r) => r.key === key)?.revealPath;
+  const path = rows.value.find((r) => r.key === key)?.reveal_path;
   if (!path) return;
   await revealPath(path);
 }
@@ -2269,8 +1879,9 @@ async function runRows(targets: Row[]) {
     // Before returning: the queue is what puts this row and everything
     // downstream of it into "Queued" and flips the button to Stop, and
     // the whole complaint this answers is that pressing play looked
-    // like nothing happened.
-    await loadJobs();
+    // like nothing happened. The job frame will refetch too; this is
+    // for a page whose stream is down.
+    await Promise.all([loadJobs(), loadRows()]);
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
   } finally {
@@ -2298,7 +1909,7 @@ async function runEverything() {
     const job = await enqueueJob({ kind: "all" });
     adoptJob(job);
     say(true, "Queued a sync of everything.", job.id);
-    await loadJobs();
+    await Promise.all([loadJobs(), loadRows()]);
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
   } finally {
@@ -2306,21 +1917,20 @@ async function runEverything() {
   }
 }
 
-/// Call off the job that has this row claimed.
-async function stopSource(id: string) {
-  const job = claimedBy.value.get(id);
-  if (!job) return;
+/// Call off the job that has a row claimed.
+async function stopJob(jobId: string) {
+  const sourceIds = jobs.value.find((j) => j.id === jobId)?.source_ids;
   busy.value = true;
   clearBanner();
   try {
-    await cancelJob(job.id);
+    await cancelJob(jobId);
     say(
       true,
-      `Stopping the sync of ${job.source_ids || "everything"}. Steps in flight ` +
+      `Stopping the sync of ${sourceIds || "everything"}. Steps in flight ` +
         `checkpoint what they have and exit.`,
-      job.id,
+      jobId,
     );
-    await loadJobs();
+    await Promise.all([loadJobs(), loadRows()]);
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
   } finally {
@@ -2328,22 +1938,18 @@ async function stopSource(id: string) {
   }
 }
 
-/// One pushed job update, applied without a round trip.
+/// One pushed job update. The queue decides "Queued" and the Run/Stop
+/// face, and the row is written before the frame is published, so the
+/// refetch sees it.
 function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
   retireBanner(e.id, e.state);
   const active = e.state === "pending" || e.state === "running";
-  repaint();
-  // A job ending is exactly when its record settles — and the record
-  // is the only place a step's finish time and error live.
-  if (!active) {
-    void loadDag();
-    // A step that just finished is exactly when the size on screen is
-    // about to be read and is about to be wrong — so this one asks for
-    // a fresh walk. It is also the last chance for a while: the
-    // backend's own tick stops as soon as the run lets go of the root.
-    void loadStorage(true);
-  }
+  // A job ending is exactly when the size on screen is about to be
+  // read and is about to be wrong — so that one asks for a fresh walk.
+  // It is also the last chance for a while: the backend's own tick
+  // stops as soon as the run lets go of the root.
+  void loadRows(!active);
 }
 
 /// Fold a pushed job update into the queue we hold, so the Run/Stop
@@ -2393,10 +1999,10 @@ let relativePoll: ReturnType<typeof setInterval> | null = null;
 let lastRelativePaint = "";
 function tickRelative() {
   const now = Date.now();
-  const next = rows.value.map((r) => formatRelative(r.lastSynced, now)).join("\u0000");
+  const next = rows.value.map((r) => formatRelative(r.last_synced, now)).join("\u0000");
   if (next !== lastRelativePaint) {
     lastRelativePaint = next;
-    gridApi?.refreshCells({ columns: ["lastSynced"], force: true });
+    gridApi?.refreshCells({ columns: ["last_synced"], force: true });
   }
   tickHistoryRelative(now);
 }
@@ -2406,13 +2012,7 @@ function tickRelative() {
 /// from the config, Status and Last synced from the runner's record; fetch the
 /// first without the second and a row that has run paints as "Never run".
 async function reloadAll(freshStorage = false) {
-  await Promise.all([
-    loadConfig(),
-    loadJobs(),
-    loadDag(),
-    loadStorage(freshStorage),
-    loadAppletHealth(),
-  ]);
+  await Promise.all([loadConfig(), loadJobs(), loadRows(freshStorage)]);
 }
 
 onMounted(async () => {
@@ -2427,11 +2027,10 @@ onMounted(async () => {
     job: onJobEvent,
     root: (e) => {
       if (e.kind === "dag_changed") {
-          // Deliberately *not* a fresh walk: this fires a few times a second
-          // while a run is going. The sampler is already walking on its own
-          // cadence; this just reads what it found.
-        void loadDag();
-        void loadStorage();
+        // Deliberately *not* a fresh walk: this fires a few times a second
+        // while a run is going. The sampler is already walking on its own
+        // cadence; this just reads what it found.
+        void loadRows();
         refreshHistory();
       } else if (e.kind === "config_changed") {
         // Config and record together, for the "Never run" reason above.
