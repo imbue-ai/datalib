@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a new datalib release — bump the workspace version, repin lockfiles, run the consistency tests, push to main, tag vX.Y.Z (which triggers release.yml), watch the release publish, and bump the pin in the qi-imbue/datalib-inspiration repo. Use when asked to "make a new release", "cut a release", or "bump the version".
+description: Cut a new datalib release — bump the workspace version, repin lockfiles, run the consistency tests, land the bump on main through a PR, tag vX.Y.Z (which triggers release.yml), watch the release publish, and bump the pin in the qi-imbue/datalib-inspiration repo. Use when asked to "make a new release", "cut a release", or "bump the version".
 ---
 
 # Release
@@ -148,6 +148,9 @@ published from a local machine — the tag is the trigger.
 12. Bump the pin in the published inspiration repo,
     `qi-imbue/datalib-inspiration`. Only after step 11 — every pin there
     is a tag-relative URL that has to resolve for a fresh mind to boot.
+    This step is the one that gets dropped: v0.30.x and v0.31.x both
+    shipped without it, so start by checking what the repo actually
+    pins (`git log -1` there) rather than assuming it is one behind.
 
 ## Updating the inspiration repo
 
