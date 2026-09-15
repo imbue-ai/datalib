@@ -19,7 +19,7 @@ pub struct SearchRow {
     /// without a `REV:` field, or any row whose underlying entity isn't
     /// event-shaped). See data_architecture_ingestion.md §"Entities
     /// without a time-shape".
-    pub when: Option<String>,
+    pub created_at: Option<String>,
     pub conversation_name: String,
     pub project: String,
     pub account: String,

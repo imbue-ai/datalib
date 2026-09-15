@@ -125,7 +125,7 @@ struct Thread {
     markdown_uuid: String,
     /// Who wrote the opening message, when, and what it said.
     author: String,
-    when_ts: String,
+    created_at: String,
     text: String,
     /// Messages after the opening one. Zero means there is nothing more
     /// to open, which is what the card keys the "N replies" link on.
@@ -145,8 +145,8 @@ struct ThreadData {
     messages: usize,
 }
 
-fn when_key(when_ts: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc3339(when_ts)
+fn when_key(created_at: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(created_at)
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
@@ -224,7 +224,7 @@ fn read_rows(
         let pool = datalib_etl::doltlite_raw::open_reader(store).await?;
         let rows = sqlx::query(
             "SELECT channel, markdown_uuid, message_index, \
-                        IFNULL(when_ts, ''), IFNULL(author, ''), text \
+                        IFNULL(created_at, ''), IFNULL(author, ''), text \
                  FROM grid_rows \
                  WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL",
         )
@@ -289,7 +289,7 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
                 .map(|(md, t)| Thread {
                     markdown_uuid: md.clone(),
                     author: t.author.clone(),
-                    when_ts: t.when_raw.clone(),
+                    created_at: t.when_raw.clone(),
                     text: preview(&t.text),
                     // Everything after the opening message.
                     replies: t.messages.saturating_sub(1),
@@ -301,8 +301,8 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
     // the order is identical on every request over unchanged data (the
     // directory walk itself is unordered).
     threads.sort_by(|a, b| {
-        when_key(&a.when_ts)
-            .cmp(&when_key(&b.when_ts))
+        when_key(&a.created_at)
+            .cmp(&when_key(&b.created_at))
             .then_with(|| a.markdown_uuid.cmp(&b.markdown_uuid))
     });
     ChannelResponse {
@@ -468,7 +468,7 @@ mod tests {
                 })
                 .source_label("Slack")
                 .channel(Some(channel.to_string()))
-                .when_ts(Some(when.to_string()))
+                .created_at(Some(when.to_string()))
                 .author((!author.is_empty()).then(|| author.to_string()))
                 .message_index(index)
                 .conversation_uuid(md)
@@ -520,7 +520,7 @@ mod tests {
                     .kind("Slack Message")
                     .source_label("Slack")
                     .channel(Some(channel.to_string()))
-                    .when_ts(Some((*when).to_string()))
+                    .created_at(Some((*when).to_string()))
                     .author(Some((*author).to_string()))
                     .message_index(Some(*index))
                     .conversation_uuid(md)

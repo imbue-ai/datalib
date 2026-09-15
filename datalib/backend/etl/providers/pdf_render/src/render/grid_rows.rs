@@ -117,7 +117,7 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         provider: PROVIDER.as_str().into(),
         kind: KIND_DOCUMENT.into(),
         source_label: SOURCE_LABEL.into(),
-        when_ts: when.map(str::to_string),
+        created_at: when.map(str::to_string),
         author: meta.author.map(str::to_string),
         account: None,
         project: None,
@@ -161,7 +161,7 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             provider: PROVIDER.as_str().into(),
             kind: KIND_PAGE.into(),
             source_label: SOURCE_LABEL.into(),
-            when_ts: when.map(str::to_string),
+            created_at: when.map(str::to_string),
             // Denormalized onto the page rows too, matching how every
             // chat provider stamps the author on each message row so
             // the grid can filter without a join.
@@ -362,22 +362,22 @@ mod tests {
     }
 
     #[test]
-    fn when_ts_never_invents_an_ingest_timestamp() {
+    fn created_at_never_invents_an_ingest_timestamp() {
         let mut m = meta(None, "a/b.pdf");
         m.created_at = None;
         m.modified_at = None;
         let rows = rows_for_document(&m, &[(1, "x".into())]);
-        assert!(rows.iter().all(|r| r.when_ts.is_none()));
+        assert!(rows.iter().all(|r| r.created_at.is_none()));
     }
 
     #[test]
-    fn modified_at_is_the_fallback_for_when_ts() {
+    fn modified_at_is_the_fallback_for_created_at() {
         let mut m = meta(None, "a/b.pdf");
         m.created_at = None;
         m.modified_at = Some("2020-02-02T02:02:02+00:00");
         let rows = rows_for_document(&m, &[(1, "x".into())]);
         assert_eq!(
-            rows[0].when_ts.as_deref(),
+            rows[0].created_at.as_deref(),
             Some("2020-02-02T02:02:02+00:00")
         );
     }

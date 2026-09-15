@@ -34,7 +34,7 @@ is the single source of truth, with no codegen step. Each field carries:
 - `#[col(sql = "…")]` — portable DDL type (the SQL subset shared by Dolt
   and MySQL). Nullability is inferred from `Option<T>`.
 - `#[derived(name = "…", sql = "…")]` — a column computed at grid-index time
-  (e.g. `when_ts_utc` / `when_offset`, derived from `when_ts`). Present in
+  (e.g. `created_at_utc` / `created_offset`, derived from `created_at`). Present in
   the DDL but absent from the struct.
 - doc comment — one or two lines saying what the column *means*. How each
   provider fills it in is in [Per-provider mappings](#per-provider-mappings)
@@ -62,7 +62,7 @@ each changed document's row set, and copies the corresponding
 `DoltRepo::search` builds a `WHERE` clause from `ParsedQuery`
 (account/project/before/after/free-text) plus a kind clause from
 `q.resolved_type` (chat: vs message:), then issues a single SELECT
-against `grid_rows` ordered by `when_ts` ASC with chat rows tie-breaking
+against `grid_rows` ordered by `created_at` ASC with chat rows tie-breaking
 ahead of their messages. The row mapper translates each row into a
 `SearchRow` for the HTTP API.
 
@@ -174,7 +174,7 @@ they sit beside the shared blob store.
 `source_label` is the plain product name: `Claude`, `ChatGPT`, `Slack`,
 `GitHub`, `GitLab`, `Notion`.
 
-### `when_ts`
+### `created_at`
 
 | provider.kind | value |
 |---|---|
@@ -381,7 +381,7 @@ in `source_measurements`, a table in the same per-source
 `(subject, measured_at_utc)`.
 
 Putting the series in `grid_rows` instead was considered and rejected
-for four reasons, each specific to that table: `when_ts` is the global
+for four reasons, each specific to that table: `created_at` is the global
 sort key, so every run would bury the user's real data under a few
 hundred fresh measurement rows; `grid_rows.uuid` is contracted to be
 deterministic from the entity, and a series row's id must carry a

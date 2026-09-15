@@ -949,7 +949,7 @@ async fn upsert_markdown(
     let timestamps: Vec<&str> = md
         .rows
         .iter()
-        .filter_map(|r| r.when_ts.as_deref())
+        .filter_map(|r| r.created_at.as_deref())
         .collect();
     let created_at = timestamps.iter().min().copied();
     let updated_at = timestamps.iter().max().copied();
@@ -1109,7 +1109,7 @@ mod insert_round_trip_tests {
             source_label: "Claude".into(),
             // Offset-bearing and parseable, so the two `#[derived]` columns
             // are non-NULL too.
-            when_ts: Some("2026-06-02T13:00:00-07:00".into()),
+            created_at: Some("2026-06-02T13:00:00-07:00".into()),
             author: Some("Jean-Luc Picard".into()),
             account: Some("acct-1701".into()),
             project: Some("proj-1701".into()),
@@ -1214,7 +1214,7 @@ mod id_claim_tests {
             provider: Provider::Claude.as_str().into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
-            when_ts: None,
+            created_at: None,
             author: None,
             account: None,
             project: None,
@@ -1345,7 +1345,7 @@ mod write_lock_tests {
             provider: Provider::Claude.as_str().into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
-            when_ts: Some("2026-06-02T20:00:00+00:00".into()),
+            created_at: Some("2026-06-02T20:00:00+00:00".into()),
             author: None,
             account: Some("acct-test".into()),
             project: None,
@@ -1562,7 +1562,7 @@ mod write_lock_tests {
     /// `markdowns` row: before this, the old render's title, timestamps
     /// and `bucket_key` outlived the rows they described. Found by the
     /// contract harness on a gitlab merge request re-keyed under another
-    /// bucket whose rows all failed `when_ts`.
+    /// bucket whose rows all failed `created_at`.
     #[tokio::test]
     async fn a_document_re_rendered_with_no_rows_loses_its_markdowns_row() {
         let dir = tempdir().unwrap();
@@ -1641,9 +1641,9 @@ mod schema_reconcile_tests {
         provider VARCHAR(32) NOT NULL,
         kind VARCHAR(32) NOT NULL,
         source_label VARCHAR(32) NOT NULL,
-        when_ts VARCHAR(40),
-        when_ts_utc VARCHAR(40),
-        when_offset VARCHAR(8),
+        created_at VARCHAR(40),
+        created_at_utc VARCHAR(40),
+        created_offset VARCHAR(8),
         author VARCHAR(255),
         account VARCHAR(96),
         project VARCHAR(96),
@@ -1842,7 +1842,7 @@ mod source_cursor_tests {
             .entire_chat(format!("/chat/{uuid}"))
             .text(text)
             .markdown_uuid(Some(uuid.to_string()))
-            .when_ts(Some("2026-01-01T00:00:00+00:00".to_string()))
+            .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
             .build()
             .unwrap();
         RenderedMarkdown {

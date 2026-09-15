@@ -520,7 +520,7 @@ async fn chat(
         account: meta.account,
         project: meta.project,
         channel: meta.channel,
-        created_at: meta.when_ts,
+        created_at: meta.created_at,
         source_label: meta.source_label,
         source_url,
         body,

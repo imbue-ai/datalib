@@ -50,8 +50,8 @@ mod tests {
         assert!(cols.contains(&"channel"));
         // The two load-time-derived columns are present in the DDL /
         // COLUMNS metadata even though they are absent from the struct.
-        assert!(cols.contains(&"when_ts_utc"));
-        assert!(cols.contains(&"when_offset"));
+        assert!(cols.contains(&"created_at_utc"));
+        assert!(cols.contains(&"created_offset"));
     }
 
     #[test]

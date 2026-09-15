@@ -25,7 +25,7 @@ pub struct ChatMeta {
     pub account: Option<String>,
     pub project: Option<String>,
     pub channel: Option<String>,
-    pub when_ts: Option<String>,
+    pub created_at: Option<String>,
     pub source_label: Option<String>,
     /// Canonical web URL back to the provider, used for the page-level
     /// "Open in …" button. For Slack rows `source_url` is null and we
@@ -184,7 +184,7 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
     // sorts on, so before:/after: bounds agree with display order across
     // rows recorded in different local offsets. The user-typed bound is
     // normalized to UTC first (datalib_time): a naive value means
-    // local machine time, so it lands on the same basis as when_ts_utc.
+    // local machine time, so it lands on the same basis as created_at_utc.
     // An unparseable bound drops the filter rather than compare garbage.
     if let Some(v) = q
         .filters
@@ -192,7 +192,7 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
         .and_then(|vals| vals.first())
         .and_then(|v| datalib_time::normalize_user_time_to_utc(v))
     {
-        clauses.push("when_ts_utc < ?".into());
+        clauses.push("created_at_utc < ?".into());
         params.push(v);
     }
     if let Some(v) = q
@@ -201,7 +201,7 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
         .and_then(|vals| vals.first())
         .and_then(|v| datalib_time::normalize_user_time_to_utc(v))
     {
-        clauses.push("when_ts_utc > ?".into());
+        clauses.push("created_at_utc > ?".into());
         params.push(v);
     }
     if !needle.is_empty() {

@@ -28,7 +28,7 @@ pub struct ParsedContact {
     /// `FN` (formatted name). `None` for nameless cards — the
     /// render path falls back to the UID.
     pub display_name: Option<String>,
-    /// `REV:` (revision timestamp). Render uses it for `when_ts`;
+    /// `REV:` (revision timestamp). Render uses it for `created_at`;
     /// falls back to the `--now` stamp when absent.
     pub revision: Option<String>,
     /// Multi-valued properties surfaced in document order.

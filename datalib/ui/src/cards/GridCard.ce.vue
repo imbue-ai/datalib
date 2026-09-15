@@ -645,7 +645,7 @@ function applyDefaultSort() {
     gridApi.applyColumnState({
       state: [
         { colId: "score", sort: "desc", sortIndex: 0 },
-        { colId: "when", sort: null, sortIndex: null },
+        { colId: "created_at", sort: null, sortIndex: null },
       ],
       defaultState: { sort: null },
     });
@@ -653,7 +653,7 @@ function applyDefaultSort() {
     gridApi.applyColumnState({
       state: [
         { colId: "score", sort: null, sortIndex: null },
-        { colId: "when", sort: "asc", sortIndex: 0 },
+        { colId: "created_at", sort: "asc", sortIndex: 0 },
       ],
       defaultState: { sort: null },
     });
@@ -715,7 +715,7 @@ const ADAPTIVE_FIELDS: (keyof SearchRow)[] = [
   "source",
   "kind",
   "channel",
-  "when",
+  "created_at",
   "author",
   "account",
 ];
@@ -943,8 +943,8 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   },
   { field: "channel", headerName: "Channel", width: 130 },
   {
-    field: "when",
-    headerName: "Time",
+    field: "created_at",
+    headerName: "Created",
     width: 165,
   },
   {

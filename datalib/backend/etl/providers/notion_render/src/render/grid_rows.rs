@@ -117,7 +117,7 @@ fn page_row(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let when_ts: Option<String> = page
+    let created_at: Option<String> = page
         .get("last_edited_time")
         .and_then(|v| v.as_str())
         .or_else(|| page.get("created_time").and_then(|v| v.as_str()))
@@ -133,7 +133,7 @@ fn page_row(
         .provider(Provider::Notion)
         .kind("Notion Page")
         .source_label("Notion")
-        .when_ts(when_ts)
+        .created_at(created_at)
         .author(resolved_author(author_id, users))
         .conversation_name(Some(title.to_string()))
         .conversation_uuid(pid.clone())
@@ -182,7 +182,7 @@ fn thread_rows(
             .provider(Provider::Notion)
             .kind("Notion Comment Thread")
             .source_label("Notion")
-            .when_ts(
+            .created_at(
                 first
                     .get("created_time")
                     .and_then(|v| v.as_str())
@@ -207,7 +207,7 @@ fn thread_rows(
                 .provider(Provider::Notion)
                 .kind("Notion Comment")
                 .source_label("Notion")
-                .when_ts(
+                .created_at(
                     c.get("created_time")
                         .and_then(|v| v.as_str())
                         .map(str::to_string),

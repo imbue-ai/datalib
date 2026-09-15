@@ -230,7 +230,7 @@ from one that doesn't exist.
 
 **c. `grid_rows` is missing a `labels` column.** Map a document-shaped
 corpus onto the union table and the core lands cleanly — id → `uuid` /
-`upstream_id`, author → `author`, created → `when_ts`, space → `project`,
+`upstream_id`, author → `author`, created → `created_at`, space → `project`,
 team → `channel`, body → `text`, url → `source_url`, title →
 `conversation_name` and `markdowns.title`, cross-refs → the `edges`
 table. Exactly one field has nowhere to go: a set of tags. Every
@@ -320,7 +320,7 @@ outputs = ["tickets/rendered_md"]
 [steps.params.map]         # → the unified grid_rows core
 title   = "$.title"
 text    = ["$.description", "$.body"]   # first present wins
-when_ts = "$.updatedAt"
+created_at = "$.updatedAt"
 author  = "$.assignee.name"
 project = "$.team.key"
 labels  = "$.labels"

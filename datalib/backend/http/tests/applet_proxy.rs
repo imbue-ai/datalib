@@ -82,7 +82,7 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
             })
             .source_label("Slack")
             .channel(Some(channel.to_string()))
-            .when_ts(Some(when.to_string()))
+            .created_at(Some(when.to_string()))
             .author(author.map(str::to_string))
             .message_index(index)
             .conversation_uuid(md)

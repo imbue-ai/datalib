@@ -55,7 +55,7 @@ attachment has the body `U+FFFC`, which render drops.
 
 `message.date` is nanoseconds since 2001-01-01 (seconds in a database
 older than about 2011; render tells the two apart by magnitude). `0` is
-"no date" and becomes a null `when_ts`, not the epoch.
+"no date" and becomes a null `created_at`, not the epoch.
 
 ## Tapbacks and group events
 

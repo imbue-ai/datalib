@@ -10,6 +10,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
+    "created_at": "2369-05-28T15:08:20+00:00",
     "entire_chat": "/chat/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
     "git_sha": null,
     "item_count": null,
@@ -30,8 +31,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000100.000100",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "59f47f5f-2d07-53da-a9f5-a6f164c52d11",
-    "when_ts": "2369-05-28T15:08:20+00:00"
+    "uuid": "59f47f5f-2d07-53da-a9f5-a6f164c52d11"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -40,6 +40,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
+    "created_at": "2369-05-28T15:10:00+00:00",
     "entire_chat": "/chat/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
     "git_sha": null,
     "item_count": null,
@@ -60,8 +61,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000200.000200",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "ee0f6228-19a1-54ea-a38d-c0fbe02e1242",
-    "when_ts": "2369-05-28T15:10:00+00:00"
+    "uuid": "ee0f6228-19a1-54ea-a38d-c0fbe02e1242"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -70,6 +70,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
+    "created_at": "2369-05-28T15:11:40+00:00",
     "entire_chat": "/chat/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
     "git_sha": null,
     "item_count": null,
@@ -90,8 +91,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000300.000300",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "b89c97ab-5bca-5de7-98e8-f2157ff69991",
-    "when_ts": "2369-05-28T15:11:40+00:00"
+    "uuid": "b89c97ab-5bca-5de7-98e8-f2157ff69991"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -100,6 +100,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "aa7f900b-31b9-5603-995a-5ed36db03478",
+    "created_at": "2369-05-28T15:13:20+00:00",
     "entire_chat": "/chat/aa7f900b-31b9-5603-995a-5ed36db03478",
     "git_sha": null,
     "item_count": null,
@@ -120,8 +121,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000400.000400",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "80b2ae4e-06f9-5ca3-9d40-e24d82214eb3",
-    "when_ts": "2369-05-28T15:13:20+00:00"
+    "uuid": "80b2ae4e-06f9-5ca3-9d40-e24d82214eb3"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -130,6 +130,7 @@ expression: rows
     "channel": "#engineering",
     "conversation_name": "#engineering",
     "conversation_uuid": "68000dc2-0cb1-5eb4-ba26-89498049dfa8",
+    "created_at": "2369-05-28T15:15:00+00:00",
     "entire_chat": "/chat/68000dc2-0cb1-5eb4-ba26-89498049dfa8",
     "git_sha": null,
     "item_count": null,
@@ -150,8 +151,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "C_ENG#12604000500.000500",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "6607ab50-b9d8-55c1-86c2-a810ba8949eb",
-    "when_ts": "2369-05-28T15:15:00+00:00"
+    "uuid": "6607ab50-b9d8-55c1-86c2-a810ba8949eb"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -160,6 +160,7 @@ expression: rows
     "channel": "#ten-forward",
     "conversation_name": "#ten-forward",
     "conversation_uuid": "dcda988e-79b9-5b19-b3d7-7325524c86dd",
+    "created_at": "2369-05-28T15:16:40+00:00",
     "entire_chat": "/chat/dcda988e-79b9-5b19-b3d7-7325524c86dd",
     "git_sha": null,
     "item_count": null,
@@ -180,8 +181,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "C_TENFWD#12604000600.000600",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "927f4e6c-fefc-5b6a-a15d-d472c09bdbd8",
-    "when_ts": "2369-05-28T15:16:40+00:00"
+    "uuid": "927f4e6c-fefc-5b6a-a15d-d472c09bdbd8"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -190,6 +190,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "efd7f060-7cc7-508b-811f-afbb133a9ff6",
+    "created_at": "2369-05-28T15:18:20+00:00",
     "entire_chat": "/chat/efd7f060-7cc7-508b-811f-afbb133a9ff6",
     "git_sha": null,
     "item_count": null,
@@ -210,8 +211,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000700.000700",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "21fc5644-c4fd-5110-9c41-48d338915fb6",
-    "when_ts": "2369-05-28T15:18:20+00:00"
+    "uuid": "21fc5644-c4fd-5110-9c41-48d338915fb6"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -220,6 +220,7 @@ expression: rows
     "channel": "#ten-forward",
     "conversation_name": "#ten-forward",
     "conversation_uuid": "dcda988e-79b9-5b19-b3d7-7325524c86dd",
+    "created_at": "2369-05-28T15:18:20+00:00",
     "entire_chat": "/chat/dcda988e-79b9-5b19-b3d7-7325524c86dd",
     "git_sha": null,
     "item_count": null,
@@ -240,8 +241,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "C_TENFWD#12604000700.000700",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "3d82f5ae-bcdc-5d76-9621-2c885e289b6c",
-    "when_ts": "2369-05-28T15:18:20+00:00"
+    "uuid": "3d82f5ae-bcdc-5d76-9621-2c885e289b6c"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -250,6 +250,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "56f6c1d9-495c-5104-8a26-be13bc28718e",
+    "created_at": "2369-05-28T15:20:00+00:00",
     "entire_chat": "/chat/56f6c1d9-495c-5104-8a26-be13bc28718e",
     "git_sha": null,
     "item_count": null,
@@ -270,8 +271,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000800.000800",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "591128f8-b39e-5237-9704-e469199ba7ac",
-    "when_ts": "2369-05-28T15:20:00+00:00"
+    "uuid": "591128f8-b39e-5237-9704-e469199ba7ac"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -280,6 +280,7 @@ expression: rows
     "channel": "@William T. Riker",
     "conversation_name": "@William T. Riker",
     "conversation_uuid": "777b8f58-706d-549a-82b8-699fc856030e",
+    "created_at": "2369-05-28T15:21:40+00:00",
     "entire_chat": "/chat/777b8f58-706d-549a-82b8-699fc856030e",
     "git_sha": null,
     "item_count": null,
@@ -300,8 +301,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "D_RIKER#12604000900.000900",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "c5a0c94e-03a4-565a-b390-0ee002edeab2",
-    "when_ts": "2369-05-28T15:21:40+00:00"
+    "uuid": "c5a0c94e-03a4-565a-b390-0ee002edeab2"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -310,6 +310,7 @@ expression: rows
     "channel": "@William T. Riker",
     "conversation_name": "@William T. Riker",
     "conversation_uuid": "1803e003-56a7-5c12-9024-5265850e9eaa",
+    "created_at": "2369-05-28T15:21:41+00:00",
     "entire_chat": "/chat/1803e003-56a7-5c12-9024-5265850e9eaa",
     "git_sha": null,
     "item_count": null,
@@ -330,8 +331,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "D_RIKER#12604000901.000901",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "f1f922de-b96b-5025-bca1-62ec84b4a1d1",
-    "when_ts": "2369-05-28T15:21:41+00:00"
+    "uuid": "f1f922de-b96b-5025-bca1-62ec84b4a1d1"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -340,6 +340,7 @@ expression: rows
     "channel": "@Lt. Cmdr. Data",
     "conversation_name": "@Lt. Cmdr. Data",
     "conversation_uuid": "e5c54890-5a44-5a3d-9efe-e28b37b48edf",
+    "created_at": "2369-05-28T15:21:42+00:00",
     "entire_chat": "/chat/e5c54890-5a44-5a3d-9efe-e28b37b48edf",
     "git_sha": null,
     "item_count": null,
@@ -360,8 +361,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "D_DATA#12604000902.000902",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "ee15c54c-ae19-51b4-a51b-ba2e9f7a77d2",
-    "when_ts": "2369-05-28T15:21:42+00:00"
+    "uuid": "ee15c54c-ae19-51b4-a51b-ba2e9f7a77d2"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -370,6 +370,7 @@ expression: rows
     "channel": "@William T. Riker, Worf",
     "conversation_name": "@William T. Riker, Worf",
     "conversation_uuid": "b168a24b-fddb-55c2-88fe-523dec59fd5c",
+    "created_at": "2369-05-28T15:21:43+00:00",
     "entire_chat": "/chat/b168a24b-fddb-55c2-88fe-523dec59fd5c",
     "git_sha": null,
     "item_count": null,
@@ -390,8 +391,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "G_AWAYTEAM#12604000903.000903",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "a3c08320-2b85-52bd-afab-ddfe4dafe08d",
-    "when_ts": "2369-05-28T15:21:43+00:00"
+    "uuid": "a3c08320-2b85-52bd-afab-ddfe4dafe08d"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -400,6 +400,7 @@ expression: rows
     "channel": "@William T. Riker, Worf",
     "conversation_name": "@William T. Riker, Worf",
     "conversation_uuid": "658ccd8e-50ad-527c-8cc3-401cf8b315db",
+    "created_at": "2369-05-28T15:21:44+00:00",
     "entire_chat": "/chat/658ccd8e-50ad-527c-8cc3-401cf8b315db",
     "git_sha": null,
     "item_count": null,
@@ -420,8 +421,7 @@ expression: rows
     "upstream_entity_kind": "message",
     "upstream_id": "G_AWAYTEAM#12604000904.000904",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "06cfe816-d34f-5428-be2e-0898eee3f468",
-    "when_ts": "2369-05-28T15:21:44+00:00"
+    "uuid": "06cfe816-d34f-5428-be2e-0898eee3f468"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -430,6 +430,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
+    "created_at": "2369-05-28T15:10:00+00:00",
     "entire_chat": "/chat/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
     "git_sha": null,
     "item_count": null,
@@ -450,8 +451,7 @@ expression: rows
     "upstream_entity_kind": "reaction",
     "upstream_id": "C_BRIDGE#12604000200.000200#thumbsup#U_RIKER",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "3f034f5c-dd99-55c4-a545-82c7eec42c03",
-    "when_ts": "2369-05-28T15:10:00+00:00"
+    "uuid": "3f034f5c-dd99-55c4-a545-82c7eec42c03"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -460,6 +460,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
+    "created_at": "2369-05-28T15:10:00+00:00",
     "entire_chat": "/chat/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
     "git_sha": null,
     "item_count": null,
@@ -480,8 +481,7 @@ expression: rows
     "upstream_entity_kind": "reaction",
     "upstream_id": "C_BRIDGE#12604000200.000200#robot_face#U_DATA",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "c24ad66f-7604-5fea-a884-edd163160de9",
-    "when_ts": "2369-05-28T15:10:00+00:00"
+    "uuid": "c24ad66f-7604-5fea-a884-edd163160de9"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -490,6 +490,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
+    "created_at": "2369-05-28T15:10:00+00:00",
     "entire_chat": "/chat/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
     "git_sha": null,
     "item_count": null,
@@ -510,8 +511,7 @@ expression: rows
     "upstream_entity_kind": "reaction",
     "upstream_id": "C_BRIDGE#12604000200.000200#thumbsup#U_PICARD",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "e38a2cae-f5d0-506a-98d5-3a96413df8a1",
-    "when_ts": "2369-05-28T15:10:00+00:00"
+    "uuid": "e38a2cae-f5d0-506a-98d5-3a96413df8a1"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -520,6 +520,7 @@ expression: rows
     "channel": "#ten-forward",
     "conversation_name": "#ten-forward",
     "conversation_uuid": "dcda988e-79b9-5b19-b3d7-7325524c86dd",
+    "created_at": "2369-05-28T15:18:20+00:00",
     "entire_chat": "/chat/dcda988e-79b9-5b19-b3d7-7325524c86dd",
     "git_sha": null,
     "item_count": null,
@@ -540,8 +541,7 @@ expression: rows
     "upstream_entity_kind": "reaction",
     "upstream_id": "C_TENFWD#12604000700.000700#joy#U_RIKER",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "c4e1ebb5-ed20-5ddb-b16d-2355a3aed544",
-    "when_ts": "2369-05-28T15:18:20+00:00"
+    "uuid": "c4e1ebb5-ed20-5ddb-b16d-2355a3aed544"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -550,6 +550,7 @@ expression: rows
     "channel": "@Lt. Cmdr. Data",
     "conversation_name": "@Lt. Cmdr. Data",
     "conversation_uuid": "e5c54890-5a44-5a3d-9efe-e28b37b48edf",
+    "created_at": "2369-05-28T15:21:42+00:00",
     "entire_chat": "/chat/e5c54890-5a44-5a3d-9efe-e28b37b48edf",
     "git_sha": null,
     "item_count": null,
@@ -570,8 +571,7 @@ expression: rows
     "upstream_entity_kind": "reaction",
     "upstream_id": "D_DATA#12604000902.000902#thumbsup#U_PICARD",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "72e606d1-ae64-5d13-a4d1-8e378668521a",
-    "when_ts": "2369-05-28T15:21:42+00:00"
+    "uuid": "72e606d1-ae64-5d13-a4d1-8e378668521a"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -580,6 +580,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
+    "created_at": "2369-05-28T15:08:20+00:00",
     "entire_chat": "/chat/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
     "git_sha": null,
     "item_count": null,
@@ -600,8 +601,7 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "C_BRIDGE#12604000100.000100",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
-    "when_ts": "2369-05-28T15:08:20+00:00"
+    "uuid": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -610,6 +610,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "aa7f900b-31b9-5603-995a-5ed36db03478",
+    "created_at": "2369-05-28T15:13:20+00:00",
     "entire_chat": "/chat/aa7f900b-31b9-5603-995a-5ed36db03478",
     "git_sha": null,
     "item_count": null,
@@ -630,8 +631,7 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "C_BRIDGE#12604000400.000400",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "aa7f900b-31b9-5603-995a-5ed36db03478",
-    "when_ts": "2369-05-28T15:13:20+00:00"
+    "uuid": "aa7f900b-31b9-5603-995a-5ed36db03478"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -640,6 +640,7 @@ expression: rows
     "channel": "#engineering",
     "conversation_name": "#engineering",
     "conversation_uuid": "68000dc2-0cb1-5eb4-ba26-89498049dfa8",
+    "created_at": "2369-05-28T15:15:00+00:00",
     "entire_chat": "/chat/68000dc2-0cb1-5eb4-ba26-89498049dfa8",
     "git_sha": null,
     "item_count": null,
@@ -660,8 +661,7 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "C_ENG#12604000500.000500",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "68000dc2-0cb1-5eb4-ba26-89498049dfa8",
-    "when_ts": "2369-05-28T15:15:00+00:00"
+    "uuid": "68000dc2-0cb1-5eb4-ba26-89498049dfa8"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -670,6 +670,7 @@ expression: rows
     "channel": "#ten-forward",
     "conversation_name": "#ten-forward",
     "conversation_uuid": "dcda988e-79b9-5b19-b3d7-7325524c86dd",
+    "created_at": "2369-05-28T15:16:40+00:00",
     "entire_chat": "/chat/dcda988e-79b9-5b19-b3d7-7325524c86dd",
     "git_sha": null,
     "item_count": null,
@@ -690,8 +691,7 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "C_TENFWD#12604000600.000600",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "dcda988e-79b9-5b19-b3d7-7325524c86dd",
-    "when_ts": "2369-05-28T15:16:40+00:00"
+    "uuid": "dcda988e-79b9-5b19-b3d7-7325524c86dd"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -700,6 +700,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "efd7f060-7cc7-508b-811f-afbb133a9ff6",
+    "created_at": "2369-05-28T15:18:20+00:00",
     "entire_chat": "/chat/efd7f060-7cc7-508b-811f-afbb133a9ff6",
     "git_sha": null,
     "item_count": null,
@@ -720,8 +721,7 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "C_BRIDGE#12604000700.000700",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "efd7f060-7cc7-508b-811f-afbb133a9ff6",
-    "when_ts": "2369-05-28T15:18:20+00:00"
+    "uuid": "efd7f060-7cc7-508b-811f-afbb133a9ff6"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -730,6 +730,7 @@ expression: rows
     "channel": "#bridge",
     "conversation_name": "#bridge",
     "conversation_uuid": "56f6c1d9-495c-5104-8a26-be13bc28718e",
+    "created_at": "2369-05-28T15:20:00+00:00",
     "entire_chat": "/chat/56f6c1d9-495c-5104-8a26-be13bc28718e",
     "git_sha": null,
     "item_count": null,
@@ -750,8 +751,7 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "C_BRIDGE#12604000800.000800",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "56f6c1d9-495c-5104-8a26-be13bc28718e",
-    "when_ts": "2369-05-28T15:20:00+00:00"
+    "uuid": "56f6c1d9-495c-5104-8a26-be13bc28718e"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -760,6 +760,7 @@ expression: rows
     "channel": "@William T. Riker",
     "conversation_name": "@William T. Riker",
     "conversation_uuid": "777b8f58-706d-549a-82b8-699fc856030e",
+    "created_at": "2369-05-28T15:21:40+00:00",
     "entire_chat": "/chat/777b8f58-706d-549a-82b8-699fc856030e",
     "git_sha": null,
     "item_count": null,
@@ -780,8 +781,7 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "D_RIKER#12604000900.000900",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "777b8f58-706d-549a-82b8-699fc856030e",
-    "when_ts": "2369-05-28T15:21:40+00:00"
+    "uuid": "777b8f58-706d-549a-82b8-699fc856030e"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -790,6 +790,7 @@ expression: rows
     "channel": "@William T. Riker",
     "conversation_name": "@William T. Riker",
     "conversation_uuid": "1803e003-56a7-5c12-9024-5265850e9eaa",
+    "created_at": "2369-05-28T15:21:41+00:00",
     "entire_chat": "/chat/1803e003-56a7-5c12-9024-5265850e9eaa",
     "git_sha": null,
     "item_count": null,
@@ -810,8 +811,7 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "D_RIKER#12604000901.000901",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "1803e003-56a7-5c12-9024-5265850e9eaa",
-    "when_ts": "2369-05-28T15:21:41+00:00"
+    "uuid": "1803e003-56a7-5c12-9024-5265850e9eaa"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -820,6 +820,7 @@ expression: rows
     "channel": "@Lt. Cmdr. Data",
     "conversation_name": "@Lt. Cmdr. Data",
     "conversation_uuid": "e5c54890-5a44-5a3d-9efe-e28b37b48edf",
+    "created_at": "2369-05-28T15:21:42+00:00",
     "entire_chat": "/chat/e5c54890-5a44-5a3d-9efe-e28b37b48edf",
     "git_sha": null,
     "item_count": null,
@@ -840,8 +841,7 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "D_DATA#12604000902.000902",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "e5c54890-5a44-5a3d-9efe-e28b37b48edf",
-    "when_ts": "2369-05-28T15:21:42+00:00"
+    "uuid": "e5c54890-5a44-5a3d-9efe-e28b37b48edf"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -850,6 +850,7 @@ expression: rows
     "channel": "@William T. Riker, Worf",
     "conversation_name": "@William T. Riker, Worf",
     "conversation_uuid": "b168a24b-fddb-55c2-88fe-523dec59fd5c",
+    "created_at": "2369-05-28T15:21:43+00:00",
     "entire_chat": "/chat/b168a24b-fddb-55c2-88fe-523dec59fd5c",
     "git_sha": null,
     "item_count": null,
@@ -870,8 +871,7 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "G_AWAYTEAM#12604000903.000903",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "b168a24b-fddb-55c2-88fe-523dec59fd5c",
-    "when_ts": "2369-05-28T15:21:43+00:00"
+    "uuid": "b168a24b-fddb-55c2-88fe-523dec59fd5c"
   },
   {
     "account": "picard@enterprise.starfleet",
@@ -880,6 +880,7 @@ expression: rows
     "channel": "@William T. Riker, Worf",
     "conversation_name": "@William T. Riker, Worf",
     "conversation_uuid": "658ccd8e-50ad-527c-8cc3-401cf8b315db",
+    "created_at": "2369-05-28T15:21:44+00:00",
     "entire_chat": "/chat/658ccd8e-50ad-527c-8cc3-401cf8b315db",
     "git_sha": null,
     "item_count": null,
@@ -900,7 +901,6 @@ expression: rows
     "upstream_entity_kind": "thread",
     "upstream_id": "G_AWAYTEAM#12604000904.000904",
     "upstream_scope": "T_NCC1701D",
-    "uuid": "658ccd8e-50ad-527c-8cc3-401cf8b315db",
-    "when_ts": "2369-05-28T15:21:44+00:00"
+    "uuid": "658ccd8e-50ad-527c-8cc3-401cf8b315db"
   }
 ]

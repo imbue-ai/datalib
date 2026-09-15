@@ -24,10 +24,10 @@ fn blake3_hex(s: &str) -> String {
 pub enum GridRowError {
     /// A required identity column was empty / whitespace-only.
     EmptyField { field: &'static str },
-    /// `when_ts` was `Some` but not RFC 3339 with an explicit offset.
-    /// The grid derives its sortable `when_ts_utc` column from this, so
+    /// `created_at` was `Some` but not RFC 3339 with an explicit offset.
+    /// The grid derives its sortable `created_at_utc` column from this, so
     /// an unparseable value would sort wrong and render verbatim.
-    InvalidWhenTs { value: String, reason: String },
+    InvalidStamp { value: String, reason: String },
 }
 
 impl std::fmt::Display for GridRowError {
@@ -36,9 +36,9 @@ impl std::fmt::Display for GridRowError {
             GridRowError::EmptyField { field } => {
                 write!(f, "grid_row field `{field}` must be non-empty")
             }
-            GridRowError::InvalidWhenTs { value, reason } => write!(
+            GridRowError::InvalidStamp { value, reason } => write!(
                 f,
-                "grid_row when_ts {value:?} must be RFC 3339 with an explicit \
+                "grid_row created_at {value:?} must be RFC 3339 with an explicit \
                  offset (e.g. 2026-06-16T00:00:00+00:00): {reason}"
             ),
         }
@@ -48,22 +48,22 @@ impl std::fmt::Display for GridRowError {
 impl std::error::Error for GridRowError {}
 
 impl GridRow {
-    pub fn derived_when_ts_utc(&self) -> Option<String> {
-        self.when_ts
+    pub fn derived_created_at_utc(&self) -> Option<String> {
+        self.created_at
             .as_deref()
-            .and_then(datalib_time::split_when_ts)
+            .and_then(datalib_time::split_record_stamp)
             .map(|(utc, _offset)| utc)
     }
 
-    /// `when_offset` — the original UTC offset (`+05:30`, `-07:00`),
+    /// `created_offset` — the original UTC offset (`+05:30`, `-07:00`),
     /// preserved so the UI can re-render the instant in the wall-clock
     /// zone it was recorded in. NULL whenever
-    /// [`Self::derived_when_ts_utc`] is NULL; the two are derived from
+    /// [`Self::derived_created_at_utc`] is NULL; the two are derived from
     /// one parse and are always both present or both absent.
-    pub fn derived_when_offset(&self) -> Option<String> {
-        self.when_ts
+    pub fn derived_created_offset(&self) -> Option<String> {
+        self.created_at
             .as_deref()
-            .and_then(datalib_time::split_when_ts)
+            .and_then(datalib_time::split_record_stamp)
             .map(|(_utc, offset)| offset)
     }
 }
@@ -86,7 +86,7 @@ pub struct GridRowBuilder {
     provider: String,
     kind: String,
     source_label: String,
-    when_ts: Option<String>,
+    created_at: Option<String>,
     author: Option<String>,
     account: Option<String>,
     project: Option<String>,
@@ -152,7 +152,7 @@ impl GridRowBuilder {
         self
     }
 
-    opt_setter!(when_ts);
+    opt_setter!(created_at);
     opt_setter!(author);
     opt_setter!(account);
     opt_setter!(project);
@@ -187,7 +187,7 @@ impl GridRowBuilder {
     }
 
     /// Validate and finalize the row, recording what had to give. A
-    /// `when_ts` that will not parse is nulled and the row kept — a
+    /// `created_at` that will not parse is nulled and the row kept — a
     /// record with an identity is still a record, and the grid only
     /// loses its place in time order; a row with no identity is dropped
     /// and `None` comes back so the caller keeps going.
@@ -201,9 +201,9 @@ impl GridRowBuilder {
         // Keep the identity before `build` consumes the builder, so a
         // rejected row can still be named.
         let uuid = self.uuid.clone();
-        if let Some(ts) = self.when_ts.take() {
+        if let Some(ts) = self.created_at.take() {
             if validate_iso_offset(&ts).is_ok() {
-                self.when_ts = Some(ts);
+                self.created_at = Some(ts);
             } else {
                 problems.push(problem_row(
                     problem_key(&uuid, source_id, scope_key, &ts),
@@ -212,7 +212,7 @@ impl GridRowBuilder {
                     render_version,
                     Outcome::Nulled,
                     Problem {
-                        field: Some("when_ts".to_string()),
+                        field: Some("created_at".to_string()),
                         path: None,
                         reason: Reason::CoercionFailed,
                         rule: None,
@@ -227,7 +227,7 @@ impl GridRowBuilder {
                 let field = match &e {
                     GridRowError::EmptyField { field } => *field,
                     // Cleared above.
-                    GridRowError::InvalidWhenTs { .. } => "when_ts",
+                    GridRowError::InvalidStamp { .. } => "created_at",
                 };
                 problems.push(problem_row(
                     problem_key(&uuid, source_id, scope_key, &e.to_string()),
@@ -264,8 +264,8 @@ impl GridRowBuilder {
                 return Err(GridRowError::EmptyField { field });
             }
         }
-        if let Some(ts) = &self.when_ts {
-            validate_iso_offset(ts).map_err(|e| GridRowError::InvalidWhenTs {
+        if let Some(ts) = &self.created_at {
+            validate_iso_offset(ts).map_err(|e| GridRowError::InvalidStamp {
                 value: ts.clone(),
                 reason: e.to_string(),
             })?;
@@ -275,7 +275,7 @@ impl GridRowBuilder {
             provider: self.provider,
             kind: self.kind,
             source_label: self.source_label,
-            when_ts: self.when_ts,
+            created_at: self.created_at,
             author: self.author,
             account: self.account,
             project: self.project,
@@ -360,40 +360,40 @@ mod builder_tests {
     }
 
     #[test]
-    fn builds_minimal_row_with_none_when_ts() {
+    fn builds_minimal_row_with_none_created_at() {
         let row = ok_builder().build().expect("valid row");
         assert_eq!(row.uuid, "u-1");
-        assert!(row.when_ts.is_none());
+        assert!(row.created_at.is_none());
         assert!(row.author.is_none());
     }
 
     #[test]
-    fn accepts_offset_bearing_when_ts() {
+    fn accepts_offset_bearing_created_at() {
         let row = ok_builder()
-            .when_ts(Some("2026-06-16T00:00:00+00:00".to_string()))
+            .created_at(Some("2026-06-16T00:00:00+00:00".to_string()))
             .build()
             .expect("offset-bearing ts is valid");
-        assert_eq!(row.when_ts.as_deref(), Some("2026-06-16T00:00:00+00:00"));
+        assert_eq!(row.created_at.as_deref(), Some("2026-06-16T00:00:00+00:00"));
     }
 
     #[test]
-    fn rejects_bare_date_when_ts() {
+    fn rejects_bare_date_created_at() {
         // The LinkedIn "Connected On" bug: a bare "DD Mon YYYY" date has
-        // no time and no offset, so it can't be a valid when_ts.
+        // no time and no offset, so it can't be a valid created_at.
         let err = ok_builder()
-            .when_ts(Some("16 Jun 2026".to_string()))
+            .created_at(Some("16 Jun 2026".to_string()))
             .build()
             .expect_err("bare date must be rejected");
-        assert!(matches!(err, GridRowError::InvalidWhenTs { .. }), "{err}");
+        assert!(matches!(err, GridRowError::InvalidStamp { .. }), "{err}");
     }
 
     #[test]
     fn rejects_naive_datetime_without_offset() {
         let err = ok_builder()
-            .when_ts(Some("2026-06-16T00:00:00".to_string()))
+            .created_at(Some("2026-06-16T00:00:00".to_string()))
             .build()
             .expect_err("offset is required");
-        assert!(matches!(err, GridRowError::InvalidWhenTs { .. }), "{err}");
+        assert!(matches!(err, GridRowError::InvalidStamp { .. }), "{err}");
     }
 
     #[test]
@@ -408,18 +408,18 @@ mod builder_tests {
     /// body; dropping the row lost the whole document over one
     /// unsortable field.
     #[test]
-    fn a_bad_when_ts_is_nulled_and_the_row_kept() {
+    fn a_bad_created_at_is_nulled_and_the_row_kept() {
         let mut problems = Vec::new();
         let row = ok_builder()
-            .when_ts(Some("16 Jun 2026".to_string()))
+            .created_at(Some("16 Jun 2026".to_string()))
             .build_or_record("src", "doc-1", 3, &mut problems)
             .expect("the row survives");
-        assert!(row.when_ts.is_none());
+        assert!(row.created_at.is_none());
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].uuid, "u-1");
         assert_eq!(problems[0].outcome, Outcome::Nulled.as_str());
         assert!(
-            problems[0].problems.contains("when_ts"),
+            problems[0].problems.contains("created_at"),
             "{}",
             problems[0].problems
         );

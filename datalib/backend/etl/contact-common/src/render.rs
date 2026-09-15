@@ -132,7 +132,7 @@ fn render_one(
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
-        upstream_cursor: contact.when_ts.clone(),
+        upstream_cursor: contact.created_at.clone(),
         bucket_key: Some(m_uuid.clone()),
         md_path,
         render_version: profile.render_version,
@@ -188,10 +188,10 @@ fn render_markdown(
     if let Some(dn) = &contact.display_name {
         out.push_str(&format!("title: {}\n", yaml_safe(dn)));
     }
-    // Omit `when_ts:` entirely when we don't have one; the grid row
+    // Omit `created_at:` entirely when we don't have one; the grid row
     // emits `None` to match.
-    if let Some(ts) = &contact.when_ts {
-        out.push_str(&format!("when_ts: {}\n", yaml_safe(ts)));
+    if let Some(ts) = &contact.created_at {
+        out.push_str(&format!("created_at: {}\n", yaml_safe(ts)));
     }
     out.push_str("---\n\n");
 
@@ -258,7 +258,7 @@ fn build_grid_row(
         .provider(profile.provider)
         .kind(profile.contact_kind.clone())
         .source_label(profile.source_label.clone())
-        .when_ts(contact.when_ts.clone())
+        .created_at(contact.created_at.clone())
         .author(Some(title))
         .account(profile.account.clone())
         .channel(Some(contact.group_label.clone()))
@@ -331,9 +331,9 @@ mod tests {
             group_label: "LinkedIn Connections".to_string(),
             display_name: Some("Jean-Luc Picard".to_string()),
             external_id: Some("https://www.linkedin.com/in/jlp".to_string()),
-            // Offset-bearing per the grid's when_ts contract (the
+            // Offset-bearing per the grid's created_at contract (the
             // builder now rejects bare dates — see GridRowBuilder).
-            when_ts: Some("2024-01-02T00:00:00+00:00".to_string()),
+            created_at: Some("2024-01-02T00:00:00+00:00".to_string()),
             source_url: Some("https://www.linkedin.com/in/jlp".to_string()),
             fields: vec![
                 ContactField::new("Company", "Starfleet"),

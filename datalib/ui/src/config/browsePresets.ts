@@ -25,7 +25,7 @@ export type BrowseColumn = keyof SearchRow;
 /// because it is the within-source discriminator: one source is rarely
 /// one kind of thing (Slack has threads and messages, PDFs have documents
 /// and pages).
-const ALWAYS: BrowseColumn[] = ["kind", "when", "conversation_name", "snippet"];
+const ALWAYS: BrowseColumn[] = ["kind", "created_at", "conversation_name", "snippet"];
 
 /// Extra columns per source type, inserted before `snippet`.
 const EXTRA: Record<string, BrowseColumn[]> = {

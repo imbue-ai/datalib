@@ -148,7 +148,7 @@ Pick the surface that fits the question:
 - **SQL over everything** — the `grid_rows` union table in
   `unified_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
-  `when_ts`, `author`, `channel`, `conversation_uuid`, `text`,
+  `created_at`, `author`, `channel`, `conversation_uuid`, `text`,
   `entire_chat`, etc.
 
   Read it with **`datalib-doltlite`**, which is in the release tarball

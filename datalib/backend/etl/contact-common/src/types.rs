@@ -24,7 +24,7 @@ pub struct NormalizedContact {
     pub external_id: Option<String>,
     /// Source-side timestamp when one exists (vCard `REV:`, LinkedIn's
     /// "Connected On"). Passed through verbatim; never fabricated.
-    pub when_ts: Option<String>,
+    pub created_at: Option<String>,
     /// Canonical web URL for this contact, if any (the LinkedIn profile
     /// URL). Wired into the page Title's copy-link and the grid
     /// `source_url`.

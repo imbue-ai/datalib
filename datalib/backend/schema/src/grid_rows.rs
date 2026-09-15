@@ -41,17 +41,17 @@ pub struct GridRow {
     /// event-shaped, and we never fabricate one. Null rows are excluded by
     /// `before:`/`after:`.
     ///
-    /// `when_ts_utc` and `when_offset` are derived from this at index time
+    /// `created_at_utc` and `created_offset` are derived from this at index time
     /// and live in the DB but not on this struct. The grid sorts and filters
-    /// on `when_ts_utc`, where one zone and a fixed width make lexical order
-    /// match chronological order; `when_offset` recovers the local
+    /// on `created_at_utc`, where one zone and a fixed width make lexical order
+    /// match chronological order; `created_offset` recovers the local
     /// wall-clock for display. This column itself stays as the source
-    /// wrote it — it is the record's stamp — which is why it is not `when_ts_utc` + `tz_offset` like the stamps
+    /// wrote it — it is the record's stamp — which is why it is not `created_at_utc` + `tz_offset` like the stamps
     /// we mint (AGENTS.md, "Timestamp convention").
     #[col(sql = "VARCHAR(40)")]
-    #[derived(name = "when_ts_utc", sql = "VARCHAR(40)")]
-    #[derived(name = "when_offset", sql = "VARCHAR(8)")]
-    pub when_ts: Option<String>,
+    #[derived(name = "created_at_utc", sql = "VARCHAR(40)")]
+    #[derived(name = "created_offset", sql = "VARCHAR(8)")]
+    pub created_at: Option<String>,
     /// Display name of the author: the model slug for LLM responses, the
     /// account for user input, the real name for Slack.
     #[col(sql = "VARCHAR(255)")]

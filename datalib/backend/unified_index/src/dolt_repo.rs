@@ -29,7 +29,8 @@ pub struct DoltRepo {
 /// constant because `search` and `search_by_uuids` select exactly the
 /// same set through [`search_row_from`]; two hand-kept lists drifted for
 /// as long as they existed.
-const SEARCH_ROW_COLUMNS: &str = "uuid, provider, kind, source_label, when_ts, author, account, \
+const SEARCH_ROW_COLUMNS: &str =
+    "uuid, provider, kind, source_label, created_at, author, account, \
      project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
      message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, upstream_id, \
      upstream_entity_kind, qmd_path, byte_size, item_count";
@@ -58,7 +59,7 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
             snippet(&text, needle)
         },
         sender: author.clone(),
-        when: r.try_get::<Option<String>, _>("when_ts").ok().flatten(),
+        created_at: r.try_get::<Option<String>, _>("created_at").ok().flatten(),
         conversation_name: r.try_get("conversation_name").unwrap_or_default(),
         project: r.try_get("project").unwrap_or_default(),
         account: r.try_get("account").unwrap_or_default(),
@@ -131,7 +132,7 @@ impl IndexRepo for DoltRepo {
         let (where_sql, params) = build_where(q, &needle);
         let sql = format!(
             "SELECT {SEARCH_ROW_COLUMNS} FROM grid_rows{} \
-             ORDER BY when_ts_utc ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
+             ORDER BY created_at_utc ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
              LIMIT ?",
             where_sql
         );
@@ -168,7 +169,7 @@ impl IndexRepo for DoltRepo {
         // across the rows of a single markdown, so picking the canonical
         // (Chat / Slack Thread / per-provider top-level row) keeps the
         // result deterministic.
-        let sql = "SELECT conversation_name, account, project, channel, when_ts, source_label, \
+        let sql = "SELECT conversation_name, account, project, channel, created_at, source_label, \
                           COALESCE(source_url, slack_link) AS source_url_or_link \
                    FROM grid_rows \
                    WHERE markdown_uuid = ? \
@@ -189,7 +190,7 @@ impl IndexRepo for DoltRepo {
             account: r.try_get("account").ok(),
             project: r.try_get("project").ok(),
             channel: r.try_get("channel").ok(),
-            when_ts: r.try_get("when_ts").ok(),
+            created_at: r.try_get("created_at").ok(),
             source_label: r.try_get("source_label").ok(),
             source_url: r.try_get("source_url_or_link").ok(),
         }))

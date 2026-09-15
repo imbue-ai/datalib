@@ -25,7 +25,7 @@ use datalib_etl_perseus::{
     WORK_SHORT, WORK_TITLE, WORK_URN,
 };
 
-/// Synthetic `when_ts` base. Drives the grid's global sort so default
+/// Synthetic `created_at` base. Drives the grid's global sort so default
 /// ordering yields reading order (Book 1 Chapter 1 first).
 fn ts_base() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()
@@ -399,7 +399,7 @@ fn book_text_for_grid(book: &Book) -> String {
     book_title(&book.n)
 }
 
-fn synth_when_ts(book_n: &str, ch_n: i64) -> String {
+fn synth_stamp(book_n: &str, ch_n: i64) -> String {
     let bi: i64 = book_n.parse().unwrap_or(0);
     let offset = bi * 10_000 + ch_n;
     render_synth_ts(ts_base() + Duration::seconds(offset))
@@ -418,7 +418,7 @@ fn book_grid_row(
         .provider(Provider::Perseus)
         .kind("Book")
         .source_label("Perseus")
-        .when_ts(Some(synth_when_ts(&book.n, 0)))
+        .created_at(Some(synth_stamp(&book.n, 0)))
         .author(Some("Thucydides".to_string()))
         .account(Some("Perseus Digital Library".to_string()))
         .project(Some(WORK_TITLE.to_string()))
@@ -459,7 +459,7 @@ fn chapter_grid_row(
         .provider(Provider::Perseus)
         .kind(format!("Chapter ({})", edition.id))
         .source_label("Perseus")
-        .when_ts(Some(synth_when_ts(&book.n, ci)))
+        .created_at(Some(synth_stamp(&book.n, ci)))
         .author(Some("Thucydides".to_string()))
         .account(Some("Perseus Digital Library".to_string()))
         .project(Some(WORK_TITLE.to_string()))
@@ -496,7 +496,7 @@ fn section_grid_row(
     let bi: u32 = book.n.parse().unwrap_or(0);
     let ci: u32 = chapter.n.parse().unwrap_or(0);
     let si: u32 = sec.n.parse().unwrap_or(0);
-    let when_ts = {
+    let created_at = {
         let ci_i64: i64 = ci as i64;
         let chapter_secs = bi as i64 * 10_000 + ci_i64;
         let ts = ts_base() + Duration::seconds(chapter_secs) + Duration::milliseconds(idx + 1);
@@ -507,7 +507,7 @@ fn section_grid_row(
         .provider(Provider::Perseus)
         .kind(format!("Section ({})", edition.id))
         .source_label("Perseus")
-        .when_ts(Some(when_ts))
+        .created_at(Some(created_at))
         .author(Some("Thucydides".to_string()))
         .account(Some("Perseus Digital Library".to_string()))
         .project(Some(WORK_TITLE.to_string()))

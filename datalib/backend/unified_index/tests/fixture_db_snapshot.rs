@@ -103,7 +103,7 @@ async fn snapshot_grid_rows_and_documents() {
 
     // ── grid_rows ────────────────────────────────────────────────
     let rows = sqlx::query(
-        "SELECT uuid, provider, kind, source_label, when_ts, author, account, \
+        "SELECT uuid, provider, kind, source_label, created_at, author, account, \
                 project, org_uuid, org_name, channel, conversation_name, conversation_uuid, \
                 message_index, entire_chat, text, slack_link, qmd_path, \
                 source_url, git_sha, upstream_id, upstream_entity_kind, upstream_scope, \
@@ -125,13 +125,13 @@ async fn snapshot_grid_rows_and_documents() {
                 "provider": r.try_get::<String, _>("provider").ok(),
                 "kind": r.try_get::<String, _>("kind").ok(),
                 "source_label": r.try_get::<String, _>("source_label").ok(),
-                // `Option<String>`, not `String`: `when_ts` is nullable, and
+                // `Option<String>`, not `String`: `created_at` is nullable, and
                 // reading it as a bare `String` rendered SQL NULL as `""` —
                 // so this golden could not tell "upstream gave us no
                 // timestamp" from "upstream gave us an empty one". That is
                 // exactly the distinction §6 turns on, and it was invisible
                 // here until a fixture finally had an undated record.
-                "when_ts": r.try_get::<Option<String>, _>("when_ts").ok().flatten(),
+                "created_at": r.try_get::<Option<String>, _>("created_at").ok().flatten(),
                 "author": r.try_get::<Option<String>, _>("author").ok().flatten(),
                 "account": r.try_get::<Option<String>, _>("account").ok().flatten(),
                 "project": r.try_get::<Option<String>, _>("project").ok().flatten(),
@@ -299,7 +299,7 @@ async fn snapshot_grid_rows_and_documents() {
     // one field per line, sorted keys, no insta-yaml quoting surprises.
     // Measured against the alternatives on this same data: JSON Lines
     // is 340 lines to this one's 6,971 and CSV is 341, but CSV has no
-    // native null and this golden turns on null != "" (see `when_ts`
+    // native null and this golden turns on null != "" (see `created_at`
     // above), and neither shows you *which* field moved. The size
     // problem was the storage rows, and it is fixed above.
     let snapshot = serde_json::to_string_pretty(&bundle).expect("serialize");

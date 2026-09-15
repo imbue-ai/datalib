@@ -394,7 +394,7 @@ pub fn plan(
                 .provider(Provider::Datalib)
                 .kind(s.kind.label())
                 .source_label(SOURCE_LABEL)
-                .when_ts(Some(now.to_string()))
+                .created_at(Some(now.to_string()))
                 // No `account`: this row measures a source, it belongs
                 // to no upstream login, and the group id it used to
                 // carry here polluted every `account:` filter. The

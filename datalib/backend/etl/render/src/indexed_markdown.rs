@@ -932,7 +932,7 @@ mod tests {
             .entire_chat(format!("/chat/{markdown_uuid}"))
             .text("hello")
             .markdown_uuid(Some(markdown_uuid.to_string()))
-            .when_ts(Some("2026-01-01T00:00:00+00:00".to_string()))
+            .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
             .build()
             .expect("row")
     }
@@ -1136,7 +1136,7 @@ mod tests {
             stage: Stage::GridRow.as_str().into(),
             outcome: Outcome::Nulled.as_str().into(),
             problems: serde_json::to_string(&vec![Problem::field(
-                "when_ts",
+                "created_at",
                 Reason::CoercionFailed,
                 "not-a-date",
             )])
@@ -1318,7 +1318,7 @@ mod tests {
     /// and so does the `.md` just written, which nothing would resolve.
     /// The problems saying why stay. Found by the contract harness on a
     /// gitlab merge request re-keyed under another bucket whose rows all
-    /// failed `when_ts`: `markdowns` kept the old bucket.
+    /// failed `created_at`: `markdowns` kept the old bucket.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_document_re_rendered_with_no_rows_is_gone_bucket_and_all() {
         let td = tempfile::tempdir().unwrap();
