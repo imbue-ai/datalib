@@ -110,8 +110,8 @@ pub struct DocBucket {
 
 #[derive(Debug, Clone)]
 pub struct ParsedChatItem {
-    /// `{chat_id}#{author_id}#{date_sent}` — matches the
-    /// `chat_items.id` PK.
+    /// `chat_items.id`, as read — the key the diff names and the
+    /// attachment edges hang off.
     pub item_pk: String,
     pub author_id: String,
     pub date_sent: i64,
@@ -411,7 +411,8 @@ async fn load_buckets(
         .join(",");
     let period_key_expr = period_key_sql(period);
     let sql = format!(
-        "SELECT chat_id,
+        "SELECT id,
+                chat_id,
                 author_id,
                 date_sent,
                 {period_key_expr} AS period_key,
@@ -446,9 +447,7 @@ async fn load_buckets(
             });
             docs.len() - 1
         });
-        let item_pk = datalib_etl_signal::ingest::schema_raw::chat_item_id_recipe(
-            &chat_id, &author_id, date_sent,
-        );
+        let item_pk: String = r.try_get("id")?;
         let (text, outgoing, attachments) = decode_chat_item(&payload);
         docs[idx].items.push(ParsedChatItem {
             item_pk,

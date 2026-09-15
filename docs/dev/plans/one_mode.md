@@ -459,7 +459,13 @@ closed all but one. The one left is a decision, not a miss: a pdf whose
 conversion fails keeps its last page where a cold render has none.
 yolink, garmin, perseus and notion followed with no new gap, and with
 perseus went `retain_documents` itself; github and gitlab were the
-last, and with them `remove_conversation`.*
+last, and with them `remove_conversation`. The harness then grew the
+other three single-row mutations the sketch below names — delete one
+row, insert a copy under a fresh key, and, for a table that points at
+blob bytes, swap two rows' digests — 223 mutations to 393, and found
+one more: signal declared each message under a key it recomputed from
+the payload rather than the row id it read, so a message whose id
+disagreed with that recipe would never have been named.*
 
 A real provider is correct under the property if it keeps five
 promises. Written as a contract, so a provider author has a list and
