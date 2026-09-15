@@ -78,7 +78,7 @@ import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
 import RunLogPanel from "@/components/RunLogPanel.vue";
 import { activityChips, activityText } from "@/config/activity";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
-import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
+import { browseLabel, rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
 import { subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
@@ -455,6 +455,8 @@ const windowPhrase = computed(() => {
 /// 24×24 Material-ish glyphs, drawn in `currentColor` so they follow the
 /// button's own colour through hover, disabled and the dark theme.
 const ICON_PATHS: Record<string, string> = {
+  // A table: what Browse opens is this row's data as rows and columns.
+  browse: "M3 5h18v4H3V5zm0 6h8v8H3v-8zm10 0h8v8h-8v-8z",
   run: "M8 5v14l11-7z",
   // The play button's other face. A row whose work is already queued or
   // in flight can't usefully be started again, so the button becomes
@@ -462,8 +464,8 @@ const ICON_PATHS: Record<string, string> = {
   stop: "M6 6h12v12H6z",
 };
 
-/// The Sync cell's button. Built once per cell; its face is set by
-/// `setButton`, and re-set in place on every repaint.
+/// An icon button for the Actions cell. Built once per cell; its face
+/// is set by `setButton`, and re-set in place on every repaint.
 function iconButton(
   icon: keyof typeof ICON_PATHS,
   label: string,
@@ -502,25 +504,32 @@ function setButton(
   b.querySelector("path")!.setAttribute("d", ICON_PATHS[icon]);
 }
 
-/// The one button a row keeps: Sync, or Stop while a job has the row
-/// claimed. Everything else a row can do is in its right-click menu.
+/// The two buttons a row keeps: Browse, and Sync (or Stop while a job
+/// has the row claimed). Everything else a row can do is in its
+/// right-click menu, where these two are repeated.
 ///
 /// A class rather than a function so that `refresh` can update the
-/// button in place and return true: `repaint()` runs on every job
+/// buttons in place and return true: `repaint()` runs on every job
 /// event — a few times a second during a sync — and a function
 /// renderer is torn down and rebuilt on each, so a click whose
 /// mousedown landed on the old button and mouseup on its replacement
-/// fired nothing. The button is created once and reads the row current
+/// fired nothing. The buttons are created once and read the row current
 /// at click time.
 class ActionsRenderer implements ICellRendererComp<Row> {
   private wrap!: HTMLSpanElement;
   private row!: Row;
+  private browse!: HTMLButtonElement;
   private run!: HTMLButtonElement;
 
   init(p: ICellRendererParams<Row>): void {
     this.row = p.data!;
     this.wrap = document.createElement("span");
     this.wrap.className = "m2-actions";
+    // First, and deliberately: looking at the data is the thing a
+    // person came here to do, and it is the one action on this row that
+    // changes nothing.
+    this.browse = iconButton("browse", "Browse this data", null, false, () => openBrowse(this.row));
+    this.wrap.appendChild(this.browse);
     // One button, two faces. While a job has this row claimed the only
     // useful thing to do with it is call it off — starting a second
     // sync of work already queued is never what was meant. A group is
@@ -545,6 +554,7 @@ class ActionsRenderer implements ICellRendererComp<Row> {
 
   private apply(): void {
     const row = this.row;
+    setButton(this.browse, "browse", browseLabel(row), row.browseBlocked);
     if (row.stop_job_id) {
       setButton(this.run, "stop", row.stop_label ?? "Stop the sync in progress", row.stop_blocked);
       this.run.classList.add("danger");
@@ -854,12 +864,12 @@ const columnDefs: ColDef<Row>[] = [
     },
   },
   {
-    headerName: "Sync",
+    headerName: "Actions",
     colId: "actions",
     sortable: false,
     filter: false,
-    width: 64,
-    minWidth: 64,
+    width: 92,
+    minWidth: 92,
     resizable: false,
     valueGetter: (p: ValueGetterParams<Row>) => p.data?.id,
     cellRenderer: ActionsRenderer,
@@ -2281,8 +2291,8 @@ onUnmounted(() => {
             each table, and the run that made it — newest first, updating while a sync runs.
             Right-click inside a selection and the menu acts on all of it; outside one, on that
             row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
-            and says why on hover. <b>Sync</b> stays a button: it is the one thing a row does
-            often.
+            and says why on hover. <b>Browse</b> and <b>Sync</b> are also buttons: they are the two
+            things a row does often.
           </p>
           <p>
             <b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its

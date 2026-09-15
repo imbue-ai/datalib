@@ -7,7 +7,6 @@
 // with that type's columns. Every link is in a different file.
 
 import { test, expect, type Page } from "@playwright/test";
-import { rowMenuEntry } from "./grid-helpers";
 
 const ROWS = '.ag-grid-scrolling-rows [role="row"]';
 const SEARCH = '[data-testid="search-input"]';
@@ -88,6 +87,8 @@ async function writeConfig(page: Page, text: string): Promise<void> {
 /// label.
 const groupRowOf = (page: Page, groupId: string) =>
   page.locator(`${ROWS}[row-id="group:${groupId}"]`);
+const browseButton = (page: Page, groupId: string) =>
+  groupRowOf(page, groupId).getByRole("button", { name: /^Browse/ });
 
 /// Click Browse and wait until the grid card is actually up.
 ///
@@ -97,8 +98,7 @@ const groupRowOf = (page: Page, groupId: string) =>
 /// box belongs to the card and to nothing else, so it is the honest
 /// signal that the navigation landed.
 async function browse(page: Page, groupId: string, expectQuery: string) {
-  const browse = await rowMenuEntry(page, groupRowOf(page, groupId), /^Browse/).open();
-  await browse.click();
+  await browseButton(page, groupId).click();
   await expect(page.locator(SEARCH)).toBeVisible({ timeout: 30_000 });
   await expect(page.locator(SEARCH)).toHaveValue(expectQuery);
   await page.locator(ROWS).first().waitFor({ timeout: 30_000 });
@@ -185,12 +185,11 @@ test("the index group browses every source", async ({ page }) => {
 });
 
 /// A source that renders nothing has no rows at all — not even the
-/// storage rows, which render is what emits. The menu entry says so
-/// rather than opening an empty grid onto a source that looks broken.
+/// storage rows, which render is what emits. The button says so rather
+/// than opening an empty grid onto a source that looks broken.
 test("a download-only source cannot be browsed", async ({ page }) => {
   await openManage(page);
-  const media = await rowMenuEntry(page, groupRowOf(page, "media"), /^Browse/).open();
-  await expect(media).toHaveClass(/ag-menu-option-disabled/);
-  await media.hover();
-  await expect(page.getByText(/no render step/)).toBeVisible();
+  const media = browseButton(page, "media");
+  await expect(media).toBeDisabled();
+  await expect(media).toHaveAttribute("title", /no render step/);
 });
