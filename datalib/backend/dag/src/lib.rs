@@ -16,6 +16,7 @@ pub mod state;
 pub mod step;
 pub mod subprocess;
 pub mod version;
+pub mod written;
 
 pub use artifact::ArtifactPath;
 pub use diagnostics::{Diagnostic, EntryKind, EntryRef, Severity};
