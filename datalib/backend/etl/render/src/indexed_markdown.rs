@@ -243,7 +243,8 @@ impl IndexedMarkdownStore {
     /// a re-keyed path prefix, a chat re-periodized under another
     /// directory — the `.md` it used to be at goes, for the same reason
     /// [`Self::remove_document`] unlinks: a file nothing names is still
-    /// served and still indexed.
+    /// served and still indexed. A document with no rows is removed the
+    /// same way, the `.md` just written included; its problems stay.
     pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
         let previous = self.transaction(|| {
             blocking(async {
@@ -268,6 +269,9 @@ impl IndexedMarkdownStore {
             .strip_prefix(out_dir)
             .unwrap_or(&md.md_path)
             .to_string_lossy();
+        if md.rows.is_empty() {
+            unlink_rendered(out_dir, &now);
+        }
         if let Some(previous) = previous.filter(|p| *p != now) {
             unlink_rendered(out_dir, &previous);
         }
@@ -295,17 +299,9 @@ impl IndexedMarkdownStore {
                         .await
                         .with_context(|| format!("read md_path for {markdown_uuid}"))?
                         .flatten();
-                for sql in [
-                    "DELETE FROM grid_rows WHERE markdown_uuid = ?",
-                    "DELETE FROM edges WHERE src_markdown_uuid = ?",
-                    "DELETE FROM markdowns WHERE markdown_uuid = ?",
-                ] {
-                    sqlx::query(sql)
-                        .bind(markdown_uuid)
-                        .execute(&mut **conn)
-                        .await
-                        .with_context(|| format!("remove {markdown_uuid} from the store"))?;
-                }
+                crate::grid_index::delete_document_rows(conn, markdown_uuid)
+                    .await
+                    .with_context(|| format!("remove {markdown_uuid} from the store"))?;
                 sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
                     .bind(ScopeKind::Markdown.as_str())
                     .bind(markdown_uuid)
@@ -1313,6 +1309,51 @@ mod tests {
             counts.get("nulled").copied(),
             Some(1),
             "md-2's problem cleared; md-1's must not have — it was never looked at"
+        );
+    }
+
+    /// A document that comes back with no rows — every one rejected by
+    /// validation — is not a document: its `markdowns` row goes, so a
+    /// bucket sweep never finds it under the bucket it used to be in,
+    /// and so does the `.md` just written, which nothing would resolve.
+    /// The problems saying why stay. Found by the contract harness on a
+    /// gitlab merge request re-keyed under another bucket whose rows all
+    /// failed `when_ts`: `markdowns` kept the old bucket.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_document_re_rendered_with_no_rows_is_gone_bucket_and_all() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let s = store(root);
+        let mut first = doc(root, "md-1", "fp-1");
+        first.bucket_key = Some("mr!17".into());
+        std::fs::write(&first.md_path, "first").unwrap();
+        s.put_document(root, &first).unwrap();
+        assert_eq!(
+            s.documents_for_buckets(&["mr!17"]).unwrap(),
+            vec![("mr!17".to_string(), "md-1".to_string())]
+        );
+
+        let mut empty = doc_with(root, "md-1", "fp-2", vec![problem("row-a", "md-1")]);
+        empty.bucket_key = Some("mr!17~new".into());
+        empty.md_path = root.join("moved").join("md-1.md");
+        empty.rows.clear();
+        std::fs::create_dir_all(empty.md_path.parent().unwrap()).unwrap();
+        std::fs::write(&empty.md_path, "empty").unwrap();
+        s.put_document(root, &empty).unwrap();
+
+        assert!(
+            s.documents_for_buckets(&["mr!17", "mr!17~new"])
+                .unwrap()
+                .is_empty(),
+            "no markdowns row under either bucket"
+        );
+        assert!(s.all_document_uuids().unwrap().is_empty());
+        assert!(!first.md_path.exists(), "the old file is gone");
+        assert!(!empty.md_path.exists(), "and so is the one just written");
+        assert_eq!(
+            s.problem_counts().unwrap().get("nulled").copied(),
+            Some(1),
+            "the record of why every row went stays"
         );
     }
 

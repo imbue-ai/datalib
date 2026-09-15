@@ -186,10 +186,13 @@ impl GridRowBuilder {
         self
     }
 
-    /// Validate and finalize the row, or report why it could not be
-    /// built and return `None` so the caller drops it and keeps going.
+    /// Validate and finalize the row, recording what had to give. A
+    /// `when_ts` that will not parse is nulled and the row kept — a
+    /// record with an identity is still a record, and the grid only
+    /// loses its place in time order; a row with no identity is dropped
+    /// and `None` comes back so the caller keeps going.
     pub fn build_or_record(
-        self,
+        mut self,
         source_id: &str,
         scope_key: &str,
         render_version: u32,
@@ -198,57 +201,48 @@ impl GridRowBuilder {
         // Keep the identity before `build` consumes the builder, so a
         // rejected row can still be named.
         let uuid = self.uuid.clone();
+        if let Some(ts) = self.when_ts.take() {
+            if validate_iso_offset(&ts).is_ok() {
+                self.when_ts = Some(ts);
+            } else {
+                problems.push(problem_row(
+                    problem_key(&uuid, source_id, scope_key, &ts),
+                    scope_key,
+                    source_id,
+                    render_version,
+                    Outcome::Nulled,
+                    Problem {
+                        field: Some("when_ts".to_string()),
+                        path: None,
+                        reason: Reason::CoercionFailed,
+                        rule: None,
+                        sample: sample_of(&ts),
+                    },
+                ));
+            }
+        }
         match self.build() {
             Ok(row) => Some(row),
             Err(e) => {
-                let (field, reason, sample) = match &e {
-                    GridRowError::EmptyField { field } => (
-                        Some((*field).to_string()),
-                        Reason::NoIdentity,
-                        String::new(),
-                    ),
-                    GridRowError::InvalidWhenTs { value, .. } => (
-                        Some("when_ts".to_string()),
-                        Reason::CoercionFailed,
-                        value.clone(),
-                    ),
+                let field = match &e {
+                    GridRowError::EmptyField { field } => *field,
+                    // Cleared above.
+                    GridRowError::InvalidWhenTs { .. } => "when_ts",
                 };
-                // A row with no uuid has no identity to key the problem
-                // on either; give it the content-derived surrogate so
-                // the same bad record does not accumulate a new row
-                // every run.
-                let key = if uuid.trim().is_empty() {
-                    format!(
-                        "noid:{}",
-                        &blake3_hex(&format!("{source_id}\x1f{scope_key}\x1f{e}"))[..16]
-                    )
-                } else {
-                    uuid
-                };
-                let problem = Problem {
-                    field,
-                    path: None,
-                    reason,
-                    rule: None,
-                    sample: sample_of(&sample),
-                };
-                problems.push(RenderProblemRow {
-                    uuid: key,
-                    scope_key: scope_key.to_string(),
-                    scope_kind: ScopeKind::Markdown.as_str().to_string(),
-                    source_id: source_id.to_string(),
-                    stage: Stage::GridRow.as_str().to_string(),
-                    outcome: Outcome::Dropped.as_str().to_string(),
-                    problems: serde_json::to_string(&vec![problem]).unwrap_or_else(|_| "[]".into()),
-                    // Left for the store to stamp; it is the only
-                    // layer that can see whether this uuid already had
-                    // a row, and so the only one that can tell "first
-                    // seen" from "seen again". See the field docs.
-                    first_seen_at_utc: String::new(),
-                    last_seen_at_utc: String::new(),
-                    tz_offset: None,
-                    render_version: render_version as i64,
-                });
+                problems.push(problem_row(
+                    problem_key(&uuid, source_id, scope_key, &e.to_string()),
+                    scope_key,
+                    source_id,
+                    render_version,
+                    Outcome::Dropped,
+                    Problem {
+                        field: Some(field.to_string()),
+                        path: None,
+                        reason: Reason::NoIdentity,
+                        rule: None,
+                        sample: sample_of(""),
+                    },
+                ));
                 // Deliberately no `warn!` here. The render path's
                 // diagnostics buffer is not installed (see the audit's
                 // §1), so a log line from here reaches nobody — that is
@@ -309,6 +303,47 @@ impl GridRowBuilder {
     }
 }
 
+/// A row with no uuid has no identity to key its problem on either;
+/// it gets a surrogate derived from what went wrong, so the same bad
+/// record does not accumulate a new problem row every run.
+fn problem_key(uuid: &str, source_id: &str, scope_key: &str, detail: &str) -> String {
+    if uuid.trim().is_empty() {
+        format!(
+            "noid:{}",
+            &blake3_hex(&format!("{source_id}\x1f{scope_key}\x1f{detail}"))[..16]
+        )
+    } else {
+        uuid.to_string()
+    }
+}
+
+fn problem_row(
+    key: String,
+    scope_key: &str,
+    source_id: &str,
+    render_version: u32,
+    outcome: Outcome,
+    problem: Problem,
+) -> RenderProblemRow {
+    RenderProblemRow {
+        uuid: key,
+        scope_key: scope_key.to_string(),
+        scope_kind: ScopeKind::Markdown.as_str().to_string(),
+        source_id: source_id.to_string(),
+        stage: Stage::GridRow.as_str().to_string(),
+        outcome: outcome.as_str().to_string(),
+        problems: serde_json::to_string(&vec![problem]).unwrap_or_else(|_| "[]".into()),
+        // Left for the store to stamp; it is the only layer that can
+        // see whether this uuid already had a row, and so the only one
+        // that can tell "first seen" from "seen again". See the field
+        // docs.
+        first_seen_at_utc: String::new(),
+        last_seen_at_utc: String::new(),
+        tz_offset: None,
+        render_version: render_version as i64,
+    }
+}
+
 #[cfg(test)]
 mod builder_tests {
     use super::*;
@@ -365,5 +400,49 @@ mod builder_tests {
     fn rejects_empty_required_field() {
         let err = ok_builder().uuid("").build().expect_err("empty uuid");
         assert!(matches!(err, GridRowError::EmptyField { field: "uuid" }));
+    }
+
+    /// R1 in `data_architecture_parse_and_render.md`: a field that fails
+    /// its coercion is nulled and the record kept. A merge request whose
+    /// `created_at` was garbled still has an identity, a title and a
+    /// body; dropping the row lost the whole document over one
+    /// unsortable field.
+    #[test]
+    fn a_bad_when_ts_is_nulled_and_the_row_kept() {
+        let mut problems = Vec::new();
+        let row = ok_builder()
+            .when_ts(Some("16 Jun 2026".to_string()))
+            .build_or_record("src", "doc-1", 3, &mut problems)
+            .expect("the row survives");
+        assert!(row.when_ts.is_none());
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].uuid, "u-1");
+        assert_eq!(problems[0].outcome, Outcome::Nulled.as_str());
+        assert!(
+            problems[0].problems.contains("when_ts"),
+            "{}",
+            problems[0].problems
+        );
+        assert!(
+            problems[0].problems.contains("16 Jun 2026"),
+            "{}",
+            problems[0].problems
+        );
+    }
+
+    #[test]
+    fn a_row_without_identity_is_dropped() {
+        let mut problems = Vec::new();
+        let row = ok_builder()
+            .uuid("")
+            .build_or_record("src", "doc-1", 3, &mut problems);
+        assert!(row.is_none());
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0].uuid.starts_with("noid:"),
+            "{}",
+            problems[0].uuid
+        );
+        assert_eq!(problems[0].outcome, Outcome::Dropped.as_str());
     }
 }
