@@ -205,8 +205,7 @@ from the group; and an applet filed under a group that does not exist.
 The retired shape — `datalib-step download|render|grid_index|qmd_index`
 on a command line, from before `datalib-step` read its function from
 the environment — is `Rejected`, because it no longer runs, and the
-diagnostic names `datalib-migrate-config`; so is the one `qmd_index`
-under a typeless group, from before each source indexed itself. A warning passes the strict door too
+diagnostic names `datalib-migrate-config`. A warning passes the strict door too
 (`config::parse`, and the `PUT /api/config` behind the editor): it
 changes nothing about what runs, and refusing it would make the editor
 unable to save a config the app is happily running on.

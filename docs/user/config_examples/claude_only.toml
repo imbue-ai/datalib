@@ -25,13 +25,8 @@ inputs = ["claude_chats/ingest"]
 
 [[steps]]
 group = "claude_chats"
-function = "qmd_index"
-inputs = ["claude_chats/render_markdown"]
-
-[[steps]]
-group = "claude_chats"
 function = "qmd_embed"
-inputs = ["claude_chats/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 [[groups]]
@@ -40,6 +35,11 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
+inputs = ["claude_chats/render_markdown"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
 inputs = ["claude_chats/render_markdown"]
 
 # The app's own surface: `unified_index` serves the grid, the document

@@ -1,12 +1,12 @@
-//! The `qmd_index` function: one group's collection in the shared qmd
-//! store, brought in line with the group's `render_markdown` tree.
+//! The `qmd_index` function: the qmd keyword index over every
+//! `render_markdown` tree, written to `unified_index/qmd_index`.
 //!
-//! Every source has one of these, so scoping a search to a source is a
-//! collection qmd applies inside retrieval. The store itself is one
-//! file for the whole root (`unified_index/qmd_index/qmd/index.sqlite`),
-//! written by every group's `qmd_index` and `qmd_embed` step; the tree
-//! this step's id names, `<group>/qmd_index/`, is empty.
+//! One qmd collection per group, so a search scoped to one source is a
+//! filter qmd applies inside retrieval rather than one the applet applies
+//! to a global top-N. Embedding is not done here: it is each source's own
+//! `qmd_embed` step, which reads this one.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -17,31 +17,66 @@ use sqlx::Row;
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
 
-/// A root indexed before per-source collections carries qmd's one
-/// `mirror` collection, which no group claims. Read from qmd's own
-/// registry table; an unreadable or absent index yields `false`, and a
-/// missed retirement costs a stale collection until the next run, not
-/// a wrong index.
-async fn legacy_collection_present(data_root: &Path) -> bool {
-    let path = datalib_runtime::qmd::qmd_index_path(data_root);
-    if !path.exists() {
-        return false;
-    }
-    match read_collection_names(&path).await {
-        Ok(names) => names
-            .iter()
-            .any(|n| n == datalib_qmd_indexer::LEGACY_COLLECTION_NAME),
-        Err(e) => {
-            tracing::warn!(error = %e, path = %path.display(), "qmd: could not read collections");
-            false
+/// The one tree this step writes, as the applet that reads it resolves
+/// it from the data root.
+pub fn out_rel() -> String {
+    format!(
+        "{}/{}",
+        datalib_core::layout::UNIFIED_INDEX_DIR,
+        datalib_core::layout::QMD_DIR
+    )
+}
+
+/// The groups this step indexes, read off its declared inputs.
+///
+/// An input is a step id, and a step id is the tree it writes, so each
+/// one reads `<group>/render_markdown` — the group is its first segment.
+/// Taking the list from the graph rather than from a directory scan means
+/// a source dropped from the config stops being indexed on the next run,
+/// even while its rendered tree is still on disk.
+fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    for input in inputs {
+        if let Some(group) = input.split('/').next() {
+            if !group.is_empty() {
+                out.insert(group.to_string());
+            }
         }
     }
+    out.into_iter().collect()
+}
+
+/// Collections the index still holds that no group claims any more:
+/// the pre-per-source `mirror`, and any source since removed from the
+/// config. Read from qmd's own registry table.
+///
+/// An unreadable or absent index yields none. This runs before qmd does,
+/// so the answer is only ever used to *retire* a collection, and a
+/// missed one costs a stale collection until the next run — not a wrong
+/// index. Failing the step over it would be worse.
+async fn collections_to_retire(data_root: &Path, keep: &[String]) -> Vec<String> {
+    let path = datalib_runtime::qmd::qmd_index_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let found = match read_collection_names(&path).await {
+        Ok(names) => names,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "qmd: could not read collections");
+            return Vec::new();
+        }
+    };
+    let keep: BTreeSet<&str> = keep.iter().map(String::as_str).collect();
+    found
+        .into_iter()
+        .filter(|name| !keep.contains(name.as_str()))
+        .collect()
 }
 
 async fn read_collection_names(path: &Path) -> Result<Vec<String>> {
     // qmd's index is a plain SQLite database, unlike every `.doltlite_db`
-    // in the tree. Read-only: the file belongs to the writers this step
-    // is about to run.
+    // in the tree. Read-only: the file belongs to the qmd subprocess this
+    // step is about to run.
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
         .create_if_missing(false)
         .read_only(true);
@@ -60,18 +95,6 @@ async fn read_collection_names(path: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-struct StepProgress(datalib_etl::progress::Progress);
-
-impl datalib_qmd_indexer::IndexProgress for StepProgress {
-    fn total(&self, files: u64) {
-        self.0.metric("queued", &[], files as i64);
-        self.0.metric("done", &[], 0);
-    }
-    fn done(&self, files: u64) {
-        self.0.metric("done", &[], files as i64);
-    }
-}
-
 pub async fn run(
     data_root: &Path,
     env: &StepEnv,
@@ -80,64 +103,46 @@ pub async fn run(
 ) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
     progress.set_message("qmd index");
-    let qmd_version = datalib_qmd_indexer::DEFAULT_QMD_VERSION;
-    let models_dir = models_dir.unwrap_or_else(datalib_qmd_indexer::default_models_dir);
-    datalib_qmd_indexer::prepare_store(data_root, &models_dir)?;
-
-    let summary = datalib_qmd_indexer::index_one_group(
-        data_root,
-        &env.group,
-        qmd_version,
-        &StepProgress(progress.clone()),
-    )
-    .await
-    .with_context(|| format!("index group {}", env.group))?;
-    progress.metric("queued", &[], 0);
-    for (name, n) in [
-        ("indexed", summary.indexed),
-        ("updated", summary.updated),
-        ("unchanged", summary.unchanged),
-        ("removed", summary.removed),
-        ("documents", summary.documents),
-    ] {
-        progress.metric(name, &[], n as i64);
+    let groups = groups_from_inputs(&env.inputs);
+    let retire = collections_to_retire(data_root, &groups).await;
+    if !retire.is_empty() {
+        tracing::info!(collections = ?retire, "qmd: retiring collections no group claims");
     }
-    tracing::info!(
-        group = %env.group,
-        indexed = summary.indexed,
-        updated = summary.updated,
-        unchanged = summary.unchanged,
-        removed = summary.removed,
-        documents = summary.documents,
-        "qmd_index: done"
-    );
-
-    // After the indexing pass, never before: retiring deletes content no
-    // other collection names yet.
-    if legacy_collection_present(data_root).await {
-        datalib_qmd_indexer::retire_one_collection(
-            data_root,
-            qmd_version,
-            datalib_qmd_indexer::LEGACY_COLLECTION_NAME,
-        )
-        .context("retire the legacy `mirror` collection")?;
+    let mut opts = datalib_qmd_indexer::IndexOptions::new(data_root);
+    opts.groups = groups;
+    opts.retire_collections = retire;
+    // Neither the models nor the vectors are this step's: each source's
+    // `qmd_embed` pulls what is missing and embeds its own collection.
+    opts.pull = false;
+    opts.embed = false;
+    if let Some(d) = models_dir {
+        opts.models_dir = d;
     }
-
-    // The store rebuilds from the render_markdown trees, so cache-aware
+    let outcome = datalib_qmd_indexer::run_index(&opts)
+        .await
+        .context("qmd index")?;
+    tracing::info!(index = %outcome.index_path.display(), "qmd: done");
+    // The index rebuilds from the render_markdown trees, so cache-aware
     // backups (`restic --exclude-caches` etc.) may skip it. Tag the
     // whole `unified_index/` tree for the same reason the grid step
     // does — one tag covers both indexes however they are ordered.
     datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(data_root));
 
-    // The step's own tree holds nothing: what it wrote is a collection
-    // in the shared store. The directory still exists, so the tree the
-    // id names is there to be measured.
-    std::fs::create_dir_all(data_root.join(&env.step))?;
-
+    // A version, and a content-derived one: every `qmd_embed` step reads
+    // this tree, and the runner would otherwise hash it — the whole
+    // `index.sqlite`, and through the `models` symlink two gigabytes of
+    // GGUF. The digest covers every document's collection, path and
+    // hash plus the qmd pin, so an embed step goes stale exactly when
+    // something changed that could leave it work, including a qmd bump.
+    let pool = datalib_qmd_indexer::store::open_ro(&outcome.index_path).await?;
+    let version =
+        datalib_qmd_indexer::store::index_version(&pool, datalib_qmd_indexer::DEFAULT_QMD_VERSION)
+            .await;
+    pool.close().await;
     Ok(vec![OutputClaim {
-        path: env.step.clone(),
-        version: summary.version,
-        rows: Some(summary.documents),
+        path: out_rel(),
+        version: version.context("qmd index version")?,
+        rows: None,
     }])
 }
 
@@ -145,18 +150,52 @@ pub async fn run(
 mod tests {
     use super::*;
 
+    /// An input is a step id, which is also the tree it writes. The
+    /// group is its first segment — not the whole string, and not a
+    /// directory listing.
+    #[test]
+    fn groups_come_from_the_first_segment_of_each_input() {
+        let inputs = vec![
+            "slack_imbue/render_markdown".to_string(),
+            "claude_personal/render_markdown".to_string(),
+        ];
+        assert_eq!(
+            groups_from_inputs(&inputs),
+            vec!["claude_personal".to_string(), "slack_imbue".to_string()]
+        );
+    }
+
+    /// Two steps under one group collapse to one collection, and the
+    /// list is deduped and ordered so a config reshuffle doesn't churn
+    /// the collection set.
+    #[test]
+    fn groups_are_deduped_and_sorted() {
+        let inputs = vec![
+            "b/render_markdown".to_string(),
+            "a/render_markdown".to_string(),
+            "a/ingest".to_string(),
+            String::new(),
+        ];
+        assert_eq!(
+            groups_from_inputs(&inputs),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
     /// A data root that has never synced has no index to read, and that
     /// is a normal state — nothing to retire, no error.
     #[tokio::test]
-    async fn no_index_means_no_legacy_collection() {
+    async fn no_index_means_nothing_to_retire() {
         let td = tempfile::tempdir().unwrap();
-        assert!(!legacy_collection_present(td.path()).await);
+        assert!(collections_to_retire(td.path(), &["a".to_string()])
+            .await
+            .is_empty());
     }
 
     /// The migration this exists for: a root indexed before per-source
-    /// collections carries `mirror`.
+    /// collections carries `mirror`, which no group claims.
     #[tokio::test]
-    async fn the_legacy_collection_is_noticed() {
+    async fn legacy_and_orphaned_collections_are_retired() {
         let td = tempfile::tempdir().unwrap();
         let path = datalib_runtime::qmd::qmd_index_path(td.path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -172,19 +211,20 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        for name in ["slack_imbue", "deleted_source"] {
+        for name in ["mirror", "slack_imbue", "deleted_source"] {
             sqlx::query("INSERT INTO store_collections (name) VALUES (?)")
                 .bind(name)
                 .execute(&pool)
                 .await
                 .unwrap();
         }
-        assert!(!legacy_collection_present(td.path()).await);
-        sqlx::query("INSERT INTO store_collections (name) VALUES ('mirror')")
-            .execute(&pool)
-            .await
-            .unwrap();
         pool.close().await;
-        assert!(legacy_collection_present(td.path()).await);
+
+        let mut retire = collections_to_retire(td.path(), &["slack_imbue".to_string()]).await;
+        retire.sort();
+        assert_eq!(
+            retire,
+            vec!["deleted_source".to_string(), "mirror".to_string()]
+        );
     }
 }

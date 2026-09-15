@@ -47,7 +47,6 @@ import {
   type ManageResponse,
   type ManageRow,
   type SyncJob,
-  type SyncJobState,
   type JobProgressEvent,
 } from "@/api";
 import {
@@ -119,10 +118,21 @@ function clearBanner() {
   bannerJob.value = null;
 }
 
-/// Take down a job-scoped banner once its job has stopped running.
-function retireBanner(jobId: string, state: SyncJobState) {
-  if (bannerJob.value !== jobId) return;
-  if (state === "pending" || state === "running") return;
+/// Is this job still holding the runner: queued, running, or told to
+/// stop and not yet stopped? A cancel flips the row to `canceled` on
+/// request; the run behind it is over when the worker stamps
+/// `finished_at_utc`. The server's `job_active` says the same.
+function jobActive(j: SyncJob): boolean {
+  if (j.state === "pending" || j.state === "running") return true;
+  return j.state === "canceled" && !!j.started_at_utc && !j.finished_at_utc;
+}
+
+/// Take down a job-scoped banner once its job has stopped running. A
+/// job told to stop is still running until the worker says otherwise —
+/// the "Stopping…" banner is *for* that window.
+function retireBanner(job: SyncJob) {
+  if (bannerJob.value !== job.id) return;
+  if (jobActive(job)) return;
   clearBanner();
 }
 const busy = ref(false);
@@ -201,21 +211,20 @@ const takenIds = computed(
     ]),
 );
 
-/// The steps under the same group that read a given step, directly or
-/// through each other — what deleting it has to take with it. Deleting
-/// an ingest step takes its render step, its search-index step and its
-/// embedding step; a render step takes the last two. Leaving any of
-/// them behind would leave an input naming a step that no longer
-/// exists, which the loader refuses outright.
-function downstreamInGroup(step: ConfiguredStep): ConfiguredStep[] {
+/// The steps that read a given step, directly or through each other,
+/// across every group — what deleting it has to take with it. An ingest
+/// step takes its render and embedding steps; the shared qmd index takes
+/// every source's embedding step. Leaving any of them behind would leave
+/// an input naming a step that no longer exists, which the loader
+/// refuses outright.
+function downstreamOf(step: ConfiguredStep): ConfiguredStep[] {
   const out: ConfiguredStep[] = [];
   const seen = new Set<string>([step.id]);
   const queue = [step.id];
   while (queue.length) {
     const id = queue.shift()!;
     for (const s of sources.value) {
-      if (s.kind !== "step" || s.group !== step.group || seen.has(s.id)) continue;
-      if (!s.inputs.includes(id)) continue;
+      if (s.kind !== "step" || seen.has(s.id) || !s.inputs.includes(id)) continue;
       seen.add(s.id);
       out.push(s);
       queue.push(s.id);
@@ -303,7 +312,7 @@ function decorate(r: ManageRow): Row {
   let editBlocked: string | null;
   if (r.kind === "applet") {
     editBlocked = "No form for applets — edit this one in Advanced below.";
-  } else if (r.function === "grid_index") {
+  } else if (r.phase === "index") {
     editBlocked = "A shared index step has no options — its inputs are its whole config.";
   } else if (r.written_group !== null) {
     // The written group, not the declared one: a step naming a group
@@ -562,7 +571,7 @@ class ActionsRenderer implements ICellRendererComp<Row> {
   private apply(): void {
     const row = this.row;
     if (row.stop_job_id) {
-      setButton(this.run, "stop", row.stop_label ?? "Stop the sync in progress", null);
+      setButton(this.run, "stop", row.stop_label ?? "Stop the sync in progress", row.stop_blocked);
       this.run.classList.add("danger");
     } else {
       setButton(this.run, "run", "Sync now", row.run_blocked);
@@ -1565,7 +1574,7 @@ const commitJobs = freshest<SyncJob[]>((list) => {
     const j = list.find((x) => x.id === bannerJob.value);
     // A job that has fallen off the end of the queue we hold is not
     // running either, so the banner goes.
-    if (j) retireBanner(j.id, j.state);
+    if (j) retireBanner(j);
     else clearBanner();
   }
 });
@@ -1582,9 +1591,7 @@ async function loadJobs() {
 /// Sync-everything button, and marks the window in which the runner's
 /// record has nothing to say yet: between the click and its first
 /// written state there is nothing there to read.
-const jobActive = computed(() =>
-  jobs.value.some((j) => j.state === "pending" || j.state === "running"),
-);
+const anyJobActive = computed(() => jobs.value.some(jobActive));
 
 const commitRows = freshest<ManageResponse>((m) => {
   manage.value = m;
@@ -1669,13 +1676,13 @@ async function onWizardSubmit(payload: {
   const current = editing.value;
   let next: string;
   if (current) {
-    // Every step the source owns is replaced in one cut-and-append: a
-    // step the source was missing is simply appended with the others,
-    // and one it no longer wants (an embedding step, say) leaves with
-    // the cut. The name and the description live on the group, which
-    // is edited in place.
-    const existing = ownedSteps(current.steps);
-    next = replaceSteps(configText.value, existing, payload.stepsBody);
+    // Both steps are replaced in one cut-and-append, and a step the
+    // source was missing is simply appended with the other. The name
+    // and the description live on the group, which is edited in place.
+    // Every step the source owns: one it no longer wants (the embedding
+    // step, say) leaves with the cut, one it was missing is appended
+    // with the others.
+    next = replaceSteps(configText.value, ownedSteps(current.steps), payload.stepsBody);
     next = renameGroup(next, current.group.id, payload.name);
     next = describeGroup(next, current.group.id, payload.description);
     // A render step the provider does not write back — hand-written
@@ -1710,24 +1717,26 @@ async function deleteSource(id: string) {
   if (!step) return;
   const name = step.name;
 
-  // Deleting a step takes everything under its group that reads it.
-  // Leaving a reader behind would leave an input naming a step that no
-  // longer exists, which the loader refuses outright — a whole config
-  // broken by a partial delete.
-  const readers = step.kind === "step" ? downstreamInGroup(step) : [];
+  // Deleting a step takes everything that reads it. Leaving a reader
+  // behind would leave an input naming a step that no longer exists,
+  // which the loader refuses outright — a whole config broken by a
+  // partial delete.
+  const readers = step.kind === "step" ? downstreamOf(step) : [];
   const doomed = [step, ...readers];
+  const readerNames = readers.map((r) => `"${r.name}"`).join(", ");
 
   const what =
     step.kind === "applet"
       ? `Remove the "${name}" applet from the config?\n\n` +
         `The server stops it. Anything in the app that its components or endpoints ` +
         `serve will stop working until you add it back.`
-      : step.function === "grid_index"
-        ? `Remove the "${name}" index step from the config?\n\n` +
-          `Its output stays on disk but stops being refreshed, so the grid goes stale.`
+      : step.phase === "index"
+        ? `Remove the "${name}" index step from the config` +
+          (readers.length ? `, and the ${readers.length === 1 ? "step" : "steps"} that read it (${readerNames})` : "") +
+          `?\n\n` +
+          `Its output stays on disk but stops being refreshed, so search results go stale.`
         : readers.length
-          ? `Remove "${name}" and the ${readers.length === 1 ? "step" : "steps"} that read it ` +
-            `(${readers.map((r) => `"${r.name}"`).join(", ")})?\n\n` +
+          ? `Remove "${name}" and the ${readers.length === 1 ? "step" : "steps"} that read it (${readerNames})?\n\n` +
             `They have to go together: a step whose input is gone is a config ` +
             `datalib refuses to load.\n\n` +
             `The data stays on disk. Re-adding later resumes from what's already there.`
@@ -1805,7 +1814,7 @@ async function deleteRows(targets: Row[]) {
       if (!step) continue;
       doomed.set(step.id, step);
       if (step.kind === "step") {
-        for (const r of downstreamInGroup(step)) doomed.set(r.id, r);
+        for (const r of downstreamOf(step)) doomed.set(r.id, r);
       }
     }
   }
@@ -1962,8 +1971,9 @@ async function stopJob(jobId: string) {
 /// refetch sees it.
 function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
-  retireBanner(e.id, e.state);
-  const active = e.state === "pending" || e.state === "running";
+  const job = jobs.value.find((j) => j.id === e.id);
+  if (job) retireBanner(job);
+  const active = !!job && jobActive(job);
   // A job ending is exactly when the size on screen is about to be
   // read and is about to be wrong — so that one asks for a fresh walk.
   // It is also the last chance for a while: the backend's own tick
@@ -2095,9 +2105,9 @@ onUnmounted(() => {
         </button>
         <button
           class="m2-btn m2-runall"
-          :disabled="busy || !!parseError || !!configError || jobActive || rows.length === 0"
+          :disabled="busy || !!parseError || !!configError || anyJobActive || rows.length === 0"
           :title="
-            jobActive
+            anyJobActive
               ? 'A sync is already running.'
               : rows.length === 0
                 ? 'Nothing configured yet.'
@@ -2373,7 +2383,7 @@ onUnmounted(() => {
         <p v-else-if="historyError" class="m2-logs-note bad">{{ historyError }}</p>
         <p v-else-if="historyLines.length === 0" class="m2-logs-note">
           No doltlite store under <code>{{ historyStoreNote }}</code> yet. A step that has never
-          run has written nothing, and the search-index steps keep no store of their own.
+          run has written nothing, and the QMD index keeps no store of its own.
         </p>
         <div v-else class="m2-history-grid">
           <AgGridVue

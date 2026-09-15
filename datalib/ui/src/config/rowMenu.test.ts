@@ -38,7 +38,7 @@ describe("rowMenu", () => {
     expect(entry(menu, "history").disabled).toBe("An applet writes no store");
     expect(entry(menu, "log").disabled).toBe("An applet runs no step");
     expect(entry(rowMenu([target({ kind: "step", func: "qmd_index" })], opts), "history").disabled).toBe(
-      "The search index keeps no doltlite store",
+      "The QMD index keeps no doltlite store",
     );
     expect(entry(rowMenu([target({ runBlocked: "Not in the pipeline" })], opts), "sync").disabled).toBe(
       "Not in the pipeline",

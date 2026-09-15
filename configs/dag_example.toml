@@ -15,8 +15,10 @@
 # one: it runs `datalib-step`, which reads the function and the group's
 # `type` from that environment. The built-in functions are `ingest`
 # (bring the data in), `render_markdown` (turn the raw store into
-# markdown), and the two fan-ins `grid_index` and `qmd_index` over
-# every render_markdown tree. `params` is per-function — the ingest
+# markdown), `qmd_embed` (a source's vectors, for semantic search — the
+# slow one, so it is per source and optional), and the two fan-ins
+# `grid_index` and `qmd_index` over every render_markdown tree. `params`
+# is per-function — the ingest
 # step carries the provider's config, with where the data comes from
 # as one table whose name is read under the group's type (`api` is
 # the product's own API; `export`, `backup` and the like read files
@@ -92,13 +94,8 @@ inputs = ["slack/ingest"]
 
 [[steps]]
 group = "slack"
-function = "qmd_index"
-inputs = ["slack/render_markdown"]
-
-[[steps]]
-group = "slack"
 function = "qmd_embed"
-inputs = ["slack/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # ── claude ─────────────────────────────────────────────────────────
@@ -124,13 +121,8 @@ inputs = ["claude/ingest"]
 
 [[steps]]
 group = "claude"
-function = "qmd_index"
-inputs = ["claude/render_markdown"]
-
-[[steps]]
-group = "claude"
 function = "qmd_embed"
-inputs = ["claude/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # ── shared fan-in steps ────────────────────────────────────────────
@@ -145,6 +137,11 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
+inputs = ["slack/render_markdown", "claude/render_markdown"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
 inputs = ["slack/render_markdown", "claude/render_markdown"]
 
 # ── applets ────────────────────────────────────────────────────────

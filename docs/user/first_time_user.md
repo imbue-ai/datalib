@@ -253,13 +253,8 @@ inputs = ["claude/ingest"]
 
 [[steps]]
 group = "claude"
-function = "qmd_index"
-inputs = ["claude/render_markdown"]
-
-[[steps]]
-group = "claude"
 function = "qmd_embed"
-inputs = ["claude/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 [[groups]]
@@ -268,6 +263,11 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
+inputs = ["claude/render_markdown"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
 inputs = ["claude/render_markdown"]
 
 [[applets]]
@@ -377,10 +377,10 @@ faster.
   first.
 - A `render_markdown` step per source: each conversation or document
   rendered into readable markdown, attachments included.
-- A `qmd_index` step per source: the source's documents added to the
-  keyword search index. Seconds.
 - The `grid_index` step: one row per message or document written into
   the SQL store at `<data_root>/unified_index/grid_index/db.doltlite_db`.
+- The `qmd_index` step: every source's documents added to the keyword
+  search index. Seconds.
 - A `qmd_embed` step per source: the vectors behind semantic search.
   **The first run is slow** — embedding takes roughly 5–10 minutes per
   thousand chunks on CPU, after a one-time download of the models.

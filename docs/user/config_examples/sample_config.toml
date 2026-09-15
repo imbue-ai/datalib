@@ -23,6 +23,11 @@ group = "unified_index"
 function = "grid_index"
 inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
 
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
+
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
 # the email provider in file-backed mode, reading the file at its
 # `path` instead of talking to a mail server. Point it at the .mbox
@@ -44,13 +49,8 @@ inputs = ["gmail-takeout/ingest"]
 
 [[steps]]
 group = "gmail-takeout"
-function = "qmd_index"
-inputs = ["gmail-takeout/render_markdown"]
-
-[[steps]]
-group = "gmail-takeout"
 function = "qmd_embed"
-inputs = ["gmail-takeout/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # Slack workspace mirror. Credentials come from `latchkey` at runtime
@@ -95,13 +95,8 @@ inputs = ["slack/ingest"]
 
 [[steps]]
 group = "slack"
-function = "qmd_index"
-inputs = ["slack/render_markdown"]
-
-[[steps]]
-group = "slack"
 function = "qmd_embed"
-inputs = ["slack/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # Anthropic / claude.ai conversation mirror. Credentials come from
@@ -129,13 +124,8 @@ inputs = ["claude-api/ingest"]
 
 [[steps]]
 group = "claude-api"
-function = "qmd_index"
-inputs = ["claude-api/render_markdown"]
-
-[[steps]]
-group = "claude-api"
 function = "qmd_embed"
-inputs = ["claude-api/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # The app's own surface: `unified_index` serves the grid, the document

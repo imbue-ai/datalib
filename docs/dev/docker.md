@@ -49,7 +49,7 @@ of the shipped pipeline: a tarball whose binaries cannot ingest the
 fixtures fails the image build.
 
 The search index is deliberately not built at image time. The
-config's `qmd_index` and `qmd_embed` steps — one pair per source — sit
+config's `qmd_index` fan-in and the `qmd_embed` step of every source sit
 below a `BUILD-TIME CUT` marker that the Dockerfile drops for its run
 and keeps in the shipped file, so the first sync in a container builds
 it. Embedding under the arm64 leg's

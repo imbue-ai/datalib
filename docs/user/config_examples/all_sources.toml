@@ -63,15 +63,20 @@ data_root = "~/datalib"  # Base dir; everything is written under here. `~` is ex
 
 # --- Shared index steps -------------------------------------------------
 
-# Every source's rendered markdown feeds this fan-in: the SQL index
-# behind the grid UI. The search index is per source — each source's
-# `qmd_index` and `qmd_embed` steps below.
+# Every source's rendered markdown feeds these two fan-ins: the SQL
+# index behind the grid UI, and the qmd keyword index. Embedding is
+# each source's own `qmd_embed` step below, reading the qmd index.
 [[groups]]
 id = "unified_index"
 
 [[steps]]
 group = "unified_index"
 function = "grid_index"
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
 inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown"]
 
 # --- Claude / Anthropic -------------------------------------------------
@@ -110,13 +115,8 @@ inputs = ["claude-api/ingest"]
 
 [[steps]]
 group = "claude-api"
-function = "qmd_index"
-inputs = ["claude-api/render_markdown"]
-
-[[steps]]
-group = "claude-api"
 function = "qmd_embed"
-inputs = ["claude-api/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # An unpacked Claude data export already on disk: the same `claude`
@@ -147,13 +147,8 @@ inputs = ["claude-export/ingest"]
 
 [[steps]]
 group = "claude-export"
-function = "qmd_index"
-inputs = ["claude-export/render_markdown"]
-
-[[steps]]
-group = "claude-export"
 function = "qmd_embed"
-inputs = ["claude-export/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- ChatGPT ------------------------------------------------------------
@@ -181,13 +176,8 @@ inputs = ["chatgpt/ingest"]
 
 [[steps]]
 group = "chatgpt"
-function = "qmd_index"
-inputs = ["chatgpt/render_markdown"]
-
-[[steps]]
-group = "chatgpt"
 function = "qmd_embed"
-inputs = ["chatgpt/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- Slack --------------------------------------------------------------
@@ -262,13 +252,8 @@ inputs = ["slack/ingest"]
 
 [[steps]]
 group = "slack"
-function = "qmd_index"
-inputs = ["slack/render_markdown"]
-
-[[steps]]
-group = "slack"
 function = "qmd_embed"
-inputs = ["slack/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- GitHub -------------------------------------------------------------
@@ -298,13 +283,8 @@ inputs = ["github/ingest"]
 
 [[steps]]
 group = "github"
-function = "qmd_index"
-inputs = ["github/render_markdown"]
-
-[[steps]]
-group = "github"
 function = "qmd_embed"
-inputs = ["github/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- GitLab -------------------------------------------------------------
@@ -333,13 +313,8 @@ inputs = ["gitlab/ingest"]
 
 [[steps]]
 group = "gitlab"
-function = "qmd_index"
-inputs = ["gitlab/render_markdown"]
-
-[[steps]]
-group = "gitlab"
 function = "qmd_embed"
-inputs = ["gitlab/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- Notion -------------------------------------------------------------
@@ -389,13 +364,8 @@ inputs = ["notion/ingest"]
 
 [[steps]]
 group = "notion"
-function = "qmd_index"
-inputs = ["notion/render_markdown"]
-
-[[steps]]
-group = "notion"
 function = "qmd_embed"
-inputs = ["notion/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- Email: two input modes ---------------------------------------------
@@ -443,13 +413,8 @@ only_render_labels = []
 
 [[steps]]
 group = "fastmail"
-function = "qmd_index"
-inputs = ["fastmail/render_markdown"]
-
-[[steps]]
-group = "fastmail"
 function = "qmd_embed"
-inputs = ["fastmail/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # Mode B — Gmail REST API, for a Gmail account. The mode that needs the
@@ -517,13 +482,8 @@ only_render_labels = []
 
 [[steps]]
 group = "gmail"
-function = "qmd_index"
-inputs = ["gmail/render_markdown"]
-
-[[steps]]
-group = "gmail"
 function = "qmd_embed"
-inputs = ["gmail/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # Mode C — Google Takeout .mbox on disk. The `mbox` table selects it:
@@ -567,13 +527,8 @@ only_render_labels = []    # render only threads touching these labels; empty = 
 
 [[steps]]
 group = "gmail-takeout"
-function = "qmd_index"
-inputs = ["gmail-takeout/render_markdown"]
-
-[[steps]]
-group = "gmail-takeout"
 function = "qmd_embed"
-inputs = ["gmail-takeout/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- Contacts: two input modes ------------------------------------------
@@ -599,13 +554,8 @@ inputs = ["icloud-contacts/ingest"]
 
 [[steps]]
 group = "icloud-contacts"
-function = "qmd_index"
-inputs = ["icloud-contacts/render_markdown"]
-
-[[steps]]
-group = "icloud-contacts"
 function = "qmd_embed"
-inputs = ["icloud-contacts/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # Mode B — local vCard files. The `vcf` table selects it: `.vcf` files
@@ -632,13 +582,8 @@ inputs = ["vcard-contacts/ingest"]
 
 [[steps]]
 group = "vcard-contacts"
-function = "qmd_index"
-inputs = ["vcard-contacts/render_markdown"]
-
-[[steps]]
-group = "vcard-contacts"
 function = "qmd_embed"
-inputs = ["vcard-contacts/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- Beeper -------------------------------------------------------------
@@ -669,13 +614,8 @@ period = "month"   # month (default) | day | year | all — span of each rendere
 
 [[steps]]
 group = "beeper"
-function = "qmd_index"
-inputs = ["beeper/render_markdown"]
-
-[[steps]]
-group = "beeper"
 function = "qmd_embed"
-inputs = ["beeper/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- Perseus Digital Library --------------------------------------------
@@ -706,13 +646,8 @@ inputs = ["perseus/ingest"]
 
 [[steps]]
 group = "perseus"
-function = "qmd_index"
-inputs = ["perseus/render_markdown"]
-
-[[steps]]
-group = "perseus"
 function = "qmd_embed"
-inputs = ["perseus/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- YoLink sensors -----------------------------------------------------
@@ -758,13 +693,8 @@ inputs = ["yolink/ingest"]
 
 [[steps]]
 group = "yolink"
-function = "qmd_index"
-inputs = ["yolink/render_markdown"]
-
-[[steps]]
-group = "yolink"
 function = "qmd_embed"
-inputs = ["yolink/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- Garmin Connect -----------------------------------------------------
@@ -807,13 +737,8 @@ inputs = ["garmin/ingest"]
 
 [[steps]]
 group = "garmin"
-function = "qmd_index"
-inputs = ["garmin/render_markdown"]
-
-[[steps]]
-group = "garmin"
 function = "qmd_embed"
-inputs = ["garmin/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 # --- AirVisual (IQAir) monitors -----------------------------------------
 
@@ -855,13 +780,8 @@ inputs = ["ship-air/ingest"]
 
 [[steps]]
 group = "ship-air"
-function = "qmd_index"
-inputs = ["ship-air/render_markdown"]
-
-[[steps]]
-group = "ship-air"
 function = "qmd_embed"
-inputs = ["ship-air/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- Signal (Android backup) --------------------------------------------
@@ -893,13 +813,8 @@ period = "month"   # month (default) | day | year | all — span of each rendere
 
 [[steps]]
 group = "signal"
-function = "qmd_index"
-inputs = ["signal/render_markdown"]
-
-[[steps]]
-group = "signal"
 function = "qmd_embed"
-inputs = ["signal/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- WhatsApp (Android crypt15 backup) ----------------------------------
@@ -932,13 +847,8 @@ inputs = ["whatsapp/ingest"]
 
 [[steps]]
 group = "whatsapp"
-function = "qmd_index"
-inputs = ["whatsapp/render_markdown"]
-
-[[steps]]
-group = "whatsapp"
 function = "qmd_embed"
-inputs = ["whatsapp/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- LinkedIn (data export) ---------------------------------------------
@@ -978,13 +888,8 @@ inputs = ["linkedin/ingest"]
 
 [[steps]]
 group = "linkedin"
-function = "qmd_index"
-inputs = ["linkedin/render_markdown"]
-
-[[steps]]
-group = "linkedin"
 function = "qmd_embed"
-inputs = ["linkedin/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- Google Takeout (data export) ---------------------------------------
@@ -1034,13 +939,8 @@ inputs = ["google-takeout/ingest"]
 
 [[steps]]
 group = "google-takeout"
-function = "qmd_index"
-inputs = ["google-takeout/render_markdown"]
-
-[[steps]]
-group = "google-takeout"
 function = "qmd_embed"
-inputs = ["google-takeout/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- SMS Backup & Restore (Android export) ------------------------------
@@ -1071,13 +971,8 @@ inputs = ["sms-backup-restore/ingest"]
 
 [[steps]]
 group = "sms-backup-restore"
-function = "qmd_index"
-inputs = ["sms-backup-restore/render_markdown"]
-
-[[steps]]
-group = "sms-backup-restore"
 function = "qmd_embed"
-inputs = ["sms-backup-restore/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- fsindex (directory-tree scanner) -----------------------------------
@@ -1110,17 +1005,6 @@ path = "~/Documents"
 group = "fsindex-home"
 function = "render_markdown"
 inputs = ["fsindex-home/ingest"]
-
-[[steps]]
-group = "fsindex-home"
-function = "qmd_index"
-inputs = ["fsindex-home/render_markdown"]
-
-[[steps]]
-group = "fsindex-home"
-function = "qmd_embed"
-inputs = ["fsindex-home/qmd_index"]
-lock = "qmd_embed"
 
 # --- pdf (local PDF corpus → markdown) ----------------------------------
 
@@ -1163,13 +1047,8 @@ inputs = ["pdfs/ingest"]
 
 [[steps]]
 group = "pdfs"
-function = "qmd_index"
-inputs = ["pdfs/render_markdown"]
-
-[[steps]]
-group = "pdfs"
 function = "qmd_embed"
-inputs = ["pdfs/qmd_index"]
+inputs = ["unified_index/qmd_index"]
 lock = "qmd_embed"
 
 # --- media (local music / photos / video / playlists) --------------------
@@ -1231,17 +1110,6 @@ path = "~/Music"
 group = "media"
 function = "render_markdown"
 inputs = ["media/ingest"]
-
-[[steps]]
-group = "media"
-function = "qmd_index"
-inputs = ["media/render_markdown"]
-
-[[steps]]
-group = "media"
-function = "qmd_embed"
-inputs = ["media/qmd_index"]
-lock = "qmd_embed"
 
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 

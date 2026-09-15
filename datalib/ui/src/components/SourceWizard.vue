@@ -62,7 +62,7 @@ import {
   BYTE_UNITS,
   DEFAULT_BYTE_UNIT,
   UNIT_BYTES,
-  joinBytes,
+  parseByteSize,
   splitBytes,
   type ByteUnit,
 } from "@/config/byteSize";
@@ -196,13 +196,19 @@ const INLINE_KINDS = new Set<Field["kind"]>(["bool", "int", "bytes"]);
 const missingSteps = computed<string[]>(() => {
   if (!props.editing) return [];
   const out: string[] = [];
-  const steps = props.editing.steps;
-  if (!steps.ingest) out.push(stepIdFor(id.value, "download"));
-  if (renders.value && !steps.render) out.push(stepIdFor(id.value, "render"));
-  if (renders.value && !steps.index) out.push(stepIdFor(id.value, "index"));
-  if (embeds.value && !steps.embed) out.push(stepIdFor(id.value, "embed"));
+  if (!props.editing.steps.ingest) out.push(stepIdFor(id.value, "download"));
+  if (renders.value && !props.editing.steps.render) out.push(stepIdFor(id.value, "render"));
+  if (embeds.value && !props.editing.steps.embed) out.push(stepIdFor(id.value, "embed"));
   return out;
 });
+
+/// An embedding step this source has that saving will remove: semantic
+/// search (or rendering) was switched off below.
+const droppedEmbed = computed<string | null>(() =>
+  props.editing && !embeds.value && props.editing.steps.embed
+    ? props.editing.steps.embed.id
+    : null,
+);
 
 /// A render step this source has that its provider does not write — a
 /// hand-written one under a download-only type. Saving removes it, and
@@ -212,17 +218,6 @@ const orphanRender = computed<string | null>(() =>
     ? props.editing.steps.render.id
     : null,
 );
-
-/// Search-index steps this source has that saving will remove: both
-/// when rendering is off, the embedding one when semantic search is.
-const droppedQmdSteps = computed<string[]>(() => {
-  if (!props.editing) return [];
-  const steps = props.editing.steps;
-  const out: string[] = [];
-  if (!renders.value && steps.index) out.push(steps.index.id);
-  if (!embeds.value && steps.embed) out.push(steps.embed.id);
-  return out;
-});
 
 const groups = computed(() => {
   const matches = filterCatalog(query.value);
@@ -247,10 +242,11 @@ function selectOptions(f: Field & { kind: "select" }): { value: string; label: s
   return [...f.options, { value: current, label: `${current} (not a known value)` }];
 }
 
-/// The unit each `bytes` field is shown in. Only the wizard knows it:
-/// the config holds plain bytes, and `values` does too, so a stored
-/// value opens on whichever unit shows it as a whole number and an
-/// empty one on the default.
+/// The unit each `bytes` field is shown in. A `bytes` value is the
+/// string the config holds ("5 MB"); the unit is read off it when it is
+/// one the dropdown offers, else chosen so the number shows whole, and
+/// an empty field starts on the default. Kept apart from `values` so an
+/// empty field still remembers the unit picked for it.
 const byteUnits = ref<Record<string, ByteUnit>>({});
 
 function seed(entry: CatalogEntry, steps?: SourceSteps) {
@@ -258,8 +254,9 @@ function seed(entry: CatalogEntry, steps?: SourceSteps) {
   byteUnits.value = {};
   for (const f of entry.fields ?? []) {
     if (f.kind !== "bytes") continue;
-    const v = values.value[f.target];
-    byteUnits.value[f.target] = typeof v === "number" ? splitBytes(v).unit : DEFAULT_BYTE_UNIT;
+    const parsed = parseByteSize(String(values.value[f.target] ?? ""));
+    byteUnits.value[f.target] =
+      parsed === null ? DEFAULT_BYTE_UNIT : (parsed.unit ?? splitBytes(parsed.bytes).unit);
   }
 }
 
@@ -267,14 +264,11 @@ function byteUnit(f: Field): ByteUnit {
   return byteUnits.value[f.target] ?? DEFAULT_BYTE_UNIT;
 }
 function byteAmount(f: Field): string {
-  const v = Number(values.value[f.target]);
-  if (values.value[f.target] === "" || !Number.isFinite(v)) return "";
-  return String(v / UNIT_BYTES[byteUnit(f)]);
+  const parsed = parseByteSize(String(values.value[f.target] ?? ""));
+  return parsed === null ? "" : String(parsed.bytes / UNIT_BYTES[byteUnit(f)]);
 }
 function setByteAmount(f: Field, text: string) {
-  const amount = Number(text);
-  values.value[f.target] =
-    text.trim() === "" || !Number.isFinite(amount) ? "" : joinBytes(amount, byteUnit(f));
+  values.value[f.target] = text.trim() === "" ? "" : `${text.trim()} ${byteUnit(f)}`;
 }
 /// Changing the unit keeps the number — "5 MB" becomes "5 GB", the way a
 /// phone's data-limit dialog does it — rather than re-expressing the
@@ -282,7 +276,7 @@ function setByteAmount(f: Field, text: string) {
 function setByteUnit(f: Field, unit: ByteUnit) {
   const amount = byteAmount(f);
   byteUnits.value[f.target] = unit;
-  if (amount !== "") values.value[f.target] = joinBytes(Number(amount), unit);
+  if (amount !== "") values.value[f.target] = `${amount} ${unit}`;
 }
 
 if (props.editing) seed(props.editing.entry, props.editing.steps);
@@ -1000,12 +994,12 @@ function submit() {
             <b class="wiz-permanent">Permanent — this is your last chance to change it.</b>
             Suggested from the name. Creates
             <code>{{ stepIdFor(groupId || "…", "download") }}</code>
-            <template v-if="renders">
-              , <code>{{ stepIdFor(groupId || "…", "render") }}</code
-              >, <code>{{ stepIdFor(groupId || "…", "index") }}</code>
-              <template v-if="embeds">
-                and <code>{{ stepIdFor(groupId || "…", "embed") }}</code>
-              </template>
+            <template v-if="renders && embeds">
+              , <code>{{ stepIdFor(groupId || "…", "render") }}</code> and
+              <code>{{ stepIdFor(groupId || "…", "embed") }}</code>
+            </template>
+            <template v-else-if="renders">
+              and <code>{{ stepIdFor(groupId || "…", "render") }}</code>
             </template>
             under the data root.
           </small>
@@ -1037,14 +1031,11 @@ function submit() {
             This source has a render step, <code>{{ orphanRender }}</code
             >, but {{ chosen.label }} renders nothing.
           </template>
-          Saving removes it, and takes it out of the grid index’s inputs.
+          Saving removes it, and takes it out of the index steps’ inputs.
         </p>
-        <p v-if="droppedQmdSteps.length" class="wiz-cred">
-          Saving removes
-          <template v-for="(step, i) in droppedQmdSteps" :key="step"
-            ><template v-if="i > 0"> and </template><code>{{ step }}</code></template
-          >. What {{ droppedQmdSteps.length === 1 ? "it" : "they" }} put in the search index
-          stays until the next sync notices.
+        <p v-if="droppedEmbed" class="wiz-cred">
+          Saving removes <code>{{ droppedEmbed }}</code>. The vectors it computed stay in the
+          search index until the next sync notices.
         </p>
 
         <p
@@ -1076,11 +1067,10 @@ function submit() {
               <span class="wiz-label">Semantic search</span>
               <input v-model="embedWanted" type="checkbox" class="wiz-bool" />
               <small class="wiz-help">
-                Keyword search always covers a rendered source, through
-                <code>{{ stepIdFor(groupId || "…", "index") }}</code>. Semantic search needs a
-                further step, <code>{{ stepIdFor(groupId || "…", "embed") }}</code>, which
-                computes a vector for every document — slow the first time, one source at a
-                time, and stoppable and resumable from this screen. Turn it off for a source
+                Keyword search covers every rendered source through the shared index. Semantic
+                search needs a further step, <code>{{ stepIdFor(groupId || "…", "embed") }}</code>,
+                which computes a vector for every document — slow the first time, one source at
+                a time, and stoppable and resumable from this screen. Turn it off for a source
                 that is large and rarely searched by meaning.
               </small>
             </label>

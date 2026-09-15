@@ -1,8 +1,8 @@
 // Quick-add source templates for the Sources tab. Each body is one
 // source appended to the DAG config — the `[[groups]]` entry, its
-// ingest step, its render step and its two search-index steps —
-// written through the same writers
-// the wizard uses (`buildGroup`, `stepToml`, `qmdStepsToml`), so the shape of a source
+// ingest step, its render step and its embedding step — written
+// through the same writers the wizard uses (`buildGroup`, `stepToml`,
+// `embedStepToml`), so the shape of a source
 // is spelled out in `sourceSteps.ts` and nowhere else. What a snippet
 // adds is a hand-written params body for the ingest step: several of
 // these providers have no wizard form, and some carry params the
@@ -12,23 +12,22 @@
 // functions so date-dependent parts (Slack's `since`) and the
 // install-specific latchkey CLI hint are computed at click time.
 
-import { buildGroup, qmdStepsToml, stepIdFor, stepToml } from "./sourceSteps";
+import { buildGroup, embedStepToml, stepIdFor, stepToml } from "./sourceSteps";
 
 // YYYY-MM-DD for `n` days before today (UTC).
 function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
-// One source: its group, then the ingest and render steps and the
-// search-index pair. `params` is the ingest step's `[steps.params]`
-// body — written as TOML sub-table headers, so it must come last within
-// its step. `preamble` (optional) is comment lines placed above the
-// group's divider.
+// One source: its group, then the ingest, render and embed steps.
+// `params` is the ingest step's `[steps.params]` body — written as TOML
+// sub-table headers, so it must come last within its step. `preamble`
+// (optional) is comment lines placed above the group's divider.
 function source(id: string, type: string, params: string, preamble = ""): string {
   const group = buildGroup({ id, name: "", type });
   const ingest = stepToml({ group: id, phase: "download", params });
   const render = stepToml({ group: id, phase: "render", inputs: [stepIdFor(id, "download")] });
-  return `${preamble}${group}\n\n${ingest}\n\n${render}\n\n${qmdStepsToml(id, true)}`;
+  return `${preamble}${group}\n\n${ingest}\n\n${render}\n\n${embedStepToml(id)}`;
 }
 
 export type Snippet = { label: string; body: (latchkeyCli: string) => string };

@@ -299,6 +299,7 @@ impl Child for Entry<'_> {
 fn default_name(id: &str) -> String {
     match id {
         "unified_index/grid_index" => "Unified Index (table)",
+        "unified_index/qmd_index" => "Unified Index (QMD)",
         "unified_index" => "Unified Index (Applet)",
         other => other,
     }
@@ -313,7 +314,7 @@ fn child_label(step: &WrittenStep) -> String {
         Some("ingest") => "Ingest",
         Some("render_markdown") => "Render markdown",
         Some("grid_index") => "Grid index",
-        Some("qmd_index") => "Search index",
+        Some("qmd_index") => "QMD index",
         Some("qmd_embed") => "Embeddings",
         Some(other) => other,
         None => "Step",

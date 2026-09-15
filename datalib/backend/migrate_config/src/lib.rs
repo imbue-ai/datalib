@@ -297,9 +297,9 @@ inputs = ["slack/render_markdown"]
         );
     }
 
-    /// The shape from just before each source indexed itself: one
-    /// `qmd_index` under the typeless `unified_index` group, naming
-    /// every source's render step.
+    /// The shape from before embedding was a step per source: the
+    /// `qmd_index` fan-in naming every source's render step, and no
+    /// `qmd_embed` anywhere.
     const GROUPED_GLOBAL_QMD: &str = r#"
 [[groups]]
 id = "slack"
@@ -345,14 +345,14 @@ id = "unified_index"
 command = "datalib-applet unified_index"
 "#;
 
-    /// The global fan-in becomes a `qmd_index` + `qmd_embed` pair under
-    /// each source it named, right after that source's render step; a
-    /// source it did not name (or one with no render step) gets nothing.
+    /// Each source the fan-in names gets a `qmd_embed` step reading it,
+    /// right after that source's render step; a source it did not name
+    /// (or one with no render step) gets nothing, and the fan-in stays.
     #[test]
-    fn the_global_qmd_index_becomes_a_pair_per_source() {
+    fn a_fan_in_with_no_embed_steps_gets_one_per_source() {
         assert_eq!(
             detect(GROUPED_GLOBAL_QMD).unwrap(),
-            LegacyFormat::GlobalQmdIndex
+            LegacyFormat::NoEmbedSteps
         );
         let out = convert(GROUPED_GLOBAL_QMD).unwrap();
         let cfg = datalib_dag::config::parse(&out).unwrap();
@@ -362,10 +362,10 @@ command = "datalib-applet unified_index"
             [
                 "slack/ingest",
                 "slack/render_markdown",
-                "slack/qmd_index",
                 "slack/qmd_embed",
                 "notes/ingest",
                 "unified_index/grid_index",
+                "unified_index/qmd_index",
             ],
             "{out}"
         );
@@ -374,14 +374,8 @@ command = "datalib-applet unified_index"
             .iter()
             .find(|s| s.id == "slack/qmd_embed")
             .unwrap();
-        assert_eq!(embed.inputs, ["slack/qmd_index"]);
+        assert_eq!(embed.inputs, ["unified_index/qmd_index"]);
         assert_eq!(embed.lock.as_deref(), Some("qmd_embed"));
-        let index = cfg
-            .steps
-            .iter()
-            .find(|s| s.id == "slack/qmd_index")
-            .unwrap();
-        assert_eq!(index.inputs, ["slack/render_markdown"]);
         // And the result is current.
         assert!(detect(&out).unwrap_err().to_string().contains("already"));
     }

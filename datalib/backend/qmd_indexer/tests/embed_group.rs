@@ -1,12 +1,7 @@
-//! The two claims the per-source qmd steps rest on, checked against a
-//! real qmd:
-//!
-//!  * a collection `index_group` writes is one `qmd update` reports as
-//!    `unchanged` — so indexing one source without qmd's all-collections
-//!    `update` loses nothing; and
-//!  * `qmd embed -c` is scoped to the collection, refuses a second
-//!    concurrent embed with the exact wording `embed_group` reads, and
-//!    is driven to completion by the loop.
+//! The two qmd behaviors `embed_group` reads off qmd's output, checked
+//! against a real qmd: `qmd embed -c` is scoped to the collection, and
+//! a second concurrent embed is refused with the exact wording the loop
+//! looks for — and exits 0, which is why the loop looks.
 //!
 //! Runs the fixture's rendered markdown (`qmd_md.tar`) through the
 //! Bazel-staged node, qmd tree and embedding model, so it needs neither
@@ -16,10 +11,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
-use datalib_qmd_indexer::store::{collection_version, embed_gauge, open_ro};
+use datalib_qmd_indexer::store::{embed_gauge, index_version, open_ro};
 use datalib_qmd_indexer::{
-    embed_group, index_one_group, prepare_store, EmbedGauge, EmbedOptions, EmbedProgress,
-    NoIndexProgress, DEFAULT_QMD_VERSION,
+    embed_group, prepare_store, run_index, EmbedGauge, EmbedOptions, EmbedProgress, IndexOptions,
+    DEFAULT_QMD_VERSION,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -106,15 +101,17 @@ impl Root {
         text
     }
 
-    fn index(&self, group: &str) -> datalib_qmd_indexer::GroupIndexSummary {
+    /// `qmd collection add` + `qmd update` over these groups, embedding
+    /// nothing.
+    fn index(&self, groups: &[&str]) {
+        let mut opts = IndexOptions::new(&self.root);
+        opts.groups = groups.iter().map(|g| g.to_string()).collect();
+        opts.embed = false;
+        opts.pull = false;
+        opts.models_dir = self.models.clone();
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(index_one_group(
-            &self.root,
-            group,
-            DEFAULT_QMD_VERSION,
-            &NoIndexProgress,
-        ))
-        .unwrap_or_else(|e| panic!("index_one_group({group}) failed: {e:#}"))
+        rt.block_on(run_index(&opts))
+            .unwrap_or_else(|e| panic!("run_index({groups:?}) failed: {e:#}"));
     }
 
     fn gauge(&self, group: &str) -> EmbedGauge {
@@ -129,15 +126,13 @@ impl Root {
         })
     }
 
-    fn version(&self, group: &str) -> String {
+    fn version(&self) -> String {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let pool = open_ro(&datalib_runtime::qmd::qmd_index_path(&self.root))
                 .await
                 .unwrap();
-            let (_, v) = collection_version(&pool, group, DEFAULT_QMD_VERSION)
-                .await
-                .unwrap();
+            let v = index_version(&pool, DEFAULT_QMD_VERSION).await.unwrap();
             pool.close().await;
             v
         })
@@ -191,29 +186,6 @@ fn stage_runtime(work: &Path, qmd_version: &str) -> PathBuf {
     runtime
 }
 
-/// The `Indexed: …` line `qmd update` prints for one collection.
-fn update_line_for(update_output: &str, group: &str) -> String {
-    let lines: Vec<&str> = update_output.lines().collect();
-    let at = lines
-        .iter()
-        .position(|l| l.contains(&format!("] {group} (")))
-        .unwrap_or_else(|| panic!("no update block for {group} in:\n{update_output}"));
-    lines[at..]
-        .iter()
-        .find(|l| l.starts_with("Indexed:"))
-        .unwrap_or_else(|| panic!("no Indexed line for {group}"))
-        .to_string()
-}
-
-/// The largest rendered file of a group — the one most likely to
-/// exercise a big `content.doc` value on the FTS path.
-fn largest_file(root: &Path, group: &str) -> PathBuf {
-    walk(&root.join(group).join("render_markdown"))
-        .into_iter()
-        .max_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
-        .expect("group has files")
-}
-
 fn walk(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(dir).unwrap().flatten() {
@@ -227,96 +199,46 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Every write `index_group` makes is one qmd would have made itself:
-/// a following `qmd update` finds nothing to add, change or remove in
-/// any collection, and keyword search reaches text in the largest
-/// document (the FTS rows come from qmd's triggers, and a large body is
-/// the case a doltlite quirk could have silently truncated).
+/// The index's content version is a function of what is indexed: the
+/// same after a second pass over unchanged trees, different after an
+/// edit — which is what makes a `qmd_embed` step stale exactly when
+/// there could be something to embed.
 #[test]
-fn rows_written_here_are_unchanged_to_qmd_update() {
+fn the_index_version_moves_with_the_documents_and_only_then() {
     let r = Root::materialize();
-    let groups = ["slack", "claude-api", "tng_pdfs", "yolink"];
-    let mut total = 0;
-    for g in groups {
-        // `qmd collection add` indexes the tree as it registers it, so
-        // the first pass meets rows qmd wrote and must find every one of
-        // them unchanged — the identity claim from qmd's side.
-        let s = r.index(g);
-        assert!(s.documents > 0, "{g}: empty collection: {s:?}");
-        assert_eq!(
-            (s.indexed, s.updated, s.removed, s.unchanged),
-            (0, 0, 0, s.documents),
-            "{g}: rows qmd wrote read as changed: {s:?}"
-        );
-        total += s.documents;
-    }
-
-    let update = r.qmd(&["update"]);
-    for g in groups {
-        let line = update_line_for(&update, g);
-        assert!(
-            line.starts_with("Indexed: 0 new, 0 updated,")
-                && line.ends_with("unchanged, 0 removed"),
-            "{g}: qmd update disagreed with index_group: {line}"
-        );
-    }
-    assert!(
-        update.contains(&format!("({total} unique hashes need vectors)")),
-        "expected {total} pending in:\n{update}"
-    );
-
-    // A word from deep inside the largest document, through qmd's own
-    // search (its SQLite, not ours — the oracle for what FTS holds).
-    let big = largest_file(&r.root, "slack");
-    let text = std::fs::read_to_string(&big).unwrap();
-    let needle = text
-        .split_whitespace()
-        .rev()
-        .find(|w| w.len() >= 7 && w.chars().all(|c| c.is_ascii_alphabetic()))
-        .expect("a plain word near the end of the largest document");
-    let hits = r.qmd(&["search", needle, "-c", "slack", "-n", "50"]);
-    let rel = big.strip_prefix(&r.root).unwrap().to_string_lossy();
-    assert!(
-        hits.contains(rel.as_ref()),
-        "search for {needle:?} (from {rel}) found:\n{hits}"
-    );
-
-    // A second pass over unchanged trees changes nothing and keeps the
-    // version; an edit is one `updated` and a new version; a deleted
-    // file is one `removed`, and qmd's own update agrees again.
-    let before = r.version("yolink");
-    let again = r.index("yolink");
+    r.index(&["yolink", "slack"]);
+    let before = r.version();
+    r.index(&["yolink", "slack"]);
     assert_eq!(
-        again.indexed + again.updated + again.removed,
-        0,
-        "{again:?}"
+        r.version(),
+        before,
+        "a pass over unchanged trees must not move the version"
     );
-    assert_eq!(r.version("yolink"), before);
 
     let file = walk(&r.root.join("yolink/render_markdown"))[0].clone();
     let mut body = std::fs::read_to_string(&file).unwrap();
     body.push_str("\n\nQuiddleworth zebrafish, appended by the test.\n");
     std::fs::write(&file, body).unwrap();
-    let edited = r.index("yolink");
-    assert_eq!(
-        (edited.indexed, edited.updated, edited.removed),
-        (0, 1, 0),
-        "{edited:?}"
+    r.index(&["yolink", "slack"]);
+    let after = r.version();
+    assert_ne!(after, before, "an edited document must move the version");
+    assert_ne!(
+        index_version_with_pin(&r, "9.9.9"),
+        after,
+        "a qmd bump must move the version even with nothing edited"
     );
-    assert_ne!(r.version("yolink"), before);
-    assert!(r
-        .qmd(&["search", "Quiddleworth", "-c", "yolink"])
-        .contains("yolink/render_markdown/"));
+}
 
-    std::fs::remove_file(&file).unwrap();
-    let removed = r.index("yolink");
-    assert_eq!(
-        (removed.indexed, removed.updated, removed.removed),
-        (0, 0, 1),
-        "{removed:?}"
-    );
-    let line = update_line_for(&r.qmd(&["update"]), "yolink");
-    assert!(line.starts_with("Indexed: 0 new, 0 updated,"), "{line}");
+fn index_version_with_pin(r: &Root, pin: &str) -> String {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let pool = open_ro(&datalib_runtime::qmd::qmd_index_path(&r.root))
+            .await
+            .unwrap();
+        let v = index_version(&pool, pin).await.unwrap();
+        pool.close().await;
+        v
+    })
 }
 
 struct Gauges(Mutex<Vec<EmbedGauge>>);
@@ -334,8 +256,7 @@ impl EmbedProgress for Gauges {
 #[test]
 fn embed_is_scoped_serialized_and_driven_to_completion() {
     let r = Root::materialize();
-    r.index("slack");
-    r.index("yolink");
+    r.index(&["slack", "yolink"]);
     assert_eq!(r.gauge("slack").embedded(), 0);
 
     let gauges = Gauges(Mutex::new(Vec::new()));

@@ -14,9 +14,10 @@
 //!   `mbox.path`, …;
 //! - `common.raw_path` goes: the store is the step's own tree, which is
 //!   the only value the step ever accepted for it;
-//! - the one `unified_index/qmd_index` fan-in over every source becomes a
-//!   `qmd_index` + `qmd_embed` pair under each source it named, after
-//!   that source's render step.
+//! - a config whose `qmd_index` fan-in still did the embedding — no
+//!   `qmd_embed` step anywhere — gets one under each source the fan-in
+//!   names, after that source's render step, so semantic search keeps
+//!   covering what it covered.
 //!
 //! This module parses the retired shapes itself. The runner refuses them,
 //! so the loader cannot hand the entries over, and a retired shape should
@@ -125,9 +126,9 @@ pub enum Retired {
     /// A group `type` spelled for the method (`slack_api`), or an
     /// ingest step whose params still say `sync` / `common.input_path`.
     TypesAndMethodTables,
-    /// One `qmd_index` step under a typeless group, fanning in every
-    /// source, from before each source indexed itself.
-    GlobalQmdIndex,
+    /// A `qmd_index` fan-in and no `qmd_embed` step anywhere, from
+    /// before embedding was each source's own step.
+    NoEmbedSteps,
 }
 
 /// Which retired shape this config is in, or `None` when it is already
@@ -152,33 +153,38 @@ pub fn retired_shape(text: &str) -> Result<Option<Retired>> {
     if retired_type || retired_params {
         return Ok(Some(Retired::TypesAndMethodTables));
     }
-    Ok(global_qmd_index(&cfg)
+    Ok(sources_without_embed_steps(&cfg)
         .is_some()
-        .then_some(Retired::GlobalQmdIndex))
+        .then_some(Retired::NoEmbedSteps))
 }
 
-/// The retired fan-in: a built-in `qmd_index` step under a group with no
-/// `type`. Returns the sources it named, by the first segment of each
-/// `<group>/render_markdown` input.
-fn global_qmd_index(cfg: &OldConfig) -> Option<Vec<String>> {
-    let typeless = |g: &str| {
-        cfg.groups
-            .iter()
-            .find(|x| x.id == g)
-            .is_none_or(|x| x.r#type.is_none())
+/// When the `qmd_index` fan-in was the only qmd step, it embedded every
+/// source it named; now embedding is a `qmd_embed` step per source. A
+/// config with the fan-in and no embed step at all is that shape, and
+/// the sources the fan-in names — the first segment of each
+/// `<group>/render_markdown` input — are the ones that used to be
+/// embedded. `None` for a config that has any embed step: that one has
+/// been through this already, or chose.
+fn sources_without_embed_steps(cfg: &OldConfig) -> Option<Vec<String>> {
+    let function_of = |s: &StepIn| match builtin_of(s) {
+        Some(b) => Some(b.function.to_string()),
+        None if s.command.is_none() => s.function.clone(),
+        None => None,
     };
-    // Either spelling of the fan-in: the current `function = "qmd_index"`
-    // with no command, or the older `datalib-step qmd_index` command line.
-    let step = cfg.steps.iter().find(|s| match builtin_of(s) {
-        Some(b) => b.function == "qmd_index" && typeless(&b.group),
-        None => {
-            s.command.is_none()
-                && s.function.as_deref() == Some("qmd_index")
-                && s.group.as_deref().is_some_and(typeless)
-        }
-    })?;
+    if cfg
+        .steps
+        .iter()
+        .any(|s| function_of(s).as_deref() == Some("qmd_embed"))
+    {
+        return None;
+    }
+    let fan_in = cfg
+        .steps
+        .iter()
+        .find(|s| function_of(s).as_deref() == Some("qmd_index"))?;
     Some(
-        step.inputs
+        fan_in
+            .inputs
             .iter()
             .filter_map(|i| i.split('/').next())
             .filter(|g| !g.is_empty())
@@ -649,7 +655,7 @@ pub fn rewrite(text: &str) -> Result<String> {
             },
         ));
     }
-    per_source_qmd_steps(&cfg, &groups, &mut steps);
+    embed_steps_per_source(&cfg, &renames, &mut steps);
 
     let applets: Vec<AppletOut> = cfg
         .applets
@@ -706,29 +712,37 @@ pub fn rewrite(text: &str) -> Result<String> {
     Ok(out)
 }
 
-/// Replace the global `qmd_index` fan-in with a `qmd_index` + `qmd_embed`
-/// pair under each source it named, placed after that source's render
-/// step. Sources it did not name were not searchable before and stay
-/// that way; the wizard adds the pair on request.
-fn per_source_qmd_steps(
+/// Give each source the `qmd_index` fan-in names a `qmd_embed` step,
+/// placed after that source's render step and reading the fan-in.
+/// Sources it did not name were not embedded before and stay that way;
+/// the wizard adds the step on request.
+fn embed_steps_per_source(
     cfg: &OldConfig,
-    groups: &[GroupOut],
+    renames: &BTreeMap<String, String>,
     steps: &mut Vec<(Option<usize>, StepOut)>,
 ) {
-    let Some(named) = global_qmd_index(cfg) else {
+    let Some(named) = sources_without_embed_steps(cfg) else {
         return;
     };
-    let typeless = |gi: Option<usize>| gi.is_none_or(|gi| groups[gi].r#type.is_none());
-    steps.retain(|(gi, s)| !(s.function.as_deref() == Some("qmd_index") && typeless(*gi)));
-    let has = |steps: &[(Option<usize>, StepOut)], g: &str, f: &str| {
-        steps
-            .iter()
-            .any(|(_, s)| s.group.as_deref() == Some(g) && s.function.as_deref() == Some(f))
+    let Some((_, fan_in)) = steps
+        .iter()
+        .find(|(_, s)| s.function.as_deref() == Some("qmd_index"))
+    else {
+        return;
+    };
+    let fan_in_id = match (&fan_in.group, &fan_in.function, &fan_in.id) {
+        (Some(g), Some(f), _) => format!("{g}/{f}"),
+        (_, _, Some(id)) => id.clone(),
+        _ => return,
     };
     for g in named {
-        if has(steps, &g, "qmd_index") {
-            continue;
-        }
+        // The fan-in named the render step by its old id, which the
+        // rewrite above may have renamed along with its group.
+        let g = renames
+            .get(&format!("{g}/render_markdown"))
+            .and_then(|r| r.split('/').next())
+            .map(str::to_string)
+            .unwrap_or(g);
         let Some(at) = steps.iter().position(|(_, s)| {
             s.group.as_deref() == Some(g.as_str())
                 && s.function.as_deref() == Some("render_markdown")
@@ -736,16 +750,9 @@ fn per_source_qmd_steps(
             continue;
         };
         let gi = steps[at].0;
-        let mut embed = StepOut::builtin(&g, "qmd_embed", vec![format!("{g}/qmd_index")]);
+        let mut embed = StepOut::builtin(&g, "qmd_embed", vec![fan_in_id.clone()]);
         embed.lock = Some("qmd_embed".to_string());
         steps.insert(at + 1, (gi, embed));
-        steps.insert(
-            at + 1,
-            (
-                gi,
-                StepOut::builtin(&g, "qmd_index", vec![format!("{g}/render_markdown")]),
-            ),
-        );
     }
 }
 

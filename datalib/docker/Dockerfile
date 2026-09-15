@@ -236,8 +236,8 @@ RUN chmod 0755 /usr/local/bin/datalib-entrypoint.sh
 # first-time user through it, and datalib/docker/doc_test.sh checks
 # that walkthrough against the built image.
 #
-# The config's search-index steps (every source's `qmd_index` and
-# `qmd_embed`) sit below a BUILD-TIME CUT marker and are dropped for
+# The config's search-index steps (the `qmd_index` fan-in and every
+# source's `qmd_embed`) sit below a BUILD-TIME CUT marker and are dropped for
 # this run (embedding under the arm64 leg's QEMU emulation would cost
 # every release tens of minutes); the shipped config keeps them, so the
 # first sync in a container builds the index.

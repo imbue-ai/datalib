@@ -88,26 +88,10 @@ function = "grid_index"
 name = "Search index"
 inputs = ["slack/render_markdown"]
 
-[[groups]]
-id = "u2"
-
 [[steps]]
-group = "u2"
-function = "grid_index"
-
-[[groups]]
-id = "slack"
-name = "Work Slack"
-type = "slack"
-
-[[steps]]
-group = "slack"
+group = "unified_index"
 function = "qmd_index"
-
-[[steps]]
-group = "slack"
-function = "qmd_embed"
-inputs = ["slack/qmd_index"]
+inputs = ["slack/render_markdown"]
 
 [[applets]]
 group = "unified_index"
@@ -123,14 +107,7 @@ command = "datalib-applet unified_index"
 
   it("gives an unnamed shared step its default label", () => {
     const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
-    expect(byId.get("u2/grid_index")?.name).toBe("u2/grid_index");
-  });
-
-  it("labels a source's search-index steps from the group's name", () => {
-    const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
-    expect(byId.get("slack/qmd_index")?.name).toBe("Work Slack (search index)");
-    expect(byId.get("slack/qmd_embed")?.name).toBe("Work Slack (embeddings)");
-    expect(byId.get("slack/qmd_embed")?.phase).toBe("embed");
+    expect(byId.get("unified_index/qmd_index")?.name).toBe("Unified Index (QMD)");
   });
 
   it("labels the applet too, which has no config key to name it", () => {

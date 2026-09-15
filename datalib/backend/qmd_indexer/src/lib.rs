@@ -1,7 +1,7 @@
-//! The qmd index over the rendered markdown trees at a data root: one
-//! collection per group, written by [`store::index_group`] and embedded
-//! by [`embed::embed_group`]. [`run_index`] composes the two over every
-//! group for the fixture build and the standalone CLI.
+//! Drive the `qmd` CLI over the rendered markdown trees at a data root:
+//! one collection per group, all indexed by one `qmd update`
+//! ([`run_index`]) and each embedded on its own by
+//! [`embed::embed_group`].
 
 pub mod embed;
 pub mod store;
@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use datalib_obs::status_line;
 
 pub use embed::{embed_group, EmbedOptions, EmbedOutcome, EmbedProgress, NoEmbedProgress};
-pub use store::{EmbedGauge, GroupIndexSummary, IndexProgress, NoIndexProgress};
+pub use store::EmbedGauge;
 
 /// Re-export of the ONE canonical qmd pin (`datalib_runtime::qmd`) — a
 /// re-export rather than a literal so this crate *cannot* drift from the
@@ -144,7 +144,6 @@ pub fn models_present(models_dir: &Path) -> bool {
 pub struct IndexOutcome {
     pub index_path: PathBuf,
     pub status_output: Option<String>,
-    pub groups: Vec<GroupIndexSummary>,
 }
 
 /// Make sure the store directory and its `models` symlink exist, and
@@ -159,46 +158,12 @@ pub fn prepare_store(root: &Path, models_dir: &Path) -> Result<PathBuf> {
     Ok(datalib_runtime::qmd::qmd_index_path(root))
 }
 
-/// Register `group`'s collection (idempotent — this is also what creates
-/// the store on a fresh root) and bring its rows in line with the
-/// group's rendered tree.
-pub async fn index_one_group(
-    root: &Path,
-    group: &str,
-    qmd_version: &str,
-    progress: &dyn IndexProgress,
-) -> Result<GroupIndexSummary> {
-    let root = root
-        .canonicalize()
-        .with_context(|| format!("root does not exist: {}", root.display()))?;
-    let cache_home = datalib_runtime::qmd::qmd_cache_home(&root);
-    let root_arg = root.to_str().context("root is not valid UTF-8")?;
-    let mask = mask_for_group(group);
-    ensure_collection(
-        &cache_home,
-        qmd_version,
-        &[
-            "collection",
-            "add",
-            root_arg,
-            "--name",
-            group,
-            "--mask",
-            &mask,
-        ],
-    )?;
-    let index_path = datalib_runtime::qmd::qmd_index_path(&root);
-    let pool = store::open_rw(&index_path).await?;
-    let tree = root.join(group).join("render_markdown");
-    let result = store::index_group(&pool, group, &root, &tree, qmd_version, progress).await;
-    pool.close().await;
-    result
-}
-
-/// Index every group under `<root>`, one collection per group, then
-/// embed the ones asked for. Registering a collection is idempotent, so
-/// this reconciles rather than assuming a first run: a source added
-/// after the index was built gets its collection here.
+/// Register one collection per group and run `qmd update` over them all
+/// — it cannot be scoped to one collection, and does not need to be:
+/// the scan is fast, and only embedding is per group. Registering a
+/// collection is idempotent, so this reconciles rather than assuming a
+/// first run: a source added after the index was built gets its
+/// collection here.
 pub async fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     let root = opts
         .root
@@ -238,18 +203,24 @@ pub async fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
         if first_run { "create" } else { "incremental" }
     );
 
-    let mut groups = Vec::with_capacity(opts.groups.len());
+    let root_arg = root.to_str().context("root is not valid UTF-8")?;
     for group in &opts.groups {
-        let summary = index_one_group(&root, group, &opts.qmd_version, &NoIndexProgress).await?;
-        status_line!(
-            "[qmd-indexer] {group}: {} new, {} updated, {} unchanged, {} removed",
-            summary.indexed,
-            summary.updated,
-            summary.unchanged,
-            summary.removed
-        );
-        groups.push(summary);
+        let mask = mask_for_group(group);
+        ensure_collection(
+            &cache_home,
+            &opts.qmd_version,
+            &[
+                "collection",
+                "add",
+                root_arg,
+                "--name",
+                group,
+                "--mask",
+                &mask,
+            ],
+        )?;
     }
+    run_qmd(&cache_home, &opts.qmd_version, &["update"])?;
 
     // Retiring a collection is destructive and has to come *after* the
     // indexing pass above. `qmd collection remove` deletes that
@@ -335,7 +306,6 @@ pub async fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     Ok(IndexOutcome {
         index_path,
         status_output,
-        groups,
     })
 }
 

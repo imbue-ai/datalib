@@ -11,9 +11,8 @@
 // a custom executable the wizard knows nothing about.
 //
 // The wizard writes a source as one unit — the group, its `ingest`
-// step, its `render_markdown` step and the two search-index steps that
-// follow (`qmd_index`, always; `qmd_embed`, on request) — from one
-// form, and edits it the same way. Writes are whole-text: add/delete splice the text the
+// step, its `render_markdown` step and, on request, its `qmd_embed`
+// step — from one form, and edits it the same way. Writes are whole-text: add/delete splice the text the
 // editor holds. Field-level editing that preserves comments needs a
 // format-preserving TOML writer, so until then `paramsAreRepresentable`
 // gates the Edit button and the wizard never silently drops something
@@ -25,13 +24,14 @@
 // another tab.
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
+
+import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
 import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
 
 /// Which wave a step belongs to, for display and for picking the right
 /// half of a catalog entry's fields. Read off the step's `function`.
-/// `index` is a source's keyword index or the shared grid index;
-/// `embed` is a source's vectors.
+/// `embed` is a source's vectors, the one per-source step past render.
 export type StepPhase = "ingest" | "render" | "index" | "embed" | "other";
 
 export type EntryKind = "step" | "applet";
@@ -83,19 +83,11 @@ export type ConfiguredGroup = {
 
 /// The label for a grouped step that wrote no `name` of its own.
 function groupedName(group: ConfiguredGroup, id: string, phase: StepPhase): string {
-  if (!group.name || id in DEFAULT_NAMES) return defaultName(id);
-  switch (phase) {
-    case "ingest":
-      return group.name;
-    case "render":
-      return `${group.name} (render markdown)`;
-    case "index":
-      return `${group.name} (search index)`;
-    case "embed":
-      return `${group.name} (embeddings)`;
-    default:
-      return defaultName(id);
-  }
+  if (!group.name) return defaultName(id);
+  if (phase === "ingest") return group.name;
+  if (phase === "render") return `${group.name} (render markdown)`;
+  if (phase === "embed") return `${group.name} (embeddings)`;
+  return defaultName(id);
 }
 
 /// The built-in functions, each the directory it writes. Mirrors
@@ -120,6 +112,7 @@ function phaseOfFunction(fn: string | null): StepPhase {
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
   "unified_index/grid_index": "Unified Index (table)",
+  "unified_index/qmd_index": "Unified Index (QMD)",
   "unified_index": "Unified Index (Applet)",
 };
 
@@ -384,26 +377,22 @@ export function producerOf(
 export type SourceSteps = {
   ingest?: ConfiguredStep;
   render?: ConfiguredStep;
-  index?: ConfiguredStep;
   embed?: ConfiguredStep;
 };
 
-/// A group's steps, by phase.
+/// A group's ingest, render and embed steps, by phase.
 export function sourceStepsOf(groupId: string, all: ConfiguredStep[]): SourceSteps {
   const under = all.filter((s) => s.kind === "step" && s.group === groupId);
   return {
     ingest: under.find((s) => s.phase === "ingest"),
     render: under.find((s) => s.phase === "render"),
-    index: under.find((s) => s.phase === "index"),
     embed: under.find((s) => s.phase === "embed"),
   };
 }
 
 /// Every step the wizard owns for a source, for a replace-in-one-cut.
 export function ownedSteps(steps: SourceSteps): ConfiguredStep[] {
-  return [steps.ingest, steps.render, steps.index, steps.embed].filter(
-    (s): s is ConfiguredStep => !!s,
-  );
+  return [steps.ingest, steps.render, steps.embed].filter((s): s is ConfiguredStep => !!s);
 }
 
 /// The catalog entry describing a step, in the context of the config it
@@ -435,10 +424,11 @@ export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
 
 export type FieldValues = Record<string, unknown>;
 
-/// `bytes` is an `int` with a different control: the value it holds
-/// and writes is the same plain number.
-function isNumeric(field: Field): field is Field & { kind: "int" | "bytes" } {
-  return field.kind === "int" || field.kind === "bytes";
+/// A `bytes` value is the string a person would write — "5 MB" — and
+/// is written as one. A number reaching here (the catalog's default, a
+/// config that says `5_000_000`) is put into that form first.
+function bytesText(value: unknown): string {
+  return typeof value === "number" ? formatBytes(value) : String(value ?? "");
 }
 
 /// The option a stored value corresponds to, or the value unchanged.
@@ -469,9 +459,13 @@ export function seedFieldValues(entry: CatalogEntry, steps?: SourceSteps): Field
           ? ((existing as string[]) ?? [])
           : field.kind === "select"
             ? matchOption(field.options, existing)
-            : existing;
-    } else if (isNumeric(field) && field.default !== undefined && !steps) {
+            : field.kind === "bytes"
+              ? bytesText(existing)
+              : existing;
+    } else if (field.kind === "int" && field.default !== undefined && !steps) {
       next[field.target] = field.default;
+    } else if (field.kind === "bytes" && field.default !== undefined && !steps) {
+      next[field.target] = formatBytes(field.default);
     } else if (field.kind === "bool") {
       next[field.target] = field.default ?? false;
     } else if (field.kind === "select") {
@@ -545,8 +539,9 @@ function jsonValue(field: Field | undefined, value: unknown): unknown {
     case "bool":
       return !!value;
     case "int":
-    case "bytes":
       return Number(value);
+    case "bytes":
+      return bytesText(value);
     case "string_list":
       return value as string[];
     default:
@@ -600,7 +595,8 @@ function isSet(field: Field, value: unknown): boolean {
   if (value === undefined || value === null) return false;
   if (field.kind === "string_list") return Array.isArray(value) && value.length > 0;
   if (field.kind === "text" || field.kind === "date") return String(value).trim() !== "";
-  if (isNumeric(field)) return value !== "" && Number.isFinite(Number(value));
+  if (field.kind === "int") return value !== "" && Number.isFinite(Number(value));
+  if (field.kind === "bytes") return parseByteSize(bytesText(value)) !== null;
     // A select normally holds one of its options, so it is always written. The
     // membership test is deliberately *not* here: a hand-edited config can hold
     // a value the dropdown doesn't know, and dropping it on save would silently
@@ -624,8 +620,9 @@ function tomlValue(field: Field | undefined, value: unknown): string {
     case "bool":
       return value ? "true" : "false";
     case "int":
-    case "bytes":
       return String(Number(value));
+    case "bytes":
+      return quote(bytesText(value));
     case "string_list":
       return `[${(value as string[]).map(quote).join(", ")}]`;
     default:
@@ -650,8 +647,8 @@ function quote(s: string): string {
 }
 
 /// The phases the wizard writes a step for: the two the catalog has
-/// fields for, plus the two search-index steps, which have none.
-export type WrittenPhase = FieldPhase | "index" | "embed";
+/// fields for, plus the embedding step, which has none.
+export type WrittenPhase = FieldPhase | "embed";
 
 /// The function a step of this phase performs within its group, which
 /// is also the directory it writes under the group's.
@@ -659,8 +656,6 @@ export function functionOf(phase: WrittenPhase): string {
   switch (phase) {
     case "render":
       return "render_markdown";
-    case "index":
-      return "qmd_index";
     case "embed":
       return "qmd_embed";
     default:
@@ -674,20 +669,19 @@ export function stepIdFor(group: string, phase: WrittenPhase): string {
   return `${group}/${functionOf(phase)}`;
 }
 
+/// The shared qmd keyword index every `qmd_embed` step reads.
+export const QMD_INDEX_STEP = "unified_index/qmd_index";
+
 /// The name every `qmd_embed` step shares in its `lock`: qmd refuses a
 /// second concurrent embed of one store, so the runner starts one at a
 /// time.
 export const EMBED_LOCK = "qmd_embed";
 
-/// A source's search-index steps: `qmd_index` reading its rendered
-/// markdown, and `qmd_embed` reading that, when the source wants
-/// semantic search.
-export function qmdStepsToml(group: string, embeds: boolean): string {
-  const index = stepToml({ group, phase: "index", inputs: [stepIdFor(group, "render")] });
-  if (!embeds) return index;
-  const embed = `${stepToml({ group, phase: "embed", inputs: [stepIdFor(group, "index")] })}
+/// A source's embedding step: the vectors behind semantic search,
+/// reading the shared qmd index, one source at a time.
+export function embedStepToml(group: string): string {
+  return `${stepToml({ group, phase: "embed", inputs: [QMD_INDEX_STEP] })}
 lock = ${quote(EMBED_LOCK)}`;
-  return `${index}\n\n${embed}`;
 }
 
 /// One source's `[[groups]]` block, with a divider above it. The name
@@ -766,11 +760,10 @@ function = ${quote(functionOf(opts.phase))}${inputsLine}${params ? `\n${params}`
 }
 
 /// Everything the wizard writes for one source, in the order it goes
-/// into the file: the group (when creating), the ingest step, and for
-/// a provider that renders the render step, its keyword-index step and
-/// — when the source wants semantic search — its embedding step. A
-/// provider that renders nothing (`renderStep: false`) gets none of the
-/// last three and no `renderId`.
+/// into the file: the group (when creating), the ingest step, and for a
+/// provider that renders the render step and — when the source wants
+/// semantic search — its embedding step. A provider that renders
+/// nothing (`renderStep: false`) gets neither and no `renderId`.
 export function buildSource(opts: {
   entry: CatalogEntry;
   group: string;
@@ -795,7 +788,7 @@ export function buildSource(opts: {
   const render = renders
     ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
     : null;
-  const qmd = renders ? qmdStepsToml(group, opts.embeds !== false) : null;
+  const embed = renders && opts.embeds !== false ? embedStepToml(group) : null;
   return {
     groupBody: opts.withGroup
       ? buildGroup({
@@ -805,7 +798,7 @@ export function buildSource(opts: {
           description: opts.description,
         })
       : null,
-    stepsBody: [ingest, render, qmd].filter((s): s is string => s !== null).join("\n\n"),
+    stepsBody: [ingest, render, embed].filter((s): s is string => s !== null).join("\n\n"),
     renderId: renders ? stepIdFor(group, "render") : null,
   };
 }
@@ -843,12 +836,11 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
   return text.slice(0, group.start) + edited + text.slice(group.end);
 }
 
-/// Wire a render step into every fan-in that consumes rendered markdown
-/// — today the grid index; a source's own search-index steps name it
-/// themselves.
+/// Wire a render step into every fan-in that consumes rendered markdown.
 ///
 /// The fan-ins name their inputs by id, so a source added without this renders
-/// happily and never reaches the grid, with nothing on screen to say why.
+/// happily and is never indexed — invisible in search, with nothing on screen
+/// to say why.
 /// A fan-in step's `inputs = [...]`, keyed on the step being filed
 /// under the `unified_index` group (or, for a custom step, writing an
 /// `unified_index/…` id), within its own table.
