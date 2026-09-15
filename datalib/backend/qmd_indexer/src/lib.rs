@@ -356,14 +356,30 @@ pub fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e).with_context(|| format!("stat {}", models_link.display())),
     }
-    std::os::unix::fs::symlink(models_dir, &models_link).with_context(|| {
-        format!(
-            "failed to symlink {} -> {}",
-            models_link.display(),
-            models_dir.display()
-        )
-    })?;
-    Ok(())
+    match std::os::unix::fs::symlink(models_dir, &models_link) {
+        Ok(()) => Ok(()),
+        // Two steps preparing the store at once — every source's
+        // `qmd_index` starts the moment its render lands — race here,
+        // and the loser finds the winner's link.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            match std::fs::symlink_metadata(&models_link) {
+                Ok(meta) if meta.file_type().is_symlink() => Ok(()),
+                _ => Err(e).with_context(|| {
+                    format!(
+                        "{} appeared while linking it and is not a symlink",
+                        models_link.display()
+                    )
+                }),
+            }
+        }
+        Err(e) => Err(e).with_context(|| {
+            format!(
+                "failed to symlink {} -> {}",
+                models_link.display(),
+                models_dir.display()
+            )
+        }),
+    }
 }
 
 fn capture_qmd_status(cache_home: &Path, qmd_version: &str) -> Result<String> {
@@ -424,6 +440,15 @@ fn ensure_collection(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Res
         return Ok(());
     }
     bail!("qmd {:?} failed: {}: {}", args, out.status, combined.trim());
+}
+
+/// Unregister `name` from the store at `root`, tolerating one that is
+/// already gone. Destructive: qmd deletes the collection's `documents`
+/// rows and any `content` no other collection names — see the note in
+/// [`run_index`] on why this must follow the indexing pass.
+pub fn retire_one_collection(root: &Path, qmd_version: &str, name: &str) -> Result<()> {
+    let cache_home = datalib_runtime::qmd::qmd_cache_home(root);
+    retire_collection(&cache_home, qmd_version, name)
 }
 
 /// Unregister a collection, tolerating one that is already gone.

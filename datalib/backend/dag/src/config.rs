@@ -996,6 +996,31 @@ fn accept_steps(
             );
         }
 
+        // The two qmd functions are per source. Under a typeless group
+        // the only thing this can be is the retired fan-in — one
+        // `unified_index/qmd_index` over every source — which would now
+        // index an empty tree and register a collection for it.
+        if c.entry.command.is_none()
+            && group_type.is_none()
+            && matches!(c.entry.function.as_deref(), Some("qmd_index" | "qmd_embed"))
+        {
+            let function = c.entry.function.as_deref().unwrap_or_default();
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    Some("function"),
+                    format!(
+                        "`{function}` runs per source, under a group with a `type`; one \
+                         `unified_index/qmd_index` over every source is the shape written \
+                         before each source indexed itself, and it no longer runs"
+                    ),
+                )
+                .with_help("rewrite the file once: `datalib-migrate-config <data root> --force`"),
+            );
+            continue;
+        }
+
         let spec = match spec_of(&c.entry, group_type) {
             Ok(spec) => spec,
             Err(e) => {
@@ -2207,10 +2232,6 @@ id = "unified_index"
 group = "unified_index"
 function = "grid_index"
 
-[[steps]]
-group = "unified_index"
-function = "qmd_index"
-
 [[applets]]
 group = "unified_index"
 id = "unified_index"
@@ -2218,7 +2239,7 @@ command = "datalib-applet unified_index"
 "#,
         );
         assert!(check.is_clean(), "{:?}", check.diagnostics);
-        assert_eq!(check.graph.steps.len(), 2);
+        assert_eq!(check.graph.steps.len(), 1);
     }
 
     /// Malformed TOML is the one shape with nothing to salvage.
@@ -2822,6 +2843,25 @@ command = "datalib-applet unified_index"
                 .expect("rejected");
             assert!(d.describe().contains("datalib-migrate-config"), "{}", d.describe());
         }
+        // The global qmd step, from before each source indexed itself.
+        let check = check_text(
+            "[[groups]]\nid = \"unified_index\"\n\n\
+             [[steps]]\ngroup = \"unified_index\"\nfunction = \"qmd_index\"\ninputs = []\n",
+        );
+        assert_eq!(check.dropped(), 1, "{:?}", check.diagnostics);
+        assert!(
+            check.diagnostics[0]
+                .describe()
+                .contains("datalib-migrate-config"),
+            "{}",
+            check.diagnostics[0].describe()
+        );
+        // The same function under a source is the current shape.
+        let check = check_text(
+            "[[groups]]\nid = \"slack\"\ntype = \"slack\"\n\n\
+             [[steps]]\ngroup = \"slack\"\nfunction = \"qmd_index\"\n",
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
         // An explicit `datalib-step` with no subcommand is the built-in
         // step spelled out, and fine.
         let check = check_text(

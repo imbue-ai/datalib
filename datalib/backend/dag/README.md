@@ -40,8 +40,9 @@ environment — `DATALIB_DAG_GROUP`, `DATALIB_DAG_FUNCTION`,
 step with no `command` runs `datalib-step`, which dispatches on that
 environment and writes the tree its id names; that is why a built-in
 step's function is the directory it writes (`ingest`, `render_markdown`,
-`grid_index`, `qmd_index`), and why the loader requires such a step to
-be under a group. The runner never interprets the function itself.
+`qmd_index`, `qmd_embed`, `grid_index`), and why the loader requires
+such a step to be under a group. The runner never interprets the
+function itself.
 
 ## The graph is declared, not derived
 
@@ -76,9 +77,12 @@ sends them looking for an `inputs` entry that isn't there.
 
 ## What a run executes, and what makes a step stale
 
-A run executes a **runnable subgraph**: the source steps this run selected
-plus everything downstream of them. With no `--sync` that is the whole
-graph. Steps outside it are reported `NotSelected` and cannot run, whatever
+A run executes a **runnable subgraph**: the steps this run selected plus
+everything downstream of them. With no `--sync` that is the whole graph.
+A selected step is usually a source step, so the whole chain follows;
+naming one further down — a source's `qmd_embed`, to resume it — runs
+just that step and its dependents, against the input versions the last
+run recorded. Steps outside it are reported `NotSelected` and cannot run, whatever
 their state.
 
 The subgraph is reachability in the graph, computed once before anything
@@ -201,7 +205,8 @@ from the group; and an applet filed under a group that does not exist.
 The retired shape — `datalib-step download|render|grid_index|qmd_index`
 on a command line, from before `datalib-step` read its function from
 the environment — is `Rejected`, because it no longer runs, and the
-diagnostic names `datalib-migrate-config`. A warning passes the strict door too
+diagnostic names `datalib-migrate-config`; so is the one `qmd_index`
+under a typeless group, from before each source indexed itself. A warning passes the strict door too
 (`config::parse`, and the `PUT /api/config` behind the editor): it
 changes nothing about what runs, and refusing it would make the editor
 unable to save a config the app is happily running on.

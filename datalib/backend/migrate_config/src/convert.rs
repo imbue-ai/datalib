@@ -13,7 +13,10 @@
 //!   `common.input_path` becomes `export.path`, `fswalk.path`,
 //!   `mbox.path`, …;
 //! - `common.raw_path` goes: the store is the step's own tree, which is
-//!   the only value the step ever accepted for it.
+//!   the only value the step ever accepted for it;
+//! - the one `unified_index/qmd_index` fan-in over every source becomes a
+//!   `qmd_index` + `qmd_embed` pair under each source it named, after
+//!   that source's render step.
 //!
 //! This module parses the retired shapes itself. The runner refuses them,
 //! so the loader cannot hand the entries over, and a retired shape should
@@ -80,6 +83,8 @@ struct StepIn {
     #[serde(default)]
     code_version: Option<String>,
     #[serde(default)]
+    lock: Option<String>,
+    #[serde(default)]
     params: Option<toml::Value>,
 }
 
@@ -120,6 +125,9 @@ pub enum Retired {
     /// A group `type` spelled for the method (`slack_api`), or an
     /// ingest step whose params still say `sync` / `common.input_path`.
     TypesAndMethodTables,
+    /// One `qmd_index` step under a typeless group, fanning in every
+    /// source, from before each source indexed itself.
+    GlobalQmdIndex,
 }
 
 /// Which retired shape this config is in, or `None` when it is already
@@ -141,7 +149,42 @@ pub fn retired_shape(text: &str) -> Result<Option<Retired>> {
                     || has_raw_path(p)
             })
     });
-    Ok((retired_type || retired_params).then_some(Retired::TypesAndMethodTables))
+    if retired_type || retired_params {
+        return Ok(Some(Retired::TypesAndMethodTables));
+    }
+    Ok(global_qmd_index(&cfg)
+        .is_some()
+        .then_some(Retired::GlobalQmdIndex))
+}
+
+/// The retired fan-in: a built-in `qmd_index` step under a group with no
+/// `type`. Returns the sources it named, by the first segment of each
+/// `<group>/render_markdown` input.
+fn global_qmd_index(cfg: &OldConfig) -> Option<Vec<String>> {
+    let typeless = |g: &str| {
+        cfg.groups
+            .iter()
+            .find(|x| x.id == g)
+            .is_none_or(|x| x.r#type.is_none())
+    };
+    // Either spelling of the fan-in: the current `function = "qmd_index"`
+    // with no command, or the older `datalib-step qmd_index` command line.
+    let step = cfg.steps.iter().find(|s| match builtin_of(s) {
+        Some(b) => b.function == "qmd_index" && typeless(&b.group),
+        None => {
+            s.command.is_none()
+                && s.function.as_deref() == Some("qmd_index")
+                && s.group.as_deref().is_some_and(typeless)
+        }
+    })?;
+    Some(
+        step.inputs
+            .iter()
+            .filter_map(|i| i.split('/').next())
+            .filter(|g| !g.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 fn has_raw_path(params: &toml::Value) -> bool {
@@ -414,7 +457,26 @@ struct StepOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     code_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    lock: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     params: Option<toml::Value>,
+}
+
+impl StepOut {
+    fn builtin(group: &str, function: &str, inputs: Vec<String>) -> Self {
+        StepOut {
+            group: Some(group.to_string()),
+            function: Some(function.to_string()),
+            id: None,
+            name: None,
+            command: None,
+            inputs,
+            env: BTreeMap::new(),
+            code_version: None,
+            lock: None,
+            params: None,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -516,6 +578,7 @@ pub fn rewrite(text: &str) -> Result<String> {
                     inputs: rename_all(&step.inputs),
                     env: step.env.clone(),
                     code_version: step.code_version.clone(),
+                    lock: step.lock.clone(),
                     params,
                 },
             ));
@@ -581,10 +644,12 @@ pub fn rewrite(text: &str) -> Result<String> {
                 inputs: rename_all(&step.inputs),
                 env: step.env.clone(),
                 code_version: step.code_version.clone(),
+                lock: None,
                 params,
             },
         ));
     }
+    per_source_qmd_steps(&cfg, &groups, &mut steps);
 
     let applets: Vec<AppletOut> = cfg
         .applets
@@ -639,6 +704,49 @@ pub fn rewrite(text: &str) -> Result<String> {
         out.push_str(&block("applets", a)?);
     }
     Ok(out)
+}
+
+/// Replace the global `qmd_index` fan-in with a `qmd_index` + `qmd_embed`
+/// pair under each source it named, placed after that source's render
+/// step. Sources it did not name were not searchable before and stay
+/// that way; the wizard adds the pair on request.
+fn per_source_qmd_steps(
+    cfg: &OldConfig,
+    groups: &[GroupOut],
+    steps: &mut Vec<(Option<usize>, StepOut)>,
+) {
+    let Some(named) = global_qmd_index(cfg) else {
+        return;
+    };
+    let typeless = |gi: Option<usize>| gi.is_none_or(|gi| groups[gi].r#type.is_none());
+    steps.retain(|(gi, s)| !(s.function.as_deref() == Some("qmd_index") && typeless(*gi)));
+    let has = |steps: &[(Option<usize>, StepOut)], g: &str, f: &str| {
+        steps
+            .iter()
+            .any(|(_, s)| s.group.as_deref() == Some(g) && s.function.as_deref() == Some(f))
+    };
+    for g in named {
+        if has(steps, &g, "qmd_index") {
+            continue;
+        }
+        let Some(at) = steps.iter().position(|(_, s)| {
+            s.group.as_deref() == Some(g.as_str())
+                && s.function.as_deref() == Some("render_markdown")
+        }) else {
+            continue;
+        };
+        let gi = steps[at].0;
+        let mut embed = StepOut::builtin(&g, "qmd_embed", vec![format!("{g}/qmd_index")]);
+        embed.lock = Some("qmd_embed".to_string());
+        steps.insert(at + 1, (gi, embed));
+        steps.insert(
+            at + 1,
+            (
+                gi,
+                StepOut::builtin(&g, "qmd_index", vec![format!("{g}/render_markdown")]),
+            ),
+        );
+    }
 }
 
 /// The group an applet is filed under: the tree its `params.tree` names,

@@ -9,13 +9,14 @@
 # No `data_root`: it defaults to this file's directory, so the root can
 # be copied anywhere (a bind mount, say) and still work.
 #
-# The semantic index is the one step NOT built into the image — see the
-# BUILD-TIME CUT marker at the bottom. Everything after that line is
-# dropped for the build-time run and present in the shipped file, so
-# the first `Sync all` (or `datalib-dag` run) in a container builds it.
-# The reason is the release pipeline: the arm64 image is built under
-# QEMU, and embedding under emulation would add tens of minutes to
-# every release for an index that takes a minute to build natively.
+# The search index — each source's `qmd_index` and `qmd_embed` steps —
+# is NOT built into the image; see the BUILD-TIME CUT marker at the
+# bottom. Everything after that line is dropped for the build-time run
+# and present in the shipped file, so the first `Sync all` (or
+# `datalib-dag` run) in a container builds it. The reason is the
+# release pipeline: the arm64 image is built under QEMU, and embedding
+# under emulation would add tens of minutes to every release for an
+# index that takes a minute to build natively.
 
 [[groups]]
 id = "claude-export"
@@ -163,16 +164,81 @@ id = "unified_index"
 command = "datalib-applet unified_index"
 
 # === BUILD-TIME CUT === (the Dockerfile drops everything below this line
-# for the build-time run; keep the semantic index step last)
+# for the build-time run; keep the search index steps last)
+
 [[steps]]
-group = "unified_index"
+group = "claude-export"
 function = "qmd_index"
-inputs = [
-  "claude-export/render_markdown",
-  "gmail-takeout/render_markdown",
-  "google-takeout/render_markdown",
-  "sms-backup-restore/render_markdown",
-  "linkedin/render_markdown",
-  "contacts/render_markdown",
-  "pdfs/render_markdown",
-]
+inputs = ["claude-export/render_markdown"]
+
+[[steps]]
+group = "claude-export"
+function = "qmd_embed"
+inputs = ["claude-export/qmd_index"]
+lock = "qmd_embed"
+
+[[steps]]
+group = "gmail-takeout"
+function = "qmd_index"
+inputs = ["gmail-takeout/render_markdown"]
+
+[[steps]]
+group = "gmail-takeout"
+function = "qmd_embed"
+inputs = ["gmail-takeout/qmd_index"]
+lock = "qmd_embed"
+
+[[steps]]
+group = "google-takeout"
+function = "qmd_index"
+inputs = ["google-takeout/render_markdown"]
+
+[[steps]]
+group = "google-takeout"
+function = "qmd_embed"
+inputs = ["google-takeout/qmd_index"]
+lock = "qmd_embed"
+
+[[steps]]
+group = "sms-backup-restore"
+function = "qmd_index"
+inputs = ["sms-backup-restore/render_markdown"]
+
+[[steps]]
+group = "sms-backup-restore"
+function = "qmd_embed"
+inputs = ["sms-backup-restore/qmd_index"]
+lock = "qmd_embed"
+
+[[steps]]
+group = "linkedin"
+function = "qmd_index"
+inputs = ["linkedin/render_markdown"]
+
+[[steps]]
+group = "linkedin"
+function = "qmd_embed"
+inputs = ["linkedin/qmd_index"]
+lock = "qmd_embed"
+
+[[steps]]
+group = "contacts"
+function = "qmd_index"
+inputs = ["contacts/render_markdown"]
+
+[[steps]]
+group = "contacts"
+function = "qmd_embed"
+inputs = ["contacts/qmd_index"]
+lock = "qmd_embed"
+
+[[steps]]
+group = "pdfs"
+function = "qmd_index"
+inputs = ["pdfs/render_markdown"]
+
+[[steps]]
+group = "pdfs"
+function = "qmd_embed"
+inputs = ["pdfs/qmd_index"]
+lock = "qmd_embed"

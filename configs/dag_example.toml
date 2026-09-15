@@ -90,6 +90,17 @@ group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
+[[steps]]
+group = "slack"
+function = "qmd_index"
+inputs = ["slack/render_markdown"]
+
+[[steps]]
+group = "slack"
+function = "qmd_embed"
+inputs = ["slack/qmd_index"]
+lock = "qmd_embed"
+
 # ── claude ─────────────────────────────────────────────────────────
 # Prerequisite (one-time): register claude.ai with latchkey and
 # supply your sessionKey cookie (DevTools → Application → Cookies):
@@ -111,6 +122,17 @@ group = "claude"
 function = "render_markdown"
 inputs = ["claude/ingest"]
 
+[[steps]]
+group = "claude"
+function = "qmd_index"
+inputs = ["claude/render_markdown"]
+
+[[steps]]
+group = "claude"
+function = "qmd_embed"
+inputs = ["claude/qmd_index"]
+lock = "qmd_embed"
+
 # ── shared fan-in steps ────────────────────────────────────────────
 # `inputs` names the steps these read, by composed id. Adding a source
 # above means adding its render step's id here too — the wizard does
@@ -123,11 +145,6 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["slack/render_markdown", "claude/render_markdown"]
-
-[[steps]]
-group = "unified_index"
-function = "qmd_index"
 inputs = ["slack/render_markdown", "claude/render_markdown"]
 
 # ── applets ────────────────────────────────────────────────────────

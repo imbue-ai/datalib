@@ -23,11 +23,6 @@ group = "unified_index"
 function = "grid_index"
 inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
 
-[[steps]]
-group = "unified_index"
-function = "qmd_index"
-inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
-
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
 # the email provider in file-backed mode, reading the file at its
 # `path` instead of talking to a mail server. Point it at the .mbox
@@ -46,6 +41,17 @@ path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
 group = "gmail-takeout"
 function = "render_markdown"
 inputs = ["gmail-takeout/ingest"]
+
+[[steps]]
+group = "gmail-takeout"
+function = "qmd_index"
+inputs = ["gmail-takeout/render_markdown"]
+
+[[steps]]
+group = "gmail-takeout"
+function = "qmd_embed"
+inputs = ["gmail-takeout/qmd_index"]
+lock = "qmd_embed"
 
 # Slack workspace mirror. Credentials come from `latchkey` at runtime
 # (see the "Register Slack with latchkey" section in the first-time
@@ -87,6 +93,17 @@ group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
+[[steps]]
+group = "slack"
+function = "qmd_index"
+inputs = ["slack/render_markdown"]
+
+[[steps]]
+group = "slack"
+function = "qmd_embed"
+inputs = ["slack/qmd_index"]
+lock = "qmd_embed"
+
 # Anthropic / claude.ai conversation mirror. Credentials come from
 # `latchkey` at runtime (see the "Register Claude web with latchkey"
 # section in the first-time user guide). An empty `api` table fetches
@@ -109,6 +126,17 @@ function = "ingest"
 group = "claude-api"
 function = "render_markdown"
 inputs = ["claude-api/ingest"]
+
+[[steps]]
+group = "claude-api"
+function = "qmd_index"
+inputs = ["claude-api/render_markdown"]
+
+[[steps]]
+group = "claude-api"
+function = "qmd_embed"
+inputs = ["claude-api/qmd_index"]
+lock = "qmd_embed"
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

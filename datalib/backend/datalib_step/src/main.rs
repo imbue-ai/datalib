@@ -16,6 +16,7 @@ mod introspect;
 mod login;
 mod methods;
 mod probe;
+mod qmd_embed;
 mod qmd_index;
 mod render;
 #[cfg(test)]
@@ -345,17 +346,17 @@ async fn run_function(
             writes_the_index_tree(&env, &grid_index::out_rel())?;
             grid_index::run(data_root, Some(now), emitter).await
         }
-        Function::QmdIndex => {
-            writes_the_index_tree(&env, &qmd_index::out_rel())?;
-            qmd_index::run(data_root, &env, models_dir, emitter).await
+        Function::QmdIndex => qmd_index::run(data_root, &env, now, models_dir, emitter).await,
+        Function::QmdEmbed => {
+            qmd_embed::run(data_root, &env, now, params, models_dir, emitter).await
         }
     }
 }
 
-/// The two index steps have one reader each — the `unified_index`
-/// applet — which finds them from the data root alone, so their trees
-/// are fixed. A config that files them under another group would have
-/// the runner tracking a tree nothing ever writes.
+/// The grid index has one reader — the `unified_index` applet — which
+/// finds it from the data root alone, so its tree is fixed. A config
+/// that files it under another group would have the runner tracking a
+/// tree nothing ever writes.
 fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
     anyhow::ensure!(
         env.step == expected,

@@ -38,10 +38,21 @@ fn validate_config(name: &str, path: &std::path::Path) {
         else {
             panic!("{name}: step {} has no command and no group", step.id);
         };
+        let params = match &step.params {
+            Some(p) => serde_json::to_value(p)
+                .unwrap_or_else(|e| panic!("{name}: step {}: params → JSON: {e}", step.id)),
+            None => serde_json::json!({}),
+        };
         let phase = match Function::parse(function) {
             Some(Function::Ingest) => Phase::Ingest,
             Some(Function::RenderMarkdown) => Phase::Render,
             Some(Function::GridIndex | Function::QmdIndex) => continue,
+            Some(Function::QmdEmbed) => {
+                serde_json::from_value::<crate::qmd_embed::Params>(params).unwrap_or_else(|e| {
+                    panic!("{name}: step {}: params are not qmd_embed's: {e}", step.id)
+                });
+                continue;
+            }
             None => panic!(
                 "{name}: step {}: datalib-step has no function {function:?}",
                 step.id
@@ -53,11 +64,6 @@ fn validate_config(name: &str, path: &std::path::Path) {
             .find(|g| g.id == group)
             .and_then(|g| g.r#type.as_deref())
             .unwrap_or_else(|| panic!("{name}: step {}: its group declares no type", step.id));
-        let params = match &step.params {
-            Some(p) => serde_json::to_value(p)
-                .unwrap_or_else(|e| panic!("{name}: step {}: params → JSON: {e}", step.id)),
-            None => serde_json::json!({}),
-        };
         let raw_dir = datalib_etl::layout::ingest_root(data_root.path(), group);
         dispatch::plan(ty, phase, group, raw_dir, params).unwrap_or_else(|e| {
             panic!(

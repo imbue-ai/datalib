@@ -362,9 +362,17 @@ its `qmd_index` step.
    dependents blocked, the run's exit code unaffected. Both halves of
    the vocabulary (`DagRunState`, the status labels, the DAG view) and
    `step_protocol.md`.
-3. **Steps.** `qmd_embed` function, `qmd_index` rewrite,
-   `state.json`. Config examples and scaffold. At this
-   point a hand-written config runs the new shape.
+3. **Steps** — *built 2026-09-15*. `qmd_embed` and the per-source
+   `qmd_index` in `datalib-step`, each leaving a `state.json` in its
+   tree; the loader rejects the old global `unified_index/qmd_index`
+   and names the migrator, which now rewrites it into the pair under
+   every source it named; `--sync` accepts any step id, so a
+   `qmd_embed` can be resumed on its own; every example config, the
+   scaffold, the docker demo (its whole search index below the
+   build-time cut) and the user guide carry the new shape. Run end to
+   end through `datalib-dag` on the fixture's markdown: a 3-second
+   budget ended `incomplete`, the next run resumed and succeeded, the
+   run after that skipped everything as up to date.
 4. **UI and migration.** Wizard, Manage rows, migrator, docs.
 5. **Fixture.** `--embed` and the two-group fixture; retarget the
    tests that assumed everything was embedded.

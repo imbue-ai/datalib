@@ -28,8 +28,10 @@ pub enum Function {
     RenderMarkdown,
     /// Stack every source's render store into the unified grid table.
     GridIndex,
-    /// Build the qmd search index over every rendered tree.
+    /// A source's collection in the shared qmd store: keyword search.
     QmdIndex,
+    /// Vectors for that collection: semantic search. Optional.
+    QmdEmbed,
 }
 
 impl Function {

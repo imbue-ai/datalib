@@ -1237,20 +1237,22 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 }
 
 /// Starter DAG config: the shared fan-in steps that every source's
-/// rendered markdown feeds. Non-empty on purpose — the two index steps
-/// are source-independent and belong in every pipeline. They start with
-/// no inputs, which is a valid graph that indexes nothing; adding a
-/// source appends its render step's id here (the UI's "Add a source"
-/// flow does that for you). `data_root` is omitted: it defaults to this
-/// file's own directory, keeping the root self-contained.
+/// rendered markdown feeds. Non-empty on purpose — the grid index is
+/// source-independent and belongs in every pipeline. It starts with no
+/// inputs, which is a valid graph that indexes nothing; adding a source
+/// appends its render step's id here (the UI's "Add a source" flow does
+/// that for you), and brings its own `qmd_index` and `qmd_embed` steps
+/// with it. `data_root` is omitted: it defaults to this file's own
+/// directory, keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
 # ── the unified index ──────────────────────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
-# Every source's rendered markdown feeds these two: a step's id is
+# Every source's rendered markdown feeds this one: a step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id. A step with no `command` is one of
-# datalib's own.
+# datalib's own. A source's search index is its own two steps,
+# `qmd_index` and `qmd_embed`, written beside its ingest and render.
 
 [[groups]]
 id = \"unified_index\"
@@ -1259,11 +1261,6 @@ name = \"Unified Index\"
 [[steps]]
 group = \"unified_index\"
 function = \"grid_index\"
-inputs = []
-
-[[steps]]
-group = \"unified_index\"
-function = \"qmd_index\"
 inputs = []
 
 # The applet that serves the grid: the app has no search, no document
@@ -1695,14 +1692,11 @@ mod tests {
             "scaffold rejected: {}\n---\n{text}",
             checked.render(std::path::Path::new("scaffold"))
         );
-        // The fan-ins have no inputs to name yet, so on a scaffolded
-        // root they *are* the fringe. They are what `--sync` can target
-        // until the first source is added — and running them against
+        // The fan-in has no inputs to name yet, so on a scaffolded
+        // root it *is* the fringe. It is what `--sync` can target
+        // until the first source is added — and running it against
         // nothing is a no-op, not an error.
-        assert_eq!(
-            source_ids(&checked),
-            ["unified_index/grid_index", "unified_index/qmd_index"]
-        );
+        assert_eq!(source_ids(&checked), ["unified_index/grid_index"]);
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on.
         assert!(checked
@@ -1712,17 +1706,14 @@ mod tests {
             .any(|a| a.id == UNIFIED_INDEX_APPLET));
     }
 
-    /// A scaffolded root has no *sources*, even though its two index
-    /// steps are the fringe. Counting the fringe would tell someone
-    /// with an empty library that they already have two data sources —
-    /// the confusion `POST /api/config/init` exists to end.
+    /// A scaffolded root has no *sources*, even though its index step
+    /// is the fringe. Counting the fringe would tell someone with an
+    /// empty library that they already have a data source — the
+    /// confusion `POST /api/config/init` exists to end.
     #[test]
     fn a_scaffolded_root_reports_no_sources() {
         let fringe = fringe_of(&scaffold_toml());
-        assert_eq!(
-            fringe,
-            ["unified_index/grid_index", "unified_index/qmd_index"]
-        );
+        assert_eq!(fringe, ["unified_index/grid_index"]);
         assert_eq!(configured_source_count(&fringe), 0);
     }
 

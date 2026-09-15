@@ -251,17 +251,23 @@ group = "claude"
 function = "render_markdown"
 inputs = ["claude/ingest"]
 
+[[steps]]
+group = "claude"
+function = "qmd_index"
+inputs = ["claude/render_markdown"]
+
+[[steps]]
+group = "claude"
+function = "qmd_embed"
+inputs = ["claude/qmd_index"]
+lock = "qmd_embed"
+
 [[groups]]
 id = "unified_index"
 
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["claude/render_markdown"]
-
-[[steps]]
-group = "unified_index"
-function = "qmd_index"
 inputs = ["claude/render_markdown"]
 
 [[applets]]
@@ -371,13 +377,17 @@ faster.
   first.
 - A `render_markdown` step per source: each conversation or document
   rendered into readable markdown, attachments included.
+- A `qmd_index` step per source: the source's documents added to the
+  keyword search index. Seconds.
 - The `grid_index` step: one row per message or document written into
   the SQL store at `<data_root>/unified_index/grid_index/db.doltlite_db`.
-- The `qmd_index` step: builds the semantic search index. **The first
-  run is slow** — embedding takes roughly 5–10 minutes per thousand
-  chunks on CPU, after a one-time download of the models. It's
-  resumable, so Ctrl-C and re-run is safe. Re-runs after the backlog
-  drains take seconds.
+- A `qmd_embed` step per source: the vectors behind semantic search.
+  **The first run is slow** — embedding takes roughly 5–10 minutes per
+  thousand chunks on CPU, after a one-time download of the models.
+  Sources embed one at a time. It's resumable, so Ctrl-C (or Stop in
+  the app) and re-run is safe, and a source you leave the step out of
+  is searchable by keyword only. Re-runs after the backlog drains take
+  seconds.
 
 **On disk afterwards** (with `data_root = "~/datalib"`):
 
@@ -388,8 +398,10 @@ faster.
 │   ├── ingest/                     #   the captured raw stores (precious) …
 │   │   ├── entities.doltlite_db
 │   │   └── blobs.doltlite_db
-│   └── render_markdown/            #   … and the rendered .md tree
-│       └── …
+│   ├── render_markdown/            #   … the rendered .md tree …
+│   │   └── …
+│   ├── qmd_index/state.json        #   … and what its search index holds
+│   └── qmd_embed/state.json
 ├── slack/
 │   ├── ingest/
 │   └── render_markdown/
@@ -397,7 +409,7 @@ faster.
 │   └── …
 ├── unified_index/                  # the shared indexes, rebuildable
 │   ├── grid_index/db.doltlite_db   #   grid rows + markdowns + edges
-│   └── qmd_index/qmd/index.sqlite  #   the semantic search index
+│   └── qmd_index/qmd/index.sqlite  #   the search index, one collection per source
 └── system/                         # everything that isn't a source
     ├── dag_state.json              # scheduler state (which steps are up to date)
     ├── api-token                   # the running server's bearer token
