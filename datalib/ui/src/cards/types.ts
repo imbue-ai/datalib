@@ -69,6 +69,12 @@ export type CardCtx = {
   // source-derived fallback (title.ts displayTitle). null also means
   // "back to the fallback".
   setTitle(title: string | null): void;
+  // Offer help: what this card shows and how to work it, as HTML. The
+  // chrome grows a "?" that opens it. Every card should say something
+  // here — a card with no help is a card that assumes its reader
+  // already knows it. null takes the offer back; the host clears it
+  // when the card is torn down.
+  setHelp(html: string | null): void;
   bus: Bus;
   host: HostCommands;
 };
@@ -131,4 +137,9 @@ export type ViewLibs = {
   // (`{columns, rows}`), e.g. `tableView({ url: "/api/manage/rows" })`.
   // See cards/TableGrid.ce.vue for the column-type vocabulary.
   tableView: (opts: { url: string }) => CardRender;
+  // The Manage screen as a card: every source and step config.toml
+  // declares, with status, actions and the panels they open.
+  sourcesView: () => CardRender;
+  // config.toml itself, edited directly.
+  configView: () => CardRender;
 };

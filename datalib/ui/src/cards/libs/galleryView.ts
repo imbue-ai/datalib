@@ -33,6 +33,16 @@ const BUILTIN_GALLERY: GalleryEntry[] = [
     description: "Search and browse everything in your library.",
   },
   {
+    source: "sourcesView()",
+    title: "Sources",
+    description: "Every source and step your config declares: sync them, edit them, read their logs.",
+  },
+  {
+    source: "configView()",
+    title: "config.toml",
+    description: "The config file itself, edited directly.",
+  },
+  {
     source: "documentPickerView()",
     title: "Document",
     description: "Pick a document from your library and read it.",

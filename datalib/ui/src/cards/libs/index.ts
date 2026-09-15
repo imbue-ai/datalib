@@ -9,6 +9,8 @@ import { dactalView } from "./dactalView";
 import { perseusView } from "./perseusView";
 import { sourceDagView } from "./sourceDagView";
 import { tableView } from "./tableView";
+import { sourcesView } from "./sourcesView";
+import { configView } from "./configView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
@@ -22,6 +24,8 @@ export const viewLibs: ViewLibs = {
   perseusView,
   sourceDagView,
   tableView,
+  sourcesView,
+  configView,
 };
 
 export {
@@ -35,4 +39,6 @@ export {
   perseusView,
   sourceDagView,
   tableView,
+  sourcesView,
+  configView,
 };

@@ -1,12 +1,7 @@
 <script setup lang="ts">
-// Manager2 — the Manage tab inverted, per docs/dev/plans/source_wizard.md.
-//
-// Account and Documents are absent rather than faked: they need the latchkey
-// endpoints and the unified_index applet respectively, and the layout forbids
-// datalib-http reading that tree.
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
+import type { CardCtx } from "./types";
 import {
   ModuleRegistry,
   AllCommunityModule,
@@ -64,25 +59,70 @@ import {
   type SourceSteps,
   type StepPhase,
 } from "@/config/sourceSteps";
-import { sparkline, type Sample } from "@/config/sparkline";
-import { formatBytes } from "@/config/bytes";
-import TableGrid from "@/cards/TableGrid.ce.vue";
-// The viewer's cell styles, into the head: this is a page, not a card.
-import "@/cards/tableGrid.css";
+import TableGrid from "./TableGrid.ce.vue";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
 import { browseColumns, browseQuery } from "@/config/browsePresets";
-import { encodeColumns } from "@/router/columns";
 import RunLogPanel from "@/components/RunLogPanel.vue";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
+
+const props = defineProps<{ ctx: CardCtx }>();
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 
 ModuleRegistry.registerModules([AllCommunityModule, TreeDataModule, ContextMenuModule]);
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
+
+props.ctx.setTitle("Sources");
+props.ctx.setHelp(`
+<p>Every top-level row is a <b>group</b> <code>config.toml</code> declares: a source
+(Work Slack, Personal mail), or the unified index that makes them searchable. Open
+its chevron for the <b>steps</b> that do the work — fetch, render, index — and the
+<b>applets</b> the app spawns to serve it. Actions that don’t apply to a kind are
+disabled and say why.</p>
+<p>A group row reads off its steps: <b>Status</b> is running if any step is, failed if
+any failed, and otherwise the last step’s in pipeline order; while a sync is in
+flight it draws one segment per step. <b>Last synced</b> is the fetch step’s.
+<b>Sync</b> runs the group’s source steps and everything downstream;
+<b>Remove</b> takes the steps and applets with it.</p>
+<p><b>Type</b> and <b>Status</b> are icons, and the mark after a step’s name says what
+it does — hover any of them for the word. <b>Double-click a Status</b> to read that
+step's log — from the run in flight while it runs, else from the run it last took
+part in, with a picker for its other runs — as a grid you can sort, filter and
+search; on a group row, the log of the step its status came from.
+<b>Activity</b> is what a running step has reported: how much is queued ahead of
+it, what it has counted so far, and how many warnings and errors it has logged.</p>
+<p><b>Right-click a row</b> for everything it can do — browse, edit, reveal, remove, the
+log, a rename (on the Name cell), and its <b>commit history</b>: every store under it
+is versioned, and the panel lists each commit — when, what it said, what it did to
+each table, and the run that made it — newest first, updating while a sync runs.
+Right-click inside a selection and the menu acts on all of it; outside one, on that
+row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
+and says why on hover. <b>Sync</b> stays a button: it is the one thing a row does
+often.</p>
+<p><b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its
+whole folder, measured on the same walk — plotted over the last few minutes and drawn
+against the largest row, so a row’s height means its size, and its shape means what
+that size has been doing. Hover for the total and the breakdown.</p>
+<p><b>Last synced</b> and <b>Status</b> are per step, read from the runner’s own
+record — so a sync you start from a terminal shows up here too. A run whose record
+never closed and whose lock nobody holds reads as <b>interrupted</b>: it was
+killed, not lost. A step a queued sync will reach reads as <b>queued</b>, and its
+Sync button becomes a Stop — one job is one runner process over a whole subgraph,
+so stopping is per sync, not per row.</p>
+<p>The bar along the bottom of the app is the <b>whole data root</b>, not the sum of
+the rows: it includes <code>system/</code> — the stores, the job logs, the served
+attachments — and anything a deleted step left behind. The config itself is the
+<b>config.toml</b> card; <b>Show the config</b> opens it beside this one.</p>
+`);
+
+/// The config editor, as a card beside this one.
+function openConfig() {
+  props.ctx.host.openCards("configView()");
+}
 
 const configText = ref("");
 const configPath = ref("");
@@ -130,10 +170,6 @@ const jobs = ref<SyncJob[]>([]);
 /// fresh one.
 const manage = ref<ManageResponse | null>(null);
 const storage = computed(() => manage.value?.storage ?? null);
-/// How far back the histories reach, in ms. Read from the response
-/// rather than hardcoded here, so the plot can't disagree with the data
-/// about what "recent" means.
-const historyWindowMs = computed(() => (storage.value?.window_secs ?? 300) * 1000);
 /// The config's entries as the browser parses them, for the wizard —
 /// which edits the text — and the catalog lookups in `decorate`.
 const sources = ref<ConfiguredStep[]>([]);
@@ -141,18 +177,12 @@ const sources = ref<ConfiguredStep[]>([]);
 /// and for taking a group with its last step.
 const configGroups = ref<ConfiguredGroup[]>([]);
 
-// The Advanced disclosure. Closed on load: the point of this tab is
-// that a text editor is not the first thing you meet.
-const configOpen = ref(false);
-const configDirty = ref(false);
 
 // Resolved once — the desktop bridge either exists for this window or
 // it doesn't, and the label depends only on the platform.
 const canReveal = isDesktopApp();
 const revealLabel = revealActionLabel();
 
-// Browse navigates out of this screen into a card stack.
-const router = useRouter();
 
 const wizardOpen = ref(false);
 /// Bumped on every opening, and bound to the dialog's `key`, so a
@@ -343,56 +373,6 @@ function groupEntry(g: ConfiguredGroup, steps: SourceSteps): CatalogEntry | unde
   return step ? entryForStep(step, sources.value) : catalogForStep(g.type, {});
 }
 
-/// The status bar's plot box, in user units. Wider than a row's,
-/// because it is the only thing on its line.
-const ROOT_SPARK = { width: 260, height: 20 };
-
-/// Build the `<svg>` for one series, or null when there is nothing to
-/// draw yet.
-function sparkSvg(
-  history: Sample[],
-  box: { width: number; height: number },
-  scale: { min?: number; max: number },
-  nowMs: number,
-): SVGSVGElement | null {
-  const spark = sparkline(history, {
-    nowMs,
-    windowMs: historyWindowMs.value,
-    min: scale.min,
-    max: scale.max,
-    width: box.width,
-    height: box.height,
-    // Half the 1px stroke, so a line pinned to the top or the bottom
-    // isn't sliced in half by the viewBox edge.
-    inset: 0.5,
-  });
-  if (!spark) return null;
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", `0 0 ${box.width} ${box.height}`);
-  svg.setAttribute("preserveAspectRatio", "none");
-  svg.setAttribute("aria-hidden", "true");
-  svg.classList.add("m2-spark");
-  const area = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-  area.setAttribute("points", spark.area);
-  area.classList.add("m2-spark-area");
-  svg.appendChild(area);
-  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-  line.setAttribute("points", spark.line);
-  line.classList.add("m2-spark-line");
-  svg.appendChild(line);
-  return svg;
-}
-
-/// How long ago the window opens, in words — "the last 5 minutes".
-/// Built from the response's own window so the sentence and the plot
-/// agree.
-const windowPhrase = computed(() => {
-  const secs = storage.value?.window_secs ?? 300;
-  return secs % 60 === 0
-    ? `the last ${secs / 60} minute${secs === 60 ? "" : "s"}`
-    : `the last ${secs} seconds`;
-});
-
 /// What each Sync-column button does. The rows say which button a row
 /// carries and whether it is enabled; this is the code behind the id.
 const rowActions: Record<string, (row: Row) => void> = {
@@ -495,75 +475,6 @@ async function openStepLog(row: Row, runId: string | null = null) {
 // ── The status bar ───────────────────────────────────────────────────
 
 /// The root's series, scaled to its own range rather than to zero.
-const rootScale = computed(() => {
-  const h = storage.value?.root.history ?? [];
-  const values = h.map((x) => x.bytes);
-  if (storage.value?.measured_at_utc) values.push(storage.value.root.bytes);
-  if (values.length === 0) return { min: 0, max: 0 };
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  // A series that hasn't moved has no range to scale to. Straddle the
-  // value so it draws through the middle of the box — a flat line at
-  // the ceiling or the floor reads as "pinned at the top of something",
-  // which is a claim, and there is nothing here to claim.
-  if (min !== max) return { min, max };
-  return min === 0 ? { min: 0, max: 1 } : { min: min * 0.99, max: max * 1.01 };
-});
-
-/// How much the root has grown across the window, or null when there is
-/// nothing to compare against.
-const rootDelta = computed(() => {
-  const h = storage.value?.root.history ?? [];
-  if (h.length < 2 || !storage.value) return null;
-  return storage.value.root.bytes - h[0].bytes;
-});
-
-/// What the status bar's plot is actually showing, in words.
-const rootSparkTitle = computed(() => {
-  // A response whose `measured_at_utc` is null is a server that hasn't
-  // finished its first walk. Its zero is not an empty disk, and saying
-  // "0 B" would be the one genuinely wrong thing this line can say.
-  if (!storage.value?.measured_at_utc) return "Measuring the data root…";
-  const now = formatBytes(storage.value.root.bytes);
-  const moved = rootDelta.value;
-  if (moved === null || moved === 0) {
-    return `${now} on disk. No change recorded over ${windowPhrase.value}.`;
-  }
-  // Said as a change rather than as two endpoints. Both endpoints round
-  // to the same three significant figures whenever the movement is
-  // small against the total — which is the usual case — so "ranged
-  // 4.3 MB to 4.3 MB" sat next to a "+62 kB" that contradicted it.
-  return (
-    `${now} on disk — ${moved > 0 ? "grew" : "shrank"} by ` +
-    `${formatBytes(Math.abs(moved))} over ${windowPhrase.value}. The line is scaled ` +
-    `to that change rather than to zero, so its height is the shape, not the size.`
-  );
-});
-
-/// The status bar's plot, rebuilt whenever the measurement moves.
-const rootSparkHost = ref<HTMLElement | null>(null);
-function paintRootSpark() {
-  const host = rootSparkHost.value;
-  if (!host) return;
-  host.replaceChildren();
-  const svg = sparkSvg(
-    (storage.value?.root.history ?? []).map((h) => ({ at: h.at, value: h.bytes })),
-    ROOT_SPARK,
-    rootScale.value,
-    Date.now(),
-  );
-  if (svg) host.appendChild(svg);
-}
-watch([storage, rootSparkHost], paintRootSpark, { flush: "post" });
-
-  // ── Help. What every column means used to be a paragraph under the table:
-  // worth having, not worth the room, and it pushed the Advanced disclosure
-  // below the fold.
-const helpOpen = ref(false);
-
-/// Double-click on Status opens that row's log. Only that column: the
-/// rest of the row has its own meanings for a double-click, and
-/// overloading all of them would make the gesture unguessable.
 function onCellDoubleClicked(data: Row, field: string) {
   if (field !== "status") return;
   // A group's status is one child's, and that child's log is the answer.
@@ -1006,7 +917,6 @@ function onWindowKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape") return;
   if (logFor.value) logFor.value = null;
   else if (historyFor.value.length) historyFor.value = [];
-  else if (helpOpen.value) helpOpen.value = false;
 }
 
 function reparse() {
@@ -1037,9 +947,6 @@ async function loadConfig() {
     configError.value = cfg.parsed_ok ? null : (cfg.error ?? "The config was rejected.");
     serverSourceCount.value = cfg.source_count;
     configExists.value = cfg.exists;
-    // A reload must never overwrite what someone is typing into the
-    // Advanced editor. Their text wins until they save or discard.
-    if (configDirty.value) return;
     configText.value = cfg.text;
     reparse();
     if (sources.value.length === 0 && cfg.source_count > 0) {
@@ -1133,7 +1040,6 @@ async function writeConfig(text: string, what: string) {
       return false;
     }
     configText.value = text;
-    configDirty.value = false;
     reparse();
     // A warning saves — nothing is dropped — but it is still advice
     // the file would otherwise only give on the command line.
@@ -1350,7 +1256,8 @@ async function deleteRows(targets: Row[]) {
 /// back button returns here.
 function openBrowse(row: Row) {
   if (row.browseBlocked || !row.browseSource) return;
-  void router.push(encodeColumns([{ code: row.browseSource, state: "" }]));
+  // Beside this card, in whatever layout is showing it.
+  props.ctx.host.openCards(row.browseSource);
 }
 
 async function reveal(key: string) {
@@ -1367,21 +1274,6 @@ async function revealPath(path: string) {
   if (!ok) {
     banner.value = { ok: false, text: `Could not open ${path} in the file manager.` };
   }
-}
-
-function onConfigEdit() {
-  configDirty.value = true;
-  clearBanner();
-}
-
-async function saveConfigEdits() {
-  await writeConfig(configText.value, "Saved the config.");
-}
-
-async function discardConfigEdits() {
-  configDirty.value = false;
-  await loadConfig();
-  clearBanner();
 }
 
 /// Sync what a row stands for. A step is its own seed; a group's seeds
@@ -1573,21 +1465,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="m2">
+  <section class="m2 m2-card">
     <header class="m2-head">
-      <div>
-        <h2>Pipeline</h2>
-        <p class="m2-sub">Everything <code>config.toml</code> declares.</p>
-      </div>
       <div class="m2-head-actions">
-        <button
-          class="m2-btn m2-help-btn"
-          :aria-expanded="helpOpen"
-          title="What the rows, columns and actions on this screen mean."
-          @click="helpOpen = true"
-        >
-          Help
-        </button>
         <button
           class="m2-btn m2-runall"
           :disabled="busy || !!parseError || !!configError || jobActive || rows.length === 0"
@@ -1617,9 +1497,9 @@ onUnmounted(() => {
       <span>{{ configError }}</span>
       <span class="m2-invalid-why">
         It parses as TOML, so the table below still reflects it — but nothing will sync, and
-        applets won’t start, until this is fixed. Open <b>Advanced</b> below to edit it.
+        applets won’t start, until this is fixed. Open the config to edit it.
       </span>
-      <button class="m2-btn" @click="configOpen = true">Show the config</button>
+      <button class="m2-btn" @click="openConfig">Show the config</button>
     </div>
     <!-- Entries the loader dropped. Not a whole-config error: the rest
          of the pipeline is running, which is why this is a note above a
@@ -1633,7 +1513,7 @@ onUnmounted(() => {
       </b>
       <span class="m2-invalid-why">
         The rest of this config loaded and still syncs. These are in the file and were not
-        loaded — each one’s Status cell says why. Open <b>Advanced</b> below to fix them, or
+        loaded — each one’s Status cell says why. Open the config to fix them, or
         run <code>datalib-dag --check {{ configPath }}</code>.
       </span>
       <ul class="m2-dropped">
@@ -1641,7 +1521,7 @@ onUnmounted(() => {
           <code>{{ r.id }}</code> — {{ r.dropped?.message }}
         </li>
       </ul>
-      <button class="m2-btn" @click="configOpen = true">Show the config</button>
+      <button class="m2-btn" @click="openConfig">Show the config</button>
     </div>
     <p v-if="banner" class="m2-msg" :class="banner.ok ? 'good' : 'bad'">{{ banner.text }}</p>
 
@@ -1669,147 +1549,17 @@ onUnmounted(() => {
     <div v-if="emptyDiagnosis && !parseError" class="m2-msg bad m2-invalid">
       <b>This table is empty, and it shouldn’t be.</b>
       <span>{{ emptyDiagnosis }}</span>
-      <button class="m2-btn" @click="configOpen = true">Show the config</button>
+      <button class="m2-btn" @click="openConfig">Show the config</button>
     </div>
     <p v-else-if="rows.length === 0 && !parseError" class="m2-empty">
       Nothing configured yet. The <b>+ Data Source</b> button walks you through one.
     </p>
-
-    <div class="m2-advanced">
-      <!-- Outside the disclosure, not inside it: the path answers
-           "which root am I looking at", which is a question you have
-           before you have decided to edit anything. It sits here rather
-           than under the page heading so that it, the offer to edit the
-           file, and the button that opens it in the file manager are
-           one thing to find instead of three. -->
-      <p class="m2-file">
-        <code>{{ configPath }}</code>
-        <button
-          v-if="canReveal"
-          class="m2-btn m2-file-reveal"
-          :title="`${revealLabel} — the config file everything above is a view of`"
-          @click="revealPath(configPath)"
-        >
-          {{ revealLabel }}
-        </button>
-      </p>
-      <details :open="configOpen" @toggle="configOpen = ($event.target as HTMLDetailsElement).open">
-      <summary>Advanced — edit <code>config.toml</code> directly</summary>
-      <p class="m2-advanced-note">
-        The file is the source of truth; everything above is a view of it. This is where to go
-        for anything the forms don’t model — a source type with no wizard yet, or a knob like
-        <code>common.download_params</code> that would make a row’s Edit button refuse.
-      </p>
-      <textarea
-        v-model="configText"
-        class="m2-editor"
-        spellcheck="false"
-        @input="onConfigEdit"
-      />
-      <div class="m2-advanced-actions">
-        <button class="m2-btn" :disabled="!configDirty || busy" @click="saveConfigEdits">
-          Save
-        </button>
-        <button class="m2-btn muted" :disabled="!configDirty || busy" @click="discardConfigEdits">
-          Discard changes
-        </button>
-        <span v-if="configDirty" class="m2-advanced-dirty">
-          Unsaved — the grid above still shows the last saved version.
-        </span>
-      </div>
-      </details>
-    </div>
     </div>
 
-    <footer class="m2-rootbar">
-      <span class="m2-rootbar-label">Data root</span>
-      <code class="m2-rootbar-path" :title="storage?.root.abs ?? ''">{{ storage?.root.abs }}</code>
-      <span class="m2-rootbar-spark" ref="rootSparkHost" :title="rootSparkTitle"></span>
-      <span class="m2-rootbar-size" :title="rootSparkTitle">
-        <b>{{ storage?.measured_at_utc ? formatBytes(storage.root.bytes) : "—" }}</b>
-        <span v-if="rootDelta !== null && rootDelta !== 0" class="m2-rootbar-delta">
-          {{ rootDelta > 0 ? "+" : "−" }}{{ formatBytes(Math.abs(rootDelta)) }}
-        </span>
-      </span>
-      <button
-        v-if="canReveal && storage"
-        class="m2-btn"
-        :title="`${revealLabel} — the data root itself`"
-        @click="revealPath(storage.root.abs)"
-      >
-        {{ revealLabel }}
-      </button>
-    </footer>
-
-    <div v-if="helpOpen" class="m2-logs-backdrop" @click.self="helpOpen = false">
-      <div class="m2-logs m2-help" role="dialog" aria-modal="true" aria-label="About this screen">
-        <header class="m2-logs-head">
-          <div>
-            <h3>What this screen shows</h3>
-            <p>The Pipeline table, column by column.</p>
-          </div>
-          <button class="m2-btn" @click="helpOpen = false">Close</button>
-        </header>
-        <div class="m2-help-body">
-          <p>
-            Every top-level row is a <b>group</b> <code>config.toml</code> declares: a source
-            (Work Slack, Personal mail), or the unified index that makes them searchable. Open
-            its chevron for the <b>steps</b> that do the work — fetch, render, index — and the
-            <b>applets</b> the app spawns to serve it. Actions that don’t apply to a kind are
-            disabled and say why. Account and document-count columns aren’t here yet — each
-            needs a backend endpoint the design calls for.
-          </p>
-          <p>
-            A group row reads off its steps: <b>Status</b> is running if any step is, failed if
-            any failed, and otherwise the last step’s in pipeline order; while a sync is in
-            flight it draws one segment per step. <b>Last synced</b> is the fetch step’s.
-            <b>Sync</b> runs the group’s source steps and everything downstream;
-            <b>Remove</b> takes the steps and applets with it.
-          </p>
-          <p>
-            <b>Type</b> and <b>Status</b> are icons, and the mark after a step’s name says what
-            it does — hover any of them for the word. <b>Double-click a Status</b> to read that
-            step's log — from the run in flight while it runs, else from the run it last took
-            part in, with a picker for its other runs — as a grid you can sort, filter and
-            search; on a group row, the log of the step its status came from.
-            <b>Activity</b> is what a running step has reported: how much is queued ahead of
-            it, what it has counted so far, and how many warnings and errors it has logged.
-          </p>
-          <p>
-            <b>Right-click a row</b> for everything it can do — browse, edit, reveal, remove, the
-            log, a rename (on the Name cell), and its <b>commit history</b>: every store under it
-            is versioned, and the panel lists each commit — when, what it said, what it did to
-            each table, and the run that made it — newest first, updating while a sync runs.
-            Right-click inside a selection and the menu acts on all of it; outside one, on that
-            row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
-            and says why on hover. <b>Sync</b> stays a button: it is the one thing a row does
-            often.
-          </p>
-          <p>
-            <b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its
-            whole folder, measured on the same walk — plotted over {{ windowPhrase }} and drawn
-            against the largest row, so a row’s height means its size, and its shape means what
-            that size has been doing. Hover for the total and the breakdown.
-          </p>
-          <p>
-            <b>Last synced</b> and <b>Status</b> are per step, read from the runner’s own
-            record — so a sync you start from a terminal shows up here too. A run whose record
-            never closed and whose lock nobody holds reads as <b>interrupted</b>: it was
-            killed, not lost. A step a queued sync will reach reads as <b>queued</b>, and its
-            Sync button becomes a Stop — one job is one runner process over a whole subgraph,
-            so stopping is per sync, not per row.
-          </p>
-          <p>
-            The bar along the bottom is the <b>whole data root</b>, not the sum of the rows:
-            it includes <code>system/</code> — the stores, the job logs, the served
-            attachments — and anything a deleted step left behind. Its line is scaled to its
-            own range over {{ windowPhrase }} rather than to zero, because five minutes of a
-            sync moves a large root by a fraction of a percent and would otherwise draw flat.
-          </p>
-        </div>
-      </div>
-    </div>
-
+    <!-- The panels, out of the shadow root: their components' scoped
+         styles live in the head, and a modal belongs over the whole
+         page anyway. -->
+    <Teleport to="body">
     <div v-if="logFor" class="m2-logs-backdrop" @click.self="logFor = null">
       <div class="m2-logs m2-runlog" role="dialog" aria-modal="true" aria-label="Step log">
         <header class="m2-logs-head">
@@ -1893,592 +1643,6 @@ onUnmounted(() => {
       @close="closeWizard"
       @submit="onWizardSubmit"
     />
+    </Teleport>
   </section>
 </template>
-
-<style scoped>
-/* The shell is a viewport-height flex column, so this view can claim
-   the leftover and bound itself — which is what lets the grid scroll on
-   its own instead of growing the page. `min-height: 0` is the part that
-   makes a flex child actually shrink rather than overflow. */
-.m2 {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 16px 20px 20px;
-  box-sizing: border-box;
-}
-.m2-head { display: flex; align-items: flex-start; gap: 16px; flex: 0 0 auto; }
-/* The two header actions travel together, pinned right. */
-.m2-head-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-/* Sized to sit level with "+ Data Source", but outlined rather than
-   filled: running what is already configured is the routine act, adding
-   a source the deliberate one, and only one of them should read as the
-   primary thing to do on this screen. */
-.m2-runall {
-  padding: 8px 14px;
-  font-size: inherit;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.m2-head h2 { margin: 0 0 4px; font-size: 19px; }
-.m2-sub { margin: 0; color: var(--datalib-muted); font-size: 12px; }
-/* Sized to sit level with the two buttons beside it, but plain: it
-   opens a panel, it doesn't do anything to the pipeline. */
-.m2-help-btn { padding: 8px 14px; font-size: inherit; }
-.m2-add {
-  padding: 8px 14px;
-  border: 1px solid var(--datalib-accent);
-  border-radius: 5px;
-  background: var(--datalib-accent);
-  color: #fff;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-.m2-add:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.m2-msg { margin: 12px 0 0; font-size: 13px; }
-.m2-msg.bad { color: var(--datalib-log-error); }
-.m2-msg.good { color: var(--datalib-muted); }
-.m2-invalid {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--datalib-log-error);
-  border-radius: 5px;
-  max-width: 90ch;
-}
-.m2-invalid > span { color: var(--datalib-fg); }
-.m2-dropped {
-  margin: 0;
-  padding-left: 1.1rem;
-  color: var(--datalib-fg);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-.m2-invalid-why { color: var(--datalib-muted) !important; font-size: 12.5px; line-height: 1.55; }
-
-.m2-grid {
-  margin-top: 16px;
-  /* A definite height is what makes AG Grid scroll internally — both
-     ways. `min-height` keeps it usable when the Advanced editor is
-     open and competing for the same space. */
-  flex: 1 1 auto;
-  min-height: 180px;
-  position: relative;
-}
-/* Without `domLayout: autoHeight` the grid sizes to its container, so
-   its own element has to fill the box we just gave it — otherwise it
-   collapses to nothing and renders neither headers nor rows.
-   Fill the positioned .m2-grid absolutely rather than with
-   `height: 100%`. WebKit (Safari + the Tauri WKWebView the desktop app
-   runs in) resolves a percentage height against a flex-sized parent
-   that has no explicit `height` as `auto`, which collapsed this grid to
-   its 2px of border — headers and rows present in the DOM, nothing
-   painted — while Chromium gives it the full flexed height. Same bug,
-   same fix as `.grid` in cards/GridCard.ce.vue. Pinned by
-   tests/e2e/manager2-grid.spec.ts under the suite's `webkit` project. */
-.m2-ag {
-  position: absolute;
-  inset: 0;
-}
-/* Everything under the grid scrolls as one block, so opening the
-   Advanced editor never pushes the table off screen. */
-.m2-foot {
-  flex: 0 0 auto;
-  max-height: 52vh;
-  overflow-y: auto;
-}
-.m2-empty { color: var(--datalib-muted); font-size: 14px; margin-top: 16px; }
-.m2-advanced {
-  margin-top: 24px;
-  border-top: 1px solid var(--datalib-border);
-  padding-top: 14px;
-}
-.m2-advanced summary {
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--datalib-muted);
-  user-select: none;
-}
-.m2-advanced summary:hover { color: var(--datalib-fg); }
-.m2-advanced-note {
-  margin: 12px 0 8px;
-  font-size: 12.5px;
-  color: var(--datalib-muted);
-  line-height: 1.6;
-  max-width: 76ch;
-}
-.m2-editor {
-  width: 100%;
-  min-height: 340px;
-  padding: 10px 12px;
-  border: 1px solid var(--datalib-border);
-  border-radius: 5px;
-  background: var(--datalib-input-bg);
-  color: var(--datalib-fg);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12.5px;
-  line-height: 1.55;
-  resize: vertical;
-}
-.m2-advanced-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-}
-.m2-advanced-dirty { font-size: 12px; color: var(--datalib-muted); }
-
-/* The config's own path, where the offer to edit it is. It used to sit
-   under the heading at the top, three screens away from the editor and
-   from the button that opens it in Finder. */
-.m2-file {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 10px 0 8px;
-  font-size: 12px;
-  color: var(--datalib-muted);
-}
-.m2-file code { word-break: break-all; }
-.m2-file-reveal { flex: 0 0 auto; }
-
-/* The status bar: one line, pinned under everything, saying what the
-   whole root weighs right now. Outside `.m2-foot` deliberately — that
-   block scrolls, and a status bar that scrolls away is not one.
-   Named `rootbar` rather than anything with "status" in it: `.m2-status`
-   is the Status *cell*, and its rules live in the unscoped block below
-   (cell renderers build plain DOM, so their classes can't be scoped).
-   An unscoped rule still reaches a template element, so sharing the
-   name handed this footer `display: inline-flex` and `height: 100%`
-   from a table cell. */
-.m2-rootbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--datalib-border);
-  font-size: 12px;
-  color: var(--datalib-muted);
-}
-.m2-rootbar-label { flex: 0 0 auto; font-weight: 600; }
-/* The path yields first when the window narrows — the number and the
-   plot are the point of the line. */
-.m2-rootbar-path {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* Pushed right, so the number and its plot sit together at the end of
-   the line whatever the path's length. */
-.m2-rootbar-spark {
-  margin-left: auto;
-  flex: 0 0 auto;
-  display: block;
-  width: 260px;
-  height: 20px;
-}
-.m2-rootbar-size {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  font-variant-numeric: tabular-nums;
-}
-.m2-rootbar-size b { color: var(--datalib-fg); }
-/* The change over the window, in the same colour as the line that
-   shows it. Not green: growth is not good news and shrinkage is not
-   bad — the sign is the whole message. */
-.m2-rootbar-delta { color: var(--datalib-accent); }
-
-/* The help panel reuses the log panel's modal chrome; only its body
-   differs, being prose rather than a log. */
-.m2-help-body {
-  padding: 4px 16px 16px;
-  overflow: auto;
-  flex: 1 1 auto;
-  font-size: 13px;
-  line-height: 1.65;
-  color: var(--datalib-muted);
-  max-width: 78ch;
-}
-.m2-help-body p { margin: 10px 0; }
-.m2-help-body b { color: var(--datalib-fg); }
-
-/* The per-step log panel. Modal, because it is a full answer to a
-   question the grid can only gesture at, and because the grid behind it
-   repaints whenever a step moves — a panel docked inside it would be
-   fighting that. */
-.m2-logs-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  z-index: 50;
-}
-.m2-logs {
-  background: var(--datalib-bg);
-  border: 1px solid var(--datalib-border);
-  border-radius: 8px;
-  width: min(920px, 100%);
-  max-height: 100%;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
-}
-/* The log panel is a grid and wants the room: wide for its columns,
-   tall enough that following a run is not a keyhole. */
-.m2-runlog { width: min(1400px, 100%); height: min(85vh, 100%); }
-.m2-logs-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--datalib-border);
-  flex: 0 0 auto;
-}
-.m2-logs-head h3 { margin: 0 0 3px; font-size: 15px; }
-.m2-logs-head p { margin: 0; font-size: 12px; color: var(--datalib-muted); }
-.m2-logs-head button { margin-left: auto; }
-.m2-logs-note { margin: 0; padding: 16px; font-size: 13px; color: var(--datalib-muted); max-width: 70ch; }
-.m2-logs-note.bad { color: var(--datalib-log-error); }
-/* The history panel is a grid rather than a list, and wider than the
-   log: nine columns, and the table list is the one worth the room. */
-.m2-history { width: min(1400px, 100%); height: min(720px, 100%); }
-/* `position: relative`, because `.m2-ag` is absolutely placed — see the
-   WebKit note above it. */
-.m2-history-grid { position: relative; flex: 1 1 auto; min-height: 0; margin: 0 16px 16px; }
-</style>
-
-<style>
-/* Cell renderers build plain DOM, so their classes can't be scoped. */
-.m2-cell-source { display: inline-flex; align-items: center; gap: 8px; }
-.m2-history-hash {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
-.m2-history-label { display: inline-flex; align-items: baseline; gap: 8px; }
-.m2-history-store { font-weight: 600; }
-.m2-history-table { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-/* Two lines in one row's height, like the size cell. */
-.m2-history-when { display: inline-flex; flex-direction: column; line-height: 1.25; justify-content: center; height: 100%; }
-.m2-history-when .m2-cell-dir { font-size: 11px; }
-.m2-history-run {
-  padding: 0;
-  margin: 0;
-  background: transparent;
-  border: none;
-  color: var(--datalib-accent);
-  font: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  cursor: pointer;
-  text-decoration: underline dotted;
-}
-/* The destructive entry, told apart the way the trash button is. */
-.ag-menu-option.m2-menu-danger:not(.ag-menu-option-disabled) { color: var(--datalib-log-error); }
-/* The same control as `button.copy-uuid` in ChatBody: a greyed glyph
-   that lights up on hover and flashes its verdict. */
-.m2-copy-id {
-  filter: grayscale(1);
-  display: inline-flex;
-  align-items: center;
-  padding: 0;
-  margin: 0;
-  background: transparent;
-  border: none;
-  color: inherit;
-  font: inherit;
-  font-size: 0.9em;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0.55;
-}
-.m2-copy-id:hover { opacity: 1; }
-.m2-copy-id.copied { color: #16a34a; opacity: 1; filter: none; }
-.m2-copy-id.copy-failed { color: #dc2626; opacity: 1; filter: none; }
-.m2-cell-dir { color: var(--datalib-muted); font-size: 12px; }
-/* The group row is the row: its name leads the tree, so it carries the
-   weight, and the steps under it read as its parts. */
-.m2-group-name { font-weight: 600; }
-/* The step-role mark, riding after the name. Muted and a size down
-   from the Type mark beside it: the name is what the eye should land
-   on, and this answers the follow-up question rather than competing
-   with it. `gap` on the parent already spaces it. */
-.m2-name-step {
-  display: inline-flex;
-  align-items: center;
-  color: var(--datalib-muted);
-  flex: 0 0 auto;
-}
-
-/* Type: one mark, centred in a narrow column, with the word on
-   `title`. The cell fills the row height so the glyph sits on the text
-   baseline's optical centre rather than at the top. */
-.m2-cell-type {
-  display: inline-flex;
-  align-items: center;
-  height: 100%;
-}
-.m2-cell-type img { width: 18px; height: 18px; object-fit: contain; }
-/* The fallback when a type has no brand mark. Clipped rather than
-   wrapped: the column is sized for an icon, and the full name is on
-   `title` like every other cell here. */
-.m2-type-word {
-  font-size: 11px;
-  color: var(--datalib-muted);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* The status vocabulary. Anything unstyled falls through to the default
-   colour, which is the right outcome for a status this sheet hasn't
-   met — and that case renders the word rather than a glyph. */
-.m2-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 100%;
-  color: var(--datalib-muted);
-}
-.m2-status-running { color: var(--datalib-accent); }
-.m2-status-queued { color: var(--datalib-muted); }
-.m2-status-failed { color: var(--datalib-log-error); }
-/* A run that died mid-step: not a failure anyone reported, but not a
-   success either, so it reads as a warning rather than an error. */
-.m2-status-interrupted { color: var(--datalib-log-warn); }
-/* Both tick glyphs are green, and for the same reason the failure "!"
-   is red: the column is icons now, so colour is doing the work the
-   words used to. A grey tick beside a red exclamation reads as "no
-   answer yet" rather than "fine".
-   `succeeded` is one tick, `skipped_up_to_date` ("Up to date") is two —
-   different facts, both good news, so they share the colour and are
-   told apart by the glyph. */
-.m2-status-succeeded,
-.m2-status-skipped-up-to-date { color: var(--datalib-log-ok); }
-/* Never run is the emptiest state in the column, and reads as such. */
-.m2-status-never-run { opacity: 0.55; }
-
-/* Running is drawn, not glyphed — a still frame can't say "still
-   going". A ring with one lit quarter, turning once a second. */
-.m2-spinner {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
-  border-top-color: currentColor;
-  animation: m2-spin 1s linear infinite;
-}
-@keyframes m2-spin {
-  to { transform: rotate(360deg); }
-}
-/* Motion is the signal here, not decoration — but a static ring still
-   reads as "running" beside a column of finished ticks, so honour the
-   preference rather than exempting ourselves from it. */
-@media (prefers-reduced-motion: reduce) {
-  .m2-spinner { animation: none; }
-}
-/* A group's run in flight: one segment per step in pipeline order, in
-   the step's own status colour, the running one pulsing. The same
-   grammar as StepProgress.vue's task cells — a still segment is a
-   finished step, a blank one a step not reached. */
-.m2-segs {
-  flex: 1 1 auto;
-  min-width: 20px;
-  display: flex;
-  gap: 1px;
-  height: 6px;
-}
-.m2-seg {
-  flex: 1;
-  background: color-mix(in srgb, var(--datalib-fg) 14%, transparent);
-}
-.m2-seg:first-child { border-radius: 3px 0 0 3px; }
-.m2-seg:last-child { border-radius: 0 3px 3px 0; }
-.m2-seg-succeeded,
-.m2-seg-skipped-up-to-date { background: var(--datalib-log-ok); }
-.m2-seg-failed { background: var(--datalib-log-error); }
-.m2-seg-interrupted { background: var(--datalib-log-warn); }
-.m2-seg-blocked { background: var(--datalib-muted); }
-.m2-seg-running {
-  background: var(--datalib-accent);
-  animation: m2-seg-pulse 1s ease-in-out infinite;
-}
-@keyframes m2-seg-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .m2-seg-running { animation: none; }
-}
-
-/* Shown only when the step reported a total to be a fraction of. */
-.m2-progress {
-  flex: 1 1 auto;
-  min-width: 20px;
-  height: 4px;
-  border-radius: 2px;
-  background: color-mix(in srgb, currentColor 18%, transparent);
-  overflow: hidden;
-}
-.m2-progress > span {
-  display: block;
-  height: 100%;
-  background: currentColor;
-}
-
-/* Activity: one chip per number the step reported. `queued` is the one
-   that says whether it is keeping up, so it leads and is the one that
-   gets a colour; a count of warnings and errors closes the row. */
-.m2-activity {
-  display: inline-flex;
-  flex-wrap: nowrap;
-  gap: 4px;
-  overflow: hidden;
-  max-width: 100%;
-}
-.m2-chip {
-  font-size: 11px;
-  line-height: 16px;
-  padding: 0 6px;
-  border-radius: 8px;
-  white-space: nowrap;
-  background: color-mix(in srgb, currentColor 10%, transparent);
-  color: var(--datalib-muted);
-}
-.m2-chip.queued { color: var(--datalib-log-warn); }
-.m2-chip.idle { color: var(--datalib-log-ok); }
-.m2-chip.errors { color: var(--datalib-log-error); }
-.m2-chip.stalled { color: var(--datalib-log-warn); }
-
-/* Bytes on disk: the recent history against the largest row, with the
-   size centred over it and the per-output breakdown on `title`. */
-.m2-bytes {
-  display: flex;
-  align-items: center;
-  height: 100%;
-  width: 100%;
-}
-/* "Nothing to show here" — an em dash, in both the Bytes column
-   (no artifacts on disk) and Last synced (never run). Shared,
-   because it is one meaning. */
-.m2-none { color: var(--datalib-muted); opacity: 0.55; }
-/* The plot box the number sits over. */
-.m2-plot {
-  position: relative;
-  flex: 1 1 auto;
-  height: 18px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--datalib-fg) 8%, transparent);
-  overflow: hidden;
-}
-/* Absolute so the label sits over the plot rather than after it. The
-   svg stretches to the cell's real width — `preserveAspectRatio:
-   none` on the element means the user-unit box is a coordinate system,
-   not a shape. */
-.m2-plot > .m2-spark {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-/* The number reads across the plot — over the filled region on one
-   side and the empty one on the other — so it can't take its contrast
-   from either. `--datalib-fg` against a fill kept well under half
-   opacity holds up in both themes; the shadow is what keeps the glyph
-   edges legible where the two meet. */
-.m2-plot-label {
-  position: relative;
-  display: block;
-  text-align: center;
-  line-height: 18px;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: var(--datalib-fg);
-  text-shadow: 0 0 3px var(--datalib-bg);
-}
-
-/* The sparkline itself, shared by the size column and the status bar.
-   Unscoped along with the rest of this block because the cell renderers
-   build plain DOM.
-
-   `vector-effect: non-scaling-stroke` is load-bearing: the svg is
-   stretched from its 120-unit box to whatever the column is wide, and
-   without it the stroke stretches too — a 1px line drawn as an ellipse
-   two pixels wide horizontally and one vertically. */
-.m2-spark { display: block; overflow: visible; }
-.m2-spark-line {
-  fill: none;
-  stroke: var(--datalib-accent);
-  stroke-width: 1.25;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
-.m2-spark-area {
-  fill: color-mix(in srgb, var(--datalib-accent) 22%, transparent);
-  stroke: none;
-}
-
-.m2-actions {
-  display: inline-flex;
-  gap: 2px;
-  align-items: center;
-  height: 100%;
-}
-.m2-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: none;
-  color: var(--datalib-muted);
-  cursor: pointer;
-}
-.m2-icon-btn:hover:not(:disabled) {
-  background: var(--datalib-hover);
-  border-color: var(--datalib-border);
-  color: var(--datalib-fg);
-}
-.m2-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-.m2-icon-btn.danger:hover:not(:disabled) {
-  color: var(--datalib-log-error);
-  border-color: var(--datalib-log-error);
-}
-.m2-btn {
-  padding: 2px 9px;
-  border: 1px solid var(--datalib-border);
-  border-radius: 4px;
-  background: var(--datalib-card-bg);
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.m2-btn:hover:not(:disabled) { background: var(--datalib-hover); }
-.m2-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.m2-btn.danger:hover:not(:disabled) { border-color: var(--datalib-log-error); color: var(--datalib-log-error); }
-.m2-btn.muted { color: var(--datalib-muted); }
-.m2-btn.muted:hover:not(:disabled) { color: var(--datalib-fg); }
-</style>

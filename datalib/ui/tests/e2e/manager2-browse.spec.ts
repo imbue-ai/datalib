@@ -70,13 +70,12 @@ function columnValues(page: Page, colId: string) {
 
 async function openManage(page: Page) {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await page.locator(ROWS).first().waitFor({ timeout: 10_000 });
 }
 
 async function writeConfig(page: Page, text: string): Promise<void> {
   await openManage(page);
-  await page.getByText("Advanced — edit config.toml directly").click();
   await page.locator(".m2-editor").fill(text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
@@ -110,7 +109,6 @@ let original = "";
 
 test.beforeEach(async ({ page }) => {
   await openManage(page);
-  await page.getByText("Advanced — edit config.toml directly").click();
   original = await page.locator(".m2-editor").inputValue();
   await writeConfig(page, `${original.replace(/\s*$/, "")}\n${GROUPS}`);
 });

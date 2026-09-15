@@ -136,7 +136,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await page.getByRole("button", { name: "Initialize empty data library" }).click();
 
     // ── 3. landing in Manager2 ───────────────────────────────────────
-    await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/sources2");
     // The scaffold's one group is the table's whole content, and its
     // three entries are under it.
@@ -261,7 +261,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     copyFileSync(LATECOMER!, `${SCAN_DIR}/warp_core_manual.pdf`);
 
     await page.goto(`${BASE}/sources2`);
-    await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     // Re-read rather than reuse: this is a fresh page, and the numbers
     // it shows are the ones the assertion below is about.
     const beforeSecond = await bytesOf(page, "pdfs/ingest");
@@ -316,7 +316,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     page.on("dialog", (d) => void d.accept());
 
     await page.goto(`${BASE}/sources2`);
-    await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     // A fresh browser context: the groups are folded again.
     await expandGroup(page, "pdfs");
 

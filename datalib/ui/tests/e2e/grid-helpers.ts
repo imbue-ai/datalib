@@ -480,7 +480,7 @@ export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
     )
     .toBe(false);
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
 /// Every row's stamp, keyed by id — the reading a settle compares

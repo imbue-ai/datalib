@@ -54,7 +54,7 @@ async function stubBackend(page: Page) {
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
 async function pickSlack(page: Page) {
@@ -77,7 +77,6 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }) => {
   if (!original) return;
   await openManager(page);
-  await page.getByText("Advanced — edit config.toml directly").click();
   await page.locator(".m2-editor").fill(original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();

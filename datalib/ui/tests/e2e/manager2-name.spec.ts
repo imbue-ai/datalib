@@ -5,7 +5,7 @@ import { expandGroup, groupRow, pickRowMenu, pipelineRow as row } from "./grid-h
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
 const wizard = (page: Page) => page.getByRole("dialog");
@@ -46,7 +46,6 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }) => {
   if (!original) return;
   await openManager(page);
-  await page.getByText("Advanced — edit config.toml directly").click();
   await page.locator(".m2-editor").fill(original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
@@ -169,7 +168,6 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
     .replace(/"fetch-only\/render_markdown"(,\s*)?/g, "");
   expect(without).not.toBe(text);
   expect(without).not.toContain("fetch-only/render_markdown");
-  await page.getByText("Advanced — edit config.toml directly").click();
   await editor.fill(without);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
@@ -284,7 +282,6 @@ test("a hand-written render step under a download-only type is called out, then 
   const text = await editor.inputValue();
   expect(text).toContain('group = "photos"\nfunction = "ingest"');
   expect(text).not.toContain('group = "photos"\nfunction = "render_markdown"');
-  await page.getByText("Advanced — edit config.toml directly").click();
   await editor.fill(
     `${text.trimEnd()}\n\n[[steps]]\ngroup = "photos"\nfunction = "render_markdown"\ninputs = ["photos/ingest"]\n`,
   );
