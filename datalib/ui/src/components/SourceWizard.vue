@@ -459,6 +459,11 @@ const serviceRegistered = ref(true);
 /// until the server says otherwise, so a command is never shown naming
 /// a binary that isn't there.
 const latchkeyCli = ref("npx -y latchkey");
+/// The latchkey gateway the backend talks through, when there is one.
+/// Under a gateway the credentials and the browser that signs in to
+/// them are on the gateway's side, and latchkey refuses every command
+/// the login button would run — so the button is not offered at all.
+const gateway = ref<string | null>(null);
 /// Why the account list is empty, when latchkey could not be asked.
 /// Shown as a note, not an error — the field is still typable.
 const accountsError = ref<string | null>(null);
@@ -474,6 +479,7 @@ async function loadAccounts() {
     authOptions.value = info.auth_options;
     serviceRegistered.value = info.registered;
     latchkeyCli.value = info.cli;
+    gateway.value = info.gateway;
     accountsError.value = info.error;
   } catch (e) {
     accounts.value = [];
@@ -493,14 +499,18 @@ const wouldRegister = computed(() =>
 /// for a service that can do neither would produce a failure that reads
 /// like a bug in datalib.
 const canConnect = computed(
-  () => authOptions.value.includes("browser") || !!chosen.value?.credentialRegister,
+  () =>
+    !gateway.value &&
+    (authOptions.value.includes("browser") || !!chosen.value?.credentialRegister),
 );
 
 /// A service latchkey holds that cannot do a browser login. Its owner
 /// set it up by hand, so the dialog says how to add a credential the
-/// same way rather than offering to change it.
+/// same way rather than offering to change it. Not under a gateway:
+/// `auth set` is refused there too, and the gateway note says where
+/// credentials come from instead.
 const setOnlyService = computed(
-  () => serviceRegistered.value && !authOptions.value.includes("browser"),
+  () => !gateway.value && serviceRegistered.value && !authOptions.value.includes("browser"),
 );
 
 /// Set by the button on a service latchkey holds without a browser
@@ -856,7 +866,8 @@ function submit() {
             </span>
             <small v-if="accountField.help" class="wiz-help">{{ accountField.help }}</small>
             <small v-if="accounts && accounts.length === 0 && !accountsError" class="wiz-help">
-              latchkey has no <code>{{ service }}</code> credential stored yet. Connect below.
+              latchkey has no <code>{{ service }}</code> credential stored yet.
+              {{ canConnect ? "Connect below." : "" }}
             </small>
             <small v-if="accountsError" class="wiz-help">
               Couldn’t ask latchkey which accounts it holds ({{ accountsError }}). Type the
@@ -890,6 +901,12 @@ function submit() {
             class="wiz-help wiz-conn-note"
           >
             {{ chosen.credentialConnectWarning }}
+          </p>
+          <!-- Under a gateway the login happens on the gateway's side,
+               and every command the button would run is refused. -->
+          <p v-if="gateway" class="wiz-help wiz-conn-note">
+            Credentials are held by a latchkey gateway (<code>{{ gateway }}</code>). Sign in
+            where that gateway is managed, then press <b>Test connection</b>.
           </p>
           <!-- What the button says on a service that has no browser
                login. Shown rather than done: latchkey refuses to

@@ -781,10 +781,17 @@ out, but it turns a silent mismatch into a red test.
    in `download-playwright-browser`. First-run can therefore pull a
    large binary — that has to be surfaced as an explicit, consented
    step with progress, not a silent stall behind a spinner.
-3. **Gateway mode already works.** When `gatewayUrl` is set,
-   `auth browser` forwards the request to the gateway rather than
-   opening a local browser, which lines up with datalib's existing
-   gateway env var.
+3. **Gateway mode does not work through the button, and is not meant
+   to.** When `LATCHKEY_GATEWAY` is set, latchkey forwards `auth
+   browser` to the gateway — but refuses `ensure-browser`, `services
+   register`, `auth set` and `auth clear`, which is three of the four
+   commands the button runs, and the browser that could sign in is on
+   the gateway's host. So `GET /api/latchkey/{service}` reports the
+   gateway, the wizard offers no button there and says where to sign
+   in instead, and `POST …/connect` refuses up front (2026-09-15;
+   found in minds, where the old failure told the person to run
+   `ensure-browser`). "Test connection" is unaffected: the probe is
+   `latchkey curl`, which the gateway serves.
 
 ### Where the latchkey calls run
 
