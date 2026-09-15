@@ -6,7 +6,14 @@
 // ctx.host.openCards — structural changes never go through the bus.
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
   ModuleRegistry,
@@ -36,7 +43,13 @@ import {
   type QmdDocState,
   type SearchRow,
 } from "@/api";
-import { entryForStep, listGroups, listSteps, slugify, sourceStepsOf } from "@/config/sourceSteps";
+import {
+  entryForStep,
+  listGroups,
+  listSteps,
+  slugify,
+  sourceStepsOf,
+} from "@/config/sourceSteps";
 import { iconUrl } from "@/config/icons";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
@@ -47,6 +60,7 @@ import {
   revealInFileManager,
 } from "@/desktop";
 import { openExternal } from "@/externalLinks";
+import { keepExcludeItems } from "@/grid/keepExclude";
 import { subscribeLive } from "@/live";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
@@ -100,11 +114,9 @@ const query = ref(initialState.get("q") ?? props.q ?? "");
 
 // The card's chrome title tracks the live query, not just the factory
 // argument — searching from inside the card retitles it.
-watch(
-  query,
-  (q) => props.ctx.setTitle(q ? `Search: ${q}` : "Search"),
-  { immediate: true },
-);
+watch(query, (q) => props.ctx.setTitle(q ? `Search: ${q}` : "Search"), {
+  immediate: true,
+});
 const rows = ref<SearchRow[]>([]);
 // The query whose results are actually painted right now — not `query`
 // (what is typed) and not `!loading` (which flips in both directions
@@ -250,7 +262,10 @@ const qmdSummaryTitle = computed(() => {
 // `qmdState`, which AG Grid has no way to observe on its own.
 function refreshIndexCells() {
   if (!gridApi) return;
-  gridApi.refreshCells({ columns: ["qmd_indexed", "qmd_embedded"], force: true });
+  gridApi.refreshCells({
+    columns: ["qmd_indexed", "qmd_embedded"],
+    force: true,
+  });
 }
 
 // Tri-state cell: true → ✅, false → ❌, null/unknown → an em dash. The
@@ -265,7 +280,9 @@ function indexFlag(v: boolean | null | undefined): string {
 
 // The index state for a row's document, or undefined before the first
 // /qmd_state response lands.
-function qmdDocState(row: SearchRow | null | undefined): QmdDocState | undefined {
+function qmdDocState(
+  row: SearchRow | null | undefined,
+): QmdDocState | undefined {
   if (!row?.markdown_uuid) return undefined;
   return qmdState.value.get(row.markdown_uuid);
 }
@@ -463,7 +480,11 @@ function quoteValue(v: string): string {
   return `"${escaped}"`;
 }
 
-function formatFilterToken(key: string, value: string, exclude: boolean): string {
+function formatFilterToken(
+  key: string,
+  value: string,
+  exclude: boolean,
+): string {
   return `${exclude ? "-" : ""}${key}:${quoteValue(value)}`;
 }
 
@@ -481,7 +502,6 @@ function appendFilterToQuery(token: string) {
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -606,7 +626,9 @@ async function runSearch(q: string) {
     rows.value = r.rows;
     total.value = r.total_estimated;
     const qe =
-      typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
+      typeof r.query_echo?.qmd_error === "string"
+        ? r.query_echo.qmd_error
+        : null;
     qmdError.value = qe;
     cachePut(q, { rows: r.rows, total: r.total_estimated, qmdError: qe });
     shownQuery.value = q;
@@ -911,7 +933,8 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     tooltipValueGetter: (p) => {
       const id = p.data?.source_id ?? "";
       if (!id) return "";
-      if (id === DATALIB_SOURCE_ID) return "Datalib's own row, not a source's data";
+      if (id === DATALIB_SOURCE_ID)
+        return "Datalib's own row, not a source's data";
       const name = sourceNames.value.get(id);
       return name ? `${name} — stored in ${id}/` : `Stored in ${id}/`;
     },
@@ -1151,42 +1174,17 @@ const gridOptions: GridOptions<SearchRow> = {
     const plural = targets.length === 1 ? "" : "s";
 
     const items: (MenuItemDef<SearchRow> | DefaultMenuItem)[] = [];
-    if (filterCtx) {
+    for (const ctx of [filterCtx, notionCtx]) {
+      if (!ctx) continue;
       items.push(
-        {
-          name: `Keep only ${filterCtx.header}=${filterCtx.value}`,
-          action: () =>
-            appendFilterToQuery(
-              formatFilterToken(filterCtx.key, filterCtx.value, false),
-            ),
-        },
-        {
-          name: `Exclude all ${filterCtx.header}=${filterCtx.value}`,
-          action: () =>
-            appendFilterToQuery(
-              formatFilterToken(filterCtx.key, filterCtx.value, true),
-            ),
-        },
-        "separator",
-      );
-    }
-    if (notionCtx) {
-      items.push(
-        {
-          name: `Keep only Notion Page=${notionCtx.value}`,
-          action: () =>
-            appendFilterToQuery(
-              formatFilterToken(notionCtx.key, notionCtx.value, false),
-            ),
-        },
-        {
-          name: `Exclude all Notion Page=${notionCtx.value}`,
-          action: () =>
-            appendFilterToQuery(
-              formatFilterToken(notionCtx.key, notionCtx.value, true),
-            ),
-        },
-        "separator",
+        ...keepExcludeItems<SearchRow>({
+          header: ctx.header,
+          value: ctx.value,
+          keep: () =>
+            appendFilterToQuery(formatFilterToken(ctx.key, ctx.value, false)),
+          exclude: () =>
+            appendFilterToQuery(formatFilterToken(ctx.key, ctx.value, true)),
+        }),
       );
     }
     items.push({
@@ -1310,7 +1308,11 @@ const gridOptions: GridOptions<SearchRow> = {
   // multiRow so right-click "Copy UUID(s)" can target several rows, like
   // Lightroom. Single-click still narrows to one row; the document column
   // follows whichever row was most recently toggled on.
-  rowSelection: { mode: "multiRow", checkboxes: false, enableClickSelection: true },
+  rowSelection: {
+    mode: "multiRow",
+    checkboxes: false,
+    enableClickSelection: true,
+  },
   ensureDomOrder: true,
   getRowId: (p: GetRowIdParams<SearchRow>) => p.data.uuid,
   onGridReady: (e: GridReadyEvent<SearchRow>) => {
@@ -1376,7 +1378,11 @@ const gridOptions: GridOptions<SearchRow> = {
     // user per-document answers. Guarded on an empty map so hiding and
     // re-showing doesn't refetch state we already hold for these rows;
     // the `rows` watcher covers the case where the result set moved.
-    if (qmdColumnsVisible() && qmdState.value.size === 0 && rows.value.length > 0) {
+    if (
+      qmdColumnsVisible() &&
+      qmdState.value.size === 0 &&
+      rows.value.length > 0
+    ) {
       refreshQmdState();
     }
   },
@@ -1428,8 +1434,8 @@ const gridOptions: GridOptions<SearchRow> = {
     </div>
 
     <p v-if="qmdError" class="qmd-error" role="alert">
-      qmd search failed — results below are from a degraded SQL-LIKE
-      fallback: {{ qmdError }}
+      qmd search failed — results below are from a degraded SQL-LIKE fallback:
+      {{ qmdError }}
     </p>
 
     <p v-if="error" class="error">error: {{ error }}</p>
@@ -1586,7 +1592,9 @@ const gridOptions: GridOptions<SearchRow> = {
   color: var(--datalib-muted);
 }
 @keyframes datalib-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
 

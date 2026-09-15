@@ -18,15 +18,24 @@ import {
   colorSchemeVariable,
   type CellClassParams,
   type ColDef,
+  type DefaultMenuItem,
+  type GetContextMenuItemsParams,
   type GridApi,
   type GridReadyEvent,
   type ITooltipParams,
+  type MenuItemDef,
   type ValueFormatterParams,
 } from "ag-grid-community";
-// The drag-to-group bar is an enterprise module. GridCard already links
-// the whole enterprise bundle, so this costs nothing new; only the two
-// grouping modules are registered here.
-import { RowGroupingModule, RowGroupingPanelModule } from "ag-grid-enterprise";
+// The drag-to-group bar, the right-click menu and the set filter are
+// enterprise modules. GridCard already links the whole enterprise bundle,
+// so this costs nothing new; only the four are registered here.
+import {
+  ContextMenuModule,
+  RowGroupingModule,
+  RowGroupingPanelModule,
+  SetFilterModule,
+} from "ag-grid-enterprise";
+import { keepExcludeItems } from "@/grid/keepExclude";
 import {
   fetchRunLog,
   fetchRuns,
@@ -44,8 +53,10 @@ import {
 
 ModuleRegistry.registerModules([
   AllCommunityModule,
+  ContextMenuModule,
   RowGroupingModule,
   RowGroupingPanelModule,
+  SetFilterModule,
 ]);
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
@@ -216,7 +227,7 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     field: "run_id",
     width: 100,
     hide: !allRuns.value,
-    filter: true,
+    filter: "agSetColumnFilter",
     valueFormatter: (p: ValueFormatterParams<RunLogLine>) =>
       shortRunId(String(p.value ?? "")),
     tooltipField: "run_id",
@@ -226,24 +237,42 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     field: "step",
     width: 180,
     hide: stepOnly.value && !!props.step,
-    filter: true,
+    filter: "agSetColumnFilter",
   },
   {
     headerName: "Level",
     field: "level",
     width: 80,
-    filter: true,
+    filter: "agSetColumnFilter",
     cellClass: levelClass,
   },
-  { headerName: "Stream", field: "stream", width: 84, filter: true },
-  { headerName: "Thread", field: "thread", width: 150, filter: true },
-  { headerName: "Target", field: "target", width: 200, filter: true },
+  {
+    headerName: "Stream",
+    field: "stream",
+    width: 84,
+    filter: "agSetColumnFilter",
+  },
+  {
+    headerName: "Thread",
+    field: "thread",
+    width: 150,
+    filter: "agSetColumnFilter",
+  },
+  {
+    headerName: "Target",
+    field: "target",
+    width: 200,
+    filter: "agSetColumnFilter",
+  },
   {
     headerName: "Message",
     field: "msg",
     flex: 1,
     minWidth: 320,
-    filter: true,
+    // Free text, unlike the columns above: the text filter, with room
+    // for one condition per "Exclude all".
+    filter: "agTextColumnFilter",
+    filterParams: { maxNumConditions: 12 },
     wrapText: false,
     cellClass: levelClass,
     tooltipField: "msg",
@@ -252,7 +281,7 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     headerName: "Fields",
     field: "fields",
     width: 220,
-    filter: true,
+    filter: "agTextColumnFilter",
     tooltipField: "fields",
     // One of a kind per line: grouping by it would be a group per row.
     enableRowGroup: false,
@@ -282,6 +311,111 @@ const groupOptions = {
 
 function onGridReady(e: GridReadyEvent<RunLogLine>) {
   gridApi = e.api;
+}
+
+// Right-click on a cell: keep only the lines sharing its value, or drop
+// them, as the unified grid does — here through the column's own filter,
+// so the header's filter icon shows what is in force and clears it.
+// The facet columns use the set filter, so a second "Exclude" narrows
+// the same set rather than replacing the first; Message uses the text
+// filter, so it adds a condition.
+type SetModel = { filterType: "set"; values: string[] };
+type TextCondition = {
+  filterType: "text";
+  type: "equals" | "notEqual";
+  filter: string;
+};
+type TextModel =
+  | TextCondition
+  | { filterType: "text"; operator: "AND"; conditions: TextCondition[] };
+
+function distinctValues(colId: string): string[] {
+  const seen = new Set<string>();
+  gridApi?.forEachNode((n) => {
+    const v = n.data?.[colId as keyof RunLogLine];
+    if (v != null) seen.add(String(v));
+  });
+  return [...seen];
+}
+
+async function applyKeepOrExclude(
+  colId: string,
+  value: string,
+  exclude: boolean,
+) {
+  if (!gridApi) return;
+  const isSet =
+    gridApi.getColumn(colId)?.getColDef().filter === "agSetColumnFilter";
+  let next: SetModel | TextModel;
+  if (isSet) {
+    const cur = gridApi.getColumnFilterModel(colId) as SetModel | null;
+    const allowed = cur?.values ?? distinctValues(colId);
+    next = {
+      filterType: "set",
+      values: exclude ? allowed.filter((v) => v !== value) : [value],
+    };
+  } else if (exclude) {
+    const cur = gridApi.getColumnFilterModel(colId) as TextModel | null;
+    const prior: TextCondition[] =
+      cur == null ? [] : "conditions" in cur ? cur.conditions : [cur];
+    next = {
+      filterType: "text",
+      operator: "AND",
+      conditions: [
+        ...prior.filter((c) => c.type === "notEqual"),
+        { filterType: "text", type: "notEqual", filter: value },
+      ],
+    };
+  } else {
+    next = { filterType: "text", type: "equals", filter: value };
+  }
+  await gridApi.setColumnFilterModel(colId, next);
+  gridApi.onFilterChanged();
+}
+
+function contextMenuItems(
+  params: GetContextMenuItemsParams<RunLogLine>,
+): (MenuItemDef<RunLogLine> | DefaultMenuItem)[] {
+  const defaults = params.defaultItems ?? [];
+  const colId = params.column?.getColId();
+  const colDef = params.column?.getColDef();
+  const raw = params.value;
+  if (
+    !gridApi ||
+    !colId ||
+    !colDef?.filter ||
+    !params.node ||
+    raw == null ||
+    raw === ""
+  ) {
+    return defaults;
+  }
+  const value = String(raw);
+  const shown = colDef.valueFormatter
+    ? String(
+        gridApi.getCellValue({
+          rowNode: params.node,
+          colKey: colId,
+          useFormatter: true,
+        }),
+      )
+    : value;
+  const items = keepExcludeItems<RunLogLine>({
+    header: colDef.headerName ?? colId,
+    value: shown,
+    keep: () => void applyKeepOrExclude(colId, value, false),
+    exclude: () => void applyKeepOrExclude(colId, value, true),
+  });
+  if (gridApi.isAnyFilterPresent()) {
+    items.push(
+      {
+        name: "Clear all filters",
+        action: () => gridApi?.setFilterModel(null),
+      },
+      "separator",
+    );
+  }
+  return [...items, ...defaults];
 }
 
 function onQuickFilter(ev: Event) {
@@ -358,6 +492,8 @@ onUnmounted(() => {
       :tooltipShowDelay="300"
       :rowHeight="24"
       :headerHeight="30"
+      :preventDefaultOnContextMenu="true"
+      :getContextMenuItems="contextMenuItems"
       v-bind="groupOptions"
       :enableCellTextSelection="true"
       :suppressCellFocus="true"
