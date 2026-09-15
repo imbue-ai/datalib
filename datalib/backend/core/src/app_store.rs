@@ -157,9 +157,12 @@ impl AppRepo for AppStore {
                            started_at_utc, finished_at_utc, tz_offset, error, pid, \
                            progress_pct, progress_msg \
                     FROM sync_jobs";
+        // The SQL form of `SyncJobRow::is_active`: a job told to stop is
+        // active until the worker stamps it finished.
         let sql = if only_active {
             format!(
                 "{base} WHERE state IN (?, ?) \
+                 OR (state = ? AND started_at_utc IS NOT NULL AND finished_at_utc IS NULL) \
                  ORDER BY created_at_utc DESC, id DESC LIMIT ?"
             )
         } else {
@@ -167,13 +170,14 @@ impl AppRepo for AppStore {
         };
         // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `sql` is
         // `format!` over two `&'static str` templates selected by a bool, and
-        // every runtime value (the two states, `limit`) is a bound `?`
+        // every runtime value (the three states, `limit`) is a bound `?`
         // parameter. Nothing caller-supplied reaches the string.
         let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         if only_active {
             q = q
                 .bind(JobState::Pending.as_str())
-                .bind(JobState::Running.as_str());
+                .bind(JobState::Running.as_str())
+                .bind(JobState::Canceled.as_str());
         }
         let rows = q
             .bind(limit as i64)
@@ -544,6 +548,15 @@ mod tests {
             mid.finished_at_utc
         );
 
+        // Winding down is still active: the chrome and the Manage screen
+        // list it, and `is_active` agrees.
+        assert!(mid.is_active() && mid.is_stopping());
+        let active = store.list_jobs(true, 10).await.unwrap();
+        assert_eq!(
+            active.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(),
+            [job.id.as_str()]
+        );
+
         assert_eq!(store.recover_running_jobs().await.unwrap(), 1);
         let after = store.get_job(&job.id).await.unwrap().unwrap();
         assert_eq!(
@@ -552,6 +565,8 @@ mod tests {
             "still canceled, not failed"
         );
         assert!(after.finished_at_utc.is_some(), "…and now finished");
+        assert!(!after.is_active());
+        assert!(store.list_jobs(true, 10).await.unwrap().is_empty());
     }
 
     /// The disk-usage timeseries round-trips, and — the part worth

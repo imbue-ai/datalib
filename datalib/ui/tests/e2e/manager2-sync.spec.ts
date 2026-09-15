@@ -232,7 +232,7 @@ ${applets()}`;
     // resolves when the event is dispatched, not when the async handler
     // behind it finishes, so an assertion straight after it races the
     // enqueue. The banner is set by `runSource` between the POST
-    // returning and the job list being re-read, which is exactly the
+    // returning and the rows being refetched, which is exactly the
     // moment this test is about: the queue has the job, and the
     // question is what the rows say. (The recorder was already running,
     // so nothing is missed while this resolves — that is the point of
@@ -243,7 +243,17 @@ ${applets()}`;
     // render step is queued from the same first frame — before the
     // runner exists, let alone reaches it. This is the assertion a
     // download-only provider could not support, and the reason this
-    // spec is built on `pdf`.
+    // spec is built on `pdf`. The rows are the server's, refetched
+    // after the banner goes up, so the first frame is waited for
+    // rather than read off the banner — what is asserted is what that
+    // frame says.
+    await expect
+      .poll(async () => (await statusLog(page, "pdfs/render_markdown")).length, {
+        timeout: 10_000,
+        intervals: [50],
+        message: "the render row never repainted after the click",
+      })
+      .toBeGreaterThan(beforeDown);
     const downstream = (await statusLog(page, "pdfs/render_markdown")).slice(beforeDown);
     expect(
       statusWord(downstream[0]),
@@ -293,6 +303,7 @@ ${applets()}`;
       Failed: 2,
       Blocked: 2,
       Interrupted: 2,
+      Stopped: 2,
     };
     const rankOf = (frame: string) => {
       const s = statusWord(frame);

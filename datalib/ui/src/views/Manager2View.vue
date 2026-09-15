@@ -117,21 +117,12 @@ function clearBanner() {
   bannerJob.value = null;
 }
 
-/// Is this job still holding the runner: queued, running, or told to
-/// stop and not yet stopped? A cancel flips the row to `canceled` on
-/// request; the run behind it is over when the worker stamps
-/// `finished_at_utc`. The server's `job_active` says the same.
-function jobActive(j: SyncJob): boolean {
-  if (j.state === "pending" || j.state === "running") return true;
-  return j.state === "canceled" && !!j.started_at_utc && !j.finished_at_utc;
-}
-
 /// Take down a job-scoped banner once its job has stopped running. A
 /// job told to stop is still running until the worker says otherwise —
 /// the "Stopping…" banner is *for* that window.
 function retireBanner(job: SyncJob) {
   if (bannerJob.value !== job.id) return;
-  if (jobActive(job)) return;
+  if (job.active) return;
   clearBanner();
 }
 const busy = ref(false);
@@ -1579,7 +1570,7 @@ async function loadJobs() {
 /// Sync-everything button, and marks the window in which the runner's
 /// record has nothing to say yet: between the click and its first
 /// written state there is nothing there to read.
-const anyJobActive = computed(() => jobs.value.some(jobActive));
+const anyJobActive = computed(() => jobs.value.some((j) => j.active));
 
 const commitRows = freshest<ManageResponse>((m) => {
   manage.value = m;
@@ -1957,7 +1948,7 @@ function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
   const job = jobs.value.find((j) => j.id === e.id);
   if (job) retireBanner(job);
-  const active = !!job && jobActive(job);
+  const active = e.active;
   // A job ending is exactly when the size on screen is about to be
   // read and is about to be wrong — so that one asks for a fresh walk.
   // It is also the last chance for a while: the backend's own tick
@@ -1976,6 +1967,8 @@ function mergeJob(e: JobProgressEvent) {
     const next: SyncJob = {
       ...prev,
       state: e.state,
+      active: e.active,
+      stopping: prev.stopping && e.active,
       progress_msg: e.progress_msg,
       started_at_utc: prev.started_at_utc ?? (e.state === "running" ? now : null),
       finished_at_utc:
@@ -1991,6 +1984,8 @@ function mergeJob(e: JobProgressEvent) {
       kind: e.kind,
       source_ids: e.source_ids,
       state: e.state,
+      active: e.active,
+      stopping: false,
       progress_pct: null,
       progress_msg: e.progress_msg,
       error: null,
@@ -2770,6 +2765,8 @@ onUnmounted(() => {
 /* A run that died mid-step: not a failure anyone reported, but not a
    success either, so it reads as a warning rather than an error. */
 .m2-status-interrupted { color: var(--datalib-log-warn); }
+/* Stopped on request: the same "not done, nothing broke" as above. */
+.m2-status-stopped { color: var(--datalib-log-warn); }
 /* Both tick glyphs are green, and for the same reason the failure "!"
    is red: the column is icons now, so colour is doing the work the
    words used to. A grey tick beside a red exclamation reads as "no
@@ -2821,7 +2818,8 @@ onUnmounted(() => {
 .m2-seg-succeeded,
 .m2-seg-skipped-up-to-date { background: var(--datalib-log-ok); }
 .m2-seg-failed { background: var(--datalib-log-error); }
-.m2-seg-interrupted { background: var(--datalib-log-warn); }
+.m2-seg-interrupted,
+.m2-seg-stopped { background: var(--datalib-log-warn); }
 .m2-seg-blocked { background: var(--datalib-muted); }
 .m2-seg-running {
   background: var(--datalib-accent);

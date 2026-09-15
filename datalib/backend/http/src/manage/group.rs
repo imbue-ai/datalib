@@ -68,15 +68,15 @@ pub struct ChildStatus {
 
 /// The status a group row shows, and which child it is read from.
 /// Running if any child is running; failed if any child failed;
-/// otherwise the last step in pipeline order — the one whose state says
-/// how far the group's data got. A group with only applets reads its
-/// last applet. `children` must already be in pipeline order.
+/// stopped if any child was; otherwise the last step in pipeline order
+/// — the one whose state says how far the group's data got. A group
+/// with only applets reads its last applet. `children` must already be
+/// in pipeline order.
 pub fn group_status(children: &[ChildStatus]) -> Option<(StatusView, String)> {
-    if let Some(running) = children.iter().find(|c| c.status.key == "running") {
-        return Some(read(running));
-    }
-    if let Some(failed) = children.iter().find(|c| c.status.key == "failed") {
-        return Some(read(failed));
+    for key in ["running", "failed", "stopped"] {
+        if let Some(child) = children.iter().find(|c| c.status.key == key) {
+            return Some(read(child));
+        }
     }
     let last_step = children.iter().rfind(|c| c.kind == ChildKind::Step);
     last_step.or(children.last()).map(read)
@@ -248,6 +248,19 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(got.0.key, "failed");
+        assert_eq!(got.1, "s/ingest");
+    }
+
+    /// A stopped download reads through to its group the way a failed
+    /// one does: "blocked" on the render step after it would say less.
+    #[test]
+    fn group_status_is_stopped_when_a_child_was_stopped() {
+        let got = group_status(&[
+            child("s/ingest", "stopped", Step, None),
+            child("s/render_markdown", "blocked", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(got.0.key, "stopped");
         assert_eq!(got.1, "s/ingest");
     }
 
