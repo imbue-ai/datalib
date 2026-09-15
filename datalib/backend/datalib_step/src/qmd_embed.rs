@@ -25,19 +25,6 @@ pub struct Params {
     pub budget_minutes: f64,
 }
 
-/// What the step leaves in its own tree.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct EmbedState {
-    pub collection: String,
-    pub active: u64,
-    pub embedded: u64,
-    pub pending: u64,
-    pub chunks: u64,
-    pub complete: bool,
-    pub qmd_version: String,
-    pub embedded_at: String,
-}
-
 /// The error a run ends with when its budget ran out first. Classified
 /// as `incomplete`, which is not a failure (`hints::classify`).
 #[derive(Debug)]
@@ -57,10 +44,6 @@ impl std::fmt::Display for BudgetSpent {
 
 impl std::error::Error for BudgetSpent {}
 
-pub fn state_path(data_root: &Path, step: &str) -> PathBuf {
-    data_root.join(step).join("state.json")
-}
-
 struct StepProgress(datalib_etl::progress::Progress);
 
 impl EmbedProgress for StepProgress {
@@ -78,7 +61,6 @@ impl EmbedProgress for StepProgress {
 pub async fn run(
     data_root: &Path,
     env: &StepEnv,
-    now: &str,
     params: serde_json::Value,
     models_dir: Option<PathBuf>,
     emitter: &Emitter,
@@ -120,20 +102,9 @@ pub async fn run(
         "qmd_embed: done"
     );
 
-    let state = EmbedState {
-        collection: env.group.clone(),
-        active: outcome.gauge.active,
-        embedded: outcome.gauge.embedded(),
-        pending: outcome.gauge.pending,
-        chunks: outcome.gauge.chunks,
-        complete: outcome.complete,
-        qmd_version: qmd_version.to_string(),
-        embedded_at: now.to_string(),
-    };
-    let path = state_path(data_root, &env.step);
-    std::fs::create_dir_all(path.parent().expect("state.json has a parent"))?;
-    std::fs::write(&path, serde_json::to_vec_pretty(&state)?)
-        .with_context(|| format!("write {}", path.display()))?;
+    // As with `qmd_index`: the vectors live in the shared store, and the
+    // step's own tree is an empty directory.
+    std::fs::create_dir_all(data_root.join(&env.step))?;
 
     if !outcome.complete {
         return Err(BudgetSpent {

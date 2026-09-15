@@ -5,7 +5,7 @@
 //! collection qmd applies inside retrieval. The store itself is one
 //! file for the whole root (`unified_index/qmd_index/qmd/index.sqlite`),
 //! written by every group's `qmd_index` and `qmd_embed` step; the tree
-//! this step's id names, `<group>/qmd_index/`, holds its `state.json`.
+//! this step's id names, `<group>/qmd_index/`, is empty.
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -16,22 +16,6 @@ use sqlx::Row;
 
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
-
-/// What the step leaves in its own tree: enough for a reader of the
-/// data root to know what the collection holds without opening qmd's
-/// file.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct IndexState {
-    pub collection: String,
-    pub documents: u64,
-    pub version: String,
-    pub qmd_version: String,
-    pub indexed_at: String,
-}
-
-pub fn state_path(data_root: &Path, step: &str) -> PathBuf {
-    data_root.join(step).join("state.json")
-}
 
 /// A root indexed before per-source collections carries qmd's one
 /// `mirror` collection, which no group claims. Read from qmd's own
@@ -91,7 +75,6 @@ impl datalib_qmd_indexer::IndexProgress for StepProgress {
 pub async fn run(
     data_root: &Path,
     env: &StepEnv,
-    now: &str,
     models_dir: Option<PathBuf>,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
@@ -146,17 +129,10 @@ pub async fn run(
     // does — one tag covers both indexes however they are ordered.
     datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(data_root));
 
-    let state = IndexState {
-        collection: env.group.clone(),
-        documents: summary.documents,
-        version: summary.version.clone(),
-        qmd_version: qmd_version.to_string(),
-        indexed_at: now.to_string(),
-    };
-    let path = state_path(data_root, &env.step);
-    std::fs::create_dir_all(path.parent().expect("state.json has a parent"))?;
-    std::fs::write(&path, serde_json::to_vec_pretty(&state)?)
-        .with_context(|| format!("write {}", path.display()))?;
+    // The step's own tree holds nothing: what it wrote is a collection
+    // in the shared store. The directory still exists, so the tree the
+    // id names is there to be measured.
+    std::fs::create_dir_all(data_root.join(&env.step))?;
 
     Ok(vec![OutputClaim {
         path: env.step.clone(),

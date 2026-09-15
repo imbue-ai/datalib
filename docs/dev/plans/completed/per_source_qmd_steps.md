@@ -151,13 +151,10 @@ them.
 plus the applet.
 
 **The shared file.** Both steps write `index.sqlite`, which is not the
-tree either step's id names. The id-is-the-tree rule
-(`dag/README.md` §"A step is (group, function)") stays true in the
-useful sense: each step owns `<g>/qmd_index/` and `<g>/qmd_embed/` and
-writes a small `state.json` there (collection name, document count,
-version; pending/embedded counts, model, fingerprint, last session) —
-what the Manage screen's group row can read off the folder without
-opening qmd's file. The store itself stays where it is,
+tree either step's id names — those, `<g>/qmd_index/` and
+`<g>/qmd_embed/`, are empty directories, created so the tree the id
+names exists to be measured. (A first cut left a `state.json` in each;
+nothing read them, so they went.) The store itself stays where it is,
 `unified_index/qmd_index/qmd/index.sqlite` (`QMD_INDEX_REL`). That
 directory is spelled like a step tree and after this change no step is
 named that; moving it to `unified_index/qmd/` is cosmetic, costs a path
@@ -341,7 +338,7 @@ its `qmd_index` step.
 | piece | crate |
 |---|---|
 | Rust writer for one collection (`index_group`), pending query, embed loop with budget and lock detection (`embed_group`) | `qmd_indexer` (already shared by the fixture and `datalib-step`; gains an sqlx dependency, which it does not have today) |
-| `Function::QmdEmbed`, `qmd_index.rs` rewrite, new `qmd_embed.rs`, `state.json` | `datalib_step` |
+| `Function::QmdEmbed`, `qmd_index.rs` rewrite, new `qmd_embed.rs` | `datalib_step` |
 | `lock` key, `FailureKind::Incomplete` + `RunState` word, dispatch gate | `dag` |
 | `--embed` on the CLI, `--embed-groups` through `build_qmd_index.py` | `qmd_indexer/src/main.rs`, `tests/fixtures/` |
 | wizard, phases, labels, inputs regex, `DagRunState` union | `ui` |
@@ -365,8 +362,7 @@ its `qmd_index` step.
    the vocabulary (`DagRunState`, the status labels, the DAG view) and
    `step_protocol.md`.
 3. **Steps** — *built 2026-09-15*. `qmd_embed` and the per-source
-   `qmd_index` in `datalib-step`, each leaving a `state.json` in its
-   tree; the loader rejects the old global `unified_index/qmd_index`
+   `qmd_index` in `datalib-step`; the loader rejects the old global `unified_index/qmd_index`
    and names the migrator, which now rewrites it into the pair under
    every source it named; `--sync` accepts any step id, so a
    `qmd_embed` can be resumed on its own; every example config, the
