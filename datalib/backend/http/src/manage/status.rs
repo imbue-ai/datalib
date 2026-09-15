@@ -316,6 +316,24 @@ pub fn job_seeds(job: &SyncJobRow) -> Vec<String> {
         .collect()
 }
 
+/// Is this job still holding the runner: queued, running, or told to
+/// stop and not yet stopped? A cancel flips the row to `canceled` the
+/// moment it is asked for — that is how the worker learns to send
+/// SIGTERM — while the steps behind it go on checkpointing for up to
+/// the worker's grace period. The run is over when the worker stamps
+/// `finished_at_utc`, and not before.
+pub fn job_active(j: &SyncJobRow) -> bool {
+    if j.state == "pending" || j.state == "running" {
+        return true;
+    }
+    j.state == "canceled" && j.started_at_utc.is_some() && j.finished_at_utc.is_none()
+}
+
+/// Told to stop, and still winding down.
+pub fn job_stopping(j: &SyncJobRow) -> bool {
+    j.state == "canceled" && job_active(j)
+}
+
 /// step id → the queued-or-running job that has claimed it.
 pub fn claimed_by<'a>(
     steps: &[StepEdges],
@@ -324,7 +342,7 @@ pub fn claimed_by<'a>(
     let mut m: HashMap<String, &'a SyncJobRow> = HashMap::new();
     let dependents = dependents_of(steps);
     for job in jobs {
-        if job.state != "pending" && job.state != "running" {
+        if !job_active(job) {
             continue;
         }
         let seeds = job_seeds(job);
@@ -415,10 +433,14 @@ pub fn step_status(args: StatusArgs<'_>) -> StatusView {
 
     // Claimed, and the runner hasn't reached it. `current` being set at
     // all means it has — including `not_selected`, which is the runner
-    // saying this row is out of scope after all.
+    // saying this row is out of scope after all. But only the claiming
+    // job's own run can say so: a job's id is its run's id, and while
+    // some *other* job's run is in flight, its `not_selected` means that
+    // run left this step alone — not that the job queued behind it did.
+    let spoken_for = |claim: &SyncJobRow| run_in_flight.is_none_or(|r| r.run_id == claim.id);
     if let Some(claim) = args
         .claim
-        .filter(|c| current.is_none() && !reached_since(last, c))
+        .filter(|c| !(spoken_for(c) && current.is_some()) && !reached_since(last, c))
     {
         // "the sync of pdfs/raw" reads badly on pdfs/raw's own row, which
         // is the row most likely to be read. Name the sync only when it
@@ -431,7 +453,13 @@ pub fn step_status(args: StatusArgs<'_>) -> StatusView {
         };
         // Upstream steps first, because that is the specific answer;
         // the job itself is the fallback.
-        let detail = if !args.waiting_on.is_empty() {
+        let detail = if job_stopping(claim) {
+            let mut sentence = sync.clone();
+            if let Some(first) = sentence.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            format!("{sentence} is stopping; this step will not be reached.")
+        } else if !args.waiting_on.is_empty() {
             format!(
                 "Waiting for {} to finish, in {sync}.",
                 list_of(args.waiting_on)
@@ -644,6 +672,82 @@ mod tests {
         let s = status_in(&f, "b/ingest");
         assert_eq!(s.key, "succeeded");
         assert_eq!(s.at.as_deref(), Some(YESTERDAY));
+    }
+
+    /// "Sync a", then "Sync b" while a is still going: a's run walks
+    /// past b/ingest and reports it out of scope, which is true of
+    /// *a's* run. b's job is pending behind it, and its row has to say
+    /// so — this used to fall through to yesterday's Succeeded, under a
+    /// Stop button.
+    #[test]
+    fn a_step_queued_by_its_own_job_stays_queued_while_another_jobs_run_reports_it_not_selected() {
+        let mut a = job("running", true);
+        a.id = "job-a".into();
+        let mut b = job("pending", false);
+        b.id = "job-b".into();
+        b.source_ids = Some("b/ingest".into());
+        let b_done = last_run("r", YESTERDAY, Some(YESTERDAY), "succeeded");
+        let f = Frame {
+            jobs: vec![a.clone(), b],
+            run: Some(run("job-a", RUN_START, None, true)),
+            dag: dag(&[
+                ("a/ingest", rec(Some("running"), None)),
+                ("b/ingest", rec(Some("not_selected"), Some(b_done.clone()))),
+            ]),
+        };
+        let s = status_in(&f, "b/ingest");
+        assert_eq!(s.key, "queued");
+        assert!(s.detail.unwrap().contains("Waiting for this sync to start"));
+        assert_eq!(status_in(&f, "a/ingest").key, "running");
+
+        // The same `not_selected`, reported by the claiming job's *own*
+        // run, still means what it always did: out of scope, show the
+        // history. b/ingest is in job-a's closure only if job-a syncs
+        // everything.
+        a.source_ids = None;
+        let own = Frame {
+            jobs: vec![a],
+            run: Some(run("job-a", RUN_START, None, true)),
+            dag: dag(&[("b/ingest", rec(Some("not_selected"), Some(b_done)))]),
+        };
+        assert_eq!(status_in(&own, "b/ingest").key, "succeeded");
+    }
+
+    /// Stop flips the row to `canceled` at once; the runner is still
+    /// winding down until `finished_at_utc` lands. The rows stay
+    /// claimed through that window — under a Stopping face, not a Sync
+    /// one.
+    #[test]
+    fn a_job_told_to_stop_holds_its_claim_until_the_worker_stamps_it_finished() {
+        let mut stopping = job("canceled", true);
+        stopping.id = "job-a".into();
+        assert!(job_active(&stopping));
+        assert!(job_stopping(&stopping));
+        let jobs = [stopping.clone()];
+        assert_eq!(
+            claimed_by(&steps(), &jobs)
+                .get("a/render_markdown")
+                .map(|j| j.id.as_str()),
+            Some("job-a")
+        );
+        let f = Frame {
+            jobs: vec![stopping.clone()],
+            run: Some(run("job-a", RUN_START, None, true)),
+            dag: dag(&[]),
+        };
+        let s = status_in(&f, "a/render_markdown");
+        assert_eq!(s.key, "queued");
+        assert!(s.detail.unwrap().contains("is stopping"));
+
+        // Stamped: over, and the claim with it.
+        let mut stopped = stopping;
+        stopped.finished_at_utc = Some(RUN_END.into());
+        assert!(!job_active(&stopped));
+        assert!(claimed_by(&steps(), &[stopped]).is_empty());
+
+        // A pending job that was canceled never started anything to
+        // wind down: nothing to hold.
+        assert!(!job_active(&job("canceled", false)));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! (serde + anyhow), so the orchestrator can name [`PdfConfig`] without
 //! linking the provider.
 
-use datalib_source_common::{LocalPath, SourceCommon};
+use datalib_source_common::{byte_size, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The pdf-owned slice of a `pdf` source. The scan root is
@@ -26,11 +26,14 @@ pub struct PdfConfig {
     #[serde(default)]
     pub ignore: Vec<String>,
 
-    /// Skip files larger than this. A multi-gigabyte PDF is nearly
-    /// always a scanned book or a corrupt file, and either way we do
-    /// not want one document to stall a whole scan. `None` means no
-    /// ceiling.
-    #[serde(default = "default_max_bytes")]
+    /// Skip files larger than this — bytes, or a string like `"1 GB"`.
+    /// A multi-gigabyte PDF is nearly always a scanned book or a
+    /// corrupt file, and either way we do not want one document to
+    /// stall a whole scan. `None` means no ceiling.
+    #[serde(
+        default = "default_max_bytes",
+        deserialize_with = "byte_size::deserialize_opt"
+    )]
     pub max_bytes: Option<u64>,
 
     /// Run OCR over pages that carry no extractable text.
@@ -106,5 +109,17 @@ mod tests {
     fn max_bytes_defaults_to_512mib() {
         let c: PdfConfig = toml::from_str("").unwrap();
         assert_eq!(c.max_bytes, Some(512 * 1024 * 1024));
+    }
+
+    /// The knob reads as a person writes it: TOML's own `_` separators
+    /// on an integer, or a string with a unit.
+    #[test]
+    fn max_bytes_reads_integers_and_unit_strings() {
+        let c: PdfConfig = toml::from_str("max_bytes = 512_000_000").unwrap();
+        assert_eq!(c.max_bytes, Some(512_000_000));
+        let c: PdfConfig = toml::from_str(r#"max_bytes = "512 MiB""#).unwrap();
+        assert_eq!(c.max_bytes, Some(512 * 1024 * 1024));
+        let e = toml::from_str::<PdfConfig>(r#"max_bytes = "512 XB""#).unwrap_err();
+        assert!(e.to_string().contains("unknown unit"), "{e}");
     }
 }

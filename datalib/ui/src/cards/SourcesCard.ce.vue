@@ -37,7 +37,6 @@ import {
   type ManageResponse,
   type ManageRow,
   type SyncJob,
-  type SyncJobState,
   type JobProgressEvent,
 } from "@/api";
 import {
@@ -154,10 +153,21 @@ function clearBanner() {
   bannerJob.value = null;
 }
 
-/// Take down a job-scoped banner once its job has stopped running.
-function retireBanner(jobId: string, state: SyncJobState) {
-  if (bannerJob.value !== jobId) return;
-  if (state === "pending" || state === "running") return;
+/// Is this job still holding the runner: queued, running, or told to
+/// stop and not yet stopped? A cancel flips the row to `canceled` on
+/// request; the run behind it is over when the worker stamps
+/// `finished_at_utc`. The server's `job_active` says the same.
+function jobActive(j: SyncJob): boolean {
+  if (j.state === "pending" || j.state === "running") return true;
+  return j.state === "canceled" && !!j.started_at_utc && !j.finished_at_utc;
+}
+
+/// Take down a job-scoped banner once its job has stopped running. A
+/// job told to stop is still running until the worker says otherwise —
+/// the "Stopping…" banner is *for* that window.
+function retireBanner(job: SyncJob) {
+  if (bannerJob.value !== job.id) return;
+  if (jobActive(job)) return;
   clearBanner();
 }
 const busy = ref(false);
@@ -986,7 +996,7 @@ const commitJobs = freshest<SyncJob[]>((list) => {
     const j = list.find((x) => x.id === bannerJob.value);
     // A job that has fallen off the end of the queue we hold is not
     // running either, so the banner goes.
-    if (j) retireBanner(j.id, j.state);
+    if (j) retireBanner(j);
     else clearBanner();
   }
 });
@@ -1003,9 +1013,7 @@ async function loadJobs() {
 /// Sync-everything button, and marks the window in which the runner's
 /// record has nothing to say yet: between the click and its first
 /// written state there is nothing there to read.
-const jobActive = computed(() =>
-  jobs.value.some((j) => j.state === "pending" || j.state === "running"),
-);
+const anyJobActive = computed(() => jobs.value.some(jobActive));
 
 const commitRows = freshest<ManageResponse>((m) => {
   manage.value = m;
@@ -1366,8 +1374,9 @@ async function stopJob(jobId: string) {
 /// refetch sees it.
 function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
-  retireBanner(e.id, e.state);
-  const active = e.state === "pending" || e.state === "running";
+  const job = jobs.value.find((j) => j.id === e.id);
+  if (job) retireBanner(job);
+  const active = !!job && jobActive(job);
   // A job ending is exactly when the size on screen is about to be
   // read and is about to be wrong — so that one asks for a fresh walk.
   // It is also the last chance for a while: the backend's own tick
@@ -1470,9 +1479,9 @@ onUnmounted(() => {
       <div class="m2-head-actions">
         <button
           class="m2-btn m2-runall"
-          :disabled="busy || !!parseError || !!configError || jobActive || rows.length === 0"
+          :disabled="busy || !!parseError || !!configError || anyJobActive || rows.length === 0"
           :title="
-            jobActive
+            anyJobActive
               ? 'A sync is already running.'
               : rows.length === 0
                 ? 'Nothing configured yet.'

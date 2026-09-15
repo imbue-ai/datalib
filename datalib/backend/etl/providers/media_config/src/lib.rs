@@ -2,7 +2,7 @@
 //! (serde + anyhow), so the orchestrator can name [`MediaConfig`]
 //! without linking the provider.
 
-use datalib_source_common::{LocalPath, SourceCommon};
+use datalib_source_common::{byte_size, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The media-owned slice of a `media` source. The scan root is
@@ -26,13 +26,17 @@ pub struct MediaConfig {
     #[serde(default)]
     pub ignore: Vec<String>,
 
-    /// Skip files larger than this entirely — no row at all.
-    #[serde(default)]
+    /// Skip files larger than this entirely — no row at all. Bytes, or
+    /// a string like `"4 GB"`.
+    #[serde(default, deserialize_with = "byte_size::deserialize_opt")]
     pub max_bytes: Option<u64>,
 
     /// Give up on the metadata-excluding payload hash above this size,
     /// leaving `media_items.payload_blake3` NULL.
-    #[serde(default = "default_payload_max_bytes")]
+    #[serde(
+        default = "default_payload_max_bytes",
+        deserialize_with = "byte_size::deserialize_opt"
+    )]
     pub payload_max_bytes: Option<u64>,
 
     /// Index `.m3u` / `.m3u8` playlists found in the tree.

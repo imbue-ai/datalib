@@ -62,7 +62,7 @@ import {
   BYTE_UNITS,
   DEFAULT_BYTE_UNIT,
   UNIT_BYTES,
-  joinBytes,
+  parseByteSize,
   splitBytes,
   type ByteUnit,
 } from "@/config/byteSize";
@@ -224,10 +224,11 @@ function selectOptions(f: Field & { kind: "select" }): { value: string; label: s
   return [...f.options, { value: current, label: `${current} (not a known value)` }];
 }
 
-/// The unit each `bytes` field is shown in. Only the wizard knows it:
-/// the config holds plain bytes, and `values` does too, so a stored
-/// value opens on whichever unit shows it as a whole number and an
-/// empty one on the default.
+/// The unit each `bytes` field is shown in. A `bytes` value is the
+/// string the config holds ("5 MB"); the unit is read off it when it is
+/// one the dropdown offers, else chosen so the number shows whole, and
+/// an empty field starts on the default. Kept apart from `values` so an
+/// empty field still remembers the unit picked for it.
 const byteUnits = ref<Record<string, ByteUnit>>({});
 
 function seed(entry: CatalogEntry, steps?: SourceSteps) {
@@ -235,8 +236,9 @@ function seed(entry: CatalogEntry, steps?: SourceSteps) {
   byteUnits.value = {};
   for (const f of entry.fields ?? []) {
     if (f.kind !== "bytes") continue;
-    const v = values.value[f.target];
-    byteUnits.value[f.target] = typeof v === "number" ? splitBytes(v).unit : DEFAULT_BYTE_UNIT;
+    const parsed = parseByteSize(String(values.value[f.target] ?? ""));
+    byteUnits.value[f.target] =
+      parsed === null ? DEFAULT_BYTE_UNIT : (parsed.unit ?? splitBytes(parsed.bytes).unit);
   }
 }
 
@@ -244,14 +246,11 @@ function byteUnit(f: Field): ByteUnit {
   return byteUnits.value[f.target] ?? DEFAULT_BYTE_UNIT;
 }
 function byteAmount(f: Field): string {
-  const v = Number(values.value[f.target]);
-  if (values.value[f.target] === "" || !Number.isFinite(v)) return "";
-  return String(v / UNIT_BYTES[byteUnit(f)]);
+  const parsed = parseByteSize(String(values.value[f.target] ?? ""));
+  return parsed === null ? "" : String(parsed.bytes / UNIT_BYTES[byteUnit(f)]);
 }
 function setByteAmount(f: Field, text: string) {
-  const amount = Number(text);
-  values.value[f.target] =
-    text.trim() === "" || !Number.isFinite(amount) ? "" : joinBytes(amount, byteUnit(f));
+  values.value[f.target] = text.trim() === "" ? "" : `${text.trim()} ${byteUnit(f)}`;
 }
 /// Changing the unit keeps the number — "5 MB" becomes "5 GB", the way a
 /// phone's data-limit dialog does it — rather than re-expressing the
@@ -259,7 +258,7 @@ function setByteAmount(f: Field, text: string) {
 function setByteUnit(f: Field, unit: ByteUnit) {
   const amount = byteAmount(f);
   byteUnits.value[f.target] = unit;
-  if (amount !== "") values.value[f.target] = joinBytes(Number(amount), unit);
+  if (amount !== "") values.value[f.target] = `${amount} ${unit}`;
 }
 
 if (props.editing) seed(props.editing.entry, props.editing.steps);

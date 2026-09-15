@@ -553,15 +553,25 @@ impl RowCtx<'_> {
     /// the Sync column draws.
     fn sync_action(&self, id: &str, run_blocked: Option<String>) -> (Vec<Action>, Option<String>) {
         if let Some(job) = self.claims.get(id) {
-            let label = match job.source_ids.as_deref().filter(|s| !s.is_empty()) {
-                Some(ids) => format!("Stop the sync of {ids}"),
-                None => "Stop the sync in progress".to_string(),
+            let of = match job.source_ids.as_deref().filter(|s| !s.is_empty()) {
+                Some(ids) => format!("the sync of {ids}"),
+                None => "the sync in progress".to_string(),
+            };
+            // Once asked to stop there is nothing more to ask: the steps
+            // in flight are checkpointing, and the face says so until
+            // they exit.
+            let stopping = status::job_stopping(job);
+            let label = if stopping {
+                format!("Stopping {of}")
+            } else {
+                format!("Stop {of}")
             };
             let stop = Action {
                 id: "stop".into(),
+                enabled: !stopping,
+                disabled_reason: stopping
+                    .then(|| format!("{label} \u{2014} its steps are checkpointing and exiting.")),
                 label,
-                enabled: true,
-                disabled_reason: None,
                 danger: true,
             };
             return (vec![stop], Some(job.id.clone()));

@@ -24,6 +24,8 @@
 // another tab.
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
+
+import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
 import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
 
@@ -409,10 +411,11 @@ export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
 
 export type FieldValues = Record<string, unknown>;
 
-/// `bytes` is an `int` with a different control: the value it holds
-/// and writes is the same plain number.
-function isNumeric(field: Field): field is Field & { kind: "int" | "bytes" } {
-  return field.kind === "int" || field.kind === "bytes";
+/// A `bytes` value is the string a person would write — "5 MB" — and
+/// is written as one. A number reaching here (the catalog's default, a
+/// config that says `5_000_000`) is put into that form first.
+function bytesText(value: unknown): string {
+  return typeof value === "number" ? formatBytes(value) : String(value ?? "");
 }
 
 /// The option a stored value corresponds to, or the value unchanged.
@@ -443,9 +446,13 @@ export function seedFieldValues(entry: CatalogEntry, steps?: SourceSteps): Field
           ? ((existing as string[]) ?? [])
           : field.kind === "select"
             ? matchOption(field.options, existing)
-            : existing;
-    } else if (isNumeric(field) && field.default !== undefined && !steps) {
+            : field.kind === "bytes"
+              ? bytesText(existing)
+              : existing;
+    } else if (field.kind === "int" && field.default !== undefined && !steps) {
       next[field.target] = field.default;
+    } else if (field.kind === "bytes" && field.default !== undefined && !steps) {
+      next[field.target] = formatBytes(field.default);
     } else if (field.kind === "bool") {
       next[field.target] = field.default ?? false;
     } else if (field.kind === "select") {
@@ -519,8 +526,9 @@ function jsonValue(field: Field | undefined, value: unknown): unknown {
     case "bool":
       return !!value;
     case "int":
-    case "bytes":
       return Number(value);
+    case "bytes":
+      return bytesText(value);
     case "string_list":
       return value as string[];
     default:
@@ -574,7 +582,8 @@ function isSet(field: Field, value: unknown): boolean {
   if (value === undefined || value === null) return false;
   if (field.kind === "string_list") return Array.isArray(value) && value.length > 0;
   if (field.kind === "text" || field.kind === "date") return String(value).trim() !== "";
-  if (isNumeric(field)) return value !== "" && Number.isFinite(Number(value));
+  if (field.kind === "int") return value !== "" && Number.isFinite(Number(value));
+  if (field.kind === "bytes") return parseByteSize(bytesText(value)) !== null;
     // A select normally holds one of its options, so it is always written. The
     // membership test is deliberately *not* here: a hand-edited config can hold
     // a value the dropdown doesn't know, and dropping it on save would silently
@@ -598,8 +607,9 @@ function tomlValue(field: Field | undefined, value: unknown): string {
     case "bool":
       return value ? "true" : "false";
     case "int":
-    case "bytes":
       return String(Number(value));
+    case "bytes":
+      return quote(bytesText(value));
     case "string_list":
       return `[${(value as string[]).map(quote).join(", ")}]`;
     default:

@@ -47,6 +47,10 @@
 # are set per source under the download step's `params.common` (see
 # the slack steps below for an example).
 #
+# Any `*_bytes` knob takes an integer of bytes (`5_000_000` — TOML
+# allows the separators) or a string with a unit: "5 MB", "512 KiB".
+# KB/MB/GB are ×1000, KiB/MiB/GiB ×1024.
+#
 # REDACT: several stanzas below carry device-history secrets (yolink) or
 # would, if filled in, hold tokens/keys. Never commit a real one.
 
@@ -174,7 +178,7 @@ group = "slack"
 function = "ingest"
 
 [steps.params.common]
-blob_size_limit_bytes = 1000000  # skip file/media uploads larger than 1 MB
+blob_size_limit_bytes = "1 MB"  # skip file/media uploads larger than this
 # Bound how hard the download retries upstream rate limits before
 # giving up. The shared HTTP layer always respects a `Retry-After`
 # on a 429 (and otherwise backs off exponentially); these two knobs
@@ -900,7 +904,7 @@ function = "ingest"
 # Gitignore-shaped patterns, on top of any .gitignore files in the tree.
 # ignore = ["node_modules/**", "**/.Trash/**"]
 # Skip anything larger than this (default 512 MiB).
-# max_bytes = 536870912
+# max_bytes = "512 MiB"
 [steps.params.fswalk]
 path = "~/Documents"
 
@@ -957,7 +961,7 @@ function = "ingest"
 # No indexing ceiling by default — a multi-gigabyte video is normal.
 # max_bytes = 0                       # (0 is rejected; omit for no limit)
 # Give up on the payload hash above this and leave it NULL (default 8 GiB).
-# payload_max_bytes = 8589934592
+# payload_max_bytes = "8 GiB"
 # playlists = true                    # default; false skips .m3u/.m3u8
 # Skip cloud placeholders (Dropbox online-only, macOS dataless files) rather
 # than triggering a multi-gigabyte materialization. Default true; turn it off
