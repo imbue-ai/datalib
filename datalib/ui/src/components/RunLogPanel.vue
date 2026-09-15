@@ -4,6 +4,8 @@
 // a picker for the other runs the step took part in, since "what did
 // it do last time" is the question right after "what is it doing". The
 // picker's last entry is every run at once, with a column saying which.
+// The same grid, opened on every run with `process:http` typed in,
+// is the server's own log: the store holds that too.
 //
 // The search box is the same query bar the unified grid has —
 // `level:warn -target:sqlx "history"` — read by the server, so a query
@@ -11,9 +13,9 @@
 // token to it the same way there.
 //
 // The tail is a cursor, not a stream: the store assigns each line a
-// monotone `seq`, and each `dag_changed` frame (the runner touched the
-// store) asks for the lines after the last one seen. A run that has
-// finished is read once.
+// monotone `seq`, and each `run_store_changed` frame (someone wrote the
+// store — the runner, or the server itself) asks for the lines after
+// the last one seen. A run that has finished is read once.
 import { computed, onMounted, onUnmounted, ref, shallowRef } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
@@ -61,6 +63,9 @@ const props = defineProps<{
   step: string | null;
   /// Whether that run may still be writing: tail while true.
   live: boolean;
+  /// What the query bar starts with — `process:http` for the server's
+  /// log. Editable like anything typed there.
+  initialQuery?: string;
 }>();
 
 const emit = defineEmits<{
@@ -91,7 +96,7 @@ const live = computed(() => {
 const stepOnly = ref(true);
 /// The query bar. Sent to the server as typed; a change reloads from
 /// the start, since the lines it drops are exactly the ones wanted back.
-const query = ref("");
+const query = ref(props.initialQuery ?? "");
 let queryTimer: ReturnType<typeof setTimeout> | null = null;
 const lines = shallowRef<RunLogLine[]>([]);
 const busy = ref(false);
@@ -239,6 +244,15 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     tooltipField: "run_id",
   },
   {
+    headerName: "Process",
+    field: "process",
+    width: 90,
+    // One step's lines are all the runner's; the column says something
+    // only once the server's can be in the grid too.
+    hide: stepOnly.value && !!props.step,
+    filter: true,
+  },
+  {
     headerName: "Step",
     field: "step",
     width: 180,
@@ -292,15 +306,16 @@ const defaultColDef: ColDef<RunLogLine> = {
   enableRowGroup: true,
 };
 
-/// Grouping by run, by level, by target — the questions a log answers
-/// once it holds more than one run. Groups open expanded: the point is
+/// Grouping by run, by process, by level, by target — the questions a
+/// log answers once it holds more than one run. Groups open expanded: the point is
 /// to organise the lines, not to hide them, and the counts on the group
 /// rows read the same either way.
 const groupOptions = {
   rowGroupPanelShow: "always" as const,
   groupDefaultExpanded: -1,
   localeText: {
-    rowGroupColumnsEmptyMessage: "Drag a column here to group the lines by it — Run, Level, Target",
+    rowGroupColumnsEmptyMessage:
+      "Drag a column here to group the lines by it — Run, Process, Level, Target",
   },
   autoGroupColumnDef: { minWidth: 220 } as ColDef<RunLogLine>,
 };
@@ -315,6 +330,7 @@ function onGridReady(e: GridReadyEvent<RunLogLine>) {
 // a column with none, like Time, offers nothing.
 const QUERY_KEYS: Partial<Record<keyof RunLogLine, string>> = {
   run_id: "run",
+  process: "process",
   step: "step",
   level: "level",
   stream: "stream",
@@ -359,7 +375,7 @@ onMounted(() => {
   void loadRuns();
   unsubscribe = subscribeLive({
     root: (e) => {
-      if (e.kind === "dag_changed" && live.value) void load(false);
+      if (e.kind === "run_store_changed" && live.value) void load(false);
     },
     resync: () => {
       void loadRuns();

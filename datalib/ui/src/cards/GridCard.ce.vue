@@ -1361,7 +1361,7 @@ const gridOptions: GridOptions<SearchRow> = {
      so the percentage resolves after all. The assertion guards the
      surface (it fails the moment that stops being true); the rule stays
      because it is correct independent of what an ancestor happens to
-     do. The same pattern under `.m2-grid` in views/Manager2View.vue —
+     do. The same pattern under `.m2-grid` in cards/sourcesCard.css —
      flex-sized, no positioned ancestor — did collapse, to 2px, and its
      spec does fail without the fix. */
   position: absolute;

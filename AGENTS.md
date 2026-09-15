@@ -93,12 +93,21 @@ reference doc it relates to.
 - [`docs/dev/plans/completed/logs_and_metrics.md`](docs/dev/plans/completed/logs_and_metrics.md)
   — *agreed plan (2026-09-11), built in full (2026-09-14)*: one
   plain-SQLite run store (`system/runs.sqlite`, tables in
-  `app_schema::runs`) written by the runner alone, holding every run's
-  step states, log lines and metrics; progress reported as absolute
-  `metric` events rather than a percentage; queue depth per step from
-  the rows each producer seals; rates and stall detection derived
-  from the samples. Read it before touching how a step reports
-  progress, how the Manage screen shows a run, or `datalib_runs`.
+  `app_schema::runs`) holding every run's step states, log lines and
+  metrics; progress reported as absolute `metric` events rather than
+  a percentage; queue depth per step from the rows each producer
+  seals; rates and stall detection derived from the samples. Read it
+  before touching how a step reports progress, how the Manage screen
+  shows a run, or `datalib_runs`. Since 2026-09-15 the `log` table is
+  also the app server's own log: `datalib-http` installs
+  `datalib_runs::StoreLayer`, a `tracing` layer that writes every
+  event as a row with no `run_id` and `process = http` (the runner's
+  rows say `dag`), and the Manage screen's **Server log** button is
+  the same grid as a step's log opened on `process:http`. The one
+  rule that came with it: a `runs.sqlite` write is a
+  `run_store_changed` frame, not `dag_changed`, and the Manage
+  screen acts on it only while a run is live — otherwise a refetch
+  that logged a line would trigger the next refetch, forever.
 - [`docs/dev/plans/streaming_steps_plan.md`](docs/dev/plans/streaming_steps_plan.md)
   — *plan*, partly built: how to build the above, measured against the
   tree, with each step marked done or not. Read it before touching how
@@ -881,15 +890,19 @@ Where the stores live under a data root:
 <data_root>/system/jobs.doltlite_db             the sync job queue
 <data_root>/system/usage.doltlite_db            bytes-on-disk over time
 <data_root>/system/runs.sqlite                  every run's step states, log lines and
-                                                metrics (plain SQLite, not doltlite —
-                                                any sqlite3 opens it)
+                                                metrics, plus the app server's own log
+                                                (plain SQLite, not doltlite — any
+                                                sqlite3 opens it)
 ```
 
 One writer per file, and it is load-bearing: doltlite's working set is
 per *file* and shared across processes, so two writers on one file
 commit each other's in-flight rows. The `grid_index` step owns the
 index; `datalib-http` owns feedback, jobs and usage; the applet only
-reads.
+reads. `runs.sqlite` is the exception because it is not doltlite: it
+is plain SQLite in WAL mode, and the runner and `datalib-http` both
+write it (the runner its runs, the server its own log), which SQLite's
+own locking makes ordinary.
 
 `usage.doltlite_db` is the one store nothing ever commits. It is a
 timeseries — `datalib-http` walks the root every five seconds *while a

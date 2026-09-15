@@ -28,6 +28,9 @@ tokio = { workspace = true, features = ["process", "sync", "time", "fs", "io-uti
 # artifact versions when a step doesn't report its own.
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 tracing = "0.1"
+# The binary's own lines go into the run store through
+# `datalib_runs::StoreLayer`; the filter is `RUST_LOG`'s grammar.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = { workspace = true }
 # Signal forwarding to step subprocesses (kill(2)); already pinned
 # transitively.

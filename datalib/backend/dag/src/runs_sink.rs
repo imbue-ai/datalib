@@ -7,7 +7,7 @@
 //! deltas would lose work.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
 
 use datalib_runs::store::{now_split, split_stamp};
 use datalib_runs::{
@@ -29,7 +29,7 @@ struct Acc {
 
 /// An [`EventSink`] that keeps the run store current.
 pub struct RunStoreSink {
-    writer: RunWriter,
+    writer: Arc<RunWriter>,
     steps: Mutex<HashMap<StepId, Acc>>,
 }
 
@@ -50,9 +50,22 @@ impl RunStoreSink {
         retention: Retention,
     ) -> Option<Self> {
         Some(Self {
-            writer: RunWriter::start(data_root, run_id, started_at_utc, retention)?,
+            writer: Arc::new(RunWriter::start(
+                data_root,
+                run_id,
+                started_at_utc,
+                retention,
+            )?),
             steps: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// For the runner's own `tracing` lines, through
+    /// [`datalib_runs::StoreLayer`]: they land in the run with no step.
+    /// Weak, so the global subscriber never keeps the writer — and its
+    /// final flush — from happening when this sink is dropped.
+    pub fn log_sink(&self) -> Weak<RunWriter> {
+        Arc::downgrade(&self.writer)
     }
 
     fn update(&self, step: &StepId, f: impl FnOnce(&mut Acc)) {
