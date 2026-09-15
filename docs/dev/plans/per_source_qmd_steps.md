@@ -103,6 +103,17 @@ them.
    this mac's GPU (CI is CPU-only and the fixture's embed action is
    ~90s). Model load is ~2–3s per `qmd embed` invocation.
 
+9. **`qmd collection add` indexes the tree as it registers it**
+   (`collectionAdd` → `indexFiles`, `qmd.ts:1851`), and a collection is
+   a YAML entry in `<XDG_CONFIG_HOME>/qmd/index.yml` — with the data
+   root's *absolute* path — that qmd syncs into `store_collections` on
+   every start. So registering a new source costs one qmd-side scan
+   before our writer's first pass, which then finds every row
+   unchanged (the identity claim from qmd's side; `index_group_test`
+   pins it). Writing the YAML entry ourselves would skip that first
+   scan; not worth the coupling until a source is large enough to
+   notice.
+
 ## The design
 
 ### Two functions per source, one shared store
@@ -337,13 +348,13 @@ its `qmd_index` step.
 
 ## Slices
 
-1. **Library.** `qmd_indexer::index_group` (Rust writer) and
-   `embed_group` (loop, budget, lock detection, pending query), with a
-   test that writes rows, runs `qmd update`, and asserts `unchanged`
-   (the byte-identity claim in finding 2) — plus the two-embeds test
-   that pins qmd's silent skip so a version bump that changes the
-   message is caught. `run_index` composes them; the fixture and the
-   global step keep working unchanged. Ships alone.
+1. **Library** — *built 2026-09-15*. `qmd_indexer::index_one_group`
+   (the Rust writer, `src/store.rs`) and `embed_group` (loop, budget,
+   lock, gauge, `src/embed.rs`), with `tests/index_group.rs` pinning
+   the identity claim in both directions, the scoping of `embed -c`,
+   the exact busy line qmd prints, and that the loop sees through its
+   exit 0. `run_index` composes them, so the fixture and the global
+   step run on the new writer already; the CLI takes `--embed-group`.
 2. **Runner.** `lock` key, `Incomplete`, the dispatch gate; unit tests
    in `scheduler.rs`.
 3. **Steps.** `qmd_embed` function, `qmd_index` rewrite,

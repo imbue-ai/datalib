@@ -113,10 +113,9 @@ pub async fn run(
     if let Some(d) = models_dir {
         opts.models_dir = d;
     }
-    // run_index shells out to qmd; blocking work.
-    let outcome = tokio::task::spawn_blocking(move || datalib_qmd_indexer::run_index(&opts))
+    let outcome = datalib_qmd_indexer::run_index(&opts)
         .await
-        .context("qmd task panicked")??;
+        .context("qmd index")?;
     tracing::info!(index = %outcome.index_path.display(), "qmd: done");
     // The index rebuilds from the render_markdown trees, so cache-aware
     // backups (`restic --exclude-caches` etc.) may skip it. Tag the

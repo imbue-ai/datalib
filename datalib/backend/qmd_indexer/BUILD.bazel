@@ -4,7 +4,11 @@ exports_files(["Cargo.toml"])
 
 rust_library(
     name = "datalib_qmd_indexer",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/embed.rs",
+        "src/lib.rs",
+        "src/store.rs",
+    ],
     crate_name = "datalib_qmd_indexer",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
@@ -28,16 +32,60 @@ rust_library(
     # Before adding a crate here: put the helper in `datalib_runtime` (or
     # re-export it through there) instead. Adding a dep is the move that
     # quietly undoes all of this.
+    #
+    # The third-party crates below are pinned by the lockfile and never
+    # edited, so they cost one re-embed when the pin moves and nothing
+    # per PR. sqlx is how the index is written (this crate is qmd's
+    # writer for one collection — see src/store.rs), and it is what
+    # links the doltlite amalgamation every other binary uses, whose
+    # FTS5 is what makes qmd's triggers fire.
     deps = [
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:walkdir",
     ],
 )
 
 rust_test(
     name = "qmd_indexer_unittests",
     crate = ":datalib_qmd_indexer",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
+# The claim the per-source index rests on — that a collection this crate
+# writes is one qmd itself would report `unchanged` — plus the two qmd
+# behaviors the embed loop reads off qmd's output. Needs node, the qmd
+# tree and the embedding model, all as bazel inputs (see the same
+# arrangement in //datalib/backend/unified_index:qmd_daemon_scope_test).
+rust_test(
+    name = "index_group_test",
+    size = "large",
+    srcs = ["tests/index_group.rs"],
+    data = [
+        "//tests/fixtures:ingested/qmd_md.tar",
+        "@nodejs_host//:node_bin",
+        "//third-party/qmd/runtime:qmd_package_dir",
+        "//third-party/qmd/runtime:qmd_tree",
+        "@qmd_model_embeddinggemma//file",
+    ],
+    edition = "2021",
+    env = {
+        "QMD_TEST_NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+        "QMD_TEST_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+        "QMD_TEST_EMBED_MODEL_RLOC": "$(rlocationpath @qmd_model_embeddinggemma//file)",
+    },
+    deps = [
+        ":datalib_qmd_indexer",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
 )
 
 rust_binary(
@@ -48,5 +96,6 @@ rust_binary(
     deps = [
         ":datalib_qmd_indexer",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:tokio",
     ],
 )

@@ -1,10 +1,18 @@
-//! Drive the `qmd` CLI to (re)build a BM25 + embedding index over the
-//! rendered conversation markdown tree at a given root.
+//! The qmd index over the rendered markdown trees at a data root: one
+//! collection per group, written by [`store::index_group`] and embedded
+//! by [`embed::embed_group`]. [`run_index`] composes the two over every
+//! group for the fixture build and the standalone CLI.
+
+pub mod embed;
+pub mod store;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use datalib_obs::status_line;
+
+pub use embed::{embed_group, EmbedOptions, EmbedOutcome, EmbedProgress, NoEmbedProgress};
+pub use store::{EmbedGauge, GroupIndexSummary, IndexProgress, NoIndexProgress};
 
 /// Re-export of the ONE canonical qmd pin (`datalib_runtime::qmd`) — a
 /// re-export rather than a literal so this crate *cannot* drift from the
@@ -56,6 +64,9 @@ pub fn discover_groups(root: &Path) -> Result<Vec<String>> {
 pub struct IndexOptions {
     pub root: PathBuf,
     pub embed: bool,
+    /// Which of `groups` to embed. `None` embeds them all; the fixture
+    /// names two, so its embed action covers a fraction of the corpus.
+    pub embed_groups: Option<Vec<String>>,
     pub qmd_version: String,
     /// One qmd collection per group, named after the group. Scoping a
     /// search to one source is then a `collections` argument qmd applies
@@ -78,6 +89,7 @@ impl IndexOptions {
         Self {
             root: root.into(),
             embed: true,
+            embed_groups: None,
             qmd_version: DEFAULT_QMD_VERSION.to_string(),
             groups: Vec::new(),
             retire_collections: Vec::new(),
@@ -132,14 +144,62 @@ pub fn models_present(models_dir: &Path) -> bool {
 pub struct IndexOutcome {
     pub index_path: PathBuf,
     pub status_output: Option<String>,
+    pub groups: Vec<GroupIndexSummary>,
 }
 
-/// Run an incremental qmd index pass over every group's `render_markdown/`
-/// tree under `<root>`, one collection per group. Registering a
-/// collection is idempotent, so this reconciles rather than assuming a
-/// first run: a source added after the index was built gets its
-/// collection here.
-pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
+/// Make sure the store directory and its `models` symlink exist, and
+/// return the store's path. Every writer goes through here first.
+pub fn prepare_store(root: &Path, models_dir: &Path) -> Result<PathBuf> {
+    let qmd_dir = datalib_runtime::qmd::qmd_state_dir(root);
+    std::fs::create_dir_all(&qmd_dir)
+        .with_context(|| format!("failed to create {}", qmd_dir.display()))?;
+    std::fs::create_dir_all(models_dir)
+        .with_context(|| format!("failed to create models dir {}", models_dir.display()))?;
+    ensure_models_symlink(&qmd_dir, models_dir)?;
+    Ok(datalib_runtime::qmd::qmd_index_path(root))
+}
+
+/// Register `group`'s collection (idempotent — this is also what creates
+/// the store on a fresh root) and bring its rows in line with the
+/// group's rendered tree.
+pub async fn index_one_group(
+    root: &Path,
+    group: &str,
+    qmd_version: &str,
+    progress: &dyn IndexProgress,
+) -> Result<GroupIndexSummary> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("root does not exist: {}", root.display()))?;
+    let cache_home = datalib_runtime::qmd::qmd_cache_home(&root);
+    let root_arg = root.to_str().context("root is not valid UTF-8")?;
+    let mask = mask_for_group(group);
+    ensure_collection(
+        &cache_home,
+        qmd_version,
+        &[
+            "collection",
+            "add",
+            root_arg,
+            "--name",
+            group,
+            "--mask",
+            &mask,
+        ],
+    )?;
+    let index_path = datalib_runtime::qmd::qmd_index_path(&root);
+    let pool = store::open_rw(&index_path).await?;
+    let tree = root.join(group).join("render_markdown");
+    let result = store::index_group(&pool, group, &root, &tree, qmd_version, progress).await;
+    pool.close().await;
+    result
+}
+
+/// Index every group under `<root>`, one collection per group, then
+/// embed the ones asked for. Registering a collection is idempotent, so
+/// this reconciles rather than assuming a first run: a source added
+/// after the index was built gets its collection here.
+pub async fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     let root = opts
         .root
         .canonicalize()
@@ -151,14 +211,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     // every group's `render_markdown/`.
     let cache_home = datalib_runtime::qmd::qmd_cache_home(&root);
     let qmd_dir = datalib_runtime::qmd::qmd_state_dir(&root);
-    std::fs::create_dir_all(&qmd_dir)
-        .with_context(|| format!("failed to create {}", qmd_dir.display()))?;
-
-    std::fs::create_dir_all(&opts.models_dir)
-        .with_context(|| format!("failed to create models dir {}", opts.models_dir.display()))?;
-    ensure_models_symlink(&qmd_dir, &opts.models_dir)?;
-
-    let index_path = qmd_dir.join("index.sqlite");
+    let index_path = prepare_store(&root, &opts.models_dir)?;
     let first_run = !index_path.exists();
 
     status_line!("[qmd-indexer] root        = {}", root.display());
@@ -185,24 +238,18 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
         if first_run { "create" } else { "incremental" }
     );
 
-    let root_arg = root.to_str().context("root is not valid UTF-8")?;
+    let mut groups = Vec::with_capacity(opts.groups.len());
     for group in &opts.groups {
-        let mask = mask_for_group(group);
-        ensure_collection(
-            &cache_home,
-            &opts.qmd_version,
-            &[
-                "collection",
-                "add",
-                root_arg,
-                "--name",
-                group,
-                "--mask",
-                &mask,
-            ],
-        )?;
+        let summary = index_one_group(&root, group, &opts.qmd_version, &NoIndexProgress).await?;
+        status_line!(
+            "[qmd-indexer] {group}: {} new, {} updated, {} unchanged, {} removed",
+            summary.indexed,
+            summary.updated,
+            summary.unchanged,
+            summary.removed
+        );
+        groups.push(summary);
     }
-    run_qmd(&cache_home, &opts.qmd_version, &["update"])?;
 
     // Retiring a collection is destructive and has to come *after* the
     // indexing pass above. `qmd collection remove` deletes that
@@ -233,7 +280,37 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     }
 
     if opts.embed {
-        run_qmd(&cache_home, &opts.qmd_version, &["embed"])?;
+        let to_embed: Vec<&String> = match &opts.embed_groups {
+            Some(named) => opts.groups.iter().filter(|g| named.contains(g)).collect(),
+            None => opts.groups.iter().collect(),
+        };
+        status_line!(
+            "[qmd-indexer] embedding   = {}",
+            to_embed
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        for group in to_embed {
+            let eopts = EmbedOptions {
+                root: root.clone(),
+                group: group.clone(),
+                qmd_version: opts.qmd_version.clone(),
+                budget: None,
+                pull_if_missing: false,
+                models_dir: opts.models_dir.clone(),
+            };
+            let outcome =
+                tokio::task::spawn_blocking(move || embed_group(&eopts, &NoEmbedProgress))
+                    .await
+                    .context("embed task panicked")??;
+            status_line!(
+                "[qmd-indexer] {group}: {} of {} documents embedded",
+                outcome.gauge.embedded(),
+                outcome.gauge.active
+            );
+        }
     }
 
     if !index_path.exists() {
@@ -258,6 +335,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     Ok(IndexOutcome {
         index_path,
         status_output,
+        groups,
     })
 }
 
@@ -387,7 +465,7 @@ fn retire_collection(cache_home: &Path, qmd_version: &str, name: &str) -> Result
     );
 }
 
-fn run_qmd(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
+pub(crate) fn run_qmd(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
     // Resolution (bundled runtime vs npx, `$NPX_BIN` override) lives in
     // `datalib_runtime::qmd::qmd_command`. Bazel actions don't get
     // `$NPX_BIN` forwarded (would bust action cache keys) and instead

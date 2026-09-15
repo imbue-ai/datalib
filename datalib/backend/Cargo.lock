@@ -2154,6 +2154,13 @@ dependencies = [
  "anyhow",
  "datalib-obs",
  "datalib-runtime",
+ "libc",
+ "runfiles",
+ "sha2 0.11.0",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "walkdir",
 ]
 
 [[package]]

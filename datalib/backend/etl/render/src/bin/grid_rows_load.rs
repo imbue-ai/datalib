@@ -117,10 +117,7 @@ async fn main() -> Result<()> {
         opts.groups = discover_groups(&args.out)?;
         opts.retire_collections = vec![LEGACY_COLLECTION_NAME.to_string()];
         info!(event = "qmd_index_start", root = %args.out.display(), embed = opts.embed);
-        let outcome = tokio::task::spawn_blocking(move || run_index(&opts))
-            .await
-            .context("qmd-indexer task panicked")?
-            .context("qmd-indexer failed")?;
+        let outcome = run_index(&opts).await.context("qmd-indexer failed")?;
         info!(event = "qmd_index_complete", index = %outcome.index_path.display());
     }
     Ok(())

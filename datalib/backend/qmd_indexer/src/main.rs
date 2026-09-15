@@ -19,6 +19,7 @@ fn parse_args() -> Result<IndexOptions> {
     let mut embed: Option<bool> = None;
     let mut qmd_version: Option<String> = None;
     let mut groups: Vec<String> = Vec::new();
+    let mut embed_groups: Vec<String> = Vec::new();
     let mut models_dir: Option<PathBuf> = None;
     let mut pull: Option<bool> = None;
 
@@ -31,6 +32,9 @@ fn parse_args() -> Result<IndexOptions> {
             "--embed" => embed = Some(true),
             "--qmd-version" => qmd_version = Some(next_value(&mut it, "--qmd-version")?),
             "--group" => groups.push(next_value(&mut it, "--group")?),
+            // Embed only these groups; every group named (or found) is
+            // still indexed for keyword search.
+            "--embed-group" => embed_groups.push(next_value(&mut it, "--embed-group")?),
             "--models-dir" => {
                 models_dir = Some(PathBuf::from(next_value(&mut it, "--models-dir")?))
             }
@@ -62,6 +66,9 @@ fn parse_args() -> Result<IndexOptions> {
         groups
     };
     o.retire_collections = vec![LEGACY_COLLECTION_NAME.to_string()];
+    if !embed_groups.is_empty() {
+        o.embed_groups = Some(embed_groups);
+    }
     if let Some(v) = models_dir {
         o.models_dir = v;
     }
@@ -81,14 +88,15 @@ fn next_value<I: Iterator<Item = OsString>>(it: &mut I, flag: &str) -> Result<St
 fn print_help() {
     eprintln!(
         "datalib-qmd-indexer --root <DIR> [--no-embed] \
-         [--qmd-version <V>] [--group <GROUP>]... \
+         [--qmd-version <V>] [--group <GROUP>]... [--embed-group <GROUP>]... \
          [--models-dir <DIR>] [--no-pull]"
     );
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let opts = parse_args()?;
-    let outcome = run_index(&opts)?;
+    let outcome = run_index(&opts).await?;
     if let Some(status) = outcome.status_output {
         eprintln!("---- qmd status ----");
         eprint!("{status}");
