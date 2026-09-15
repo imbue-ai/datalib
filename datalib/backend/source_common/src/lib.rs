@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub mod byte_size;
 pub mod download_params;
 pub mod glob;
 pub use download_params::DownloadParams;
@@ -46,9 +47,10 @@ pub struct SourceCommon {
     /// tree.
     #[serde(skip)]
     pub raw_path: Option<PathBuf>,
-    /// Skip downloading any blob attachment larger than this many bytes.
+    /// Skip downloading any blob attachment larger than this — an
+    /// integer of bytes or a string like `"5 MB"` (`byte_size`).
     /// `None` = no limit. Consumed only by providers that download attachments.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "byte_size::deserialize_opt")]
     pub blob_size_limit_bytes: Option<u64>,
     /// Wipe this source's entity tables and resume cursors before every
     /// ingest, so the run rewrites them from what the input holds now and
@@ -81,7 +83,7 @@ pub struct SourceCommon {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "byte_size::deserialize_opt")]
     pub blob_size_limit_bytes: Option<u64>,
     #[serde(default, alias = "extract_params")]
     pub download_params: DownloadParams,

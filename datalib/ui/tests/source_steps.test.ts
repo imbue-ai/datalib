@@ -490,8 +490,25 @@ describe("the Slack pickers", () => {
   it("probe with the ingest params the form would write", () => {
     expect(paramsObject(SLACK, seedFieldValues(SLACK), "download")).toEqual({
       api: { media: true, all_channels: false, dms: false },
-      common: { blob_size_limit_bytes: 5_000_000 },
+      common: { blob_size_limit_bytes: "5 MB" },
     });
+  });
+
+  /// The cap reads however the file spells it — TOML's `_` separators
+  /// on an integer, or a unit string — and opens as a form the control
+  /// can show.
+  it("read the cap in either spelling the config allows", () => {
+    const seededFrom = (line: string) => {
+      const [step] = listSteps(`[[steps]]
+group = "slack"
+function = "ingest"
+[steps.params.common]
+${line}
+`);
+      return seedFieldValues(SLACK, { ingest: step })["common.blob_size_limit_bytes"];
+    };
+    expect(seededFrom("blob_size_limit_bytes = 5_000_000")).toBe("5 MB");
+    expect(seededFrom('blob_size_limit_bytes = "512 MiB"')).toBe("512 MiB");
   });
 });
 
