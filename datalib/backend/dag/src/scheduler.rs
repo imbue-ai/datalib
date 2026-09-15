@@ -501,12 +501,15 @@ impl Runner {
             // made ready could not be dispatched until some *other* step
             // finished -- which is exactly the situation streaming exists
             // to fix.
+            //
+            // `biased`, checkpoints first. A step's checkpoint is sent by
+            // the same task that later resolves the step's future, so by
+            // the time its completion is observable the checkpoint is
+            // already in the channel — and a random pick that took the
+            // completion first would mark the step finished, break out of
+            // the loop, and drop a seal the step did announce (#462).
             let completed = tokio::select! {
-                joined = set.join_next() => {
-                    Some(joined
-                        .expect("a live task implies a joinable one")
-                        .context("step task panicked")?)
-                }
+                biased;
                 Some(signal) = checkpoints.recv() => {
                     'checkpoint: {
                         let (step, version, rows) = match signal {
@@ -602,6 +605,11 @@ impl Runner {
                         );
                     }
                     None
+                }
+                joined = set.join_next() => {
+                    Some(joined
+                        .expect("a live task implies a joinable one")
+                        .context("step task panicked")?)
                 }
             };
             let Some((i, attempts, res, consumed)) = completed else {
