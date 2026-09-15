@@ -326,7 +326,7 @@ pub async fn start_connect(
 /// only diagnosable afterwards if something durable says what latchkey
 /// printed. The output is latchkey's, so it is scrubbed first.
 fn fail(slot: &Arc<Mutex<ConnectStatus>>, service: &str, output: String) {
-    eprintln!("latchkey login for {service} failed: {}", scrub(&output));
+    tracing::warn!("latchkey login for {service} failed: {}", scrub(&output));
     let mut slot = slot.lock().expect("connect slot mutex");
     slot.status = ConnectState::Failed;
     slot.output = output;
@@ -339,8 +339,8 @@ fn succeed(
     output: String,
 ) {
     match &account {
-        Some(a) => eprintln!("latchkey login for {service}: stored under account {a:?}"),
-        None => eprintln!("latchkey login for {service}: stored"),
+        Some(a) => tracing::info!("latchkey login for {service}: stored under account {a:?}"),
+        None => tracing::info!("latchkey login for {service}: stored"),
     }
     let mut slot = slot.lock().expect("connect slot mutex");
     slot.status = ConnectState::Ok;
@@ -506,7 +506,7 @@ pub async fn probe(
         // useful message ("Gmail users.getProfile: HTTP 401 …"), so
         // pass it through rather than replacing it with our own.
         let stderr = String::from_utf8_lossy(&out.stderr);
-        eprintln!(
+        tracing::warn!(
             "probe {source_type} failed: {}",
             scrub(&error_chain(&stderr))
         );

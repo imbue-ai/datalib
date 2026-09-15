@@ -18,6 +18,7 @@ import type { JobProgressEvent } from "@/api";
 export type RootEvent =
   | { kind: "config_changed" }
   | { kind: "dag_changed" }
+  | { kind: "run_store_changed" }
   | { kind: "frontend_changed" }
   | { kind: "index_changed" }
   | { kind: "heartbeat" };

@@ -1,11 +1,13 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # The run store: a plain-SQLite file the runner writes and anything can
-# read — step states, log lines and metrics, across runs. The tables
-# are `app_schema::runs`; this is the writer and reader. Deliberately
-# light on datalib dependencies (the schema crate and `datalib_time`):
-# the runner takes it without taking `datalib_core`, and `datalib-http`
-# takes it to read what the runner wrote.
+# read — step states, log lines and metrics, across runs — plus the app
+# server's own log. The tables are `app_schema::runs`; this is the
+# writers, the reader, and the tracing layer that feeds a writer.
+# Deliberately light on datalib dependencies (the schema crate and
+# `datalib_time`): the runner takes it without taking `datalib_core`,
+# and `datalib-http` takes it to read what the runner wrote and to
+# write its own lines.
 rust_library(
     name = "datalib_runs",
     srcs = glob(["src/**/*.rs"]),
@@ -15,10 +17,12 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
+        "@datalib_crates//:tracing-subscriber",
     ],
 )
 

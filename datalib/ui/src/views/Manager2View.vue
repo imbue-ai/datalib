@@ -898,10 +898,15 @@ function freshest<T>(commit: (value: T) => void) {
   // the run store's lines for that step, in the run it last took part in
   // — or the one in flight — as a grid that follows the run while it goes.
 
-/// What the log panel is showing, or null when it is closed.
-const logFor = ref<{ row: Row; runId: string; live: boolean; startedAt: string | null } | null>(
-  null,
-);
+/// What the log panel is showing, or null when it is closed. A null
+/// `row` is the server's own log: every run at once, narrowed by the
+/// query bar to what `datalib-http` wrote rather than to a step.
+const logFor = ref<{
+  row: Row | null;
+  runId: string;
+  live: boolean;
+  startedAt: string | null;
+} | null>(null);
 const logError = ref<string | null>(null);
 /// What `logFor.runId` holds while the panel shows every run at once.
 const ALL_RUNS_LOG = "*";
@@ -935,6 +940,15 @@ async function runFor(row: Row): Promise<{ runId: string; live: boolean; started
   }
   const [newest] = await fetchRuns({ step: row.id, limit: 1 });
   return newest ? { runId: newest.run_id, live: !newest.finished_at_utc, startedAt: newest.started_at_utc } : null;
+}
+
+/// The server's log — what `datalib-http` itself said: the worker, the
+/// applets, every request that failed. Always live: the server writing
+/// it is the one serving this page.
+function openServerLog() {
+  logError.value = null;
+  logFor.value = { row: null, runId: ALL_RUNS_LOG, live: true, startedAt: null };
+  logOpenedOn.value = ALL_RUNS_LOG;
 }
 
 /// With `runId`, the log of that one run; without, the run in flight if
@@ -2034,7 +2048,10 @@ onMounted(async () => {
   unsubscribe = subscribeLive({
     job: onJobEvent,
     root: (e) => {
-      if (e.kind === "dag_changed") {
+      // The store frame is acted on only while a run is in flight. Between
+      // runs the store moves for the server's own log lines, and a refetch
+      // on each of those that itself logged something would never stop.
+      if (e.kind === "dag_changed" || (e.kind === "run_store_changed" && manage.value?.run?.live)) {
         // Deliberately *not* a fresh walk: this fires a few times a second
         // while a run is going. The sampler is already walking on its own
         // cadence; this just reads what it found.
@@ -2081,6 +2098,13 @@ onUnmounted(() => {
           @click="helpOpen = true"
         >
           Help
+        </button>
+        <button
+          class="m2-btn"
+          title="What the app’s own server has been saying — the sync worker, the applets, requests that failed."
+          @click="openServerLog"
+        >
+          Server log
         </button>
         <button
           class="m2-btn m2-runall"
@@ -2310,9 +2334,22 @@ onUnmounted(() => {
     </div>
 
     <div v-if="logFor" class="m2-logs-backdrop" @click.self="logFor = null">
-      <div class="m2-logs m2-runlog" role="dialog" aria-modal="true" aria-label="Step log">
+      <div
+        class="m2-logs m2-runlog"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="logFor.row ? 'Step log' : 'Server log'"
+      >
         <header class="m2-logs-head">
-          <div>
+          <div v-if="!logFor.row">
+            <h3>Server log</h3>
+            <p>
+              What <code>datalib-http</code> wrote — its own lines and its applets’ — beside
+              every run the store holds. Clear <code>process:http</code> from the search to see
+              the runs’ lines too.
+            </p>
+          </div>
+          <div v-else>
             <h3>{{ logFor.row.name }}</h3>
             <p>
               <code>{{ logFor.row.id }}</code>
@@ -2331,10 +2368,11 @@ onUnmounted(() => {
         <p v-if="logError" class="m2-logs-note bad">{{ logError }}</p>
         <RunLogPanel
           v-else-if="logFor.runId"
-          :key="logOpenedOn + '/' + logFor.row.id"
+          :key="logOpenedOn + '/' + (logFor.row?.id ?? '')"
           :run-id="logOpenedOn"
-          :step="logFor.row.id"
+          :step="logFor.row?.id ?? null"
           :live="logFor.live"
+          :initial-query="logFor.row ? undefined : 'process:http'"
           @run-changed="onLogRunChanged"
         />
       </div>

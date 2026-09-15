@@ -33,6 +33,7 @@ rust_library(
         "src/history.rs",
         "src/lib.rs",
         "src/lock.rs",
+        "src/logging.rs",
         "src/manage/group.rs",
         "src/manage/mod.rs",
         "src/manage/status.rs",
@@ -89,7 +90,10 @@ rust_library(
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower-http",
-        "@datalib_crates//:uuid",    ],
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:tracing-subscriber",
+        "@datalib_crates//:uuid",
+    ],
 )
 
 rust_test(
@@ -222,6 +226,24 @@ rust_test(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",
+    ],
+)
+
+# The server's own log: a `tracing` event in this process reaches the
+# store and comes back through `GET /api/log` as `process:http`.
+rust_test(
+    name = "server_log_test",
+    srcs = ["tests/server_log.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+        "@datalib_crates//:tracing",
     ],
 )
 
@@ -368,6 +390,7 @@ rust_binary(
         "@datalib_crates//:axum",
         "@datalib_crates//:clap",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
         "@datalib_crates//:webbrowser",
     ],
 )

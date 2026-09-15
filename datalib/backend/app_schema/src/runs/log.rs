@@ -1,4 +1,5 @@
-// One row per log line, from every step of every run.
+// One row per log line: every step of every run, what the runner said
+// about a run, and what the app's server said between runs.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum LogLevel {
+    Trace,
+    Debug,
     Info,
     Warn,
     Error,
@@ -32,6 +35,38 @@ impl LogLevel {
     }
 
     pub fn parse(s: &str) -> Option<LogLevel> {
+        s.parse().ok()
+    }
+}
+
+/// Which datalib program put the line in the store: the runner (its
+/// own lines and everything it relayed from a step's pipes) or the
+/// app's server (its own lines and what its applets said).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum Process {
+    Dag,
+    Http,
+}
+
+impl Process {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn parse(s: &str) -> Option<Process> {
         s.parse().ok()
     }
 }
@@ -73,9 +108,14 @@ pub struct LogRow {
     /// tail cursor. A writer leaves it 0.
     #[col(sql = "INTEGER")]
     pub seq: i64,
+    /// `None` for a line written outside any run: the server's own.
     #[col(sql = "VARCHAR(64)")]
-    pub run_id: String,
-    /// `None` for a line about the run rather than one step.
+    pub run_id: Option<String>,
+    /// A [`Process`] word.
+    #[col(sql = "VARCHAR(16)")]
+    pub process: String,
+    /// `None` for a line about the run, or the server, rather than one
+    /// step.
     #[col(sql = "VARCHAR(255)")]
     pub step: Option<String>,
     /// Which invocation of the step within the run; 0 when unknown.

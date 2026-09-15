@@ -5,10 +5,9 @@ use std::path::Path;
 
 use app_schema::runs::LogRow;
 use datalib_query::Token;
-use sqlx::Row;
 
 use crate::runs_path;
-use crate::store::open_existing;
+use crate::store::{log_row_from, open_existing};
 
 /// One read of the log. `run` and `step` narrow it the way the panel
 /// does; `q` is what was typed; `after_seq` is the tail cursor.
@@ -33,6 +32,7 @@ impl std::fmt::Display for QueryError {
 /// The keys a log query understands, each the column it names.
 const KEYS: &[(&str, &str)] = &[
     ("run", "run_id"),
+    ("process", "process"),
     ("step", "step"),
     ("level", "level"),
     ("stream", "stream"),
@@ -134,8 +134,8 @@ pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogRow>
         return Ok(Vec::new());
     };
     let sql = format!(
-        "SELECT seq, run_id, step, attempt, ts_utc, tz_offset, stream, level, target, thread, \
-         msg, fields FROM log WHERE {} ORDER BY seq LIMIT ?",
+        "SELECT seq, run_id, process, step, attempt, ts_utc, tz_offset, stream, level, target, \
+         thread, msg, fields FROM log WHERE {} ORDER BY seq LIMIT ?",
         compiled.clauses.join(" AND ")
     );
     // Audited: every clause is assembled from the `&'static str` column
@@ -154,23 +154,7 @@ pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogRow>
         .await
         .unwrap_or_default();
     pool.close().await;
-    Ok(rows
-        .iter()
-        .map(|r| LogRow {
-            seq: r.get("seq"),
-            run_id: r.get("run_id"),
-            step: r.get("step"),
-            attempt: r.get("attempt"),
-            ts_utc: r.get("ts_utc"),
-            tz_offset: r.get("tz_offset"),
-            stream: r.get("stream"),
-            level: r.get("level"),
-            target: r.get("target"),
-            thread: r.get("thread"),
-            msg: r.get("msg"),
-            fields: r.get("fields"),
-        })
-        .collect())
+    Ok(rows.iter().map(log_row_from).collect())
 }
 
 #[cfg(test)]
@@ -208,6 +192,6 @@ mod tests {
     fn an_unknown_key_is_refused_by_name() {
         let e = compile(&q("author:thad")).unwrap_err();
         assert!(e.0.contains("`author:`"), "{e}");
-        assert!(e.0.contains("run, step, level"), "{e}");
+        assert!(e.0.contains("run, process, step, level"), "{e}");
     }
 }

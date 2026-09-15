@@ -56,7 +56,7 @@ pub async fn tree_history(
         let history = datalib_history::read(&s.root.join(&rel), limit)
             .await
             .map_err(|e| {
-                eprintln!("history: {rel}: {e:#}");
+                tracing::warn!("history: {rel}: {e:#}");
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{rel}: {e:#}"))
             })?;
         stores.push(StoreEntry { path: rel, history });
