@@ -63,11 +63,12 @@ impl Phase {
 }
 
 /// One segment of a group's in-flight progress bar: a step and the
-/// status key it is drawn in.
+/// status it is drawn in.
 #[derive(Debug, Clone, Serialize)]
 pub struct Segment {
     pub id: String,
     pub key: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -770,6 +771,7 @@ impl RowCtx<'_> {
                     .map(|c| Segment {
                         id: c.id().to_string(),
                         key: row_of(c.id()).status.key.clone(),
+                        label: row_of(c.id()).status.label.clone(),
                     })
                     .collect()
             }),
