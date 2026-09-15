@@ -458,12 +458,12 @@ impl Runner {
             // made ready could not be dispatched until some *other* step
             // finished -- which is exactly the situation streaming exists
             // to fix.
+            // Seals before joins: a step sends its seal before its task
+            // can finish, so a queued seal predates a queued join. Taken
+            // the other way round, the loop breaks (or reads the seal as
+            // stale) before it reaches the stream.
             let completed = tokio::select! {
-                joined = set.join_next() => {
-                    Some(joined
-                        .expect("a live task implies a joinable one")
-                        .context("step task panicked")?)
-                }
+                biased;
                 Some(signal) = checkpoints.recv() => {
                     'checkpoint: {
                         let (step, version, rows) = match signal {
@@ -517,12 +517,16 @@ impl Runner {
                         // The event carries what the step said, not the
                         // qualified form: the qualification is the runner's
                         // bookkeeping, and a reader of the stream should see
-                        // the version the step vouched for.
-                        self.sink.emit(&Event::Checkpoint {
-                            step: step.clone(),
-                            version,
-                            rows,
-                        });
+                        // the version the step vouched for. Once per seal:
+                        // a producer re-announces one until its consumer
+                        // has run, and the repeat is not news.
+                        if moved {
+                            self.sink.emit(&Event::Checkpoint {
+                                step: step.clone(),
+                                version,
+                                rows,
+                            });
+                        }
                         if !streams[p] {
                             // Sealed a sink it says nobody may read early.
                             // Not fatal -- the version is still good and
@@ -559,6 +563,11 @@ impl Runner {
                         );
                     }
                     None
+                }
+                joined = set.join_next() => {
+                    Some(joined
+                        .expect("a live task implies a joinable one")
+                        .context("step task panicked")?)
                 }
             };
             let Some((i, attempts, res, consumed)) = completed else {
