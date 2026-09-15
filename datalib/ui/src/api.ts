@@ -1159,6 +1159,10 @@ export type LatchkeyService = {
   /// bundled path, or the `npx` fallback. Any command shown to a person
   /// has to start with this rather than a bare `latchkey`.
   cli: string;
+  /// The latchkey gateway the backend is pointed at, if any. The
+  /// credentials — and the browser that signs in to them — live there,
+  /// so the wizard offers no login of its own.
+  gateway: string | null;
   /// Set when latchkey itself could not be asked. Not fatal: the
   /// account can still be typed.
   error: string | null;

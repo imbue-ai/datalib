@@ -32,6 +32,12 @@ export type MenuTarget = {
   revealPath: string | null;
 };
 
+/// The Browse entry's name — shared with the Actions cell's button, so
+/// the two never say different things.
+export function browseLabel(t: Pick<MenuTarget, "kind" | "type">): string {
+  return t.kind === "group" && !t.type ? "Browse every source" : "Browse this data";
+}
+
 export type MenuAction =
   | "browse"
   | "sync"
@@ -116,7 +122,7 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
 
   entries.push({
     action: "browse",
-    name: one && only.kind === "group" && !only.type ? "Browse every source" : "Browse this data",
+    name: browseLabel(only),
     disabled: !one ? ONE_AT_A_TIME : only.browseBlocked,
   });
   const claimed = targets.filter((t) => t.stopJobId).length;

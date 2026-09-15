@@ -139,8 +139,12 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(slack["status"]["key"], "never_run");
     assert_eq!(slack["status"]["from"], serde_json::Value::Null);
     assert_eq!(slack["seeds"], serde_json::json!(["slack/ingest"]));
-    assert_eq!(slack["actions"][0]["id"], "sync");
+    // Browse first, then Sync: a source with a render step has rows.
+    assert_eq!(slack["actions"][0]["id"], "browse");
+    assert_eq!(slack["actions"][0]["label"], "Browse this data");
     assert_eq!(slack["actions"][0]["enabled"], true);
+    assert_eq!(slack["actions"][1]["id"], "sync");
+    assert_eq!(slack["actions"][1]["enabled"], true);
     assert_eq!(slack["disk"]["value"], serde_json::Value::Null);
     assert_eq!(slack["disk"]["unit"], "bytes");
 
@@ -157,8 +161,12 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
 
     let render = &rows["slack/render_markdown"];
     assert_eq!(render["name"]["label"], "Render markdown");
-    assert_eq!(render["actions"][0]["enabled"], false);
     assert!(render["actions"][0]["disabled_reason"]
+        .as_str()
+        .unwrap()
+        .contains("from its group's row"));
+    assert_eq!(render["actions"][1]["enabled"], false);
+    assert!(render["actions"][1]["disabled_reason"]
         .as_str()
         .unwrap()
         .contains("Run slack/ingest"));
@@ -190,10 +198,17 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         assert_eq!(index["status"]["key"], "failed");
         assert_eq!(index["status_from"], "unified_index");
     }
-    assert!(index["actions"][0]["disabled_reason"]
+    // The index group browses as the projection over every source.
+    assert_eq!(index["actions"][0]["label"], "Browse every source");
+    assert_eq!(index["actions"][0]["enabled"], true);
+    assert!(index["actions"][1]["disabled_reason"]
         .as_str()
         .unwrap()
         .contains("none of this group's steps"));
+    assert!(applet["actions"][0]["disabled_reason"]
+        .as_str()
+        .unwrap()
+        .contains("no rows of its own"));
     // The index group mirrors nothing, so it has no type to show.
     assert_eq!(index["type"], serde_json::Value::Null);
 }
@@ -271,6 +286,37 @@ async fn a_finished_run_reaches_the_rows() {
 /// An entry the loader drops still has a row — it is still in the
 /// file — and its status says so, outranking whatever the record
 /// remembers. The group it is under is not dropped with it.
+/// A source that renders nothing has no rows at all, so its Browse is
+/// disabled and says so, rather than opening an empty grid onto a
+/// source that looks broken.
+#[tokio::test]
+async fn a_download_only_source_cannot_be_browsed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = format!(
+        "{CONFIG}
+[[groups]]
+id = \"photos\"
+type = \"media\"
+
+[[steps]]
+group = \"photos\"
+function = \"ingest\"
+"
+    );
+    write_root(tmp.path(), &config, None);
+
+    let got = get_rows(tmp.path()).await;
+    assert_eq!(got["ok"], true, "{got}");
+    let rows = by_key(&got);
+    let photos = &rows["group:photos"];
+    assert_eq!(photos["actions"][0]["id"], "browse");
+    assert_eq!(photos["actions"][0]["enabled"], false);
+    assert!(photos["actions"][0]["disabled_reason"]
+        .as_str()
+        .unwrap()
+        .contains("no render step"));
+}
+
 #[tokio::test]
 async fn a_dropped_entry_keeps_its_row_and_says_why() {
     let tmp = tempfile::tempdir().unwrap();
@@ -293,7 +339,7 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
             .contains("title"),
         "{render}"
     );
-    assert!(render["actions"][0]["disabled_reason"]
+    assert!(render["actions"][1]["disabled_reason"]
         .as_str()
         .unwrap()
         .starts_with("Not in the pipeline"));

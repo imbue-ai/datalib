@@ -27,6 +27,7 @@ const SET_ONLY = {
   ],
   registered: true,
   cli: "/opt/datalib/bin/latchkey",
+  gateway: null,
   error: null,
 };
 
@@ -125,4 +126,22 @@ test("a new source writes no account at all", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
   await wizard(page).getByText("Review the TOML this writes").click();
   await expect(wizard(page).locator(".wiz-review pre")).not.toContainText("latchkey_settings");
+});
+
+/// Behind a latchkey gateway (`LATCHKEY_GATEWAY` set — how minds runs
+/// datalib) the `latchkey` the backend spawns refuses every command the
+/// button would run, and the browser that could sign in is on the
+/// gateway's side. The regression: the button was offered, and its
+/// failure told the person to run `ensure-browser` — a command that
+/// configures a browser on the wrong machine.
+test("behind a gateway there is no login button, only where to sign in", async ({ page }) => {
+  await openClaude(page, { ...WITH_BROWSER, gateway: "http://gw.example:8080" });
+
+  await expect(wizard(page).getByRole("button", { name: "Latchkey auth" })).toHaveCount(0);
+  await expect(wizard(page)).not.toContainText("may log out your other claude.ai session");
+  await expect(wizard(page)).not.toContainText("latchkey auth set");
+  await expect(wizard(page)).toContainText("held by a latchkey gateway (http://gw.example:8080)");
+  // Test connection still works there: the probe goes through
+  // `latchkey curl`, which the gateway serves.
+  await expect(wizard(page).getByRole("button", { name: "Test connection" })).toBeVisible();
 });

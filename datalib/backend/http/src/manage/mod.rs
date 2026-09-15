@@ -100,7 +100,8 @@ pub fn columns() -> Vec<ColumnSpec> {
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp),
         ColumnSpec::new("disk", "Bytes on disk", ColumnType::Timeseries)
             .describe("What this tree weighs, with the last few minutes behind it."),
-        ColumnSpec::new("actions", "Sync", ColumnType::Actions),
+        ColumnSpec::new("actions", "Actions", ColumnType::Actions)
+            .describe("Browse this row's data, and sync it \u{2014} or stop the sync in progress."),
     ]
 }
 
@@ -347,6 +348,16 @@ fn child_label(step: &WrittenStep) -> String {
     .to_string()
 }
 
+fn browse_action(label: &str, blocked: Option<String>) -> Action {
+    Action {
+        id: "browse".into(),
+        label: label.into(),
+        enabled: blocked.is_none(),
+        disabled_reason: blocked,
+        danger: false,
+    }
+}
+
 /// The sentence the Status cell carries for an entry the loader dropped.
 fn not_in_pipeline(d: &Diagnostic) -> String {
     format!("Not in the pipeline: {}", dropped_detail(d))
@@ -549,8 +560,8 @@ impl RowCtx<'_> {
     }
 
     /// Sync, or Stop while a job has the row claimed: the one button
-    /// the Sync column draws.
-    fn sync_action(&self, id: &str, run_blocked: Option<String>) -> (Vec<Action>, Option<String>) {
+    /// beside Browse.
+    fn sync_action(&self, id: &str, run_blocked: Option<String>) -> (Action, Option<String>) {
         if let Some(job) = self.claims.get(id) {
             let of = match job.source_ids.as_deref().filter(|s| !s.is_empty()) {
                 Some(ids) => format!("the sync of {ids}"),
@@ -573,7 +584,7 @@ impl RowCtx<'_> {
                 label,
                 danger: true,
             };
-            return (vec![stop], Some(job.id.clone()));
+            return (stop, Some(job.id.clone()));
         }
         let sync = Action {
             id: "sync".into(),
@@ -582,7 +593,7 @@ impl RowCtx<'_> {
             disabled_reason: run_blocked,
             danger: false,
         };
-        (vec![sync], None)
+        (sync, None)
     }
 
     fn entry_row(&self, e: &Entry<'_>, floor: &mut StatusFloor) -> ManageRow {
@@ -755,7 +766,19 @@ impl RowCtx<'_> {
             Entry::Step(_) => self.progress(&id).map(activity::chips).unwrap_or_default(),
             Entry::Applet(_) => vec![],
         };
-        let (actions, stop_job_id) = self.sync_action(&id, run_blocked);
+        // A source is browsed as one thing, from its group's row. A
+        // step's rows are not a separate view of the data; they are the
+        // same rows.
+        let browse = browse_action(
+            "Browse this data",
+            Some(match e {
+                Entry::Step(_) => "Browse a source from its group's row.".to_string(),
+                Entry::Applet(_) => {
+                    "An applet serves endpoints; it has no rows of its own.".to_string()
+                }
+            }),
+        );
+        let (sync, stop_job_id) = self.sync_action(&id, run_blocked);
         ManageRow {
             key: id.clone(),
             path: match &group {
@@ -780,7 +803,7 @@ impl RowCtx<'_> {
             status_from: None,
             activity,
             disk,
-            actions,
+            actions: vec![browse, sync],
             seeds,
             reveal_blocked,
             stop_job_id,
@@ -895,7 +918,7 @@ impl RowCtx<'_> {
         };
 
         let seeds = group::group_seeds(&ordered, |c| row_of(c.id()).dropped.is_some());
-        let run_blocked = dropped_why.or_else(|| {
+        let run_blocked = dropped_why.clone().or_else(|| {
             if !seeds.is_empty() {
                 None
             } else if !steps.is_empty() {
@@ -908,14 +931,34 @@ impl RowCtx<'_> {
                 Some("Nothing under this group runs.".to_string())
             }
         });
+        // A group's rows reach the index through its `render_markdown`
+        // step, so having one is exactly the condition for having
+        // anything to browse. The index group has no type and no render
+        // step: browsing it is the projection across every source.
+        let browse = if g.r#type.is_none() {
+            browse_action("Browse every source", dropped_why.clone())
+        } else {
+            let has_render = ordered
+                .iter()
+                .any(|c| c.kind() == ChildKind::Step && row_of(c.id()).phase == Phase::Render);
+            browse_action(
+                "Browse this data",
+                dropped_why.clone().or_else(|| {
+                    (!has_render).then(|| {
+                        "This source has no render step, so none of what it downloads reaches \
+                         the grid. Its files are on disk \u{2014} open the folder instead."
+                            .to_string()
+                    })
+                }),
+            )
+        };
+        // While a job has a child claimed, the group's button is that
+        // child's Stop.
         let claimed = ordered
             .iter()
-            .map(|c| row_of(c.id()))
-            .find(|r| r.stop_job_id.is_some());
-        let (actions, stop_job_id) = match claimed {
-            Some(r) => (r.actions.clone(), r.stop_job_id.clone()),
-            None => self.sync_action(&g.id, run_blocked),
-        };
+            .map(|c| c.id())
+            .find(|id| row_of(id).stop_job_id.is_some());
+        let (sync, stop_job_id) = self.sync_action(claimed.unwrap_or(&g.id), run_blocked);
         let activity = ordered
             .iter()
             .map(|c| row_of(c.id()))
@@ -973,7 +1016,7 @@ impl RowCtx<'_> {
             activity,
             last_synced,
             disk,
-            actions,
+            actions: vec![browse, sync],
             seeds,
             reveal_blocked: on_disk.is_none().then(|| {
                 "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()

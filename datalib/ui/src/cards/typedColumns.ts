@@ -268,6 +268,8 @@ function renderTimeseries(
 /// 24×24 Material-ish glyphs for the action ids the viewer knows a
 /// picture for, drawn in `currentColor`. Any other id draws its label.
 const ACTION_ICONS: Record<string, string> = {
+  // A table: what Browse opens is this row's data as rows and columns.
+  browse: "M3 5h18v4H3V5zm0 6h8v8H3v-8zm10 0h8v8h-8v-8z",
   sync: "M8 5v14l11-7z",
   stop: "M6 6h12v12H6z",
 };
@@ -362,7 +364,7 @@ const WIDTH: Record<ColumnType, number> = {
   identity: 120,
   status: 96,
   chips: 260,
-  actions: 64,
+  actions: 92,
   markdown_uuid: 200,
 };
 

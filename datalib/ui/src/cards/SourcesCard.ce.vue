@@ -94,7 +94,8 @@ part in, with a picker for its other runs — as a grid you can sort, filter and
 search; on a group row, the log of the step its status came from.
 <b>Activity</b> is what a running step has reported: how much is queued ahead of
 it, what it has counted so far, and how many warnings and errors it has logged.</p>
-<p><b>Right-click a row</b> for everything it can do — browse, edit, reveal, remove, the
+<p><b>Browse</b> and <b>Sync</b> are buttons: they are the two things a row does often.
+<b>Right-click a row</b> for everything it can do — browse, edit, reveal, remove, the
 log, a rename (on the Name cell), and its <b>commit history</b>: every store under it
 is versioned, and the panel lists each commit — when, what it said, what it did to
 each table, and the run that made it — newest first, updating while a sync runs.
@@ -246,21 +247,14 @@ type Row = ManageRow & {
   /// The group whose form Edit opens: the row's own group, or for a
   /// step under one, that group. Null where there is no form.
   editGroup: string | null;
-  /// Why this row has nothing to browse, or null when it does.
-  browseBlocked: string | null;
-  /// The card source a Browse of this row opens. Empty for the index
-  /// group, whose browse is the unified projection over every source.
-  browseSource: string;
+  /// The card source a Browse of this row opens, or null where the
+  /// row's `browse` action says there is nothing to browse.
+  browseSource: string | null;
 };
 
 /// The tree the grid shows, as the server assembled it, with the
 /// wizard's knowledge added per row.
 const rows = computed<Row[]>(() => (manage.value?.rows ?? []).map(decorate));
-
-function droppedWhy(r: ManageRow): string | null {
-  if (!r.dropped) return null;
-  return `Not in the pipeline: ${r.dropped.message}${r.dropped.help ? ` — ${r.dropped.help}` : ""}`;
-}
 
 function decorate(r: ManageRow): Row {
   if (r.kind === "group") {
@@ -269,7 +263,7 @@ function decorate(r: ManageRow): Row {
       ...r,
       editBlocked,
       editGroup: editBlocked ? null : r.id,
-      ...groupBrowse(r, droppedWhy(r)),
+      browseSource: groupBrowse(r),
     };
   }
   // Edit: the wizard's one form describes a source — a group and its two
@@ -298,49 +292,26 @@ function decorate(r: ManageRow): Row {
     name: ingestLabelled ? { ...r.name, label: ingestLabelled } : r.name,
     editBlocked,
     editGroup: editBlocked ? null : r.group,
-    // A source is browsed as one thing, from its group's row — the same
-    // rule Edit follows. A step's own rows are not a separate view of
-    // the data; they are the same rows.
-    browseBlocked:
-      r.kind === "applet"
-        ? "An applet serves endpoints; it has no rows of its own."
-        : "Browse a source from its group's row.",
-    browseSource: "",
+    browseSource: null,
   };
 }
 
-/// What a Browse of this group opens, and why it might not.
-///
-/// A group's rows reach the index through its `render_markdown` step, so
-/// having one is exactly the condition for having anything to browse.
-/// The index group has no type and no render step: browsing it is the
-/// unified projection across every source, which is the card the app
-/// already opens on.
-function groupBrowse(
-  g: ManageRow,
-  dropped: string | null,
-): { browseBlocked: string | null; browseSource: string } {
+/// What a Browse of this group opens. Whether it can — the group has a
+/// render step, and is in the pipeline — is the server's word, carried
+/// by the row's `browse` action; this is only the card behind it. The
+/// index group has no type: browsing it is the unified projection
+/// across every source, which is the card the app already opens on.
+function groupBrowse(g: ManageRow): string | null {
+  if (!browseAction(g)?.enabled) return null;
   const type = g.type?.id ?? null;
-  if (!type) {
-    return { browseBlocked: dropped, browseSource: "gridView()" };
-  }
-  if (dropped) return { browseBlocked: dropped, browseSource: "" };
-  const hasRender = (manage.value?.rows ?? []).some(
-    (r) => r.kind === "step" && r.group === g.id && r.phase === "render",
-  );
-  if (!hasRender) {
-    return {
-      browseBlocked:
-        "This source has no render step, so none of what it downloads " +
-        "reaches the grid. Its files are on disk — open the folder instead.",
-      browseSource: "",
-    };
-  }
+  if (!type) return "gridView()";
   const columns = browseColumns(type);
   const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id))}`];
   if (columns) args.push(`columns: ${JSON.stringify(columns)}`);
-  return { browseBlocked: null, browseSource: `gridView({ ${args.join(", ")} })` };
+  return `gridView({ ${args.join(", ")} })`;
 }
+
+const browseAction = (r: ManageRow) => r.actions.find((a) => a.id === "browse");
 
 /// Why a group has no form, or null when the wizard can edit it. A
 /// source is edited as one thing, so the verdict is the group's and
@@ -374,9 +345,11 @@ function groupEntry(g: ConfiguredGroup, steps: SourceSteps): CatalogEntry | unde
   return step ? entryForStep(step, sources.value) : catalogForStep(g.type, {});
 }
 
-/// What each Sync-column button does. The rows say which button a row
-/// carries and whether it is enabled; this is the code behind the id.
+/// What each Actions-column button does. The rows say which buttons a
+/// row carries and whether each is enabled; this is the code behind
+/// the id.
 const rowActions: Record<string, (row: Row) => void> = {
+  browse: (row) => openBrowse(row),
   sync: (row) => void runRow(row),
   stop: (row) => {
     if (row.stop_job_id) void stopJob(row.stop_job_id);
@@ -616,7 +589,7 @@ function menuTarget(row: Row): MenuTarget {
     runBlocked: row.actions.find((a) => a.id === "sync")?.disabled_reason ?? null,
     editBlocked: row.editBlocked,
     revealBlocked: row.reveal_blocked,
-    browseBlocked: row.browseBlocked,
+    browseBlocked: browseAction(row)?.disabled_reason ?? null,
     stopJobId: row.stop_job_id,
     statusFrom: row.status_from,
     revealPath: row.reveal_path,
@@ -1259,7 +1232,7 @@ async function deleteRows(targets: Row[]) {
 /// ordinary navigation — the card is bookmarkable, shareable, and the
 /// back button returns here.
 function openBrowse(row: Row) {
-  if (row.browseBlocked || !row.browseSource) return;
+  if (!row.browseSource) return;
   // Beside this card, in whatever layout is showing it.
   props.ctx.host.openCards(row.browseSource);
 }

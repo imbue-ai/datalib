@@ -28,6 +28,32 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a browser login may stay pending before we call it lost.
 /// Long, because the clock is a person reading a consent screen.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Set by whoever runs datalib behind a latchkey gateway. With it set,
+/// the `latchkey` this module spawns is a thin client: `services info`,
+/// `auth browser` and `curl` are forwarded to the gateway, and every
+/// command that manages local state — `ensure-browser`, `services
+/// register`, `auth set`, `auth clear` — is refused outright. The same
+/// rule `datalib_etl::latchkey` applies, restated here because this
+/// crate links no ETL code.
+const GATEWAY_ENV_VAR: &str = "LATCHKEY_GATEWAY";
+
+/// The gateway's URL, when this process is pointed at one.
+fn latchkey_gateway() -> Option<String> {
+    gateway_from(std::env::var_os(GATEWAY_ENV_VAR))
+}
+
+/// An empty setting is no gateway, the way latchkey itself reads it.
+fn gateway_from(value: Option<std::ffi::OsString>) -> Option<String> {
+    let value = value?.to_string_lossy().trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn gateway_refusal(gateway: &str) -> String {
+    format!(
+        "credentials are held by a latchkey gateway ({gateway}), and a login cannot be \
+         started from here. Sign in where that gateway is managed, then test the connection."
+    )
+}
 
 // GET /api/latchkey/{service}
 
@@ -49,6 +75,10 @@ pub struct ServiceInfo {
     /// path, or the `npx` fallback. The wizard prints commands people
     /// are meant to run, and `latchkey` alone is not on everyone's PATH.
     pub cli: String,
+    /// The latchkey gateway this process is pointed at, if any. When
+    /// set, the wizard offers no login of its own: the credentials live
+    /// on the gateway, and so does the browser that signs in to them.
+    pub gateway: Option<String>,
     /// Set when latchkey could not answer at all (not installed, no
     /// keyring access). The wizard still lets you type an account name
     /// by hand, so this is a note rather than an error.
@@ -73,8 +103,12 @@ pub async fn get_service(
     Path(service): Path<String>,
 ) -> Result<Json<ServiceInfo>, (StatusCode, Json<Value>)> {
     let service = validated_service(&service)?;
+    let gateway = latchkey_gateway();
     match latchkey_json(&["services", "info", &service], SERVICES_TIMEOUT).await {
-        Ok(v) => Ok(Json(parse_service_info(&service, &v))),
+        Ok(v) => Ok(Json(ServiceInfo {
+            gateway,
+            ..parse_service_info(&service, &v)
+        })),
         Err(e) => {
             // latchkey says "Unknown service: <name>" for a name nobody
             // has registered. That is a state the wizard can act on, so
@@ -88,6 +122,7 @@ pub async fn get_service(
                 accounts: Vec::new(),
                 registered: !unknown,
                 cli: datalib_core::node_runtime::latchkey_cli_hint(),
+                gateway,
                 error: if unknown { None } else { Some(message) },
             }))
         }
@@ -132,6 +167,7 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         accounts,
         registered: true,
         cli: datalib_core::node_runtime::latchkey_cli_hint(),
+        gateway: None,
         error: None,
     }
 }
@@ -215,6 +251,12 @@ pub async fn start_connect(
     body: Option<Json<ConnectRequest>>,
 ) -> Result<Json<ConnectStatus>, (StatusCode, Json<Value>)> {
     let service = validated_service(&service)?;
+    // Before anything is spawned: the first latchkey command below is
+    // `ensure-browser`, whose refusal under a gateway names a command
+    // that would configure a browser on the wrong machine.
+    if let Some(gateway) = latchkey_gateway() {
+        return Err(err(StatusCode::CONFLICT, &gateway_refusal(&gateway)));
+    }
     let body = body.map(|Json(b)| b).unwrap_or_default();
     let account = body.account.unwrap_or_default().trim().to_string();
     let register = body.register.map(|r| register_args(&service, &r));
@@ -804,6 +846,35 @@ mod ensure_browser_tests {
             "ensure-browser must not reach the downloading source: {sources}"
         );
         assert!(sources.contains("system-browser"), "{sources}");
+    }
+}
+
+#[cfg(test)]
+mod gateway_tests {
+    use super::{gateway_from, gateway_refusal};
+
+    /// `LATCHKEY_GATEWAY=` (set but empty) is how a shell script
+    /// disables the gateway; treating it as one would refuse every
+    /// login on a machine that has no gateway at all.
+    #[test]
+    fn an_empty_setting_is_no_gateway() {
+        assert_eq!(gateway_from(None), None);
+        assert_eq!(gateway_from(Some("".into())), None);
+        assert_eq!(gateway_from(Some("  ".into())), None);
+        assert_eq!(
+            gateway_from(Some("http://127.0.0.1:9".into())).as_deref(),
+            Some("http://127.0.0.1:9")
+        );
+    }
+
+    /// The refusal has to say where the credentials are and must not
+    /// point at `ensure-browser`, which is the command the old failure
+    /// path named — and which does nothing useful under a gateway.
+    #[test]
+    fn the_refusal_names_the_gateway_and_no_command() {
+        let message = gateway_refusal("http://gw.example:8080");
+        assert!(message.contains("http://gw.example:8080"), "{message}");
+        assert!(!message.contains("ensure-browser"), "{message}");
     }
 }
 
