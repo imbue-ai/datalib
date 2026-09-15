@@ -20,6 +20,8 @@ instead from `bazel run //:precommit` and as a plain step in
   7. Every target tagged `manual` must be named by a `build_test` in the
      same package, because `bazel test //...` never builds a `manual`
      target and one can stop compiling in silence.
+  8. A provider that keeps a sync cursor must record the config the
+     cursor was taken under, or widening that config is a silent no-op.
 
 Check 1: why it exists
 ----------------------
@@ -134,6 +136,17 @@ def _find_enclosing_rule_name(lines: list[str], tag_lineno: int) -> str | None:
         if m:
             return m.group(1)
     return None
+
+
+# The trailing `#[cfg(test)] mod tests` block, cut off. Only a module at
+# column 0 counts: an inline `#[cfg(test)]` on one helper method would
+# otherwise hide everything after it from the check.
+_TEST_MODULE = re.compile(r"^#\[cfg\(test\)\]\s*\n\s*mod\b", re.MULTILINE)
+
+
+def _without_test_module(text: str) -> str:
+    m = _TEST_MODULE.search(text)
+    return text if m is None else text[: m.start()]
 
 
 def _git_ls_files(root: Path, pattern: str) -> list[str]:
@@ -308,7 +321,105 @@ def main() -> int:
     rc |= _check_render_opens_read_only(root)
     rc |= _check_download_takes_a_store(root)
     rc |= _check_manual_targets_still_build(root)
+    rc |= _check_cursor_records_its_scope(root)
     return rc
+
+
+# --- Check 8: a cursor must be recorded with the config that set it ----
+#
+# A cursor answers "where do I resume?" from stored data alone, so the
+# config that narrowed the first walk -- a label filter, a `since`, a
+# device list -- is never consulted again. Widen it and the next run
+# resumes from the cursor as if nothing happened: the mail that already
+# sat outside the old filter never *changed*, so no change feed will ever
+# name it. Slack was the first to hit this (#103), then every provider
+# with a cursor was swept -- and Gmail, added afterwards, missed the sweep
+# and mirrored nothing after its filter was removed (2026-09-15).
+#
+# The fix each time is `datalib_etl::scope_config`: record the
+# scope-affecting config beside the cursor, diff it next run, backfill
+# what widened. This keeps a new cursor from arriving without it. The
+# signal is the one primitive every cursor write bottoms out in; the
+# recorder is either `store` or `store_if_satisfied`. Per provider crate,
+# because a wrapper in `db.rs` is called from `mod.rs`.
+#
+# docs/dev/data_architecture_ingestion.md, "When the cursor swallows a
+# config change", is the rule and the table of who records what.
+_CURSOR_WRITE = re.compile(r"\bupsert_scope_state\(")
+_SCOPE_RECORD = re.compile(r"\bscope_config::store(?:_if_satisfied)?\(")
+
+# Providers that keep a marker in `sync_scope_state` which is not a resume
+# position, with the reason. Everything else with a cursor records.
+_CURSOR_WITHOUT_SCOPE_CONFIG: dict[str, str] = {
+    # Listing-diff: every run re-lists and re-applies `since` to the fresh
+    # listing, so a widened filter surfaces what it admits on its own.
+    # The marker is "when did I last sweep", not a position in a walk.
+    "claude": "listing-diff; the sweep marker is not a resume cursor",
+}
+
+
+def _provider_ingest_sources(root: Path) -> dict[str, list[str]]:
+    by_provider: dict[str, list[str]] = {}
+    for rel in _git_ls_files(root, "datalib/backend/etl/providers"):
+        parts = rel.split("/")
+        # datalib/backend/etl/providers/<p>/src/ingest/...
+        if (
+            len(parts) < 8
+            or parts[5] != "src"
+            or parts[6] != "ingest"
+            or not rel.endswith(".rs")
+        ):
+            continue
+        by_provider.setdefault(parts[4], []).append(rel)
+    return by_provider
+
+
+def _check_cursor_records_its_scope(root: Path) -> int:
+    bad: list[str] = []
+    for provider, files in sorted(_provider_ingest_sources(root).items()):
+        writes: list[str] = []
+        records = False
+        for rel in files:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+            body = _without_test_module(text)
+            if _SCOPE_RECORD.search(body):
+                records = True
+            for lineno, line in enumerate(body.splitlines(), 1):
+                if (
+                    _CURSOR_WRITE.search(line)
+                    and "pub async fn upsert_scope_state" not in line
+                ):
+                    writes.append(f"{rel}:{lineno}")
+        if not writes or records:
+            continue
+        if provider in _CURSOR_WITHOUT_SCOPE_CONFIG:
+            continue
+        bad.append(f"{provider}: cursor written at {', '.join(writes)}")
+    if not bad:
+        print(
+            "OK: every provider with a sync cursor records the config it was taken under."
+        )
+        return 0
+    print(
+        "ERROR: a provider keeps a sync cursor without recording its scope config:",
+        file=sys.stderr,
+    )
+    for b in bad:
+        print(f"  - {b}", file=sys.stderr)
+    print(
+        "\nA cursor resumes from stored data alone, so widening the config that\n"
+        "set it (a label filter, a `since`, a device list) is a silent no-op:\n"
+        "nothing that already sat outside the old scope ever *changes*, so no\n"
+        "change feed names it. Record the scope-affecting config beside the\n"
+        "cursor with `datalib_etl::scope_config::store_if_satisfied`, diff it\n"
+        "on the next run with `filter_widened` / `limit_relaxed` / `turned_on`,\n"
+        "and backfill what widened. If the marker really is not a resume\n"
+        "position, allowlist the provider in _CURSOR_WITHOUT_SCOPE_CONFIG with\n"
+        'the reason. See docs/dev/data_architecture_ingestion.md, "When the\n'
+        'cursor swallows a config change".',
+        file=sys.stderr,
+    )
+    return 1
 
 
 # --- Check 6: a download takes the store, it does not open one -------
@@ -334,7 +445,7 @@ _OPTIONAL_STORE_FIELD = re.compile(r"\bpub db: Option<\s*RawDb\s*>")
 def _check_download_takes_a_store(root: Path) -> int:
     bad: list[str] = []
     for rel in _git_ls_files(root, "datalib/backend/etl/providers"):
-        if not rel.endswith(".rs") or "/src/download" not in rel:
+        if not rel.endswith(".rs") or "/src/ingest/" not in rel:
             continue
         text = (root / rel).read_text(encoding="utf-8", errors="replace")
         for lineno, line in enumerate(text.splitlines(), 1):
@@ -397,7 +508,7 @@ def _check_render_opens_read_only(root: Path) -> int:
             continue
         text = (root / rel).read_text(encoding="utf-8", errors="replace")
         # Test modules build the stores they then read, so they need `open`.
-        body = text.split("#[cfg(test)]")[0]
+        body = _without_test_module(text)
         for lineno, line in enumerate(body.splitlines(), 1):
             if _WRITABLE_OPEN.search(line):
                 bad.append(f"{rel}:{lineno}: {line.strip()}")
@@ -550,7 +661,7 @@ def _unpinned_reads(root: Path, rel: str) -> list[tuple[int, str]]:
 
     # Test modules seed the stores they then render from, and a seed is
     # the writer's `DELETE FROM` / `INSERT`, not a render read.
-    body = text.split("#[cfg(test)]")[0]
+    body = _without_test_module(text)
     out: list[tuple[int, str]] = []
     for lineno, line in enumerate(body.splitlines(), 1):
         for table in _TABLE_READ.findall(line):

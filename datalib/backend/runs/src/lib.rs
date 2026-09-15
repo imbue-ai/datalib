@@ -10,7 +10,8 @@ pub use app_schema::runs::{
     LogLevel, LogRow, MetricRow, MetricSampleRow, RunRow, StepRunRow, Stream,
 };
 pub use store::{
-    canonical_labels, log_after, open_or_create, runs, snapshot, snapshot_of, RunWriter, Snapshot,
+    canonical_labels, log_after, open_or_create, runs, snapshot, snapshot_of, step_log_after,
+    RunWriter, Snapshot,
 };
 
 use std::path::{Path, PathBuf};

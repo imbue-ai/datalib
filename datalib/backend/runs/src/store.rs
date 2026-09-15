@@ -363,6 +363,29 @@ pub async fn log_after(
     after_seq: i64,
     limit: i64,
 ) -> Vec<LogRow> {
+    log_where(data_root, Some(run_id), step, after_seq, limit).await
+}
+
+/// One step's lines across every run the store holds, oldest first —
+/// "what has this step been doing", not "what did it do in this run".
+/// Runs never overlap (the runner holds a lock), so `seq` order is also
+/// run order, and the same tail cursor works across them.
+pub async fn step_log_after(
+    data_root: &Path,
+    step: &str,
+    after_seq: i64,
+    limit: i64,
+) -> Vec<LogRow> {
+    log_where(data_root, None, Some(step), after_seq, limit).await
+}
+
+async fn log_where(
+    data_root: &Path,
+    run_id: Option<&str>,
+    step: Option<&str>,
+    after_seq: i64,
+    limit: i64,
+) -> Vec<LogRow> {
     let path = runs_path(data_root);
     if !path.exists() {
         return Vec::new();
@@ -371,10 +394,12 @@ pub async fn log_after(
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT seq, step, attempt, ts_utc, tz_offset, stream, level, target, thread, msg, fields \
-         FROM log WHERE run_id = ? AND seq > ? AND (? IS NULL OR step = ?) \
+        "SELECT seq, run_id, step, attempt, ts_utc, tz_offset, stream, level, target, thread, \
+         msg, fields \
+         FROM log WHERE (? IS NULL OR run_id = ?) AND seq > ? AND (? IS NULL OR step = ?) \
          ORDER BY seq LIMIT ?",
     )
+    .bind(run_id)
     .bind(run_id)
     .bind(after_seq)
     .bind(step)
@@ -387,7 +412,7 @@ pub async fn log_after(
     rows.iter()
         .map(|r| LogRow {
             seq: r.get("seq"),
-            run_id: run_id.to_string(),
+            run_id: r.get("run_id"),
             step: r.get("step"),
             attempt: r.get("attempt"),
             ts_utc: r.get("ts_utc"),

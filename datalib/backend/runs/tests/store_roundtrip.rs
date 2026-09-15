@@ -127,6 +127,33 @@ async fn log_after_resumes_from_a_sequence_number() {
     assert_eq!(rest[0].msg, "line 4");
 }
 
+/// One step's lines across runs come back in run order with the run each
+/// line belongs to, and the same `seq` cursor tails them.
+#[tokio::test]
+async fn step_log_after_spans_runs_and_names_each() {
+    use datalib_runs::step_log_after;
+    let td = tempfile::tempdir().unwrap();
+    let keep = Retention {
+        max_runs: 100,
+        max_age_days: 36500,
+    };
+    for (run, msg) in [("run-1", "first"), ("run-2", "second")] {
+        let w = RunWriter::start(td.path(), run, run, keep).unwrap();
+        w.log(line("a", "info", msg));
+        w.log(line("b", "info", "other step"));
+    }
+    let a = step_log_after(td.path(), "a", 0, 100).await;
+    assert_eq!(
+        a.iter()
+            .map(|l| (l.run_id.as_str(), l.msg.as_str()))
+            .collect::<Vec<_>>(),
+        [("run-1", "first"), ("run-2", "second")],
+    );
+    let tail = step_log_after(td.path(), "a", a[0].seq, 100).await;
+    assert_eq!(tail.len(), 1);
+    assert_eq!(tail[0].run_id, "run-2");
+}
+
 /// A terminal state latches. A progress tick that was already in flight
 /// when the step finished must not resurrect it as running — which is
 /// exactly what a table showing "running" forever after a sync ended

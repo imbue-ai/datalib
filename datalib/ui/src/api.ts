@@ -140,7 +140,6 @@ export type DocEntry = {
 // --- The unified_index applet --------------------------------------------
 export const UNIFIED_INDEX = "/applet/unified_index";
 
-
 // Newest-first listing of rendered documents (capped server-side).
 export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
   return getJson<DocEntry[]>(`${UNIFIED_INDEX}/docs`, signal);
@@ -239,7 +238,9 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
     } catch {
       // ignore
     }
-    const msg = detail ? `${url} → ${r.status}: ${detail}` : `${url} → ${r.status}`;
+    const msg = detail
+      ? `${url} → ${r.status}: ${detail}`
+      : `${url} → ${r.status}`;
     pushToast(msg);
     throw new Error(msg);
   }
@@ -382,7 +383,9 @@ export function fetchConfig(signal?: AbortSignal): Promise<ConfigResponse> {
 
 // Server-generated minimal starter config. Used when the root has no
 // config yet; the user fills in sources via the Setup tab's buttons.
-export function fetchConfigScaffold(signal?: AbortSignal): Promise<ConfigResponse> {
+export function fetchConfigScaffold(
+  signal?: AbortSignal,
+): Promise<ConfigResponse> {
   return getJson<ConfigResponse>("/api/config/scaffold", signal);
 }
 
@@ -400,7 +403,9 @@ export type InitConfigResponse = {
 // a root that has none. The "only if absent" check lives server-side
 // (one `create_new`), so this can't clobber a config that appeared in
 // between — a second window, a migration, an agent editing the root.
-export async function initConfig(signal?: AbortSignal): Promise<InitConfigResponse> {
+export async function initConfig(
+  signal?: AbortSignal,
+): Promise<InitConfigResponse> {
   const r = await fetch("/api/config/init", { method: "POST", signal });
   if (!r.ok) {
     let detail = "";
@@ -460,7 +465,9 @@ export type DagStepProgress = {
 // The fraction a step's `done` / `queued` pair describes, or null when
 // the step has not said how much is ahead of it — a bar drawn from an
 // invented total claims more than we know.
-export function progressFraction(p: DagStepProgress | null | undefined): number | null {
+export function progressFraction(
+  p: DagStepProgress | null | undefined,
+): number | null {
   if (!p) return null;
   const done = p.metrics.done;
   const queued = p.metrics.queued;
@@ -537,7 +544,9 @@ export async function saveConfig(
     } catch {
       // ignore
     }
-    throw new Error(detail ? `${r.status}: ${detail}` : `PUT /api/config → ${r.status}`);
+    throw new Error(
+      detail ? `${r.status}: ${detail}` : `PUT /api/config → ${r.status}`,
+    );
   }
   return (await r.json()) as SaveConfigResponse;
 }
@@ -550,7 +559,8 @@ export type SyncSource = {
   id: string;
 };
 
-export type SyncJobState = "pending" | "running" | "done" | "failed" | "canceled";
+export type SyncJobState =
+  "pending" | "running" | "done" | "failed" | "canceled";
 // The only kind enqueued today: one DAG run over the whole config
 // (`source_ids` optionally narrows it to selected sources).
 export type SyncJobKind = "all";
@@ -715,7 +725,10 @@ export function fetchActiveJobs(signal?: AbortSignal): Promise<SyncJob[]> {
   return getJson<SyncJob[]>("/api/sync/jobs", signal);
 }
 
-export function fetchAllJobs(limit = 50, signal?: AbortSignal): Promise<SyncJob[]> {
+export function fetchAllJobs(
+  limit = 50,
+  signal?: AbortSignal,
+): Promise<SyncJob[]> {
   const params = new URLSearchParams({ limit: String(limit) });
   return getJson<SyncJob[]>(`/api/sync/jobs/all?${params.toString()}`, signal);
 }
@@ -737,12 +750,17 @@ export async function enqueueJob(
     } catch {
       // ignore
     }
-    throw new Error(detail ? `${r.status}: ${detail}` : `POST /api/sync/jobs → ${r.status}`);
+    throw new Error(
+      detail ? `${r.status}: ${detail}` : `POST /api/sync/jobs → ${r.status}`,
+    );
   }
   return (await r.json()) as SyncJob;
 }
 
-export async function cancelJob(id: string, signal?: AbortSignal): Promise<void> {
+export async function cancelJob(
+  id: string,
+  signal?: AbortSignal,
+): Promise<void> {
   const r = await fetch(`/api/sync/jobs/${encodeURIComponent(id)}/cancel`, {
     method: "POST",
     signal,
@@ -819,11 +837,28 @@ export function fetchRunLog(
   );
 }
 
+// One step's lines across every run the store holds, oldest first. The
+// same tail cursor as `fetchRunLog`: `seq` is monotone across runs too.
+export function fetchStepLog(
+  step: string,
+  opts: { afterSeq?: number; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<RunLogLine[]> {
+  const params = new URLSearchParams();
+  params.set("step", step);
+  if (opts.afterSeq != null) params.set("after_seq", String(opts.afterSeq));
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  return getJson<RunLogLine[]>(`/api/log?${params.toString()}`, signal);
+}
+
 /// One job by id — a run the commit history names, which may be older
 /// than the list the Manage screen holds. Null when the app never ran
 /// it, without the toast `getJson` would raise: a run started from a
 /// terminal is an ordinary answer here, not a failure.
-export async function fetchJob(id: string, signal?: AbortSignal): Promise<SyncJob | null> {
+export async function fetchJob(
+  id: string,
+  signal?: AbortSignal,
+): Promise<SyncJob | null> {
   const r = await fetch(`/api/sync/jobs/${encodeURIComponent(id)}`, { signal });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`GET /api/sync/jobs/${id} → ${r.status}`);
@@ -868,7 +903,9 @@ export type FrontendView = {
   applet_errors?: Record<string, string>;
 };
 
-export async function fetchFrontend(signal?: AbortSignal): Promise<FrontendView> {
+export async function fetchFrontend(
+  signal?: AbortSignal,
+): Promise<FrontendView> {
   const r = await fetch("/api/frontend", { signal });
   if (!r.ok) throw new Error(`GET /api/frontend → ${r.status}`);
   return (await r.json()) as FrontendView;
@@ -927,7 +964,9 @@ export async function submitFeedback(
     } catch {
       // ignore — body may not be readable on aborted responses
     }
-    throw new Error(detail ? `${r.status}: ${detail}` : `POST /api/feedback → ${r.status}`);
+    throw new Error(
+      detail ? `${r.status}: ${detail}` : `POST /api/feedback → ${r.status}`,
+    );
   }
   return (await r.json()) as FeedbackResponse;
 }
@@ -1052,7 +1091,9 @@ async function quietJson<T>(url: string, init?: RequestInit): Promise<T> {
 /// Which accounts latchkey holds for one service, and how another could
 /// be added.
 export function latchkeyService(service: string): Promise<LatchkeyService> {
-  return quietJson<LatchkeyService>(`/api/latchkey/${encodeURIComponent(service)}`);
+  return quietJson<LatchkeyService>(
+    `/api/latchkey/${encodeURIComponent(service)}`,
+  );
 }
 
 /// Start latchkey's browser login. Returns immediately with an id to
@@ -1063,22 +1104,27 @@ export function startLatchkeyConnect(
   register?: ServiceRegistration,
   ephemeralBrowser = false,
 ): Promise<ConnectAttempt> {
-  return quietJson<ConnectAttempt>(`/api/latchkey/${encodeURIComponent(service)}/connect`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      account: account ?? "",
-      register: register ?? null,
-      ephemeral_browser: ephemeralBrowser,
-    }),
-  });
+  return quietJson<ConnectAttempt>(
+    `/api/latchkey/${encodeURIComponent(service)}/connect`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        account: account ?? "",
+        register: register ?? null,
+        ephemeral_browser: ephemeralBrowser,
+      }),
+    },
+  );
 }
 
 /// Poll one browser login. The server drops a finished attempt once it
 /// has been read, so a second poll after `ok`/`failed` is a 404 — read
 /// it once and keep the answer.
 export function latchkeyConnectStatus(id: string): Promise<ConnectAttempt> {
-  return quietJson<ConnectAttempt>(`/api/latchkey/connect/${encodeURIComponent(id)}/status`);
+  return quietJson<ConnectAttempt>(
+    `/api/latchkey/connect/${encodeURIComponent(id)}/status`,
+  );
 }
 
 /// Ask a provider what these credentials can reach. `params` is the

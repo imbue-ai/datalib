@@ -189,6 +189,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs", get(runs_list))
         .route("/api/runs/{run}/steps", get(run_steps))
         .route("/api/runs/{run}/log", get(run_log))
+        .route("/api/log", get(step_log))
         .route("/api/sync/stream", get(sync_stream))
         .route("/api/frontend", get(get_frontend))
         // Component code, addressed by content. Flat across every
@@ -1556,6 +1557,25 @@ async fn run_log(
         )
         .await,
     )
+}
+
+#[derive(Debug, Deserialize)]
+struct StepLogParams {
+    step: String,
+    #[serde(default)]
+    after_seq: Option<i64>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// `GET /api/log?step=…` — one step's lines across every run the store
+/// holds, oldest first. Tails the same way `/api/runs/{run}/log` does.
+async fn step_log(
+    State(s): State<AppState>,
+    Query(p): Query<StepLogParams>,
+) -> Json<Vec<datalib_runs::LogRow>> {
+    let limit = p.limit.unwrap_or(5000).clamp(1, 50_000);
+    Json(datalib_runs::step_log_after(&s.root, &p.step, p.after_seq.unwrap_or(0), limit).await)
 }
 
 fn repo_err_to_status(e: RepoError) -> StatusCode {

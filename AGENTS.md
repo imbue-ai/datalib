@@ -1485,6 +1485,19 @@ saved queries and in people's fingers. New callers emit `source_id:` and
 
 Background: [#279](https://github.com/imbue-ai/datalib/issues/279).
 
+## A cursor is only valid under the config that set it
+
+A provider that resumes from a stored cursor never re-reads the config
+that narrowed its first walk, so *widening* that config (removing a
+label filter, moving `since` back) is a silent no-op unless the
+provider records the scope beside the cursor and diffs it next run —
+`datalib_etl::scope_config`, and the convention is written up in
+[`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md#when-the-cursor-swallows-a-config-change)
+§ "When the cursor swallows a config change", with the table of who
+records what. Slack hit this first, then Gmail, added after the sweep
+that fixed everyone else; `lint_repo.py` check 8 now catches a new
+provider that keeps a cursor without the record.
+
 ## Unordered collections: give a bag an order before storing it
 
 **A JSON array is not necessarily a list.** When an API returns a *set*

@@ -68,15 +68,22 @@ impl RawDb {
                 .await
                 .with_context(|| format!("truncate {table}"))?;
         }
-        // Every live mode's cursor namespace. A reset that cleared only
-        // one would leave a stale cursor pointing into a store that no
-        // longer has the rows it names.
-        for prefix in ["jmap:%", "gmail:%"] {
+        // Every mode's cursor namespace, and the record of the config each
+        // cursor was taken under. A reset that cleared only one mode would
+        // leave a stale cursor pointing into a store that no longer has
+        // the rows it names; one that kept the config record would let it
+        // describe a store that no longer exists.
+        for prefix in ["jmap:%", "gmail:%", "mbox:%"] {
             sqlx::query("DELETE FROM sync_scope_state WHERE scope LIKE ?")
                 .bind(prefix)
                 .execute(&mut *tx)
                 .await
                 .with_context(|| format!("clear {prefix} scope state on reset"))?;
+            sqlx::query("DELETE FROM sync_scope_config WHERE scope LIKE ?")
+                .bind(prefix)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("clear {prefix} scope config on reset"))?;
         }
         sqlx::query("DELETE FROM ingested_files")
             .execute(&mut *tx)
@@ -675,6 +682,9 @@ mod tests {
         .unwrap();
         upsert_email(&db, &email).await;
         db.save_state("A1", "Email", "tok").await.unwrap();
+        datalib_etl::scope_config::store(db.pool(), "gmail:download", &json!({"labels": ["x"]}))
+            .await
+            .unwrap();
         let run = datalib_etl::doltlite_raw::start_run(db.pool(), &json!({"phase": "test"}))
             .await
             .unwrap();
@@ -686,6 +696,12 @@ mod tests {
         assert!(db.load_emails().await.unwrap().is_empty());
         assert!(db.load_email_joins().await.unwrap().mailboxes.is_empty());
         assert!(db.load_state("A1", "Email").await.unwrap().is_none());
+        // The record of the config the cursor was taken under goes with
+        // the cursor: kept, it would describe a store that no longer exists.
+        assert!(datalib_etl::scope_config::load(db.pool(), "gmail:download")
+            .await
+            .unwrap()
+            .is_none());
         // sync_runs untouched.
         let run_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sync_runs WHERE run_id = ?")
             .bind(run)

@@ -2,7 +2,8 @@
 // One run's log, as a grid: every line the run store holds for it,
 // sortable and filterable by AG Grid, appended to as the run goes — and
 // a picker for the other runs the step took part in, since "what did
-// it do last time" is the question right after "what is it doing".
+// it do last time" is the question right after "what is it doing". The
+// picker's last entry is every run at once, with a column saying which.
 //
 // The tail is a cursor, not a stream: the store assigns each line a
 // monotone `seq`, and each `dag_changed` frame (the runner touched the
@@ -22,7 +23,17 @@ import {
   type ITooltipParams,
   type ValueFormatterParams,
 } from "ag-grid-community";
-import { fetchRunLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
+// The drag-to-group bar is an enterprise module. GridCard already links
+// the whole enterprise bundle, so this costs nothing new; only the two
+// grouping modules are registered here.
+import { RowGroupingModule, RowGroupingPanelModule } from "ag-grid-enterprise";
+import {
+  fetchRunLog,
+  fetchRuns,
+  fetchStepLog,
+  type RunInfo,
+  type RunLogLine,
+} from "@/api";
 import { subscribeLive } from "@/live";
 import {
   compareStamps,
@@ -31,7 +42,11 @@ import {
   formatTimeOfDay,
 } from "@/config/timeFormat";
 
-ModuleRegistry.registerModules([AllCommunityModule]);
+ModuleRegistry.registerModules([
+  AllCommunityModule,
+  RowGroupingModule,
+  RowGroupingPanelModule,
+]);
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const props = defineProps<{
@@ -45,12 +60,18 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  /// The picker moved to another run, so the caller can say which.
-  (e: "run-changed", run: RunInfo): void;
+  /// The picker moved to another run, so the caller can say which;
+  /// `null` when it moved to every run at once.
+  (e: "run-changed", run: RunInfo | null): void;
 }>();
+
+/// The picker's "every run" entry. Not a run id: the store's ids are
+/// UUIDs, and the job ids that double as run ids are too.
+const ALL_RUNS = "*";
 
 /// The run on screen; starts as the one opened, moves with the picker.
 const runId = ref(props.runId);
+const allRuns = computed(() => runId.value === ALL_RUNS);
 /// The runs the picker offers: the ones this step took part in, newest
 /// first, or every recent run when the panel is not about one step.
 const runs = ref<RunInfo[]>([]);
@@ -58,6 +79,8 @@ const runs = ref<RunInfo[]>([]);
 /// so by prop; a picked one by whether the store has closed it.
 const live = computed(() => {
   if (runId.value === props.runId) return props.live;
+  if (allRuns.value)
+    return props.live || runs.value.some((x) => x.finished_at_utc == null);
   const r = runs.value.find((x) => x.run_id === runId.value);
   return !!r && r.finished_at_utc == null;
 });
@@ -89,7 +112,13 @@ async function load(fresh: boolean) {
   }
   error.value = null;
   try {
-    const got = await fetchRunLog(runId.value, { step: stepFilter(), afterSeq: lastSeq });
+    const got =
+      allRuns.value && props.step
+        ? await fetchStepLog(props.step, { afterSeq: lastSeq })
+        : await fetchRunLog(runId.value, {
+            step: stepFilter(),
+            afterSeq: lastSeq,
+          });
     if (got.length > 0) {
       lastSeq = got[got.length - 1].seq;
       lines.value = fresh ? got : [...lines.value, ...got];
@@ -132,9 +161,22 @@ async function loadRuns() {
 
 function pickRun(ev: Event) {
   runId.value = (ev.target as HTMLSelectElement).value;
-  const picked = runs.value.find((r) => r.run_id === runId.value);
-  if (picked) emit("run-changed", picked);
+  if (allRuns.value) {
+    // Every run is only meaningful for one step.
+    stepOnly.value = true;
+    emit("run-changed", null);
+  } else {
+    const picked = runs.value.find((r) => r.run_id === runId.value);
+    if (picked) emit("run-changed", picked);
+  }
   void load(true);
+}
+
+/// The run id as the column shows it: the first block of the UUID, which
+/// is what someone reads off the header to tell two runs apart. The whole
+/// id is in the tooltip.
+function shortRunId(id: string): string {
+  return id.split("-")[0] ?? id;
 }
 
 /// How a run reads in the picker: when it started, and whether it is
@@ -157,6 +199,10 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     // The time of day to the millisecond, in the viewer's zone (a
     // step's own lines are stamped in UTC, the runner's in local time);
     // the date is in the tooltip, since every line of one run shares it.
+    // Clipped from the left: the seconds and milliseconds are what tell
+    // one line from the next, the hour is the same for all.
+    cellClass: "rl-clip-left",
+    enableRowGroup: false,
     valueFormatter: (p: ValueFormatterParams<RunLogLine>) =>
       formatTimeOfDay(p.value ? String(p.value) : null),
     tooltipValueGetter: (p: ITooltipParams<RunLogLine>) =>
@@ -166,13 +212,29 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     filter: false,
   },
   {
+    headerName: "Run",
+    field: "run_id",
+    width: 100,
+    hide: !allRuns.value,
+    filter: true,
+    valueFormatter: (p: ValueFormatterParams<RunLogLine>) =>
+      shortRunId(String(p.value ?? "")),
+    tooltipField: "run_id",
+  },
+  {
     headerName: "Step",
     field: "step",
     width: 180,
     hide: stepOnly.value && !!props.step,
     filter: true,
   },
-  { headerName: "Level", field: "level", width: 80, filter: true, cellClass: levelClass },
+  {
+    headerName: "Level",
+    field: "level",
+    width: 80,
+    filter: true,
+    cellClass: levelClass,
+  },
   { headerName: "Stream", field: "stream", width: 84, filter: true },
   { headerName: "Thread", field: "thread", width: 150, filter: true },
   { headerName: "Target", field: "target", width: 200, filter: true },
@@ -192,6 +254,8 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     width: 220,
     filter: true,
     tooltipField: "fields",
+    // One of a kind per line: grouping by it would be a group per row.
+    enableRowGroup: false,
   },
 ]);
 
@@ -199,6 +263,21 @@ const defaultColDef: ColDef<RunLogLine> = {
   resizable: true,
   sortable: true,
   suppressHeaderMenuButton: false,
+  enableRowGroup: true,
+};
+
+/// Grouping by run, by level, by target — the questions a log answers
+/// once it holds more than one run. Groups open expanded: the point is
+/// to organise the lines, not to hide them, and the counts on the group
+/// rows read the same either way.
+const groupOptions = {
+  rowGroupPanelShow: "always" as const,
+  groupDefaultExpanded: -1,
+  localeText: {
+    rowGroupColumnsEmptyMessage:
+      "Drag a column here to group the lines by it — Run, Level, Target",
+  },
+  autoGroupColumnDef: { minWidth: 220 } as ColDef<RunLogLine>,
 };
 
 function onGridReady(e: GridReadyEvent<RunLogLine>) {
@@ -206,7 +285,10 @@ function onGridReady(e: GridReadyEvent<RunLogLine>) {
 }
 
 function onQuickFilter(ev: Event) {
-  gridApi?.setGridOption("quickFilterText", (ev.target as HTMLInputElement).value);
+  gridApi?.setGridOption(
+    "quickFilterText",
+    (ev.target as HTMLInputElement).value,
+  );
 }
 
 onMounted(() => {
@@ -239,11 +321,11 @@ onUnmounted(() => {
         aria-label="Search the log"
         @input="onQuickFilter"
       />
-      <button v-if="props.step" class="m2-btn" @click="toggleScope">
+      <button v-if="props.step && !allRuns" class="m2-btn" @click="toggleScope">
         {{ stepOnly ? "Show the whole run" : "Only this step" }}
       </button>
       <select
-        v-if="runs.length > 1"
+        v-if="runs.length > 1 || props.step"
         class="rl-run"
         :value="runId"
         aria-label="Which run"
@@ -252,6 +334,7 @@ onUnmounted(() => {
         <option v-for="r in runs" :key="r.run_id" :value="r.run_id">
           {{ runLabel(r) }}
         </option>
+        <option v-if="props.step" :value="ALL_RUNS">every run</option>
       </select>
       <span class="rl-count">
         {{ lines.length }} line{{ lines.length === 1 ? "" : "s" }}
@@ -261,7 +344,8 @@ onUnmounted(() => {
     <p v-if="error" class="rl-note bad">{{ error }}</p>
     <p v-else-if="busy" class="rl-note">Reading the run store…</p>
     <p v-else-if="lines.length === 0" class="rl-note">
-      Nothing logged yet for this run<span v-if="stepOnly && props.step"> by this step</span>.
+      Nothing logged yet<span v-if="!allRuns"> for this run</span
+      ><span v-if="stepOnly && props.step"> by this step</span>.
     </p>
     <AgGridVue
       v-show="lines.length > 0"
@@ -274,6 +358,7 @@ onUnmounted(() => {
       :tooltipShowDelay="300"
       :rowHeight="24"
       :headerHeight="30"
+      v-bind="groupOptions"
       :enableCellTextSelection="true"
       :suppressCellFocus="true"
       @grid-ready="onGridReady"
@@ -341,6 +426,15 @@ onUnmounted(() => {
 
 <style>
 /* Cell classes are set by the grid, so they can't be scoped. */
+/* Overflow hides the start of the text rather than its end. The value
+   span is what clips, so it runs right-to-left: the ellipsis lands on
+   the left. A time of day is digits and separators only, which the bidi
+   algorithm keeps as one left-to-right run, so the text itself is
+   unchanged. */
+.rl-grid .rl-clip-left .ag-cell-value {
+  direction: rtl;
+  text-align: left;
+}
 .rl-grid .rl-warn {
   color: var(--datalib-log-warn);
 }

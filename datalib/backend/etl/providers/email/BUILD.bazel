@@ -142,6 +142,24 @@ rust_test(
     ],
 )
 
+# Widening `only_extract_labels` on a mirror that already has a cursor:
+# `history.list` never names mail that merely existed outside the old
+# filter, so the run has to notice the filter moved and walk it.
+rust_test(
+    name = "gmail_widened_labels_backfill",
+    srcs = ["tests/gmail_widened_labels_backfill.rs"],
+    crate_root = "tests/gmail_widened_labels_backfill.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_email",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 rust_test(
     name = "gmail_label_union",
     srcs = ["tests/gmail_label_union.rs"],
