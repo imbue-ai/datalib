@@ -284,9 +284,11 @@ reference doc it relates to.
   row join lives in `GET /api/manage/rows` (`http/src/manage/`), the
   vocabulary in `datalib/backend/columns`, the viewer in
   `ui/src/cards/TableGrid.ce.vue`, and the Manage screen is the
-  `sourcesView()` + `configView()` cards (`Manager2View.vue` is gone).
-  `GridCard` onto the viewer is what remains. The crate split and the
-  run store it depended on have both landed.
+  `sourcesView()` + `configView()` cards (`Manager2View.vue` is gone),
+  and the search grid draws through `cards/typedColumns.ts` over
+  columns the applet declares. Read its checkpoint for what the last
+  step taught about where the viewer's altitude is. The crate split
+  and the run store it depended on have both landed.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md)
   — **read before adding a source to the Add/Edit wizard**: a field
   that asks for a file or folder must offer a native OS picker, not a
@@ -763,10 +765,11 @@ When you add or change a `grid_rows` column:
    `SEARCH_ROW_COLUMNS` and `search_row_from` — plus `SearchRow` in
    `unified_index/src/search.rs` if the column reaches the API.
 4. If it should be a grid column, add it to the `SearchRow` type in
-   `datalib/ui/src/api.ts` and to `columnDefs` in
-   `datalib/ui/src/cards/GridCard.ce.vue`. The column list is the
-   grid's, not the applet's — there is no `default_columns()` and no
-   `/columns` endpoint any more (checked 2026-09-11).
+   `datalib/ui/src/api.ts` and declare it in `columns()` in
+   `datalib/backend/applets/src/unified_index/columns.rs`, with its
+   type from `datalib_columns`. The applet declares the columns and
+   the grid draws them by type (`cards/typedColumns.ts`); a width or a
+   hover the type cannot know goes in `GridCard`'s `columnOverrides`.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## QMDs are write-only

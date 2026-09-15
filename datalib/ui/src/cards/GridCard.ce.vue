@@ -7,10 +7,13 @@
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import TableGrid from "./TableGrid.ce.vue";
+import { AgGridVue } from "ag-grid-vue3";
+import { typedColumns } from "./typedColumns";
 import {
   ModuleRegistry,
   AllCommunityModule,
+  themeQuartz,
+  colorSchemeVariable,
   type ColDef,
   type ColumnState,
   type GridApi,
@@ -50,6 +53,8 @@ import { keepExcludeItems, withToken } from "@/grid/query";
 import type { CardCtx } from "./types";
 
 ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule]);
+
+const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -500,7 +505,9 @@ async function runSearch(q: string) {
   qmdError.value = null;
   try {
     const r = await fetchSearch(q, SEARCH_LIMIT, inflight.signal);
-    if (r.columns?.length) columns.value = r.columns;
+    if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
+      columns.value = r.columns;
+    }
     rows.value = r.rows;
     total.value = r.total_estimated;
     const qe =
@@ -600,6 +607,11 @@ function applyDefaultSort() {
       if (last >= 0) api.ensureIndexVisible(last, "bottom");
     }
   };
+  // The grid is mounted once its rows and columns have landed, so at
+  // grid-ready they are already in: scroll now, before the first paint
+  // is seen at the wrong end. The two paths below cover rows that
+  // arrive into a grid that already exists.
+  if (api.getDisplayedRowCount() > 0) scrollToEnd();
   // Subscribe to the next rowDataUpdated event, then deregister.
   // Wrapped in a try/catch because ag-grid versions disagree on
   // whether one-shot subscriptions are allowed.
@@ -774,6 +786,12 @@ const columnOverrides: Record<string, ColDef<SearchRow>> = {
   kind: { width: 110 },
   conversation_name: { width: 200 },
   channel: { width: 130 },
+  // The default order, in the definition so the first paint is already
+  // sorted rather than re-sorted a beat after rows land. Safe to bake
+  // in now that the definitions are built once: `applyDefaultSort`
+  // still switches to score when a free-text search returns scores,
+  // and a user's own sort sticks because nothing rebuilds the columns.
+  when: { sort: "asc" },
   snippet: {
     flex: 1,
     minWidth: 200,
@@ -840,12 +858,40 @@ const extraColumns: ColDef<SearchRow>[] = [
   },
 ];
 
+/// The preset's columns, then the column state the URL carries. The
+/// grid is mounted only once the applet has declared its columns, so
+/// by grid-ready there is something to apply them to.
+function applyInitialColumnState() {
+  if (!gridApi) return;
+  applyPresetColumns();
+  if (colsEncoded) {
+    const state = decodeColumnState(colsEncoded);
+    if (state) {
+      restoring = true;
+      gridApi.applyColumnState({ state, applyOrder: true });
+      restoring = false;
+      // An explicit persisted column state carries the user's sort
+      // choice — don't clobber it with our default.
+      if (state.some((c) => c.sort != null)) userSortedManually = true;
+    }
+  }
+}
+
+/// The grid's columns: the applet's, drawn by type, refined by the
+/// overrides above, with the card's own beside `project` — among the
+/// facets, where a 640px card still has them on screen.
+const columnDefs = computed<ColDef<SearchRow>[]>(() => {
+  const typed = typedColumns<SearchRow>(columns.value, {
+    rows: () => rows.value,
+    overrides: columnOverrides,
+  });
+  const at = typed.findIndex((c) => c.colId === "project") + 1;
+  return [...typed.slice(0, at), ...extraColumns, ...typed.slice(at)];
+});
+
 /// Every column id the grid can show, declared or the card's own.
 function allColumnIds(): string[] {
-  return [
-    ...columns.value.map((c) => c.field),
-    ...extraColumns.map((c) => c.colId as string),
-  ];
+  return columnDefs.value.map((c) => (c.colId ?? c.field) as string);
 }
 
 const defaultColDef: ColDef = {
@@ -856,6 +902,7 @@ const defaultColDef: ColDef = {
 };
 
 const gridOptions: GridOptions<SearchRow> = {
+  theme: gridTheme,
   animateRows: false,
   // Empty results are reported once, by the "no matches." line below the
   // grid — which is gated so it stays hidden while a search is in flight
@@ -1084,21 +1131,14 @@ const gridOptions: GridOptions<SearchRow> = {
     // open — fine for tests, which drive a single grid.
     (window as unknown as { __fwGridApi?: GridApi<SearchRow> }).__fwGridApi =
       e.api;
-    applyPresetColumns();
-    if (colsEncoded) {
-      const state = decodeColumnState(colsEncoded);
-      if (state) {
-        restoring = true;
-        gridApi.applyColumnState({ state, applyOrder: true });
-        restoring = false;
-        // An explicit persisted column state carries the user's sort
-        // choice — don't clobber it with our default.
-        if (state.some((c) => c.sort != null)) userSortedManually = true;
-      }
-    }
-    // Rows may already be loaded by the time the grid is ready.
+    applyInitialColumnState();
+    // The rows are already loaded by the time the grid is ready — it is
+    // mounted once they and their columns have landed — so this is the
+    // moment the `rows` watcher below would otherwise have.
+    applyAdaptiveVisibility();
     applyDefaultSort();
     tryRestoreSelection();
+    refreshQmdState();
   },
   onRowSelected: (e: RowSelectedEvent<SearchRow>) => {
     if (!e.node.isSelected() || !e.data) return;
@@ -1199,18 +1239,20 @@ const gridOptions: GridOptions<SearchRow> = {
     <p v-if="error" class="error">error: {{ error }}</p>
 
     <div class="grid-wrap" :data-shown-query="shownQuery">
-      <div class="grid" :class="{ 'grid--loading': loading }">
-        <TableGrid
-          :columns="columns"
-          :rows="rows"
-          rowKey="uuid"
-          :columnOverrides="columnOverrides"
-          :extraColumns="extraColumns"
-          :defaultColDef="defaultColDef"
-          :gridOptions="gridOptions"
-          :selectable="true"
-        />
-      </div>
+      <!-- Mounted once the applet has declared its columns: AG Grid
+           resets column state whenever it is handed new definitions,
+           so a grid created before them would lose the preset, the
+           URL's column state and the tool panel's toggles the moment
+           they arrived. -->
+      <AgGridVue
+        v-if="columns.length > 0"
+        class="grid"
+        :class="{ 'grid--loading': loading }"
+        :rowData="rows"
+        :columnDefs="columnDefs"
+        :defaultColDef="defaultColDef"
+        :gridOptions="gridOptions"
+      />
       <div v-if="loading" class="grid-spinner" aria-label="searching">
         <div class="grid-spinner__ring" />
         <div class="grid-spinner__label">searching…</div>

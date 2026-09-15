@@ -1,7 +1,7 @@
 # Design: a data-centric UI
 
-**Status: §1, §2, §4 and §6's first half built (2026-09-15); §3's
-identities on the wire; §5 and `GridCard` not.** Written
+**Status: built (2026-09-15), except §5's per-table change frames.**
+Written
 2026-09-09 against `a4752fb5`; revised 2026-09-15 against `9a45cff4`.
 Per [`AGENTS.md`](../../../AGENTS.md), don't cite this file as a
 description of the tree. Where it says "today", that was checked
@@ -315,16 +315,23 @@ ones are the speculative ones.
    panel and wizard are row-action-opened panels; the whole-root
    storage bar is app chrome (`RootStorageBar.vue`); `ctx.setHelp` is
    in the card contract and both cards use it.
-6. **`GridCard` onto the viewer.** The duplication goes.
+6. **`GridCard` onto the viewer.** Done, and it changed the viewer's
+   shape. The applet declares the search grid's columns and resolves
+   its Provider and Source identities from the config; `GridCard`'s
+   own `formatBytes`, icon map and source-name join are gone. But the
+   first attempt mounted `GridCard`'s grid *through* `TableGrid`, and
+   `TableGrid` grew a `gridOptions` passthrough, `columnOverrides`,
+   `extraColumns` and a `rowClick` emit to make that fit — a wrapper
+   re-exposing the API of the thing it wrapped, and AG Grid's own
+   `onGridReady` was the first callback the two fought over. The fix
+   was altitude, not patching: `typedColumns` (`cards/typedColumns.ts`)
+   is the pure product of §2 — specs in, column definitions out — and
+   `TableGrid` is a thin grid over it for the hosts that want only a
+   table. `GridCard` calls `typedColumns` and keeps its own grid.
 
-**The checkpoint, read at (5).** The sources tree became a card with
-these escape hatches, each named honestly:
+**The checkpoint, read at (5) and again at (6).** The sources tree
+became a card with these escape hatches, each named honestly:
 
-- `TableGrid` takes `extraColumns` (AG Grid column definitions the
-  card adds beside the declared ones) and a `contextMenu`. Neither is
-  used by the sources card — the Activity column that was expected to
-  need the first became a `chips` type instead — but `GridCard` will
-  want both.
 - The sources card still decorates each row client-side with what
   needs the wizard's descriptors: `editBlocked`, the Browse card
   source, and the Download/Import label read off `params`. That is the
@@ -332,5 +339,12 @@ these escape hatches, each named honestly:
 - The Type column shows icon *and* label where the old grid showed the
   icon alone; a generic `identity` cell has no way to know a column is
   narrow on purpose, and the label was judged worth its width.
+- `GridCard` refines the declared columns with `overrides` (widths, a
+  two-line clamp on the text, the account-name formatter — the
+  accounts map is the browser's) and adds its two qmd-state columns
+  beside them. Those are presentation the type cannot know, and they
+  live where the grid does.
 
-That is few enough that the idea holds: (6) is mopping up.
+Few enough that the idea holds. What the split taught: the vocabulary
+is a function, not a component, and a host that already owns a grid
+should be handed definitions rather than a second grid.

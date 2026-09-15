@@ -176,7 +176,7 @@ test("the index group browses every source", async ({ page }) => {
   // (#384). The query itself is already asserted by `browse` above.
   await expect
     .poll(async () => {
-      const sources = await columnValues(page, "source_id");
+      const sources = await columnValues(page, "source_ref");
       return new Set(sources.map((s) => s.trim()).filter(Boolean)).size;
     })
     .toBeGreaterThan(1);
