@@ -20,6 +20,7 @@
 // test writes.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import {
   expandGroup,
   groupRow,
@@ -158,6 +159,31 @@ async function untilJobFinished(
     )
     .toMatch(new RegExp(`^(${states.join("|")})$`));
   return seen!;
+}
+
+/// What a failure about a stop would otherwise leave unsaid: the queue
+/// as the API serves it, the runner's record, and the last lines this
+/// spec's backend wrote — where the worker says what it sent and saw.
+/// Playwright puts test stdout in the report and in bazel's test log,
+/// which is the only place a CI run can be read from.
+async function dumpStopEvidence(request: APIRequestContext, why: string): Promise<void> {
+  try {
+    const queue = await jobs(request);
+    const dag = await (await request.get("/api/dag")).json();
+    console.warn(`[e2e] ${why}: jobs=${JSON.stringify(queue)}`);
+    console.warn(`[e2e] ${why}: dag=${JSON.stringify(dag)}`);
+  } catch (e) {
+    console.warn(`[e2e] ${why}: could not read the API: ${e}`);
+  }
+  try {
+    const servers = JSON.parse(process.env.FW_E2E_SERVERS ?? "[]") as { name: string; log: string }[];
+    const mine = servers.find((s) => s.name === "sandbox-manager2-control");
+    if (!mine) return;
+    const tail = readFileSync(mine.log, "utf8").split("\n").slice(-80).join("\n");
+    console.warn(`[e2e] ${why}: backend log tail:\n${tail}`);
+  } catch (e) {
+    console.warn(`[e2e] ${why}: could not read the backend log: ${e}`);
+  }
 }
 
 /// Empty the queue and wait for the runner to let go of the root, so
@@ -350,22 +376,28 @@ test.describe("sources run independently, one job at a time", () => {
     type Seen = { disabled: boolean; banner: boolean };
     let windingDown: Seen | null = null;
     let stopped: SyncJob | undefined;
-    await expect
-      .poll(
-        async () => {
-          stopped = await jobFor(request, CHATGPT);
-          if (stopped && !stopped.active) return "finished";
-          if (await stopping.isVisible()) {
-            windingDown = {
-              disabled: (windingDown?.disabled ?? true) && (await stopping.isDisabled()),
-              banner: (windingDown?.banner ?? false) || (await banner.isVisible()),
-            };
-          }
-          return `winding down (${stopped?.state ?? "no job"})`;
-        },
-        { timeout: 45_000, intervals: [100], message: `the job for ${CHATGPT.id} never finished` },
-      )
-      .toBe("finished");
+    let finished = false;
+    try {
+      await expect
+        .poll(
+          async () => {
+            stopped = await jobFor(request, CHATGPT);
+            if (stopped && !stopped.active) return "finished";
+            if (await stopping.isVisible()) {
+              windingDown = {
+                disabled: (windingDown?.disabled ?? true) && (await stopping.isDisabled()),
+                banner: (windingDown?.banner ?? false) || (await banner.isVisible()),
+              };
+            }
+            return `winding down (${stopped?.state ?? "no job"})`;
+          },
+          { timeout: 45_000, intervals: [100], message: `the job for ${CHATGPT.id} never finished` },
+        )
+        .toBe("finished");
+      finished = true;
+    } finally {
+      if (!finished) await dumpStopEvidence(request, "the stop never finished");
+    }
     expect(stopped?.state, "a stop is a cancel, not a failure").toBe("canceled");
     // Read through a closure: TypeScript narrows the `let` to `null`
     // here, not seeing the assignment inside the poll, and an assigned
