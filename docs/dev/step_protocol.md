@@ -406,7 +406,9 @@ the reset env vars, checkpoints on SIGINT, and emits versions where it
 has them (the grid index claims its dolt commit hash). Use it as the
 reference implementation.
 
-The two index functions have one reader, the `unified_index` applet,
-which finds them from the data root alone; so their ids are fixed at
-`unified_index/grid_index` and `unified_index/qmd_index`, and
-`datalib-step` refuses to run them under any other.
+The grid index has one reader, the `unified_index` applet, which finds
+it from the data root alone; so its id is fixed at
+`unified_index/grid_index`, and `datalib-step` refuses to run it under
+any other. The two qmd functions run per source, under a group with a
+`type`, and write their collection into the one qmd store the applet
+also finds from the root.

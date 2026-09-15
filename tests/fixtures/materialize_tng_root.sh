@@ -83,8 +83,10 @@ chmod u+w "$OUT_ROOT/unified_index/grid_index/db.doltlite_db"
 # on the Manage screen, and the storage endpoint measures one tree per
 # *declared* group and step. Without the group the index is invisible
 # there — no row, and no way to see that it is the second-largest thing
-# in the root. The two steps are declared but not run here; the index
-# itself arrives pre-built in the tars above.
+# in the root. The step is declared but not run here; the grid index
+# and the qmd store both arrive pre-built in the tars above. No source
+# group is declared either, so no `qmd_index`/`qmd_embed` step: the
+# qmd store's collections are simply what the tar holds.
 cat > "$OUT_ROOT/config.toml" <<EOF
 data_root = "$OUT_ROOT"
 
@@ -95,11 +97,6 @@ name = "Unified Index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = []
-
-[[steps]]
-group = "unified_index"
-function = "qmd_index"
 inputs = []
 
 [[applets]]

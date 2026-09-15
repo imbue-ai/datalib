@@ -8,7 +8,7 @@ import { listGroups, listSteps } from "../src/config/sourceSteps";
 
 describe("quick-add snippets", () => {
   for (const snippet of SNIPPETS) {
-    it(`${snippet.label} is one group with an ingest and a render step under it`, () => {
+    it(`${snippet.label} is one group with its four steps under it`, () => {
       const text = snippet.body("latchkey");
       const [group, ...rest] = listGroups(text);
       expect(rest).toEqual([]);
@@ -17,8 +17,13 @@ describe("quick-add snippets", () => {
       expect(steps.map((s) => s.id)).toEqual([
         `${group.id}/ingest`,
         `${group.id}/render_markdown`,
+        `${group.id}/qmd_index`,
+        `${group.id}/qmd_embed`,
       ]);
       expect(steps[1].inputs).toEqual([`${group.id}/ingest`]);
+      expect(steps[2].inputs).toEqual([`${group.id}/render_markdown`]);
+      expect(steps[3].inputs).toEqual([`${group.id}/qmd_index`]);
+      expect(text).toContain('lock = "qmd_embed"');
       // No command: a built-in step is `datalib-step`.
       expect(text).not.toContain("command");
     });

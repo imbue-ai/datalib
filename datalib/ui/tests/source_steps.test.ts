@@ -17,6 +17,7 @@ import {
   listSteps,
   paramsAreRepresentable,
   paramsObject,
+  ownedSteps,
   producerOf,
   removeSteps,
   renameGroup,
@@ -36,7 +37,7 @@ const LIGHTROOM = catalogFor("lightroom")!;
 const APPLE_PHOTOS = catalogFor("apple_photos")!;
 const SIGNAL = catalogFor("signal")!;
 
-/** One source's group and two steps plus the index group and its steps. */
+/** One source's group and four steps plus the index group and its step. */
 const PAIR = `data_root = "~/datalib"
 
 [[groups]]
@@ -45,11 +46,6 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["slack/render_markdown"]
-
-[[steps]]
-group = "unified_index"
-function = "qmd_index"
 inputs = ["slack/render_markdown"]
 
 # ── slack ─────────────────────────────────────────────────────────────
@@ -68,15 +64,27 @@ channels = ["general"]
 group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
+
+[[steps]]
+group = "slack"
+function = "qmd_index"
+inputs = ["slack/render_markdown"]
+
+[[steps]]
+group = "slack"
+function = "qmd_embed"
+inputs = ["slack/qmd_index"]
+lock = "qmd_embed"
 `;
 
 describe("listSteps", () => {
   it("gives every step its own row, in file order, under its composed id", () => {
     expect(listSteps(PAIR).map((s) => s.id)).toEqual([
       "unified_index/grid_index",
-      "unified_index/qmd_index",
       "slack/ingest",
       "slack/render_markdown",
+      "slack/qmd_index",
+      "slack/qmd_embed",
     ]);
   });
 
@@ -88,12 +96,13 @@ describe("listSteps", () => {
     expect(by.get("slack/ingest")).toBe("ingest");
     expect(by.get("slack/render_markdown")).toBe("render");
     expect(by.get("unified_index/grid_index")).toBe("index");
-    expect(by.get("unified_index/qmd_index")).toBe("index");
+    expect(by.get("slack/qmd_index")).toBe("index");
+    expect(by.get("slack/qmd_embed")).toBe("embed");
     // A custom function under a group, and a step outside any group,
     // are steps and nothing more — whatever their ids look like.
     const custom = listSteps(`[[steps]]
 group = "slack"
-function = "embed"
+function = "vectorize"
 command = "my-embedder"
 
 [[steps]]
@@ -179,13 +188,18 @@ describe("a source's two steps", () => {
     expect(stepIdFor("work-slack", "render")).toBe("work-slack/render_markdown");
   });
 
-  it("sourceStepsOf finds a group's ingest and render steps by phase", () => {
+  it("sourceStepsOf finds a group's steps by phase", () => {
     const all = listSteps(PAIR);
-    const { ingest, render } = sourceStepsOf("slack", all);
+    const { ingest, render, index, embed } = sourceStepsOf("slack", all);
     expect(ingest?.id).toBe("slack/ingest");
     expect(render?.id).toBe("slack/render_markdown");
-    // The index group has neither.
-    expect(sourceStepsOf("unified_index", all)).toEqual({ ingest: undefined, render: undefined });
+    expect(index?.id).toBe("slack/qmd_index");
+    expect(embed?.id).toBe("slack/qmd_embed");
+    // The index group has only its grid index, which reads as "index".
+    const shared = sourceStepsOf("unified_index", all);
+    expect(shared.ingest).toBeUndefined();
+    expect(shared.render).toBeUndefined();
+    expect(shared.index?.id).toBe("unified_index/grid_index");
   });
 
   // A render step's producer is what its inputs name; one that declares
@@ -227,9 +241,32 @@ describe("buildSource", () => {
     expect(out.stepsBody.indexOf('function = "ingest"')).toBeLessThan(
       out.stepsBody.indexOf('function = "render_markdown"'),
     );
-    // And the whole thing parses back as the two steps under the group.
+    // And the whole thing parses back as the four steps under the group,
+    // each reading the one before it, the embedding step under its lock.
     const text = `${out.groupBody}\n\n${out.stepsBody}`;
-    expect(listSteps(text).map((s) => s.id)).toEqual(["slack/ingest", "slack/render_markdown"]);
+    const steps = listSteps(text);
+    expect(steps.map((s) => s.id)).toEqual([
+      "slack/ingest",
+      "slack/render_markdown",
+      "slack/qmd_index",
+      "slack/qmd_embed",
+    ]);
+    expect(steps[2].inputs).toEqual(["slack/render_markdown"]);
+    expect(steps[3].inputs).toEqual(["slack/qmd_index"]);
+    expect(out.stepsBody).toContain('lock = "qmd_embed"');
+  });
+
+  it("leaves the embedding step out when the source does not want it", () => {
+    const out = buildSource({
+      entry: SLACK,
+      group: "slack",
+      name: "",
+      values: {},
+      withGroup: false,
+      embeds: false,
+    });
+    expect(out.stepsBody).toContain('function = "qmd_index"');
+    expect(out.stepsBody).not.toContain("qmd_embed");
   });
 
   it("writes no group when editing, and no render step for a provider that renders nothing", () => {
@@ -242,6 +279,7 @@ describe("buildSource", () => {
     });
     expect(out.groupBody).toBeNull();
     expect(out.stepsBody).not.toContain("render_markdown");
+    expect(out.stepsBody).not.toContain("qmd_");
     expect(out.renderId).toBeNull();
   });
 
@@ -534,16 +572,13 @@ describe("removeSteps / replaceSteps", () => {
   /// that no longer exists, which the loader refuses outright — a whole
   /// config broken by a partial delete. Manager2 deletes the pair, and
   /// the group with them, taking its divider comment along.
-  it("removes a pair and its group together, leaving a config that still parses", () => {
-    const both = listSteps(PAIR).filter((s) => s.group === "slack");
-    expect(both).toHaveLength(2);
+  it("removes a source's steps and its group together, leaving a config that still parses", () => {
+    const all = listSteps(PAIR).filter((s) => s.group === "slack");
+    expect(all).toHaveLength(4);
     const group = listGroups(PAIR).find((g) => g.id === "slack")!;
-    const after = unwireFromFanIns(removeSteps(PAIR, [...both, group]), "slack/render_markdown");
+    const after = unwireFromFanIns(removeSteps(PAIR, [...all, group]), "slack/render_markdown");
     expect(after).not.toContain("slack");
-    expect(listSteps(after).map((s) => s.id)).toEqual([
-      "unified_index/grid_index",
-      "unified_index/qmd_index",
-    ]);
+    expect(listSteps(after).map((s) => s.id)).toEqual(["unified_index/grid_index"]);
     expect(listGroups(after).map((g) => g.id)).toEqual(["unified_index"]);
   });
 
@@ -559,20 +594,21 @@ describe("removeSteps / replaceSteps", () => {
     expect(after).toContain('channels = ["random"]');
     expect(after).not.toContain('channels = ["general"]');
     expect(after).toContain('name = "Work Slack"');
-    // Still exactly four steps, and the render step is as it was.
+    // Still exactly five steps, and the render step is as it was.
     expect(listSteps(after).map((s) => s.id).sort()).toEqual([
       "slack/ingest",
+      "slack/qmd_embed",
+      "slack/qmd_index",
       "slack/render_markdown",
       "unified_index/grid_index",
-      "unified_index/qmd_index",
     ]);
   });
 
   // The edit path: both steps cut against the text as parsed, then one
   // append. Cutting one, appending, then cutting the other would use
   // offsets into text the first cut had already shifted.
-  it("replaces a source's pair in one pass, leaving exactly one of each", () => {
-    const { ingest, render } = sourceStepsOf("slack", listSteps(PAIR));
+  it("replaces a source's steps in one pass, leaving exactly one of each", () => {
+    const steps = sourceStepsOf("slack", listSteps(PAIR));
     const out = buildSource({
       entry: SLACK,
       group: "slack",
@@ -580,18 +616,42 @@ describe("removeSteps / replaceSteps", () => {
       values: { "api.channels": ["random"] },
       withGroup: false,
     });
-    const after = replaceSteps(PAIR, [ingest!, render!], out.stepsBody);
-    expect(after.match(/function = "ingest"/g)).toHaveLength(1);
-    expect(after.match(/function = "render_markdown"/g)).toHaveLength(1);
+    const after = replaceSteps(PAIR, ownedSteps(steps), out.stepsBody);
+    for (const fn of ["ingest", "render_markdown", "qmd_index", "qmd_embed"]) {
+      expect(after.match(new RegExp(`function = "${fn}"`, "g"))).toHaveLength(1);
+    }
     expect(after).toContain('channels = ["random"]');
     expect(after).not.toContain('channels = ["general"]');
-    // The group and the index steps are untouched.
+    // The group and the shared index step are untouched.
     expect(after).toContain('name = "Work Slack"');
     expect(listSteps(after).map((s) => s.id).sort()).toEqual([
       "slack/ingest",
+      "slack/qmd_embed",
+      "slack/qmd_index",
       "slack/render_markdown",
       "unified_index/grid_index",
-      "unified_index/qmd_index",
+    ]);
+  });
+
+  // Unticking semantic search removes the embedding step with the same
+  // cut: it is one of the steps the source owns, and the new body
+  // simply does not carry it.
+  it("drops the embedding step a source no longer wants", () => {
+    const steps = sourceStepsOf("slack", listSteps(PAIR));
+    const out = buildSource({
+      entry: SLACK,
+      group: "slack",
+      name: "Work Slack",
+      values: {},
+      withGroup: false,
+      embeds: false,
+    });
+    const after = replaceSteps(PAIR, ownedSteps(steps), out.stepsBody);
+    expect(listSteps(after).map((s) => s.id).sort()).toEqual([
+      "slack/ingest",
+      "slack/qmd_index",
+      "slack/render_markdown",
+      "unified_index/grid_index",
     ]);
   });
 
@@ -602,8 +662,8 @@ describe("removeSteps / replaceSteps", () => {
       /\n\[\[steps\]\]\ngroup = "slack"\nfunction = "render_markdown"\ninputs = \["slack\/ingest"\]\n/,
       "\n",
     );
-    const { ingest, render } = sourceStepsOf("slack", listSteps(fetchOnly));
-    expect(render).toBeUndefined();
+    const steps = sourceStepsOf("slack", listSteps(fetchOnly));
+    expect(steps.render).toBeUndefined();
     const out = buildSource({
       entry: SLACK,
       group: "slack",
@@ -611,12 +671,13 @@ describe("removeSteps / replaceSteps", () => {
       values: {},
       withGroup: false,
     });
-    const after = replaceSteps(fetchOnly, [ingest!], out.stepsBody);
+    const after = replaceSteps(fetchOnly, ownedSteps(steps), out.stepsBody);
     expect(listSteps(after).map((s) => s.id).sort()).toEqual([
       "slack/ingest",
+      "slack/qmd_embed",
+      "slack/qmd_index",
       "slack/render_markdown",
       "unified_index/grid_index",
-      "unified_index/qmd_index",
     ]);
   });
 
@@ -699,23 +760,26 @@ describe("fan-in wiring", () => {
   // Adding a render step without naming it in the index steps renders
   // happily and is never indexed — invisible in search, with nothing on
   // screen to say why.
-  it("adds an id once, to every index step", () => {
+  it("adds an id once, to the shared index step and nowhere else", () => {
     const wired = wireIntoFanIns(PAIR, "email/render_markdown");
-    expect(wired.match(/"email\/render_markdown"/g)).toHaveLength(2);
+    expect(wired.match(/"email\/render_markdown"/g)).toHaveLength(1);
     expect(wireIntoFanIns(wired, "email/render_markdown")).toBe(wired);
     expect(wired).toContain('data_root = "~/datalib"');
     expect(wired).toContain("── slack");
   });
 
-  it("removes an id from every index step, and only from their inputs", () => {
+  it("removes an id from the shared index step, and only from its inputs", () => {
     const bare = unwireFromFanIns(PAIR, "slack/render_markdown");
-    // Both fan-ins now read nothing...
-    expect(bare.match(/inputs = \[\]/g)).toHaveLength(2);
-    // ...but the render step itself is untouched. Unwiring is about
+    // The fan-in now reads nothing...
+    expect(bare.match(/inputs = \[\]/g)).toHaveLength(1);
+    // ...but the render step itself is untouched, and so is the
+    // source's own search-index step, which names the same id: it is
+    // not a fan-in, and it leaves with its source. Unwiring is about
     // edges; removing the step is `removeSteps`, and the two are
     // separate because deleting a source needs both.
     expect(bare).toContain('function = "render_markdown"');
     expect(bare).toContain('function = "grid_index"');
+    expect(bare).toContain('inputs = ["slack/render_markdown"]');
   });
 
   /// The scaffold's index steps start with `inputs = []`, and the applet

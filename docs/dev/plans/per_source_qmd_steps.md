@@ -373,7 +373,14 @@ its `qmd_index` step.
    end through `datalib-dag` on the fixture's markdown: a 3-second
    budget ended `incomplete`, the next run resumed and succeeded, the
    run after that skipped everything as up to date.
-4. **UI and migration.** Wizard, Manage rows, migrator, docs.
+4. **UI** — *built 2026-09-15* (the migrator landed with slice 3).
+   The wizard writes a source as four steps, with a "Semantic search"
+   tick under Rendering (on by default) that adds or drops the
+   `qmd_embed` step; editing replaces every step the source owns in
+   one cut, so unticking removes the step. The Manage screen labels
+   the rows "Search index" and "Embeddings", deleting a step takes
+   everything under its group that reads it, and the quick-add
+   snippets carry the pair too.
 5. **Fixture.** `--embed` and the two-group fixture; retarget the
    tests that assumed everything was embedded.
 6. **Follow-ups**, deliberately out of scope: index incrementally from

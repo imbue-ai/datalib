@@ -139,29 +139,17 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/sources2");
     // The scaffold's one group is the table's whole content, and its
-    // three entries are under it.
+    // two entries are under it.
     await expect(groupRow(page, "unified_index")).toContainText("Unified Index");
     await expect(page.locator(".ag-row")).toHaveCount(1);
     await expandGroup(page, "unified_index");
-    for (const id of ["unified_index/grid_index", "unified_index/qmd_index", "unified_index"]) {
+    for (const id of ["unified_index/grid_index", "unified_index"]) {
       await expect(row(page, id)).toHaveCount(1);
     }
-    // The two index steps are labelled by their function, not by the
-    // generic "Index" the label map falls through to when a key is
-    // stale — which is what happened when the functions were renamed.
+    // The index step is labelled by its function, not by the generic
+    // "Index" the label map falls through to when a key is stale —
+    // which is what happened when the functions were renamed.
     await expect(row(page, "unified_index/grid_index")).toContainText("Grid index");
-    await expect(row(page, "unified_index/qmd_index")).toContainText("QMD index");
-
-    // The qmd index step, removed before anything can queue it. See the
-    // header: it is real work this test cannot afford, and the delete
-    // action is the honest way to not run it.
-    const remove = await rowMenuEntry(
-      page,
-      row(page, "unified_index/qmd_index"),
-      /^Remove from config$/,
-    ).open();
-    await remove.click();
-    await expect(row(page, "unified_index/qmd_index")).toHaveCount(0);
 
     // ── 4-6. the wizard ──────────────────────────────────────────────
     await page.getByRole("button", { name: "+ Data Source" }).click();
@@ -187,19 +175,43 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(toml).toContainText(`path = "${SCAN_DIR}"`);
     await expect(toml).toContainText('function = "render_markdown"');
     await expect(toml).toContainText('inputs = ["pdfs/ingest"]');
+    // The search-index pair follows the render step: keyword indexing
+    // always, embeddings by the tick under Rendering, which is on.
+    await expect(toml).toContainText('function = "qmd_index"');
+    await expect(toml).toContainText('inputs = ["pdfs/render_markdown"]');
+    await expect(toml).toContainText('function = "qmd_embed"');
+    await expect(toml).toContainText('lock = "qmd_embed"');
 
     await wizard.getByRole("button", { name: "Add source" }).click();
     await expect(wizard).toHaveCount(0);
 
-    // One group row, with two steps under it, and none of them has ever
-    // run: no status history, nothing on disk. This is the state the
-    // sync below has to move. The group reads off its steps, so it
+    // One group row, with four steps under it, and none of them has
+    // ever run: no status history, nothing on disk. This is the state
+    // the sync below has to move. The group reads off its steps, so it
     // says the same.
     await expect(groupRow(page, "pdfs")).toContainText("PDFs");
     expect(await statusOf(page, "group:pdfs")).toBe("Never run");
     expect(await bytesOf(page, "group:pdfs")).toBeNull();
     await expandGroup(page, "pdfs");
-    await expect(row(page, "pdfs/ingest")).toHaveCount(1);
+    for (const id of ["pdfs/ingest", "pdfs/render_markdown", "pdfs/qmd_index", "pdfs/qmd_embed"]) {
+      await expect(row(page, id)).toHaveCount(1);
+    }
+    await expect(row(page, "pdfs/qmd_index")).toContainText("Search index");
+    await expect(row(page, "pdfs/qmd_embed")).toContainText("Embeddings");
+
+    // The search-index steps, removed before anything can queue them.
+    // See the header: it is real work this test cannot afford, and the
+    // delete action is the honest way to not run it. Removing the index
+    // step takes the embedding step that reads it — a step whose input
+    // is gone is a config the loader refuses.
+    const remove = await rowMenuEntry(
+      page,
+      row(page, "pdfs/qmd_index"),
+      /^Remove from config$/,
+    ).open();
+    await remove.click();
+    await expect(row(page, "pdfs/qmd_index")).toHaveCount(0);
+    await expect(row(page, "pdfs/qmd_embed")).toHaveCount(0);
     await expect(row(page, "pdfs/render_markdown")).toHaveCount(1);
     expect(await statusOf(page, "pdfs/ingest")).toBe("Never run");
     expect(await bytesOf(page, "pdfs/ingest")).toBeNull();
@@ -340,6 +352,16 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     for (const id of ["pdfs/ingest", "pdfs/render_markdown", "signal/ingest", "signal/render_markdown"]) {
       await expect(row(page, id), `${id} should be a row`).toHaveCount(1);
     }
+    // Signal's search-index steps go the way pdfs' did above, and for
+    // the same reason.
+    const remove = await rowMenuEntry(
+      page,
+      row(page, "signal/qmd_index"),
+      /^Remove from config$/,
+    ).open();
+    await remove.click();
+    await expect(row(page, "signal/qmd_index")).toHaveCount(0);
+    await expect(row(page, "signal/qmd_embed")).toHaveCount(0);
 
     // ── 3. one has history, the other has none ───────────────────────
     //

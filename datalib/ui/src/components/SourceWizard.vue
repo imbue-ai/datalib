@@ -140,6 +140,15 @@ const renderWanted = ref(props.editing ? !!props.editing.steps.render : true);
 /// source asked for it.
 const renders = computed(() => providerRenders.value && renderWanted.value);
 
+/// Whether this source wants semantic search: its `qmd_embed` step, the
+/// slow one. On by default for a new source; editing seeds it from
+/// what the config has, so a source someone left keyword-only stays
+/// that way until they say otherwise.
+const embedWanted = ref(props.editing ? !!props.editing.steps.embed : true);
+
+/// Does this source write an embedding step — it renders, and asked.
+const embeds = computed(() => renders.value && embedWanted.value);
+
 /// The fields the form shows for one phase: the descriptor's, less any
 /// whose gate is shut.
 function activeFields(phase: "download" | "render"): Field[] {
@@ -179,8 +188,11 @@ const INLINE_KINDS = new Set<Field["kind"]>(["bool", "int"]);
 const missingSteps = computed<string[]>(() => {
   if (!props.editing) return [];
   const out: string[] = [];
-  if (!props.editing.steps.ingest) out.push(stepIdFor(id.value, "download"));
-  if (renders.value && !props.editing.steps.render) out.push(stepIdFor(id.value, "render"));
+  const steps = props.editing.steps;
+  if (!steps.ingest) out.push(stepIdFor(id.value, "download"));
+  if (renders.value && !steps.render) out.push(stepIdFor(id.value, "render"));
+  if (renders.value && !steps.index) out.push(stepIdFor(id.value, "index"));
+  if (embeds.value && !steps.embed) out.push(stepIdFor(id.value, "embed"));
   return out;
 });
 
@@ -192,6 +204,17 @@ const orphanRender = computed<string | null>(() =>
     ? props.editing.steps.render.id
     : null,
 );
+
+/// Search-index steps this source has that saving will remove: both
+/// when rendering is off, the embedding one when semantic search is.
+const droppedQmdSteps = computed<string[]>(() => {
+  if (!props.editing) return [];
+  const steps = props.editing.steps;
+  const out: string[] = [];
+  if (!renders.value && steps.index) out.push(steps.index.id);
+  if (!embeds.value && steps.embed) out.push(steps.embed.id);
+  return out;
+});
 
 const groups = computed(() => {
   const matches = filterCatalog(query.value);
@@ -304,6 +327,7 @@ const source = computed(() =>
         values: values.value,
         withGroup: mode.value === "create",
         renders: renders.value,
+        embeds: embeds.value,
       })
     : null,
 );
@@ -931,7 +955,11 @@ function submit() {
             Suggested from the name. Creates
             <code>{{ stepIdFor(groupId || "…", "download") }}</code>
             <template v-if="renders">
-              and <code>{{ stepIdFor(groupId || "…", "render") }}</code>
+              , <code>{{ stepIdFor(groupId || "…", "render") }}</code
+              >, <code>{{ stepIdFor(groupId || "…", "index") }}</code>
+              <template v-if="embeds">
+                and <code>{{ stepIdFor(groupId || "…", "embed") }}</code>
+              </template>
             </template>
             under the data root.
           </small>
@@ -963,7 +991,14 @@ function submit() {
             This source has a render step, <code>{{ orphanRender }}</code
             >, but {{ chosen.label }} renders nothing.
           </template>
-          Saving removes it, and takes it out of the index steps’ inputs.
+          Saving removes it, and takes it out of the grid index’s inputs.
+        </p>
+        <p v-if="droppedQmdSteps.length" class="wiz-cred">
+          Saving removes
+          <template v-for="(step, i) in droppedQmdSteps" :key="step"
+            ><template v-if="i > 0"> and </template><code>{{ step }}</code></template
+          >. What {{ droppedQmdSteps.length === 1 ? "it" : "they" }} put in the search index
+          stays until the next sync notices.
         </p>
 
         <p
@@ -989,6 +1024,18 @@ function submit() {
                 >
                   It has no settings of its own.</template
                 >
+              </small>
+            </label>
+            <label v-if="renders" class="wiz-field wiz-inline">
+              <span class="wiz-label">Semantic search</span>
+              <input v-model="embedWanted" type="checkbox" class="wiz-bool" />
+              <small class="wiz-help">
+                Keyword search always covers a rendered source, through
+                <code>{{ stepIdFor(groupId || "…", "index") }}</code>. Semantic search needs a
+                further step, <code>{{ stepIdFor(groupId || "…", "embed") }}</code>, which
+                computes a vector for every document — slow the first time, one source at a
+                time, and stoppable and resumable from this screen. Turn it off for a source
+                that is large and rarely searched by meaning.
               </small>
             </label>
           </section>

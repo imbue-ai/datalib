@@ -44,19 +44,19 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await openManager(page);
   await expandGroup(page, "unified_index");
   const grid = pipelineRow(page, "unified_index/grid_index");
-  const qmd = pipelineRow(page, "unified_index/qmd_index");
+  const applet = pipelineRow(page, "unified_index");
   await expect(grid).toBeVisible();
   await grid.locator('[col-id="status"]').click();
-  await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
+  await applet.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
   await expect(page.locator(".ag-row-selected")).toHaveCount(2);
 
-  await qmd.locator('[col-id="status"]').click({ button: "right" });
+  await applet.locator('[col-id="status"]').click({ button: "right" });
   await expect(menuEntries(page).last()).toHaveText("Remove 2 entries from config");
   // The one-row actions say so, and a reason names the row it came from.
   const history = page.locator(".ag-menu-option", { hasText: "Show commit history" });
   await expect(history).toHaveClass(/ag-menu-option-disabled/);
   await history.hover();
-  await expect(page.getByText("QMD index: The QMD index keeps no doltlite store")).toBeVisible();
+  await expect(page.getByText("Unified Index (Applet): An applet writes no store")).toBeVisible();
   await page.keyboard.press("Escape");
 
   // A row outside the selection is the one target, and the selection

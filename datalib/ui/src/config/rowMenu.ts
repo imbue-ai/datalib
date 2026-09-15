@@ -70,7 +70,9 @@ const ONE_AT_A_TIME = "One row at a time";
 /// A tree that keeps no doltlite store, or null when it keeps one.
 export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
-  if (t.func === "qmd_index") return "The QMD index keeps no doltlite store";
+  if (t.func === "qmd_index" || t.func === "qmd_embed") {
+    return "The search index keeps no doltlite store";
+  }
   return null;
 }
 

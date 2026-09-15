@@ -43,6 +43,7 @@ rust_library(
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
         "@datalib_crates//:libc",
         "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",

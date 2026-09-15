@@ -60,6 +60,7 @@ import {
   listSteps,
   type EntryKind,
   appendSource,
+  ownedSteps,
   removeSteps,
   describeGroup,
   renameGroup,
@@ -248,12 +249,27 @@ const takenIds = computed(
     ]),
 );
 
-/// The render step that reads a given fetch step, if the config has
-/// one — what deleting the fetch step has to take with it.
-function renderSiblingOf(fetchId: string): ConfiguredStep | undefined {
-  return sources.value.find(
-    (s) => s.kind === "step" && s.inputs.includes(fetchId) && s.phase === "render",
-  );
+/// The steps under the same group that read a given step, directly or
+/// through each other — what deleting it has to take with it. Deleting
+/// an ingest step takes its render step, its search-index step and its
+/// embedding step; a render step takes the last two. Leaving any of
+/// them behind would leave an input naming a step that no longer
+/// exists, which the loader refuses outright.
+function downstreamInGroup(step: ConfiguredStep): ConfiguredStep[] {
+  const out: ConfiguredStep[] = [];
+  const seen = new Set<string>([step.id]);
+  const queue = [step.id];
+  while (queue.length) {
+    const id = queue.shift()!;
+    for (const s of sources.value) {
+      if (s.kind !== "step" || s.group !== step.group || seen.has(s.id)) continue;
+      if (!s.inputs.includes(id)) continue;
+      seen.add(s.id);
+      out.push(s);
+      queue.push(s.id);
+    }
+  }
+  return out;
 }
 
 /// What a row stands for: a `[[groups]]` entry, or one of the two
@@ -363,6 +379,7 @@ const PHASE_LABEL: Record<StepPhase, string> = {
   ingest: "Ingest",
   render: "Render",
   index: "Index",
+  embed: "Embed",
   other: "Step",
 };
 
@@ -374,13 +391,14 @@ const CHILD_LABEL: Record<StepPhase, string> = {
   ingest: "Ingest",
   render: "Render markdown",
   index: "Index",
+  embed: "Embeddings",
   other: "Step",
 };
 
 /// The index steps, by function.
 const INDEX_LABEL: Record<string, string> = {
   grid_index: "Grid index",
-  qmd_index: "QMD index",
+  qmd_index: "Search index",
 };
 
 function childLabel(s: ConfiguredStep): string {
@@ -507,7 +525,7 @@ function entryRow(s: ConfiguredStep, declaredGroups: Set<string>): Row {
   let editBlocked: string | null = null;
   if (s.kind === "applet") {
     editBlocked = "No form for applets — edit this one in Advanced below.";
-  } else if (s.phase === "index") {
+  } else if (s.function === "grid_index") {
     editBlocked = "A shared index step has no options — its inputs are its whole config.";
   } else if (s.group !== null) {
     // The written group, not the declared one: a step naming a group
@@ -2042,12 +2060,12 @@ async function onWizardSubmit(payload: {
   const current = editing.value;
   let next: string;
   if (current) {
-    // Both steps are replaced in one cut-and-append, and a step the
-    // source was missing is simply appended with the other. The name
-    // and the description live on the group, which is edited in place.
-    const existing = [current.steps.ingest, current.steps.render].filter(
-      (s): s is ConfiguredStep => !!s,
-    );
+    // Every step the source owns is replaced in one cut-and-append: a
+    // step the source was missing is simply appended with the others,
+    // and one it no longer wants (an embedding step, say) leaves with
+    // the cut. The name and the description live on the group, which
+    // is edited in place.
+    const existing = ownedSteps(current.steps);
     next = replaceSteps(configText.value, existing, payload.stepsBody);
     next = renameGroup(next, current.group.id, payload.name);
     next = describeGroup(next, current.group.id, payload.description);
@@ -2083,24 +2101,25 @@ async function deleteSource(id: string) {
   if (!step) return;
   const name = step.name;
 
-  // Deleting a fetch step takes its render step too. Leaving the render
-  // step behind would leave an input naming a step that no longer
-  // exists, which the loader refuses outright — a whole config broken
-  // by a partial delete.
-  const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
-  const doomed = sibling ? [step, sibling] : [step];
+  // Deleting a step takes everything under its group that reads it.
+  // Leaving a reader behind would leave an input naming a step that no
+  // longer exists, which the loader refuses outright — a whole config
+  // broken by a partial delete.
+  const readers = step.kind === "step" ? downstreamInGroup(step) : [];
+  const doomed = [step, ...readers];
 
   const what =
     step.kind === "applet"
       ? `Remove the "${name}" applet from the config?\n\n` +
         `The server stops it. Anything in the app that its components or endpoints ` +
         `serve will stop working until you add it back.`
-      : step.phase === "index"
+      : step.function === "grid_index"
         ? `Remove the "${name}" index step from the config?\n\n` +
-          `Its output stays on disk but stops being refreshed, so search results go stale.`
-        : sibling
-          ? `Remove "${name}" and the render step that reads it ("${sibling.name}")?\n\n` +
-            `Both have to go together: a render step whose input is gone is a config ` +
+          `Its output stays on disk but stops being refreshed, so the grid goes stale.`
+        : readers.length
+          ? `Remove "${name}" and the ${readers.length === 1 ? "step" : "steps"} that read it ` +
+            `(${readers.map((r) => `"${r.name}"`).join(", ")})?\n\n` +
+            `They have to go together: a step whose input is gone is a config ` +
             `datalib refuses to load.\n\n` +
             `The data stays on disk. Re-adding later resumes from what's already there.`
           : `Remove "${name}" from the config?\n\n` +
@@ -2176,8 +2195,9 @@ async function deleteRows(targets: Row[]) {
       const step = sources.value.find((s) => s.id === t.id);
       if (!step) continue;
       doomed.set(step.id, step);
-      const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
-      if (sibling) doomed.set(sibling.id, sibling);
+      if (step.kind === "step") {
+        for (const r of downstreamInGroup(step)) doomed.set(r.id, r);
+      }
     }
   }
   // A group with nothing left under it goes too, as in `deleteSource`.
@@ -2755,7 +2775,7 @@ onUnmounted(() => {
         <p v-else-if="historyError" class="m2-logs-note bad">{{ historyError }}</p>
         <p v-else-if="historyLines.length === 0" class="m2-logs-note">
           No doltlite store under <code>{{ historyStoreNote }}</code> yet. A step that has never
-          run has written nothing, and the QMD index keeps no store of its own.
+          run has written nothing, and the search-index steps keep no store of their own.
         </p>
         <div v-else class="m2-history-grid">
           <AgGridVue

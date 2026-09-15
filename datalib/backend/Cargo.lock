@@ -2196,6 +2196,7 @@ name = "datalib-qmd-indexer"
 version = "0.31.1"
 dependencies = [
  "anyhow",
+ "chrono",
  "datalib-obs",
  "datalib-runtime",
  "libc",
