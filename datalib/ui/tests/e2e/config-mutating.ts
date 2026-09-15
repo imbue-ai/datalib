@@ -4,6 +4,7 @@ export const CONFIG_MUTATING = [
   "manager2-browse",
   "manager2-sync",
   "manager2-streaming",
+  "manager2-control",
   "manager2-name",
   "manager2-menu",
   "grid-source-id",

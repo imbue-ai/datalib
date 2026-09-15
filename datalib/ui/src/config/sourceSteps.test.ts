@@ -47,13 +47,15 @@ describe("the Slack attachment cap", () => {
   });
 
   it("defaults to 5 MB on a new source", () => {
-    expect(seedFieldValues(SLACK)[CAP]).toBe(5_000_000);
+    expect(seedFieldValues(SLACK)[CAP]).toBe("5 MB");
   });
 
+  // Written as a person would write it, which the backend reads
+  // (`datalib_source_common::byte_size`) — never as a count of bytes.
   it("writes the cap into the step's common table", () => {
     const out = toml(seedFieldValues(SLACK));
     expect(out).toContain("[steps.params.common]");
-    expect(out).toContain("blob_size_limit_bytes = 5000000");
+    expect(out).toContain('blob_size_limit_bytes = "5 MB"');
   });
 
   // The regression that matters. Before the create-only rule, opening
@@ -69,8 +71,22 @@ describe("the Slack attachment cap", () => {
   it("round-trips a cap the config already sets, without snapping it to 5 MB", () => {
     const existing = step({ api: { media: true }, common: { blob_size_limit_bytes: 250 } });
     const seeded = seedFieldValues(SLACK, { ingest: existing });
-    expect(seeded[CAP]).toBe(250);
-    expect(toml(seeded)).toContain("blob_size_limit_bytes = 250");
+    expect(seeded[CAP]).toBe("250 B");
+    expect(toml(seeded)).toContain('blob_size_limit_bytes = "250 B"');
+  });
+
+  // A hand-written cap keeps its own spelling: "5000 KB" is not
+  // rewritten to "5 MB" by a save that never touched it.
+  it("keeps a hand-written cap as written", () => {
+    const existing = step({ api: { media: true }, common: { blob_size_limit_bytes: "5000 KB" } });
+    const seeded = seedFieldValues(SLACK, { ingest: existing });
+    expect(seeded[CAP]).toBe("5000 KB");
+    expect(toml(seeded)).toContain('blob_size_limit_bytes = "5000 KB"');
+  });
+
+  it("drops a cap it cannot read rather than writing it back", () => {
+    const existing = step({ api: { media: true }, common: { blob_size_limit_bytes: "5 XB" } });
+    expect(toml(seedFieldValues(SLACK, { ingest: existing }))).not.toContain("blob_size_limit");
   });
 
   // `requires` gates the write as well as the row, so turning

@@ -34,11 +34,7 @@ import {
 // The drag-to-group bar and the right-click menu are enterprise
 // modules. GridCard already links the whole enterprise bundle, so this
 // costs nothing new; only the three are registered here.
-import {
-  ContextMenuModule,
-  RowGroupingModule,
-  RowGroupingPanelModule,
-} from "ag-grid-enterprise";
+import { ContextMenuModule, RowGroupingModule, RowGroupingPanelModule } from "ag-grid-enterprise";
 import { keepExcludeItems, withToken } from "@/grid/query";
 import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
 import { subscribeLive } from "@/live";
@@ -87,8 +83,7 @@ const runs = ref<RunInfo[]>([]);
 /// so by prop; a picked one by whether the store has closed it.
 const live = computed(() => {
   if (runId.value === props.runId) return props.live;
-  if (allRuns.value)
-    return props.live || runs.value.some((x) => x.finished_at_utc == null);
+  if (allRuns.value) return props.live || runs.value.some((x) => x.finished_at_utc == null);
   const r = runs.value.find((x) => x.run_id === runId.value);
   return !!r && r.finished_at_utc == null;
 });
@@ -240,8 +235,7 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     width: 100,
     hide: !allRuns.value,
     filter: true,
-    valueFormatter: (p: ValueFormatterParams<RunLogLine>) =>
-      shortRunId(String(p.value ?? "")),
+    valueFormatter: (p: ValueFormatterParams<RunLogLine>) => shortRunId(String(p.value ?? "")),
     tooltipField: "run_id",
   },
   {
@@ -251,13 +245,7 @@ const columnDefs = computed((): ColDef<RunLogLine>[] => [
     hide: stepOnly.value && !!props.step,
     filter: true,
   },
-  {
-    headerName: "Level",
-    field: "level",
-    width: 80,
-    filter: true,
-    cellClass: levelClass,
-  },
+  { headerName: "Level", field: "level", width: 80, filter: true, cellClass: levelClass },
   {
     headerName: "Stream",
     field: "stream",
@@ -312,8 +300,7 @@ const groupOptions = {
   rowGroupPanelShow: "always" as const,
   groupDefaultExpanded: -1,
   localeText: {
-    rowGroupColumnsEmptyMessage:
-      "Drag a column here to group the lines by it — Run, Level, Target",
+    rowGroupColumnsEmptyMessage: "Drag a column here to group the lines by it — Run, Level, Target",
   },
   autoGroupColumnDef: { minWidth: 220 } as ColDef<RunLogLine>,
 };
@@ -362,10 +349,7 @@ function contextMenuItems(
     apply: (token) => setQuery(withToken(query.value, token)),
   });
   if (query.value.trim()) {
-    items.push(
-      { name: "Clear the query", action: () => setQuery("") },
-      "separator",
-    );
+    items.push({ name: "Clear the query", action: () => setQuery("") }, "separator");
   }
   return [...items, ...defaults];
 }

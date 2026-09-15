@@ -396,8 +396,21 @@ impl AppRepo for AppStore {
         .execute(&mut *conn)
         .await
         .map_err(|e| RepoError::Internal(format!("recover running: {e}")))?;
+        // A job told to stop is `canceled` from the moment it is asked
+        // and finished only when the worker stamps it, so one the
+        // backend died in the middle of stopping would read as still
+        // winding down forever. It is as finished as it is going to get.
+        let stuck = sqlx::query(
+            "UPDATE sync_jobs SET finished_at_utc = ?, tz_offset = ?, pid = NULL              WHERE state = ? AND started_at_utc IS NOT NULL AND finished_at_utc IS NULL",
+        )
+        .bind(&finished_at_utc)
+        .bind(&tz_offset)
+        .bind(JobState::Canceled.as_str())
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("recover canceled: {e}")))?;
         // No DOLT_COMMIT — see the note in `enqueue_job`.
-        let n = res.rows_affected() as usize;
+        let n = (res.rows_affected() + stuck.rows_affected()) as usize;
         Ok(n)
     }
 
@@ -469,20 +482,29 @@ async fn probe_dolt_extensions(pool: &SqlitePool) -> bool {
 }
 
 fn row_to_sync_job(r: &sqlx::sqlite::SqliteRow) -> SyncJobRow {
+    // Decoded through `Option`, which is what checks for NULL: a bare
+    // `String` decode reads a NULL VARCHAR as `""`, and a job that had
+    // not finished then carried `finished_at_utc: ""` to every reader.
+    fn nullable<'r, T: sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>>(
+        r: &'r sqlx::sqlite::SqliteRow,
+        col: &str,
+    ) -> Option<T> {
+        r.try_get::<Option<T>, _>(col).ok().flatten()
+    }
     SyncJobRow {
         id: r.try_get("id").unwrap_or_default(),
-        source_ids: r.try_get("source_ids").ok(),
+        source_ids: nullable(r, "source_ids"),
         kind: r.try_get("kind").unwrap_or_default(),
-        parent_job_id: r.try_get("parent_job_id").ok(),
+        parent_job_id: nullable(r, "parent_job_id"),
         state: r.try_get("state").unwrap_or_default(),
         created_at_utc: r.try_get("created_at_utc").unwrap_or_default(),
-        started_at_utc: r.try_get("started_at_utc").ok(),
-        finished_at_utc: r.try_get("finished_at_utc").ok(),
-        tz_offset: r.try_get("tz_offset").ok(),
-        error: r.try_get("error").ok(),
-        pid: r.try_get::<i64, _>("pid").ok(),
-        progress_pct: r.try_get("progress_pct").ok(),
-        progress_msg: r.try_get("progress_msg").ok(),
+        started_at_utc: nullable(r, "started_at_utc"),
+        finished_at_utc: nullable(r, "finished_at_utc"),
+        tz_offset: nullable(r, "tz_offset"),
+        error: nullable(r, "error"),
+        pid: nullable::<i64>(r, "pid"),
+        progress_pct: nullable(r, "progress_pct"),
+        progress_msg: nullable(r, "progress_msg"),
     }
 }
 
@@ -498,6 +520,38 @@ mod tests {
             tz_offset: None,
             bytes,
         }
+    }
+
+    /// A job the backend died while stopping — `canceled` on request,
+    /// never stamped finished by a worker that is gone — would otherwise
+    /// hold its steps claimed in the UI until the end of time.
+    #[tokio::test]
+    async fn recovery_closes_a_cancel_the_worker_never_finished() {
+        let td = tempfile::tempdir().unwrap();
+        let store = AppStore::open(td.path()).await.unwrap();
+        let job = store
+            .enqueue_job(app_schema::sync_jobs::JobKind::All, Some("a/ingest"))
+            .await
+            .unwrap();
+        let claimed = store.claim_next_job().await.unwrap().expect("claimed");
+        assert_eq!(claimed.id, job.id);
+        store.request_cancel_job(&job.id).await.unwrap();
+        let mid = store.get_job(&job.id).await.unwrap().unwrap();
+        assert_eq!(mid.job_state(), Some(JobState::Canceled));
+        assert!(
+            mid.finished_at_utc.is_none(),
+            "a cancel request does not finish the job: {:?}",
+            mid.finished_at_utc
+        );
+
+        assert_eq!(store.recover_running_jobs().await.unwrap(), 1);
+        let after = store.get_job(&job.id).await.unwrap().unwrap();
+        assert_eq!(
+            after.job_state(),
+            Some(JobState::Canceled),
+            "still canceled, not failed"
+        );
+        assert!(after.finished_at_utc.is_some(), "…and now finished");
     }
 
     /// The disk-usage timeseries round-trips, and — the part worth

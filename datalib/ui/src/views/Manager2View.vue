@@ -47,7 +47,6 @@ import {
   type ManageResponse,
   type ManageRow,
   type SyncJob,
-  type SyncJobState,
   type JobProgressEvent,
 } from "@/api";
 import {
@@ -69,11 +68,7 @@ import {
   type SourceSteps,
   type StepPhase,
 } from "@/config/sourceSteps";
-import {
-  calibrationMax,
-  sparkline,
-  type UsageSample,
-} from "@/config/sparkline";
+import { calibrationMax, sparkline, type UsageSample } from "@/config/sparkline";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
 import { iconUrl } from "@/config/icons";
@@ -82,30 +77,14 @@ import { encodeColumns } from "@/router/columns";
 import { STEP_GLYPHS, STATUS_GLYPHS, glyphSvg } from "@/config/glyphs";
 import RunLogPanel from "@/components/RunLogPanel.vue";
 import { activityChips, activityText } from "@/config/activity";
-import {
-  historyRows,
-  truncatedStores,
-  type HistoryRow,
-} from "@/config/commitHistory";
+import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
-import {
-  compareStamps,
-  formatRelative,
-  formatStamp,
-} from "@/config/timeFormat";
+import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
 import { subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
-import {
-  isDesktopApp,
-  revealActionLabel,
-  revealInFileManager,
-} from "@/desktop";
+import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 
-ModuleRegistry.registerModules([
-  AllCommunityModule,
-  TreeDataModule,
-  ContextMenuModule,
-]);
+ModuleRegistry.registerModules([AllCommunityModule, TreeDataModule, ContextMenuModule]);
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const configText = ref("");
@@ -120,10 +99,10 @@ const serverSourceCount = ref(0);
 const configExists = ref(false);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
-/// The job a banner is *about*, when it is about one. Holding the id lets
-/// the banner retire itself the moment that job stops running; it used to
-/// clear only on the next action, so a finished sync left the page insisting
-/// one was still queued.
+  /// The job a banner is *about*, when it is about one. Holding the id lets
+  /// the banner retire itself the moment that job stops running; it used to
+  /// clear only on the next action, so a finished sync left the page insisting
+  /// one was still queued.
 const bannerJob = ref<string | null>(null);
 
 /// Put up a banner, optionally tying it to a job's lifetime.
@@ -138,10 +117,21 @@ function clearBanner() {
   bannerJob.value = null;
 }
 
-/// Take down a job-scoped banner once its job has stopped running.
-function retireBanner(jobId: string, state: SyncJobState) {
-  if (bannerJob.value !== jobId) return;
-  if (state === "pending" || state === "running") return;
+/// Is this job still holding the runner: queued, running, or told to
+/// stop and not yet stopped? A cancel flips the row to `canceled` on
+/// request; the run behind it is over when the worker stamps
+/// `finished_at_utc`. The server's `job_active` says the same.
+function jobActive(j: SyncJob): boolean {
+  if (j.state === "pending" || j.state === "running") return true;
+  return j.state === "canceled" && !!j.started_at_utc && !j.finished_at_utc;
+}
+
+/// Take down a job-scoped banner once its job has stopped running. A
+/// job told to stop is still running until the worker says otherwise —
+/// the "Stopping…" banner is *for* that window.
+function retireBanner(job: SyncJob) {
+  if (bannerJob.value !== job.id) return;
+  if (jobActive(job)) return;
   clearBanner();
 }
 const busy = ref(false);
@@ -157,9 +147,7 @@ const storage = computed(() => manage.value?.storage ?? null);
 /// How far back the histories reach, in ms. Read from the response
 /// rather than hardcoded here, so the plot can't disagree with the data
 /// about what "recent" means.
-const historyWindowMs = computed(
-  () => (storage.value?.window_secs ?? 300) * 1000,
-);
+const historyWindowMs = computed(() => (storage.value?.window_secs ?? 300) * 1000);
 /// The config's entries as the browser parses them, for the wizard —
 /// which edits the text — and the catalog lookups in `decorate`.
 const sources = ref<ConfiguredStep[]>([]);
@@ -226,8 +214,7 @@ const takenIds = computed(
 /// one — what deleting the fetch step has to take with it.
 function renderSiblingOf(fetchId: string): ConfiguredStep | undefined {
   return sources.value.find(
-    (s) =>
-      s.kind === "step" && s.inputs.includes(fetchId) && s.phase === "render",
+    (s) => s.kind === "step" && s.inputs.includes(fetchId) && s.phase === "render",
   );
 }
 
@@ -281,13 +268,9 @@ function configuredEntry(row: ManageRow): ConfiguredStep | undefined {
 function decorate(r: ManageRow): Row {
   if (r.kind === "group") {
     const g = configGroups.value.find((x) => x.id === r.id);
-    const entry = g
-      ? groupEntry(g, sourceStepsOf(g.id, sources.value))
-      : undefined;
+    const entry = g ? groupEntry(g, sourceStepsOf(g.id, sources.value)) : undefined;
     const editBlocked = groupEditBlocked(r.id);
-    const droppedWhy = r.dropped
-      ? `Not in the pipeline: ${r.dropped.message}${r.dropped.help ? ` — ${r.dropped.help}` : ""}`
-      : null;
+    const droppedWhy = r.dropped ? `Not in the pipeline: ${r.dropped.message}${r.dropped.help ? ` — ${r.dropped.help}` : ""}` : null;
     return {
       ...r,
       kindLabel: "Group",
@@ -314,22 +297,18 @@ function decorate(r: ManageRow): Row {
   if (r.kind === "applet") {
     editBlocked = "No form for applets — edit this one in Advanced below.";
   } else if (r.phase === "index") {
-    editBlocked =
-      "A shared index step has no options — its inputs are its whole config.";
+    editBlocked = "A shared index step has no options — its inputs are its whole config.";
   } else if (r.written_group !== null) {
     // The written group, not the declared one: a step naming a group
     // the config lacks should hear that, not "outside any group".
     editBlocked = groupEditBlocked(r.written_group);
   } else {
-    editBlocked =
-      "No guided form for a step outside a group — edit it in Advanced below.";
+    editBlocked = "No guided form for a step outside a group — edit it in Advanced below.";
   }
   // "Download" or "Import", read off the step's params against what its
   // provider declares; the server's "Ingest" only when they name no method.
   const name =
-    r.group && r.phase === "ingest"
-      ? (ingestLabel(r.type, r.params) ?? r.name)
-      : r.name;
+    r.group && r.phase === "ingest" ? (ingestLabel(r.type, r.params) ?? r.name) : r.name;
   return {
     ...r,
     name,
@@ -379,10 +358,7 @@ function groupBrowse(
   const columns = browseColumns(g.type);
   const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id))}`];
   if (columns) args.push(`columns: ${JSON.stringify(columns)}`);
-  return {
-    browseBlocked: null,
-    browseSource: `gridView({ ${args.join(", ")} })`,
-  };
+  return { browseBlocked: null, browseSource: `gridView({ ${args.join(", ")} })` };
 }
 
 /// Why a group has no form, or null when the wizard can edit it. A
@@ -393,12 +369,9 @@ function groupEditBlocked(groupId: string): string | null {
   if (!g) return "This step names a group the config doesn't declare.";
   const { ingest, render } = sourceStepsOf(g.id, sources.value);
   const entry = groupEntry(g, { ingest, render });
-  if (!g.type)
-    return "No guided form for this group — edit its entries in Advanced below.";
-  if (!entry)
-    return `No guided form: the catalog doesn't know the type "${g.type}".`;
-  if (!entry.wizard)
-    return `No guided form for ${entry.label} yet — edit it in Advanced below.`;
+  if (!g.type) return "No guided form for this group — edit its entries in Advanced below.";
+  if (!entry) return `No guided form: the catalog doesn't know the type "${g.type}".`;
+  if (!entry.wizard) return `No guided form for ${entry.label} yet — edit it in Advanced below.`;
   for (const step of [ingest, render]) {
     if (!step) continue;
     const rep = paramsAreRepresentable(step, entry);
@@ -415,10 +388,7 @@ function groupEditBlocked(groupId: string): string | null {
 /// The catalog entry describing a group. Its `type` names the provider,
 /// but *which* descriptor — Gmail or Fastmail, both `email` — is read
 /// off its ingest step's params, the way the step row does it.
-function groupEntry(
-  g: ConfiguredGroup,
-  steps: SourceSteps,
-): CatalogEntry | undefined {
+function groupEntry(g: ConfiguredGroup, steps: SourceSteps): CatalogEntry | undefined {
   const step = steps.ingest ?? steps.render;
   return step ? entryForStep(step, sources.value) : catalogForStep(g.type, {});
 }
@@ -470,17 +440,11 @@ function sparkSvg(
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("aria-hidden", "true");
   svg.classList.add("m2-spark");
-  const area = document.createElementNS(
-    "http://www.w3.org/2000/svg",
-    "polygon",
-  );
+  const area = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
   area.setAttribute("points", spark.area);
   area.classList.add("m2-spark-area");
   svg.appendChild(area);
-  const line = document.createElementNS(
-    "http://www.w3.org/2000/svg",
-    "polyline",
-  );
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
   line.setAttribute("points", spark.line);
   line.classList.add("m2-spark-line");
   svg.appendChild(line);
@@ -591,12 +555,7 @@ class ActionsRenderer implements ICellRendererComp<Row> {
   private apply(): void {
     const row = this.row;
     if (row.stop_job_id) {
-      setButton(
-        this.run,
-        "stop",
-        row.stop_label ?? "Stop the sync in progress",
-        null,
-      );
+      setButton(this.run, "stop", row.stop_label ?? "Stop the sync in progress", row.stop_blocked);
       this.run.classList.add("danger");
     } else {
       setButton(this.run, "run", "Sync now", row.run_blocked);
@@ -645,8 +604,7 @@ const columnDefs: ColDef<Row>[] = [
         // The step-role mark. A group row has none: the chevron before
         // it already says what it is.
         if (row && row.kind !== "group") {
-          const glyph =
-            row.kind === "applet" ? STEP_GLYPHS.applet : STEP_GLYPHS[row.phase];
+          const glyph = row.kind === "applet" ? STEP_GLYPHS.applet : STEP_GLYPHS[row.phase];
           const mark = document.createElement("span");
           mark.className = "m2-name-step";
           mark.title = row.kindLabel;
@@ -795,8 +753,7 @@ const columnDefs: ColDef<Row>[] = [
     colId: "activity",
     width: 260,
     minWidth: 160,
-    valueGetter: (p: ValueGetterParams<Row>) =>
-      activityText(p.data?.progress ?? null),
+    valueGetter: (p: ValueGetterParams<Row>) => activityText(p.data?.progress ?? null),
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const wrap = document.createElement("span");
       wrap.className = "m2-activity";
@@ -820,9 +777,9 @@ const columnDefs: ColDef<Row>[] = [
     field: "last_synced",
     width: 150,
     minWidth: 150,
-    // Sort on the instant. AG Grid sorts the row's value rather than what a
-    // renderer drew, and the value is an ISO string carrying its own UTC
-    // offset, which does not compare correctly as text. See `compareStamps`.
+      // Sort on the instant. AG Grid sorts the row's value rather than what a
+      // renderer drew, and the value is an ISO string carrying its own UTC
+      // offset, which does not compare correctly as text. See `compareStamps`.
     comparator: compareStamps,
     cellRenderer: (p: ICellRendererParams<Row>) => {
       const iso = p.data?.last_synced ?? null;
@@ -847,8 +804,7 @@ const columnDefs: ColDef<Row>[] = [
       if (!row) return undefined;
       if (row.kind === "applet") return "An applet owns no artifacts.";
       const present = row.outputs.filter((o) => o.present);
-      if (present.length === 0)
-        return "Nothing on disk yet — this hasn't produced anything.";
+      if (present.length === 0) return "Nothing on disk yet — this hasn't produced anything.";
       // The total leads, because it is the number the bar stands for
       // and the bar alone can't say it. The per-output breakdown —
       // entities vs attachments, where the backend found a split —
@@ -890,12 +846,7 @@ const columnDefs: ColDef<Row>[] = [
       }
       const track = document.createElement("span");
       track.className = "m2-plot";
-      const svg = sparkSvg(
-        row.history,
-        ROW_SPARK,
-        { max: maxBytes.value },
-        Date.now(),
-      );
+      const svg = sparkSvg(row.history, ROW_SPARK, { max: maxBytes.value }, Date.now());
       // No history yet means the backend hasn't finished its first walk
       // of the root. The size still shows; there is just nothing behind
       // it to draw.
@@ -951,18 +902,15 @@ function freshest<T>(commit: (value: T) => void) {
   return run as typeof run & { invalidate: () => void };
 }
 
-// ── One step's log. A red Status says *that* a step failed; the next
-// question is always what it was doing. Double-clicking the cell opens
-// the run store's lines for that step, in the run it last took part in
-// — or the one in flight — as a grid that follows the run while it goes.
+  // ── One step's log. A red Status says *that* a step failed; the next
+  // question is always what it was doing. Double-clicking the cell opens
+  // the run store's lines for that step, in the run it last took part in
+  // — or the one in flight — as a grid that follows the run while it goes.
 
 /// What the log panel is showing, or null when it is closed.
-const logFor = ref<{
-  row: Row;
-  runId: string;
-  live: boolean;
-  startedAt: string | null;
-} | null>(null);
+const logFor = ref<{ row: Row; runId: string; live: boolean; startedAt: string | null } | null>(
+  null,
+);
 const logError = ref<string | null>(null);
 /// What `logFor.runId` holds while the panel shows every run at once.
 const ALL_RUNS_LOG = "*";
@@ -980,39 +928,22 @@ function onLogRunChanged(run: RunInfo | null) {
         live: run.finished_at_utc == null,
         startedAt: run.started_at_utc,
       }
-    : {
-        ...logFor.value,
-        runId: ALL_RUNS_LOG,
-        live: logFor.value.live,
-        startedAt: null,
-      };
+    : { ...logFor.value, runId: ALL_RUNS_LOG, live: logFor.value.live, startedAt: null };
 }
 
 /// The run whose log answers "what was this step doing": the one in
 /// flight if the step is in it, else the one its record names, else —
 /// for a record from before runs had ids — the newest run the store says
 /// it took part in.
-async function runFor(
-  row: Row,
-): Promise<{ runId: string; live: boolean; startedAt: string | null } | null> {
+async function runFor(row: Row): Promise<{ runId: string; live: boolean; startedAt: string | null } | null> {
   if (row.live_run_id) {
-    return {
-      runId: row.live_run_id,
-      live: true,
-      startedAt: manage.value?.run?.started_at ?? null,
-    };
+    return { runId: row.live_run_id, live: true, startedAt: manage.value?.run?.started_at ?? null };
   }
   if (row.last_run_id) {
     return { runId: row.last_run_id, live: false, startedAt: row.last_synced };
   }
   const [newest] = await fetchRuns({ step: row.id, limit: 1 });
-  return newest
-    ? {
-        runId: newest.run_id,
-        live: !newest.finished_at_utc,
-        startedAt: newest.started_at_utc,
-      }
-    : null;
+  return newest ? { runId: newest.run_id, live: !newest.finished_at_utc, startedAt: newest.started_at_utc } : null;
 }
 
 /// With `runId`, the log of that one run; without, the run in flight if
@@ -1021,15 +952,10 @@ async function openStepLog(row: Row, runId: string | null = null) {
   logError.value = null;
   try {
     const run = runId
-      ? {
-          runId,
-          live: !!manage.value?.run?.live && manage.value.run.run_id === runId,
-          startedAt: null,
-        }
+      ? { runId, live: !!manage.value?.run?.live && manage.value.run.run_id === runId, startedAt: null }
       : await runFor(row);
     if (!run) {
-      logError.value =
-        "This step has not taken part in any run the store remembers.";
+      logError.value = "This step has not taken part in any run the store remembers.";
       logFor.value = { row, runId: "", live: false, startedAt: null };
       return;
     }
@@ -1109,25 +1035,20 @@ function paintRootSpark() {
 }
 watch([storage, rootSparkHost], paintRootSpark, { flush: "post" });
 
-// ── Help. What every column means used to be a paragraph under the table:
-// worth having, not worth the room, and it pushed the Advanced disclosure
-// below the fold.
+  // ── Help. What every column means used to be a paragraph under the table:
+  // worth having, not worth the room, and it pushed the Advanced disclosure
+  // below the fold.
 const helpOpen = ref(false);
 
 /// Double-click on Status opens that row's log. Only that column: the
 /// rest of the row has its own meanings for a double-click, and
 /// overloading all of them would make the gesture unguessable.
-function onCellDoubleClicked(e: {
-  column?: { getColId: () => string };
-  data?: Row;
-}) {
+function onCellDoubleClicked(e: { column?: { getColId: () => string }; data?: Row }) {
   if (e.column?.getColId() !== "status" || !e.data) return;
   // A group's status is one child's, and that child's log is the answer.
   const row =
     e.data.kind === "group"
-      ? rows.value.find(
-          (r) => r.kind !== "group" && r.id === e.data!.status_from,
-        )
+      ? rows.value.find((r) => r.kind !== "group" && r.id === e.data!.status_from)
       : e.data;
   if (row) void openStepLog(row);
 }
@@ -1145,9 +1066,7 @@ const historyLines = ref<HistoryRow[]>([]);
 const historyTruncated = ref<string[]>([]);
 const historyBusy = ref(false);
 const historyError = ref<string | null>(null);
-const loadHistory = freshest<
-  { rows: HistoryRow[]; truncated: string[] } | Error
->((v) => {
+const loadHistory = freshest<{ rows: HistoryRow[]; truncated: string[] } | Error>((v) => {
   historyBusy.value = false;
   if (v instanceof Error) historyError.value = v.message;
   else {
@@ -1186,9 +1105,7 @@ function refreshHistory() {
 }
 
 /// What the panel is titled: one row's name, or the names joined.
-const historyTitle = computed(() =>
-  historyFor.value.map((r) => r.name).join(", "),
-);
+const historyTitle = computed(() => historyFor.value.map((r) => r.name).join(", "));
 
 let historyGridApi: GridApi<HistoryRow> | null = null;
 let lastHistoryPaint = "";
@@ -1210,12 +1127,9 @@ function tickHistoryRelative(now: number) {
 /// Where the open rows' history is kept, for the panel's subtitle.
 const historyStoreNote = computed(() => {
   const rows = historyFor.value;
-  if (rows.length !== 1)
-    return `every store under ${rows.map((r) => `${r.id}/`).join(", ")}`;
+  if (rows.length !== 1) return `every store under ${rows.map((r) => `${r.id}/`).join(", ")}`;
   const [row] = rows;
-  return row.kind === "group"
-    ? `every store under ${row.id}/`
-    : `the stores in ${row.id}/`;
+  return row.kind === "group" ? `every store under ${row.id}/` : `the stores in ${row.id}/`;
 });
 
 /// A commit names its run, and that run's log is the "how" behind the
@@ -1224,9 +1138,7 @@ const historyStoreNote = computed(() => {
 /// as the Status double-click does.
 function openRunLog(row: HistoryRow) {
   if (!row.run) return;
-  const step = rows.value.find(
-    (r) => r.kind !== "group" && r.id === row.stepId,
-  );
+  const step = rows.value.find((r) => r.kind !== "group" && r.id === row.stepId);
   if (!step) return;
   historyFor.value = [];
   void openStepLog(step, row.run);
@@ -1249,16 +1161,12 @@ const rowSelection: RowSelectionOptions<Row> = {
 /// the row under the pointer is in it, that row alone when it is not.
 /// The selection itself is never touched — as in Lightroom, a
 /// right-click aims the action, it does not re-select.
-function menuTargets(
-  api: GridApi<Row>,
-  anchor: IRowNode<Row> | null | undefined,
-): Row[] {
+function menuTargets(api: GridApi<Row>, anchor: IRowNode<Row> | null | undefined): Row[] {
   if (!anchor?.data) return [];
   const selected = (api.getSelectedNodes() as IRowNode<Row>[])
     .filter((n): n is IRowNode<Row> & { data: Row } => n.data != null)
     .sort((a, b) => (a.rowIndex ?? 0) - (b.rowIndex ?? 0));
-  if (anchor.isSelected() && selected.length > 0)
-    return selected.map((n) => n.data);
+  if (anchor.isSelected() && selected.length > 0) return selected.map((n) => n.data);
   return [anchor.data];
 }
 
@@ -1287,11 +1195,7 @@ function contextMenuItems(
   const targets = menuTargets(gridApi, anchor);
   if (targets.length === 0) return [];
   const column = params.column?.getColId() ?? "";
-  const entries = rowMenu(targets.map(menuTarget), {
-    column,
-    canReveal,
-    revealLabel,
-  });
+  const entries = rowMenu(targets.map(menuTarget), { column, canReveal, revealLabel });
   return entries.map((entry) => {
     if (entry.separator) return "separator";
     return {
@@ -1304,11 +1208,7 @@ function contextMenuItems(
   });
 }
 
-async function runMenuAction(
-  action: MenuAction,
-  targets: Row[],
-  anchor: IRowNode<Row> | null,
-) {
+async function runMenuAction(action: MenuAction, targets: Row[], anchor: IRowNode<Row> | null) {
   const [first] = targets;
   switch (action) {
     case "browse":
@@ -1333,10 +1233,7 @@ async function runMenuAction(
       return;
     case "rename":
       if (anchor && anchor.rowIndex != null) {
-        gridApi?.startEditingCell({
-          rowIndex: anchor.rowIndex,
-          colKey: "name",
-        });
+        gridApi?.startEditingCell({ rowIndex: anchor.rowIndex, colKey: "name" });
       }
       return;
     case "copy_id":
@@ -1344,18 +1241,13 @@ async function runMenuAction(
       return;
     case "copy_path":
       await copyToClipboard(
-        targets
-          .map((t) => t.reveal_path)
-          .filter((p): p is string => !!p)
-          .join("\n"),
+        targets.map((t) => t.reveal_path).filter((p): p is string => !!p).join("\n"),
       );
       return;
     case "log": {
       const row =
         first.kind === "group"
-          ? rows.value.find(
-              (r) => r.kind !== "group" && r.id === first.status_from,
-            )
+          ? rows.value.find((r) => r.kind !== "group" && r.id === first.status_from)
           : first;
       if (row) void openStepLog(row);
       return;
@@ -1378,10 +1270,7 @@ async function renameRow(row: Row, name: string) {
   if (row.kind !== "group") return;
   const next = renameGroup(configText.value, row.id, name);
   if (next === configText.value) return;
-  await writeConfig(
-    next,
-    name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`,
-  );
+  await writeConfig(next, name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`);
 }
 
 const historyColumnDefs: ColDef<HistoryRow>[] = [
@@ -1405,10 +1294,7 @@ const historyColumnDefs: ColDef<HistoryRow>[] = [
         if (row?.level === "store") {
           const dir = document.createElement("span");
           dir.className = "m2-cell-dir";
-          dir.textContent = row.storePath.slice(
-            0,
-            row.storePath.lastIndexOf("/"),
-          );
+          dir.textContent = row.storePath.slice(0, row.storePath.lastIndexOf("/"));
           wrap.appendChild(dir);
         }
         return wrap;
@@ -1442,8 +1328,7 @@ const historyColumnDefs: ColDef<HistoryRow>[] = [
     width: 100,
     type: "numericColumn",
     valueFormatter: (p) => formatCount(p.value),
-    headerTooltip:
-      "Rows after this commit — across the data tables, or in the one table",
+    headerTooltip: "Rows after this commit — across the data tables, or in the one table",
   },
   {
     headerName: "Added",
@@ -1570,11 +1455,7 @@ function readExpanded(): Set<string> {
   try {
     const raw = localStorage.getItem(EXPANDED_STORE);
     const list: unknown = raw ? JSON.parse(raw) : [];
-    return new Set(
-      Array.isArray(list)
-        ? list.filter((x): x is string => typeof x === "string")
-        : [],
-    );
+    return new Set(Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : []);
   } catch {
     return new Set();
   }
@@ -1633,9 +1514,7 @@ async function loadConfig() {
     // which case `App.vue`'s gate is showing instead of this view, and
     // this is belt and braces. Ordinary per-entry problems are not
     // errors of the whole config and live in `configDiagnostics`.
-    configError.value = cfg.parsed_ok
-      ? null
-      : (cfg.error ?? "The config was rejected.");
+    configError.value = cfg.parsed_ok ? null : (cfg.error ?? "The config was rejected.");
     serverSourceCount.value = cfg.source_count;
     configExists.value = cfg.exists;
     // A reload must never overwrite what someone is typing into the
@@ -1650,11 +1529,7 @@ async function loadConfig() {
         "manager2: parsed 0 entries from a config the server reads",
         cfg.source_count,
         "sources from —",
-        {
-          path: cfg.path,
-          textLength: cfg.text.length,
-          parsedOk: cfg.parsed_ok,
-        },
+        { path: cfg.path, textLength: cfg.text.length, parsedOk: cfg.parsed_ok },
       );
     }
   } catch (e) {
@@ -1687,7 +1562,7 @@ const commitJobs = freshest<SyncJob[]>((list) => {
     const j = list.find((x) => x.id === bannerJob.value);
     // A job that has fallen off the end of the queue we hold is not
     // running either, so the banner goes.
-    if (j) retireBanner(j.id, j.state);
+    if (j) retireBanner(j);
     else clearBanner();
   }
 });
@@ -1704,9 +1579,7 @@ async function loadJobs() {
 /// Sync-everything button, and marks the window in which the runner's
 /// record has nothing to say yet: between the click and its first
 /// written state there is nothing there to read.
-const jobActive = computed(() =>
-  jobs.value.some((j) => j.state === "pending" || j.state === "running"),
-);
+const anyJobActive = computed(() => jobs.value.some(jobActive));
 
 const commitRows = freshest<ManageResponse>((m) => {
   manage.value = m;
@@ -1737,10 +1610,7 @@ async function writeConfig(text: string, what: string) {
   try {
     const res = await saveConfig(text);
     if (!res.ok) {
-      banner.value = {
-        ok: false,
-        text: res.error ?? "The config was rejected.",
-      };
+      banner.value = { ok: false, text: res.error ?? "The config was rejected." };
       return false;
     }
     configText.value = text;
@@ -1748,10 +1618,7 @@ async function writeConfig(text: string, what: string) {
     reparse();
     // A warning saves — nothing is dropped — but it is still advice
     // the file would otherwise only give on the command line.
-    banner.value = {
-      ok: true,
-      text: res.error ? `${what} Warning: ${res.error}` : what,
-    };
+    banner.value = { ok: true, text: res.error ? `${what} Warning: ${res.error}` : what };
     return true;
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -1816,9 +1683,7 @@ async function onWizardSubmit(payload: {
   } else {
     next = appendSource(
       configText.value,
-      payload.groupBody
-        ? `${payload.groupBody}\n\n${payload.stepsBody}`
-        : payload.stepsBody,
+      payload.groupBody ? `${payload.groupBody}\n\n${payload.stepsBody}` : payload.stepsBody,
     );
   }
 
@@ -1830,10 +1695,7 @@ async function onWizardSubmit(payload: {
   // Banners are for a person, so they say the name; the id is what the
   // config and the disk use.
   const shown = payload.name || payload.id;
-  const ok = await writeConfig(
-    next,
-    current ? `Saved ${shown}.` : `Added ${shown}.`,
-  );
+  const ok = await writeConfig(next, current ? `Saved ${shown}.` : `Added ${shown}.`);
   if (!ok) return;
   closeWizard();
 }
@@ -1847,8 +1709,7 @@ async function deleteSource(id: string) {
   // step behind would leave an input naming a step that no longer
   // exists, which the loader refuses outright — a whole config broken
   // by a partial delete.
-  const sibling =
-    step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
+  const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
   const doomed = sibling ? [step, sibling] : [step];
 
   const what =
@@ -1898,12 +1759,8 @@ async function deleteGroup(id: string) {
   const members = sources.value.filter((s) => s.group === id);
   const steps = members.filter((s) => s.kind === "step").length;
   const applets = members.filter((s) => s.kind === "applet").length;
-  const count = (n: number, word: string) =>
-    `${n} ${word}${n === 1 ? "" : "s"}`;
-  const under = [
-    steps ? count(steps, "step") : "",
-    applets ? count(applets, "applet") : "",
-  ]
+  const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const under = [steps ? count(steps, "step") : "", applets ? count(applets, "applet") : ""]
     .filter(Boolean)
     .join(" and ");
   const what =
@@ -1936,23 +1793,19 @@ async function deleteRows(targets: Row[]) {
       if (!group) continue;
       groups.add(group.id);
       doomed.set(`group:${group.id}`, group);
-      for (const m of sources.value.filter((s) => s.group === group.id))
-        doomed.set(m.id, m);
+      for (const m of sources.value.filter((s) => s.group === group.id)) doomed.set(m.id, m);
     } else {
       const step = sources.value.find((s) => s.id === t.id);
       if (!step) continue;
       doomed.set(step.id, step);
-      const sibling =
-        step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
+      const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
       if (sibling) doomed.set(sibling.id, sibling);
     }
   }
   // A group with nothing left under it goes too, as in `deleteSource`.
   for (const g of configGroups.value) {
     if (groups.has(g.id)) continue;
-    const left = sources.value.some(
-      (s) => s.group === g.id && !doomed.has(s.id),
-    );
+    const left = sources.value.some((s) => s.group === g.id && !doomed.has(s.id));
     const had = sources.value.some((s) => s.group === g.id);
     if (had && !left) doomed.set(`group:${g.id}`, g);
   }
@@ -1965,8 +1818,7 @@ async function deleteRows(targets: Row[]) {
   const entries = [...doomed.values()];
   let next = removeSteps(configText.value, entries);
   for (const d of entries) {
-    if ("phase" in d && d.phase === "render")
-      next = unwireFromFanIns(next, d.id);
+    if ("phase" in d && d.phase === "render") next = unwireFromFanIns(next, d.id);
   }
   await writeConfig(next, `Removed ${targets.length} entries.`);
 }
@@ -1994,10 +1846,7 @@ async function reveal(key: string) {
 async function revealPath(path: string) {
   const ok = await revealInFileManager(path);
   if (!ok) {
-    banner.value = {
-      ok: false,
-      text: `Could not open ${path} in the file manager.`,
-    };
+    banner.value = { ok: false, text: `Could not open ${path} in the file manager.` };
   }
 }
 
@@ -2106,8 +1955,9 @@ async function stopJob(jobId: string) {
 /// refetch sees it.
 function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
-  retireBanner(e.id, e.state);
-  const active = e.state === "pending" || e.state === "running";
+  const job = jobs.value.find((j) => j.id === e.id);
+  if (job) retireBanner(job);
+  const active = !!job && jobActive(job);
   // A job ending is exactly when the size on screen is about to be
   // read and is about to be wrong — so that one asks for a fresh walk.
   // It is also the last chance for a while: the backend's own tick
@@ -2127,19 +1977,12 @@ function mergeJob(e: JobProgressEvent) {
       ...prev,
       state: e.state,
       progress_msg: e.progress_msg,
-      started_at_utc:
-        prev.started_at_utc ?? (e.state === "running" ? now : null),
+      started_at_utc: prev.started_at_utc ?? (e.state === "running" ? now : null),
       finished_at_utc:
         prev.finished_at_utc ??
-        (e.state === "done" || e.state === "failed" || e.state === "canceled"
-          ? now
-          : null),
+        (e.state === "done" || e.state === "failed" || e.state === "canceled" ? now : null),
     };
-    jobs.value = [
-      ...jobs.value.slice(0, at),
-      next,
-      ...jobs.value.slice(at + 1),
-    ];
+    jobs.value = [...jobs.value.slice(0, at), next, ...jobs.value.slice(at + 1)];
     return;
   }
   jobs.value = [
@@ -2169,9 +2012,7 @@ let relativePoll: ReturnType<typeof setInterval> | null = null;
 let lastRelativePaint = "";
 function tickRelative() {
   const now = Date.now();
-  const next = rows.value
-    .map((r) => formatRelative(r.last_synced, now))
-    .join("\u0000");
+  const next = rows.value.map((r) => formatRelative(r.last_synced, now)).join("\u0000");
   if (next !== lastRelativePaint) {
     lastRelativePaint = next;
     gridApi?.refreshCells({ columns: ["last_synced"], force: true });
@@ -2248,15 +2089,9 @@ onUnmounted(() => {
         </button>
         <button
           class="m2-btn m2-runall"
-          :disabled="
-            busy ||
-            !!parseError ||
-            !!configError ||
-            jobActive ||
-            rows.length === 0
-          "
+          :disabled="busy || !!parseError || !!configError || anyJobActive || rows.length === 0"
           :title="
-            jobActive
+            anyJobActive
               ? 'A sync is already running.'
               : rows.length === 0
                 ? 'Nothing configured yet.'
@@ -2266,30 +2101,22 @@ onUnmounted(() => {
         >
           Sync everything
         </button>
-        <button
-          class="m2-add"
-          :disabled="busy || !!parseError || !!configError"
-          @click="openAdd"
-        >
+        <button class="m2-add" :disabled="busy || !!parseError || !!configError" @click="openAdd">
           + Data Source
         </button>
       </div>
     </header>
 
-    <p v-if="loadError" class="m2-msg bad">
-      Could not load the config: {{ loadError }}
-    </p>
+    <p v-if="loadError" class="m2-msg bad">Could not load the config: {{ loadError }}</p>
     <p v-if="parseError" class="m2-msg bad">
-      The config doesn’t parse, so the table below can’t be trusted:
-      {{ parseError }}
+      The config doesn’t parse, so the table below can’t be trusted: {{ parseError }}
     </p>
     <div v-else-if="configError" class="m2-msg bad m2-invalid">
       <b>datalib won’t run this config.</b>
       <span>{{ configError }}</span>
       <span class="m2-invalid-why">
-        It parses as TOML, so the table below still reflects it — but nothing
-        will sync, and applets won’t start, until this is fixed. Open
-        <b>Advanced</b> below to edit it.
+        It parses as TOML, so the table below still reflects it — but nothing will sync, and
+        applets won’t start, until this is fixed. Open <b>Advanced</b> below to edit it.
       </span>
       <button class="m2-btn" @click="configOpen = true">Show the config</button>
     </div>
@@ -2301,15 +2128,12 @@ onUnmounted(() => {
     <div v-else-if="droppedRows.length" class="m2-msg bad m2-invalid">
       <b>
         {{ droppedRows.length }}
-        {{ droppedRows.length === 1 ? "entry isn’t" : "entries aren’t" }} in the
-        pipeline.
+        {{ droppedRows.length === 1 ? "entry isn’t" : "entries aren’t" }} in the pipeline.
       </b>
       <span class="m2-invalid-why">
-        The rest of this config loaded and still syncs. These are in the file
-        and were not loaded — each one’s Status cell says why. Open
-        <b>Advanced</b> below to fix them, or run
-        <code>datalib-dag --check {{ configPath }}</code
-        >.
+        The rest of this config loaded and still syncs. These are in the file and were not
+        loaded — each one’s Status cell says why. Open <b>Advanced</b> below to fix them, or
+        run <code>datalib-dag --check {{ configPath }}</code>.
       </span>
       <ul class="m2-dropped">
         <li v-for="r in droppedRows" :key="r.id">
@@ -2318,9 +2142,7 @@ onUnmounted(() => {
       </ul>
       <button class="m2-btn" @click="configOpen = true">Show the config</button>
     </div>
-    <p v-if="banner" class="m2-msg" :class="banner.ok ? 'good' : 'bad'">
-      {{ banner.text }}
-    </p>
+    <p v-if="banner" class="m2-msg" :class="banner.ok ? 'good' : 'bad'">{{ banner.text }}</p>
 
     <div class="m2-grid">
       <!-- Tree data: a group row with its steps and applets under it.
@@ -2348,95 +2170,68 @@ onUnmounted(() => {
     </div>
 
     <div class="m2-foot">
-      <div v-if="emptyDiagnosis && !parseError" class="m2-msg bad m2-invalid">
-        <b>This table is empty, and it shouldn’t be.</b>
-        <span>{{ emptyDiagnosis }}</span>
-        <button class="m2-btn" @click="configOpen = true">
-          Show the config
-        </button>
-      </div>
-      <p v-else-if="rows.length === 0 && !parseError" class="m2-empty">
-        Nothing configured yet. The <b>+ Data Source</b> button walks you
-        through one.
-      </p>
+    <div v-if="emptyDiagnosis && !parseError" class="m2-msg bad m2-invalid">
+      <b>This table is empty, and it shouldn’t be.</b>
+      <span>{{ emptyDiagnosis }}</span>
+      <button class="m2-btn" @click="configOpen = true">Show the config</button>
+    </div>
+    <p v-else-if="rows.length === 0 && !parseError" class="m2-empty">
+      Nothing configured yet. The <b>+ Data Source</b> button walks you through one.
+    </p>
 
-      <div class="m2-advanced">
-        <!-- Outside the disclosure, not inside it: the path answers
+    <div class="m2-advanced">
+      <!-- Outside the disclosure, not inside it: the path answers
            "which root am I looking at", which is a question you have
            before you have decided to edit anything. It sits here rather
            than under the page heading so that it, the offer to edit the
            file, and the button that opens it in the file manager are
            one thing to find instead of three. -->
-        <p class="m2-file">
-          <code>{{ configPath }}</code>
-          <button
-            v-if="canReveal"
-            class="m2-btn m2-file-reveal"
-            :title="`${revealLabel} — the config file everything above is a view of`"
-            @click="revealPath(configPath)"
-          >
-            {{ revealLabel }}
-          </button>
-        </p>
-        <details
-          :open="configOpen"
-          @toggle="configOpen = ($event.target as HTMLDetailsElement).open"
+      <p class="m2-file">
+        <code>{{ configPath }}</code>
+        <button
+          v-if="canReveal"
+          class="m2-btn m2-file-reveal"
+          :title="`${revealLabel} — the config file everything above is a view of`"
+          @click="revealPath(configPath)"
         >
-          <summary>Advanced — edit <code>config.toml</code> directly</summary>
-          <p class="m2-advanced-note">
-            The file is the source of truth; everything above is a view of it.
-            This is where to go for anything the forms don’t model — a source
-            type with no wizard yet, or a knob like
-            <code>common.download_params</code> that would make a row’s Edit
-            button refuse.
-          </p>
-          <textarea
-            v-model="configText"
-            class="m2-editor"
-            spellcheck="false"
-            @input="onConfigEdit"
-          />
-          <div class="m2-advanced-actions">
-            <button
-              class="m2-btn"
-              :disabled="!configDirty || busy"
-              @click="saveConfigEdits"
-            >
-              Save
-            </button>
-            <button
-              class="m2-btn muted"
-              :disabled="!configDirty || busy"
-              @click="discardConfigEdits"
-            >
-              Discard changes
-            </button>
-            <span v-if="configDirty" class="m2-advanced-dirty">
-              Unsaved — the grid above still shows the last saved version.
-            </span>
-          </div>
-        </details>
+          {{ revealLabel }}
+        </button>
+      </p>
+      <details :open="configOpen" @toggle="configOpen = ($event.target as HTMLDetailsElement).open">
+      <summary>Advanced — edit <code>config.toml</code> directly</summary>
+      <p class="m2-advanced-note">
+        The file is the source of truth; everything above is a view of it. This is where to go
+        for anything the forms don’t model — a source type with no wizard yet, or a knob like
+        <code>common.download_params</code> that would make a row’s Edit button refuse.
+      </p>
+      <textarea
+        v-model="configText"
+        class="m2-editor"
+        spellcheck="false"
+        @input="onConfigEdit"
+      />
+      <div class="m2-advanced-actions">
+        <button class="m2-btn" :disabled="!configDirty || busy" @click="saveConfigEdits">
+          Save
+        </button>
+        <button class="m2-btn muted" :disabled="!configDirty || busy" @click="discardConfigEdits">
+          Discard changes
+        </button>
+        <span v-if="configDirty" class="m2-advanced-dirty">
+          Unsaved — the grid above still shows the last saved version.
+        </span>
       </div>
+      </details>
+    </div>
     </div>
 
     <footer class="m2-rootbar">
       <span class="m2-rootbar-label">Data root</span>
-      <code class="m2-rootbar-path" :title="storage?.root.abs ?? ''">{{
-        storage?.root.abs
-      }}</code>
-      <span
-        class="m2-rootbar-spark"
-        ref="rootSparkHost"
-        :title="rootSparkTitle"
-      ></span>
+      <code class="m2-rootbar-path" :title="storage?.root.abs ?? ''">{{ storage?.root.abs }}</code>
+      <span class="m2-rootbar-spark" ref="rootSparkHost" :title="rootSparkTitle"></span>
       <span class="m2-rootbar-size" :title="rootSparkTitle">
-        <b>{{
-          storage?.measured_at_utc ? formatBytes(storage.root.bytes) : "—"
-        }}</b>
-        <span
-          v-if="rootDelta !== null && rootDelta !== 0"
-          class="m2-rootbar-delta"
-        >
+        <b>{{ storage?.measured_at_utc ? formatBytes(storage.root.bytes) : "—" }}</b>
+        <span v-if="rootDelta !== null && rootDelta !== 0" class="m2-rootbar-delta">
           {{ rootDelta > 0 ? "+" : "−" }}{{ formatBytes(Math.abs(rootDelta)) }}
         </span>
       </span>
@@ -2450,17 +2245,8 @@ onUnmounted(() => {
       </button>
     </footer>
 
-    <div
-      v-if="helpOpen"
-      class="m2-logs-backdrop"
-      @click.self="helpOpen = false"
-    >
-      <div
-        class="m2-logs m2-help"
-        role="dialog"
-        aria-modal="true"
-        aria-label="About this screen"
-      >
+    <div v-if="helpOpen" class="m2-logs-backdrop" @click.self="helpOpen = false">
+      <div class="m2-logs m2-help" role="dialog" aria-modal="true" aria-label="About this screen">
         <header class="m2-logs-head">
           <div>
             <h3>What this screen shows</h3>
@@ -2470,98 +2256,77 @@ onUnmounted(() => {
         </header>
         <div class="m2-help-body">
           <p>
-            Every top-level row is a <b>group</b>
-            <code>config.toml</code> declares: a source (Work Slack, Personal
-            mail), or the unified index that makes them searchable. Open its
-            chevron for the <b>steps</b> that do the work — fetch, render, index
-            — and the <b>applets</b> the app spawns to serve it. Actions that
-            don’t apply to a kind are disabled and say why. Account and
-            document-count columns aren’t here yet — each needs a backend
-            endpoint the design calls for.
+            Every top-level row is a <b>group</b> <code>config.toml</code> declares: a source
+            (Work Slack, Personal mail), or the unified index that makes them searchable. Open
+            its chevron for the <b>steps</b> that do the work — fetch, render, index — and the
+            <b>applets</b> the app spawns to serve it. Actions that don’t apply to a kind are
+            disabled and say why. Account and document-count columns aren’t here yet — each
+            needs a backend endpoint the design calls for.
           </p>
           <p>
-            A group row reads off its steps: <b>Status</b> is running if any
-            step is, failed if any failed, and otherwise the last step’s in
-            pipeline order; while a sync is in flight it draws one segment per
-            step. <b>Last synced</b> is the fetch step’s. <b>Sync</b> runs the
-            group’s source steps and everything downstream; <b>Remove</b> takes
-            the steps and applets with it.
+            A group row reads off its steps: <b>Status</b> is running if any step is, failed if
+            any failed, and otherwise the last step’s in pipeline order; while a sync is in
+            flight it draws one segment per step. <b>Last synced</b> is the fetch step’s.
+            <b>Sync</b> runs the group’s source steps and everything downstream;
+            <b>Remove</b> takes the steps and applets with it.
           </p>
           <p>
-            <b>Type</b> and <b>Status</b> are icons, and the mark after a step’s
-            name says what it does — hover any of them for the word.
-            <b>Double-click a Status</b> to read that step's log — from the run
-            in flight while it runs, else from the run it last took part in,
-            with a picker for its other runs — as a grid you can sort, filter
-            and search; on a group row, the log of the step its status came
-            from. <b>Activity</b> is what a running step has reported: how much
-            is queued ahead of it, what it has counted so far, and how many
-            warnings and errors it has logged.
+            <b>Type</b> and <b>Status</b> are icons, and the mark after a step’s name says what
+            it does — hover any of them for the word. <b>Double-click a Status</b> to read that
+            step's log — from the run in flight while it runs, else from the run it last took
+            part in, with a picker for its other runs — as a grid you can sort, filter and
+            search; on a group row, the log of the step its status came from.
+            <b>Activity</b> is what a running step has reported: how much is queued ahead of
+            it, what it has counted so far, and how many warnings and errors it has logged.
           </p>
           <p>
-            <b>Right-click a row</b> for everything it can do — browse, edit,
-            reveal, remove, the log, a rename (on the Name cell), and its
-            <b>commit history</b>: every store under it is versioned, and the
-            panel lists each commit — when, what it said, what it did to each
-            table, and the run that made it — newest first, updating while a
-            sync runs. Right-click inside a selection and the menu acts on all
-            of it; outside one, on that row alone, without changing the
-            selection. An entry that doesn’t apply stays, greyed, and says why
-            on hover. <b>Sync</b> stays a button: it is the one thing a row does
+            <b>Right-click a row</b> for everything it can do — browse, edit, reveal, remove, the
+            log, a rename (on the Name cell), and its <b>commit history</b>: every store under it
+            is versioned, and the panel lists each commit — when, what it said, what it did to
+            each table, and the run that made it — newest first, updating while a sync runs.
+            Right-click inside a selection and the menu acts on all of it; outside one, on that
+            row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
+            and says why on hover. <b>Sync</b> stays a button: it is the one thing a row does
             often.
           </p>
           <p>
-            <b>Bytes on disk</b> is a directory walk over each row’s tree — a
-            group’s is its whole folder, measured on the same walk — plotted
-            over {{ windowPhrase }} and drawn against the largest row, so a
-            row’s height means its size, and its shape means what that size has
-            been doing. Hover for the total and the breakdown.
+            <b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its
+            whole folder, measured on the same walk — plotted over {{ windowPhrase }} and drawn
+            against the largest row, so a row’s height means its size, and its shape means what
+            that size has been doing. Hover for the total and the breakdown.
           </p>
           <p>
-            <b>Last synced</b> and <b>Status</b> are per step, read from the
-            runner’s own record — so a sync you start from a terminal shows up
-            here too. A run whose record never closed and whose lock nobody
-            holds reads as <b>interrupted</b>: it was killed, not lost. A step a
-            queued sync will reach reads as <b>queued</b>, and its Sync button
-            becomes a Stop — one job is one runner process over a whole
-            subgraph, so stopping is per sync, not per row.
+            <b>Last synced</b> and <b>Status</b> are per step, read from the runner’s own
+            record — so a sync you start from a terminal shows up here too. A run whose record
+            never closed and whose lock nobody holds reads as <b>interrupted</b>: it was
+            killed, not lost. A step a queued sync will reach reads as <b>queued</b>, and its
+            Sync button becomes a Stop — one job is one runner process over a whole subgraph,
+            so stopping is per sync, not per row.
           </p>
           <p>
-            The bar along the bottom is the <b>whole data root</b>, not the sum
-            of the rows: it includes <code>system/</code> — the stores, the job
-            logs, the served attachments — and anything a deleted step left
-            behind. Its line is scaled to its own range over
-            {{ windowPhrase }} rather than to zero, because five minutes of a
-            sync moves a large root by a fraction of a percent and would
-            otherwise draw flat.
+            The bar along the bottom is the <b>whole data root</b>, not the sum of the rows:
+            it includes <code>system/</code> — the stores, the job logs, the served
+            attachments — and anything a deleted step left behind. Its line is scaled to its
+            own range over {{ windowPhrase }} rather than to zero, because five minutes of a
+            sync moves a large root by a fraction of a percent and would otherwise draw flat.
           </p>
         </div>
       </div>
     </div>
 
     <div v-if="logFor" class="m2-logs-backdrop" @click.self="logFor = null">
-      <div
-        class="m2-logs m2-runlog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Step log"
-      >
+      <div class="m2-logs m2-runlog" role="dialog" aria-modal="true" aria-label="Step log">
         <header class="m2-logs-head">
           <div>
             <h3>{{ logFor.row.name }}</h3>
             <p>
               <code>{{ logFor.row.id }}</code>
-              <span v-if="logFor.runId === ALL_RUNS_LOG">
-                · every run the store holds</span
-              >
+              <span v-if="logFor.runId === ALL_RUNS_LOG"> · every run the store holds</span>
               <span v-else-if="logFor.runId">
-                · {{ logFor.live ? "a run in flight" : "a past run"
-                }}<span
+                · {{ logFor.live ? "a run in flight" : "a past run" }}<span
                   v-if="logFor.startedAt"
                   :title="formatStamp(logFor.startedAt)"
-                  >, started
-                  {{ formatRelative(logFor.startedAt, Date.now()) }}</span
-                >
+                >, started {{ formatRelative(logFor.startedAt, Date.now()) }}</span>
                 · run <code>{{ logFor.runId }}</code>
               </span>
             </p>
@@ -2580,27 +2345,17 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div
-      v-if="historyFor.length"
-      class="m2-logs-backdrop"
-      @click.self="historyFor = []"
-    >
-      <div
-        class="m2-logs m2-history"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Commit history"
-      >
+    <div v-if="historyFor.length" class="m2-logs-backdrop" @click.self="historyFor = []">
+      <div class="m2-logs m2-history" role="dialog" aria-modal="true" aria-label="Commit history">
         <header class="m2-logs-head">
           <div>
             <h3>{{ historyTitle }} — commit history</h3>
             <p>
-              Each commit in {{ historyStoreNote }}, newest first; open one for
-              what it did to each table.
+              Each commit in {{ historyStoreNote }}, newest first; open one for what it did to
+              each table.
               <span v-if="historyTruncated.length">
                 Only the newest commits are shown for
-                <code>{{ historyTruncated.join(", ") }}</code
-                >.
+                <code>{{ historyTruncated.join(", ") }}</code>.
               </span>
             </p>
           </div>
@@ -2610,13 +2365,10 @@ onUnmounted(() => {
         <p v-if="historyBusy && historyLines.length === 0" class="m2-logs-note">
           Reading the commit log…
         </p>
-        <p v-else-if="historyError" class="m2-logs-note bad">
-          {{ historyError }}
-        </p>
+        <p v-else-if="historyError" class="m2-logs-note bad">{{ historyError }}</p>
         <p v-else-if="historyLines.length === 0" class="m2-logs-note">
-          No doltlite store under <code>{{ historyStoreNote }}</code> yet. A
-          step that has never run has written nothing, and the QMD index keeps
-          no store of its own.
+          No doltlite store under <code>{{ historyStoreNote }}</code> yet. A step that has never
+          run has written nothing, and the QMD index keeps no store of its own.
         </p>
         <div v-else class="m2-history-grid">
           <AgGridVue
@@ -2662,19 +2414,9 @@ onUnmounted(() => {
   padding: 16px 20px 20px;
   box-sizing: border-box;
 }
-.m2-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  flex: 0 0 auto;
-}
+.m2-head { display: flex; align-items: flex-start; gap: 16px; flex: 0 0 auto; }
 /* The two header actions travel together, pinned right. */
-.m2-head-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+.m2-head-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 /* Sized to sit level with "+ Data Source", but outlined rather than
    filled: running what is already configured is the routine act, adding
    a source the deliberate one, and only one of them should read as the
@@ -2685,21 +2427,11 @@ onUnmounted(() => {
   font-weight: 600;
   white-space: nowrap;
 }
-.m2-head h2 {
-  margin: 0 0 4px;
-  font-size: 19px;
-}
-.m2-sub {
-  margin: 0;
-  color: var(--datalib-muted);
-  font-size: 12px;
-}
+.m2-head h2 { margin: 0 0 4px; font-size: 19px; }
+.m2-sub { margin: 0; color: var(--datalib-muted); font-size: 12px; }
 /* Sized to sit level with the two buttons beside it, but plain: it
    opens a panel, it doesn't do anything to the pipeline. */
-.m2-help-btn {
-  padding: 8px 14px;
-  font-size: inherit;
-}
+.m2-help-btn { padding: 8px 14px; font-size: inherit; }
 .m2-add {
   padding: 8px 14px;
   border: 1px solid var(--datalib-accent);
@@ -2710,21 +2442,11 @@ onUnmounted(() => {
   font-weight: 600;
   cursor: pointer;
 }
-.m2-add:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+.m2-add:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.m2-msg {
-  margin: 12px 0 0;
-  font-size: 13px;
-}
-.m2-msg.bad {
-  color: var(--datalib-log-error);
-}
-.m2-msg.good {
-  color: var(--datalib-muted);
-}
+.m2-msg { margin: 12px 0 0; font-size: 13px; }
+.m2-msg.bad { color: var(--datalib-log-error); }
+.m2-msg.good { color: var(--datalib-muted); }
 .m2-invalid {
   display: flex;
   flex-direction: column;
@@ -2736,9 +2458,7 @@ onUnmounted(() => {
   border-radius: 5px;
   max-width: 90ch;
 }
-.m2-invalid > span {
-  color: var(--datalib-fg);
-}
+.m2-invalid > span { color: var(--datalib-fg); }
 .m2-dropped {
   margin: 0;
   padding-left: 1.1rem;
@@ -2746,11 +2466,7 @@ onUnmounted(() => {
   font-size: 12.5px;
   line-height: 1.6;
 }
-.m2-invalid-why {
-  color: var(--datalib-muted) !important;
-  font-size: 12.5px;
-  line-height: 1.55;
-}
+.m2-invalid-why { color: var(--datalib-muted) !important; font-size: 12.5px; line-height: 1.55; }
 
 .m2-grid {
   margin-top: 16px;
@@ -2783,11 +2499,7 @@ onUnmounted(() => {
   max-height: 52vh;
   overflow-y: auto;
 }
-.m2-empty {
-  color: var(--datalib-muted);
-  font-size: 14px;
-  margin-top: 16px;
-}
+.m2-empty { color: var(--datalib-muted); font-size: 14px; margin-top: 16px; }
 .m2-advanced {
   margin-top: 24px;
   border-top: 1px solid var(--datalib-border);
@@ -2799,9 +2511,7 @@ onUnmounted(() => {
   color: var(--datalib-muted);
   user-select: none;
 }
-.m2-advanced summary:hover {
-  color: var(--datalib-fg);
-}
+.m2-advanced summary:hover { color: var(--datalib-fg); }
 .m2-advanced-note {
   margin: 12px 0 8px;
   font-size: 12.5px;
@@ -2828,10 +2538,7 @@ onUnmounted(() => {
   gap: 8px;
   margin-top: 8px;
 }
-.m2-advanced-dirty {
-  font-size: 12px;
-  color: var(--datalib-muted);
-}
+.m2-advanced-dirty { font-size: 12px; color: var(--datalib-muted); }
 
 /* The config's own path, where the offer to edit it is. It used to sit
    under the heading at the top, three screens away from the editor and
@@ -2845,12 +2552,8 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--datalib-muted);
 }
-.m2-file code {
-  word-break: break-all;
-}
-.m2-file-reveal {
-  flex: 0 0 auto;
-}
+.m2-file code { word-break: break-all; }
+.m2-file-reveal { flex: 0 0 auto; }
 
 /* The status bar: one line, pinned under everything, saying what the
    whole root weighs right now. Outside `.m2-foot` deliberately — that
@@ -2872,10 +2575,7 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--datalib-muted);
 }
-.m2-rootbar-label {
-  flex: 0 0 auto;
-  font-weight: 600;
-}
+.m2-rootbar-label { flex: 0 0 auto; font-weight: 600; }
 /* The path yields first when the window narrows — the number and the
    plot are the point of the line. */
 .m2-rootbar-path {
@@ -2901,15 +2601,11 @@ onUnmounted(() => {
   gap: 6px;
   font-variant-numeric: tabular-nums;
 }
-.m2-rootbar-size b {
-  color: var(--datalib-fg);
-}
+.m2-rootbar-size b { color: var(--datalib-fg); }
 /* The change over the window, in the same colour as the line that
    shows it. Not green: growth is not good news and shrinkage is not
    bad — the sign is the whole message. */
-.m2-rootbar-delta {
-  color: var(--datalib-accent);
-}
+.m2-rootbar-delta { color: var(--datalib-accent); }
 
 /* The help panel reuses the log panel's modal chrome; only its body
    differs, being prose rather than a log. */
@@ -2922,12 +2618,8 @@ onUnmounted(() => {
   color: var(--datalib-muted);
   max-width: 78ch;
 }
-.m2-help-body p {
-  margin: 10px 0;
-}
-.m2-help-body b {
-  color: var(--datalib-fg);
-}
+.m2-help-body p { margin: 10px 0; }
+.m2-help-body b { color: var(--datalib-fg); }
 
 /* The per-step log panel. Modal, because it is a full answer to a
    question the grid can only gesture at, and because the grid behind it
@@ -2955,10 +2647,7 @@ onUnmounted(() => {
 }
 /* The log panel is a grid and wants the room: wide for its columns,
    tall enough that following a run is not a keyhole. */
-.m2-runlog {
-  width: min(1400px, 100%);
-  height: min(85vh, 100%);
-}
+.m2-runlog { width: min(1400px, 100%); height: min(85vh, 100%); }
 .m2-logs-head {
   display: flex;
   align-items: flex-start;
@@ -2967,51 +2656,22 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--datalib-border);
   flex: 0 0 auto;
 }
-.m2-logs-head h3 {
-  margin: 0 0 3px;
-  font-size: 15px;
-}
-.m2-logs-head p {
-  margin: 0;
-  font-size: 12px;
-  color: var(--datalib-muted);
-}
-.m2-logs-head button {
-  margin-left: auto;
-}
-.m2-logs-note {
-  margin: 0;
-  padding: 16px;
-  font-size: 13px;
-  color: var(--datalib-muted);
-  max-width: 70ch;
-}
-.m2-logs-note.bad {
-  color: var(--datalib-log-error);
-}
+.m2-logs-head h3 { margin: 0 0 3px; font-size: 15px; }
+.m2-logs-head p { margin: 0; font-size: 12px; color: var(--datalib-muted); }
+.m2-logs-head button { margin-left: auto; }
+.m2-logs-note { margin: 0; padding: 16px; font-size: 13px; color: var(--datalib-muted); max-width: 70ch; }
+.m2-logs-note.bad { color: var(--datalib-log-error); }
 /* The history panel is a grid rather than a list, and wider than the
    log: nine columns, and the table list is the one worth the room. */
-.m2-history {
-  width: min(1400px, 100%);
-  height: min(720px, 100%);
-}
+.m2-history { width: min(1400px, 100%); height: min(720px, 100%); }
 /* `position: relative`, because `.m2-ag` is absolutely placed — see the
    WebKit note above it. */
-.m2-history-grid {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-  margin: 0 16px 16px;
-}
+.m2-history-grid { position: relative; flex: 1 1 auto; min-height: 0; margin: 0 16px 16px; }
 </style>
 
 <style>
 /* Cell renderers build plain DOM, so their classes can't be scoped. */
-.m2-cell-source {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
+.m2-cell-source { display: inline-flex; align-items: center; gap: 8px; }
 .m2-history-hash {
   display: inline-flex;
   align-items: center;
@@ -3019,29 +2679,12 @@ onUnmounted(() => {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
-.m2-history-label {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-}
-.m2-history-store {
-  font-weight: 600;
-}
-.m2-history-table {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
+.m2-history-label { display: inline-flex; align-items: baseline; gap: 8px; }
+.m2-history-store { font-weight: 600; }
+.m2-history-table { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 /* Two lines in one row's height, like the size cell. */
-.m2-history-when {
-  display: inline-flex;
-  flex-direction: column;
-  line-height: 1.25;
-  justify-content: center;
-  height: 100%;
-}
-.m2-history-when .m2-cell-dir {
-  font-size: 11px;
-}
+.m2-history-when { display: inline-flex; flex-direction: column; line-height: 1.25; justify-content: center; height: 100%; }
+.m2-history-when .m2-cell-dir { font-size: 11px; }
 .m2-history-run {
   padding: 0;
   margin: 0;
@@ -3055,9 +2698,7 @@ onUnmounted(() => {
   text-decoration: underline dotted;
 }
 /* The destructive entry, told apart the way the trash button is. */
-.ag-menu-option.m2-menu-danger:not(.ag-menu-option-disabled) {
-  color: var(--datalib-log-error);
-}
+.ag-menu-option.m2-menu-danger:not(.ag-menu-option-disabled) { color: var(--datalib-log-error); }
 /* The same control as `button.copy-uuid` in ChatBody: a greyed glyph
    that lights up on hover and flashes its verdict. */
 .m2-copy-id {
@@ -3075,28 +2716,13 @@ onUnmounted(() => {
   cursor: pointer;
   opacity: 0.55;
 }
-.m2-copy-id:hover {
-  opacity: 1;
-}
-.m2-copy-id.copied {
-  color: #16a34a;
-  opacity: 1;
-  filter: none;
-}
-.m2-copy-id.copy-failed {
-  color: #dc2626;
-  opacity: 1;
-  filter: none;
-}
-.m2-cell-dir {
-  color: var(--datalib-muted);
-  font-size: 12px;
-}
+.m2-copy-id:hover { opacity: 1; }
+.m2-copy-id.copied { color: #16a34a; opacity: 1; filter: none; }
+.m2-copy-id.copy-failed { color: #dc2626; opacity: 1; filter: none; }
+.m2-cell-dir { color: var(--datalib-muted); font-size: 12px; }
 /* The group row is the row: its name leads the tree, so it carries the
    weight, and the steps under it read as its parts. */
-.m2-group-name {
-  font-weight: 600;
-}
+.m2-group-name { font-weight: 600; }
 /* The step-role mark, riding after the name. Muted and a size down
    from the Type mark beside it: the name is what the eye should land
    on, and this answers the follow-up question rather than competing
@@ -3116,11 +2742,7 @@ onUnmounted(() => {
   align-items: center;
   height: 100%;
 }
-.m2-cell-type img {
-  width: 18px;
-  height: 18px;
-  object-fit: contain;
-}
+.m2-cell-type img { width: 18px; height: 18px; object-fit: contain; }
 /* The fallback when a type has no brand mark. Clipped rather than
    wrapped: the column is sized for an icon, and the full name is on
    `title` like every other cell here. */
@@ -3142,20 +2764,12 @@ onUnmounted(() => {
   height: 100%;
   color: var(--datalib-muted);
 }
-.m2-status-running {
-  color: var(--datalib-accent);
-}
-.m2-status-queued {
-  color: var(--datalib-muted);
-}
-.m2-status-failed {
-  color: var(--datalib-log-error);
-}
+.m2-status-running { color: var(--datalib-accent); }
+.m2-status-queued { color: var(--datalib-muted); }
+.m2-status-failed { color: var(--datalib-log-error); }
 /* A run that died mid-step: not a failure anyone reported, but not a
    success either, so it reads as a warning rather than an error. */
-.m2-status-interrupted {
-  color: var(--datalib-log-warn);
-}
+.m2-status-interrupted { color: var(--datalib-log-warn); }
 /* Both tick glyphs are green, and for the same reason the failure "!"
    is red: the column is icons now, so colour is doing the work the
    words used to. A grey tick beside a red exclamation reads as "no
@@ -3164,13 +2778,9 @@ onUnmounted(() => {
    different facts, both good news, so they share the colour and are
    told apart by the glyph. */
 .m2-status-succeeded,
-.m2-status-skipped-up-to-date {
-  color: var(--datalib-log-ok);
-}
+.m2-status-skipped-up-to-date { color: var(--datalib-log-ok); }
 /* Never run is the emptiest state in the column, and reads as such. */
-.m2-status-never-run {
-  opacity: 0.55;
-}
+.m2-status-never-run { opacity: 0.55; }
 
 /* Running is drawn, not glyphed — a still frame can't say "still
    going". A ring with one lit quarter, turning once a second. */
@@ -3183,17 +2793,13 @@ onUnmounted(() => {
   animation: m2-spin 1s linear infinite;
 }
 @keyframes m2-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 /* Motion is the signal here, not decoration — but a static ring still
    reads as "running" beside a column of finished ticks, so honour the
    preference rather than exempting ourselves from it. */
 @media (prefers-reduced-motion: reduce) {
-  .m2-spinner {
-    animation: none;
-  }
+  .m2-spinner { animation: none; }
 }
 /* A group's run in flight: one segment per step in pipeline order, in
    the step's own status colour, the running one pulsing. The same
@@ -3210,42 +2816,23 @@ onUnmounted(() => {
   flex: 1;
   background: color-mix(in srgb, var(--datalib-fg) 14%, transparent);
 }
-.m2-seg:first-child {
-  border-radius: 3px 0 0 3px;
-}
-.m2-seg:last-child {
-  border-radius: 0 3px 3px 0;
-}
+.m2-seg:first-child { border-radius: 3px 0 0 3px; }
+.m2-seg:last-child { border-radius: 0 3px 3px 0; }
 .m2-seg-succeeded,
-.m2-seg-skipped-up-to-date {
-  background: var(--datalib-log-ok);
-}
-.m2-seg-failed {
-  background: var(--datalib-log-error);
-}
-.m2-seg-interrupted {
-  background: var(--datalib-log-warn);
-}
-.m2-seg-blocked {
-  background: var(--datalib-muted);
-}
+.m2-seg-skipped-up-to-date { background: var(--datalib-log-ok); }
+.m2-seg-failed { background: var(--datalib-log-error); }
+.m2-seg-interrupted { background: var(--datalib-log-warn); }
+.m2-seg-blocked { background: var(--datalib-muted); }
 .m2-seg-running {
   background: var(--datalib-accent);
   animation: m2-seg-pulse 1s ease-in-out infinite;
 }
 @keyframes m2-seg-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .m2-seg-running {
-    animation: none;
-  }
+  .m2-seg-running { animation: none; }
 }
 
 /* Shown only when the step reported a total to be a fraction of. */
@@ -3282,18 +2869,10 @@ onUnmounted(() => {
   background: color-mix(in srgb, currentColor 10%, transparent);
   color: var(--datalib-muted);
 }
-.m2-chip.queued {
-  color: var(--datalib-log-warn);
-}
-.m2-chip.idle {
-  color: var(--datalib-log-ok);
-}
-.m2-chip.errors {
-  color: var(--datalib-log-error);
-}
-.m2-chip.stalled {
-  color: var(--datalib-log-warn);
-}
+.m2-chip.queued { color: var(--datalib-log-warn); }
+.m2-chip.idle { color: var(--datalib-log-ok); }
+.m2-chip.errors { color: var(--datalib-log-error); }
+.m2-chip.stalled { color: var(--datalib-log-warn); }
 
 /* Bytes on disk: the recent history against the largest row, with the
    size centred over it and the per-output breakdown on `title`. */
@@ -3306,10 +2885,7 @@ onUnmounted(() => {
 /* "Nothing to show here" — an em dash, in both the Bytes column
    (no artifacts on disk) and Last synced (never run). Shared,
    because it is one meaning. */
-.m2-none {
-  color: var(--datalib-muted);
-  opacity: 0.55;
-}
+.m2-none { color: var(--datalib-muted); opacity: 0.55; }
 /* The plot box the number sits over. */
 .m2-plot {
   position: relative;
@@ -3353,10 +2929,7 @@ onUnmounted(() => {
    stretched from its 120-unit box to whatever the column is wide, and
    without it the stroke stretches too — a 1px line drawn as an ellipse
    two pixels wide horizontally and one vertically. */
-.m2-spark {
-  display: block;
-  overflow: visible;
-}
+.m2-spark { display: block; overflow: visible; }
 .m2-spark-line {
   fill: none;
   stroke: var(--datalib-accent);
@@ -3393,10 +2966,7 @@ onUnmounted(() => {
   border-color: var(--datalib-border);
   color: var(--datalib-fg);
 }
-.m2-icon-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
+.m2-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .m2-icon-btn.danger:hover:not(:disabled) {
   color: var(--datalib-log-error);
   border-color: var(--datalib-log-error);
@@ -3411,21 +2981,9 @@ onUnmounted(() => {
   font-size: 12px;
   cursor: pointer;
 }
-.m2-btn:hover:not(:disabled) {
-  background: var(--datalib-hover);
-}
-.m2-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.m2-btn.danger:hover:not(:disabled) {
-  border-color: var(--datalib-log-error);
-  color: var(--datalib-log-error);
-}
-.m2-btn.muted {
-  color: var(--datalib-muted);
-}
-.m2-btn.muted:hover:not(:disabled) {
-  color: var(--datalib-fg);
-}
+.m2-btn:hover:not(:disabled) { background: var(--datalib-hover); }
+.m2-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.m2-btn.danger:hover:not(:disabled) { border-color: var(--datalib-log-error); color: var(--datalib-log-error); }
+.m2-btn.muted { color: var(--datalib-muted); }
+.m2-btn.muted:hover:not(:disabled) { color: var(--datalib-fg); }
 </style>

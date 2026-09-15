@@ -14,11 +14,7 @@ export function quoteValue(v: string): string {
   return `"${escaped}"`;
 }
 
-export function filterToken(
-  key: string,
-  value: string,
-  exclude: boolean,
-): string {
+export function filterToken(key: string, value: string, exclude: boolean): string {
   return `${exclude ? "-" : ""}${key}:${quoteValue(value)}`;
 }
 
