@@ -286,14 +286,16 @@ reference doc it relates to.
   [`docs/dev/plans/source_wizard.md`](docs/dev/plans/source_wizard.md) (a
   proposal, only partly built — read its banner); the descriptors you
   actually edit are `datalib/ui/src/config/catalog.ts`.
-- [`docs/dev/plans/per_source_qmd_steps.md`](docs/dev/plans/per_source_qmd_steps.md)
-  — *proposal (2026-09-15), nothing built*: the qmd work moves from one
-  global step to `<g>/qmd_index` + `<g>/qmd_embed` per source, indexing
-  by writing qmd's `documents` rows ourselves (measured: qmd cannot
-  tell), embedding via `qmd embed -c` under a scheduler-level `lock`.
-  Read its findings before touching `qmd_indexer` — two embeds on one
-  store silently skip with exit 0, and `qmd embed` stops itself after
-  30 minutes and still exits 0.
+- [`docs/dev/plans/completed/per_source_qmd_steps.md`](docs/dev/plans/completed/per_source_qmd_steps.md)
+  — **built (2026-09-15)**: the qmd work is `<g>/qmd_index` +
+  `<g>/qmd_embed` per source, not one global step. `qmd_index` writes
+  qmd's `documents` rows itself (measured: qmd cannot tell — its own
+  `update` cannot be scoped to a collection); `qmd_embed` runs
+  `qmd embed -c` under the scheduler's `lock`, reading qmd's output
+  rather than its exit code, which lies twice (a refused second embed
+  and a timed-out session both exit 0). Read it before touching
+  `qmd_indexer`, and for the `render_version`-style rule that makes a
+  qmd bump re-embed.
 - [`docs/dev/plans/qmd_index_ui.md`](docs/dev/plans/qmd_index_ui.md) — the grid's
   `Indexed` / `Embedded` columns and the `qmd_state` endpoint behind
   them (built), plus the design for selective re-indexing and live

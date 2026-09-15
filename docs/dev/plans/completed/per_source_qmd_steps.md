@@ -1,11 +1,13 @@
 # Plan: per-source `qmd_index` and `qmd_embed` steps
 
-**Status: proposal (2026-09-15), nothing built.** Per
-[`AGENTS.md`](../../../AGENTS.md), this file describes work we intend to
-do, not the tree. The claims about *today's* behavior carry a
-`file:line` or a measurement, and every measurement below was taken on
-2026-09-15 against qmd 2.8.3 (the pin in `runtime/src/qmd.rs`) on a mac;
-the recipe is at the end so it can be re-run.
+**Status: built in full, 2026-09-15**, in the five slices at the end.
+Kept as the record of what was measured and decided; the §"The design"
+sections describe the tree as it landed, and the follow-ups under
+"Slices" are the parts that did not. Every measurement below was taken
+on 2026-09-15 against qmd 2.8.3 (the pin in `runtime/src/qmd.rs`) on a
+mac; the recipe is at the end so it can be re-run. "Today" in
+§"What the experiments established" means the tree *before* this
+landed.
 
 ## The ask
 
@@ -381,8 +383,12 @@ its `qmd_index` step.
    the rows "Search index" and "Embeddings", deleting a step takes
    everything under its group that reads it, and the quick-add
    snippets carry the pair too.
-5. **Fixture.** `--embed` and the two-group fixture; retarget the
-   tests that assumed everything was embedded.
+5. **Fixture** — *built 2026-09-15*. `tests/fixtures/qmd_groups.bzl`
+   names the two groups (`slack`, `claude-api`); the genrule passes
+   them as `--embed-group`, and the tests that assumed everything was
+   embedded now assert the line exactly — a document is embedded iff
+   its group is one of the two, which is the first time the `Embedded`
+   column has been tested as a column of its own.
 6. **Follow-ups**, deliberately out of scope: index incrementally from
    the render store's `dolt_diff` cursor instead of re-hashing the
    tree (the walk is O(source) per run, fine until a source has ~10⁵

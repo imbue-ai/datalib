@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { searchAndSettle } from "./grid-helpers";
 
 // The grid's `Indexed` / `Embedded` columns, end to end against the
 // fixture's real qmd index.
@@ -13,15 +14,22 @@ import { test, expect } from "@playwright/test";
 const CHECK = "✅";
 const CROSS = "❌";
 
-test("the applet reports the fixture's documents indexed and embedded", async ({
+/// The groups the fixture embeds — `tests/fixtures/qmd_groups.bzl`, kept
+/// in step by hand. Every group is indexed; only these carry vectors,
+/// so a document outside them is the ❌ half of the Embedded column.
+const EMBEDDED_GROUPS = new Set(["slack", "claude-api"]);
+
+test("the applet reports the fixture's documents indexed, and embedded where the fixture embeds", async ({
   request,
 }) => {
   const search = await request.get("/applet/unified_index/search?q=&limit=200");
   expect(search.ok(), `search API: HTTP ${search.status()}`).toBeTruthy();
-  const rows = ((await search.json()) as { rows: { markdown_uuid: string | null }[] })
-    .rows;
+  const rows = (
+    (await search.json()) as { rows: { markdown_uuid: string | null; source_id: string }[] }
+  ).rows;
   const uuids = [...new Set(rows.map((r) => r.markdown_uuid).filter(Boolean))];
   expect(uuids.length, "fixture rows must carry markdown_uuids").toBeGreaterThan(0);
+  const groupOf = new Map(rows.filter((r) => r.markdown_uuid).map((r) => [r.markdown_uuid!, r.source_id]));
 
   const resp = await request.post("/applet/unified_index/qmd_state", {
     data: { markdown_uuids: uuids },
@@ -35,10 +43,11 @@ test("the applet reports the fixture's documents indexed and embedded", async ({
 
   expect(state.index_present, "the e2e fixture root ships a qmd index").toBe(true);
   expect(state.summary.documents).toBeGreaterThan(0);
+  expect(state.summary.embedded, "some of the fixture is embedded").toBeGreaterThan(0);
   expect(
     state.summary.embedded,
-    "the fixture embeds everything it indexes",
-  ).toBe(state.summary.documents);
+    "and some of it deliberately is not",
+  ).toBeLessThan(state.summary.documents);
 
   // Every uuid we asked about comes back — no silent omissions.
   expect(Object.keys(state.docs).sort()).toEqual([...uuids].sort());
@@ -48,8 +57,18 @@ test("the applet reports the fixture's documents indexed and embedded", async ({
     notIndexed,
     "every fixture document should hash-match a qmd `documents` row",
   ).toEqual([]);
-  const notEmbedded = Object.entries(state.docs).filter(([, v]) => v.embedded !== true);
-  expect(notEmbedded, "every fixture document should be embedded").toEqual([]);
+  // The storage rows every source emits are filed under `datalib`,
+  // but their document lives in the *source's* rendered tree and so in
+  // its collection — which is where the embedding follows from. They
+  // are left out of the line check rather than guessed at.
+  const offTheLine = Object.entries(state.docs).filter(
+    ([uuid, v]) =>
+      groupOf.get(uuid) !== "datalib" && v.embedded !== EMBEDDED_GROUPS.has(groupOf.get(uuid)!),
+  );
+  expect(
+    offTheLine,
+    "a document should be embedded exactly when its group is one the fixture embeds",
+  ).toEqual([]);
 });
 
 test("the columns are off by default and render check marks once shown", async ({
@@ -112,19 +131,32 @@ test("the columns are off by default and render check marks once shown", async (
     .first();
   await expect(firstIndexed).toHaveText(CHECK, { timeout: 15_000 });
 
-  for (const colId of ["qmd_indexed", "qmd_embedded"]) {
-    const cells = page.locator(
-      `.ag-grid-scrolling-rows [role="row"] [col-id="${colId}"]`,
-    );
-    const texts = await cells.allInnerTexts();
-    expect(texts.length, `${colId} cells rendered`).toBeGreaterThan(0);
-    expect(
-      texts.filter((t) => t.trim() === CROSS),
-      `${colId}: fixture rows must not report as missing from the index`,
-    ).toEqual([]);
-    expect(
-      texts.every((t) => t.trim() === CHECK),
-      `${colId}: every rendered cell should be a check mark, got ${JSON.stringify(texts)}`,
-    ).toBe(true);
-  }
+  // Indexed: every rendered row is a check mark — the whole fixture is
+  // keyword-indexed.
+  const indexed = await page
+    .locator('.ag-grid-scrolling-rows [role="row"] [col-id="qmd_indexed"]')
+    .allInnerTexts();
+  expect(indexed.length, "qmd_indexed cells rendered").toBeGreaterThan(0);
+  expect(
+    indexed.every((t) => t.trim() === CHECK),
+    `qmd_indexed: every rendered cell should be a check mark, got ${JSON.stringify(indexed)}`,
+  ).toBe(true);
+
+  // Embedded: a check mark for a source the fixture embeds, a cross for
+  // one it does not — one search per case, so both marks are seen to
+  // render rather than one of them merely not contradicted.
+  const embeddedCells = () =>
+    page.locator('.ag-grid-scrolling-rows [role="row"] [col-id="qmd_embedded"]');
+  await searchAndSettle(page, "source_id:slack");
+  await expect(embeddedCells().first()).toHaveText(CHECK, { timeout: 15_000 });
+  expect(
+    (await embeddedCells().allInnerTexts()).every((t) => t.trim() === CHECK),
+    "slack is embedded: every cell a check mark",
+  ).toBe(true);
+  await searchAndSettle(page, "source_id:notion");
+  await expect(embeddedCells().first()).toHaveText(CROSS, { timeout: 15_000 });
+  expect(
+    (await embeddedCells().allInnerTexts()).every((t) => t.trim() === CROSS),
+    "notion is indexed but not embedded: every cell a cross",
+  ).toBe(true);
 });

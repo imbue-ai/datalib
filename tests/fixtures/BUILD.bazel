@@ -1,3 +1,4 @@
+load(":qmd_groups.bzl", "QMD_EMBEDDED_GROUPS")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
@@ -353,7 +354,8 @@ py_test(
 
 # Build a QMD (BM25 + embeddings) index over the rendered TNG markdown
 # tree (`:ingested_tng`'s qmd_md.tar) and emit it as an overlay tar that
-# layers onto `:ingested_tng`'s qmd.tar.
+# layers onto `:ingested_tng`'s qmd.tar. Every group is indexed; only
+# `QMD_EMBEDDED_GROUPS` (qmd_groups.bzl) are embedded.
 #
 # Output `qmd-index.tar` mirrors qmd.tar's layout: paths rooted at `qmd/`,
 # so extracting both archives into the same directory (e.g. with
@@ -419,7 +421,7 @@ genrule(
         "$(execpath @nodejs_host//:node_bin)",
         "$(execpath //third-party/qmd/runtime:qmd_package_dir)",
         "$(execpath @qmd_model_embeddinggemma//file)",
-    ]),
+    ] + ["--embed-group " + g for g in QMD_EMBEDDED_GROUPS]),
     tags = [
         # No `requires-network`, deliberately. It was here for the model
         # download, which is now `@qmd_model_embeddinggemma` — a bazel

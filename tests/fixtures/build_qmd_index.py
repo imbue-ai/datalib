@@ -43,6 +43,8 @@ Args (positional):
     6: path to the linked `@tobilu/qmd` package dir, used to locate the
        root of the pnpm store it lives in
     7: path to the embedding GGUF (@qmd_model_embeddinggemma//file)
+    then any number of `--embed-group <group>`, passed through to the
+    indexer: every group is indexed, only these are embedded
 """
 
 from __future__ import annotations
@@ -119,6 +121,7 @@ def _stage_models(work: Path, embed_model: Path) -> Path:
 def main() -> int:
     indexer, qmd_tar, out_tar, qmd_version = sys.argv[1:5]
     node_bin, qmd_pkg_dir, embed_model = (Path(p) for p in sys.argv[5:8])
+    embed_args = sys.argv[8:]
     qmd_tar_path = Path(qmd_tar).resolve()
     out_tar_path = Path(out_tar).resolve()
     out_tar_path.parent.mkdir(parents=True, exist_ok=True)
@@ -165,6 +168,7 @@ def main() -> int:
         # it treats a cached file whose HuggingFace etag it cannot
         # confirm as stale. Skipping it is what keeps the action offline.
         "--no-pull",
+        *embed_args,
     ]
     r = subprocess.run(cmd, env=env, check=False)
     if r.returncode != 0:
