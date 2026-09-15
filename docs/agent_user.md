@@ -138,8 +138,13 @@ frame when a job starts or ends and whenever the run store moves. The
 run store is what to read for what happened: `GET /api/runs` lists
 runs (a job's id is its run id), `/api/runs/{run}/steps` gives every
 step's state and metrics, and `/api/runs/{run}/log?step=&after_seq=`
-is the log, tailable by `seq`. All of it is `system/runs.sqlite`,
-plain SQLite, so `sqlite3` reads it directly too.
+is the log, tailable by `seq`. `GET /api/log?q=` is the same log
+across every run, in the search bar's grammar — `level:warn
+-target:sqlx "history"` — and `process:http` narrows it to what the
+server itself said (the worker, the applets, requests that failed),
+which the Manage screen shows under **Server log**. All of it is
+`system/runs.sqlite`, plain SQLite, so `sqlite3` reads it directly
+too.
 
 ## Reading the mirrored data
 

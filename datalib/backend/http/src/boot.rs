@@ -36,7 +36,7 @@ pub async fn build_state(
     // terminal) reads it from here instead of scraping our stderr.
     api_token.write_token_file()?;
 
-    eprintln!(
+    tracing::info!(
         "stores: {}, {}",
         datalib_core::layout::feedback_db(&root).display(),
         datalib_core::layout::jobs_db(&root).display(),

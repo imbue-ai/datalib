@@ -65,7 +65,7 @@ rust_binary(
     edition = "2021",
     # Must match [workspace.package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.32.0",
+    version = "0.33.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -76,9 +76,11 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":datalib_dag",
+        "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing-subscriber",
     ],
 )
 

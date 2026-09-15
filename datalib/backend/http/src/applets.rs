@@ -423,7 +423,7 @@ fn reconcile(
     let root = match frontend_root(data_root) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("applets: {e:#}");
+            tracing::warn!("applets: {e:#}");
             return to_start
                 .iter()
                 .map(|e2| (e2.id.clone(), format!("{e:#}")))
@@ -448,7 +448,7 @@ fn reconcile(
             .collect();
         for h in handles {
             if let Ok((id, Err(e))) = h.join() {
-                eprintln!("applet {id}: {e}");
+                tracing::warn!(applet = %id, "{e}");
                 errors.insert(id, e);
             }
         }
@@ -501,7 +501,7 @@ fn load_entries(
                 d.entry.as_ref().map(|e| e.kind) == Some(datalib_dag::EntryKind::Applet)
                     || d.severity == datalib_dag::Severity::Fatal
             }) {
-                eprintln!("applets: {}", d.describe());
+                tracing::warn!("applets: {}", d.describe());
             }
             (checked.cfg.applets, dir)
         }
@@ -510,7 +510,7 @@ fn load_entries(
         // even read is a different thing entirely.
         Err(e) => {
             if cfg_path.exists() {
-                eprintln!("applets: config could not be read, none will start: {e:#}");
+                tracing::warn!("applets: config could not be read, none will start: {e:#}");
             }
             (Vec::new(), binary_dir)
         }
@@ -589,7 +589,9 @@ impl Supervisor {
             std::thread::spawn(move || {
                 let reader = std::io::BufReader::new(stderr);
                 for line in reader.lines().map_while(Result::ok) {
-                    eprintln!("applet {id}: {line}");
+                    // Relayed as this server's line about the applet,
+                    // the way the runner relays a step's stderr.
+                    tracing::info!(applet = %id, "{line}");
                     if let Ok(mut t) = tail.lock() {
                         t.push(line);
                         // Bounded: this lives as long as the applet.
@@ -625,7 +627,7 @@ impl Supervisor {
                         }
                         // Anything else on stdout is just output. An
                         // applet is not required to keep it clean.
-                        None => eprintln!("applet {id}: {line}"),
+                        None => tracing::info!(applet = %id, "{line}"),
                     }
                 }
                 if !announced {

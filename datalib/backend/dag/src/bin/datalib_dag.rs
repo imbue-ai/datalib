@@ -26,6 +26,8 @@ use datalib_dag::events::FanOutSink;
 use datalib_dag::runs_sink::RunStoreSink;
 use datalib_dag::step::FailureKind;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -239,13 +241,26 @@ async fn main() -> Result<()> {
         let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
         let retention = cfg.run_history.map(|h| h.retention()).unwrap_or_default();
         match RunStoreSink::start(&data_root, &run_id, &now, retention) {
-            Some(store) => sinks.push(Arc::new(store)),
+            Some(store) => {
+                // The runner's own `tracing` lines go to the store too,
+                // as the run's lines with no step — and only there:
+                // stderr is the NDJSON event stream, which a fmt layer
+                // would interleave prose into.
+                let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,sqlx=warn"));
+                let _ = tracing_subscriber::registry()
+                    .with(filter)
+                    .with(datalib_runs::StoreLayer::new(store.log_sink()))
+                    .try_init();
+                sinks.push(Arc::new(store));
+            }
             None => {
-                // This binary has no tracing subscriber and no indicatif
-                // bars, so the macro's usual objection does not apply and
-                // `tracing::warn!` would go nowhere at all. The NDJSON
-                // reader tolerates non-JSON lines (worker.rs skips what it
-                // cannot parse), so a plain line is safe here.
+                // No tracing subscriber is installed on this path and
+                // there are no indicatif bars, so the macro's usual
+                // objection does not apply and `tracing::warn!` would go
+                // nowhere at all. The NDJSON reader tolerates non-JSON
+                // lines (worker.rs skips what it cannot parse), so a
+                // plain line is safe here.
                 #[allow(clippy::disallowed_macros)]
                 {
                     eprintln!("datalib-dag: run store unavailable; nothing recorded this run");

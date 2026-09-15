@@ -1,8 +1,3 @@
-// Runs as its own process via `datalib-http`, so there are no indicatif bars
-// here and request-error logging legitimately writes to stderr — hence the
-// exemption from the workspace-wide ban in clippy.toml.
-#![allow(clippy::disallowed_macros)]
-
 //! axum router for the Datalib HTTP API.
 //!
 //! Dolt is the source of truth. **QMDs are write-only output**: `/api/chat`
@@ -41,6 +36,7 @@ mod embed;
 pub mod frontend;
 pub mod history;
 pub mod lock;
+pub mod logging;
 pub mod manage;
 pub mod usage;
 pub mod watch;
@@ -281,7 +277,7 @@ async fn submit_feedback(
         })),
         Err(RepoError::ReadOnly) => Err(StatusCode::SERVICE_UNAVAILABLE),
         Err(e) => {
-            eprintln!("feedback insert failed: {e}");
+            tracing::error!("feedback insert failed: {e}");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -391,7 +387,7 @@ async fn proxy_impl(
 }
 
 fn applet_error(status: StatusCode, msg: &str) -> Response<Body> {
-    eprintln!("applet proxy: {msg}");
+    tracing::warn!("applet proxy: {msg}");
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "application/json")
@@ -489,7 +485,7 @@ async fn put_lib(
     }
     let dir = frontend::frontend_dir(&s.root).join(frontend::USER_NAMESPACE);
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("put_lib: mkdir {}: {e}", dir.display());
+        tracing::error!("put_lib: mkdir {}: {e}", dir.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -498,7 +494,7 @@ async fn put_lib(
     // Content-addressed: identical source is already the right file.
     if !js.exists() {
         if let Err(e) = std::fs::write(&js, req.source.as_bytes()) {
-            eprintln!("put_lib: write {}: {e}", js.display());
+            tracing::error!("put_lib: write {}: {e}", js.display());
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     }
@@ -532,12 +528,12 @@ async fn put_lib(
     match serde_json::to_string_pretty(&meta) {
         Ok(text) => {
             if let Err(e) = std::fs::write(&meta_path, text) {
-                eprintln!("put_lib: meta {}: {e}", meta_path.display());
+                tracing::error!("put_lib: meta {}: {e}", meta_path.display());
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         }
         Err(e) => {
-            eprintln!("put_lib: encode meta {name}: {e}");
+            tracing::error!("put_lib: encode meta {name}: {e}");
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     }
@@ -581,11 +577,11 @@ async fn rename_lib(
 
     let target = dir.join(format!("{new_name}.json"));
     let encoded = serde_json::to_string_pretty(&meta).map_err(|e| {
-        eprintln!("rename_lib: encode {new_name}: {e}");
+        tracing::error!("rename_lib: encode {new_name}: {e}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     if let Err(e) = std::fs::write(&target, encoded) {
-        eprintln!("rename_lib: write {}: {e}", target.display());
+        tracing::error!("rename_lib: write {}: {e}", target.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     // The tombstone replaces the old document, so the old name resolves
@@ -598,12 +594,12 @@ async fn rename_lib(
     match serde_json::to_string_pretty(&tomb) {
         Ok(text) => {
             if let Err(e) = std::fs::write(&tomb_path, text) {
-                eprintln!("rename_lib: tombstone {}: {e}", tomb_path.display());
+                tracing::error!("rename_lib: tombstone {}: {e}", tomb_path.display());
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         }
         Err(e) => {
-            eprintln!("rename_lib: encode tombstone {name}: {e}");
+            tracing::error!("rename_lib: encode tombstone {name}: {e}");
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     }
@@ -842,18 +838,18 @@ async fn put_config(
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            eprintln!("put_config: mkdir {}: {e}", parent.display());
+            tracing::error!("put_config: mkdir {}: {e}", parent.display());
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
     let tmp = path.with_extension("tmp");
     if let Err(e) = std::fs::write(&tmp, req.text.as_bytes()) {
-        eprintln!("put_config: write {}: {e}", tmp.display());
+        tracing::error!("put_config: write {}: {e}", tmp.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     if let Err(e) = std::fs::rename(&tmp, &path) {
         let _ = std::fs::remove_file(&tmp);
-        eprintln!("put_config: rename {}: {e}", path.display());
+        tracing::error!("put_config: rename {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     Ok(Json(verdict))
@@ -888,7 +884,7 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            eprintln!("init_config: mkdir {}: {e}", parent.display());
+            tracing::error!("init_config: mkdir {}: {e}", parent.display());
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
@@ -905,7 +901,7 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
         Ok(mut f) => {
             use std::io::Write;
             f.write_all(text.as_bytes()).map_err(|e| {
-                eprintln!("init_config: write {}: {e}", path.display());
+                tracing::error!("init_config: write {}: {e}", path.display());
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
             Ok(Json(InitConfigResponse {
@@ -922,7 +918,7 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
             error: None,
         })),
         Err(e) => {
-            eprintln!("init_config: create {}: {e}", path.display());
+            tracing::error!("init_config: create {}: {e}", path.display());
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -1591,7 +1587,7 @@ struct RunLogParams {
     #[serde(default)]
     step: Option<String>,
     /// Only lines after this `seq` — how a client tails: remember the
-    /// last `seq` it saw and ask again on the next `dag_changed` frame.
+    /// last `seq` it saw and ask again on the next `run_store_changed` frame.
     #[serde(default)]
     after_seq: Option<i64>,
     #[serde(default)]
@@ -1660,7 +1656,7 @@ fn repo_err_to_status(e: RepoError) -> StatusCode {
     match e {
         RepoError::ReadOnly => StatusCode::SERVICE_UNAVAILABLE,
         _ => {
-            eprintln!("repo error: {e}");
+            tracing::error!("repo error: {e}");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
