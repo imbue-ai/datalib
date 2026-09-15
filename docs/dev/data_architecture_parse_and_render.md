@@ -617,6 +617,10 @@ and the sink has a taxonomy rather than a severity:
 | a field fails its declared coercion | null **that field**, keep the record |
 | a value whose type the contract does not cover | null that field — never pass it through untyped |
 
+`GridRowBuilder::build_or_record` is this sink for the grid-row stage:
+a `when_ts` that will not parse is nulled and the row kept, a row with
+no identity is dropped, and each lands as a `render_problems` row.
+
 Every one emits `{source, stage, key_or_path, field, reason, sample}`,
 where `sample` is the first 80 characters. Never a count without a
 reason, never a reason without a sample. The test of the design is
