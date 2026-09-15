@@ -1437,20 +1437,30 @@ async fn sync_job_cancel(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
+    let was_running = s
+        .app
+        .get_job(&id)
+        .await
+        .map_err(repo_err_to_status)?
+        .is_some_and(|row| row.job_state() == Some(JobState::Running));
     s.app
         .request_cancel_job(&id)
         .await
         .map_err(repo_err_to_status)?;
     // A pending job that's canceled is never claimed by the worker, so
     // it would emit nothing — push a terminal event ourselves so the UI
-    // updates. (A running job will also get the worker's own event.)
-    let _ = s.progress_tx.send(worker::ProgressEvent {
-        id,
-        kind: String::new(),
-        source_ids: None,
-        state: JobState::Canceled,
-        progress_msg: None,
-    });
+    // updates. A running job's event is the worker's to send, once the
+    // runner has actually exited: pushing one here would tell the UI
+    // the sync was over while its steps were still checkpointing.
+    if !was_running {
+        let _ = s.progress_tx.send(worker::ProgressEvent {
+            id,
+            kind: String::new(),
+            source_ids: None,
+            state: JobState::Canceled,
+            progress_msg: None,
+        });
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

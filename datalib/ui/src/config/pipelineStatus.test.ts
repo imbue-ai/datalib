@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest";
 import {
   claimedBy,
   effectiveRun,
+  jobActive,
+  jobStopping,
   sourcesFeeding,
   statusFloor,
   stepStatus,
@@ -23,7 +25,7 @@ import {
   type StatusView,
 } from "./pipelineStatus";
 import type { ConfiguredStep } from "./sourceSteps";
-import type { DagRun, DagStep, SyncJob } from "@/api";
+import type { DagRun, DagStep, DagStepRun, SyncJob } from "@/api";
 
 /// A two-source graph with a shared fan-in, which is the shape every
 /// real config has: `a/ingest → a/render_markdown → unified_index/grid`, and
@@ -176,6 +178,81 @@ describe("what a single snapshot means", () => {
     );
     expect(s.key).toBe("succeeded");
     expect(s.at).toBe(T.yesterday);
+  });
+
+  it("a step queued by its own job stays Queued while another job's run reports it not_selected", () => {
+    // "Sync a", then "Sync b" while a is still going: a's run walks past
+    // b/ingest and reports it out of scope, which is true of *a's* run.
+    // b's job is pending behind it, and its row has to say so — this
+    // used to fall through to yesterday's Succeeded, under a Stop button.
+    const aRun = { ...liveRun, run_id: "job-a" };
+    const bDone: DagStepRun = {
+      run_id: "r",
+      started_at: T.yesterday,
+      finished_at: T.yesterday,
+      status: "succeeded",
+      attempts: 1,
+      error: null,
+    };
+    const frame: Frame = {
+      jobs: [
+        job({ id: "job-a", source_ids: "a/ingest", state: "running" }),
+        job({ id: "job-b", source_ids: "b/ingest", state: "pending", started_at_utc: null }),
+      ],
+      run: aRun,
+      dag: {
+        "a/ingest": dagStep({ id: "a/ingest", current_state: "running" }),
+        "b/ingest": dagStep({ id: "b/ingest", current_state: "not_selected", last_run: bDone }),
+      },
+    };
+    const b = statusIn(frame, "b/ingest");
+    expect(b.key).toBe("queued");
+    expect(b.detail).toContain("Waiting for this sync to start");
+    expect(statusIn(frame, "a/ingest").key).toBe("running");
+
+    // The same `not_selected`, reported by the claiming job's *own* run,
+    // still means what it always did: out of scope, show the history.
+    const own: Frame = {
+      jobs: [job({ id: "job-a", source_ids: "a/ingest", state: "running" })],
+      run: aRun,
+      dag: { "b/ingest": dagStep({ id: "b/ingest", current_state: "not_selected", last_run: bDone }) },
+    };
+    // b/ingest is not in job-a's closure, so it carries no claim; give
+    // it one by syncing everything from job-a instead.
+    const everything: Frame = {
+      ...own,
+      jobs: [job({ id: "job-a", source_ids: null, state: "running" })],
+    };
+    expect(statusIn(everything, "b/ingest").key).toBe("succeeded");
+  });
+});
+
+describe("a job told to stop", () => {
+  it("holds its claim until the worker stamps it finished, and says so", () => {
+    // Stop flips the row to `canceled` at once; the runner is still
+    // winding down until `finished_at_utc` lands. The rows stay claimed
+    // through that window — under a Stopping face, not a Sync one.
+    const stopping = job({ id: "job-a", state: "canceled", finished_at_utc: null });
+    expect(jobActive(stopping)).toBe(true);
+    expect(jobStopping(stopping)).toBe(true);
+    const claims = claimedBy(steps(), [stopping]);
+    expect(claims.get("a/render_markdown")?.id).toBe("job-a");
+    const s = statusIn(
+      { jobs: [stopping], run: { ...liveRun, run_id: "job-a" }, dag: {} },
+      "a/render_markdown",
+    );
+    expect(s.key).toBe("queued");
+    expect(s.detail).toContain("is stopping");
+
+    // Stamped: over, and the claim with it.
+    const stopped = { ...stopping, finished_at_utc: T.runEnd };
+    expect(jobActive(stopped)).toBe(false);
+    expect(claimedBy(steps(), [stopped]).size).toBe(0);
+
+    // A pending job that was canceled never started anything to wind
+    // down: nothing to hold.
+    const neverRan = job({ state: "canceled", started_at_utc: null, finished_at_utc: null });
+    expect(jobActive(neverRan)).toBe(false);
   });
 });
 

@@ -221,6 +221,26 @@ export function waitingOn(
   return step.inputs.filter((input) => !isFinished(input)).sort();
 }
 
+/// Is this job still holding the runner: queued, running, or told to
+/// stop and not yet stopped? A cancel flips the row to `canceled` the
+/// moment it is asked for — that is how the worker learns to send
+/// SIGTERM — while the steps behind it go on checkpointing for up to
+/// the worker's grace period. The run is over when the worker stamps
+/// `finished_at_utc`, and not before.
+export function jobActive(
+  j: Pick<SyncJob, "state" | "started_at_utc" | "finished_at_utc">,
+): boolean {
+  if (j.state === "pending" || j.state === "running") return true;
+  return j.state === "canceled" && !!j.started_at_utc && !j.finished_at_utc;
+}
+
+/// Told to stop, and still winding down.
+export function jobStopping(
+  j: Pick<SyncJob, "state" | "started_at_utc" | "finished_at_utc">,
+): boolean {
+  return j.state === "canceled" && jobActive(j);
+}
+
 /// step id → the queued-or-running job that has claimed it.
 export function claimedBy(
   steps: ConfiguredStep[],
@@ -230,7 +250,7 @@ export function claimedBy(
   const dependents = dependentsOf(steps);
   const stepIds = steps.filter((s) => s.kind === "step").map((s) => s.id);
   for (const job of jobs) {
-    if (job.state !== "pending" && job.state !== "running") continue;
+    if (!jobActive(job)) continue;
     // The worker splits `source_ids` on commas and passes each as its
     // own `--sync`; empty means the whole config.
     const seeds = (job.source_ids ?? "")
@@ -304,8 +324,12 @@ export function stepStatus(args: {
   // Claimed, and the runner hasn't reached it. `current` being set at
   // all means it has — including `not_selected`, which is the runner
   // saying this row is out of scope after all, and is more current than
-  // the closure we predicted.
-  if (claim && !current && !reachedSince(last, claim)) {
+  // the closure we predicted. But only the claiming job's own run can
+  // say so: a job's id is its run's id, and while some *other* job's
+  // run is in flight, its `not_selected` means that run left this step
+  // alone — not that the job queued behind it did.
+  const spokenFor = !runInFlight || !claim || runInFlight.run_id === claim.id;
+  if (claim && !(spokenFor && current) && !reachedSince(last, claim)) {
     // "the sync of pdfs/raw" reads badly on pdfs/raw's own row, which
     // is the row most likely to be read: a source step is what you
     // pressed the button on. Name the sync only when it is some *other*
@@ -324,11 +348,13 @@ export function stepStatus(args: {
     // is the specific answer; the job itself is the fallback when there
     // is nothing upstream left to wait for.
     const blockers = args.waitingOn ?? [];
-    const detail = blockers.length
-      ? `Waiting for ${listOf(blockers)} to finish, in ${sync}.`
-      : claim.state === "pending"
-        ? `Waiting for ${sync} to start.`
-        : `Waiting its turn in ${sync}.`;
+    const detail = jobStopping(claim)
+      ? `${sync[0].toUpperCase()}${sync.slice(1)} is stopping; this step will not be reached.`
+      : blockers.length
+        ? `Waiting for ${listOf(blockers)} to finish, in ${sync}.`
+        : claim.state === "pending"
+          ? `Waiting for ${sync} to start.`
+          : `Waiting its turn in ${sync}.`;
     return view("queued", last?.finished_at ?? last?.started_at ?? null, detail);
   }
 

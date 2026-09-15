@@ -50,7 +50,6 @@ import {
   progressFraction,
   type Diagnostic,
   type SyncJob,
-  type SyncJobState,
   type JobProgressEvent,
   type OutputStorage,
   type PipelineStorage,
@@ -96,6 +95,8 @@ import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { compareStamps, formatRelative, formatStamp } from "@/config/timeFormat";
 import {
   claimedBy as claimedByJob,
+  jobActive,
+  jobStopping,
   sourcesFeeding as sourcesFeedingIn,
   stepStatus as statusOf,
   waitingOn,
@@ -159,10 +160,12 @@ function clearBanner() {
   bannerJob.value = null;
 }
 
-/// Take down a job-scoped banner once its job has stopped running.
-function retireBanner(jobId: string, state: SyncJobState) {
-  if (bannerJob.value !== jobId) return;
-  if (state === "pending" || state === "running") return;
+/// Take down a job-scoped banner once its job has stopped running. A
+/// job told to stop is still running until the worker says otherwise —
+/// the "Stopping…" banner is *for* that window.
+function retireBanner(job: SyncJob) {
+  if (bannerJob.value !== job.id) return;
+  if (jobActive(job)) return;
   clearBanner();
 }
 const busy = ref(false);
@@ -903,12 +906,19 @@ class ActionsRenderer implements ICellRendererComp<Row> {
     const row = this.row;
     if (row.stopJobId && row.stopTarget) {
       const claim = claimedBy.value.get(row.stopTarget);
-      setButton(
-        this.run,
-        "stop",
-        claim?.source_ids ? `Stop the sync of ${claim.source_ids}` : "Stop the sync in progress",
-        null,
-      );
+      const of = claim?.source_ids ? `the sync of ${claim.source_ids}` : "the sync in progress";
+      // Once asked to stop there is nothing more to ask: the steps in
+      // flight are checkpointing, and the face says so until they exit.
+      if (claim && jobStopping(claim)) {
+        setButton(
+          this.run,
+          "stop",
+          `Stopping ${of}`,
+          `Stopping ${of} — its steps are checkpointing and exiting.`,
+        );
+      } else {
+        setButton(this.run, "stop", `Stop ${of}`, null);
+      }
       this.run.classList.add("danger");
     } else {
       setButton(this.run, "run", "Sync now", row.runBlocked);
@@ -1913,7 +1923,7 @@ const commitJobs = freshest<SyncJob[]>((list) => {
     const j = list.find((x) => x.id === bannerJob.value);
     // A job that has fallen off the end of the queue we hold is not
     // running either, so the banner goes.
-    if (j) retireBanner(j.id, j.state);
+    if (j) retireBanner(j);
     else clearBanner();
   }
 });
@@ -1930,9 +1940,7 @@ async function loadJobs() {
 /// Sync-everything button, and marks the window in which the runner's
 /// record has nothing to say yet: between the click and its first
 /// written state there is nothing there to read.
-const jobActive = computed(() =>
-  jobs.value.some((j) => j.state === "pending" || j.state === "running"),
-);
+const anyJobActive = computed(() => jobs.value.some(jobActive));
 
 /// The runner's per-step record.
 const commitDag = freshest<Awaited<ReturnType<typeof fetchDag>>>((dag) => {
@@ -2331,8 +2339,9 @@ async function stopSource(id: string) {
 /// One pushed job update, applied without a round trip.
 function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
-  retireBanner(e.id, e.state);
-  const active = e.state === "pending" || e.state === "running";
+  const job = jobs.value.find((j) => j.id === e.id);
+  if (job) retireBanner(job);
+  const active = !!job && jobActive(job);
   repaint();
   // A job ending is exactly when its record settles — and the record
   // is the only place a step's finish time and error live.
@@ -2477,9 +2486,9 @@ onUnmounted(() => {
         </button>
         <button
           class="m2-btn m2-runall"
-          :disabled="busy || !!parseError || !!configError || jobActive || rows.length === 0"
+          :disabled="busy || !!parseError || !!configError || anyJobActive || rows.length === 0"
           :title="
-            jobActive
+            anyJobActive
               ? 'A sync is already running.'
               : rows.length === 0
                 ? 'Nothing configured yet.'
