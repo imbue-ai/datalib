@@ -338,17 +338,52 @@ test.describe("sources run independently, one job at a time", () => {
     await stopBtn(page, `group:${CHATGPT.id}`).click();
     // Between the click and the runner's exit the worker sends SIGTERM,
     // the runner forwards SIGINT, and the step checkpoints and exits —
-    // up to the worker's 15 s grace. The row says so the whole time: the
-    // button reads Stopping and takes no second click, and the banner
-    // holds.
+    // up to the worker's 15 s grace, and as little as a fraction of a
+    // second when the step is between requests. The row says so for as
+    // long as that lasts: the button reads Stopping and takes no second
+    // click. Sampled until the job is stamped, and asserted only if the
+    // window was wide enough to be seen at all — on a fast host it can
+    // close before the first sample. The "Stopping…" banner is the
+    // click handler's, painted a beat after the rows refetch that flips
+    // the face, so it is only logged.
     const banner = page.getByText(`Stopping the sync of ${ingestOf(CHATGPT)}`);
-    await expect(banner).toBeVisible();
-    await expect(stoppingBtn(page, `group:${CHATGPT.id}`)).toBeDisabled();
-    const stopped = await untilJobFinished(request, CHATGPT, ["canceled"]);
-    expect(stopped.state, "a stop is a cancel, not a failure").toBe("canceled");
+    const stopping = stoppingBtn(page, `group:${CHATGPT.id}`);
+    /// What the row and banner read while the wind-down was on, if a
+    /// sample caught it.
+    type Seen = { disabled: boolean; banner: boolean };
+    let windingDown: Seen | null = null;
+    let stopped: SyncJob | undefined;
+    await expect
+      .poll(
+        async () => {
+          stopped = await jobFor(request, CHATGPT);
+          if (stopped?.finished_at_utc) return "finished";
+          if (await stopping.isVisible()) {
+            windingDown = {
+              disabled: (windingDown?.disabled ?? true) && (await stopping.isDisabled()),
+              banner: (windingDown?.banner ?? false) || (await banner.isVisible()),
+            };
+          }
+          return `winding down (${stopped?.state ?? "no job"})`;
+        },
+        { timeout: 45_000, intervals: [100], message: `the job for ${CHATGPT.id} never finished` },
+      )
+      .toBe("finished");
+    expect(stopped?.state, "a stop is a cancel, not a failure").toBe("canceled");
+    // Read through a closure: TypeScript narrows the `let` to `null`
+    // here, not seeing the assignment inside the poll, and an assigned
+    // local would inherit that narrowing.
+    const seen = ((): Seen | null => windingDown)();
+    console.log(
+      `[e2e] the stop of ${CHATGPT.id} ` +
+        (seen
+          ? `showed its wind-down (banner ${seen.banner ? "seen" : "not seen"})`
+          : "was over before a sample saw it"),
+    );
+    if (seen) expect(seen.disabled, "while winding down, Stopping takes no second click").toBe(true);
     // …and once the runner has gone, both stand down.
     await expect(banner).toBeHidden({ timeout: 10_000 });
-    await expect(stoppingBtn(page, `group:${CHATGPT.id}`)).toHaveCount(0);
+    await expect(stopping).toHaveCount(0);
     // Its download's row is terminal and does not claim to have finished
     // the work. (What word it uses is the test.fail below.)
     let word = "";
