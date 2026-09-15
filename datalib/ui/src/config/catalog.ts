@@ -930,7 +930,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Mirror the Messages app's own database, with full history.",
     keywords: ["apple", "messages", "imessage", "sms", "texts", "chat.db", "iphone"],
     kind: "local",
-    icon: null,
+    icon: "apple_messages",
     defaultName: "messages",
     nameHint: "Messages on this Mac",
     wizard: true,
@@ -952,7 +952,9 @@ export const CATALOG: CatalogEntry[] = [
           "~/Library/Messages to reach it. Choose it with the picker rather than typing " +
           "the path: macOS protects the folder, and picking the file is what lets Datalib " +
           "read it. If a sync still fails with \"Operation not permitted\", grant Datalib " +
-          "Full Disk Access in System Settings. Attachments are listed by name only.",
+          "Full Disk Access in System Settings. Attachments (photos, videos, files) are " +
+          "listed by name and path only — their bytes are not copied, since picking " +
+          "chat.db grants access to that one file.",
       },
       {
         kind: "bool",
