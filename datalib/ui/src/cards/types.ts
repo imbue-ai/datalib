@@ -69,11 +69,23 @@ export type CardCtx = {
   // source-derived fallback (title.ts displayTitle). null also means
   // "back to the fallback".
   setTitle(title: string | null): void;
+  // Offer help: what this card shows and how to work it, as HTML. The
+  // chrome grows a "?" that opens it. Every card should say something
+  // here — a card with no help is a card that assumes its reader
+  // already knows it. null takes the offer back; the host clears it
+  // when the card is torn down.
+  setHelp(html: string | null): void;
   bus: Bus;
   host: HostCommands;
 };
 
 export type CardRender = (root: ShadowRoot, ctx: CardCtx) => Teardown;
+
+// Bus topic: config.toml was just written by a card on this page (the
+// wizard, a rename, a delete). A card showing the file reloads on it
+// rather than waiting for the data root's own change frame, which
+// arrives a beat later. Payload null.
+export const TOPIC_CONFIG_WRITTEN = "config.written";
 
 // Bus topic: the destination of the edge currently under the cursor.
 // Published by the document view when the pointer enters an
@@ -127,4 +139,13 @@ export type ViewLibs = {
   perseusView: () => CardRender;
   // Visualize the sync pipeline's step DAG, with live run states.
   sourceDagView: () => CardRender;
+  // The typed table viewer over any endpoint that declares its columns
+  // (`{columns, rows}`), e.g. `tableView({ url: "/api/manage/rows" })`.
+  // See cards/TableGrid.ce.vue for the column-type vocabulary.
+  tableView: (opts: { url: string }) => CardRender;
+  // The Manage screen as a card: every source and step config.toml
+  // declares, with status, actions and the panels they open.
+  sourcesView: () => CardRender;
+  // config.toml itself, edited directly.
+  configView: () => CardRender;
 };

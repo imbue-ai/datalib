@@ -12,7 +12,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { searchAndSettle } from "./grid-helpers";
 
-const SOURCE_CELLS = '.ag-grid-scrolling-rows [col-id="source_id"]';
+const SOURCE_CELLS = '.ag-grid-scrolling-rows [col-id="source_ref"]';
 
 /// The distinct, non-empty texts in the Source column, in set order.
 async function distinctSourceCells(page: Page): Promise<string[]> {
@@ -32,8 +32,7 @@ async function openGrid(page: Page) {
 /// which PUTs through the same validating endpoint everything else uses.
 async function writeConfig(page: Page, text: string): Promise<void> {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
-  await page.getByText("Advanced — edit config.toml directly").click();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await page.locator(".m2-editor").fill(text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
@@ -47,7 +46,7 @@ let original = "";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   original = await page.locator(".m2-editor").inputValue();
 });
 

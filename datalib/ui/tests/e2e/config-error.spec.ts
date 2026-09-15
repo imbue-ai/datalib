@@ -90,7 +90,7 @@ test("a broken entry costs that entry, and nothing else", async ({
   // not wearing a status from some earlier run.
   const row = page.locator('.ag-row[row-id="broken/ingest"]');
   await expect(row).toBeVisible();
-  await expect(row.locator('[col-id="status"] .m2-status')).toHaveAttribute(
+  await expect(row.locator('[col-id="status"] .tg-status')).toHaveAttribute(
     "title",
     /Not loaded.*title/,
   );

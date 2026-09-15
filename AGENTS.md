@@ -58,7 +58,7 @@ reference doc it relates to.
   `datalib-step`, every config and fixture), **and so is the UI**: the
   Manage screen is a tree, one row per group with its steps and applets
   under a chevron, the group row reading status, last-synced and bytes
-  off its own folder and its children (`ui/src/config/groupRows.ts`
+  off its own folder and its children (`http/src/manage/group.rs`
   holds the rules), and the wizard is one dialog that writes and edits
   a source as a group plus both its steps — the group's `name` and
   its `description` (free text nothing reads yet; #409 says why not
@@ -289,11 +289,15 @@ reference doc it relates to.
   *proposal*, nothing built (revised 2026-09-15): one typed table
   viewer plus the markdown one, with column types declared by whoever
   serves the rows, and the Manage screen's sources tree ported onto it
-  as an ordinary card. Its first piece — the row join `Manager2View`
-  did in the browser across six endpoints, moved into
-  `GET /api/manage/rows` (`http/src/manage/`) — is **built
-  (2026-09-15)**; the typed viewer and the card are not. The crate
-  split and the run store it depended on have both landed.
+  as an ordinary card. **Built (2026-09-15)** through the card: the
+  row join lives in `GET /api/manage/rows` (`http/src/manage/`), the
+  vocabulary in `datalib/backend/columns`, the viewer in
+  `ui/src/cards/TableGrid.ce.vue`, and the Manage screen is the
+  `sourcesView()` + `configView()` cards (`Manager2View.vue` is gone),
+  and the search grid draws through `cards/typedColumns.ts` over
+  columns the applet declares. Read its checkpoint for what the last
+  step taught about where the viewer's altitude is. The crate split
+  and the run store it depended on have both landed.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md)
   — **read before adding a source to the Add/Edit wizard**: a field
   that asks for a file or folder must offer a native OS picker, not a
@@ -770,10 +774,11 @@ When you add or change a `grid_rows` column:
    `SEARCH_ROW_COLUMNS` and `search_row_from` — plus `SearchRow` in
    `unified_index/src/search.rs` if the column reaches the API.
 4. If it should be a grid column, add it to the `SearchRow` type in
-   `datalib/ui/src/api.ts` and to `columnDefs` in
-   `datalib/ui/src/cards/GridCard.ce.vue`. The column list is the
-   grid's, not the applet's — there is no `default_columns()` and no
-   `/columns` endpoint any more (checked 2026-09-11).
+   `datalib/ui/src/api.ts` and declare it in `columns()` in
+   `datalib/backend/applets/src/unified_index/columns.rs`, with its
+   type from `datalib_columns`. The applet declares the columns and
+   the grid draws them by type (`cards/typedColumns.ts`); a width or a
+   hover the type cannot know goes in `GridCard`'s `columnOverrides`.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## QMDs are write-only
@@ -1606,7 +1611,7 @@ Two rules for the boundary:
   newer build, or a third-party step, can name a value this binary does
   not have. The caller decides what that means — the Manage screen
   shows a status word it does not know as the bare word, deliberately,
-  rather than drawing nothing (`Manager2View.vue`'s Status renderer
+  rather than drawing nothing (`TableGrid.ce.vue`'s status renderer
   says why).
 - **Add a test that strum and serde agree** when a type derives both.
   They are independent derives producing independent strings, so the

@@ -5,7 +5,7 @@ import { expandGroup, groupRow, pickRowMenu, pipelineRow as row } from "./grid-h
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
 const wizard = (page: Page) => page.getByRole("dialog");
@@ -26,7 +26,7 @@ const idField = (page: Page) => field(page, "Id");
 /// column any more — and `aria-label` is the only place the word
 /// survives, which is also what a person gets by hovering it.
 const stepMark = (page: Page, id: string) =>
-  row(page, id).locator('[col-id="name"] .m2-name-step [role="img"]');
+  row(page, id).locator('[col-id="name"] .tg-mark [role="img"]');
 
 async function pickClaude(page: Page) {
   await page.getByRole("button", { name: "+ Data Source" }).click();
@@ -46,7 +46,6 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }) => {
   if (!original) return;
   await openManager(page);
-  await page.getByText("Advanced — edit config.toml directly").click();
   await page.locator(".m2-editor").fill(original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
@@ -95,7 +94,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // which is the whole point of the row.
   const group = groupRow(page, "personal-claude");
   await expect(group).toContainText("Personal Claude");
-  await expect(group.locator(".m2-cell-dir")).toHaveText("personal-claude");
+  await expect(group.locator(".tg-id")).toHaveText("personal-claude");
   await expect(row(page, "personal-claude/ingest")).toHaveCount(0);
 
   // Opened, the two steps are labelled by what they do; the group owns
@@ -116,7 +115,9 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // root's config declares no index steps (its grid db is pre-baked),
   // so there is nothing here for `wireIntoFanIns` to add it to — that
   // wiring is covered in source_steps.test.ts against a config that has
-  // fan-ins.
+  // fan-ins. The editor is its own card and reloads on the write; wait
+  // for the entry before reading.
+  await expect(editor).toHaveValue(/group = "personal-claude"/);
   const text = await editor.inputValue();
   expect(text.match(/group = "personal-claude"\nfunction = "render_markdown"/g)).toHaveLength(1);
 
@@ -160,6 +161,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   // the index fans in from every source's render step, so removing one
   // means removing it from two places. That is the edit a person doing
   // this by hand actually has to make.
+  await expect(editor).toHaveValue(/group = "fetch-only"/);
   const text = await editor.inputValue();
   const without = text
     .replace(
@@ -169,7 +171,6 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
     .replace(/"fetch-only\/render_markdown"(,\s*)?/g, "");
   expect(without).not.toBe(text);
   expect(without).not.toContain("fetch-only/render_markdown");
-  await page.getByText("Advanced — edit config.toml directly").click();
   await editor.fill(without);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
@@ -219,6 +220,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   await expect(page.locator('.ag-row[row-id="no-render/render_markdown"]')).toHaveCount(0);
   // The fan-ins must lose it too: an input naming a step that no longer
   // exists is a config the loader refuses outright.
+  await expect(editor).not.toHaveValue(/no-render\/render_markdown/);
   const after = await editor.inputValue();
   expect(after).not.toContain("no-render/render_markdown");
   expect(after).toContain('group = "no-render"');
@@ -254,6 +256,7 @@ test("a provider with render options writes them on the render step, from the on
   await expect(row(page, "signal-work/render_markdown")).toBeVisible();
   await expect(stepMark(page, "signal-work/render_markdown")).toHaveAttribute("aria-label", "Render");
 
+  await expect(editor).toHaveValue(/group = "signal-work"/);
   const text = await editor.inputValue();
   expect(text).toContain('group = "signal-work"\nfunction = "render_markdown"');
   expect(text).toContain('inputs = ["signal-work/ingest"]');
@@ -281,10 +284,10 @@ test("a hand-written render step under a download-only type is called out, then 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Photos.")).toBeVisible();
 
+  await expect(editor).toHaveValue(/group = "photos"/);
   const text = await editor.inputValue();
   expect(text).toContain('group = "photos"\nfunction = "ingest"');
   expect(text).not.toContain('group = "photos"\nfunction = "render_markdown"');
-  await page.getByText("Advanced — edit config.toml directly").click();
   await editor.fill(
     `${text.trimEnd()}\n\n[[steps]]\ngroup = "photos"\nfunction = "render_markdown"\ninputs = ["photos/ingest"]\n`,
   );

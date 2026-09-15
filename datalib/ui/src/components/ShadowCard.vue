@@ -8,6 +8,7 @@
 // we call the teardown returned by the render.
 import { onMounted, onBeforeUnmount, shallowRef, useTemplateRef, watch } from "vue";
 import { compileCardSource } from "@/cards/cardSource";
+import { setCardHelp } from "@/cards/help";
 import { devMode } from "@/devMode";
 import {
   ensureFrontend,
@@ -93,6 +94,8 @@ function tearDownCard() {
   const fn = teardown.value;
   if (!fn) return;
   teardown.value = null;
+  // The card's help offer goes with the card, like its title.
+  setCardHelp(props.ctx.cardId, null);
   try {
     fn();
   } catch (e) {

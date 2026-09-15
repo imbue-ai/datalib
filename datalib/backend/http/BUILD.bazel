@@ -34,6 +34,7 @@ rust_library(
         "src/lib.rs",
         "src/lock.rs",
         "src/logging.rs",
+        "src/manage/activity.rs",
         "src/manage/group.rs",
         "src/manage/mod.rs",
         "src/manage/status.rs",
@@ -70,6 +71,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/columns:datalib_columns",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/history:datalib_history",

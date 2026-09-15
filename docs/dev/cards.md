@@ -163,10 +163,21 @@ type CardCtx = {
   cardId: string;        // host-assigned, stable for the card's lifetime
   initialState: string;  // persisted state from the host ("" when absent)
   setTitle(title: string | null): void;  // chrome-bar title (see above)
+  setHelp(html: string | null): void;    // the chrome's "?" (see below)
   bus: Bus;              // ambient cross-card events
   host: HostCommands;    // structural + persistence commands
 };
 ```
+
+### Help
+
+Every card should offer help: what it shows and how to work it, as
+HTML, through `ctx.setHelp` — usually right after `setTitle`. The chrome
+grows a "?" that opens it in a popup over the page (`CardControls.vue`;
+the text is kept per card id in `cards/help.ts`, so all three layouts
+share one mechanism). A card with no help is a card that assumes its
+reader already knows it. The host clears the offer when the card is
+torn down, as it does the title.
 
 ### HostCommands
 
@@ -282,6 +293,66 @@ programs against:
   minted, agent-bound component is seeded with (the gallery's agent
   entry stores `() => agentSeedView("<name>")` as the alias source);
   the agent's first save replaces it.
+- `tableView({ url })` — the typed table viewer over any endpoint that
+  answers `{columns, rows}` (plus `tree: true` when each row carries a
+  `path`). See "Typed tables" below.
+- `sourcesView()` — the Manage screen as a card: the tree of what
+  `config.toml` declares over `GET /api/manage/rows`, drawn by
+  `TableGrid`, with the row actions and the panels they open — the
+  wizard, a step's log, a group's commit history — teleported to
+  `<body>`. Browse opens a `gridView(...)` beside it through
+  `host.openCards`. The `/sources2` route is this card at 1.6× width
+  with `configView()` beside it (`MANAGE_STACK` in `router/index.ts`).
+- `configView()` — `config.toml` itself, edited directly, saved through
+  the backend's loader. Reloads on the root's `config_changed` frame
+  and, a beat sooner, on the `config.written` bus topic a card publishes
+  after writing the file.
+
+## Typed tables
+
+A table's producer declares its columns and the viewer draws each cell
+by the column's *type* rather than by the field's name. The vocabulary
+is `datalib_columns` (`datalib/backend/columns/src/lib.rs`), mirrored
+by hand in `datalib/ui/src/api.ts` — change both halves together —
+and the one renderer for all of it is `cards/typedColumns.ts`: a pure
+function from the declared specs to AG Grid column definitions. Two
+kinds of host use it. `cards/TableGrid.ce.vue` is a grid over it for
+a card that wants a table and nothing more (`tableView`, the sources
+card); a card that drives AG Grid itself — its own selection, column
+state in the URL, adaptive visibility (`GridCard`) — calls
+`typedColumns` for its definitions and keeps its own grid. The split
+is deliberate: a component that owned the grid *and* re-exposed AG
+Grid's options for the second kind of host was a wrapper around a
+wrapper, and every option it re-exposed was a place for the two to
+disagree.
+
+| type | the cell's value | drawn as |
+|---|---|---|
+| `text` | a string | as is |
+| `count` | an integer | grouped digits |
+| `bytes` | an integer | a base-10 size, exact figure on hover |
+| `timestamp` | an ISO stamp | "7 days ago", exact stamp on hover; sorts on the instant |
+| `timeseries` | `{value, unit, samples, detail}` | the value over a sparkline, calibrated across the column |
+| `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
+| `status` | `{key, label, at, detail, fraction, segments}` | a glyph for the key, the reason on hover, a bar while running |
+| `chips` | `[{kind, text, title}]` | a row of chips |
+| `actions` | `[{id, label, enabled, disabled_reason, danger}]` | buttons; the card supplies the handler for each id, and an id with no handler draws nothing |
+| `markdown_uuid` | a uuid or `{id, label}` | the title; click opens the document |
+
+The producer resolves, the viewer presents: an `identity` arrives with
+its label already looked up, because only the producer can, and the
+viewer decides what the icon token looks like. An action is an *id*,
+never a URL — a URL arriving as data would be a capability.
+
+`GET /api/manage/rows` and the `unified_index` applet's `/search` are
+the two producers. The applet resolves the search grid's Provider and
+Source identities itself, from `config.toml` (`applets/src/unified_index/columns.rs`)
+— the configured source's own mark and the group's name — which is
+what keeps renaming a source free of a re-index. The cell styles live
+in `cards/tableGrid.css` rather than a component's `<style>`: a
+`.ce.vue`'s styles attach to the component for the card adapter to
+drop into a shadow root, so every card that draws typed cells passes
+the file as a style source.
 
 Adding a view = adding a factory to `ViewLibs` in
 `datalib/ui/src/cards/libs/index.ts` (and its name to the
