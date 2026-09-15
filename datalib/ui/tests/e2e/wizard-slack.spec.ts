@@ -161,3 +161,35 @@ test("a typed name is checked the way the downloader reads it", async ({ page })
   await expect(wizard(page).getByText(/Not on this account: bridg\./)).toBeVisible();
   await expect(wizard(page).getByText(/Not on this account: @riker\./)).toBeVisible();
 });
+
+// The attachment cap is stored in bytes and shown as a number beside a
+// unit. What is written has to stay the plain byte count, whichever
+// unit the number was typed in.
+test("the attachment cap is edited in units and written in bytes", async ({ page }) => {
+  await pickSlack(page);
+  const row = wizard(page).locator(
+    '.wiz-field:has(> .wiz-label:text-is("Skip attachments larger than")) .wiz-bytes',
+  );
+  const amount = row.locator("input");
+  const unit = row.locator("select");
+  // The 5_000_000 default opens as the whole number it is.
+  await expect(amount).toHaveValue("5");
+  await expect(unit).toHaveValue("MB");
+
+  await wizard(page).getByText("Review the TOML this writes").click();
+  const toml = wizard(page).locator(".wiz-review pre");
+  await expect(toml).toContainText("blob_size_limit_bytes = 5000000");
+
+  // Changing the unit keeps the number, like a phone's data-limit dialog.
+  await unit.selectOption("GB");
+  await expect(amount).toHaveValue("5");
+  await expect(toml).toContainText("blob_size_limit_bytes = 5000000000");
+
+  await amount.fill("250");
+  await unit.selectOption("KB");
+  await expect(toml).toContainText("blob_size_limit_bytes = 250000");
+
+  // Clearing the number drops the cap entirely: no limit, not zero.
+  await amount.fill("");
+  await expect(toml).not.toContainText("blob_size_limit_bytes");
+});

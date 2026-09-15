@@ -39,11 +39,11 @@ describe("the Slack attachment cap", () => {
   it("is declared, gated on attachments being on", () => {
     const field = SLACK.fields?.find((f) => f.target === CAP);
     expect(field, "slack should declare the cap").toBeDefined();
-    expect(field!.kind).toBe("int");
+    expect(field!.kind).toBe("bytes");
     // Slack skips the blob path entirely when `media` is off, so a cap
     // written alongside `media = false` would be inert config.
     expect(field!.requires).toBe("api.media");
-    expect((field as Field & { kind: "int" }).default).toBe(5_000_000);
+    expect((field as Field & { kind: "bytes" }).default).toBe(5_000_000);
   });
 
   it("defaults to 5 MB on a new source", () => {
