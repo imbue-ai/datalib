@@ -1,0 +1,21 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The search-bar grammar every grid shares: `key:value` terms, `-` to
+# negate, double quotes for values with spaces, and free text. No
+# vocabulary — what a key means belongs to whoever serves the rows — and
+# no dependencies, so `datalib-http` can take it without taking the index.
+# Bazel-only, like the other first-party crates with no first-party deps.
+rust_library(
+    name = "datalib_query",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_query",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+)
+
+rust_test(
+    name = "query_unittests",
+    size = "small",
+    crate = ":datalib_query",
+    edition = "2021",
+)

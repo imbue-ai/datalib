@@ -13,6 +13,7 @@ use datalib_etl::download_problems::{self, DownloadProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
+use datalib_etl::scope_config::{self, FilterChange};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -22,6 +23,7 @@ use datalib_etl_email_config::EmailGmailApi;
 
 use super::db::RawDb;
 use super::schema_raw::{EmlBlobRow, GmailMessageRow, ThreadRow};
+use super::K_ONLY_EXTRACT_LABELS;
 use api::QuotaThrottle;
 use ingest::LabelIndex;
 
@@ -90,8 +92,16 @@ pub struct FetchSummary {
     /// True when the run stopped at `message_budget` with more to fetch.
     /// A partial backfill is a successful outcome, not a failure.
     pub budget_exhausted: bool,
-    /// True when a stored cursor had aged out and we re-enumerated.
+    /// True when there was no usable cursor — none stored, `full_resync`
+    /// set, or one that aged out — and the whole filter was re-enumerated.
     pub full_sync: bool,
+    /// Labels enumerated on top of the history replay because
+    /// `only_extract_labels` widened since the cursor was stored: the
+    /// newly-admitted label names, or `["*"]` when the filter was removed.
+    /// `history.list` cannot surface mail that merely *existed* outside
+    /// the old filter, so a widening needs its own walk.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backfilled_labels: Vec<String>,
     /// Messages the enumeration named that `messages.get` would not
     /// return, for a reason other than the message being gone. Holds the
     /// cursor: see where it is written.
@@ -104,6 +114,20 @@ pub struct FetchSummary {
 
 fn state_scope(account_id: &str) -> String {
     format!("gmail:{account_id}:historyId")
+}
+
+/// Scope key for this mode's [`scope_config`] blob. Prefixed `gmail:`, the
+/// namespace `RawDb::reset` clears.
+const SCOPE_CONFIG_KEY: &str = "gmail:download";
+
+/// The config that decides which mail lands on disk, recorded beside the
+/// cursor so the next run can tell a widened filter from an unchanged
+/// one. Only the label filter qualifies: `message_budget` is a per-run
+/// budget and `full_resync` a one-off override.
+fn scope_config_blob(opts: &FetchOptions) -> Value {
+    let mut labels: Vec<&str> = opts.only_labels.iter().map(String::as_str).collect();
+    labels.sort_unstable();
+    json!({ K_ONLY_EXTRACT_LABELS: labels })
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -129,16 +153,43 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
 
-    let result = run_sync(&db, &opts).await;
+    let scope_cfg = scope_config_blob(&opts);
+    let prior_scope_cfg = scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
+    let label_change = scope_config::filter_widened(
+        prior_scope_cfg.as_ref(),
+        K_ONLY_EXTRACT_LABELS,
+        &opts.only_labels,
+    );
+
+    let result = run_sync(&db, &opts, &label_change).await;
     // Even on error, record a summary stub so the row has the same
     // fields a successful one does — the defaults populated as far as
     // the run got. Mirrors the JMAP path.
     let summary_for_bookkeeping = result.as_ref().cloned().unwrap_or_default();
+    // Record the filter only once a run has mirrored everything under
+    // it. A run that held its cursor (budget, or a failed fetch) has
+    // not, and the next run must plan the same backfill again.
+    let satisfied = result.as_ref().is_ok_and(|s| s.drained());
+    scope_config::store_if_satisfied(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg, satisfied).await;
     run.finish(&result, &summary_for_bookkeeping).await;
     result
 }
 
-async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
+impl FetchSummary {
+    /// Whether the run did every fetch it set out to do. The cursor and
+    /// the recorded filter both advance only on a drained run: storing
+    /// either after a partial one tells the next run "caught up", and an
+    /// incremental run never re-lists what this one skipped.
+    pub fn drained(&self) -> bool {
+        !self.budget_exhausted && self.messages_failed == 0
+    }
+}
+
+async fn run_sync(
+    db: &RawDb,
+    opts: &FetchOptions,
+    label_change: &FilterChange,
+) -> Result<FetchSummary> {
     let cfg = &opts.config;
     let user_id = cfg.user_id().to_string();
 
@@ -187,6 +238,12 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
         .collect();
     super::upsert_mailboxes(db, &now, &account_id, &mailbox_payloads).await?;
     summary.mailboxes_upserted = mailbox_payloads.len();
+    info!(
+        event = "gmail_labels",
+        account = %account_id,
+        labels = mailbox_payloads.len(),
+        "listed the account's labels",
+    );
 
     // Turn `only_extract_labels` into Gmail label ids so the enumeration
     // is narrowed server-side. Doing it client-side would mean paying
@@ -206,31 +263,44 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
         );
     }
 
-    // ── decide full vs partial ──────────────────────────────────────
+    // ── decide what to replay and what to walk ──────────────────────
     let stored = if cfg.full_resync {
         None
     } else {
         db.load_scope(&state_scope(&account_id)).await?
     };
-    let plan = match &stored {
-        None => Plan::Full,
+    let history = match &stored {
+        None => None,
         Some(cursor) => {
             throttle.acquire(api::UNITS_HISTORY_LIST).await;
             match collect_history(&user_id, &opts.latchkey, cursor, &mut throttle).await {
-                Ok(changes) => Plan::Partial(changes),
+                Ok(changes) => Some(changes),
                 // Only `history.list` reads a 404 this way.
                 Err(e) if is_not_found(&e) => {
                     warn!(
                         event = "gmail_history_expired",
                         account = %account_id,
+                        cursor = %cursor,
                         "stored historyId aged out of Google's retention window; re-enumerating",
                     );
-                    Plan::Full
+                    None
                 }
                 Err(e) => return Err(e),
             }
         }
     };
+    let plan = plan_walk(history, label_change, &filter_label_ids, &index);
+    info!(
+        event = "gmail_plan",
+        account = %account_id,
+        stored_cursor = stored.as_deref().unwrap_or("<none>"),
+        full_resync = cfg.full_resync,
+        label_change = ?label_change,
+        history = plan.history.as_ref().map(|c| c.added.len() + c.relabeled.len() + c.deleted.len()),
+        walk = ?plan.walk.as_deref().map(describe_walk),
+        "{}",
+        plan.describe(),
+    );
 
     // ── fetch ───────────────────────────────────────────────────────
     // Loaded once per run, not once per page: both are whole-table reads
@@ -257,63 +327,70 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
     };
 
     // The cursor to store *if* the run gets through its work. Sampled
-    // before enumeration on a full sync, so anything that changed while
-    // it ran is replayed next run rather than missed.
-    let next_cursor: Option<String> = match &plan {
-        Plan::Full => profile.history_id.clone(),
-        Plan::Partial(changes) => changes.history_id.clone(),
+    // before any walk, so anything that changed while it ran is replayed
+    // next run rather than missed.
+    let next_cursor: Option<String> = match &plan.history {
+        None => profile.history_id.clone(),
+        Some(changes) => changes.history_id.clone(),
     };
 
-    match plan {
-        Plan::Full => {
-            summary.full_sync = true;
-            let enumerated = full_sync(
+    if let Some(changes) = &plan.history {
+        summary.emails_destroyed = destroy(db, &changes.deleted).await?;
+        let ids: Vec<String> = changes
+            .added
+            .iter()
+            .chain(changes.relabeled.iter())
+            .cloned()
+            .collect();
+        info!(
+            event = "gmail_history_replay",
+            account = %account_id,
+            since = stored.as_deref().unwrap_or(""),
+            fetch = ids.len(),
+            deleted = changes.deleted.len(),
+            "replaying history since the stored cursor",
+        );
+        fetch_ids(&mut state, &mut throttle, &ids, opts, &mut summary).await?;
+    } else {
+        summary.full_sync = true;
+    }
+
+    if let Some(walk_label_ids) = &plan.walk {
+        if plan.history.is_some() {
+            summary.backfilled_labels = plan.backfilled_labels.clone();
+        }
+        let enumerated = if summary.budget_exhausted {
+            None
+        } else {
+            full_sync(
                 &mut state,
                 &mut throttle,
                 opts,
-                &filter_label_ids,
+                walk_label_ids,
                 &mut summary,
             )
-            .await?;
-            // A cursor that aged out costs a full re-enumeration, and that
-            // re-enumeration is the one moment this provider can see a
-            // deletion it missed while the cursor was stale: `history.list`
-            // only reports what happened inside its retention window.
-            //
-            // Two conditions, both about whether the walk was authoritative
-            // over the whole mailbox. A label filter narrows it server-side,
-            // so messages outside those labels are unlisted rather than
-            // deleted; a budget-limited walk never asked for its remaining
-            // pages. Either one makes absence meaningless.
-            match (&enumerated, filter_label_ids.is_empty()) {
-                (Some(seen), true) => {
-                    summary.emails_destroyed += prune_to_enumeration(db, seen).await?;
-                }
-                _ => info!(
-                    event = "gmail_prune_skipped",
-                    label_filtered = !filter_label_ids.is_empty(),
-                    budget_exhausted = summary.budget_exhausted,
-                    "re-enumeration was not authoritative over the whole mailbox; \
-                     not treating unlisted messages as deleted",
-                ),
+            .await?
+        };
+        // A walk that covered the whole mailbox is the one moment this
+        // provider can see a deletion `history.list` never reported —
+        // one outside its retention window, or outside the old filter.
+        //
+        // Two conditions, both about whether the walk was authoritative
+        // over the whole mailbox. A label filter narrows it server-side,
+        // so messages outside those labels are unlisted rather than
+        // deleted; a budget-limited walk never asked for its remaining
+        // pages. Either one makes absence meaningless.
+        match (&enumerated, walk_label_ids.is_empty()) {
+            (Some(seen), true) => {
+                summary.emails_destroyed += prune_to_enumeration(db, seen).await?;
             }
-        }
-        Plan::Partial(changes) => {
-            summary.emails_destroyed = destroy(db, &changes.deleted).await?;
-            let ids: Vec<String> = changes
-                .added
-                .iter()
-                .chain(changes.relabeled.iter())
-                .cloned()
-                .collect();
-            info!(
-                event = "gmail_partial_sync",
-                account = %account_id,
-                fetch = ids.len(),
-                deleted = changes.deleted.len(),
-                "history since stored cursor",
-            );
-            fetch_ids(&mut state, &mut throttle, &ids, opts, &mut summary).await?;
+            _ => info!(
+                event = "gmail_prune_skipped",
+                label_filtered = !walk_label_ids.is_empty(),
+                budget_exhausted = summary.budget_exhausted,
+                "the walk was not authoritative over the whole mailbox; \
+                 not treating unlisted messages as deleted",
+            ),
         }
     }
 
@@ -332,7 +409,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
     // Leaving the cursor put means the next run re-enumerates — cheap,
     // because `messages.list` is 5 units a page and every id already
     // fetched is skipped before spending `messages.get`'s 20.
-    if summary.budget_exhausted || summary.messages_failed > 0 {
+    if !summary.drained() {
         info!(
             event = "gmail_cursor_held",
             fetched = summary.emails_upserted,
@@ -342,15 +419,110 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions) -> Result<FetchSummary> {
         );
     } else if let Some(h) = &next_cursor {
         db.save_scope(&state_scope(&account_id), h).await?;
+        info!(event = "gmail_cursor_stored", cursor = %h, "stored the historyId cursor");
     }
 
     summary.quota_units_spent = throttle.spent_total();
+    info!(
+        event = "gmail_summary",
+        account = %account_id,
+        emails_upserted = summary.emails_upserted,
+        emails_destroyed = summary.emails_destroyed,
+        threads_upserted = summary.threads_upserted,
+        blobs_stored = summary.blobs_stored,
+        blobs_skipped = summary.blobs_skipped,
+        blobs_oversize = summary.blobs_oversize,
+        messages_already_had = summary.messages_already_had,
+        messages_filtered = summary.messages_filtered,
+        messages_failed = summary.messages_failed,
+        quota_units_spent = summary.quota_units_spent,
+        full_sync = summary.full_sync,
+        backfilled_labels = ?summary.backfilled_labels,
+        "gmail sync finished",
+    );
     Ok(summary)
 }
 
-enum Plan {
-    Full,
-    Partial(Changes),
+/// What one run does: replay `history.list` since the stored cursor, walk
+/// `messages.list`, or both.
+///
+/// No cursor means one walk over the configured filter. A cursor whose
+/// filter has not moved means the replay alone. A cursor whose filter
+/// *widened* needs both: the replay for what changed under the old
+/// labels, and a walk over what is newly in scope — the mail that was
+/// already there under those labels never appears in `history.list`,
+/// because nothing about it changed.
+struct Plan {
+    history: Option<Changes>,
+    /// Label ids to walk; an empty list is one unrestricted walk. `None`
+    /// walks nothing.
+    walk: Option<Vec<String>>,
+    /// What `walk` is for, as configured names, when it is a backfill.
+    backfilled_labels: Vec<String>,
+}
+
+impl Plan {
+    fn describe(&self) -> String {
+        match (&self.history, &self.walk) {
+            (None, Some(ids)) => format!("full sync: {}", describe_walk(ids)),
+            (Some(_), None) => "incremental: history replay only".to_string(),
+            (Some(_), Some(ids)) => format!(
+                "incremental, and the label filter widened: history replay plus a backfill \
+                 walk over {}",
+                describe_walk(ids)
+            ),
+            (None, None) => "nothing to do".to_string(),
+        }
+    }
+}
+
+fn describe_walk(label_ids: &[String]) -> String {
+    if label_ids.is_empty() {
+        "the whole account".to_string()
+    } else {
+        format!("labels {label_ids:?}")
+    }
+}
+
+fn plan_walk(
+    history: Option<Changes>,
+    label_change: &FilterChange,
+    filter_label_ids: &[String],
+    index: &LabelIndex,
+) -> Plan {
+    let no_backfill = |history| Plan {
+        history,
+        walk: None,
+        backfilled_labels: Vec::new(),
+    };
+    if history.is_none() {
+        return Plan {
+            history,
+            walk: Some(filter_label_ids.to_vec()),
+            backfilled_labels: Vec::new(),
+        };
+    }
+    match label_change {
+        FilterChange::Unchanged => no_backfill(history),
+        FilterChange::WidenedToAll => Plan {
+            history,
+            walk: Some(Vec::new()),
+            backfilled_labels: vec!["*".to_string()],
+        },
+        FilterChange::Added(names) => {
+            // A name that resolves to nothing was already reported as a
+            // `download_problem` when the whole filter was resolved.
+            let ids: Vec<String> = names.iter().filter_map(|n| index.id_for_name(n)).collect();
+            if ids.is_empty() {
+                return no_backfill(history);
+            }
+            Plan {
+                history,
+                walk: Some(ids),
+                backfilled_labels: names.clone(),
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -457,7 +629,10 @@ async fn full_sync(
 ) -> Result<Option<BTreeSet<String>>> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for label_id in enumeration_walks(label_ids) {
+        let label = label_id.map_or_else(|| "<all>".to_string(), |id| state.index.name(id));
         let mut token: Option<String> = None;
+        let mut pages = 0usize;
+        let mut listed = 0usize;
         loop {
             throttle.acquire(api::UNITS_MESSAGES_LIST).await;
             let page = api::list_messages(
@@ -468,6 +643,8 @@ async fn full_sync(
                 label_id,
             )
             .await?;
+            pages += 1;
+            listed += page.ids.len();
             // A message under two configured labels is listed by both
             // walks; `seen` is what keeps the second listing free.
             let fresh: Vec<String> = page
@@ -475,7 +652,20 @@ async fn full_sync(
                 .into_iter()
                 .filter(|id| seen.insert(id.clone()))
                 .collect();
+            let fetched_before = state.fetched;
             fetch_ids(state, throttle, &fresh, opts, summary).await?;
+            info!(
+                event = "gmail_list_page",
+                label = %label,
+                page = pages,
+                listed = listed,
+                fresh = fresh.len(),
+                fetched = state.fetched - fetched_before,
+                fetched_total = state.fetched,
+                already_had = summary.messages_already_had,
+                more = page.next_page_token.is_some(),
+                "walked one messages.list page",
+            );
             if summary.budget_exhausted {
                 return Ok(None);
             }
@@ -484,6 +674,13 @@ async fn full_sync(
                 None => break,
             }
         }
+        info!(
+            event = "gmail_walk_done",
+            label = %label,
+            pages = pages,
+            listed = listed,
+            "finished walking one label",
+        );
     }
     Ok(Some(seen))
 }

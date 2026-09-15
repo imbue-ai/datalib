@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a new datalib release — bump the workspace version, repin lockfiles, run the consistency tests, push to main, tag vX.Y.Z (which triggers release.yml), watch the release publish, and bump the pin in the qi-imbue/datalib-inspiration repo. Use when asked to "make a new release", "cut a release", or "bump the version".
+description: Cut a new datalib release — bump the workspace version, repin lockfiles, run the consistency tests, land the bump on main through a PR, tag vX.Y.Z (which triggers release.yml), watch the release publish, and bump the pin in the qi-imbue/datalib-inspiration repo. Use when asked to "make a new release", "cut a release", or "bump the version".
 ---
 
 # Release
@@ -115,10 +115,26 @@ published from a local machine — the tag is the trigger.
    build and confirm `git status --porcelain MODULE.bazel.lock` is now
    empty. If it still isn't, the lock didn't converge and the next
    person to build inherits the dirty file.
-8. Push the bump straight to main (release bumps land directly, not
-   via PR): `git push origin release-vX.Y.Z:main`.
-9. Tag that commit and push the tag:
-   `git tag vX.Y.Z <commit> && git push origin vX.Y.Z`.
+8. Land the bump on main through a PR. `main` carries a ruleset ("CI
+   green before merge") that requires the `bazel test //...` and
+   `bazel build :dist (musl static)` checks, so a direct
+   `git push origin release-vX.Y.Z:main` is rejected with `GH013`:
+
+   ```sh
+   git push -u origin release-vX.Y.Z
+   gh pr create --base main --head release-vX.Y.Z \
+     --title "chore(release): bump version X.Y.Z → X.Y'.Z'"
+   gh pr checks <n> --watch --fail-fast
+   gh pr merge <n> --merge
+   ```
+
+   The merge is a merge commit (that is how every PR here lands), so
+   the commit on `main` is not the bump commit itself.
+9. Tag the merge commit on main and push the tag:
+   `git fetch origin && git tag vX.Y.Z origin/main && git push origin vX.Y.Z`.
+   Check first that `origin/main` is that merge and nothing landed on
+   top of it (`git log --oneline -3 origin/main`); tag the merge by
+   sha if something did.
 10. Watch the workflow to completion:
     `gh run list --workflow=release.yml --limit 1`, then
     `gh run watch <run-id> --exit-status`. It's slow (multi-platform
@@ -132,6 +148,9 @@ published from a local machine — the tag is the trigger.
 12. Bump the pin in the published inspiration repo,
     `qi-imbue/datalib-inspiration`. Only after step 11 — every pin there
     is a tag-relative URL that has to resolve for a fresh mind to boot.
+    This step is the one that gets dropped: v0.30.x and v0.31.x both
+    shipped without it, so start by checking what the repo actually
+    pins (`git log -1` there) rather than assuming it is one behind.
 
 ## Updating the inspiration repo
 

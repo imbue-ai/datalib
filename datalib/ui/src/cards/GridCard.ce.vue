@@ -47,6 +47,7 @@ import {
   revealInFileManager,
 } from "@/desktop";
 import { openExternal } from "@/externalLinks";
+import { keepExcludeItems, withToken } from "@/grid/query";
 import { subscribeLive } from "@/live";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
@@ -452,36 +453,9 @@ function openFeedbackForSearchBar(ev: MouseEvent) {
   feedbackOpen.value = true;
 }
 
-/// Quote a value for the search bar. Quotes when it contains whitespace,
-/// `:`, leading `-`, or is empty. Mirrors the backend tokenizer's
-/// quoted-span handling (`\"` and `\\` escapes inside quotes).
-function quoteValue(v: string): string {
-  const needsQuotes =
-    v === "" || /[\s:"]/.test(v) || v.startsWith("-") || v.startsWith('"');
-  if (!needsQuotes) return v;
-  const escaped = v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return `"${escaped}"`;
-}
-
-function formatFilterToken(key: string, value: string, exclude: boolean): string {
-  return `${exclude ? "-" : ""}${key}:${quoteValue(value)}`;
-}
-
 function appendFilterToQuery(token: string) {
-  const current = query.value.trim();
-  // Skip if the exact token is already present as its own whitespace-
-  // delimited word (cheap dedupe; doesn't try to canonicalize quoting
-  // variants, which is fine — duplicates only widen on free-text and
-  // these tokens are field-prefixed, so they collapse on a re-click).
-  const re = new RegExp(`(^|\\s)${escapeRegExp(token)}(\\s|$)`);
-  if (re.test(current)) return;
-  query.value = current.length === 0 ? token : `${current} ${token}`;
+  query.value = withToken(query.value, token);
 }
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1151,42 +1125,15 @@ const gridOptions: GridOptions<SearchRow> = {
     const plural = targets.length === 1 ? "" : "s";
 
     const items: (MenuItemDef<SearchRow> | DefaultMenuItem)[] = [];
-    if (filterCtx) {
+    for (const ctx of [filterCtx, notionCtx]) {
+      if (!ctx) continue;
       items.push(
-        {
-          name: `Keep only ${filterCtx.header}=${filterCtx.value}`,
-          action: () =>
-            appendFilterToQuery(
-              formatFilterToken(filterCtx.key, filterCtx.value, false),
-            ),
-        },
-        {
-          name: `Exclude all ${filterCtx.header}=${filterCtx.value}`,
-          action: () =>
-            appendFilterToQuery(
-              formatFilterToken(filterCtx.key, filterCtx.value, true),
-            ),
-        },
-        "separator",
-      );
-    }
-    if (notionCtx) {
-      items.push(
-        {
-          name: `Keep only Notion Page=${notionCtx.value}`,
-          action: () =>
-            appendFilterToQuery(
-              formatFilterToken(notionCtx.key, notionCtx.value, false),
-            ),
-        },
-        {
-          name: `Exclude all Notion Page=${notionCtx.value}`,
-          action: () =>
-            appendFilterToQuery(
-              formatFilterToken(notionCtx.key, notionCtx.value, true),
-            ),
-        },
-        "separator",
+        ...keepExcludeItems<SearchRow>({
+          header: ctx.header,
+          key: ctx.key,
+          value: ctx.value,
+          apply: appendFilterToQuery,
+        }),
       );
     }
     items.push({

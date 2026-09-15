@@ -543,11 +543,38 @@ Current consumers, and what each does when the knob widens:
 | slack | `media`, `blob_size_limit_bytes` | Re-walk from `since` (blob knobs only reach messages the walk visits) |
 | github, gitlab | `refresh_window_days` | `scope_state::since_for_scope_with_prior` reaches back to the earlier of the cursor and `now - window` |
 | email (JMAP) | `only_extract_labels` | `Email/query` scoped to the newly-added mailboxes |
+| email (Gmail) | `only_extract_labels` | `history.list` since the cursor as usual, plus a `messages.list` walk over the newly-added labels (or the whole account when the filter was removed) |
+| email (mbox) | `only_extract_labels` | Re-read every file |
+| garmin | `since` | Re-walk from the new start |
+| notion | `refresh_window_days` | Re-examine the widened window |
 | yolink | `devices[].start` | Re-walk that device from the new start |
 
 The longest write-up of the reasoning, including what is deliberately
 *not* recorded and why, is `providers/slack/INGEST.md` § "Config
 changes the cursor would otherwise swallow".
+
+**The rule is opt-in, and that is how it gets missed.** Slack was fixed
+first, then every provider with a cursor was swept (#103). Gmail landed
+after the sweep (#175) with a cursor and no record, and widening its
+label filter was a silent no-op until 2026-09-15: two syncs after the
+filter was removed each spent four quota units and mirrored nothing.
+`scripts/lint_repo.py` check 8 now refuses a provider crate that writes
+`sync_scope_state` without also calling `scope_config::store` — a
+crate-level check, so it catches a new provider, not a new *mode*
+inside an existing one, which is exactly the shape Gmail took. The
+structural fix — a cursor primitive that takes the scope config on the
+way in and hands back the `FilterChange` with the token, so a cursor
+cannot be read without saying what scope it is read under — is the
+next step and touches every consumer in the table; it is worth doing as
+its own change.
+
+One gap the same audit found and left open: **Gmail
+`blob_size_limit_bytes`.** JMAP is exempt because `sync_blobs` re-scans
+every email for missing bytes on every run, so a raised cap backfills
+by itself. Gmail has no such pass: an oversize message lands its row
+and no blob, and the next run skips the id before ever asking again.
+Raising the cap on a Gmail mirror leaves every previously-oversize
+message without bytes.
 
 Render has the same failure mode and resolves it differently —
 wholesale invalidation rather than a proportional reaction. See
