@@ -347,7 +347,7 @@ ${applets()}`;
     await syncBtn(page, "pdfs/ingest").click();
     expect(await settle(page, "pdfs/ingest", countUpWas)).toBe("Succeeded");
 
-    const cell = row(page, "pdfs/ingest").locator('[col-id="lastSynced"]');
+    const cell = row(page, "pdfs/ingest").locator('[col-id="last_synced"]');
     await expect(cell).toHaveText("seconds ago");
 
     // The exact instant is still reachable, on the hover.
@@ -383,7 +383,7 @@ ${applets()}`;
     // the data root is shared by every test in this file, so any step
     // one of them syncs would make this order-dependent.
     await expect(
-      row(page, "unsynced/ingest").locator('[col-id="lastSynced"]'),
+      row(page, "unsynced/ingest").locator('[col-id="last_synced"]'),
     ).toHaveText("—");
     expect(await lastSyncedOf(page, "unsynced/ingest")).toBeNull();
   });
@@ -427,7 +427,7 @@ ${applets()}`;
             id: r.getAttribute("row-id") ?? "",
             level: Number(/ag-row-level-(\d+)/.exec(r.className)?.[1] ?? "0"),
             stamp:
-              r.querySelector('[col-id="lastSynced"] [title]')?.getAttribute("title") ?? null,
+              r.querySelector('[col-id="last_synced"] [title]')?.getAttribute("title") ?? null,
           })),
       );
 
@@ -472,7 +472,7 @@ ${applets()}`;
       ).toBe(true);
     };
 
-    const header = page.locator('.ag-header-cell[col-id="lastSynced"]');
+    const header = page.locator('.ag-header-cell[col-id="last_synced"]');
 
     await header.click(); // ascending — oldest first
     const asc = siblingSets(await ordering());

@@ -1,0 +1,289 @@
+//! `GET /api/manage/rows` assembles the Manage screen's tree: one row
+//! per entry in the config file, with status read off the runner's
+//! record and the job queue.
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use datalib_core::app_store::AppStore;
+use datalib_http::applets::AppletRegistry;
+use datalib_http::{router, ApiToken, AppState};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+use tower::ServiceExt;
+
+const TEST_TOKEN: &str = "manage-rows-test-token";
+
+async fn state(root: &Path) -> AppState {
+    let root = Arc::new(root.to_path_buf());
+    let app = AppStore::open(root.as_path())
+        .await
+        .expect("open app stores");
+    AppState {
+        root: root.clone(),
+        app: Arc::new(app),
+        progress_tx: tokio::sync::broadcast::channel(16).0,
+        root_tx: tokio::sync::broadcast::channel(16).0,
+        usage: Default::default(),
+        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
+        applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
+    }
+}
+
+async fn get_rows(root: &Path) -> serde_json::Value {
+    let app = router(state(root).await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/manage/rows")
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn by_key(v: &serde_json::Value) -> HashMap<String, serde_json::Value> {
+    v["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["key"].as_str().unwrap().to_string(), r.clone()))
+        .collect()
+}
+
+const CONFIG: &str = r#"
+[[groups]]
+id = "slack"
+name = "Work Slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = ["slack/render_markdown"]
+
+[[applets]]
+id = "unified_index"
+group = "unified_index"
+command = "datalib-applet unified_index"
+"#;
+
+fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
+    std::fs::create_dir_all(root.join("system")).unwrap();
+    std::fs::write(root.join("config.toml"), config).unwrap();
+    if let Some(j) = state_json {
+        std::fs::write(root.join("system/dag_state.json"), j).unwrap();
+    }
+}
+
+/// The tree: a row per group, its steps and applets under it by
+/// `path`, in pipeline order for the segments but config order for the
+/// rows — and the names each row shows.
+#[tokio::test]
+async fn a_fresh_root_is_a_tree_of_never_run_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None);
+
+    let got = get_rows(tmp.path()).await;
+    assert_eq!(got["ok"], true, "{got}");
+    assert_eq!(got["run"], serde_json::Value::Null);
+    let rows = by_key(&got);
+    assert_eq!(rows.len(), 6, "{got}");
+
+    let slack = &rows["group:slack"];
+    assert_eq!(slack["kind"], "group");
+    assert_eq!(slack["name"], "Work Slack");
+    assert_eq!(slack["type"], "slack");
+    assert_eq!(slack["path"], serde_json::json!(["group:slack"]));
+    assert_eq!(slack["status"]["key"], "never_run");
+    assert_eq!(slack["status"]["from"], serde_json::Value::Null);
+    assert_eq!(slack["seeds"], serde_json::json!(["slack/ingest"]));
+    assert_eq!(slack["run_blocked"], serde_json::Value::Null);
+    assert_eq!(slack["bytes"], serde_json::Value::Null);
+
+    let ingest = &rows["slack/ingest"];
+    assert_eq!(
+        ingest["path"],
+        serde_json::json!(["group:slack", "slack/ingest"])
+    );
+    assert_eq!(ingest["phase"], "ingest");
+    assert_eq!(ingest["type"], "slack");
+    assert_eq!(ingest["name"], "Ingest");
+    assert_eq!(ingest["seeds"], serde_json::json!(["slack/ingest"]));
+
+    let render = &rows["slack/render_markdown"];
+    assert_eq!(render["name"], "Render markdown");
+    assert!(render["run_blocked"]
+        .as_str()
+        .unwrap()
+        .contains("Run slack/ingest"));
+
+    // The applet shares its group's id; the group's key keeps them apart.
+    let applet = &rows["unified_index"];
+    assert_eq!(applet["kind"], "applet");
+    assert_eq!(
+        applet["path"],
+        serde_json::json!(["group:unified_index", "unified_index"])
+    );
+    // Its health is the supervisor's word, not the runner's: up, or —
+    // here, with no `datalib-applet` on the PATH — failed to start.
+    // Either way it has no history, so no timestamp.
+    let label = applet["status"]["label"].as_str().unwrap();
+    assert!(label == "Up" || label == "Failed to start", "{applet}");
+    assert_eq!(applet["status"]["at"], serde_json::Value::Null);
+    assert_eq!(applet["last_synced"], serde_json::Value::Null);
+    assert_eq!(applet["name"], "Unified Index (Applet)");
+    // The group reads a failed applet as its own failure, else its
+    // last step, which has never run.
+    let index = &rows["group:unified_index"];
+    if label == "Up" {
+        assert_eq!(index["status"]["key"], "never_run");
+        assert_eq!(index["status_from"], "unified_index/grid_index");
+    } else {
+        assert_eq!(index["status"]["key"], "failed");
+        assert_eq!(index["status_from"], "unified_index");
+    }
+    assert!(index["run_blocked"]
+        .as_str()
+        .unwrap()
+        .contains("none of this group's steps"));
+}
+
+/// A finished run: the step rows read the record, and the group reads
+/// its last step — the failed render — with the child named in the
+/// detail, and "last synced" from its ingest step.
+#[tokio::test]
+async fn a_finished_run_reaches_the_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(
+        tmp.path(),
+        CONFIG,
+        Some(
+            r#"{
+              "steps": {
+                "slack/ingest": {
+                  "succeeded": true,
+                  "last_run": {
+                    "run_id": "r1",
+                    "started_at": "2026-08-31T10:00:00+01:00",
+                    "finished_at": "2026-08-31T10:00:09+01:00",
+                    "status": "succeeded",
+                    "attempts": 1
+                  }
+                },
+                "slack/render_markdown": {
+                  "succeeded": false,
+                  "last_run": {
+                    "run_id": "r1",
+                    "started_at": "2026-08-31T10:00:09+01:00",
+                    "finished_at": "2026-08-31T10:00:11+01:00",
+                    "status": "failed",
+                    "attempts": 2,
+                    "error": "bad json at line 3"
+                  }
+                }
+              },
+              "current_run": {
+                "run_id": "r1",
+                "started_at": "2026-08-31T10:00:00+01:00",
+                "finished_at": "2026-08-31T10:00:12+01:00",
+                "plan": ["slack/ingest", "slack/render_markdown"],
+                "states": {"slack/ingest": "succeeded", "slack/render_markdown": "failed"}
+              }
+            }"#,
+        ),
+    );
+
+    let got = get_rows(tmp.path()).await;
+    assert_eq!(got["run"]["run_id"], "r1");
+    let rows = by_key(&got);
+
+    let ingest = &rows["slack/ingest"];
+    assert_eq!(ingest["status"]["key"], "succeeded");
+    assert_eq!(ingest["last_synced"], "2026-08-31T10:00:09+01:00");
+    assert_eq!(ingest["last_run_id"], "r1");
+    assert_eq!(ingest["live_run_id"], serde_json::Value::Null);
+
+    let render = &rows["slack/render_markdown"];
+    assert_eq!(render["status"]["key"], "failed");
+    assert_eq!(render["status"]["detail"], "bad json at line 3");
+
+    let slack = &rows["group:slack"];
+    assert_eq!(slack["status"]["key"], "failed");
+    assert_eq!(slack["status_from"], "slack/render_markdown");
+    assert_eq!(
+        slack["status"]["detail"],
+        "slack/render_markdown: bad json at line 3"
+    );
+    assert_eq!(slack["last_synced"], "2026-08-31T10:00:09+01:00");
+    assert_eq!(slack["segments"], serde_json::Value::Null);
+}
+
+/// An entry the loader drops still has a row — it is still in the
+/// file — and its status says so, outranking whatever the record
+/// remembers. The group it is under is not dropped with it.
+#[tokio::test]
+async fn a_dropped_entry_keeps_its_row_and_says_why() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = CONFIG.replace(
+        "function = \"render_markdown\"\n",
+        "function = \"render_markdown\"\ntitle = \"not a key\"\n",
+    );
+    write_root(tmp.path(), &config, None);
+
+    let got = get_rows(tmp.path()).await;
+    assert_eq!(got["ok"], true, "{got}");
+    let rows = by_key(&got);
+    let render = &rows["slack/render_markdown"];
+    assert_eq!(render["status"]["key"], "config_rejected");
+    assert_eq!(render["status"]["label"], "Not loaded");
+    assert!(
+        render["dropped"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("title"),
+        "{render}"
+    );
+    assert!(render["run_blocked"]
+        .as_str()
+        .unwrap()
+        .starts_with("Not in the pipeline"));
+    // The fan-in that read it is blocked by it, and says so.
+    let index = &rows["unified_index/grid_index"];
+    assert_eq!(index["status"]["key"], "config_blocked");
+    // The group itself still loads and still runs from its ingest step.
+    let slack = &rows["group:slack"];
+    assert_eq!(slack["dropped"], serde_json::Value::Null);
+    assert_eq!(slack["seeds"], serde_json::json!(["slack/ingest"]));
+}
+
+/// A file that is not TOML has no rows to show and says so, rather
+/// than 500ing or returning an empty table that reads as "no sources".
+#[tokio::test]
+async fn a_file_that_is_not_toml_is_an_error_not_an_empty_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), "[[steps", None);
+    let got = get_rows(tmp.path()).await;
+    assert_eq!(got["ok"], false);
+    assert!(got["error"].as_str().is_some_and(|e| !e.is_empty()));
+    assert_eq!(got["rows"].as_array().unwrap().len(), 0);
+}

@@ -41,6 +41,7 @@ mod embed;
 pub mod frontend;
 pub mod history;
 pub mod lock;
+pub mod manage;
 pub mod usage;
 pub mod watch;
 pub mod worker;
@@ -169,6 +170,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/probe", post(connect::probe))
         .route("/api/dag", get(get_dag))
+        .route("/api/manage/rows", get(manage::get_manage_rows))
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/api/lib/{name}/rename", post(rename_lib))
         .route("/agent/cards.md", get(agent_cards_guide))
@@ -972,7 +974,7 @@ pub struct DagStepInfo {
 }
 
 /// A step's live numbers and words, from `system/runs.sqlite`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DagStepProgress {
     /// The step's own words: "conversations.list", "3 of 9 channels".
     pub msg: Option<String>,
@@ -1081,7 +1083,7 @@ fn now_utc() -> String {
 }
 
 /// A step's last outcome, mirroring `datalib_dag::state::LastRun`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DagStepRun {
     /// The run it happened in — what to pass to `/api/runs/{run}/log`
     /// for its log. Empty for a record written before runs had ids.
@@ -1094,7 +1096,7 @@ pub struct DagStepRun {
 }
 
 /// The run in flight, or the one that finished last.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DagRunInfo {
     pub run_id: String,
     pub started_at: String,
@@ -1113,22 +1115,29 @@ pub struct DagResponse {
     pub run: Option<DagRunInfo>,
 }
 
-/// `GET /api/dag` — the step DAG derived from the data root's config,
-/// exactly as the runner would build it (same load → to_specs →
-/// Graph::build chain), so the visualization can never drift from
-/// execution. Steps come back in topological order.
-async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
-    use datalib_dag::config;
+/// The runner's own record of what each step did and is doing, with
+/// the run store's live numbers laid over it. What `GET /api/dag` and
+/// `GET /api/manage/rows` both read.
+pub struct DagRecord {
+    /// The run in flight, or the one that finished last. Absent on a
+    /// root that has never synced, which is not an error.
+    pub run: Option<DagRunInfo>,
+    /// step id → its state in the run `run` describes.
+    pub states: std::collections::BTreeMap<String, String>,
+    /// step id → what it did the last time a run reached it.
+    pub last_runs: std::collections::HashMap<String, DagStepRun>,
+    /// step id → what it has reported in the run in flight.
+    pub progress: std::collections::HashMap<String, DagStepProgress>,
+}
 
-    // The runner's own record. Absent on a root that has never synced,
-    // which is not an error — every step just reports no last run.
-    let state = datalib_dag::state::DagState::load(&s.root).unwrap_or_default();
+pub async fn dag_record(root: &std::path::Path) -> DagRecord {
+    let state = datalib_dag::state::DagState::load(root).unwrap_or_default();
     // Is a runner actually holding this root? Momentarily taking the
     // lock is the cheapest honest test: success means nobody had it.
     // Racy by nature — a run could start a microsecond later — but the
     // answer is only ever used to say "that open record belongs to a
     // run that died", where being one poll stale costs nothing.
-    let live = datalib_dag::lock::FileLock::runner_is_held(&s.root);
+    let live = datalib_dag::lock::FileLock::runner_is_held(root);
     let run = state.current_run.as_ref().map(|r| DagRunInfo {
         run_id: r.run_id.clone(),
         started_at: r.started_at.clone(),
@@ -1146,13 +1155,62 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
     // the runner writing its first row, the newest run in the store is
     // still the run before — and painting its numbers onto this run's
     // steps is worse than showing none at all.
-    let store = datalib_runs::snapshot(&s.root).await;
-    let progress: std::collections::HashMap<String, DagStepProgress> = match (&run, &store.run_id) {
+    let store = datalib_runs::snapshot(root).await;
+    let progress = match (&run, &store.run_id) {
         (Some(r), Some(store_run)) if &r.run_id == store_run => {
             progress_by_step(&store, &now_utc())
         }
         _ => Default::default(),
     };
+
+    let last_runs = state
+        .steps
+        .iter()
+        .filter_map(|(id, st)| st.last_run.as_ref().map(|r| (id.clone(), r)))
+        // A `not_selected` last-run is a record from before the
+        // scheduler stopped writing them — see `Scheduler::finish`. It
+        // says a run walked past this step without touching it, on top
+        // of whatever the step had actually done. The real outcome it
+        // replaced is gone, so the honest report is no record at all:
+        // "never run". It self-heals the next time a run reaches the
+        // step for real.
+        .filter(|(_, r)| r.status != "not_selected")
+        .map(|(id, r)| {
+            (
+                id,
+                DagStepRun {
+                    run_id: r.run_id.clone(),
+                    started_at: r.started_at.clone(),
+                    finished_at: r.finished_at.clone(),
+                    status: r.status.clone(),
+                    attempts: r.attempts,
+                    error: r.error.clone(),
+                },
+            )
+        })
+        .collect();
+
+    DagRecord {
+        run,
+        states,
+        last_runs,
+        progress,
+    }
+}
+
+/// `GET /api/dag` — the step DAG derived from the data root's config,
+/// exactly as the runner would build it (same load → to_specs →
+/// Graph::build chain), so the visualization can never drift from
+/// execution. Steps come back in topological order.
+async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
+    use datalib_dag::config;
+
+    let DagRecord {
+        run,
+        states,
+        last_runs,
+        progress,
+    } = dag_record(&s.root).await;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path())?;
@@ -1183,40 +1241,9 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                         .iter()
                         .map(|&d| graph.steps[d].id.clone())
                         .collect(),
-                    last_run: state
-                        .steps
-                        .get(&sp.id)
-                        .and_then(|st| st.last_run.as_ref())
-                        // A `not_selected` last-run is a record from
-                        // before the scheduler stopped writing them —
-                        // see `Scheduler::finish`. It says a run walked
-                        // past this step without touching it, stamped
-                        // with that run's time, on top of whatever the
-                        // step had actually done. The real outcome it
-                        // replaced is gone, so the honest report is no
-                        // record at all: "never run", which is what a
-                        // step we know nothing about looks like. It
-                        // self-heals the next time a run reaches the
-                        // step for real.
-                        .filter(|r| r.status != "not_selected")
-                        .map(|r| DagStepRun {
-                            run_id: r.run_id.clone(),
-                            started_at: r.started_at.clone(),
-                            finished_at: r.finished_at.clone(),
-                            status: r.status.clone(),
-                            attempts: r.attempts,
-                            error: r.error.clone(),
-                        }),
+                    last_run: last_runs.get(&sp.id).cloned(),
                     current_state: states.get(&sp.id).cloned(),
-                    progress: progress.get(&sp.id).map(|p| DagStepProgress {
-                        msg: p.msg.clone(),
-                        metrics: p.metrics.clone(),
-                        errors: p.errors,
-                        rates: p.rates.clone(),
-                        progress_age_secs: p.progress_age_secs,
-                        log_age_secs: p.log_age_secs,
-                        updated_at_utc: p.updated_at_utc.clone(),
-                    }),
+                    progress: progress.get(&sp.id).cloned(),
                 }
             })
             .collect())
@@ -1319,7 +1346,7 @@ struct StorageParams {
     refresh: Option<String>,
 }
 
-fn flag_is_set(v: Option<&str>) -> bool {
+pub(crate) fn flag_is_set(v: Option<&str>) -> bool {
     matches!(v, Some("") | Some("1") | Some("true") | Some("yes"))
 }
 

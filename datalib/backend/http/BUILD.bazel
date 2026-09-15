@@ -33,6 +33,9 @@ rust_library(
         "src/history.rs",
         "src/lib.rs",
         "src/lock.rs",
+        "src/manage/group.rs",
+        "src/manage/mod.rs",
+        "src/manage/status.rs",
         "src/usage.rs",
         "src/watch.rs",
         "src/worker.rs",
@@ -180,6 +183,23 @@ rust_test(
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+# `GET /api/manage/rows` assembles the Manage screen's tree from the
+# config, the runner's record and the job queue.
+rust_test(
+    name = "manage_rows_test",
+    srcs = ["tests/manage_rows.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
