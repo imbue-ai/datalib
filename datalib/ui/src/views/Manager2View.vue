@@ -53,6 +53,8 @@ import {
   listGroups,
   listSteps,
   appendSource,
+  ownedSteps,
+  QMD_INDEX_STEP,
   removeSteps,
   describeGroup,
   renameGroup,
@@ -210,13 +212,33 @@ const takenIds = computed(
     ]),
 );
 
-/// The render step that reads a given fetch step, if the config has
-/// one — what deleting the fetch step has to take with it.
-function renderSiblingOf(fetchId: string): ConfiguredStep | undefined {
-  return sources.value.find(
-    (s) => s.kind === "step" && s.inputs.includes(fetchId) && s.phase === "render",
-  );
+/// The steps that read a given step, directly or through each other,
+/// across every group — what deleting it has to take with it. An ingest
+/// step takes its render and embedding steps; the shared qmd index takes
+/// every source's embedding step. Leaving any of them behind would leave
+/// an input naming a step that no longer exists, which the loader
+/// refuses outright.
+function downstreamOf(step: ConfiguredStep): ConfiguredStep[] {
+  const out: ConfiguredStep[] = [];
+  const seen = new Set<string>([step.id]);
+  const queue = [step.id];
+  while (queue.length) {
+    const id = queue.shift()!;
+    for (const s of sources.value) {
+      if (s.kind !== "step" || seen.has(s.id) || !s.inputs.includes(id)) continue;
+      seen.add(s.id);
+      out.push(s);
+      queue.push(s.id);
+    }
+  }
+  return out;
 }
+
+/// Whether the config has the shared qmd index an embedding step reads;
+/// the wizard offers semantic search only when it does.
+const hasQmdIndex = computed(() =>
+  sources.value.some((s) => s.kind === "step" && s.id === QMD_INDEX_STEP),
+);
 
 /// What a row stands for: a `[[groups]]` entry, or one of the two
 /// kinds of entry filed under it. The server assembles the row
@@ -251,6 +273,7 @@ const PHASE_LABEL: Record<StepPhase, string> = {
   ingest: "Ingest",
   render: "Render",
   index: "Index",
+  embed: "Embed",
   other: "Step",
 };
 
@@ -1663,10 +1686,10 @@ async function onWizardSubmit(payload: {
     // Both steps are replaced in one cut-and-append, and a step the
     // source was missing is simply appended with the other. The name
     // and the description live on the group, which is edited in place.
-    const existing = [current.steps.ingest, current.steps.render].filter(
-      (s): s is ConfiguredStep => !!s,
-    );
-    next = replaceSteps(configText.value, existing, payload.stepsBody);
+    // Every step the source owns: one it no longer wants (the embedding
+    // step, say) leaves with the cut, one it was missing is appended
+    // with the others.
+    next = replaceSteps(configText.value, ownedSteps(current.steps), payload.stepsBody);
     next = renameGroup(next, current.group.id, payload.name);
     next = describeGroup(next, current.group.id, payload.description);
     // A render step the provider does not write back — hand-written
@@ -1701,12 +1724,13 @@ async function deleteSource(id: string) {
   if (!step) return;
   const name = step.name;
 
-  // Deleting a fetch step takes its render step too. Leaving the render
-  // step behind would leave an input naming a step that no longer
-  // exists, which the loader refuses outright — a whole config broken
-  // by a partial delete.
-  const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
-  const doomed = sibling ? [step, sibling] : [step];
+  // Deleting a step takes everything that reads it. Leaving a reader
+  // behind would leave an input naming a step that no longer exists,
+  // which the loader refuses outright — a whole config broken by a
+  // partial delete.
+  const readers = step.kind === "step" ? downstreamOf(step) : [];
+  const doomed = [step, ...readers];
+  const readerNames = readers.map((r) => `"${r.name}"`).join(", ");
 
   const what =
     step.kind === "applet"
@@ -1714,11 +1738,13 @@ async function deleteSource(id: string) {
         `The server stops it. Anything in the app that its components or endpoints ` +
         `serve will stop working until you add it back.`
       : step.phase === "index"
-        ? `Remove the "${name}" index step from the config?\n\n` +
+        ? `Remove the "${name}" index step from the config` +
+          (readers.length ? `, and the ${readers.length === 1 ? "step" : "steps"} that read it (${readerNames})` : "") +
+          `?\n\n` +
           `Its output stays on disk but stops being refreshed, so search results go stale.`
-        : sibling
-          ? `Remove "${name}" and the render step that reads it ("${sibling.name}")?\n\n` +
-            `Both have to go together: a render step whose input is gone is a config ` +
+        : readers.length
+          ? `Remove "${name}" and the ${readers.length === 1 ? "step" : "steps"} that read it (${readerNames})?\n\n` +
+            `They have to go together: a step whose input is gone is a config ` +
             `datalib refuses to load.\n\n` +
             `The data stays on disk. Re-adding later resumes from what's already there.`
           : `Remove "${name}" from the config?\n\n` +
@@ -1794,8 +1820,9 @@ async function deleteRows(targets: Row[]) {
       const step = sources.value.find((s) => s.id === t.id);
       if (!step) continue;
       doomed.set(step.id, step);
-      const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
-      if (sibling) doomed.set(sibling.id, sibling);
+      if (step.kind === "step") {
+        for (const r of downstreamOf(step)) doomed.set(r.id, r);
+      }
     }
   }
   // A group with nothing left under it goes too, as in `deleteSource`.
@@ -2389,6 +2416,7 @@ onUnmounted(() => {
       v-if="wizardOpen"
       :key="wizardKey"
       :taken-ids="takenIds"
+      :has-qmd-index="hasQmdIndex"
       :editing="editing"
       @close="closeWizard"
       @submit="onWizardSubmit"

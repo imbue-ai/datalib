@@ -12,6 +12,8 @@ export const STEP_GLYPHS = {
   // av/library_books — stacked ruled cards: a card catalog.
   index:
     "M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9H9V9h10v2zm-4 4H9v-2h6v2zm4-8H9V5h10v2z",
+  // action/scatter_plot-ish — three dots, a vector space.
+  embed: "M7 11a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm10-6a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm-1 10a3 3 0 1 1 0 6 3 3 0 0 1 0-6z",
   // device/widgets — the generic "app / component" mark.
   applet: "M13 13v8h8v-8h-8zM3 21h8v-8H3v8zM3 3v8h8V3H3zm13.66-1.31L11 7.34 16.66 13l5.66-5.66-5.66-5.65z",
   // action/terminal — a shell prompt, for a step that is just a command.

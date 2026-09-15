@@ -40,8 +40,9 @@ environment — `DATALIB_DAG_GROUP`, `DATALIB_DAG_FUNCTION`,
 step with no `command` runs `datalib-step`, which dispatches on that
 environment and writes the tree its id names; that is why a built-in
 step's function is the directory it writes (`ingest`, `render_markdown`,
-`grid_index`, `qmd_index`), and why the loader requires such a step to
-be under a group. The runner never interprets the function itself.
+`qmd_index`, `qmd_embed`, `grid_index`), and why the loader requires
+such a step to be under a group. The runner never interprets the
+function itself.
 
 ## The graph is declared, not derived
 
@@ -76,9 +77,12 @@ sends them looking for an `inputs` entry that isn't there.
 
 ## What a run executes, and what makes a step stale
 
-A run executes a **runnable subgraph**: the source steps this run selected
-plus everything downstream of them. With no `--sync` that is the whole
-graph. Steps outside it are reported `NotSelected` and cannot run, whatever
+A run executes a **runnable subgraph**: the steps this run selected plus
+everything downstream of them. With no `--sync` that is the whole graph.
+A selected step is usually a source step, so the whole chain follows;
+naming one further down — a source's `qmd_embed`, to resume it — runs
+just that step and its dependents, against the input versions the last
+run recorded. Steps outside it are reported `NotSelected` and cannot run, whatever
 their state.
 
 The subgraph is reachability in the graph, computed once before anything
@@ -113,6 +117,28 @@ versions it reported are recorded: steps are incremental, so the next run
 resumes from the committed partial state. Failure kinds map to a retry
 policy in the scheduler; the step only classifies. Retries simply re-invoke
 the step, which is safe because steps promise idempotency.
+
+One failure kind is not a failure. A step that stops on purpose with
+work left — its per-run budget ran out — reports `incomplete`: never
+retried within the run, its dependents blocked as after a failure, but
+the run's exit code and the job's state do not call it failed, and
+the Manage screen shows the word itself. It never recorded a success,
+so it is stale next run by the second clause above, which is how it
+resumes.
+
+## `lock`: one step per name at a time
+
+A step may name a `lock` in its config. The scheduler dispatches at
+most one step per name at once; a ready step whose name is held goes
+back to the front of the queue when the holder lands, and holds no
+parallelism slot while it waits. That last part is the reason it is
+the scheduler's job rather than the step's: a step that took its own
+file lock would wait *inside* a slot, and three sources waiting to
+embed behind a fourth would leave one slot for everything else. The
+runner attaches no meaning to the name and knows nothing about what
+it protects; `qmd_embed` steps share `qmd_embed` because qmd refuses
+a second concurrent embed of one store, and the step still takes its
+own file lock underneath, for a config that forgot the key.
 
 ## Versions are reported by the step, not measured by the runner
 

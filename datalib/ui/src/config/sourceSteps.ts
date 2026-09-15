@@ -11,8 +11,8 @@
 // a custom executable the wizard knows nothing about.
 //
 // The wizard writes a source as one unit — the group, its `ingest`
-// step and its `render_markdown` step — from one form, and edits it the
-// same way. Writes are whole-text: add/delete splice the text the
+// step, its `render_markdown` step and, on request, its `qmd_embed`
+// step — from one form, and edits it the same way. Writes are whole-text: add/delete splice the text the
 // editor holds. Field-level editing that preserves comments needs a
 // format-preserving TOML writer, so until then `paramsAreRepresentable`
 // gates the Edit button and the wizard never silently drops something
@@ -31,7 +31,8 @@ import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
 
 /// Which wave a step belongs to, for display and for picking the right
 /// half of a catalog entry's fields. Read off the step's `function`.
-export type StepPhase = "ingest" | "render" | "index" | "other";
+/// `embed` is a source's vectors, the one per-source step past render.
+export type StepPhase = "ingest" | "render" | "index" | "embed" | "other";
 
 export type EntryKind = "step" | "applet";
 
@@ -85,6 +86,7 @@ function groupedName(group: ConfiguredGroup, id: string, phase: StepPhase): stri
   if (!group.name) return defaultName(id);
   if (phase === "ingest") return group.name;
   if (phase === "render") return `${group.name} (render markdown)`;
+  if (phase === "embed") return `${group.name} (embeddings)`;
   return defaultName(id);
 }
 
@@ -96,6 +98,7 @@ const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   render_markdown: "render",
   grid_index: "index",
   qmd_index: "index",
+  qmd_embed: "embed",
 };
 
 /// A step's phase, from its function. A step outside any group has no
@@ -370,16 +373,26 @@ export function producerOf(
   return all.find((s) => s.group === step.group && s.phase === "ingest");
 }
 
-/// The two steps a source is made of, as the config has them.
-export type SourceSteps = { ingest?: ConfiguredStep; render?: ConfiguredStep };
+/// The steps a source is made of, as the config has them.
+export type SourceSteps = {
+  ingest?: ConfiguredStep;
+  render?: ConfiguredStep;
+  embed?: ConfiguredStep;
+};
 
-/// A group's ingest and render steps, by phase.
+/// A group's ingest, render and embed steps, by phase.
 export function sourceStepsOf(groupId: string, all: ConfiguredStep[]): SourceSteps {
   const under = all.filter((s) => s.kind === "step" && s.group === groupId);
   return {
     ingest: under.find((s) => s.phase === "ingest"),
     render: under.find((s) => s.phase === "render"),
+    embed: under.find((s) => s.phase === "embed"),
   };
+}
+
+/// Every step the wizard owns for a source, for a replace-in-one-cut.
+export function ownedSteps(steps: SourceSteps): ConfiguredStep[] {
+  return [steps.ingest, steps.render, steps.embed].filter((s): s is ConfiguredStep => !!s);
 }
 
 /// The catalog entry describing a step, in the context of the config it
@@ -633,16 +646,42 @@ function quote(s: string): string {
   return `"${escaped}"`;
 }
 
+/// The phases the wizard writes a step for: the two the catalog has
+/// fields for, plus the embedding step, which has none.
+export type WrittenPhase = FieldPhase | "embed";
+
 /// The function a step of this phase performs within its group, which
 /// is also the directory it writes under the group's.
-export function functionOf(phase: FieldPhase): string {
-  return phase === "render" ? "render_markdown" : "ingest";
+export function functionOf(phase: WrittenPhase): string {
+  switch (phase) {
+    case "render":
+      return "render_markdown";
+    case "embed":
+      return "qmd_embed";
+    default:
+      return "ingest";
+  }
 }
 
 /// The id the loader composes for a group's step of this phase — the
 /// one place this side of the app puts a group and a function together.
-export function stepIdFor(group: string, phase: FieldPhase): string {
+export function stepIdFor(group: string, phase: WrittenPhase): string {
   return `${group}/${functionOf(phase)}`;
+}
+
+/// The shared qmd keyword index every `qmd_embed` step reads.
+export const QMD_INDEX_STEP = "unified_index/qmd_index";
+
+/// The name every `qmd_embed` step shares in its `lock`: qmd refuses a
+/// second concurrent embed of one store, so the runner starts one at a
+/// time.
+export const EMBED_LOCK = "qmd_embed";
+
+/// A source's embedding step: the vectors behind semantic search,
+/// reading the shared qmd index, one source at a time.
+export function embedStepToml(group: string): string {
+  return `${stepToml({ group, phase: "embed", inputs: [QMD_INDEX_STEP] })}
+lock = ${quote(EMBED_LOCK)}`;
 }
 
 /// One source's `[[groups]]` block, with a divider above it. The name
@@ -705,7 +744,7 @@ export function buildStep(opts: {
 /// the shape of a step is spelled out.
 export function stepToml(opts: {
   group: string;
-  phase: FieldPhase;
+  phase: WrittenPhase;
   inputs?: string[];
   params?: string;
 }): string {
@@ -721,10 +760,10 @@ function = ${quote(functionOf(opts.phase))}${inputsLine}${params ? `\n${params}`
 }
 
 /// Everything the wizard writes for one source, in the order it goes
-/// into the file: the group (when creating), the ingest step, and the
-/// render step for a provider that renders. A provider that renders
-/// nothing (`renderStep: false`) gets no render step and no
-/// `renderId`.
+/// into the file: the group (when creating), the ingest step, and for a
+/// provider that renders the render step and — when the source wants
+/// semantic search — its embedding step. A provider that renders
+/// nothing (`renderStep: false`) gets neither and no `renderId`.
 export function buildSource(opts: {
   entry: CatalogEntry;
   group: string;
@@ -738,6 +777,9 @@ export function buildSource(opts: {
   /// the provider can do; the wizard passes the answer the person gave,
   /// which is the one that decides.
   renders?: boolean;
+  /// Whether this source wants its `qmd_embed` step. On by default;
+  /// meaningless without a render step.
+  embeds?: boolean;
 }): { groupBody: string | null; stepsBody: string; renderId: string | null } {
   const { entry, group, values } = opts;
   const ingestId = stepIdFor(group, "download");
@@ -746,6 +788,7 @@ export function buildSource(opts: {
   const render = renders
     ? buildStep({ entry, group, phase: "render", inputs: [ingestId], values })
     : null;
+  const embed = renders && opts.embeds !== false ? embedStepToml(group) : null;
   return {
     groupBody: opts.withGroup
       ? buildGroup({
@@ -755,7 +798,7 @@ export function buildSource(opts: {
           description: opts.description,
         })
       : null,
-    stepsBody: render ? `${ingest}\n\n${render}` : ingest,
+    stepsBody: [ingest, render, embed].filter((s): s is string => s !== null).join("\n\n"),
     renderId: renders ? stepIdFor(group, "render") : null,
   };
 }

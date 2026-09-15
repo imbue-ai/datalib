@@ -44,6 +44,15 @@ A step with no `command` at all is a built-in one: it runs
 the environment below. That is the shape every source's own steps
 have, and it is only legal under a group.
 
+Two optional keys the runner reads and never forwards. `code_version`
+is a version of the step's own behavior, for a step whose output can
+change without its command line changing; bumping it re-runs the step
+once. `lock = "<name>"` names a resource the step must have to itself:
+the runner dispatches one step per name at a time, and a step waiting
+for the name waits in the ready set rather than in a parallelism slot.
+Every `qmd_embed` step carries `lock = "qmd_embed"`, because qmd
+refuses a second concurrent embed of one store.
+
 Sub-tables like `[steps.params]` must come after the step's plain keys:
 in TOML a table header ends the table it appears in, so everything
 below it belongs to `params` until the next header.
@@ -250,6 +259,7 @@ kind* of failure this is, which drives retry policy:
 | `auth` | credentials need a human | fail fast |
 | `data` | bad input; retrying won't help | fail fast (default when absent) |
 | `cancelled` | you were interrupted | fail fast, exit code 130 convention |
+| `incomplete` | you stopped on purpose with work left (a per-run budget ran out) | no retry; shown as `incomplete`, not `failed`; the run is not a failed run; you are stale next run, so you resume |
 
 `outputs` on a failure outcome reports partial progress you *did*
 commit — the scheduler records those versions so the next run resumes
@@ -396,7 +406,9 @@ the reset env vars, checkpoints on SIGINT, and emits versions where it
 has them (the grid index claims its dolt commit hash). Use it as the
 reference implementation.
 
-The two index functions have one reader, the `unified_index` applet,
-which finds them from the data root alone; so their ids are fixed at
-`unified_index/grid_index` and `unified_index/qmd_index`, and
-`datalib-step` refuses to run them under any other.
+The two index functions have one reader each — the `unified_index`
+applet, and every `qmd_embed` step — which find them from the data root
+alone; so their ids are fixed at `unified_index/grid_index` and
+`unified_index/qmd_index`, and `datalib-step` refuses to run them under
+any other. `qmd_embed` runs per source, under a group with a `type`,
+and writes that source's vectors into the same qmd store.

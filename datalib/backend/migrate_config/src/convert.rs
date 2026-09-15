@@ -13,7 +13,11 @@
 //!   `common.input_path` becomes `export.path`, `fswalk.path`,
 //!   `mbox.path`, …;
 //! - `common.raw_path` goes: the store is the step's own tree, which is
-//!   the only value the step ever accepted for it.
+//!   the only value the step ever accepted for it;
+//! - a config whose `qmd_index` fan-in still did the embedding — no
+//!   `qmd_embed` step anywhere — gets one under each source the fan-in
+//!   names, after that source's render step, so semantic search keeps
+//!   covering what it covered.
 //!
 //! This module parses the retired shapes itself. The runner refuses them,
 //! so the loader cannot hand the entries over, and a retired shape should
@@ -80,6 +84,8 @@ struct StepIn {
     #[serde(default)]
     code_version: Option<String>,
     #[serde(default)]
+    lock: Option<String>,
+    #[serde(default)]
     params: Option<toml::Value>,
 }
 
@@ -120,6 +126,9 @@ pub enum Retired {
     /// A group `type` spelled for the method (`slack_api`), or an
     /// ingest step whose params still say `sync` / `common.input_path`.
     TypesAndMethodTables,
+    /// A `qmd_index` fan-in and no `qmd_embed` step anywhere, from
+    /// before embedding was each source's own step.
+    NoEmbedSteps,
 }
 
 /// Which retired shape this config is in, or `None` when it is already
@@ -141,7 +150,47 @@ pub fn retired_shape(text: &str) -> Result<Option<Retired>> {
                     || has_raw_path(p)
             })
     });
-    Ok((retired_type || retired_params).then_some(Retired::TypesAndMethodTables))
+    if retired_type || retired_params {
+        return Ok(Some(Retired::TypesAndMethodTables));
+    }
+    Ok(sources_without_embed_steps(&cfg)
+        .is_some()
+        .then_some(Retired::NoEmbedSteps))
+}
+
+/// When the `qmd_index` fan-in was the only qmd step, it embedded every
+/// source it named; now embedding is a `qmd_embed` step per source. A
+/// config with the fan-in and no embed step at all is that shape, and
+/// the sources the fan-in names — the first segment of each
+/// `<group>/render_markdown` input — are the ones that used to be
+/// embedded. `None` for a config that has any embed step: that one has
+/// been through this already, or chose.
+fn sources_without_embed_steps(cfg: &OldConfig) -> Option<Vec<String>> {
+    let function_of = |s: &StepIn| match builtin_of(s) {
+        Some(b) => Some(b.function.to_string()),
+        None if s.command.is_none() => s.function.clone(),
+        None => None,
+    };
+    if cfg
+        .steps
+        .iter()
+        .any(|s| function_of(s).as_deref() == Some("qmd_embed"))
+    {
+        return None;
+    }
+    let fan_in = cfg
+        .steps
+        .iter()
+        .find(|s| function_of(s).as_deref() == Some("qmd_index"))?;
+    Some(
+        fan_in
+            .inputs
+            .iter()
+            .filter_map(|i| i.split('/').next())
+            .filter(|g| !g.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 fn has_raw_path(params: &toml::Value) -> bool {
@@ -414,7 +463,26 @@ struct StepOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     code_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    lock: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     params: Option<toml::Value>,
+}
+
+impl StepOut {
+    fn builtin(group: &str, function: &str, inputs: Vec<String>) -> Self {
+        StepOut {
+            group: Some(group.to_string()),
+            function: Some(function.to_string()),
+            id: None,
+            name: None,
+            command: None,
+            inputs,
+            env: BTreeMap::new(),
+            code_version: None,
+            lock: None,
+            params: None,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -516,6 +584,7 @@ pub fn rewrite(text: &str) -> Result<String> {
                     inputs: rename_all(&step.inputs),
                     env: step.env.clone(),
                     code_version: step.code_version.clone(),
+                    lock: step.lock.clone(),
                     params,
                 },
             ));
@@ -581,10 +650,12 @@ pub fn rewrite(text: &str) -> Result<String> {
                 inputs: rename_all(&step.inputs),
                 env: step.env.clone(),
                 code_version: step.code_version.clone(),
+                lock: None,
                 params,
             },
         ));
     }
+    embed_steps_per_source(&cfg, &renames, &mut steps);
 
     let applets: Vec<AppletOut> = cfg
         .applets
@@ -639,6 +710,50 @@ pub fn rewrite(text: &str) -> Result<String> {
         out.push_str(&block("applets", a)?);
     }
     Ok(out)
+}
+
+/// Give each source the `qmd_index` fan-in names a `qmd_embed` step,
+/// placed after that source's render step and reading the fan-in.
+/// Sources it did not name were not embedded before and stay that way;
+/// the wizard adds the step on request.
+fn embed_steps_per_source(
+    cfg: &OldConfig,
+    renames: &BTreeMap<String, String>,
+    steps: &mut Vec<(Option<usize>, StepOut)>,
+) {
+    let Some(named) = sources_without_embed_steps(cfg) else {
+        return;
+    };
+    let Some((_, fan_in)) = steps
+        .iter()
+        .find(|(_, s)| s.function.as_deref() == Some("qmd_index"))
+    else {
+        return;
+    };
+    let fan_in_id = match (&fan_in.group, &fan_in.function, &fan_in.id) {
+        (Some(g), Some(f), _) => format!("{g}/{f}"),
+        (_, _, Some(id)) => id.clone(),
+        _ => return,
+    };
+    for g in named {
+        // The fan-in named the render step by its old id, which the
+        // rewrite above may have renamed along with its group.
+        let g = renames
+            .get(&format!("{g}/render_markdown"))
+            .and_then(|r| r.split('/').next())
+            .map(str::to_string)
+            .unwrap_or(g);
+        let Some(at) = steps.iter().position(|(_, s)| {
+            s.group.as_deref() == Some(g.as_str())
+                && s.function.as_deref() == Some("render_markdown")
+        }) else {
+            continue;
+        };
+        let gi = steps[at].0;
+        let mut embed = StepOut::builtin(&g, "qmd_embed", vec![fan_in_id.clone()]);
+        embed.lock = Some("qmd_embed".to_string());
+        steps.insert(at + 1, (gi, embed));
+    }
 }
 
 /// The group an applet is filed under: the tree its `params.tree` names,

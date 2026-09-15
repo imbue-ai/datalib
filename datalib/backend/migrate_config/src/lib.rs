@@ -297,6 +297,89 @@ inputs = ["slack/render_markdown"]
         );
     }
 
+    /// The shape from before embedding was a step per source: the
+    /// `qmd_index` fan-in naming every source's render step, and no
+    /// `qmd_embed` anywhere.
+    const GROUPED_GLOBAL_QMD: &str = r#"
+[[groups]]
+id = "slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+[steps.params.api]
+channels = ["chat-qi"]
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]
+
+[[groups]]
+id = "notes"
+type = "fsindex"
+
+[[steps]]
+group = "notes"
+function = "ingest"
+[steps.params.fswalk]
+path = "~/notes"
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = ["slack/render_markdown"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = ["slack/render_markdown"]
+
+[[applets]]
+group = "unified_index"
+id = "unified_index"
+command = "datalib-applet unified_index"
+"#;
+
+    /// Each source the fan-in names gets a `qmd_embed` step reading it,
+    /// right after that source's render step; a source it did not name
+    /// (or one with no render step) gets nothing, and the fan-in stays.
+    #[test]
+    fn a_fan_in_with_no_embed_steps_gets_one_per_source() {
+        assert_eq!(
+            detect(GROUPED_GLOBAL_QMD).unwrap(),
+            LegacyFormat::NoEmbedSteps
+        );
+        let out = convert(GROUPED_GLOBAL_QMD).unwrap();
+        let cfg = datalib_dag::config::parse(&out).unwrap();
+        let ids: Vec<&str> = cfg.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "slack/ingest",
+                "slack/render_markdown",
+                "slack/qmd_embed",
+                "notes/ingest",
+                "unified_index/grid_index",
+                "unified_index/qmd_index",
+            ],
+            "{out}"
+        );
+        let embed = cfg
+            .steps
+            .iter()
+            .find(|s| s.id == "slack/qmd_embed")
+            .unwrap();
+        assert_eq!(embed.inputs, ["unified_index/qmd_index"]);
+        assert_eq!(embed.lock.as_deref(), Some("qmd_embed"));
+        // And the result is current.
+        assert!(detect(&out).unwrap_err().to_string().contains("already"));
+    }
+
     #[test]
     fn detects_each_retired_shape() {
         assert_eq!(detect(UNGROUPED).unwrap(), LegacyFormat::StepSubcommands);

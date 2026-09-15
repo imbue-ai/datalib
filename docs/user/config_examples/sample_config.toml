@@ -47,6 +47,12 @@ group = "gmail-takeout"
 function = "render_markdown"
 inputs = ["gmail-takeout/ingest"]
 
+[[steps]]
+group = "gmail-takeout"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # Slack workspace mirror. Credentials come from `latchkey` at runtime
 # (see the "Register Slack with latchkey" section in the first-time
 # user guide). `channels` restricts the sync to the listed channels;
@@ -87,6 +93,12 @@ group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
+[[steps]]
+group = "slack"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # Anthropic / claude.ai conversation mirror. Credentials come from
 # `latchkey` at runtime (see the "Register Claude web with latchkey"
 # section in the first-time user guide). An empty `api` table fetches
@@ -109,6 +121,12 @@ function = "ingest"
 group = "claude-api"
 function = "render_markdown"
 inputs = ["claude-api/ingest"]
+
+[[steps]]
+group = "claude-api"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

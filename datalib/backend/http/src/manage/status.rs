@@ -106,7 +106,8 @@ pub fn status_rank(key: &str) -> Option<i32> {
         "never_run" => -1,
         "queued" => 0,
         "running" => 1,
-        "succeeded" | "skipped_up_to_date" | "failed" | "blocked" | "interrupted" => 2,
+        "succeeded" | "skipped_up_to_date" | "failed" | "blocked" | "incomplete"
+        | "interrupted" => 2,
         _ => return None,
     })
 }
@@ -136,6 +137,8 @@ pub const STATUS_LABELS: &[(&str, &str)] = &[
     ("skipped_up_to_date", "Up to date"),
     ("failed", "Failed"),
     ("blocked", "Blocked"),
+    // Stopped on its budget with work left; the next sync resumes it.
+    ("incomplete", "Incomplete"),
     ("interrupted", "Interrupted"),
     ("never_run", "Never run"),
 ];

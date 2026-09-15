@@ -17,6 +17,7 @@ import {
   listSteps,
   paramsAreRepresentable,
   paramsObject,
+  ownedSteps,
   producerOf,
   removeSteps,
   renameGroup,
@@ -227,9 +228,31 @@ describe("buildSource", () => {
     expect(out.stepsBody.indexOf('function = "ingest"')).toBeLessThan(
       out.stepsBody.indexOf('function = "render_markdown"'),
     );
-    // And the whole thing parses back as the two steps under the group.
+    // And the whole thing parses back as the three steps under the
+    // group, the embedding step reading the shared index under its lock.
     const text = `${out.groupBody}\n\n${out.stepsBody}`;
-    expect(listSteps(text).map((s) => s.id)).toEqual(["slack/ingest", "slack/render_markdown"]);
+    const steps = listSteps(text);
+    expect(steps.map((s) => s.id)).toEqual([
+      "slack/ingest",
+      "slack/render_markdown",
+      "slack/qmd_embed",
+    ]);
+    expect(steps[2].inputs).toEqual(["unified_index/qmd_index"]);
+    expect(steps[2].phase).toBe("embed");
+    expect(out.stepsBody).toContain('lock = "qmd_embed"');
+  });
+
+  it("leaves the embedding step out when the source does not want it", () => {
+    const out = buildSource({
+      entry: SLACK,
+      group: "slack",
+      name: "",
+      values: {},
+      withGroup: false,
+      embeds: false,
+    });
+    expect(out.stepsBody).toContain('function = "render_markdown"');
+    expect(out.stepsBody).not.toContain("qmd_embed");
   });
 
   it("writes no group when editing, and no render step for a provider that renders nothing", () => {
@@ -242,6 +265,7 @@ describe("buildSource", () => {
     });
     expect(out.groupBody).toBeNull();
     expect(out.stepsBody).not.toContain("render_markdown");
+    expect(out.stepsBody).not.toContain("qmd_embed");
     expect(out.renderId).toBeNull();
   });
 
@@ -588,8 +612,8 @@ describe("removeSteps / replaceSteps", () => {
   // The edit path: both steps cut against the text as parsed, then one
   // append. Cutting one, appending, then cutting the other would use
   // offsets into text the first cut had already shifted.
-  it("replaces a source's pair in one pass, leaving exactly one of each", () => {
-    const { ingest, render } = sourceStepsOf("slack", listSteps(PAIR));
+  it("replaces a source's steps in one pass, leaving exactly one of each", () => {
+    const steps = sourceStepsOf("slack", listSteps(PAIR));
     const out = buildSource({
       entry: SLACK,
       group: "slack",
@@ -597,13 +621,46 @@ describe("removeSteps / replaceSteps", () => {
       values: { "api.channels": ["random"] },
       withGroup: false,
     });
-    const after = replaceSteps(PAIR, [ingest!, render!], out.stepsBody);
-    expect(after.match(/function = "ingest"/g)).toHaveLength(1);
-    expect(after.match(/function = "render_markdown"/g)).toHaveLength(1);
+    // PAIR has no embedding step; the form's default writes one, which
+    // is the "step the source was missing" case of the test below.
+    const after = replaceSteps(PAIR, ownedSteps(steps), out.stepsBody);
+    for (const fn of ["ingest", "render_markdown", "qmd_embed"]) {
+      expect(after.match(new RegExp(`function = "${fn}"`, "g"))).toHaveLength(1);
+    }
     expect(after).toContain('channels = ["random"]');
     expect(after).not.toContain('channels = ["general"]');
     // The group and the index steps are untouched.
     expect(after).toContain('name = "Work Slack"');
+    expect(listSteps(after).map((s) => s.id).sort()).toEqual([
+      "slack/ingest",
+      "slack/qmd_embed",
+      "slack/render_markdown",
+      "unified_index/grid_index",
+      "unified_index/qmd_index",
+    ]);
+  });
+
+  // Unticking semantic search removes the embedding step with the same
+  // cut: it is one of the steps the source owns, and the new body does
+  // not carry it.
+  it("drops the embedding step a source no longer wants", () => {
+    const withEmbed = replaceSteps(
+      PAIR,
+      ownedSteps(sourceStepsOf("slack", listSteps(PAIR))),
+      buildSource({ entry: SLACK, group: "slack", name: "", values: {}, withGroup: false })
+        .stepsBody,
+    );
+    const steps = sourceStepsOf("slack", listSteps(withEmbed));
+    expect(steps.embed?.id).toBe("slack/qmd_embed");
+    const out = buildSource({
+      entry: SLACK,
+      group: "slack",
+      name: "",
+      values: {},
+      withGroup: false,
+      embeds: false,
+    });
+    const after = replaceSteps(withEmbed, ownedSteps(steps), out.stepsBody);
     expect(listSteps(after).map((s) => s.id).sort()).toEqual([
       "slack/ingest",
       "slack/render_markdown",
@@ -631,6 +688,7 @@ describe("removeSteps / replaceSteps", () => {
     const after = replaceSteps(fetchOnly, [ingest!], out.stepsBody);
     expect(listSteps(after).map((s) => s.id).sort()).toEqual([
       "slack/ingest",
+      "slack/qmd_embed",
       "slack/render_markdown",
       "unified_index/grid_index",
       "unified_index/qmd_index",

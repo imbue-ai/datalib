@@ -41,13 +41,15 @@ pub enum RowKind {
 
 /// The built-in functions by what they do. Mirrors
 /// `datalib_step::function::Function`; a step outside any group has no
-/// function and is a custom executable, `other`.
+/// function and is a custom executable, `other`. `index` is a source's
+/// keyword index or the shared grid index; `embed` a source's vectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
     Ingest,
     Render,
     Index,
+    Embed,
     Other,
 }
 
@@ -57,6 +59,7 @@ impl Phase {
             Some("ingest") => Phase::Ingest,
             Some("render_markdown") => Phase::Render,
             Some("grid_index") | Some("qmd_index") => Phase::Index,
+            Some("qmd_embed") => Phase::Embed,
             _ => Phase::Other,
         }
     }
@@ -316,6 +319,7 @@ fn child_label(step: &WrittenStep) -> String {
         Some("render_markdown") => "Render markdown",
         Some("grid_index") => "Grid index",
         Some("qmd_index") => "QMD index",
+        Some("qmd_embed") => "Embeddings",
         Some(other) => other,
         None => "Step",
     }

@@ -1,3 +1,4 @@
+load("//tests/fixtures:qmd_groups.bzl", "QMD_EMBEDDED_GROUPS")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
@@ -61,6 +62,9 @@ rust_test(
         "//tests/fixtures:ingested/qmd-index.tar",
     ],
     edition = "2021",
+    env = {
+        "QMD_FIXTURE_EMBEDDED_GROUPS": ",".join(QMD_EMBEDDED_GROUPS),
+    },
     deps = [
         ":datalib_unified_index",
         "//datalib/backend/core:datalib_core",

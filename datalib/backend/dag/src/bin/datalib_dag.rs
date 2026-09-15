@@ -191,14 +191,17 @@ async fn main() -> Result<()> {
         child_env.insert(subprocess::ENV_CHECKPOINT_CADENCE.into(), cadence.encode());
     }
 
+    // Any declared step: usually a source step (the whole chain follows),
+    // but naming one further down — a source's `qmd_embed`, say, to
+    // resume it — runs that step and its dependents against the input
+    // versions the last run recorded.
     if !sync_only.is_empty() {
-        let fringe = graph.fringe_ids();
+        let known: Vec<&str> = graph.steps.iter().map(|s| s.id.as_str()).collect();
         for id in &sync_only {
-            if !fringe.contains(&id.as_str()) {
+            if !known.contains(&id.as_str()) {
                 bail!(
-                    "--sync {id:?}: not a source step (a step with no inputs). \
-                     Available: {}",
-                    fringe.join(", ")
+                    "--sync {id:?}: no such step. Source steps: {}",
+                    graph.fringe_ids().join(", ")
                 );
             }
         }
@@ -304,7 +307,7 @@ async fn main() -> Result<()> {
         });
         if cancelled {
             130
-        } else if report.all_ok() && dropped_entries == 0 {
+        } else if !report.any_failed() && dropped_entries == 0 {
             0
         } else {
             2

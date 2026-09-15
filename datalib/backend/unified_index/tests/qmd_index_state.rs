@@ -63,6 +63,31 @@ fn materialize_root_with_grid(dst: &Path) {
     std::fs::set_permissions(&db, perms).expect("chmod");
 }
 
+/// The groups the fixture embeds, from `tests/fixtures/qmd_groups.bzl`
+/// by way of the BUILD file's `env`. Every other group is indexed and
+/// not embedded, deliberately: it is what keeps the `Embedded` column
+/// from being the `Indexed` column twice.
+fn embedded_groups() -> BTreeSet<String> {
+    let raw = std::env::var("QMD_FIXTURE_EMBEDDED_GROUPS")
+        .expect("QMD_FIXTURE_EMBEDDED_GROUPS unset — the BUILD rule sets it from qmd_groups.bzl");
+    let groups: BTreeSet<String> = raw.split(',').map(str::to_string).collect();
+    assert!(!groups.is_empty(), "the fixture embeds at least one group");
+    groups
+}
+
+/// The group a rendered file belongs to: the first segment of its path
+/// under the data root, which is the collection qmd filed it under.
+fn group_of(root: &Path, file: &Path) -> String {
+    file.strip_prefix(root)
+        .expect("rendered file is under the root")
+        .components()
+        .next()
+        .expect("a group segment")
+        .as_os_str()
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn rendered_markdowns(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -126,18 +151,30 @@ async fn every_rendered_document_is_reported_indexed_and_embedded() {
          qmd's content hashing has probably changed: {missing:?}"
     );
 
-    // The fixture's indexer runs `embed`, so every document should also
-    // carry a complete vector set. This is what separates the two grid
-    // columns from being one column twice.
-    let unembedded: Vec<&PathBuf> = files
+    // The fixture embeds some groups and not others, so the `embedded`
+    // half of the answer has to follow the group line exactly: a
+    // complete vector set inside an embedded group, none outside. This
+    // is what separates the two grid columns from being one column
+    // twice.
+    let embedded = embedded_groups();
+    let wrong: Vec<(&PathBuf, bool)> = files
         .iter()
         .zip(&hashes)
-        .filter(|(_, h)| !states.get(*h).map(|s| s.embedded).unwrap_or(false))
-        .map(|(p, _)| p)
+        .map(|(p, h)| (p, states[h].embedded))
+        .filter(|(p, is_embedded)| embedded.contains(&group_of(root, p)) != *is_embedded)
         .collect();
     assert!(
-        unembedded.is_empty(),
-        "fixture documents indexed but not embedded: {unembedded:?}"
+        wrong.is_empty(),
+        "embedded state disagrees with the fixture's embedded groups {embedded:?}: {wrong:?}"
+    );
+    let expected_embedded = files
+        .iter()
+        .filter(|p| embedded.contains(&group_of(root, p)))
+        .count();
+    assert!(
+        expected_embedded > 0 && expected_embedded < files.len(),
+        "the fixture should embed some documents and leave others: {expected_embedded} of {}",
+        files.len()
     );
 
     let summary = reader.summary().await.expect("summary");
@@ -147,8 +184,8 @@ async fn every_rendered_document_is_reported_indexed_and_embedded() {
         "collection document count should match the rendered tree"
     );
     assert_eq!(
-        summary.embedded, summary.documents,
-        "the fixture embeds everything it indexes"
+        summary.embedded as usize, expected_embedded,
+        "the summary counts exactly the embedded groups' documents"
     );
 }
 
@@ -217,37 +254,39 @@ async fn editing_one_document_flips_only_its_own_rows() {
     let all_uuids: Vec<String> = by_doc.keys().cloned().collect();
     assert!(all_uuids.len() > 10, "expected many documents");
 
-    // Pick a document that several grid rows share, so "only its rows"
-    // is a meaningful claim rather than a single-row coincidence.
-    let (target, target_rows) = by_doc
-        .iter()
-        .filter(|(_, rs)| rs.len() >= 3)
-        .min_by_key(|(md, _)| (*md).clone())
-        .map(|(md, rs)| (md.clone(), rs.clone()))
-        .expect("a document with at least 3 grid rows");
-
-    // Baseline: everything indexed and embedded.
+    // Baseline: everything indexed, and embedded exactly where the
+    // fixture embeds.
+    let embedded = embedded_groups();
+    let paths = repo.md_paths_for(&all_uuids).await.expect("md_paths_for");
     let before = resolve_markdown_states(&repo, &reader, &all_uuids)
         .await
         .expect("resolve");
     let unhealthy: Vec<&String> = before
         .iter()
-        .filter(|(_, v)| v.indexed != Some(true) || v.embedded != Some(true))
+        .filter(|(md, v)| {
+            let should_embed = embedded.contains(&group_of(root, &paths[*md]));
+            v.indexed != Some(true) || v.embedded != Some(should_embed)
+        })
         .map(|(k, _)| k)
         .collect();
     assert!(
         unhealthy.is_empty(),
-        "fixture should start all-green: {unhealthy:?}"
+        "fixture should start green along the embedded-group line: {unhealthy:?}"
     );
+
+    // Pick an embedded document that several grid rows share, so "only
+    // its rows" is a meaningful claim rather than a single-row
+    // coincidence, and so both columns have somewhere to fall from.
+    let (target, target_rows) = by_doc
+        .iter()
+        .filter(|(md, rs)| rs.len() >= 3 && embedded.contains(&group_of(root, &paths[*md])))
+        .min_by_key(|(md, _)| (*md).clone())
+        .map(|(md, rs)| (md.clone(), rs.clone()))
+        .expect("an embedded document with at least 3 grid rows");
 
     // Edit the target's file — exactly what a re-render does to a
     // document the indexer has not caught up with.
-    let path = repo
-        .md_paths_for(std::slice::from_ref(&target))
-        .await
-        .expect("md_paths_for")
-        .remove(&target)
-        .expect("target has a rendered file");
+    let path = paths[&target].clone();
     let original = std::fs::read(&path).expect("read target");
     let mut edited = original.clone();
     edited.extend_from_slice(b"\n<!-- re-rendered since the last index run -->\n");

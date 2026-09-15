@@ -68,7 +68,8 @@ data_root = "~/datalib"  # Base dir; everything is written under here. `~` is ex
 # --- Shared index steps -------------------------------------------------
 
 # Every source's rendered markdown feeds these two fan-ins: the SQL
-# index behind the grid UI, and the qmd semantic-search index.
+# index behind the grid UI, and the qmd keyword index. Embedding is
+# each source's own `qmd_embed` step below, reading the qmd index.
 [[groups]]
 id = "unified_index"
 
@@ -116,6 +117,12 @@ group = "claude-api"
 function = "render_markdown"
 inputs = ["claude-api/ingest"]
 
+[[steps]]
+group = "claude-api"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # An unpacked Claude data export already on disk: the same `claude`
 # type, with `export` as the method instead of `api`. No network and no
 # credentials — the ingest step just reads the export's JSON and writes
@@ -142,6 +149,12 @@ group = "claude-export"
 function = "render_markdown"
 inputs = ["claude-export/ingest"]
 
+[[steps]]
+group = "claude-export"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # --- ChatGPT ------------------------------------------------------------
 
 # ChatGPT conversation mirror. Credentials via latchkey.
@@ -164,6 +177,12 @@ sleep_between = 0.5    # seconds between requests (be polite)
 group = "chatgpt"
 function = "render_markdown"
 inputs = ["chatgpt/ingest"]
+
+[[steps]]
+group = "chatgpt"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # --- Slack --------------------------------------------------------------
 
@@ -235,6 +254,12 @@ group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
+[[steps]]
+group = "slack"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # --- GitHub -------------------------------------------------------------
 
 # GitHub PR mirror. Credentials via latchkey. With `pull_requests` set,
@@ -260,6 +285,12 @@ group = "github"
 function = "render_markdown"
 inputs = ["github/ingest"]
 
+[[steps]]
+group = "github"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # --- GitLab -------------------------------------------------------------
 
 # GitLab MR mirror. Credentials via latchkey. `merge_requests` entries
@@ -283,6 +314,12 @@ merge_requests = [
 group = "gitlab"
 function = "render_markdown"
 inputs = ["gitlab/ingest"]
+
+[[steps]]
+group = "gitlab"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # --- Notion -------------------------------------------------------------
 
@@ -329,6 +366,12 @@ group = "notion"
 function = "render_markdown"
 inputs = ["notion/ingest"]
 
+[[steps]]
+group = "notion"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # --- Email: two input modes ---------------------------------------------
 
 # Mode A — JMAP server (Fastmail or any RFC 8620/8621 server). The
@@ -371,6 +414,12 @@ outlink_format = "fastmail"
 # whole account but only render two branches:
 #   only_render_labels = ["Inbox", "Work/Projects"]
 only_render_labels = []
+
+[[steps]]
+group = "fastmail"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # Mode B — Gmail REST API, for a Gmail account. The mode that needs the
 # least setup of any source in this file: latchkey has a built-in
@@ -435,6 +484,12 @@ inputs = ["gmail/ingest"]
 outlink_format = "gmail"
 only_render_labels = []
 
+[[steps]]
+group = "gmail"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # Mode C — Google Takeout .mbox on disk. The `mbox` table selects it:
 # `path` is the file, and the rest labels the synthesized account row.
 [[groups]]
@@ -474,6 +529,12 @@ inputs = ["gmail-takeout/ingest"]
 outlink_format = "gmail"   # render each message's `↗` outlink to Gmail
 only_render_labels = []    # render only threads touching these labels; empty = all
 
+[[steps]]
+group = "gmail-takeout"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # --- Contacts: two input modes ------------------------------------------
 
 # Mode A — CardDAV server. The `carddav` table selects it; `server_url`
@@ -494,6 +555,12 @@ addressbooks = ["Contacts"]
 group = "icloud-contacts"
 function = "render_markdown"
 inputs = ["icloud-contacts/ingest"]
+
+[[steps]]
+group = "icloud-contacts"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # Mode B — local vCard files. The `vcf` table selects it: `.vcf` files
 # are read from the directory at its `path`.
@@ -516,6 +583,12 @@ always_clear_before_ingest = true
 group = "vcard-contacts"
 function = "render_markdown"
 inputs = ["vcard-contacts/ingest"]
+
+[[steps]]
+group = "vcard-contacts"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # --- Beeper -------------------------------------------------------------
 
@@ -543,6 +616,12 @@ inputs = ["beeper/ingest"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
 
+[[steps]]
+group = "beeper"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # --- Perseus Digital Library --------------------------------------------
 
 # TEI editions from PerseusDL/canonical-greekLit. The `github` table
@@ -568,6 +647,12 @@ inputs = ["perseus/ingest"]
 # alignment_pairs = [   # edition pairs to sentence-align, e.g.
 #   ["perseus-grc2", "perseus-eng2"],
 # ]
+
+[[steps]]
+group = "perseus"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # --- YoLink sensors -----------------------------------------------------
 
@@ -610,6 +695,12 @@ group = "yolink"
 function = "render_markdown"
 inputs = ["yolink/ingest"]
 
+[[steps]]
+group = "yolink"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # --- Garmin Connect -----------------------------------------------------
 
 # Everything a Garmin watch uploads to Garmin Connect, over the API the
@@ -647,6 +738,12 @@ since = "2024-01-01"       # earliest day to mirror; default a year back. Quote 
 group = "garmin"
 function = "render_markdown"
 inputs = ["garmin/ingest"]
+
+[[steps]]
+group = "garmin"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 # --- AirVisual (IQAir) monitors -----------------------------------------
 
 # AirVisual Pros' own history files, read off each unit's Samba share
@@ -685,6 +782,12 @@ group = "ship-air"
 function = "render_markdown"
 inputs = ["ship-air/ingest"]
 
+[[steps]]
+group = "ship-air"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # --- Signal (Android backup) --------------------------------------------
 
 # Decrypts the newest `signal-backup-*` snapshot under `backup.path`
@@ -711,6 +814,12 @@ function = "render_markdown"
 inputs = ["signal/ingest"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
+
+[[steps]]
+group = "signal"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # --- WhatsApp (Android crypt15 backup) ----------------------------------
 
@@ -739,6 +848,12 @@ key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"   # default if omitted
 group = "whatsapp"
 function = "render_markdown"
 inputs = ["whatsapp/ingest"]
+
+[[steps]]
+group = "whatsapp"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # --- LinkedIn (data export) ---------------------------------------------
 
@@ -774,6 +889,12 @@ maximum_sequential_failed_requests = 20
 group = "linkedin"
 function = "render_markdown"
 inputs = ["linkedin/ingest"]
+
+[[steps]]
+group = "linkedin"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # --- Google Takeout (data export) ---------------------------------------
 
@@ -820,6 +941,12 @@ group = "google-takeout"
 function = "render_markdown"
 inputs = ["google-takeout/ingest"]
 
+[[steps]]
+group = "google-takeout"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
 # --- SMS Backup & Restore (Android export) ------------------------------
 
 # File-backed: point `backup.path` at the directory holding the Android
@@ -845,6 +972,12 @@ always_clear_before_ingest = true
 group = "sms-backup-restore"
 function = "render_markdown"
 inputs = ["sms-backup-restore/ingest"]
+
+[[steps]]
+group = "sms-backup-restore"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # --- fsindex (directory-tree scanner) -----------------------------------
 
@@ -915,6 +1048,12 @@ path = "~/Documents"
 group = "pdfs"
 function = "render_markdown"
 inputs = ["pdfs/ingest"]
+
+[[steps]]
+group = "pdfs"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
 
 # --- media (local music / photos / video / playlists) --------------------
 

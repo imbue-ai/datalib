@@ -12,6 +12,9 @@ use crate::events::{Emitter, OutputClaim};
 /// chain. The scheduler's retry policy keys off the answer, so this is
 /// the runner's vocabulary rather than a label of our own.
 pub fn classify(e: &anyhow::Error) -> FailureKind {
+    if e.downcast_ref::<crate::qmd_embed::BudgetSpent>().is_some() {
+        return FailureKind::Incomplete;
+    }
     let s: String = e
         .chain()
         .map(|c| c.to_string())

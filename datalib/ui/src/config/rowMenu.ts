@@ -71,6 +71,7 @@ const ONE_AT_A_TIME = "One row at a time";
 export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.func === "qmd_index") return "The QMD index keeps no doltlite store";
+  if (t.func === "qmd_embed") return "An embedding step keeps no doltlite store";
   return null;
 }
 

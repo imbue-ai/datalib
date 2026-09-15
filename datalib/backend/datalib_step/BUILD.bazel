@@ -96,6 +96,7 @@ rust_binary(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
         "@datalib_crates//:futures",
+        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",

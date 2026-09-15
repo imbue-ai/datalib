@@ -40,6 +40,10 @@ pub enum RunState {
     /// An upstream step failed (or was itself blocked); not invoked.
     Blocked,
     Failed,
+    /// Stopped on purpose with work left (its per-run budget ran out);
+    /// the next run resumes it. Its dependents are blocked this run,
+    /// as after a failure, but the run itself is not a failed run.
+    Incomplete,
 }
 
 impl RunState {
@@ -60,12 +64,20 @@ impl RunState {
     }
 
     /// Whether it finished without failing. `NotSelected` counts: not
-    /// being asked for is not a failure.
+    /// being asked for is not a failure. `Incomplete` does not: its
+    /// output is not there to consume yet.
     pub const fn is_ok(self) -> bool {
         matches!(
             self,
             RunState::Succeeded | RunState::SkippedUpToDate | RunState::NotSelected
         )
+    }
+
+    /// Whether something went wrong. Narrower than `!is_ok()`: a step
+    /// that stopped on its budget, and a step blocked behind one, are
+    /// not failures.
+    pub const fn is_failure(self) -> bool {
+        matches!(self, RunState::Failed)
     }
 }
 

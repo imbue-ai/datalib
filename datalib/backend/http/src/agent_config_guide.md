@@ -32,23 +32,24 @@ kinds of entry. `[[groups]]` is what a person sees as one thing: an
 `function` it performs there and the `inputs` it reads; its id is
 composed as `<group>/<function>` — the one tree it writes — and is
 never written. A step with no `command` is a built-in one (the
-functions `ingest`, `render_markdown`, `grid_index` and `qmd_index`,
-run by `datalib-step`); a custom step names a shell `command`. `[[applets]]` is the app surface —
+functions `ingest`, `render_markdown`, `qmd_embed`, `grid_index` and
+`qmd_index`, run by `datalib-step`); a custom step names a shell
+`command`. `[[applets]]` is the app surface —
 long-lived servers that contribute card components and the endpoints
 behind them, filed under a group but declaring no inputs because they
 read what steps wrote. This guide is about groups and steps; for
 applets see `docs/dev/applets.md`. Edges are the declared `inputs`,
 which name steps by composed id — file order does not matter. A step
-with no `inputs` is a **source step** (what a sync can target); every
-source's rendered markdown feeds the two fan-in steps under the
+with no `inputs` is a **source step** (what a sync can target). A
+source is ingest, render and — optionally — its own embedding step, and
+every source's rendered markdown feeds the two fan-in steps under the
 `unified_index` group:
 
 ```toml
-# One source = a group with a `type`, plus an ingest step and a
-# render step under it, neither with a `command`. The ingest step has
-# no inputs (that makes it a source step). `params` carries
-# per-provider config; credentials never live here (latchkey provides
-# them at runtime).
+# One source = a group with a `type`, plus its steps, none with a
+# `command`. The ingest step has no inputs (that makes it a source
+# step). `params` carries per-provider config; credentials never live
+# here (latchkey provides them at runtime).
 [[groups]]
 id = "slack"
 name = "Work Slack"
@@ -67,8 +68,19 @@ group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
-# The shared fan-in steps every source's rendered markdown feeds. Add a
-# source's render step id to both `inputs` lists.
+# Semantic search over this source: the slow step, and optional — a
+# source without it is keyword-searchable only. It reads the shared
+# qmd index below; `lock` keeps two sources from embedding at once,
+# which qmd refuses.
+[[steps]]
+group = "slack"
+function = "qmd_embed"
+inputs = ["unified_index/qmd_index"]
+lock = "qmd_embed"
+
+# The shared fan-in steps every source's rendered markdown feeds: the
+# grid, and the qmd keyword index. Add a source's render step id to
+# both `inputs` lists.
 [[groups]]
 id = "unified_index"
 

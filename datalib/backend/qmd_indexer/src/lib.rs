@@ -1,10 +1,18 @@
-//! Drive the `qmd` CLI to (re)build a BM25 + embedding index over the
-//! rendered conversation markdown tree at a given root.
+//! Drive the `qmd` CLI over the rendered markdown trees at a data root:
+//! one collection per group, all indexed by one `qmd update`
+//! ([`run_index`]) and each embedded on its own by
+//! [`embed::embed_group`].
+
+pub mod embed;
+pub mod store;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use datalib_obs::status_line;
+
+pub use embed::{embed_group, EmbedOptions, EmbedOutcome, EmbedProgress, NoEmbedProgress};
+pub use store::EmbedGauge;
 
 /// Re-export of the ONE canonical qmd pin (`datalib_runtime::qmd`) — a
 /// re-export rather than a literal so this crate *cannot* drift from the
@@ -56,6 +64,9 @@ pub fn discover_groups(root: &Path) -> Result<Vec<String>> {
 pub struct IndexOptions {
     pub root: PathBuf,
     pub embed: bool,
+    /// Which of `groups` to embed. `None` embeds them all; the fixture
+    /// names two, so its embed action covers a fraction of the corpus.
+    pub embed_groups: Option<Vec<String>>,
     pub qmd_version: String,
     /// One qmd collection per group, named after the group. Scoping a
     /// search to one source is then a `collections` argument qmd applies
@@ -78,6 +89,7 @@ impl IndexOptions {
         Self {
             root: root.into(),
             embed: true,
+            embed_groups: None,
             qmd_version: DEFAULT_QMD_VERSION.to_string(),
             groups: Vec::new(),
             retire_collections: Vec::new(),
@@ -134,12 +146,25 @@ pub struct IndexOutcome {
     pub status_output: Option<String>,
 }
 
-/// Run an incremental qmd index pass over every group's `render_markdown/`
-/// tree under `<root>`, one collection per group. Registering a
+/// Make sure the store directory and its `models` symlink exist, and
+/// return the store's path. Every writer goes through here first.
+pub fn prepare_store(root: &Path, models_dir: &Path) -> Result<PathBuf> {
+    let qmd_dir = datalib_runtime::qmd::qmd_state_dir(root);
+    std::fs::create_dir_all(&qmd_dir)
+        .with_context(|| format!("failed to create {}", qmd_dir.display()))?;
+    std::fs::create_dir_all(models_dir)
+        .with_context(|| format!("failed to create models dir {}", models_dir.display()))?;
+    ensure_models_symlink(&qmd_dir, models_dir)?;
+    Ok(datalib_runtime::qmd::qmd_index_path(root))
+}
+
+/// Register one collection per group and run `qmd update` over them all
+/// — it cannot be scoped to one collection, and does not need to be:
+/// the scan is fast, and only embedding is per group. Registering a
 /// collection is idempotent, so this reconciles rather than assuming a
 /// first run: a source added after the index was built gets its
 /// collection here.
-pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
+pub async fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     let root = opts
         .root
         .canonicalize()
@@ -151,14 +176,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     // every group's `render_markdown/`.
     let cache_home = datalib_runtime::qmd::qmd_cache_home(&root);
     let qmd_dir = datalib_runtime::qmd::qmd_state_dir(&root);
-    std::fs::create_dir_all(&qmd_dir)
-        .with_context(|| format!("failed to create {}", qmd_dir.display()))?;
-
-    std::fs::create_dir_all(&opts.models_dir)
-        .with_context(|| format!("failed to create models dir {}", opts.models_dir.display()))?;
-    ensure_models_symlink(&qmd_dir, &opts.models_dir)?;
-
-    let index_path = qmd_dir.join("index.sqlite");
+    let index_path = prepare_store(&root, &opts.models_dir)?;
     let first_run = !index_path.exists();
 
     status_line!("[qmd-indexer] root        = {}", root.display());
@@ -233,7 +251,37 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     }
 
     if opts.embed {
-        run_qmd(&cache_home, &opts.qmd_version, &["embed"])?;
+        let to_embed: Vec<&String> = match &opts.embed_groups {
+            Some(named) => opts.groups.iter().filter(|g| named.contains(g)).collect(),
+            None => opts.groups.iter().collect(),
+        };
+        status_line!(
+            "[qmd-indexer] embedding   = {}",
+            to_embed
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        for group in to_embed {
+            let eopts = EmbedOptions {
+                root: root.clone(),
+                group: group.clone(),
+                qmd_version: opts.qmd_version.clone(),
+                budget: None,
+                pull_if_missing: false,
+                models_dir: opts.models_dir.clone(),
+            };
+            let outcome =
+                tokio::task::spawn_blocking(move || embed_group(&eopts, &NoEmbedProgress))
+                    .await
+                    .context("embed task panicked")??;
+            status_line!(
+                "[qmd-indexer] {group}: {} of {} documents embedded",
+                outcome.gauge.embedded(),
+                outcome.gauge.active
+            );
+        }
     }
 
     if !index_path.exists() {
@@ -278,14 +326,30 @@ pub fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e).with_context(|| format!("stat {}", models_link.display())),
     }
-    std::os::unix::fs::symlink(models_dir, &models_link).with_context(|| {
-        format!(
-            "failed to symlink {} -> {}",
-            models_link.display(),
-            models_dir.display()
-        )
-    })?;
-    Ok(())
+    match std::os::unix::fs::symlink(models_dir, &models_link) {
+        Ok(()) => Ok(()),
+        // Two steps preparing the store at once — every source's
+        // `qmd_index` starts the moment its render lands — race here,
+        // and the loser finds the winner's link.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            match std::fs::symlink_metadata(&models_link) {
+                Ok(meta) if meta.file_type().is_symlink() => Ok(()),
+                _ => Err(e).with_context(|| {
+                    format!(
+                        "{} appeared while linking it and is not a symlink",
+                        models_link.display()
+                    )
+                }),
+            }
+        }
+        Err(e) => Err(e).with_context(|| {
+            format!(
+                "failed to symlink {} -> {}",
+                models_link.display(),
+                models_dir.display()
+            )
+        }),
+    }
 }
 
 fn capture_qmd_status(cache_home: &Path, qmd_version: &str) -> Result<String> {
@@ -348,6 +412,15 @@ fn ensure_collection(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Res
     bail!("qmd {:?} failed: {}: {}", args, out.status, combined.trim());
 }
 
+/// Unregister `name` from the store at `root`, tolerating one that is
+/// already gone. Destructive: qmd deletes the collection's `documents`
+/// rows and any `content` no other collection names — see the note in
+/// [`run_index`] on why this must follow the indexing pass.
+pub fn retire_one_collection(root: &Path, qmd_version: &str, name: &str) -> Result<()> {
+    let cache_home = datalib_runtime::qmd::qmd_cache_home(root);
+    retire_collection(&cache_home, qmd_version, name)
+}
+
 /// Unregister a collection, tolerating one that is already gone.
 /// `qmd collection remove` exits non-zero with "Collection not found"
 /// for a name it doesn't have, which for a re-run of a migration that
@@ -387,7 +460,7 @@ fn retire_collection(cache_home: &Path, qmd_version: &str, name: &str) -> Result
     );
 }
 
-fn run_qmd(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
+pub(crate) fn run_qmd(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
     // Resolution (bundled runtime vs npx, `$NPX_BIN` override) lives in
     // `datalib_runtime::qmd::qmd_command`. Bazel actions don't get
     // `$NPX_BIN` forwarded (would bust action cache keys) and instead

@@ -1268,8 +1268,9 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 /// are source-independent and belong in every pipeline. They start with
 /// no inputs, which is a valid graph that indexes nothing; adding a
 /// source appends its render step's id here (the UI's "Add a source"
-/// flow does that for you). `data_root` is omitted: it defaults to this
-/// file's own directory, keeping the root self-contained.
+/// flow does that for you), and brings its own `qmd_embed` step with
+/// it. `data_root` is omitted: it defaults to this file's own
+/// directory, keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
 # ── the unified index ──────────────────────────────────────────────────
@@ -1277,7 +1278,8 @@ fn scaffold_toml() -> String {
 # Every source's rendered markdown feeds these two: a step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id. A step with no `command` is one of
-# datalib's own.
+# datalib's own. Embedding is each source's own `qmd_embed` step,
+# written beside its ingest and render.
 
 [[groups]]
 id = \"unified_index\"

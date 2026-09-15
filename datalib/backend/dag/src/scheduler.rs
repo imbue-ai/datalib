@@ -5,7 +5,7 @@
 //! The scheduling rules — what a run selects, what makes a step stale, and
 //! why a version is reported rather than measured — are in the crate README.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,8 +47,12 @@ impl RetryPolicy {
             FailureKind::Transient => self.transient_attempts,
             FailureKind::RateLimited => self.rate_limited_attempts,
             // Auth: a human has to act. Data: retrying won't help.
-            // Cancelled: the user asked us to stop.
-            FailureKind::Auth | FailureKind::Data | FailureKind::Cancelled => 1,
+            // Cancelled: the user asked us to stop. Incomplete: the step
+            // stopped itself, and asked to be resumed next run, not now.
+            FailureKind::Auth
+            | FailureKind::Data
+            | FailureKind::Cancelled
+            | FailureKind::Incomplete => 1,
         }
     }
 }
@@ -152,6 +156,9 @@ impl StepStatus {
             StepStatus::SkippedUpToDate => RunState::SkippedUpToDate,
             StepStatus::NotSelected => RunState::NotSelected,
             StepStatus::Blocked { .. } => RunState::Blocked,
+            StepStatus::Failed {
+                kind: FailureKind::Incomplete,
+            } => RunState::Incomplete,
             StepStatus::Failed { .. } => RunState::Failed,
         }
     }
@@ -186,6 +193,13 @@ impl RunReport {
     }
     pub fn all_ok(&self) -> bool {
         self.steps.iter().all(|s| s.status.is_ok())
+    }
+
+    /// Whether any step failed. A step that stopped on its budget
+    /// (`Incomplete`), and one blocked behind it, are not failures —
+    /// the run did what it could and says so.
+    pub fn any_failed(&self) -> bool {
+        self.steps.iter().any(|s| s.status.state().is_failure())
     }
 }
 
@@ -309,6 +323,11 @@ impl Runner {
         let mut streams: Vec<bool> = graph.steps.iter().map(|s| s.streams_output).collect();
         let mut streaming_ready: VecDeque<usize> = VecDeque::new();
         let mut streaming_running = 0usize;
+        // `StepSpec::lock` names held by a running step, and the ready
+        // steps set aside because theirs was. A waiter holds no slot:
+        // it goes back to the front of `ready` when the holder lands.
+        let mut held_locks: HashSet<String> = HashSet::new();
+        let mut lock_waiters: Vec<usize> = Vec::new();
 
         loop {
             // Dispatch as many ready steps as parallelism allows.
@@ -322,6 +341,14 @@ impl Runner {
                 // second writer against one tree.
                 if in_flight[i] {
                     final_pass_owed[i] = true;
+                    continue;
+                }
+                if graph.steps[i]
+                    .lock
+                    .as_deref()
+                    .is_some_and(|l| held_locks.contains(l))
+                {
+                    lock_waiters.push(i);
                     continue;
                 }
                 match self.decide(
@@ -374,6 +401,9 @@ impl Runner {
                         running += 1;
                         in_flight[i] = true;
                         dispatched = true;
+                        if let Some(l) = &graph.steps[i].lock {
+                            held_locks.insert(l.clone());
+                        }
                         let consumed = snapshot_inputs(graph, &versions, i);
 
                         mark_running(&mut state, &graph.steps[i].id, &now_stamp());
@@ -399,6 +429,16 @@ impl Runner {
                 if in_flight[i] || status[i].is_some() {
                     continue;
                 }
+                // An early pass is not owed: with the lock held it is
+                // simply not started, and the final pass waits its turn
+                // in the ordinary queue.
+                if graph.steps[i]
+                    .lock
+                    .as_deref()
+                    .is_some_and(|l| held_locks.contains(l))
+                {
+                    continue;
+                }
                 match self.decide(
                     graph,
                     &state,
@@ -414,6 +454,9 @@ impl Runner {
                         in_flight[i] = true;
                         early[i] = true;
                         dispatched = true;
+                        if let Some(l) = &graph.steps[i].lock {
+                            held_locks.insert(l.clone());
+                        }
                         let consumed = snapshot_inputs(graph, &versions, i);
 
                         mark_running(&mut state, &graph.steps[i].id, &now_stamp());
@@ -458,12 +501,15 @@ impl Runner {
             // made ready could not be dispatched until some *other* step
             // finished -- which is exactly the situation streaming exists
             // to fix.
+            //
+            // `biased`, checkpoints first. A step's checkpoint is sent by
+            // the same task that later resolves the step's future, so by
+            // the time its completion is observable the checkpoint is
+            // already in the channel — and a random pick that took the
+            // completion first would mark the step finished, break out of
+            // the loop, and drop a seal the step did announce (#462).
             let completed = tokio::select! {
-                joined = set.join_next() => {
-                    Some(joined
-                        .expect("a live task implies a joinable one")
-                        .context("step task panicked")?)
-                }
+                biased;
                 Some(signal) = checkpoints.recv() => {
                     'checkpoint: {
                         let (step, version, rows) = match signal {
@@ -560,6 +606,11 @@ impl Runner {
                     }
                     None
                 }
+                joined = set.join_next() => {
+                    Some(joined
+                        .expect("a live task implies a joinable one")
+                        .context("step task panicked")?)
+                }
             };
             let Some((i, attempts, res, consumed)) = completed else {
                 continue;
@@ -573,6 +624,18 @@ impl Runner {
                 running -= 1;
             }
             attempts_taken[i] = attempts;
+            if let Some(l) = &graph.steps[i].lock {
+                held_locks.remove(l);
+                // Front of the queue: they were ready before whatever
+                // has been queued since.
+                let (mine, others): (Vec<usize>, Vec<usize>) = lock_waiters
+                    .drain(..)
+                    .partition(|&w| graph.steps[w].lock.as_deref() == Some(l.as_str()));
+                lock_waiters = others;
+                for w in mine.into_iter().rev() {
+                    ready.push_front(w);
+                }
+            }
 
             let spec = &graph.steps[i];
             let prior_outs = state
@@ -3660,6 +3723,133 @@ mod tests {
             }
         );
         assert_eq!(fx.run_count("unified_index/grid"), 0);
+    }
+
+    /// Two steps sharing a `lock` never overlap, and a step waiting for
+    /// the lock holds no parallelism slot: with parallelism 2, one
+    /// holder plus two waiters still leave room for an unrelated step.
+    #[tokio::test]
+    async fn steps_sharing_a_lock_run_one_at_a_time_without_holding_slots() {
+        let root = tempfile::tempdir().unwrap();
+        let in_section = Arc::new(AtomicU32::new(0));
+        let overlaps = Arc::new(AtomicU32::new(0));
+        let bystander_ran = Arc::new(AtomicU32::new(0));
+
+        let mut specs = Vec::new();
+        for name in ["a", "b", "c"] {
+            let (inside, overlap, bystander) =
+                (in_section.clone(), overlaps.clone(), bystander_ran.clone());
+            specs.push(
+                StepSpec::new(
+                    format!("{name}/embed"),
+                    StepRun::in_process(move |ctx: StepCtx| {
+                        let (inside, overlap, bystander) =
+                            (inside.clone(), overlap.clone(), bystander.clone());
+                        async move {
+                            if inside.fetch_add(1, Ordering::SeqCst) > 0 {
+                                overlap.fetch_add(1, Ordering::SeqCst);
+                            }
+                            // The first holder waits for the bystander,
+                            // which can only run if the waiters left a
+                            // slot free.
+                            while bystander.load(Ordering::SeqCst) == 0 {
+                                tokio::time::sleep(Duration::from_millis(2)).await;
+                            }
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                            inside.fetch_sub(1, Ordering::SeqCst);
+                            let dir = ctx.path_str(&ctx.step_id);
+                            std::fs::create_dir_all(&dir).unwrap();
+                            std::fs::write(dir.join("x"), "ok").unwrap();
+                            Ok(StepOutcome::default())
+                        }
+                    }),
+                )
+                .lock("qmd_embed"),
+            );
+        }
+        let ran = bystander_ran.clone();
+        specs.push(StepSpec::new(
+            "z/raw",
+            StepRun::in_process(move |ctx: StepCtx| {
+                let ran = ran.clone();
+                async move {
+                    ran.fetch_add(1, Ordering::SeqCst);
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("x"), "ok").unwrap();
+                    Ok(StepOutcome::default())
+                }
+            }),
+        ));
+        let g = Graph::build(specs).unwrap();
+        let mut r = runner(root.path());
+        r.parallelism = 2;
+        let rep = tokio::time::timeout(Duration::from_secs(10), r.run(&g))
+            .await
+            .expect("waiters holding slots would starve the bystander and deadlock here")
+            .unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert_eq!(
+            overlaps.load(Ordering::SeqCst),
+            0,
+            "two lock holders ran at once"
+        );
+    }
+
+    /// A step that stops on its budget is `incomplete`, not `failed`: no
+    /// retry this run, its dependents blocked, the run not a failed one,
+    /// and the step stale next run so it resumes.
+    #[tokio::test]
+    async fn an_incomplete_step_is_resumed_next_run_and_does_not_fail_the_run() {
+        let root = tempfile::tempdir().unwrap();
+        let runs = Arc::new(AtomicU32::new(0));
+        let rn = runs.clone();
+        let embed = StepSpec::new(
+            "a/embed",
+            StepRun::in_process(move |ctx: StepCtx| {
+                let rn = rn.clone();
+                async move {
+                    let n = rn.fetch_add(1, Ordering::SeqCst) + 1;
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("x"), format!("{n}")).unwrap();
+                    if n == 1 {
+                        return Err(StepError::new(
+                            FailureKind::Incomplete,
+                            anyhow::anyhow!("budget spent, 40 documents left"),
+                        ));
+                    }
+                    Ok(StepOutcome::default())
+                }
+            }),
+        );
+        let after = StepSpec::new(
+            "a/after",
+            StepRun::in_process(|ctx: StepCtx| async move {
+                let dir = ctx.path_str(&ctx.step_id);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("x"), "ok").unwrap();
+                Ok(StepOutcome::default())
+            }),
+        )
+        .input("a/embed");
+        let g = Graph::build(vec![embed, after]).unwrap();
+
+        let r1 = runner(root.path()).run(&g).await.unwrap();
+        assert_eq!(r1.step("a/embed").status.state(), RunState::Incomplete);
+        assert_eq!(r1.step("a/embed").attempts, 1, "no retry within the run");
+        assert_eq!(r1.step("a/after").status.state(), RunState::Blocked);
+        assert!(!r1.any_failed(), "{r1:#?}");
+        assert!(!r1.all_ok(), "{r1:#?}");
+        let recorded = DagState::load(root.path()).unwrap();
+        assert_eq!(
+            recorded.steps["a/embed"].last_run.as_ref().unwrap().status,
+            "incomplete"
+        );
+
+        let r2 = runner(root.path()).run(&g).await.unwrap();
+        assert!(r2.all_ok(), "{r2:#?}");
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "resumed on the next run");
     }
 
     #[tokio::test]

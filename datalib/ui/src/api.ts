@@ -481,7 +481,10 @@ export type DagRunState =
   | "not_selected"
   // Something upstream failed, so this was not invoked.
   | "blocked"
-  | "failed";
+  | "failed"
+  // Stopped on purpose with work left (its per-run budget ran out);
+  // the next run resumes it.
+  | "incomplete";
 
 export type DagStepRun = {
   // The run it happened in — what `/api/runs/{run}/log` takes. Empty
@@ -638,7 +641,7 @@ export function fetchPipelineStorage(
 }
 
 export type ManageRowKind = "group" | "step" | "applet";
-export type ManagePhase = "ingest" | "render" | "index" | "other";
+export type ManagePhase = "ingest" | "render" | "index" | "embed" | "other";
 
 /// One row's status, reduced to a vocabulary the Status column can
 /// draw. Mirrors `datalib_http::manage::StatusView`.

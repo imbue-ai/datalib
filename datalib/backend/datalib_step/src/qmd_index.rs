@@ -1,9 +1,10 @@
-//! The `qmd_index` function: the qmd search index over every
+//! The `qmd_index` function: the qmd keyword index over every
 //! `render_markdown` tree, written to `unified_index/qmd_index`.
 //!
 //! One qmd collection per group, so a search scoped to one source is a
 //! filter qmd applies inside retrieval rather than one the applet applies
-//! to a global top-N.
+//! to a global top-N. Embedding is not done here: it is each source's own
+//! `qmd_embed` step, which reads this one.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -110,13 +111,16 @@ pub async fn run(
     let mut opts = datalib_qmd_indexer::IndexOptions::new(data_root);
     opts.groups = groups;
     opts.retire_collections = retire;
+    // Neither the models nor the vectors are this step's: each source's
+    // `qmd_embed` pulls what is missing and embeds its own collection.
+    opts.pull = false;
+    opts.embed = false;
     if let Some(d) = models_dir {
         opts.models_dir = d;
     }
-    // run_index shells out to qmd; blocking work.
-    let outcome = tokio::task::spawn_blocking(move || datalib_qmd_indexer::run_index(&opts))
+    let outcome = datalib_qmd_indexer::run_index(&opts)
         .await
-        .context("qmd task panicked")??;
+        .context("qmd index")?;
     tracing::info!(index = %outcome.index_path.display(), "qmd: done");
     // The index rebuilds from the render_markdown trees, so cache-aware
     // backups (`restic --exclude-caches` etc.) may skip it. Tag the
@@ -124,12 +128,22 @@ pub async fn run(
     // does — one tag covers both indexes however they are ordered.
     datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(data_root));
 
-    // qmd's sqlite gets touched on every pass, so any version we could
-    // derive would move even when nothing was indexed. Report nothing:
-    // the step is a leaf (nothing consumes unified_index/qmd_index
-    // downstream), so the runner's fallback hash is never read by anyone
-    // and the imprecision costs nothing.
-    Ok(vec![])
+    // A version, and a content-derived one: every `qmd_embed` step reads
+    // this tree, and the runner would otherwise hash it — the whole
+    // `index.sqlite`, and through the `models` symlink two gigabytes of
+    // GGUF. The digest covers every document's collection, path and
+    // hash plus the qmd pin, so an embed step goes stale exactly when
+    // something changed that could leave it work, including a qmd bump.
+    let pool = datalib_qmd_indexer::store::open_ro(&outcome.index_path).await?;
+    let version =
+        datalib_qmd_indexer::store::index_version(&pool, datalib_qmd_indexer::DEFAULT_QMD_VERSION)
+            .await;
+    pool.close().await;
+    Ok(vec![OutputClaim {
+        path: out_rel(),
+        version: version.context("qmd index version")?,
+        rows: None,
+    }])
 }
 
 #[cfg(test)]

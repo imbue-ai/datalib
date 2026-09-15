@@ -40,6 +40,7 @@ import {
   seedFieldValues,
   slugify,
   stepIdFor,
+  QMD_INDEX_STEP,
   suggestId,
   type ConfiguredGroup,
   type FieldValues,
@@ -72,6 +73,11 @@ const props = defineProps<{
   /// Group ids already in the config, plus the id of every step outside
   /// a group, so a new source can't land on a tree that exists.
   takenIds: Set<string>;
+  /// Whether the config has the shared qmd index step an embedding step
+  /// reads. Without it there is nothing for one to read, so the form
+  /// offers none — an input naming a step that does not exist is a
+  /// config the loader refuses outright.
+  hasQmdIndex: boolean;
   /// Present → edit that source instead of creating one. `steps` holds
   /// whichever of its two steps the config has; one it lacks is written
   /// on save, and the form says so.
@@ -148,6 +154,16 @@ const renderWanted = ref(props.editing ? !!props.editing.steps.render : true);
 /// source asked for it.
 const renders = computed(() => providerRenders.value && renderWanted.value);
 
+/// Whether this source wants semantic search: its `qmd_embed` step, the
+/// slow one. On by default for a new source; editing seeds it from
+/// what the config has, so a source someone left keyword-only stays
+/// that way until they say otherwise.
+const embedWanted = ref(props.editing ? !!props.editing.steps.embed : true);
+
+/// Does this source write an embedding step — it renders, asked, and
+/// there is a shared index for the step to read.
+const embeds = computed(() => renders.value && embedWanted.value && props.hasQmdIndex);
+
 /// The fields the form shows for one phase: the descriptor's, less any
 /// whose gate is shut.
 function activeFields(phase: "download" | "render"): Field[] {
@@ -189,8 +205,17 @@ const missingSteps = computed<string[]>(() => {
   const out: string[] = [];
   if (!props.editing.steps.ingest) out.push(stepIdFor(id.value, "download"));
   if (renders.value && !props.editing.steps.render) out.push(stepIdFor(id.value, "render"));
+  if (embeds.value && !props.editing.steps.embed) out.push(stepIdFor(id.value, "embed"));
   return out;
 });
+
+/// An embedding step this source has that saving will remove: semantic
+/// search (or rendering) was switched off below.
+const droppedEmbed = computed<string | null>(() =>
+  props.editing && !embeds.value && props.editing.steps.embed
+    ? props.editing.steps.embed.id
+    : null,
+);
 
 /// A render step this source has that its provider does not write — a
 /// hand-written one under a download-only type. Saving removes it, and
@@ -349,6 +374,7 @@ const source = computed(() =>
         values: values.value,
         withGroup: mode.value === "create",
         renders: renders.value,
+        embeds: embeds.value,
       })
     : null,
 );
@@ -975,7 +1001,11 @@ function submit() {
             <b class="wiz-permanent">Permanent — this is your last chance to change it.</b>
             Suggested from the name. Creates
             <code>{{ stepIdFor(groupId || "…", "download") }}</code>
-            <template v-if="renders">
+            <template v-if="renders && embeds">
+              , <code>{{ stepIdFor(groupId || "…", "render") }}</code> and
+              <code>{{ stepIdFor(groupId || "…", "embed") }}</code>
+            </template>
+            <template v-else-if="renders">
               and <code>{{ stepIdFor(groupId || "…", "render") }}</code>
             </template>
             under the data root.
@@ -1010,6 +1040,10 @@ function submit() {
           </template>
           Saving removes it, and takes it out of the index steps’ inputs.
         </p>
+        <p v-if="droppedEmbed" class="wiz-cred">
+          Saving removes <code>{{ droppedEmbed }}</code>. The vectors it computed stay in the
+          search index until the next sync notices.
+        </p>
 
         <p
           v-if="formFields.length === 0 && renderFields.length === 0 && isEdit"
@@ -1034,6 +1068,29 @@ function submit() {
                 >
                   It has no settings of its own.</template
                 >
+              </small>
+            </label>
+            <label v-if="renders" class="wiz-field wiz-inline">
+              <span class="wiz-label">Semantic search</span>
+              <input
+                v-model="embedWanted"
+                type="checkbox"
+                class="wiz-bool"
+                :disabled="!hasQmdIndex"
+              />
+              <small class="wiz-help">
+                <template v-if="hasQmdIndex">
+                  Keyword search covers every rendered source through the shared index. Semantic
+                  search needs a further step,
+                  <code>{{ stepIdFor(groupId || "…", "embed") }}</code>, which computes a vector for
+                  every document — slow the first time, one source at a time, and stoppable and
+                  resumable from this screen. Turn it off for a source that is large and rarely
+                  searched by meaning.
+                </template>
+                <template v-else>
+                  Not available: this config has no <code>{{ QMD_INDEX_STEP }}</code> step for an
+                  embedding step to read.
+                </template>
               </small>
             </label>
           </section>

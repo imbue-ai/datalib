@@ -316,6 +316,7 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   // is retried, and a retry that reaches the confirm needs answering.
   page.on("dialog", (d) => {
     expect(d.message()).toContain("Doomed (render markdown)");
+    expect(d.message()).toContain("Doomed (embeddings)");
     void d.accept();
   });
   await pickRowMenu(
@@ -328,6 +329,7 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   // The group went with its last step, so its row is gone too.
   await expect(page.locator('.ag-row[row-id="doomed/ingest"]')).toHaveCount(0);
   await expect(page.locator('.ag-row[row-id="doomed/render_markdown"]')).toHaveCount(0);
+  await expect(page.locator('.ag-row[row-id="doomed/qmd_embed"]')).toHaveCount(0);
   await expect(groupRow(page, "doomed")).toHaveCount(0);
   // Including the fan-in references, or the config would not load.
   await expect(editor).not.toHaveValue(/doomed/);
@@ -341,10 +343,11 @@ test("deleting the group takes every step under it", async ({ page }) => {
   await expect(groupRow(page, "whole-group")).toBeVisible();
   await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "render_markdown"/);
 
-  // The confirm says what goes: the group and the two steps under it.
+  // The confirm says what goes: the group and the three steps under it
+  // (ingest, render and the embedding step the form adds by default).
   page.on("dialog", (d) => {
     expect(d.message()).toContain("Whole Group");
-    expect(d.message()).toContain("2 steps");
+    expect(d.message()).toContain("3 steps");
     void d.accept();
   });
   await pickRowMenu(
