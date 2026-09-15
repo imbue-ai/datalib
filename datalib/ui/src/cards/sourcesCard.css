@@ -129,6 +129,9 @@
 /* `position: relative`, because `.m2-ag` is absolutely placed — see the
    WebKit note above it. */
 .m2-history-grid { position: relative; flex: 1 1 auto; min-height: 0; margin: 0 16px 16px; }
+/* Fill the positioned .m2-history-grid absolutely rather than with
+   `height: 100%`, which a flex-sized parent resolves as `auto`. */
+.m2-ag { position: absolute; inset: 0; }
 
 /* Cell renderers build plain DOM, so their classes can't be scoped. */
 .m2-history-hash {

@@ -81,6 +81,12 @@ export type CardCtx = {
 
 export type CardRender = (root: ShadowRoot, ctx: CardCtx) => Teardown;
 
+// Bus topic: config.toml was just written by a card on this page (the
+// wizard, a rename, a delete). A card showing the file reloads on it
+// rather than waiting for the data root's own change frame, which
+// arrives a beat later. Payload null.
+export const TOPIC_CONFIG_WRITTEN = "config.written";
+
 // Bus topic: the destination of the edge currently under the cursor.
 // Published by the document view when the pointer enters an
 // edge-source span (or a doc-level outgoing-edge link); published

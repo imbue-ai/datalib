@@ -115,7 +115,9 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // root's config declares no index steps (its grid db is pre-baked),
   // so there is nothing here for `wireIntoFanIns` to add it to — that
   // wiring is covered in source_steps.test.ts against a config that has
-  // fan-ins.
+  // fan-ins. The editor is its own card and reloads on the write; wait
+  // for the entry before reading.
+  await expect(editor).toHaveValue(/group = "personal-claude"/);
   const text = await editor.inputValue();
   expect(text.match(/group = "personal-claude"\nfunction = "render_markdown"/g)).toHaveLength(1);
 
@@ -159,6 +161,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   // the index fans in from every source's render step, so removing one
   // means removing it from two places. That is the edit a person doing
   // this by hand actually has to make.
+  await expect(editor).toHaveValue(/group = "fetch-only"/);
   const text = await editor.inputValue();
   const without = text
     .replace(
@@ -217,6 +220,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   await expect(page.locator('.ag-row[row-id="no-render/render_markdown"]')).toHaveCount(0);
   // The fan-ins must lose it too: an input naming a step that no longer
   // exists is a config the loader refuses outright.
+  await expect(editor).not.toHaveValue(/no-render\/render_markdown/);
   const after = await editor.inputValue();
   expect(after).not.toContain("no-render/render_markdown");
   expect(after).toContain('group = "no-render"');
@@ -252,6 +256,7 @@ test("a provider with render options writes them on the render step, from the on
   await expect(row(page, "signal-work/render_markdown")).toBeVisible();
   await expect(stepMark(page, "signal-work/render_markdown")).toHaveAttribute("aria-label", "Render");
 
+  await expect(editor).toHaveValue(/group = "signal-work"/);
   const text = await editor.inputValue();
   expect(text).toContain('group = "signal-work"\nfunction = "render_markdown"');
   expect(text).toContain('inputs = ["signal-work/ingest"]');
@@ -279,6 +284,7 @@ test("a hand-written render step under a download-only type is called out, then 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Photos.")).toBeVisible();
 
+  await expect(editor).toHaveValue(/group = "photos"/);
   const text = await editor.inputValue();
   expect(text).toContain('group = "photos"\nfunction = "ingest"');
   expect(text).not.toContain('group = "photos"\nfunction = "render_markdown"');

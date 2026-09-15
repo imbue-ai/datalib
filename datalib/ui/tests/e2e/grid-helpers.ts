@@ -318,9 +318,26 @@ export async function recordStatuses(page: Page, ids: readonly string[]) {
     };
     const log: Record<string, string[]> = {};
     w.__statusLog = log;
+    // The Sources grid lives in a card's shadow root, which neither
+    // `document.querySelector` nor an observer on `document.body` can
+    // see into: query every open shadow root, and observe them too.
+    const roots = (): (Document | ShadowRoot)[] => {
+      const out: (Document | ShadowRoot)[] = [document];
+      for (const el of document.querySelectorAll("*")) {
+        if (el.shadowRoot) out.push(el.shadowRoot);
+      }
+      return out;
+    };
+    const deepQuery = (sel: string): Element | null => {
+      for (const r of roots()) {
+        const el = r.querySelector(sel);
+        if (el) return el;
+      }
+      return null;
+    };
     const sample = () => {
       for (const id of ids) {
-        const el = document.querySelector(
+        const el = deepQuery(
           `.ag-row[row-id="${CSS.escape(id)}"] [col-id="status"] [role="img"]`,
         );
         const s = el?.getAttribute("aria-label");
@@ -345,12 +362,15 @@ export async function recordStatuses(page: Page, ids: readonly string[]) {
     sample();
     // Exposed so `statusLog` can take a reading of its own — see there.
     w.__sampleStatuses = sample;
-    new MutationObserver(sample).observe(document.body, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ["aria-label"],
-    });
+    const observer = new MutationObserver(sample);
+    for (const r of roots()) {
+      observer.observe(r === document ? document.body : r, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["aria-label"],
+      });
+    }
   }, ids as string[]);
 }
 

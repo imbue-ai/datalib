@@ -163,10 +163,21 @@ type CardCtx = {
   cardId: string;        // host-assigned, stable for the card's lifetime
   initialState: string;  // persisted state from the host ("" when absent)
   setTitle(title: string | null): void;  // chrome-bar title (see above)
+  setHelp(html: string | null): void;    // the chrome's "?" (see below)
   bus: Bus;              // ambient cross-card events
   host: HostCommands;    // structural + persistence commands
 };
 ```
+
+### Help
+
+Every card should offer help: what it shows and how to work it, as
+HTML, through `ctx.setHelp` — usually right after `setTitle`. The chrome
+grows a "?" that opens it in a popup over the page (`CardControls.vue`;
+the text is kept per card id in `cards/help.ts`, so all three layouts
+share one mechanism). A card with no help is a card that assumes its
+reader already knows it. The host clears the offer when the card is
+torn down, as it does the title.
 
 ### HostCommands
 
@@ -285,6 +296,17 @@ programs against:
 - `tableView({ url })` — the typed table viewer over any endpoint that
   answers `{columns, rows}` (plus `tree: true` when each row carries a
   `path`). See "Typed tables" below.
+- `sourcesView()` — the Manage screen as a card: the tree of what
+  `config.toml` declares over `GET /api/manage/rows`, drawn by
+  `TableGrid`, with the row actions and the panels they open — the
+  wizard, a step's log, a group's commit history — teleported to
+  `<body>`. Browse opens a `gridView(...)` beside it through
+  `host.openCards`. The `/sources2` route is this card at 1.6× width
+  with `configView()` beside it (`MANAGE_STACK` in `router/index.ts`).
+- `configView()` — `config.toml` itself, edited directly, saved through
+  the backend's loader. Reloads on the root's `config_changed` frame
+  and, a beat sooner, on the `config.written` bus topic a card publishes
+  after writing the file.
 
 ## Typed tables
 
@@ -312,13 +334,13 @@ its label already looked up, because only the producer can, and the
 viewer decides what the icon token looks like. An action is an *id*,
 never a URL — a URL arriving as data would be a capability.
 
-`GET /api/manage/rows` is the first producer; `TableGrid` mounts
-inside `Manager2View` and inside `tableView`. Its styles live in
+`GET /api/manage/rows` is the first producer; `TableGrid` is what
+`sourcesView` and `tableView` draw with. Its styles live in
 `cards/tableGrid.css` rather than the component's `<style>`: a
 `.ce.vue`'s styles attach to the component for the card adapter to
-drop into a shadow root, so a page importing the viewer directly has
-to import the file into the head, and a card passes it as a style
-source.
+drop into a shadow root, so a card passes the file as a style source,
+and anything mounting the viewer on a page would import it into the
+head.
 
 Adding a view = adding a factory to `ViewLibs` in
 `datalib/ui/src/cards/libs/index.ts` (and its name to the

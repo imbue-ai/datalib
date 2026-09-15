@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
-import type { CardCtx } from "./types";
+import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 import {
   ModuleRegistry,
   AllCommunityModule,
@@ -1049,6 +1049,7 @@ async function writeConfig(text: string, what: string) {
     }
     configText.value = text;
     reparse();
+    props.ctx.bus.publish(TOPIC_CONFIG_WRITTEN, null);
     // A warning saves — nothing is dropped — but it is still advice
     // the file would otherwise only give on the command line.
     banner.value = { ok: true, text: res.error ? `${what} Warning: ${res.error}` : what };

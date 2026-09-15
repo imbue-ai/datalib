@@ -137,7 +137,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 3. landing in Manager2 ───────────────────────────────────────
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe("/sources2");
+    expect(decodeURIComponent(new URL(page.url()).pathname)).toContain("sourcesView()");
     // The scaffold's one group is the table's whole content, and its
     // three entries are under it.
     await expect(groupRow(page, "unified_index")).toContainText("Unified Index");

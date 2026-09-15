@@ -10,7 +10,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { fetchConfig, fetchConfigScaffold, saveConfig } from "@/api";
 import { subscribeLive } from "@/live";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
-import type { CardCtx } from "./types";
+import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 
 const props = defineProps<{ ctx: CardCtx }>();
 
@@ -87,6 +87,7 @@ async function discard() {
 }
 
 let unsubscribe: (() => void) | null = null;
+let unsubscribeBus: (() => void) | null = null;
 onMounted(() => {
   void load();
   unsubscribe = subscribeLive({
@@ -95,8 +96,12 @@ onMounted(() => {
     },
     resync: () => void load(),
   });
+  unsubscribeBus = props.ctx.bus.subscribe(TOPIC_CONFIG_WRITTEN, () => void load());
 });
-onBeforeUnmount(() => unsubscribe?.());
+onBeforeUnmount(() => {
+  unsubscribe?.();
+  unsubscribeBus?.();
+});
 </script>
 
 <template>

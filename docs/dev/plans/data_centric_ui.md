@@ -1,6 +1,7 @@
 # Design: a data-centric UI
 
-**Status: proposal; §1 built (2026-09-15), the rest not.** Written
+**Status: §1, §2, §4 and §6's first half built (2026-09-15); §3's
+identities on the wire; §5 and `GridCard` not.** Written
 2026-09-09 against `a4752fb5`; revised 2026-09-15 against `9a45cff4`.
 Per [`AGENTS.md`](../../../AGENTS.md), don't cite this file as a
 description of the tree. Where it says "today", that was checked
@@ -255,23 +256,26 @@ project from declaring column types.
 
 **In:** the server-side join; the type vocabulary and its two
 implementations; per-table change events; the typed viewer; the
-sources tree ported onto it as a card.
+sources tree ported onto it as a card; the config editor as a card;
+the whole-root storage bar as app chrome; a help affordance in the
+card contract.
 
 **Out:**
 
-- **The panels stay panels.** `Manager2View` is not one grid: it is the
-  sources tree plus a commit-history grid, a run-log panel, and the
-  wizard. Only the tree is the card. The other three are opened by a
-  row action (§4), as the wizard already is; the history grid may well
-  become a second `tableView` later, but not as part of this. Counting
-  them against the checkpoint would be counting things that were never
-  tabular.
-- **The tabs stay.** Manage remains reachable at its own route. The
-  card surface gains the sources tree as one of the things it can
-  show; it does not swallow the app.
+- **The panels stay panels.** The sources card is not one grid: it is
+  the tree plus a commit-history grid, a run-log panel, and the wizard.
+  Only the tree is drawn by the viewer. The other three are opened by a
+  row action (§4) and teleported out of the card; the history grid may
+  well become a second typed table later, but not as part of this.
+  Counting them against the checkpoint would be counting things that
+  were never tabular.
+- **The tabs stay.** `/sources2` still answers; it is now the card
+  stack `[sourcesView(), configView()]`, and the "Manager2" tab links
+  there. The card surface did not swallow the app; the Manage page
+  dissolved into it.
 - **Editing stays as it is** — the wizard modal, the rename-in-place on
-  a group row, and the raw `config.toml` textarea. How editing *should*
-  feel is a real question and a separate one.
+  a group row, and the raw `config.toml` textarea, now its own card.
+  How editing *should* feel is a real question and a separate one.
 - **`SourcesView` is not deleted here.** It is still routed at
   `/sources` and is the escape hatch while this is proven out, the
   same way Manager2 was built alongside it.
@@ -295,17 +299,29 @@ ones are the speculative ones.
    catalog's naming (§3) and the actions' ids (§4) are not on the wire
    yet — the row carries the reasons, the browser still maps them to
    buttons.
-4. **The vocabulary and the viewer** (§2, §6). `tableView` plus the
-   type crate, with the sources tree's columns as the first
-   implementation. Manager2 keeps working from its own route while the
-   card is built beside it.
-5. **The sources tree as a card.** Delete the tree half of the Vue
-   view once the card matches it; the history grid, log panel and
-   wizard become row-action-opened panels.
+4. **The vocabulary and the viewer** (§2, §6). Done: `datalib_columns`,
+   `cards/TableGrid.ce.vue`, `tableView({ url })`.
+5. **The sources tree as a card.** Done: `sourcesView()` and
+   `configView()`; `Manager2View.vue` is gone; the history grid, log
+   panel and wizard are row-action-opened panels; the whole-root
+   storage bar is app chrome (`RootStorageBar.vue`); `ctx.setHelp` is
+   in the card contract and both cards use it.
 6. **`GridCard` onto the viewer.** The duplication goes.
 
-The honest checkpoint is after (5). If the sources tree is a card and
-the vocabulary did not need a pile of one-off escape hatches to get it
-there, the idea holds and (6) is mopping up. If it did, stop and read
-what the escape hatches were — they are the design saying what it got
-wrong. Step (3) pays for itself whatever the checkpoint says.
+**The checkpoint, read at (5).** The sources tree became a card with
+these escape hatches, each named honestly:
+
+- `TableGrid` takes `extraColumns` (AG Grid column definitions the
+  card adds beside the declared ones) and a `contextMenu`. Neither is
+  used by the sources card — the Activity column that was expected to
+  need the first became a `chips` type instead — but `GridCard` will
+  want both.
+- The sources card still decorates each row client-side with what
+  needs the wizard's descriptors: `editBlocked`, the Browse card
+  source, and the Download/Import label read off `params`. That is the
+  seam §3 describes, not a hole in the vocabulary.
+- The Type column shows icon *and* label where the old grid showed the
+  icon alone; a generic `identity` cell has no way to know a column is
+  narrow on purpose, and the label was judged worth its width.
+
+That is few enough that the idea holds: (6) is mopping up.
