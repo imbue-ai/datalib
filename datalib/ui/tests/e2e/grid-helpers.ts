@@ -301,7 +301,7 @@ export async function stampOf(page: Page, id: string): Promise<string | null> {
 }
 
 /// States a run will not move a step out of.
-export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted)$/;
+export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted|Stopped)$/;
 
 
 /// How long a row may take to settle: a real `datalib-dag` run over the

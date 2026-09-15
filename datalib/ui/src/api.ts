@@ -490,7 +490,9 @@ export type DagRunState =
   | "not_selected"
   // Something upstream failed, so this was not invoked.
   | "blocked"
-  | "failed";
+  | "failed"
+  // Told to stop, and did: not done, so it runs again next time.
+  | "stopped";
 
 export type DagStepRun = {
   // The run it happened in — what `/api/runs/{run}/log` takes. Empty
@@ -581,6 +583,12 @@ export type SyncJob = {
   finished_at_utc: string | null;
   tz_offset?: string | null;
   parent_job_id?: string | null;
+  // Whether the job still holds the runner — queued, running, or told
+  // to stop and not yet stopped. The server's answer
+  // (`SyncJobRow::is_active`); nothing here derives it from `state`.
+  active: boolean;
+  // Told to stop, and still winding down.
+  stopping: boolean;
   pid?: number | null;
 };
 
@@ -868,6 +876,9 @@ export type JobProgressEvent = {
   kind: string;
   source_ids: string | null;
   state: SyncJobState;
+  // As on `SyncJob`: whether the job still holds the runner after this
+  // event.
+  active: boolean;
   progress_msg: string | null;
 };
 
@@ -981,6 +992,34 @@ export function fetchRunLog(
     `/api/runs/${encodeURIComponent(run)}/log${q ? `?${q}` : ""}`,
     signal,
   );
+}
+
+// Log lines across every run the store holds, or one run's with `run`;
+// `step` narrows to a step. `q` is the search bar, in the grammar every
+// grid shares (`level:warn -target:sqlx "history"`); a key a log line
+// does not have is a 400 whose text says so. Tails with `afterSeq` the
+// way `fetchRunLog` does: `seq` is monotone across runs too.
+export function fetchLog(
+  opts: { run?: string; step?: string; q?: string; afterSeq?: number; limit?: number },
+  signal?: AbortSignal,
+): Promise<RunLogLine[]> {
+  const params = new URLSearchParams();
+  if (opts.run) params.set("run", opts.run);
+  if (opts.step) params.set("step", opts.step);
+  if (opts.q) params.set("q", opts.q);
+  if (opts.afterSeq != null) params.set("after_seq", String(opts.afterSeq));
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  return fetchLogLines(`/api/log?${params.toString()}`, signal);
+}
+
+// A query the log cannot read comes back 400 with a sentence for the
+// search bar; that sentence is the whole error, shown where the lines
+// would be rather than toasted with the URL in front of it.
+async function fetchLogLines(url: string, signal?: AbortSignal): Promise<RunLogLine[]> {
+  const r = await fetch(url, { signal });
+  if (r.status === 400) throw new Error((await r.text()).trim());
+  if (!r.ok) throw new Error(`${url} → ${r.status}`);
+  return (await r.json()) as RunLogLine[];
 }
 
 /// One job by id — a run the commit history names, which may be older

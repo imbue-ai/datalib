@@ -41,6 +41,10 @@ pub enum SourceType {
     /// IQAir's AirVisual monitors — the product, not the vendor, as
     /// `claude` is to Anthropic.
     Airvisual,
+    /// Apple's Messages app, read from its own `chat.db`. `messages` alone
+    /// would name the thing a dozen sources carry, so the vendor stays,
+    /// as it does for `apple_photos`.
+    AppleMessages,
     /// An Apple Photos library — the product's name is just "Photos",
     /// which next to `media` would name nothing; the vendor earns its
     /// place here the way it does in `google_takeout`.

@@ -105,7 +105,7 @@ pub fn status_rank(key: &str) -> Option<i32> {
         "never_run" => -1,
         "queued" => 0,
         "running" => 1,
-        "succeeded" | "skipped_up_to_date" | "failed" | "blocked" | "interrupted" => 2,
+        "succeeded" | "skipped_up_to_date" | "failed" | "blocked" | "interrupted" | "stopped" => 2,
         _ => return None,
     })
 }
@@ -130,6 +130,7 @@ pub const STATUS_LABELS: &[(&str, &str)] = &[
     ("failed", "Failed"),
     ("blocked", "Blocked"),
     ("interrupted", "Interrupted"),
+    ("stopped", "Stopped"),
     ("never_run", "Never run"),
 ];
 
@@ -316,24 +317,6 @@ pub fn job_seeds(job: &SyncJobRow) -> Vec<String> {
         .collect()
 }
 
-/// Is this job still holding the runner: queued, running, or told to
-/// stop and not yet stopped? A cancel flips the row to `canceled` the
-/// moment it is asked for — that is how the worker learns to send
-/// SIGTERM — while the steps behind it go on checkpointing for up to
-/// the worker's grace period. The run is over when the worker stamps
-/// `finished_at_utc`, and not before.
-pub fn job_active(j: &SyncJobRow) -> bool {
-    if j.state == "pending" || j.state == "running" {
-        return true;
-    }
-    j.state == "canceled" && j.started_at_utc.is_some() && j.finished_at_utc.is_none()
-}
-
-/// Told to stop, and still winding down.
-pub fn job_stopping(j: &SyncJobRow) -> bool {
-    j.state == "canceled" && job_active(j)
-}
-
 /// step id → the queued-or-running job that has claimed it.
 pub fn claimed_by<'a>(
     steps: &[StepEdges],
@@ -342,7 +325,7 @@ pub fn claimed_by<'a>(
     let mut m: HashMap<String, &'a SyncJobRow> = HashMap::new();
     let dependents = dependents_of(steps);
     for job in jobs {
-        if !job_active(job) {
+        if !job.is_active() {
             continue;
         }
         let seeds = job_seeds(job);
@@ -453,7 +436,7 @@ pub fn step_status(args: StatusArgs<'_>) -> StatusView {
         };
         // Upstream steps first, because that is the specific answer;
         // the job itself is the fallback.
-        let detail = if job_stopping(claim) {
+        let detail = if claim.is_stopping() {
             let mut sentence = sync.clone();
             if let Some(first) = sentence.get_mut(..1) {
                 first.make_ascii_uppercase();
@@ -721,8 +704,8 @@ mod tests {
     fn a_job_told_to_stop_holds_its_claim_until_the_worker_stamps_it_finished() {
         let mut stopping = job("canceled", true);
         stopping.id = "job-a".into();
-        assert!(job_active(&stopping));
-        assert!(job_stopping(&stopping));
+        assert!(stopping.is_active());
+        assert!(stopping.is_stopping());
         let jobs = [stopping.clone()];
         assert_eq!(
             claimed_by(&steps(), &jobs)
@@ -742,12 +725,12 @@ mod tests {
         // Stamped: over, and the claim with it.
         let mut stopped = stopping;
         stopped.finished_at_utc = Some(RUN_END.into());
-        assert!(!job_active(&stopped));
+        assert!(!stopped.is_active());
         assert!(claimed_by(&steps(), &[stopped]).is_empty());
 
         // A pending job that was canceled never started anything to
         // wind down: nothing to hold.
-        assert!(!job_active(&job("canceled", false)));
+        assert!(!job("canceled", false).is_active());
     }
 
     #[test]

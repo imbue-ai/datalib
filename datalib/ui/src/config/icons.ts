@@ -1,5 +1,6 @@
 // Catalog icon name → bundled asset URL.
 
+import appleMessagesIconUrl from "@/assets/apple_messages.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import claudeIconUrl from "@/assets/claude.svg";
 import emailIconUrl from "@/assets/email.svg";
@@ -21,6 +22,7 @@ import whatsappIconUrl from "@/assets/whatsapp.svg";
 import yolinkIconUrl from "@/assets/yolink.png";
 
 const ICONS: Record<string, string> = {
+  apple_messages: appleMessagesIconUrl,
   chatgpt: chatgptIconUrl,
   claude: claudeIconUrl,
   email: emailIconUrl,

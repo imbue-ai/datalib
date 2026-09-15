@@ -40,6 +40,12 @@ pub enum RunState {
     /// An upstream step failed (or was itself blocked); not invoked.
     Blocked,
     Failed,
+    /// Told to stop from outside, and stopped: it checkpointed what it
+    /// had and exited. Not a failure — nothing went wrong — and not a
+    /// success: the work is not done, so it runs again next time, and
+    /// its dependents wait for that run rather than reading a partial
+    /// result now.
+    Stopped,
 }
 
 impl RunState {

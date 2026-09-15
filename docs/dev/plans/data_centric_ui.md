@@ -248,6 +248,15 @@ port onto it:
 The duplicated `formatBytes` and provider-icon code are deleted rather
 than shared, because after the port there is one grid.
 
+The search bar is already shared, and it is the shape the viewer's
+filtering should keep: one grammar (`datalib_query` — `key:value`, `-`
+to negate, quotes, free text), a `q=` parameter on whatever serves the
+rows, and the server owning what each key means. The unified grid
+(`/applet/unified_index/search`) and the run log (`/api/log`) both read
+it today, and the right-click "Keep only" / "Exclude all" entries are
+one helper (`ui/src/grid/query.ts`) appending a token to it. A viewer
+that serves its own rows joins by accepting `q=`.
+
 AG Grid stays. It is carrying sort, filter, column state, tree data,
 virtualization and resize, and replacing all of that is a different
 project from declaring column types.

@@ -43,6 +43,12 @@ const CATALOG: &[Entry] = &[
     e("airvisual", None, "AirVisual", None),
     e("lightroom", None, "Lightroom", None),
     e("apple_photos", None, "Apple Photos", None),
+    e(
+        "apple_messages",
+        None,
+        "Apple Messages",
+        Some("apple_messages"),
+    ),
     e("perseus", None, "Perseus library", None),
 ];
 

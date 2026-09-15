@@ -28,7 +28,26 @@ pub struct ProgressEvent {
     /// [`SyncJobRow::source_ids`].
     pub source_ids: Option<String>,
     pub state: JobState,
+    /// Whether the job still holds the runner after this event — the
+    /// same answer [`SyncJobRow::is_active`] gives for the row, so a
+    /// reader never has to work it out from `state`. Every event a
+    /// worker sends is definitive: `running` while it runs, and its
+    /// terminal state only once the runner has exited.
+    pub active: bool,
     pub progress_msg: Option<String>,
+}
+
+impl ProgressEvent {
+    pub fn new(job: &SyncJobRow, state: JobState, msg: Option<String>) -> Self {
+        ProgressEvent {
+            id: job.id.clone(),
+            kind: job.kind.clone(),
+            source_ids: job.source_ids.clone(),
+            state,
+            active: matches!(state, JobState::Pending | JobState::Running),
+            progress_msg: msg,
+        }
+    }
 }
 
 /// Broadcast sender shared by the worker and the HTTP enqueue/cancel
@@ -168,6 +187,7 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
                         kind: String::new(),
                         source_ids: None,
                         state: JobState::Failed,
+                        active: false,
                         progress_msg: Some(msg),
                     });
                 }
@@ -182,13 +202,7 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
 }
 
 fn emit(tx: &ProgressTx, job: &SyncJobRow, state: JobState, msg: Option<&str>) {
-    let _ = tx.send(ProgressEvent {
-        id: job.id.clone(),
-        kind: job.kind.clone(),
-        source_ids: job.source_ids.clone(),
-        state,
-        progress_msg: msg.map(str::to_string),
-    });
+    let _ = tx.send(ProgressEvent::new(job, state, msg.map(str::to_string)));
 }
 
 fn terminate(pid: u32) {

@@ -75,12 +75,12 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
 
 [[steps]]
 group = "unified_index"
 function = "qmd_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -1103,6 +1103,57 @@ function = "ingest"
 # gc = false
 [steps.params.library]
 path = "~/Pictures/Photos Library.photoslibrary"
+
+# --- apple_messages (the Messages app's own database) --------------------
+
+# File-backed: point `database.path` at Messages' `chat.db`, the SQLite
+# file the app keeps for itself (or a copy of it — an iPhone backup's
+# `3d0d7e5fb2ce288813306e4d4636395e047a3d28` is the same database). The
+# engine is the one apple_photos uses, so the same properties hold, and
+# unlike Photos this one renders: every chat becomes a page a month, with
+# tapbacks on their messages and attachments listed by name. Attachment
+# bytes are not copied — they sit under `~/Library/Messages/Attachments`,
+# which picking `chat.db` grants no access to.
+# See datalib/backend/etl/providers/apple_messages/INGEST.md.
+#
+# macOS protects `~/Library/Messages`. In the app, choose the file with
+# the picker: that is what grants Datalib access (Cmd-Shift-G in the
+# dialog reaches the folder). From a terminal, the terminal needs Full
+# Disk Access (System Settings → Privacy & Security); an ingest that
+# reports "Operation not permitted" is missing that, not the file.
+[[groups]]
+id = "messages"
+type = "apple_messages"
+
+[[steps]]
+group = "messages"
+function = "ingest"
+[steps.params]
+# Leave out the app's counters and settings, the Spotlight and CloudKit
+# work queues, the cloud-sync tombstones, and every `index_state` column.
+# ON by default: the daemons write those continuously, so with this off
+# every run commits whether or not anyone messaged. Nothing about a
+# message lives in them — the mirror's own `dolt_log` is the history.
+# skip_churn = true
+#
+# Table / column filters. Globs, `*` and `?` only.
+# include_tables = ["*"]
+# exclude_tables = ["recoverable_message_part"]   # e.g. drop the "recently deleted" text
+# exclude_columns = ["message.payload_data"]      # e.g. drop app-extension blobs
+#
+# Take a `VACUUM INTO` snapshot before reading. Messages keeps the
+# database open in WAL mode whenever it is running. On by default.
+# snapshot = true
+#
+# Collect unreachable chunks each run; see lightroom above.
+# gc = false
+[steps.params.database]
+path = "~/Library/Messages/chat.db"
+
+[[steps]]
+group = "messages"
+function = "render_markdown"
+inputs = ["messages/ingest"]
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

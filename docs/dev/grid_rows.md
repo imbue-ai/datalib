@@ -234,6 +234,7 @@ resolve against". A source with no login at all (a PDF folder, a
 | beeper | `rooms.account_id`, Beeper's bridge-account id (`local-signal_ba_…`) — still opaque | — | — |
 | whatsapp | — | — | `chat.subject` for groups; for 1:1, `lid_display_name`, else the phone behind `jid_map`, else the JID label (msgstore's own tables, mirrored) |
 | signal | — | — | `recipients.display_name`, else phone number |
+| apple_messages | — | — | `chat.display_name`, else the chat's handles joined by `, `, else `chat_identifier` (`chat.db`'s own tables, mirrored; contact names are not in it) |
 
 `org_uuid` / `org_name` are the organization a login lives inside:
 Claude's Anthropic org (from `conversations._source`) and Slack's

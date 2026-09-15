@@ -191,6 +191,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs", get(runs_list))
         .route("/api/runs/{run}/steps", get(run_steps))
         .route("/api/runs/{run}/log", get(run_log))
+        .route("/api/log", get(log_lines))
         .route("/api/sync/stream", get(sync_stream))
         .route("/api/frontend", get(get_frontend))
         // Component code, addressed by content. Flat across every
@@ -1360,32 +1361,55 @@ async fn pipeline_storage(
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
 
-async fn sync_jobs_active(State(s): State<AppState>) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {
+/// A job as the API serves it: the row, plus the two answers every
+/// reader used to derive from `state` for itself — and derived
+/// differently. `active` is [`SyncJobRow::is_active`] (a job told to
+/// stop is active until the worker stamps it finished); `stopping` is
+/// that wind-down.
+#[derive(Debug, Serialize)]
+pub struct SyncJobView {
+    #[serde(flatten)]
+    pub row: SyncJobRow,
+    pub active: bool,
+    pub stopping: bool,
+}
+
+impl From<SyncJobRow> for SyncJobView {
+    fn from(row: SyncJobRow) -> Self {
+        SyncJobView {
+            active: row.is_active(),
+            stopping: row.is_stopping(),
+            row,
+        }
+    }
+}
+
+async fn sync_jobs_active(State(s): State<AppState>) -> Result<Json<Vec<SyncJobView>>, StatusCode> {
     s.app
         .list_jobs(true, 200)
         .await
-        .map(Json)
+        .map(|rows| Json(rows.into_iter().map(SyncJobView::from).collect()))
         .map_err(repo_err_to_status)
 }
 
 async fn sync_jobs_all(
     State(s): State<AppState>,
     Query(p): Query<JobsAllParams>,
-) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {
+) -> Result<Json<Vec<SyncJobView>>, StatusCode> {
     let limit = p.limit.unwrap_or(200).min(10_000);
     s.app
         .list_jobs(false, limit)
         .await
-        .map(Json)
+        .map(|rows| Json(rows.into_iter().map(SyncJobView::from).collect()))
         .map_err(repo_err_to_status)
 }
 
 async fn sync_job_get(
     State(s): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<SyncJobRow>, StatusCode> {
+) -> Result<Json<SyncJobView>, StatusCode> {
     match s.app.get_job(&id).await {
-        Ok(Some(row)) => Ok(Json(row)),
+        Ok(Some(row)) => Ok(Json(SyncJobView::from(row))),
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(e) => Err(repo_err_to_status(e)),
     }
@@ -1394,7 +1418,7 @@ async fn sync_job_get(
 async fn sync_enqueue(
     State(s): State<AppState>,
     Json(req): Json<EnqueueJobRequest>,
-) -> Result<Json<SyncJobRow>, StatusCode> {
+) -> Result<Json<SyncJobView>, StatusCode> {
     // Validate the discriminator server-side; the DB column is a
     // VARCHAR with no enum constraint so we'd otherwise accept
     // anything. `All` (one DAG run, `source_ids` optionally selecting
@@ -1412,14 +1436,12 @@ async fn sync_enqueue(
         .map_err(repo_err_to_status)?;
     // Push the new (pending) job so SSE clients show it immediately,
     // before the worker even claims it.
-    let _ = s.progress_tx.send(worker::ProgressEvent {
-        id: row.id.clone(),
-        kind: row.kind.clone(),
-        source_ids: row.source_ids.clone(),
-        state: row.job_state().unwrap_or(JobState::Pending),
-        progress_msg: row.progress_msg.clone(),
-    });
-    Ok(Json(row))
+    let _ = s.progress_tx.send(worker::ProgressEvent::new(
+        &row,
+        row.job_state().unwrap_or(JobState::Pending),
+        row.progress_msg.clone(),
+    ));
+    Ok(Json(SyncJobView::from(row)))
 }
 
 async fn sync_stream(
@@ -1485,6 +1507,7 @@ async fn sync_job_cancel(
             kind: String::new(),
             source_ids: None,
             state: JobState::Canceled,
+            active: false,
             progress_msg: None,
         });
     }
@@ -1593,6 +1616,44 @@ async fn run_log(
         )
         .await,
     )
+}
+
+#[derive(Debug, Deserialize)]
+struct LogParams {
+    #[serde(default)]
+    run: Option<String>,
+    #[serde(default)]
+    step: Option<String>,
+    /// The search bar, in the grammar every grid shares (`datalib_query`):
+    /// `level:warn -target:sqlx "history"`.
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    after_seq: Option<i64>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// `GET /api/log?run=…&step=…&q=…` — log lines, oldest first, across
+/// every run the store holds unless `run` narrows it. Tails the same way
+/// `/api/runs/{run}/log` does. A `q` naming a key a log line does not
+/// have is a 400 with the key spelled out.
+async fn log_lines(
+    State(s): State<AppState>,
+    Query(p): Query<LogParams>,
+) -> Result<Json<Vec<datalib_runs::LogRow>>, (StatusCode, String)> {
+    let limit = p.limit.unwrap_or(5000).clamp(1, 50_000);
+    let q = datalib_runs::LogQuery {
+        run: p.run.as_deref(),
+        step: p.step.as_deref(),
+        q: &p.q,
+        after_seq: p.after_seq.unwrap_or(0),
+        limit,
+    };
+    datalib_runs::log_query(&s.root, &q)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
 }
 
 fn repo_err_to_status(e: RepoError) -> StatusCode {

@@ -44,6 +44,8 @@
 .tg-status-queued { color: var(--datalib-muted); }
 .tg-status-failed { color: var(--datalib-log-error); }
 .tg-status-interrupted { color: var(--datalib-log-warn); }
+/* Stopped on request: the same "not done, nothing broke" as above. */
+.tg-status-stopped { color: var(--datalib-log-warn); }
 .tg-status-succeeded,
 .tg-status-skipped-up-to-date { color: var(--datalib-log-ok); }
 .tg-status-never-run { opacity: 0.55; }
@@ -75,7 +77,8 @@
 .tg-seg-succeeded,
 .tg-seg-skipped-up-to-date { background: var(--datalib-log-ok); }
 .tg-seg-failed { background: var(--datalib-log-error); }
-.tg-seg-interrupted { background: var(--datalib-log-warn); }
+.tg-seg-interrupted,
+.tg-seg-stopped { background: var(--datalib-log-warn); }
 .tg-seg-blocked { background: var(--datalib-muted); }
 .tg-seg-running {
   background: var(--datalib-accent);

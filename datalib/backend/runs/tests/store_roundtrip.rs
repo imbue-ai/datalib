@@ -127,6 +127,79 @@ async fn log_after_resumes_from_a_sequence_number() {
     assert_eq!(rest[0].msg, "line 4");
 }
 
+/// One step's lines across runs come back in run order with the run each
+/// line belongs to, the same `seq` cursor tails them, and a `-run:` term
+/// drops one run's lines.
+#[tokio::test]
+async fn log_query_spans_runs_and_reads_terms() {
+    use datalib_runs::{log_query, LogQuery};
+    let step_log_after =
+        |root: &std::path::Path, step: &'static str, after_seq: i64, limit: i64| {
+            let root = root.to_path_buf();
+            async move {
+                log_query(
+                    &root,
+                    &LogQuery {
+                        run: None,
+                        step: Some(step),
+                        q: "",
+                        after_seq,
+                        limit,
+                    },
+                )
+                .await
+                .unwrap()
+            }
+        };
+    let td = tempfile::tempdir().unwrap();
+    let keep = Retention {
+        max_runs: 100,
+        max_age_days: 36500,
+    };
+    for (run, msg) in [("run-1", "first"), ("run-2", "second")] {
+        let w = RunWriter::start(td.path(), run, run, keep).unwrap();
+        w.log(line("a", "info", msg));
+        w.log(line("b", "info", "other step"));
+    }
+    let a = step_log_after(td.path(), "a", 0, 100).await;
+    assert_eq!(
+        a.iter()
+            .map(|l| (l.run_id.as_str(), l.msg.as_str()))
+            .collect::<Vec<_>>(),
+        [("run-1", "first"), ("run-2", "second")],
+    );
+    let tail = step_log_after(td.path(), "a", a[0].seq, 100).await;
+    assert_eq!(tail.len(), 1);
+    assert_eq!(tail[0].run_id, "run-2");
+
+    let not_first = log_query(
+        td.path(),
+        &LogQuery {
+            run: None,
+            step: Some("a"),
+            q: "-run:run-1 sec",
+            after_seq: 0,
+            limit: 100,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(not_first.len(), 1);
+    assert_eq!(not_first[0].msg, "second");
+    let refused = log_query(
+        td.path(),
+        &LogQuery {
+            run: None,
+            step: None,
+            q: "author:thad",
+            after_seq: 0,
+            limit: 100,
+        },
+    )
+    .await;
+    assert!(refused.is_err());
+}
+
 /// A terminal state latches. A progress tick that was already in flight
 /// when the step finished must not resurrect it as running — which is
 /// exactly what a table showing "running" forever after a sync ended

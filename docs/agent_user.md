@@ -199,7 +199,11 @@ Pick the surface that fits the question:
   `field:value`, `-field:value`, quoted values; fields include
   `source:`, `source_id:` (`source_name:` is an accepted alias),
   `kind:`, `channel:`, `author:`, `account:`,
-  `project:`, `before:`/`after:`, `convo:`), `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,
+  `project:`, `before:`/`after:`, `convo:`), `GET /api/log?q=…` (the
+  runner's log lines in the same grammar — keys `run:`, `step:`,
+  `level:`, `stream:`, `target:`, `thread:`, `msg:`; free text is a
+  substring of the line; `run=`/`step=` narrow it, `after_seq=` tails),
+  `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,
   `GET /applet/unified_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.
 

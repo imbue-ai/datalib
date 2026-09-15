@@ -13,12 +13,20 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/query:datalib_query",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],
+)
+
+rust_test(
+    name = "runs_unittests",
+    size = "small",
+    crate = ":datalib_runs",
+    edition = "2021",
 )
 
 # The load-bearing experiment, run against the real engine: that

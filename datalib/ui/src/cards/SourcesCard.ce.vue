@@ -153,21 +153,12 @@ function clearBanner() {
   bannerJob.value = null;
 }
 
-/// Is this job still holding the runner: queued, running, or told to
-/// stop and not yet stopped? A cancel flips the row to `canceled` on
-/// request; the run behind it is over when the worker stamps
-/// `finished_at_utc`. The server's `job_active` says the same.
-function jobActive(j: SyncJob): boolean {
-  if (j.state === "pending" || j.state === "running") return true;
-  return j.state === "canceled" && !!j.started_at_utc && !j.finished_at_utc;
-}
-
 /// Take down a job-scoped banner once its job has stopped running. A
 /// job told to stop is still running until the worker says otherwise —
 /// the "Stopping…" banner is *for* that window.
 function retireBanner(job: SyncJob) {
   if (bannerJob.value !== job.id) return;
-  if (jobActive(job)) return;
+  if (job.active) return;
   clearBanner();
 }
 const busy = ref(false);
@@ -431,19 +422,23 @@ const logFor = ref<{ row: Row; runId: string; live: boolean; startedAt: string |
   null,
 );
 const logError = ref<string | null>(null);
+/// What `logFor.runId` holds while the panel shows every run at once.
+const ALL_RUNS_LOG = "*";
 /// The run the panel was opened on. Its picker can move to another run,
 /// which updates `logFor` for the header but must not remount the panel.
 const logOpenedOn = ref("");
 
 /// The picker in the panel moved: say so in the header.
-function onLogRunChanged(run: RunInfo) {
+function onLogRunChanged(run: RunInfo | null) {
   if (!logFor.value) return;
-  logFor.value = {
-    ...logFor.value,
-    runId: run.run_id,
-    live: run.finished_at_utc == null,
-    startedAt: run.started_at_utc,
-  };
+  logFor.value = run
+    ? {
+        ...logFor.value,
+        runId: run.run_id,
+        live: run.finished_at_utc == null,
+        startedAt: run.started_at_utc,
+      }
+    : { ...logFor.value, runId: ALL_RUNS_LOG, live: logFor.value.live, startedAt: null };
 }
 
 /// The run whose log answers "what was this step doing": the one in
@@ -1013,7 +1008,7 @@ async function loadJobs() {
 /// Sync-everything button, and marks the window in which the runner's
 /// record has nothing to say yet: between the click and its first
 /// written state there is nothing there to read.
-const anyJobActive = computed(() => jobs.value.some(jobActive));
+const anyJobActive = computed(() => jobs.value.some((j) => j.active));
 
 const commitRows = freshest<ManageResponse>((m) => {
   manage.value = m;
@@ -1377,7 +1372,7 @@ function onJobEvent(e: JobProgressEvent) {
   mergeJob(e);
   const job = jobs.value.find((j) => j.id === e.id);
   if (job) retireBanner(job);
-  const active = !!job && jobActive(job);
+  const active = e.active;
   // A job ending is exactly when the size on screen is about to be
   // read and is about to be wrong — so that one asks for a fresh walk.
   // It is also the last chance for a while: the backend's own tick
@@ -1396,6 +1391,8 @@ function mergeJob(e: JobProgressEvent) {
     const next: SyncJob = {
       ...prev,
       state: e.state,
+      active: e.active,
+      stopping: prev.stopping && e.active,
       progress_msg: e.progress_msg,
       started_at_utc: prev.started_at_utc ?? (e.state === "running" ? now : null),
       finished_at_utc:
@@ -1411,6 +1408,8 @@ function mergeJob(e: JobProgressEvent) {
       kind: e.kind,
       source_ids: e.source_ids,
       state: e.state,
+      active: e.active,
+      stopping: false,
       progress_pct: null,
       progress_msg: e.progress_msg,
       error: null,
@@ -1577,7 +1576,8 @@ onUnmounted(() => {
             <h3>{{ logFor.row.name.label }}</h3>
             <p>
               <code>{{ logFor.row.id }}</code>
-              <span v-if="logFor.runId">
+              <span v-if="logFor.runId === ALL_RUNS_LOG"> · every run the store holds</span>
+              <span v-else-if="logFor.runId">
                 · {{ logFor.live ? "a run in flight" : "a past run" }}<span
                   v-if="logFor.startedAt"
                   :title="formatStamp(logFor.startedAt)"

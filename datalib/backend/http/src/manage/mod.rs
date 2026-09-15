@@ -559,7 +559,7 @@ impl RowCtx<'_> {
             // Once asked to stop there is nothing more to ask: the steps
             // in flight are checkpointing, and the face says so until
             // they exit.
-            let stopping = status::job_stopping(job);
+            let stopping = job.is_stopping();
             let label = if stopping {
                 format!("Stopping {of}")
             } else {

@@ -156,6 +156,29 @@ impl SyncJobRow {
     pub fn job_state(&self) -> Option<JobState> {
         JobState::parse(&self.state)
     }
+
+    /// Is this job still holding the runner: queued, running, or told
+    /// to stop and not yet stopped? A cancel flips `state` to
+    /// [`JobState::Canceled`] the moment it is asked for — that is how
+    /// the worker learns to send SIGTERM — while the steps behind it go
+    /// on checkpointing for up to the worker's grace period. The run is
+    /// over when the worker stamps `finished_at_utc`, and not before.
+    /// `AppStore::list_jobs` asks the same question in SQL; keep the two
+    /// together.
+    pub fn is_active(&self) -> bool {
+        match self.job_state() {
+            Some(JobState::Pending | JobState::Running) => true,
+            Some(JobState::Canceled) => {
+                self.started_at_utc.is_some() && self.finished_at_utc.is_none()
+            }
+            _ => false,
+        }
+    }
+
+    /// Told to stop, and still winding down.
+    pub fn is_stopping(&self) -> bool {
+        self.job_state() == Some(JobState::Canceled) && self.is_active()
+    }
 }
 
 #[cfg(test)]
