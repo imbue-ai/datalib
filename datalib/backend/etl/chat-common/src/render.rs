@@ -571,18 +571,24 @@ fn build_grid_rows(
 ) -> Vec<GridRow> {
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + doc.items.len());
 
-    // The chat-level row is stamped with the earliest *real* timestamp
-    // in the bucket. `min()` over the items that have one rather than
-    // "the first item's", for two reasons: an undated item sorts to the
-    // front (`None < Some` in every provider's `sort_by_key`), so
-    // reading item 0 would hand a whole conversation a null; and a
-    // bucket with no dated item at all — including the empty bucket
-    // `render_markdown` renders as "_(no messages)_" — then correctly
-    // gets `None` instead of the 1970 stamp it used to get. Providers
-    // sort ascending, so for a fully-dated bucket this is the same value
-    // `items.first()` gave.
-    let first_ts = stamp_from_ms(
-        doc.items.iter().filter_map(|i| i.date_ms).min(),
+    // The document row brackets the bucket: created at the earliest
+    // *real* stamp in it, modified at the latest — a reaction counts, it
+    // is a change to the thread. `min()`/`max()` over the items that
+    // have a stamp rather than the first and last items', because an
+    // undated item sorts to the front (`None < Some` in every provider's
+    // `sort_by_key`), and a bucket with no dated item at all — including
+    // the empty bucket `render_markdown` renders as "_(no messages)_" —
+    // then gets `None` rather than a 1970 stamp.
+    let dated = || doc.items.iter().filter_map(|i| i.date_ms);
+    let first_ts = stamp_from_ms(dated().min(), profile.stamp_precision);
+    let last_ts = stamp_from_ms(
+        dated()
+            .chain(
+                doc.items
+                    .iter()
+                    .flat_map(|i| i.reactions.iter().filter_map(|r| r.date_ms)),
+            )
+            .max(),
         profile.stamp_precision,
     );
     let conversation_name = Some(chat.display.clone());
@@ -594,7 +600,9 @@ fn build_grid_rows(
             .provider(profile.provider)
             .kind(profile.chat_kind.clone())
             .source_label(profile.source_label.clone())
+            .is_document(true)
             .created_at(first_ts)
+            .modified_at(last_ts)
             .author(chat.author.clone())
             .account(chat.account.clone())
             .org_uuid(chat.org_uuid.clone())
@@ -1300,6 +1308,35 @@ mod tests {
                 .is_some_and(|t| t.starts_with("1970"))),
             "no row may carry an epoch stand-in",
         );
+    }
+
+    /// The chat row is the one document row, created at the first
+    /// message and modified at the last change — here the reaction,
+    /// which lands ten seconds after the only message.
+    #[test]
+    fn chat_row_is_the_document_and_brackets_the_bucket() {
+        let profile = test_profile();
+        let rows = rows_of(&profile, &mk_chat());
+        let docs: Vec<&GridRow> = rows.iter().filter(|r| r.is_document).collect();
+        assert_eq!(docs.len(), 1, "{rows:?}");
+        let chat = docs[0];
+        assert_eq!(chat.kind, profile.chat_kind);
+        assert_eq!(
+            chat.created_at.as_deref(),
+            Some("2364-04-11T00:00:00+00:00")
+        );
+        assert_eq!(
+            chat.modified_at.as_deref(),
+            Some("2364-04-11T00:00:10+00:00")
+        );
+        for r in rows.iter().filter(|r| !r.is_document) {
+            assert!(
+                r.modified_at.is_none(),
+                "{} row: {:?}",
+                r.kind,
+                r.modified_at
+            );
+        }
     }
 
     /// An empty bucket is reachable — `render_markdown` renders it as

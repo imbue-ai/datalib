@@ -186,6 +186,7 @@ fn to_contact(p: &Value) -> NormalizedContact {
         display_name: (!name.is_empty()).then_some(name),
         external_id: (!url.is_empty()).then(|| url.to_string()),
         created_at: connected_on_to_stamp(field(p, "Connected On")),
+        modified_at: None,
         source_url: (!url.is_empty()).then(|| url.to_string()),
         fields,
         photo: None,

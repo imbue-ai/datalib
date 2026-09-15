@@ -933,6 +933,7 @@ mod tests {
             .text("hello")
             .markdown_uuid(Some(markdown_uuid.to_string()))
             .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
+            .is_document(true)
             .build()
             .expect("row")
     }
@@ -958,6 +959,70 @@ mod tests {
             edges: Vec::new(),
             problems,
         }
+    }
+
+    /// A renderer that forgets to mark its document row, or marks two,
+    /// fails its render outright: the old fallback ("the row whose uuid
+    /// matches, else the first") is exactly the guess `is_document`
+    /// exists to remove.
+    #[test]
+    fn a_document_must_have_exactly_one_document_row() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+
+        let mut none = doc(td.path(), "d-none", "fp");
+        none.rows[0].is_document = false;
+        let err = st.put_document(td.path(), &none).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("none of its 1 rows is marked is_document"),
+            "{err:#}"
+        );
+
+        let mut two = doc(td.path(), "d-two", "fp");
+        two.rows.push(row("d-two-extra", "d-two"));
+        let err = st.put_document(td.path(), &two).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("both marked is_document"),
+            "{err:#}"
+        );
+
+        // Neither half-written document reached the store.
+        let n: i64 = blocking(async {
+            sqlx::query_scalar("SELECT COUNT(*) FROM markdowns")
+                .fetch_one(&st.pool)
+                .await
+        })
+        .unwrap();
+        assert_eq!(n, 0);
+        st.close();
+    }
+
+    /// The document row's stamps are what `markdowns` carries — copied,
+    /// not recomputed from the inner rows, so a PR's `updated_at` wins
+    /// over its last comment.
+    #[test]
+    fn markdowns_takes_its_stamps_from_the_document_row() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        let mut d = doc(td.path(), "d-stamped", "fp");
+        d.rows[0].created_at = Some("2026-01-01T00:00:00+00:00".into());
+        d.rows[0].modified_at = Some("2026-03-01T00:00:00+00:00".into());
+        let mut inner = row("d-stamped-m1", "d-stamped");
+        inner.is_document = false;
+        inner.created_at = Some("2026-02-01T00:00:00+00:00".into());
+        d.rows.push(inner);
+        st.put_document(td.path(), &d).unwrap();
+        let (created, modified): (Option<String>, Option<String>) = blocking(async {
+            sqlx::query_as(
+                "SELECT created_at, modified_at FROM markdowns WHERE markdown_uuid = 'd-stamped'",
+            )
+            .fetch_one(&st.pool)
+            .await
+        })
+        .unwrap();
+        assert_eq!(created.as_deref(), Some("2026-01-01T00:00:00+00:00"));
+        assert_eq!(modified.as_deref(), Some("2026-03-01T00:00:00+00:00"));
+        st.close();
     }
 
     /// The storage report is rendered by datalib, not by any of the
@@ -987,6 +1052,7 @@ mod tests {
             .text("src/raw — 1.0 KiB")
             .markdown_uuid(Some("storage-doc".to_string()))
             .byte_size(Some(1024))
+            .is_document(true)
             .build()
             .expect("row")];
         st.put_document(td.path(), &report).expect("store report");

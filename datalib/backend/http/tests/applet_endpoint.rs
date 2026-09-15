@@ -39,6 +39,7 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
                 "Slack Thread"
             })
             .source_label("Slack")
+            .is_document(index.is_none())
             .channel(Some(channel.to_string()))
             .created_at(Some(when.to_string()))
             .author(author.map(str::to_string))

@@ -105,9 +105,10 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
     // NULL rather than a bare path when the URL can't be formed; a
     // half-valid link is worse than an absent one.
     let source_url = file_url(meta.abs_path);
-    // Prefer the authored creation date; fall back to modification.
-    // Never fall back to "now" — an ingest timestamp masquerading as an
-    // authored one would sort the whole corpus to today.
+    // Prefer the authored creation date; fall back to modification —
+    // the file existed by then. Never fall back to "now": an ingest
+    // timestamp masquerading as an authored one would sort the whole
+    // corpus to today.
     let when = meta.created_at.or(meta.modified_at);
 
     let mut rows = Vec::with_capacity(pages.len() + 1);
@@ -117,7 +118,9 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         provider: PROVIDER.as_str().into(),
         kind: KIND_DOCUMENT.into(),
         source_label: SOURCE_LABEL.into(),
+        is_document: true,
         created_at: when.map(str::to_string),
+        modified_at: meta.modified_at.map(str::to_string),
         author: meta.author.map(str::to_string),
         account: None,
         project: None,
@@ -161,7 +164,11 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             provider: PROVIDER.as_str().into(),
             kind: KIND_PAGE.into(),
             source_label: SOURCE_LABEL.into(),
+            is_document: false,
             created_at: when.map(str::to_string),
+            // A page has no stamp of its own; the document's modification
+            // is the document's to carry.
+            modified_at: None,
             // Denormalized onto the page rows too, matching how every
             // chat provider stamps the author on each message row so
             // the grid can filter without a join.

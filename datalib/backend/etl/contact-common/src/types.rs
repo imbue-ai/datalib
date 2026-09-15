@@ -22,9 +22,13 @@ pub struct NormalizedContact {
     /// Upstream identifier surfaced as `external_id` and a frontmatter
     /// key — the vCard `UID`, or the LinkedIn profile URL.
     pub external_id: Option<String>,
-    /// Source-side timestamp when one exists (vCard `REV:`, LinkedIn's
-    /// "Connected On"). Passed through verbatim; never fabricated.
+    /// When the contact came to be, where the source says (LinkedIn's
+    /// "Connected On"). A vCard does not say; a person does not have a
+    /// creation event. Never fabricated.
     pub created_at: Option<String>,
+    /// When the record last changed, where the source says (vCard
+    /// `REV:`). Never fabricated.
+    pub modified_at: Option<String>,
     /// Canonical web URL for this contact, if any (the LinkedIn profile
     /// URL). Wired into the page Title's copy-link and the grid
     /// `source_url`.

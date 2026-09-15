@@ -22,10 +22,17 @@ import type { SearchRow } from "@/api";
 export type BrowseColumn = keyof SearchRow;
 
 /// Columns every source's browse opens with, in this order. `kind` leads
-/// because it is the within-source discriminator: one source is rarely
-/// one kind of thing (Slack has threads and messages, PDFs have documents
-/// and pages).
-const ALWAYS: BrowseColumn[] = ["kind", "created_at", "conversation_name", "snippet"];
+/// because it is the within-source discriminator even among documents
+/// (Claude has chats and projects, Notion has pages and comment
+/// threads). Both stamps, because a Browse is one row per document and
+/// "last touched" is what tells a live thread from a dead one.
+const ALWAYS: BrowseColumn[] = [
+  "kind",
+  "created_at",
+  "modified_at",
+  "conversation_name",
+  "snippet",
+];
 
 /// Extra columns per source type, inserted before `snippet`.
 const EXTRA: Record<string, BrowseColumn[]> = {
@@ -81,11 +88,14 @@ export function browseColumns(type: string | null): BrowseColumn[] | null {
   return [...ALWAYS.slice(0, -1), ...extra, "snippet"];
 }
 
-/// The search a Browse of this group opens: everything filed under it.
-/// A group id is its directory under the data root, which is what
-/// `source_id:` matches on. Its own data, not datalib's report on it:
-/// the storage rows sit in the same directory but are filed under
-/// `datalib`, and the filter leaves them out.
+/// The search a Browse of this group opens: the documents filed under
+/// it — one row per thread, conversation, PR or page, not the messages
+/// inside them, which repeat the document's name down the grid and are
+/// one chip-delete away (`is:document`). A group id is its directory
+/// under the data root, which is what `source_id:` matches on. Its own
+/// data, not datalib's report on it: the storage rows sit in the same
+/// directory but are filed under `datalib`, and the filter leaves them
+/// out.
 export function browseQuery(groupId: string): string {
-  return `source_id:${groupId}`;
+  return `source_id:${groupId} is:document`;
 }

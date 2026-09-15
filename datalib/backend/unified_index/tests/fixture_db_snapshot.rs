@@ -163,7 +163,7 @@ async fn snapshot_grid_rows_and_documents() {
     // ── documents ────────────────────────────────────────────────
     let drows = sqlx::query(
         "SELECT markdown_uuid, source_id, provider, kind, title, \
-                created_at, updated_at, md_path, bucket_key, \
+                created_at, modified_at, md_path, bucket_key, \
                 renderer_version \
          FROM markdowns ORDER BY markdown_uuid",
     )
@@ -181,7 +181,7 @@ async fn snapshot_grid_rows_and_documents() {
                 "kind": r.try_get::<String, _>("kind").ok(),
                 "title": r.try_get::<Option<String>, _>("title").ok().flatten(),
                 "created_at": r.try_get::<Option<String>, _>("created_at").ok().flatten(),
-                "updated_at": r.try_get::<Option<String>, _>("updated_at").ok().flatten(),
+                "modified_at": r.try_get::<Option<String>, _>("modified_at").ok().flatten(),
                 "md_path": r.try_get::<Option<String>, _>("md_path").ok().flatten(),
                 "bucket_key": r.try_get::<Option<String>, _>("bucket_key").ok().flatten(),
                 "renderer_version": r.try_get::<Option<String>, _>("renderer_version").ok().flatten(),

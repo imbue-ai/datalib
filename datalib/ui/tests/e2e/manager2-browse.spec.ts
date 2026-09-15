@@ -122,7 +122,7 @@ test.afterEach(async ({ page }) => {
 test("a source's row opens that source, with its type's columns", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browse(page, "slack", "source_id:slack");
+  await browse(page, "slack", "source_id:slack is:document");
 
   // The card stack IS the URL, which is what makes a browse
   // bookmarkable and shareable rather than a transient view.
@@ -139,9 +139,10 @@ test("a source's row opens that source, with its type's columns", async ({ page 
     .toBe(true);
   // Slack's own kinds and nothing else. The storage rows sit in this
   // source's directory but are filed under datalib, so a browse of the
-  // source is the source's data — see docs/dev/grid_rows.md.
+  // source is the source's data — see docs/dev/grid_rows.md. And only
+  // the documents: one row per thread, not the messages inside them.
   for (const k of await columnValues(page, "kind")) {
-    expect(k.trim()).toMatch(/^Slack /);
+    expect(k.trim()).toBe("Slack Thread");
   }
 
   // Slack's preset: a channel and an author, and no Project — Slack has
@@ -155,7 +156,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
 test("a different type gets a different column set", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browse(page, "github", "source_id:github");
+  await browse(page, "github", "source_id:github is:document");
 
   // GitHub's preset is an author and the repo the row belongs to, and
   // no channel — the opposite pair to Slack's, from the same fixture.

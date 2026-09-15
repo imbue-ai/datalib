@@ -10,11 +10,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
       "md_path": "slack/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md",
+      "modified_at": "2369-05-28T15:11:40+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "#bridge",
-      "updated_at": "2369-05-28T15:11:40+00:00"
+      "title": "#bridge"
     },
     {
       "bucket_key": "0f0339c4-f882-5ecb-a675-b52e412fc02f",
@@ -22,35 +22,35 @@ expression: snapshot
       "kind": "document",
       "markdown_uuid": "0f0339c4-f882-5ecb-a675-b52e412fc02f",
       "md_path": "tng_pdfs/render_markdown/docs/1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4.md",
+      "modified_at": null,
       "provider": "pdf",
       "renderer_version": "rust-v1.4",
       "source_id": "tng_pdfs",
-      "title": "Captain's Log",
-      "updated_at": "2364-04-13T08:45:00-07:00"
+      "title": "Captain's Log"
     },
     {
       "bucket_key": "14207f4b-af38-5ee1-8d55-6fd426d572f2",
-      "created_at": "2370-08-22T00:00:00Z",
+      "created_at": null,
       "kind": "chat",
       "markdown_uuid": "14207f4b-af38-5ee1-8d55-6fd426d572f2",
       "md_path": "tng_contacts/render_markdown/14207f4b-af38-5ee1-8d55-6fd426d572f2/index.md",
+      "modified_at": "2370-08-22T00:00:00Z",
       "provider": "contacts",
       "renderer_version": "rust-v1.3",
       "source_id": "tng_contacts",
-      "title": "Bridge",
-      "updated_at": "2370-08-22T00:00:00Z"
+      "title": "Bridge"
     },
     {
       "bucket_key": "1544ef1c-ce85-59cd-a01f-235133651a2c",
-      "created_at": "2370-09-04T00:00:00Z",
+      "created_at": null,
       "kind": "chat",
       "markdown_uuid": "1544ef1c-ce85-59cd-a01f-235133651a2c",
       "md_path": "tng_contacts/render_markdown/1544ef1c-ce85-59cd-a01f-235133651a2c/index.md",
+      "modified_at": "2370-09-04T00:00:00Z",
       "provider": "contacts",
       "renderer_version": "rust-v1.3",
       "source_id": "tng_contacts",
-      "title": "Engineering",
-      "updated_at": "2370-09-04T00:00:00Z"
+      "title": "Engineering"
     },
     {
       "bucket_key": "86931423-0d9c-5e82-aecf-a585280e986f",
@@ -58,11 +58,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "15e20e91-1d17-55ad-8542-1a425bdc13d8",
       "md_path": "sms-backup-restore/render_markdown/86931423-0d9c-5e82-aecf-a585280e986f/2369-04.md",
+      "modified_at": "2369-04-14T20:30:00+00:00",
       "provider": "sms_backup_restore",
       "renderer_version": "rust-v1.2",
       "source_id": "sms-backup-restore",
-      "title": "Deanna Troi",
-      "updated_at": "2369-04-14T20:30:00+00:00"
+      "title": "Deanna Troi"
     },
     {
       "bucket_key": "1803e003-56a7-5c12-9024-5265850e9eaa",
@@ -70,11 +70,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "1803e003-56a7-5c12-9024-5265850e9eaa",
       "md_path": "slack/render_markdown/1803e003-56a7-5c12-9024-5265850e9eaa/all.md",
+      "modified_at": "2369-05-28T15:21:41+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "@William T. Riker",
-      "updated_at": "2369-05-28T15:21:41+00:00"
+      "title": "@William T. Riker"
     },
     {
       "bucket_key": null,
@@ -82,11 +82,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "19981b74-c2eb-5b49-b8fd-27da210a01fe",
       "md_path": "notion/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "notion",
-      "title": "notion storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "notion storage"
     },
     {
       "bucket_key": null,
@@ -94,11 +94,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "1bd28d4a-2b7a-5634-b91d-b93524331364",
       "md_path": "slack/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "slack",
-      "title": "slack storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "slack storage"
     },
     {
       "bucket_key": "1c72c68f-86f5-577e-93a8-53e634460711",
@@ -106,11 +106,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "1c72c68f-86f5-577e-93a8-53e634460711",
       "md_path": "claude-api/render_markdown/1c72c68f-86f5-577e-93a8-53e634460711/all.md",
+      "modified_at": "2369-04-15T08:30:45+00:00",
       "provider": "claude",
       "renderer_version": "rust-v1.7",
       "source_id": "claude-api",
-      "title": "Tricorder Image Diagnostic",
-      "updated_at": "2369-04-15T08:30:45+00:00"
+      "title": "Tricorder Image Diagnostic"
     },
     {
       "bucket_key": "743ae90a-bb3c-5327-8198-6732bd7503c1",
@@ -118,23 +118,23 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "1d83fe39-d152-54b2-a695-9894ce215746",
       "md_path": "sms-backup-restore/render_markdown/743ae90a-bb3c-5327-8198-6732bd7503c1/2369-04.md",
+      "modified_at": "2369-04-15T09:03:00+00:00",
       "provider": "sms_backup_restore",
       "renderer_version": "rust-v1.2",
       "source_id": "sms-backup-restore",
-      "title": "Jean-Luc Picard",
-      "updated_at": "2369-04-15T09:03:00+00:00"
+      "title": "Jean-Luc Picard"
     },
     {
       "bucket_key": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
-      "created_at": "2370-02-11T00:00:00Z",
+      "created_at": null,
       "kind": "chat",
       "markdown_uuid": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
       "md_path": "tng_contacts/render_markdown/1db2d2f9-e79a-58ad-978f-eb56fba5060f/index.md",
+      "modified_at": "2370-02-11T00:00:00Z",
       "provider": "contacts",
       "renderer_version": "rust-v1.3",
       "source_id": "tng_contacts",
-      "title": "Bridge",
-      "updated_at": "2370-02-11T00:00:00Z"
+      "title": "Bridge"
     },
     {
       "bucket_key": "31ab2c83-77e2-53bd-b225-c3a70f9acec4",
@@ -142,11 +142,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "26344276-3a84-5e48-b2db-1fceb78df775",
       "md_path": "google-takeout/render_markdown/31ab2c83-77e2-53bd-b225-c3a70f9acec4/2025-03.md",
+      "modified_at": "2025-03-05T21:34:00+00:00",
       "provider": "google_takeout",
       "renderer_version": "rust-v1.2",
       "source_id": "google-takeout",
-      "title": "Jean-Luc Picard, William Riker",
-      "updated_at": "2025-03-05T21:34:00+00:00"
+      "title": "Jean-Luc Picard, William Riker"
     },
     {
       "bucket_key": null,
@@ -154,11 +154,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "26b1370c-a6d6-5441-9ddf-c16e3344db32",
       "md_path": "gitlab/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "gitlab",
-      "title": "gitlab storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "gitlab storage"
     },
     {
       "bucket_key": null,
@@ -166,11 +166,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "27d74da2-20ed-5159-baf1-5e4822aa0357",
       "md_path": "linkedin/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "linkedin",
-      "title": "linkedin storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "linkedin storage"
     },
     {
       "bucket_key": "10a5ea3a-8229-54e5-8af3-d23abaa42860",
@@ -178,11 +178,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "2c6ace48-3820-5124-8cc2-5a34f7770ee2",
       "md_path": "google-takeout/render_markdown/10a5ea3a-8229-54e5-8af3-d23abaa42860/2364-03.md",
+      "modified_at": "2364-03-04T20:00:00+00:00",
       "provider": "google_takeout",
       "renderer_version": "rust-v1.2",
       "source_id": "google-takeout",
-      "title": "+15550900",
-      "updated_at": "2364-03-04T20:00:00+00:00"
+      "title": "+15550900"
     },
     {
       "bucket_key": "2efdd321-ada2-5000-911f-feb635f27954",
@@ -190,11 +190,11 @@ expression: snapshot
       "kind": "document",
       "markdown_uuid": "2efdd321-ada2-5000-911f-feb635f27954",
       "md_path": "claude-api/render_markdown/2efdd321-ada2-5000-911f-feb635f27954/all.md",
+      "modified_at": null,
       "provider": "claude",
       "renderer_version": "rust-v1.7",
       "source_id": "claude-api",
-      "title": "Stellar Cartography",
-      "updated_at": null
+      "title": "Stellar Cartography"
     },
     {
       "bucket_key": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
@@ -202,11 +202,11 @@ expression: snapshot
       "kind": "document",
       "markdown_uuid": "32d53da1-16f1-5eef-a09c-a0f6d428684c",
       "md_path": "tng_pdfs/render_markdown/docs/c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf.md",
+      "modified_at": null,
       "provider": "pdf",
       "renderer_version": "rust-v1.4",
       "source_id": "tng_pdfs",
-      "title": "warp_core_manual.pdf",
-      "updated_at": null
+      "title": "warp_core_manual.pdf"
     },
     {
       "bucket_key": null,
@@ -214,11 +214,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "33a8be8d-4a75-500c-a048-5883e9908802",
       "md_path": "yolink/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "yolink",
-      "title": "yolink storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "yolink storage"
     },
     {
       "bucket_key": null,
@@ -226,23 +226,23 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "38511304-b8b1-57b9-b767-919a63bd1bd8",
       "md_path": "beeper/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "beeper",
-      "title": "beeper storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "beeper storage"
     },
     {
       "bucket_key": "3b570c00-a0c4-5acd-8c55-d957292d6822",
-      "created_at": "2369-04-14T06:45:00+00:00",
+      "created_at": "2369-04-02T06:45:00+00:00",
       "kind": "chat",
       "markdown_uuid": "3b570c00-a0c4-5acd-8c55-d957292d6822",
       "md_path": "garmin/render_markdown/index.md",
+      "modified_at": "2369-04-14T06:45:00+00:00",
       "provider": "garmin",
       "renderer_version": "rust-v1.1",
       "source_id": "garmin",
-      "title": "Garmin — Jean-Luc Picard",
-      "updated_at": "2369-04-15T05:12:44+00:00"
+      "title": "Garmin — Jean-Luc Picard"
     },
     {
       "bucket_key": "40497823-e5f8-5775-9407-65834d6381ae",
@@ -250,23 +250,23 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "40497823-e5f8-5775-9407-65834d6381ae",
       "md_path": "chatgpt-api/render_markdown/40497823-e5f8-5775-9407-65834d6381ae/all.md",
+      "modified_at": "2370-10-26T08:05:00+00:00",
       "provider": "chatgpt",
       "renderer_version": "rust-v1.8",
       "source_id": "chatgpt-api",
-      "title": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
-      "updated_at": "2370-10-26T08:05:00+00:00"
+      "title": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?"
     },
     {
       "bucket_key": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
-      "created_at": "2024-09-01T05:25:00+00:00",
+      "created_at": "2024-08-30T16:00:00+00:00",
       "kind": "chat",
       "markdown_uuid": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
       "md_path": "ship-air/render_markdown/index.md",
+      "modified_at": "2024-09-01T09:01:50+00:00",
       "provider": "airvisual",
       "renderer_version": "rust-v1.1",
       "source_id": "ship-air",
-      "title": "AirVisual monitors — ship-air",
-      "updated_at": "2024-09-01T09:01:50+00:00"
+      "title": "AirVisual monitors — ship-air"
     },
     {
       "bucket_key": "3c1232fb-5525-5678-b043-6e9a745ee4e0",
@@ -274,11 +274,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "46217fed-6442-5d1e-9f34-9bddf6b7f026",
       "md_path": "sms-backup-restore/render_markdown/3c1232fb-5525-5678-b043-6e9a745ee4e0/2369-04.md",
+      "modified_at": "2369-04-15T10:01:00+00:00",
       "provider": "sms_backup_restore",
       "renderer_version": "rust-v1.2",
       "source_id": "sms-backup-restore",
-      "title": "Worf",
-      "updated_at": "2369-04-15T10:01:00+00:00"
+      "title": "Worf"
     },
     {
       "bucket_key": null,
@@ -286,11 +286,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "4fb922ee-f706-51e0-96a2-f8bf49b244dd",
       "md_path": "tng_contacts/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "tng_contacts",
-      "title": "tng_contacts storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "tng_contacts storage"
     },
     {
       "bucket_key": "56f6c1d9-495c-5104-8a26-be13bc28718e",
@@ -298,11 +298,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "56f6c1d9-495c-5104-8a26-be13bc28718e",
       "md_path": "slack/render_markdown/56f6c1d9-495c-5104-8a26-be13bc28718e/all.md",
+      "modified_at": "2369-05-28T15:20:00+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "#bridge",
-      "updated_at": "2369-05-28T15:20:00+00:00"
+      "title": "#bridge"
     },
     {
       "bucket_key": null,
@@ -310,11 +310,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "5b8d7eca-10ed-5090-97ac-f0fdc82c85cb",
       "md_path": "tng_email/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "tng_email",
-      "title": "tng_email storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "tng_email storage"
     },
     {
       "bucket_key": null,
@@ -322,11 +322,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "5c8123ec-e9a7-5569-91dc-ad083f24f452",
       "md_path": "github/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "github",
-      "title": "github storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "github storage"
     },
     {
       "bucket_key": "1caf25c0-7a5b-587c-8205-62ee1d92b057",
@@ -334,11 +334,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "5df5a72d-eea4-5d1a-aaf7-7ce908e9cefb",
       "md_path": "beeper/render_markdown/googlechat/1caf25c0-7a5b-587c-8205-62ee1d92b057/2024-03.md",
+      "modified_at": "2024-03-20T14:10:00.000+00:00",
       "provider": "beeper",
       "renderer_version": "rust-v1.2",
       "source_id": "beeper",
-      "title": "William T. Riker",
-      "updated_at": "2024-03-20T14:10:00.000+00:00"
+      "title": "William T. Riker"
     },
     {
       "bucket_key": "62b1d972-57f0-5b4c-a81b-805d6c650bde",
@@ -346,11 +346,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "62b1d972-57f0-5b4c-a81b-805d6c650bde",
       "md_path": "chatgpt-api/render_markdown/62b1d972-57f0-5b4c-a81b-805d6c650bde/all.md",
+      "modified_at": "2370-10-24T08:05:00+00:00",
       "provider": "chatgpt",
       "renderer_version": "rust-v1.8",
       "source_id": "chatgpt-api",
-      "title": "Sonnet on a Cat Named Spot",
-      "updated_at": "2370-10-24T08:05:00+00:00"
+      "title": "Sonnet on a Cat Named Spot"
     },
     {
       "bucket_key": null,
@@ -358,11 +358,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "643e18b8-ac2c-5cfc-a805-079bf50bfd1b",
       "md_path": "google-takeout/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "google-takeout",
-      "title": "google-takeout storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "google-takeout storage"
     },
     {
       "bucket_key": "658ccd8e-50ad-527c-8cc3-401cf8b315db",
@@ -370,11 +370,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "658ccd8e-50ad-527c-8cc3-401cf8b315db",
       "md_path": "slack/render_markdown/658ccd8e-50ad-527c-8cc3-401cf8b315db/all.md",
+      "modified_at": "2369-05-28T15:21:44+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "@William T. Riker, Worf",
-      "updated_at": "2369-05-28T15:21:44+00:00"
+      "title": "@William T. Riker, Worf"
     },
     {
       "bucket_key": "72999447-e9d8-5879-b3cb-655742ecf5ea",
@@ -382,11 +382,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "67a44f2e-33af-5ad5-b354-704ee2e5c7a5",
       "md_path": "beeper/render_markdown/signal/72999447-e9d8-5879-b3cb-655742ecf5ea/2024-04.md",
+      "modified_at": "2024-04-02T11:35:00.000+00:00",
       "provider": "beeper",
       "renderer_version": "rust-v1.2",
       "source_id": "beeper",
-      "title": "tng-data-conv-uuid-0001",
-      "updated_at": "2024-04-02T11:35:00.000+00:00"
+      "title": "tng-data-conv-uuid-0001"
     },
     {
       "bucket_key": "68000dc2-0cb1-5eb4-ba26-89498049dfa8",
@@ -394,23 +394,23 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "68000dc2-0cb1-5eb4-ba26-89498049dfa8",
       "md_path": "slack/render_markdown/68000dc2-0cb1-5eb4-ba26-89498049dfa8/all.md",
+      "modified_at": "2369-05-28T15:15:00+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "#engineering",
-      "updated_at": "2369-05-28T15:15:00+00:00"
+      "title": "#engineering"
     },
     {
       "bucket_key": "enterprise-d/replicator-firmware#42",
-      "created_at": "2369-04-15T09:30:00Z",
+      "created_at": "2369-04-15T08:00:00Z",
       "kind": "pr",
       "markdown_uuid": "6a0d7000-3fa1-5479-9d32-6ba74d546fa8",
       "md_path": "github/render_markdown/enterprise-d/replicator-firmware/pr-42/index.md",
+      "modified_at": "2369-04-15T11:30:00Z",
       "provider": "github",
       "renderer_version": "rust-v1.1",
       "source_id": "github",
-      "title": "Recalibrate replicator templates for Earl Grey, hot",
-      "updated_at": "2369-04-15T11:30:00Z"
+      "title": "Recalibrate replicator templates for Earl Grey, hot"
     },
     {
       "bucket_key": "6a85fd49-403c-5b60-8694-94ee3893cd35",
@@ -418,35 +418,35 @@ expression: snapshot
       "kind": "document",
       "markdown_uuid": "6a85fd49-403c-5b60-8694-94ee3893cd35",
       "md_path": "tng_pdfs/render_markdown/docs/c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2.md",
+      "modified_at": null,
       "provider": "pdf",
       "renderer_version": "rust-v1.4",
       "source_id": "tng_pdfs",
-      "title": "Hull Integrity Survey",
-      "updated_at": null
+      "title": "Hull Integrity Survey"
     },
     {
       "bucket_key": "enterprise-d/holodeck!18",
-      "created_at": "2369-04-15T14:00:00.000Z",
+      "created_at": "2369-04-15T12:00:00.000Z",
       "kind": "mr",
       "markdown_uuid": "6fc719a5-94c3-5757-a26f-2f34579d2508",
       "md_path": "gitlab/render_markdown/enterprise-d/holodeck/mr-18/index.md",
+      "modified_at": "2369-04-15T14:30:00.000Z",
       "provider": "gitlab",
       "renderer_version": "rust-v1.1",
       "source_id": "gitlab",
-      "title": "Holodeck safety interlock regression test",
-      "updated_at": "2369-04-15T14:30:00.000Z"
+      "title": "Holodeck safety interlock regression test"
     },
     {
       "bucket_key": "enterprise-d/holodeck!17",
-      "created_at": "2369-04-15T10:00:00.000Z",
+      "created_at": "2369-04-15T08:00:00.000Z",
       "kind": "mr",
       "markdown_uuid": "743537a5-d2bc-54f5-a660-97cb674ba8c8",
       "md_path": "gitlab/render_markdown/enterprise-d/holodeck/mr-17/index.md",
+      "modified_at": "2369-04-15T11:30:00.000Z",
       "provider": "gitlab",
       "renderer_version": "rust-v1.1",
       "source_id": "gitlab",
-      "title": "Add Earl Grey, hot to replicator menu",
-      "updated_at": "2369-04-15T11:30:00.000Z"
+      "title": "Add Earl Grey, hot to replicator menu"
     },
     {
       "bucket_key": "0f7d3aa5-e30a-5528-9ea5-d5b6fa547fc0",
@@ -454,11 +454,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "7779d1ce-184c-5b95-bd62-112362fc5c4d",
       "md_path": "linkedin/render_markdown/0f7d3aa5-e30a-5528-9ea5-d5b6fa547fc0/all.md",
+      "modified_at": "2369-04-10T09:06:30+00:00",
       "provider": "linkedin",
       "renderer_version": "rust-v1.3",
       "source_id": "linkedin",
-      "title": "Jean-Luc Picard, William Riker",
-      "updated_at": "2369-04-10T09:06:30+00:00"
+      "title": "Jean-Luc Picard, William Riker"
     },
     {
       "bucket_key": "777b8f58-706d-549a-82b8-699fc856030e",
@@ -466,11 +466,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "777b8f58-706d-549a-82b8-699fc856030e",
       "md_path": "slack/render_markdown/777b8f58-706d-549a-82b8-699fc856030e/all.md",
+      "modified_at": "2369-05-28T15:21:40+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "@William T. Riker",
-      "updated_at": "2369-05-28T15:21:40+00:00"
+      "title": "@William T. Riker"
     },
     {
       "bucket_key": null,
@@ -478,11 +478,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "7a0d3207-ce17-5262-8f49-74893cc1314b",
       "md_path": "sms-backup-restore/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "sms-backup-restore",
-      "title": "sms-backup-restore storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "sms-backup-restore storage"
     },
     {
       "bucket_key": null,
@@ -490,11 +490,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "818da9d1-c008-5e56-b142-1212b59c1577",
       "md_path": "signal/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "signal",
-      "title": "signal storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "signal storage"
     },
     {
       "bucket_key": null,
@@ -502,11 +502,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "819a9a62-e078-5516-8b96-1de520e576e9",
       "md_path": "chatgpt-api/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "chatgpt-api",
-      "title": "chatgpt-api storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "chatgpt-api storage"
     },
     {
       "bucket_key": "931592e5-9b50-5d07-8dc3-471750613c6e",
@@ -514,23 +514,23 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "834e1043-9903-53d5-815c-d0863739ca47",
       "md_path": "whatsapp/render_markdown/931592e5-9b50-5d07-8dc3-471750613c6e/2364-04.md",
+      "modified_at": "2364-04-11T00:13:00+00:00",
       "provider": "whatsapp",
       "renderer_version": "rust-v1.6",
       "source_id": "whatsapp",
-      "title": "Bridge Crew",
-      "updated_at": "2364-04-11T00:13:00+00:00"
+      "title": "Bridge Crew"
     },
     {
       "bucket_key": "enterprise-d/replicator-firmware#43",
-      "created_at": "2369-04-15T13:30:00Z",
+      "created_at": "2369-04-15T12:00:00Z",
       "kind": "pr",
       "markdown_uuid": "8365cf2d-2561-5cc5-bba0-657a8b9f35a2",
       "md_path": "github/render_markdown/enterprise-d/replicator-firmware/pr-43/index.md",
+      "modified_at": "2369-04-15T14:30:00Z",
       "provider": "github",
       "renderer_version": "rust-v1.1",
       "source_id": "github",
-      "title": "Add holodeck safety interlock for live phaser fire",
-      "updated_at": "2369-04-15T14:30:00Z"
+      "title": "Add holodeck safety interlock for live phaser fire"
     },
     {
       "bucket_key": "1ec8a77b-324e-5ea5-ada7-a57db0c0e092",
@@ -538,11 +538,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "840295ee-a005-5bdc-8582-0069bad5ab8e",
       "md_path": "whatsapp/render_markdown/1ec8a77b-324e-5ea5-ada7-a57db0c0e092/2364-04.md",
+      "modified_at": "2364-04-11T00:16:00+00:00",
       "provider": "whatsapp",
       "renderer_version": "rust-v1.6",
       "source_id": "whatsapp",
-      "title": "100000000000108@lid",
-      "updated_at": "2364-04-11T00:16:00+00:00"
+      "title": "100000000000108@lid"
     },
     {
       "bucket_key": "861a616f-cf0e-550e-b7bc-28efd43b7867",
@@ -550,11 +550,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "861a616f-cf0e-550e-b7bc-28efd43b7867",
       "md_path": "linkedin/render_markdown/861a616f-cf0e-550e-b7bc-28efd43b7867/index.md",
+      "modified_at": null,
       "provider": "linkedin",
       "renderer_version": "rust-v1.3",
       "source_id": "linkedin",
-      "title": "Connections",
-      "updated_at": "2369-04-10T00:00:00+00:00"
+      "title": "Connections"
     },
     {
       "bucket_key": null,
@@ -562,11 +562,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "8c0f8e03-66d2-54ea-886a-2b590e481c72",
       "md_path": "whatsapp/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "whatsapp",
-      "title": "whatsapp storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "whatsapp storage"
     },
     {
       "bucket_key": "2502921b-b84b-5782-b6de-0a7eebba042a",
@@ -574,11 +574,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "90c447d6-4d71-51a0-b3da-9b64337f022b",
       "md_path": "whatsapp/render_markdown/2502921b-b84b-5782-b6de-0a7eebba042a/2364-04.md",
+      "modified_at": "2364-04-11T00:17:00+00:00",
       "provider": "whatsapp",
       "renderer_version": "rust-v1.6",
       "source_id": "whatsapp",
-      "title": "Worf, Son of Mogh",
-      "updated_at": "2364-04-11T00:17:00+00:00"
+      "title": "Worf, Son of Mogh"
     },
     {
       "bucket_key": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
@@ -586,11 +586,11 @@ expression: snapshot
       "kind": "document",
       "markdown_uuid": "9381646e-8d62-5f3a-b8ea-fe7f7cd2c04e",
       "md_path": "tng_pdfs/render_markdown/docs/ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545.md",
+      "modified_at": null,
       "provider": "pdf",
       "renderer_version": "rust-v1.4",
       "source_id": "tng_pdfs",
-      "title": "Captain's Log",
-      "updated_at": "2364-04-13T08:45:00-07:00"
+      "title": "Captain's Log"
     },
     {
       "bucket_key": null,
@@ -598,11 +598,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "a2488896-6cd5-53bd-89d5-a3a962fbc43c",
       "md_path": "garmin/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "garmin",
-      "title": "garmin storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "garmin storage"
     },
     {
       "bucket_key": "a9d22a8f-656e-5347-bd95-454448be45e7",
@@ -610,11 +610,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "a9d22a8f-656e-5347-bd95-454448be45e7",
       "md_path": "tng_email/render_markdown/a9d22a8f-656e-5347-bd95-454448be45e7/all.md",
+      "modified_at": "2026-01-07T14:00:00+00:00",
       "provider": "email",
       "renderer_version": "rust-v1.7",
       "source_id": "tng_email",
-      "title": "Captain's Log — Stardate 80124.1",
-      "updated_at": "2026-01-07T14:00:00+00:00"
+      "title": "Captain's Log — Stardate 80124.1"
     },
     {
       "bucket_key": "aa7f900b-31b9-5603-995a-5ed36db03478",
@@ -622,11 +622,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "aa7f900b-31b9-5603-995a-5ed36db03478",
       "md_path": "slack/render_markdown/aa7f900b-31b9-5603-995a-5ed36db03478/all.md",
+      "modified_at": "2369-05-28T15:13:20+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "#bridge",
-      "updated_at": "2369-05-28T15:13:20+00:00"
+      "title": "#bridge"
     },
     {
       "bucket_key": "95e94192-e06f-5008-bf5b-f7879184d2e1",
@@ -634,11 +634,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "aafa0ad5-4dc4-59cd-b75e-572a0329836e",
       "md_path": "whatsapp/render_markdown/95e94192-e06f-5008-bf5b-f7879184d2e1/2364-04.md",
+      "modified_at": "2364-04-11T00:12:00+00:00",
       "provider": "whatsapp",
       "renderer_version": "rust-v1.6",
       "source_id": "whatsapp",
-      "title": "+17015550102",
-      "updated_at": "2364-04-11T00:12:00+00:00"
+      "title": "+17015550102"
     },
     {
       "bucket_key": "b168a24b-fddb-55c2-88fe-523dec59fd5c",
@@ -646,47 +646,47 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "b168a24b-fddb-55c2-88fe-523dec59fd5c",
       "md_path": "slack/render_markdown/b168a24b-fddb-55c2-88fe-523dec59fd5c/all.md",
+      "modified_at": "2369-05-28T15:21:43+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "@William T. Riker, Worf",
-      "updated_at": "2369-05-28T15:21:43+00:00"
+      "title": "@William T. Riker, Worf"
     },
     {
       "bucket_key": "b1d6e000-1701-4d00-8000-000000000001",
-      "created_at": "2369-04-15T00:02:00.000Z",
+      "created_at": "2369-04-15T00:01:00.000Z",
       "kind": "page",
       "markdown_uuid": "b1d6e000-1701-4d00-8000-000000000001",
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/index.md",
+      "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
       "renderer_version": "rust-v1.3",
       "source_id": "notion",
-      "title": "Bridge Operations Handbook",
-      "updated_at": "2369-04-15T00:02:00.000Z"
+      "title": "Bridge Operations Handbook"
     },
     {
       "bucket_key": "b1d6e000-1701-4d00-8000-000000000002",
-      "created_at": "2369-04-15T00:02:00.000Z",
+      "created_at": "2369-04-15T00:01:00.000Z",
       "kind": "page",
       "markdown_uuid": "b1d6e000-1701-4d00-8000-000000000002",
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000002/index.md",
+      "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
       "renderer_version": "rust-v1.3",
       "source_id": "notion",
-      "title": "Shift Roster",
-      "updated_at": "2369-04-15T00:02:00.000Z"
+      "title": "Shift Roster"
     },
     {
       "bucket_key": "b1d6e000-1701-4d00-8000-000000000003",
-      "created_at": "2369-04-15T00:02:00.000Z",
+      "created_at": "2369-04-15T00:01:00.000Z",
       "kind": "page",
       "markdown_uuid": "b1d6e000-1701-4d00-8000-000000000003",
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000003/index.md",
+      "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
       "renderer_version": "rust-v1.3",
       "source_id": "notion",
-      "title": "Incident Log: Stardate 47988.1",
-      "updated_at": "2369-04-15T00:02:00.000Z"
+      "title": "Incident Log: Stardate 47988.1"
     },
     {
       "bucket_key": null,
@@ -694,11 +694,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "b4a5b16d-4952-5ea3-b9bb-4d1b26354424",
       "md_path": "tng_pdfs/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "tng_pdfs",
-      "title": "tng_pdfs storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "tng_pdfs storage"
     },
     {
       "bucket_key": "b52e719c-9f85-5e53-bdd3-483ba67e5637",
@@ -706,11 +706,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "b52e719c-9f85-5e53-bdd3-483ba67e5637",
       "md_path": "tng_email/render_markdown/b52e719c-9f85-5e53-bdd3-483ba67e5637/all.md",
+      "modified_at": "2026-01-06T08:00:00+00:00",
       "provider": "email",
       "renderer_version": "rust-v1.7",
       "source_id": "tng_email",
-      "title": "Your shore leave awaits!",
-      "updated_at": "2026-01-06T08:00:00+00:00"
+      "title": "Your shore leave awaits!"
     },
     {
       "bucket_key": "b55690ec-c377-56ca-bf0a-e51a006a1071",
@@ -718,11 +718,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "b55690ec-c377-56ca-bf0a-e51a006a1071",
       "md_path": "linkedin/render_markdown/b55690ec-c377-56ca-bf0a-e51a006a1071/index.md",
+      "modified_at": null,
       "provider": "linkedin",
       "renderer_version": "rust-v1.3",
       "source_id": "linkedin",
-      "title": "Connections",
-      "updated_at": "2369-04-09T00:00:00+00:00"
+      "title": "Connections"
     },
     {
       "bucket_key": null,
@@ -730,11 +730,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "bb5586df-2fed-5980-a85a-aadb8db08315",
       "md_path": "ship-air/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "ship-air",
-      "title": "ship-air storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "ship-air storage"
     },
     {
       "bucket_key": "bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0",
@@ -742,23 +742,23 @@ expression: snapshot
       "kind": "document",
       "markdown_uuid": "bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0",
       "md_path": "claude-api/render_markdown/bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0/all.md",
+      "modified_at": "2364-03-02T11:30:00+00:00",
       "provider": "claude",
       "renderer_version": "rust-v1.7",
       "source_id": "claude-api",
-      "title": "Bridge Operations",
-      "updated_at": "2364-03-02T11:30:00+00:00"
+      "title": "Bridge Operations"
     },
     {
       "bucket_key": "c27813c9-e0d8-551d-87fe-33ed24b93bb6",
-      "created_at": "2370-04-15T00:00:00Z",
+      "created_at": null,
       "kind": "chat",
       "markdown_uuid": "c27813c9-e0d8-551d-87fe-33ed24b93bb6",
       "md_path": "tng_contacts/render_markdown/c27813c9-e0d8-551d-87fe-33ed24b93bb6/index.md",
+      "modified_at": "2370-04-15T00:00:00Z",
       "provider": "contacts",
       "renderer_version": "rust-v1.3",
       "source_id": "tng_contacts",
-      "title": "Bridge",
-      "updated_at": "2370-04-15T00:00:00Z"
+      "title": "Bridge"
     },
     {
       "bucket_key": "c99c303c-2182-50ac-a7e2-321ead150a4c",
@@ -766,11 +766,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
       "md_path": "tng_email/render_markdown/c99c303c-2182-50ac-a7e2-321ead150a4c/all.md",
+      "modified_at": "2026-01-05T11:15:00+00:00",
       "provider": "email",
       "renderer_version": "rust-v1.7",
       "source_id": "tng_email",
-      "title": "Mission Briefing — Sector 001",
-      "updated_at": "2026-01-05T11:15:00+00:00"
+      "title": "Mission Briefing — Sector 001"
     },
     {
       "bucket_key": "a05ba898-60e4-589d-babb-abcb65b80773",
@@ -778,11 +778,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "cb0ffcf2-dcc8-52c4-8f1a-f9b1c53782c7",
       "md_path": "google-takeout/render_markdown/a05ba898-60e4-589d-babb-abcb65b80773/2364-03.md",
+      "modified_at": "2364-03-03T19:00:00+00:00",
       "provider": "google_takeout",
       "renderer_version": "rust-v1.2",
       "source_id": "google-takeout",
-      "title": "Wesley Crusher",
-      "updated_at": "2364-03-03T19:00:00+00:00"
+      "title": "Wesley Crusher"
     },
     {
       "bucket_key": "d0000001-1701-4d00-8000-000000000001",
@@ -790,11 +790,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "d0000001-1701-4d00-8000-000000000001",
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000001.md",
+      "modified_at": "2369-04-15T01:05:00.000Z",
       "provider": "notion",
       "renderer_version": "rust-v1.3",
       "source_id": "notion",
-      "title": "Bridge Operations Handbook",
-      "updated_at": "2369-04-15T01:05:00.000Z"
+      "title": "Bridge Operations Handbook"
     },
     {
       "bucket_key": "d0000001-1701-4d00-8000-000000000002",
@@ -802,11 +802,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "d0000001-1701-4d00-8000-000000000002",
       "md_path": "notion/render_markdown/pages/b1d6e000-1701-4d00-8000-000000000001/threads/d0000001-1701-4d00-8000-000000000002.md",
+      "modified_at": "2369-04-15T01:10:00.000Z",
       "provider": "notion",
       "renderer_version": "rust-v1.3",
       "source_id": "notion",
-      "title": "Bridge Operations Handbook",
-      "updated_at": "2369-04-15T01:10:00.000Z"
+      "title": "Bridge Operations Handbook"
     },
     {
       "bucket_key": "d1f64243-f79a-5057-a85b-b5f6908ecf52",
@@ -814,11 +814,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "d1f64243-f79a-5057-a85b-b5f6908ecf52",
       "md_path": "chatgpt-api/render_markdown/d1f64243-f79a-5057-a85b-b5f6908ecf52/all.md",
+      "modified_at": "2370-10-25T08:05:20+00:00",
       "provider": "chatgpt",
       "renderer_version": "rust-v1.8",
       "source_id": "chatgpt-api",
-      "title": "Polynomial Fit for Sensor Calibration",
-      "updated_at": "2370-10-25T08:05:20+00:00"
+      "title": "Polynomial Fit for Sensor Calibration"
     },
     {
       "bucket_key": "6d7fadb9-51d2-5d1c-9ec1-54814773f24b",
@@ -826,11 +826,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "d223f2f7-3bec-5db5-ab16-c856ffbfb7bf",
       "md_path": "google-takeout/render_markdown/6d7fadb9-51d2-5d1c-9ec1-54814773f24b/2364-03.md",
+      "modified_at": "2364-03-02T18:00:00+00:00",
       "provider": "google_takeout",
       "renderer_version": "rust-v1.2",
       "source_id": "google-takeout",
-      "title": "Jean-Luc Picard",
-      "updated_at": "2364-03-02T18:00:00+00:00"
+      "title": "Jean-Luc Picard"
     },
     {
       "bucket_key": null,
@@ -838,11 +838,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "d2b2905f-efc5-5cf0-a2d5-7fffe2272a5c",
       "md_path": "claude-api/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "claude-api",
-      "title": "claude-api storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "claude-api storage"
     },
     {
       "bucket_key": "dcda988e-79b9-5b19-b3d7-7325524c86dd",
@@ -850,11 +850,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "dcda988e-79b9-5b19-b3d7-7325524c86dd",
       "md_path": "slack/render_markdown/dcda988e-79b9-5b19-b3d7-7325524c86dd/all.md",
+      "modified_at": "2369-05-28T15:18:20+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "#ten-forward",
-      "updated_at": "2369-05-28T15:18:20+00:00"
+      "title": "#ten-forward"
     },
     {
       "bucket_key": "dfabaa93-8b49-5738-bfc5-f2671bace58a",
@@ -862,11 +862,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "dfabaa93-8b49-5738-bfc5-f2671bace58a",
       "md_path": "linkedin/render_markdown/dfabaa93-8b49-5738-bfc5-f2671bace58a/index.md",
+      "modified_at": null,
       "provider": "linkedin",
       "renderer_version": "rust-v1.3",
       "source_id": "linkedin",
-      "title": "Connections",
-      "updated_at": "2369-04-08T00:00:00+00:00"
+      "title": "Connections"
     },
     {
       "bucket_key": "72999447-e9d8-5879-b3cb-655742ecf5ea",
@@ -874,11 +874,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "e28ed67d-507b-5319-8732-00e249b6ebf6",
       "md_path": "beeper/render_markdown/signal/72999447-e9d8-5879-b3cb-655742ecf5ea/2024-03.md",
+      "modified_at": "2024-04-02T23:20:00.000+00:00",
       "provider": "beeper",
       "renderer_version": "rust-v1.2",
       "source_id": "beeper",
-      "title": "tng-data-conv-uuid-0001",
-      "updated_at": "2024-04-02T23:20:00.000+00:00"
+      "title": "tng-data-conv-uuid-0001"
     },
     {
       "bucket_key": "e5c54890-5a44-5a3d-9efe-e28b37b48edf",
@@ -886,11 +886,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "e5c54890-5a44-5a3d-9efe-e28b37b48edf",
       "md_path": "slack/render_markdown/e5c54890-5a44-5a3d-9efe-e28b37b48edf/all.md",
+      "modified_at": "2369-05-28T15:21:42+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "@Lt. Cmdr. Data",
-      "updated_at": "2369-05-28T15:21:42+00:00"
+      "title": "@Lt. Cmdr. Data"
     },
     {
       "bucket_key": "31ab2c83-77e2-53bd-b225-c3a70f9acec4",
@@ -898,23 +898,23 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "e7293acc-95ca-573c-8ad8-aaee090b4b73",
       "md_path": "google-takeout/render_markdown/31ab2c83-77e2-53bd-b225-c3a70f9acec4/2025-02.md",
+      "modified_at": "2025-02-11T11:33:35+00:00",
       "provider": "google_takeout",
       "renderer_version": "rust-v1.2",
       "source_id": "google-takeout",
-      "title": "Jean-Luc Picard, William Riker",
-      "updated_at": "2025-02-11T11:33:35+00:00"
+      "title": "Jean-Luc Picard, William Riker"
     },
     {
       "bucket_key": "ea19f544-e204-5348-9d08-3acdf605dc8a",
-      "created_at": "2369-04-14T23:55:00+00:00",
+      "created_at": "2369-04-14T00:00:00+00:00",
       "kind": "chat",
       "markdown_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
       "md_path": "yolink/render_markdown/index.md",
+      "modified_at": "2369-04-14T23:55:00+00:00",
       "provider": "yolink",
       "renderer_version": "rust-v1.3",
       "source_id": "yolink",
-      "title": "YoLink sensors — yolink",
-      "updated_at": "2369-04-14T23:55:00+00:00"
+      "title": "YoLink sensors — yolink"
     },
     {
       "bucket_key": "ca23bf72-c6a4-5838-a604-d82006926dc3",
@@ -922,11 +922,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "eb85a327-9da4-5e46-87f2-b97cd29ccc9f",
       "md_path": "beeper/render_markdown/signal/ca23bf72-c6a4-5838-a604-d82006926dc3/2024-04.md",
+      "modified_at": "2024-04-10T19:01:00.000+00:00",
       "provider": "beeper",
       "renderer_version": "rust-v1.2",
       "source_id": "beeper",
-      "title": "tng-crusher-conv-uuid-0002",
-      "updated_at": "2024-04-10T19:01:00.000+00:00"
+      "title": "tng-crusher-conv-uuid-0002"
     },
     {
       "bucket_key": "ecb57e3b-24ce-546b-9201-61bf610b0783",
@@ -934,11 +934,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "ecb57e3b-24ce-546b-9201-61bf610b0783",
       "md_path": "claude-api/render_markdown/ecb57e3b-24ce-546b-9201-61bf610b0783/all.md",
+      "modified_at": "2369-04-16T09:01:30+00:00",
       "provider": "claude",
       "renderer_version": "rust-v1.7",
       "source_id": "claude-api",
-      "title": "Borg Encryption Signature Lookup",
-      "updated_at": "2369-04-16T09:01:30+00:00"
+      "title": "Borg Encryption Signature Lookup"
     },
     {
       "bucket_key": "efd7f060-7cc7-508b-811f-afbb133a9ff6",
@@ -946,11 +946,11 @@ expression: snapshot
       "kind": "thread",
       "markdown_uuid": "efd7f060-7cc7-508b-811f-afbb133a9ff6",
       "md_path": "slack/render_markdown/efd7f060-7cc7-508b-811f-afbb133a9ff6/all.md",
+      "modified_at": "2369-05-28T15:18:20+00:00",
       "provider": "slack",
       "renderer_version": "rust-v1.6",
       "source_id": "slack",
-      "title": "#bridge",
-      "updated_at": "2369-05-28T15:18:20+00:00"
+      "title": "#bridge"
     },
     {
       "bucket_key": "8047c185-16c7-562a-9f2f-55565ca61367",
@@ -958,11 +958,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
       "md_path": "signal/render_markdown/8047c185-16c7-562a-9f2f-55565ca61367/2364-04.md",
+      "modified_at": "2364-04-11T00:09:00+00:00",
       "provider": "signal",
       "renderer_version": "rust-v1.5",
       "source_id": "signal",
-      "title": "Will Riker",
-      "updated_at": "2364-04-11T00:09:00+00:00"
+      "title": "Will Riker"
     },
     {
       "bucket_key": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
@@ -970,11 +970,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
       "md_path": "tng_email/render_markdown/f568b5f9-c761-5a5d-be84-35cf144c21ba/all.md",
+      "modified_at": "2026-01-07T09:00:00+00:00",
       "provider": "email",
       "renderer_version": "rust-v1.7",
       "source_id": "tng_email",
-      "title": "Bridge status display",
-      "updated_at": "2026-01-07T09:00:00+00:00"
+      "title": "Bridge status display"
     },
     {
       "bucket_key": "f6cad624-37b7-5673-af29-80ba9aac61a5",
@@ -982,11 +982,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "f6cad624-37b7-5673-af29-80ba9aac61a5",
       "md_path": "claude-api/render_markdown/f6cad624-37b7-5673-af29-80ba9aac61a5/all.md",
+      "modified_at": "2369-04-14T10:02:00+00:00",
       "provider": "claude",
       "renderer_version": "rust-v1.7",
       "source_id": "claude-api",
-      "title": "Klingon Diplomatic Greeting Drafting",
-      "updated_at": "2369-04-14T10:02:00+00:00"
+      "title": "Klingon Diplomatic Greeting Drafting"
     },
     {
       "bucket_key": "db72e3d2-9a9b-5fb8-97fc-7cce889176be",
@@ -994,11 +994,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "fc58b941-b0d2-557f-ab3c-41257357ea82",
       "md_path": "whatsapp/render_markdown/db72e3d2-9a9b-5fb8-97fc-7cce889176be/2364-04.md",
+      "modified_at": "2364-04-11T00:15:00+00:00",
       "provider": "whatsapp",
       "renderer_version": "rust-v1.6",
       "source_id": "whatsapp",
-      "title": "+17015550103",
-      "updated_at": "2364-04-11T00:15:00+00:00"
+      "title": "+17015550103"
     }
   ],
   "dolt_log": [
@@ -1625,7 +1625,7 @@ expression: snapshot
       "channel": "Bridge",
       "conversation_name": "Bridge",
       "conversation_uuid": "5156e157-6274-594f-886c-dbb4e4db0ad9",
-      "created_at": "2370-08-22T00:00:00Z",
+      "created_at": null,
       "entire_chat": "/contact/14207f4b-af38-5ee1-8d55-6fd426d572f2",
       "git_sha": null,
       "kind": "Contact",
@@ -1712,7 +1712,7 @@ expression: snapshot
       "channel": "Engineering",
       "conversation_name": "Engineering",
       "conversation_uuid": "88e14637-6031-536e-be8f-bba2835bf431",
-      "created_at": "2370-09-04T00:00:00Z",
+      "created_at": null,
       "entire_chat": "/contact/1544ef1c-ce85-59cd-a01f-235133651a2c",
       "git_sha": null,
       "kind": "Contact",
@@ -2031,7 +2031,7 @@ expression: snapshot
       "channel": "Bridge",
       "conversation_name": "Bridge",
       "conversation_uuid": "5156e157-6274-594f-886c-dbb4e4db0ad9",
-      "created_at": "2370-02-11T00:00:00Z",
+      "created_at": null,
       "entire_chat": "/contact/1db2d2f9-e79a-58ad-978f-eb56fba5060f",
       "git_sha": null,
       "kind": "Contact",
@@ -2466,7 +2466,7 @@ expression: snapshot
       "channel": null,
       "conversation_name": "Garmin — Jean-Luc Picard",
       "conversation_uuid": "3b570c00-a0c4-5acd-8c55-d957292d6822",
-      "created_at": "2369-04-14T06:45:00+00:00",
+      "created_at": "2369-04-02T06:45:00+00:00",
       "entire_chat": "/chat/3b570c00-a0c4-5acd-8c55-d957292d6822",
       "git_sha": null,
       "kind": "Garmin Weight",
@@ -2669,7 +2669,7 @@ expression: snapshot
       "channel": null,
       "conversation_name": "AirVisual monitors — ship-air",
       "conversation_uuid": "434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
-      "created_at": "2024-09-01T09:01:50+00:00",
+      "created_at": "2024-08-30T16:00:00+00:00",
       "entire_chat": "/chat/434fc95f-57e4-55e3-8d21-0f3fc9d0632f",
       "git_sha": null,
       "kind": "Sensor Timeseries",
@@ -3626,7 +3626,7 @@ expression: snapshot
       "channel": null,
       "conversation_name": "Recalibrate replicator templates for Earl Grey, hot",
       "conversation_uuid": "6a0d7000-3fa1-5479-9d32-6ba74d546fa8",
-      "created_at": "2369-04-15T11:30:00Z",
+      "created_at": "2369-04-15T08:00:00Z",
       "entire_chat": "/chat/6a0d7000-3fa1-5479-9d32-6ba74d546fa8",
       "git_sha": "1701d00042aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "kind": "GitHub PR",
@@ -3771,7 +3771,7 @@ expression: snapshot
       "channel": null,
       "conversation_name": "Holodeck safety interlock regression test",
       "conversation_uuid": "6fc719a5-94c3-5757-a26f-2f34579d2508",
-      "created_at": "2369-04-15T14:30:00.000Z",
+      "created_at": "2369-04-15T12:00:00.000Z",
       "entire_chat": "/chat/6fc719a5-94c3-5757-a26f-2f34579d2508",
       "git_sha": "1701d018bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "kind": "GitLab MR",
@@ -3858,7 +3858,7 @@ expression: snapshot
       "channel": null,
       "conversation_name": "Add Earl Grey, hot to replicator menu",
       "conversation_uuid": "743537a5-d2bc-54f5-a660-97cb674ba8c8",
-      "created_at": "2369-04-15T11:30:00.000Z",
+      "created_at": "2369-04-15T08:00:00.000Z",
       "entire_chat": "/chat/743537a5-d2bc-54f5-a660-97cb674ba8c8",
       "git_sha": "1701d017aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "kind": "GitLab MR",
@@ -4206,7 +4206,7 @@ expression: snapshot
       "channel": null,
       "conversation_name": "Add holodeck safety interlock for live phaser fire",
       "conversation_uuid": "8365cf2d-2561-5cc5-bba0-657a8b9f35a2",
-      "created_at": "2369-04-15T14:30:00Z",
+      "created_at": "2369-04-15T12:00:00Z",
       "entire_chat": "/chat/8365cf2d-2561-5cc5-bba0-657a8b9f35a2",
       "git_sha": "1701d00043bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "kind": "GitHub PR",
@@ -5308,7 +5308,7 @@ expression: snapshot
       "channel": null,
       "conversation_name": "Bridge Operations Handbook",
       "conversation_uuid": "b1d6e000-1701-4d00-8000-000000000001",
-      "created_at": "2369-04-15T00:02:00.000Z",
+      "created_at": "2369-04-15T00:01:00.000Z",
       "entire_chat": "/notion/page/b1d6e000-1701-4d00-8000-000000000001",
       "git_sha": null,
       "kind": "Notion Page",
@@ -5337,7 +5337,7 @@ expression: snapshot
       "channel": null,
       "conversation_name": "Shift Roster",
       "conversation_uuid": "b1d6e000-1701-4d00-8000-000000000002",
-      "created_at": "2369-04-15T00:02:00.000Z",
+      "created_at": "2369-04-15T00:01:00.000Z",
       "entire_chat": "/notion/page/b1d6e000-1701-4d00-8000-000000000002",
       "git_sha": null,
       "kind": "Notion Page",
@@ -5366,7 +5366,7 @@ expression: snapshot
       "channel": null,
       "conversation_name": "Incident Log: Stardate 47988.1",
       "conversation_uuid": "b1d6e000-1701-4d00-8000-000000000003",
-      "created_at": "2369-04-15T00:02:00.000Z",
+      "created_at": "2369-04-15T00:01:00.000Z",
       "entire_chat": "/notion/page/b1d6e000-1701-4d00-8000-000000000003",
       "git_sha": null,
       "kind": "Notion Page",
@@ -5714,7 +5714,7 @@ expression: snapshot
       "channel": "Bridge",
       "conversation_name": "Bridge",
       "conversation_uuid": "5156e157-6274-594f-886c-dbb4e4db0ad9",
-      "created_at": "2370-04-15T00:00:00Z",
+      "created_at": null,
       "entire_chat": "/contact/c27813c9-e0d8-551d-87fe-33ed24b93bb6",
       "git_sha": null,
       "kind": "Contact",
@@ -6700,7 +6700,7 @@ expression: snapshot
       "channel": null,
       "conversation_name": "YoLink sensors — yolink",
       "conversation_uuid": "ea19f544-e204-5348-9d08-3acdf605dc8a",
-      "created_at": "2369-04-14T23:55:00+00:00",
+      "created_at": "2369-04-14T00:00:00+00:00",
       "entire_chat": "/chat/ea19f544-e204-5348-9d08-3acdf605dc8a",
       "git_sha": null,
       "kind": "Sensor Timeseries",

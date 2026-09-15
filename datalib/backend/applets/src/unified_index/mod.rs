@@ -225,7 +225,7 @@ async fn search_handler(
                 FreeTextMode::Hybrid => "hybrid",
                 FreeTextMode::Vsearch => "vsearch",
             },
-            "resolved_type": format!("{:?}", parsed.resolved_type),
+            "documents": parsed.documents,
             "filters": parsed.filters.iter()
                 .map(|(k, v)| (format!("{:?}", k), v.clone()))
                 .collect::<Vec<_>>(),
@@ -288,7 +288,9 @@ async fn run_qmd_search(
     // (a path the grid doesn't know about, e.g. a stale render under an old
     // layout) resolve to no rows; flag them loudly so their dropped score is
     // visible. (ERROR level; this file logs via eprintln!.)
-    let ranked = idx.ranked_rows_one_per_doc(&hits, |h| {
+    // An `is:document` search wants the document a hit is in, not the
+    // message it landed on — which the SQL filter would then drop.
+    let ranked = idx.ranked_rows_one_per_doc(&hits, parsed.documents == Some(true), |h| {
         eprintln!(
             "ERROR search: qmd hit resolved to no grid rows: path={:?} score={}",
             h.path, h.score

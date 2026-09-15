@@ -24,10 +24,15 @@ fn blake3_hex(s: &str) -> String {
 pub enum GridRowError {
     /// A required identity column was empty / whitespace-only.
     EmptyField { field: &'static str },
-    /// `created_at` was `Some` but not RFC 3339 with an explicit offset.
-    /// The grid derives its sortable `created_at_utc` column from this, so
-    /// an unparseable value would sort wrong and render verbatim.
-    InvalidStamp { value: String, reason: String },
+    /// `created_at` or `modified_at` was `Some` but not RFC 3339 with an
+    /// explicit offset. The grid derives its sortable `_utc` twin from
+    /// the stamp, so an unparseable value would sort wrong and render
+    /// verbatim.
+    InvalidStamp {
+        field: &'static str,
+        value: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for GridRowError {
@@ -36,9 +41,13 @@ impl std::fmt::Display for GridRowError {
             GridRowError::EmptyField { field } => {
                 write!(f, "grid_row field `{field}` must be non-empty")
             }
-            GridRowError::InvalidStamp { value, reason } => write!(
+            GridRowError::InvalidStamp {
+                field,
+                value,
+                reason,
+            } => write!(
                 f,
-                "grid_row created_at {value:?} must be RFC 3339 with an explicit \
+                "grid_row {field} {value:?} must be RFC 3339 with an explicit \
                  offset (e.g. 2026-06-16T00:00:00+00:00): {reason}"
             ),
         }
@@ -47,24 +56,30 @@ impl std::fmt::Display for GridRowError {
 
 impl std::error::Error for GridRowError {}
 
+/// The `_utc` / `_offset` twins of a record stamp: the instant in UTC
+/// at one width, so text order is time order, and the offset the
+/// source wrote it in (`+05:30`, `-07:00`) so the UI can show the
+/// wall-clock it was recorded at. Both come from one parse and are
+/// always both present or both absent.
+fn split(stamp: Option<&str>) -> Option<(String, String)> {
+    stamp.and_then(datalib_time::split_record_stamp)
+}
+
 impl GridRow {
     pub fn derived_created_at_utc(&self) -> Option<String> {
-        self.created_at
-            .as_deref()
-            .and_then(datalib_time::split_record_stamp)
-            .map(|(utc, _offset)| utc)
+        split(self.created_at.as_deref()).map(|(utc, _)| utc)
     }
 
-    /// `created_offset` — the original UTC offset (`+05:30`, `-07:00`),
-    /// preserved so the UI can re-render the instant in the wall-clock
-    /// zone it was recorded in. NULL whenever
-    /// [`Self::derived_created_at_utc`] is NULL; the two are derived from
-    /// one parse and are always both present or both absent.
     pub fn derived_created_offset(&self) -> Option<String> {
-        self.created_at
-            .as_deref()
-            .and_then(datalib_time::split_record_stamp)
-            .map(|(_utc, offset)| offset)
+        split(self.created_at.as_deref()).map(|(_, offset)| offset)
+    }
+
+    pub fn derived_modified_at_utc(&self) -> Option<String> {
+        split(self.modified_at.as_deref()).map(|(utc, _)| utc)
+    }
+
+    pub fn derived_modified_offset(&self) -> Option<String> {
+        split(self.modified_at.as_deref()).map(|(_, offset)| offset)
     }
 }
 
@@ -87,6 +102,8 @@ pub struct GridRowBuilder {
     kind: String,
     source_label: String,
     created_at: Option<String>,
+    modified_at: Option<String>,
+    is_document: bool,
     author: Option<String>,
     account: Option<String>,
     project: Option<String>,
@@ -153,6 +170,7 @@ impl GridRowBuilder {
     }
 
     opt_setter!(created_at);
+    opt_setter!(modified_at);
     opt_setter!(author);
     opt_setter!(account);
     opt_setter!(project);
@@ -171,6 +189,13 @@ impl GridRowBuilder {
     opt_setter!(notion_block_uuid);
     opt_setter!(markdown_uuid);
 
+    /// Mark this row as the one that *is* the rendered document. Exactly
+    /// one row per document says so; the render store checks.
+    pub fn is_document(mut self, v: bool) -> Self {
+        self.is_document = v;
+        self
+    }
+
     pub fn message_index(mut self, v: impl Into<Option<i64>>) -> Self {
         self.message_index = v.into();
         self
@@ -187,10 +212,10 @@ impl GridRowBuilder {
     }
 
     /// Validate and finalize the row, recording what had to give. A
-    /// `created_at` that will not parse is nulled and the row kept — a
-    /// record with an identity is still a record, and the grid only
-    /// loses its place in time order; a row with no identity is dropped
-    /// and `None` comes back so the caller keeps going.
+    /// stamp that will not parse is nulled and the row kept — a record
+    /// with an identity is still a record, and the grid only loses its
+    /// place in time order; a row with no identity is dropped and `None`
+    /// comes back so the caller keeps going.
     pub fn build_or_record(
         mut self,
         source_id: &str,
@@ -201,9 +226,13 @@ impl GridRowBuilder {
         // Keep the identity before `build` consumes the builder, so a
         // rejected row can still be named.
         let uuid = self.uuid.clone();
-        if let Some(ts) = self.created_at.take() {
+        for (field, slot) in [
+            ("created_at", &mut self.created_at),
+            ("modified_at", &mut self.modified_at),
+        ] {
+            let Some(ts) = slot.take() else { continue };
             if validate_iso_offset(&ts).is_ok() {
-                self.created_at = Some(ts);
+                *slot = Some(ts);
             } else {
                 problems.push(problem_row(
                     problem_key(&uuid, source_id, scope_key, &ts),
@@ -212,7 +241,7 @@ impl GridRowBuilder {
                     render_version,
                     Outcome::Nulled,
                     Problem {
-                        field: Some("created_at".to_string()),
+                        field: Some(field.to_string()),
                         path: None,
                         reason: Reason::CoercionFailed,
                         rule: None,
@@ -227,7 +256,7 @@ impl GridRowBuilder {
                 let field = match &e {
                     GridRowError::EmptyField { field } => *field,
                     // Cleared above.
-                    GridRowError::InvalidStamp { .. } => "created_at",
+                    GridRowError::InvalidStamp { field, .. } => *field,
                 };
                 problems.push(problem_row(
                     problem_key(&uuid, source_id, scope_key, &e.to_string()),
@@ -264,11 +293,17 @@ impl GridRowBuilder {
                 return Err(GridRowError::EmptyField { field });
             }
         }
-        if let Some(ts) = &self.created_at {
-            validate_iso_offset(ts).map_err(|e| GridRowError::InvalidStamp {
-                value: ts.clone(),
-                reason: e.to_string(),
-            })?;
+        for (field, stamp) in [
+            ("created_at", &self.created_at),
+            ("modified_at", &self.modified_at),
+        ] {
+            if let Some(ts) = stamp {
+                validate_iso_offset(ts).map_err(|e| GridRowError::InvalidStamp {
+                    field,
+                    value: ts.clone(),
+                    reason: e.to_string(),
+                })?;
+            }
         }
         Ok(GridRow {
             uuid: self.uuid,
@@ -276,6 +311,8 @@ impl GridRowBuilder {
             kind: self.kind,
             source_label: self.source_label,
             created_at: self.created_at,
+            modified_at: self.modified_at,
+            is_document: self.is_document,
             author: self.author,
             account: self.account,
             project: self.project,
@@ -428,6 +465,46 @@ mod builder_tests {
             "{}",
             problems[0].problems
         );
+    }
+
+    /// `modified_at` is held to the same form as `created_at`, and the
+    /// problem row names which of the two gave.
+    #[test]
+    fn a_bad_modified_at_is_nulled_by_name() {
+        let mut problems = Vec::new();
+        let row = ok_builder()
+            .created_at(Some("2026-06-16T00:00:00+00:00".to_string()))
+            .modified_at(Some("yesterday".to_string()))
+            .build_or_record("src", "doc-1", 3, &mut problems)
+            .expect("the row survives");
+        assert_eq!(row.created_at.as_deref(), Some("2026-06-16T00:00:00+00:00"));
+        assert!(row.modified_at.is_none());
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0].problems.contains("modified_at"),
+            "{}",
+            problems[0].problems
+        );
+        let err = ok_builder()
+            .modified_at(Some("yesterday".to_string()))
+            .build()
+            .expect_err("rejected outright by build");
+        assert!(
+            matches!(
+                err,
+                GridRowError::InvalidStamp {
+                    field: "modified_at",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_row_is_not_a_document_unless_it_says_so() {
+        assert!(!ok_builder().build().unwrap().is_document);
+        assert!(ok_builder().is_document(true).build().unwrap().is_document);
     }
 
     #[test]

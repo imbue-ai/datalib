@@ -1361,6 +1361,10 @@ grid_rows
     created_at
     created_at_utc
     created_offset
+    modified_at
+    modified_at_utc
+    modified_offset
+    is_document
     author
     account
     project
@@ -1391,7 +1395,7 @@ markdowns
     kind
     title
     created_at
-    updated_at
+    modified_at
     md_path
     upstream_cursor
     renderer_version

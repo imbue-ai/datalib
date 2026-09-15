@@ -153,8 +153,11 @@ Pick the surface that fits the question:
 - **SQL over everything** — the `grid_rows` union table in
   `unified_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
-  `created_at`, `author`, `channel`, `conversation_uuid`, `text`,
-  `entire_chat`, etc.
+  `created_at`, `modified_at`, `author`, `channel`, `conversation_uuid`,
+  `text`, `entire_chat`, etc. `is_document = 1` picks the one row per
+  rendered document — the thread, the conversation, the PR, the page —
+  and leaves out the messages inside them, which is usually the row
+  count you meant.
 
   Read it with **`datalib-doltlite`**, which is in the release tarball
   and so sits next to `datalib-dag` in `~/.local/bin` (it is plain
@@ -204,7 +207,9 @@ Pick the surface that fits the question:
   `field:value`, `-field:value`, quoted values; fields include
   `source:`, `source_id:` (`source_name:` is an accepted alias),
   `kind:`, `channel:`, `author:`, `account:`,
-  `project:`, `before:`/`after:`, `convo:`), `GET /api/log?q=…` (the
+  `project:`, `before:`/`after:`, `convo:`, `is:document` for the one
+  row per rendered document and `-is:document` for the rows inside
+  them), `GET /api/log?q=…` (the
   runner's log lines in the same grammar — keys `run:`, `step:`,
   `level:`, `stream:`, `target:`, `thread:`, `msg:`; free text is a
   substring of the line; `run=`/`step=` narrow it, `after_seq=` tails),

@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
@@ -875,14 +875,15 @@ async fn apply_markdown(
     // by validation — is absent, and its `markdowns` row goes with the
     // rest, or a stale `bucket_key` and title would outlive the render
     // that replaced them. The problems recording why stay.
-    let Some(canonical) = pick_canonical(&md.rows, &md.markdown_uuid) else {
+    if md.rows.is_empty() {
         delete_document_rows(conn, &md.markdown_uuid).await?;
         tracing::info!(
             document = %md.markdown_uuid,
             "render: this document has no rows left; dropped it",
         );
         return Ok(0);
-    };
+    }
+    let canonical = document_row(&md.rows, &md.markdown_uuid)?;
 
     sqlx::query("DELETE FROM grid_rows WHERE markdown_uuid = ?")
         .bind(&md.markdown_uuid)
@@ -916,12 +917,25 @@ async fn apply_markdown(
     Ok(md.rows.len())
 }
 
-/// The row whose `uuid` matches `markdown_uuid` — the chat/thread/PR/page
-/// row — falling back to the first row.
-fn pick_canonical<'a>(rows: &'a [GridRow], markdown_uuid: &str) -> Option<&'a GridRow> {
-    rows.iter()
-        .find(|r| r.uuid == markdown_uuid)
-        .or_else(|| rows.first())
+/// The one row that is the document — the chat/thread/PR/page row, the
+/// renderer having said so with `is_document`. Anything but exactly one
+/// is a renderer bug, and a bug here is one the grid cannot show, so it
+/// fails the render rather than guessing which row was meant.
+fn document_row<'a>(rows: &'a [GridRow], markdown_uuid: &str) -> Result<&'a GridRow> {
+    let mut documents = rows.iter().filter(|r| r.is_document);
+    let (first, second) = (documents.next(), documents.next());
+    match (first, second) {
+        (Some(row), None) => Ok(row),
+        (None, _) => bail!(
+            "document {markdown_uuid}: none of its {} rows is marked is_document",
+            rows.len()
+        ),
+        (Some(a), Some(b)) => bail!(
+            "document {markdown_uuid}: rows {} and {} are both marked is_document",
+            a.uuid,
+            b.uuid
+        ),
+    }
 }
 
 /// The run-pinned `--now` when there is one, else the clock, as the
@@ -946,13 +960,6 @@ async fn upsert_markdown(
     qmd_path: &str,
 ) -> Result<()> {
     let kind = doc_kind_for(&canonical.kind);
-    let timestamps: Vec<&str> = md
-        .rows
-        .iter()
-        .filter_map(|r| r.created_at.as_deref())
-        .collect();
-    let created_at = timestamps.iter().min().copied();
-    let updated_at = timestamps.iter().max().copied();
     let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
     // Fall back to the canonical row's provider when build_grid_index
     // rebuilds from disk without the config-level name.
@@ -969,7 +976,7 @@ async fn upsert_markdown(
         .context("delete prior markdowns row")?;
     sqlx::query(
         "INSERT INTO markdowns \
-         (markdown_uuid, source_id, provider, kind, title, created_at, updated_at, \
+         (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
           md_path, upstream_cursor, renderer_version, bucket_key) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -978,8 +985,8 @@ async fn upsert_markdown(
     .bind(&canonical.provider)
     .bind(kind)
     .bind(&canonical.conversation_name)
-    .bind(created_at)
-    .bind(updated_at)
+    .bind(canonical.created_at.as_deref())
+    .bind(canonical.modified_at.as_deref())
     .bind(qmd_path)
     .bind(md.upstream_cursor.as_deref())
     .bind(&version_str)
@@ -1110,6 +1117,8 @@ mod insert_round_trip_tests {
             // Offset-bearing and parseable, so the two `#[derived]` columns
             // are non-NULL too.
             created_at: Some("2026-06-02T13:00:00-07:00".into()),
+            modified_at: Some("2026-06-03T09:30:00-07:00".into()),
+            is_document: true,
             author: Some("Jean-Luc Picard".into()),
             account: Some("acct-1701".into()),
             project: Some("proj-1701".into()),
@@ -1215,6 +1224,9 @@ mod id_claim_tests {
             kind: "Chat".into(),
             source_label: "Claude".into(),
             created_at: None,
+            modified_at: None,
+            // The claims these tests make are about uuids, not documents.
+            is_document: false,
             author: None,
             account: None,
             project: None,
@@ -1346,6 +1358,8 @@ mod write_lock_tests {
             kind: "Chat".into(),
             source_label: "Claude".into(),
             created_at: Some("2026-06-02T20:00:00+00:00".into()),
+            modified_at: None,
+            is_document: true,
             author: None,
             account: Some("acct-test".into()),
             project: None,
@@ -1641,9 +1655,9 @@ mod schema_reconcile_tests {
         provider VARCHAR(32) NOT NULL,
         kind VARCHAR(32) NOT NULL,
         source_label VARCHAR(32) NOT NULL,
-        created_at VARCHAR(40),
-        created_at_utc VARCHAR(40),
-        created_offset VARCHAR(8),
+        when_ts VARCHAR(40),
+        when_ts_utc VARCHAR(40),
+        when_offset VARCHAR(8),
         author VARCHAR(255),
         account VARCHAR(96),
         project VARCHAR(96),
@@ -1757,9 +1771,10 @@ mod schema_reconcile_tests {
 
         sqlx::query(
             "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
-             entire_chat, text, upstream_id, upstream_entity_kind, upstream_scope, markdown_uuid) \
+             entire_chat, text, upstream_id, upstream_entity_kind, upstream_scope, markdown_uuid, \
+             is_document) \
              VALUES ('row-2', 'claude', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
-             'upstream-1', 'conversation', '', 'md-1')",
+             'upstream-1', 'conversation', '', 'md-1', 1)",
         )
         .execute(&pool)
         .await
@@ -1843,6 +1858,7 @@ mod source_cursor_tests {
             .text(text)
             .markdown_uuid(Some(uuid.to_string()))
             .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
+            .is_document(true)
             .build()
             .unwrap();
         RenderedMarkdown {

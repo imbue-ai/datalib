@@ -207,7 +207,8 @@ fn render_markdown(
     plots: &[(&Quantity, PlotFacts)],
 ) -> String {
     let mut out = String::with_capacity(8 * 1024);
-    let created_at = parsed.latest_ts_ms().and_then(iso);
+    let created_at = parsed.earliest_ts_ms().and_then(iso);
+    let modified_at = parsed.latest_ts_ms().and_then(iso);
 
     out.push_str("---\n");
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
@@ -216,6 +217,9 @@ fn render_markdown(
     let _ = writeln!(out, "title: {}", yaml_safe(&page_title(source_id)));
     if let Some(ts) = &created_at {
         let _ = writeln!(out, "created_at: {}", yaml_safe(ts));
+    }
+    if let Some(ts) = &modified_at {
+        let _ = writeln!(out, "modified_at: {}", yaml_safe(ts));
     }
     out.push_str("---\n\n");
 
@@ -440,7 +444,9 @@ fn build_grid_rows(
         .provider(Provider::Airvisual)
         .kind("Sensor Timeseries")
         .source_label(SOURCE_LABEL)
-        .created_at(parsed.latest_ts_ms().and_then(iso))
+        .is_document(true)
+        .created_at(parsed.earliest_ts_ms().and_then(iso))
+        .modified_at(parsed.latest_ts_ms().and_then(iso))
         .conversation_name(Some(title.clone()))
         .conversation_uuid(m_uuid.to_string())
         .entire_chat(format!("/chat/{m_uuid}"))

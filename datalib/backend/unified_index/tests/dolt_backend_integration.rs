@@ -86,11 +86,12 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     sqlx::query(
         "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, created_offset, \
          author, account, project, channel, conversation_name, conversation_uuid, \
-         message_index, entire_chat, text, slack_link, qmd_path, source_url, markdown_uuid) \
+         message_index, entire_chat, text, slack_link, qmd_path, source_url, markdown_uuid, \
+         is_document) \
          VALUES ('c-1','claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
                  '2026-04-01T10:00:00.000000Z','+00:00', \
                  NULL,'acct-a',NULL,NULL,'Test conv','c-1',NULL,'/chat/c-1', \
-                 'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1')",
+                 'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1', 1)",
     )
     .execute(repo.index_pool())
     .await
@@ -98,10 +99,10 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     sqlx::query(
         "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, created_offset, \
          author, account, project, channel, conversation_name, conversation_uuid, \
-         message_index, entire_chat, text, slack_link, markdown_uuid) \
+         message_index, entire_chat, text, slack_link, markdown_uuid, is_document) \
          VALUES ('m-1','claude','User Input','Claude','2026-04-01T10:01:00+00:00', \
                  '2026-04-01T10:01:00.000000Z','+00:00', \
-                 'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','','c-1')",
+                 'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','','c-1', 0)",
     )
     .execute(repo.index_pool())
     .await
@@ -183,21 +184,23 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     // that source's data, the measurement is datalib describing it.
     sqlx::query(
         "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, \
-         created_offset, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid) \
+         created_offset, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid, \
+         is_document) \
          VALUES ('c-1','claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
                  '2026-04-01T10:00:00.000000Z','+00:00','c-1','/chat/c-1','summary', \
-                 'claude-work/render_markdown/chats/c-1.md','c-1')",
+                 'claude-work/render_markdown/chats/c-1.md','c-1', 1)",
     )
     .execute(repo.index_pool())
     .await
     .expect("insert chat row");
     sqlx::query(
         "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, \
-         created_offset, account, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid) \
+         created_offset, account, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid, \
+         is_document) \
          VALUES ('s-1','datalib','Store','Storage','2026-04-01T10:00:00+00:00', \
                  '2026-04-01T10:00:00.000000Z','+00:00','claude-work','s-1','/chat/s-1', \
                  'claude-work/ingest/entities.doltlite_db', \
-                 'claude-work/render_markdown/_datalib/storage.md','s-1')",
+                 'claude-work/render_markdown/_datalib/storage.md','s-1', 0)",
     )
     .execute(repo.index_pool())
     .await

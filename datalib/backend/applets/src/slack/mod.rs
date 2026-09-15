@@ -467,6 +467,7 @@ mod tests {
                     "Slack Thread"
                 })
                 .source_label("Slack")
+                .is_document(index.is_none())
                 .channel(Some(channel.to_string()))
                 .created_at(Some(when.to_string()))
                 .author((!author.is_empty()).then(|| author.to_string()))
@@ -505,15 +506,30 @@ mod tests {
     }
 
     /// Like [`write_thread`], but the caller supplies each message's
-    /// index explicitly — so a test can insert them out of order.
+    /// index explicitly — so a test can insert them out of order. The
+    /// thread row the store requires is written first, stamped with the
+    /// first message's time.
     fn write_thread_rows(dir: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
         use datalib_etl_render::grid_index::RenderedMarkdown;
         use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
         use datalib_schema::grid_rows::GridRow;
 
-        let rows: Vec<GridRow> = msgs
-            .iter()
-            .map(|(index, author, text, when)| {
+        let thread = GridRow::builder()
+            .uuid(md)
+            .provider(Provider::Slack)
+            .kind("Slack Thread")
+            .source_label("Slack")
+            .is_document(true)
+            .channel(Some(channel.to_string()))
+            .created_at(msgs.first().map(|m| m.3.to_string()))
+            .conversation_uuid(md)
+            .entire_chat(format!("/chat/{md}"))
+            .text("")
+            .markdown_uuid(Some(md.to_string()))
+            .build()
+            .unwrap();
+        let rows: Vec<GridRow> = std::iter::once(thread)
+            .chain(msgs.iter().map(|(index, author, text, when)| {
                 GridRow::builder()
                     .uuid(format!("{md}-m{index}"))
                     .provider(Provider::Slack)
@@ -529,7 +545,7 @@ mod tests {
                     .markdown_uuid(Some(md.to_string()))
                     .build()
                     .unwrap()
-            })
+            }))
             .collect();
 
         let store = IndexedMarkdownStore::open(dir).unwrap();

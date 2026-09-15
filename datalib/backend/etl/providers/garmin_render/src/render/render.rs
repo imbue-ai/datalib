@@ -295,7 +295,14 @@ fn build_grid_rows(
         .provider(Provider::Garmin)
         .kind("Garmin Weight")
         .source_label("Garmin")
+        .is_document(true)
         .created_at(
+            parsed
+                .weigh_ins
+                .first()
+                .and_then(|w| iso(w.timestamp_gmt_ms)),
+        )
+        .modified_at(
             parsed
                 .latest_weigh_in()
                 .and_then(|w| iso(w.timestamp_gmt_ms)),

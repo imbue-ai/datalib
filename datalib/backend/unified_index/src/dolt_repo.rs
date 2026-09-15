@@ -30,7 +30,7 @@ pub struct DoltRepo {
 /// same set through [`search_row_from`]; two hand-kept lists drifted for
 /// as long as they existed.
 const SEARCH_ROW_COLUMNS: &str =
-    "uuid, provider, kind, source_label, created_at, author, account, \
+    "uuid, provider, kind, source_label, created_at, modified_at, is_document, author, account, \
      project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
      message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, upstream_id, \
      upstream_entity_kind, qmd_path, byte_size, item_count";
@@ -60,6 +60,8 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
         },
         sender: author.clone(),
         created_at: r.try_get::<Option<String>, _>("created_at").ok().flatten(),
+        modified_at: r.try_get::<Option<String>, _>("modified_at").ok().flatten(),
+        is_document: r.try_get::<bool, _>("is_document").unwrap_or(false),
         conversation_name: r.try_get("conversation_name").unwrap_or_default(),
         project: r.try_get("project").unwrap_or_default(),
         account: r.try_get("account").unwrap_or_default(),
@@ -132,7 +134,7 @@ impl IndexRepo for DoltRepo {
         let (where_sql, params) = build_where(q, &needle);
         let sql = format!(
             "SELECT {SEARCH_ROW_COLUMNS} FROM grid_rows{} \
-             ORDER BY created_at_utc ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
+             ORDER BY created_at_utc ASC, is_document DESC, uuid \
              LIMIT ?",
             where_sql
         );
@@ -228,7 +230,8 @@ impl IndexRepo for DoltRepo {
 
     async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError> {
         let rows = match sqlx::query(
-            "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider FROM grid_rows",
+            "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider, is_document \
+             FROM grid_rows",
         )
         .fetch_all(&self.pool)
         .await
@@ -244,6 +247,7 @@ impl IndexRepo for DoltRepo {
                 kind: r.try_get("kind").unwrap_or_default(),
                 qmd_path: r.try_get("qmd_path").unwrap_or_default(),
                 provider: r.try_get("provider").unwrap_or_default(),
+                is_document: r.try_get("is_document").unwrap_or(false),
             });
         }
         Ok(out)

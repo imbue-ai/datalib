@@ -48,10 +48,13 @@ mod tests {
         let (_, cols) = super::grid_rows::COLUMNS[0];
         assert!(cols.contains(&"uuid"));
         assert!(cols.contains(&"channel"));
-        // The two load-time-derived columns are present in the DDL /
+        // The load-time-derived columns are present in the DDL /
         // COLUMNS metadata even though they are absent from the struct.
         assert!(cols.contains(&"created_at_utc"));
         assert!(cols.contains(&"created_offset"));
+        assert!(cols.contains(&"modified_at_utc"));
+        assert!(cols.contains(&"modified_offset"));
+        assert!(cols.contains(&"is_document"));
     }
 
     #[test]
@@ -93,7 +96,7 @@ mod tests {
     kind VARCHAR(32) NOT NULL,
     title TEXT,
     created_at VARCHAR(40),
-    updated_at VARCHAR(40),
+    modified_at VARCHAR(40),
     md_path VARCHAR(1024),
     upstream_cursor VARCHAR(64),
     renderer_version VARCHAR(32),

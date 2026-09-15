@@ -1737,7 +1737,7 @@ check.
   sorts a column there, and one string is the transport form.
 
 **A stamp that belongs to the record stays as the source wrote it.**
-`grid_rows.created_at`, `markdowns.created_at` / `updated_at`,
+`grid_rows.created_at` / `modified_at`, `markdowns.created_at` / `modified_at`,
 `emails.received_at`, a payload's `created_time` — an ISO-8601 string
 preserving the offset the source gave it, because that offset is
 information (it is how the moment read to the person who saw it) and

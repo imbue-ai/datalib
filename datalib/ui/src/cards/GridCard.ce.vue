@@ -947,6 +947,15 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     headerName: "Created",
     width: 165,
   },
+  // Off by default in the unified grid, where most rows are messages
+  // with nothing here; a Browse of one source names it, and there — one
+  // row per thread — it is the column that says which are still alive.
+  {
+    field: "modified_at",
+    headerName: "Modified",
+    width: 165,
+    hide: true,
+  },
   {
     field: "snippet",
     headerName: "Contents",
