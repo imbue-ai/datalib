@@ -48,6 +48,9 @@ pub enum IdNamespace {
     /// IQAir's AirVisual monitors: the page datalib composes per source
     /// and the device rows under it.
     Airvisual,
+    /// Apple's Messages app: chats and messages by the guids Messages
+    /// mints for them.
+    AppleMessages,
     /// Both `claude_api` and `claude_export` — one raw store, one
     /// keyspace, so an export-seeded mirror kept fresh by the API does
     /// not mint two ids for one conversation.

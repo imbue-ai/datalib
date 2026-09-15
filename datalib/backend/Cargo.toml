@@ -40,6 +40,8 @@ members = [
     "etl/providers/airvisual",
     "etl/providers/airvisual_render",
     "etl/providers/fsindex",
+    "etl/providers/apple_messages",
+    "etl/providers/apple_messages_render",
     "etl/providers/apple_photos",
     "etl/providers/lightroom",
     "etl/sqlite_mirror",

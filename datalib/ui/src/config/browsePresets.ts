@@ -36,6 +36,7 @@ const EXTRA: Record<string, BrowseColumn[]> = {
   beeper: ["channel", "author", "account", "project"],
   google_takeout: ["channel", "author", "project"],
   sms_backup_restore: ["channel", "author", "project"],
+  apple_messages: ["channel", "author"],
   linkedin: ["channel", "author", "account"],
 
   // Mail and address books: a correspondent and a mailbox.

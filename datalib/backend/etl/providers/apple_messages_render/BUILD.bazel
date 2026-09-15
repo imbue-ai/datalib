@@ -1,0 +1,65 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Render half of the `apple_messages` provider: the side that knows
+# `datalib_schema`. //datalib/backend/etl/providers/apple_messages is the
+# ingest half and deliberately does not.
+rust_library(
+    name = "datalib_etl_apple_messages_render",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_apple_messages_render",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/etl/providers/apple_messages_config:datalib_etl_apple_messages_config",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/id:datalib_id",
+        "//datalib/backend/schema:datalib_schema",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "apple_messages_render_unittests",
+    size = "small",
+    crate = ":datalib_etl_apple_messages_render",
+    edition = "2021",
+)
+
+# The fixture `chat.db` mirrored into doltlite the way the ingest step
+# does it, then rendered: what the mirror engine's own tests and the
+# unit tests above cannot cover between them.
+rust_test(
+    name = "messages_roundtrip",
+    size = "small",
+    srcs = ["tests/messages_roundtrip.rs"],
+    crate_name = "messages_roundtrip",
+    data = ["//datalib/backend/etl/providers/apple_messages:tng_chat_db"],
+    edition = "2021",
+    env = {
+        "APPLE_MESSAGES_TNG_DB": "$(rootpath //datalib/backend/etl/providers/apple_messages:tng_chat_db)",
+    },
+    deps = [
+        ":datalib_etl_apple_messages_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/apple_messages:datalib_etl_apple_messages",
+        "//datalib/backend/etl/providers/apple_messages_config:datalib_etl_apple_messages_config",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
+        "//datalib/backend/source_common:datalib_source_common",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

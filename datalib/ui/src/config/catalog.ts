@@ -925,6 +925,67 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
+    type: "apple_messages",
+    label: "Apple Messages",
+    blurb: "Mirror the Messages app's own database, with full history.",
+    keywords: ["apple", "messages", "imessage", "sms", "texts", "chat.db", "iphone"],
+    kind: "local",
+    icon: "apple_messages",
+    defaultName: "messages",
+    nameHint: "Messages on this Mac",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        // Choosing the file here is what grants the app access to it on
+        // macOS (docs/dev/wizard_file_pickers.md) — the same wall Photos
+        // sits behind.
+        picks: "file",
+        pickTitle: "Choose your Messages database",
+        extensions: ["db"],
+        required: true,
+        target: "database.path",
+        label: "Messages database",
+        placeholder: "~/Library/Messages/chat.db",
+        help:
+          "The chat.db the Messages app keeps; press Cmd-Shift-G in the picker and paste " +
+          "~/Library/Messages to reach it. Choose it with the picker rather than typing " +
+          "the path: macOS protects the folder, and picking the file is what lets Datalib " +
+          "read it. If a sync still fails with \"Operation not permitted\", grant Datalib " +
+          "Full Disk Access in System Settings. Attachments (photos, videos, files) are " +
+          "listed by name and path only — their bytes are not copied, since picking " +
+          "chat.db grants access to that one file.",
+      },
+      {
+        kind: "bool",
+        target: "skip_churn",
+        label: "Skip the app's counters and sync queues",
+        default: true,
+        help:
+          "Messages rewrites its bookkeeping tables continuously, so with this off every " +
+          "run commits even when nobody messaged. Nothing about a message lives there.",
+      },
+      {
+        kind: "bool",
+        target: "snapshot",
+        label: "Snapshot before reading",
+        default: true,
+        help:
+          "Take a VACUUM INTO copy first. Messages keeps the database open whenever it is " +
+          "running, so this is the only way to read a consistent state.",
+      },
+      {
+        kind: "bool",
+        target: "gc",
+        label: "Collect unreachable chunks each run",
+        default: false,
+        help:
+          "Much smaller store, history unaffected — but it rewrites the whole chunk store " +
+          "every run.",
+      },
+    ],
+  },
+  {
     type: "apple_photos",
     label: "Apple Photos",
     blurb: "Mirror an Apple Photos library's database, with full history.",

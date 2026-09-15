@@ -92,6 +92,7 @@ type that is not one product spells its sources out — email's are
 | Beeper | `beeper` | Local Beeper Texts data dir | Signal, Google Chat, etc. (lightly used; expect rough edges) |
 | Signal | `signal` | Android backup file | Messages + media |
 | WhatsApp | `whatsapp` | Android `crypt15` backup | Messages + media |
+| Apple Messages | `apple_messages` | The Messages app's own `chat.db` on a Mac (or a copy) | iMessage / SMS chats with tapbacks; attachments by name |
 | SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
 | YoLink | `yolink` | Web API | Per-device sensor CSV history, rendered as one page of interactive plots |

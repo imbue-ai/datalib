@@ -238,7 +238,8 @@ weaker but not nothing.
 
 ## Porting status
 
-Three of sixteen row-emitting providers mint through `entity_id`. The
+The providers that mint through `entity_id` are exactly the ones
+`IdNamespace` lists (a count written here went stale twice). The
 `NON_UUID_PK_PROVIDERS` allowlist is empty and every row in the TNG
 fixture is UUID-shaped.
 
@@ -254,6 +255,7 @@ fixture is UUID-shaped.
 | pdf, perseus | pending | `Content` |
 | linkedin, google_takeout, sms_backup_restore | pending | `ProviderGlobal` |
 | whatsapp | pending | `Upstream(account_jid)` — needs parse plumbing |
+| apple_messages | ported | `ProviderGlobal` — `message.guid` is a UUID Messages mints; `chat.guid` (`iMessage;-;+1…`) is unique per Apple ID, so two sources from two Apple IDs texting one number contend, which `IdClaims` reports |
 | signal | pending | `ProviderGlobal` on recipient identifiers |
 | yolink | pending | `Upstream(device_udid)` for devices, `SourceInstance` for the page |
 | contacts | pending | `SourceInstance`, until a CardDAV principal is extracted |

@@ -1072,6 +1072,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-etl-apple-messages"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "datalib-etl",
+ "datalib-etl-sqlite-mirror",
+]
+
+[[package]]
+name = "datalib-etl-apple-messages-render"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "datalib-etl",
+ "datalib-etl-apple-messages",
+ "datalib-etl-chat-common",
+ "datalib-etl-render",
+ "datalib-etl-sqlite-mirror",
+ "datalib-id",
+ "datalib-schema",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "datalib-etl-apple-photos"
 version = "0.32.0"
 dependencies = [
