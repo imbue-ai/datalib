@@ -1318,6 +1318,15 @@ It is **not** the e2e suite: on a 1254s cold run every executed test
 together came to 200s. The rest is opt-mode Rust, and blast radius is
 the only lever on it.
 
+**A `pull_request` run builds the merge of the PR into `main` as it is
+at that moment** (`HEAD is now at … Merge <pr> into <main>` in the
+checkout step), not the branch head. So when `main` moves, the PR's
+next run re-executes whatever is unique to the PR *and* downstream of
+what `main` changed — a new fixture rule re-runs the fixture, and with
+it the e2e suite — even though the PR itself did not change. A
+`workflow_dispatch` run builds the bare branch head; compare like with
+like before calling a cache key unstable.
+
 A run can also be slow without compiling anything — check whether the
 job *started* late (`created_at` vs the job's `started_at`) before
 reading any of the numbers above. That is runner queueing, and none of
