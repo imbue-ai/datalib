@@ -10,7 +10,7 @@ const menuEntries = (page: Page) => page.locator(".ag-menu-option .ag-menu-optio
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
 test("a row's menu offers every action, and the cell under the pointer adds its own", async ({
@@ -88,11 +88,10 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await input.press("Enter");
 
   await expect(page.getByText("Renamed unified_index to Everything, indexed.")).toBeVisible();
-  await expect(row.locator(".m2-group-name")).toHaveText("Everything, indexed");
+  await expect(row.locator(".tg-parent")).toHaveText("Everything, indexed");
   await expect(editor).toHaveValue(/name = "Everything, indexed"/);
 
   // Put the root back for the next spec on this sandbox.
-  await page.getByText("Advanced — edit config.toml directly").click();
   await editor.fill(original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();

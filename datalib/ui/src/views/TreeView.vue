@@ -15,6 +15,7 @@ import { createBus } from "@/cards/bus";
 import { layoutTree, type Rect } from "./treeLayout";
 import { displayTitle } from "@/cards/title";
 import { devMode } from "@/devMode";
+import { setCardHelp } from "@/cards/help";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const bus = createBus();
@@ -396,6 +397,7 @@ function ctxFor(node: TreeNode): CardCtx {
       setTitle: (title) => {
         node.title = title;
       },
+      setHelp: (html) => setCardHelp(cardId, html),
       bus,
       host,
     };

@@ -21,6 +21,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/columns:datalib_columns",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/query:datalib_query",

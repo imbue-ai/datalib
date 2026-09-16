@@ -1,0 +1,216 @@
+/* The typed table viewer's cells (cards/TableGrid.ce.vue). A plain
+   file rather than the component's <style>: `.ce.vue` styles attach to
+   the component for the card adapter to drop into a shadow root, so a
+   page that mounts the viewer directly imports this into the head, and
+   a card passes it as a style source. */
+/* Unscoped: the cell renderers build plain DOM. Inside a card this
+   sits in the card's shadow root; on a page it lands in the head. */
+/* Fill the mounting element absolutely rather than with `height:
+   100%`: a percentage height against a flex-sized parent resolves as
+   `auto` and collapses the grid to its border. The host gives the
+   viewer a positioned box; the viewer fills it. */
+.tg-root {
+  position: absolute;
+  inset: 0;
+}
+.tg-grid {
+  position: absolute;
+  inset: 0;
+}
+
+.tg-none { color: var(--datalib-muted); opacity: 0.55; }
+
+.tg-identity { display: inline-flex; align-items: center; gap: 8px; }
+.tg-brand { width: 18px; height: 18px; object-fit: contain; }
+.tg-parent { font-weight: 600; }
+.tg-mark {
+  display: inline-flex;
+  align-items: center;
+  color: var(--datalib-muted);
+  flex: 0 0 auto;
+}
+.tg-id { color: var(--datalib-muted); font-size: 12px; }
+
+/* The status vocabulary. Anything unstyled falls through to the default
+   colour, which is right for a status this sheet hasn't met. */
+.tg-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  color: var(--datalib-muted);
+}
+.tg-status-running { color: var(--datalib-accent); }
+.tg-status-queued { color: var(--datalib-muted); }
+.tg-status-failed { color: var(--datalib-log-error); }
+.tg-status-interrupted { color: var(--datalib-log-warn); }
+/* Stopped on request: the same "not done, nothing broke" as above. */
+.tg-status-stopped { color: var(--datalib-log-warn); }
+.tg-status-succeeded,
+.tg-status-skipped-up-to-date { color: var(--datalib-log-ok); }
+.tg-status-never-run { opacity: 0.55; }
+
+.tg-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  animation: tg-spin 1s linear infinite;
+}
+@keyframes tg-spin {
+  to { transform: rotate(360deg); }
+}
+.tg-segs {
+  flex: 1 1 auto;
+  min-width: 20px;
+  display: flex;
+  gap: 1px;
+  height: 6px;
+}
+.tg-seg {
+  flex: 1;
+  background: color-mix(in srgb, var(--datalib-fg) 14%, transparent);
+}
+.tg-seg:first-child { border-radius: 3px 0 0 3px; }
+.tg-seg:last-child { border-radius: 0 3px 3px 0; }
+.tg-seg-succeeded,
+.tg-seg-skipped-up-to-date { background: var(--datalib-log-ok); }
+.tg-seg-failed { background: var(--datalib-log-error); }
+.tg-seg-interrupted,
+.tg-seg-stopped { background: var(--datalib-log-warn); }
+.tg-seg-blocked { background: var(--datalib-muted); }
+.tg-seg-running {
+  background: var(--datalib-accent);
+  animation: tg-seg-pulse 1s ease-in-out infinite;
+}
+@keyframes tg-seg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tg-spinner, .tg-seg-running { animation: none; }
+}
+.tg-progress {
+  flex: 1 1 auto;
+  min-width: 20px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  overflow: hidden;
+}
+.tg-progress > span {
+  display: block;
+  height: 100%;
+  background: currentColor;
+}
+
+.tg-chips {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow: hidden;
+  max-width: 100%;
+}
+.tg-chip {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--datalib-muted);
+}
+.tg-chip-info { color: var(--datalib-log-warn); }
+.tg-chip-idle { color: var(--datalib-log-ok); }
+.tg-chip-warning { color: var(--datalib-log-warn); }
+.tg-chip-error { color: var(--datalib-log-error); }
+
+.tg-series {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  width: 100%;
+}
+.tg-plot {
+  position: relative;
+  flex: 1 1 auto;
+  height: 18px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--datalib-fg) 8%, transparent);
+  overflow: hidden;
+}
+.tg-plot > .tg-spark {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.tg-plot-label {
+  position: relative;
+  display: block;
+  text-align: center;
+  line-height: 18px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--datalib-fg);
+  text-shadow: 0 0 3px var(--datalib-bg);
+}
+/* `vector-effect: non-scaling-stroke` is load-bearing: the svg is
+   stretched from its 120-unit box to the column's width. */
+.tg-spark { display: block; overflow: visible; }
+.tg-spark-line {
+  fill: none;
+  stroke: var(--datalib-accent);
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.tg-spark-area {
+  fill: color-mix(in srgb, var(--datalib-accent) 22%, transparent);
+  stroke: none;
+}
+
+.tg-actions {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  height: 100%;
+}
+.tg-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--datalib-muted);
+  cursor: pointer;
+}
+.tg-icon-btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
+  border-color: var(--datalib-border);
+  color: var(--datalib-fg);
+}
+.tg-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.tg-icon-btn.danger:hover:not(:disabled) {
+  color: var(--datalib-log-error);
+  border-color: var(--datalib-log-error);
+}
+.tg-btn {
+  padding: 2px 9px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  background: var(--datalib-card-bg);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tg-btn:hover:not(:disabled) { background: var(--datalib-hover); }
+.tg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.tg-btn.danger:hover:not(:disabled) { border-color: var(--datalib-log-error); color: var(--datalib-log-error); }
+.tg-link { color: inherit; text-decoration: underline dotted; }

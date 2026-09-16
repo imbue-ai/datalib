@@ -14,6 +14,7 @@ import { createBus } from "@/cards/bus";
 import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns";
 import { displayTitle } from "@/cards/title";
 import { devMode } from "@/devMode";
+import { setCardHelp } from "@/cards/help";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const route = useRoute();
@@ -190,6 +191,7 @@ function ctxFor(slot: Slot): CardCtx {
       setTitle: (title) => {
         slot.title = title;
       },
+      setHelp: (html) => setCardHelp(cardId, html),
       bus,
       host,
     };

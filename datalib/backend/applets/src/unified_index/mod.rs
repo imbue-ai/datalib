@@ -14,6 +14,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
+mod columns;
+
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport};
 use datalib_unified_index::qmd::{
@@ -134,6 +136,8 @@ pub struct SearchParams {
 #[derive(Debug, Serialize)]
 pub struct SearchResponse {
     pub query_echo: serde_json::Value,
+    /// The columns the rows carry, typed — see `datalib_columns`.
+    pub columns: Vec<datalib_columns::ColumnSpec>,
     pub rows: Vec<SearchRow>,
     pub total_estimated: u64,
     /// Backend-side errors the user should know about even though we
@@ -218,7 +222,15 @@ async fn search_handler(
     };
 
     let total = rows.len() as u64;
+    // The names and marks the config gives each source, read per
+    // request: a rename lands on the next search, with no re-index.
+    let sources = columns::Sources::read(&s.root);
+    let mut rows = rows;
+    for row in &mut rows {
+        sources.resolve(row);
+    }
     Json(SearchResponse {
+        columns: columns::columns(),
         query_echo: serde_json::json!({
             "free_text": parsed.free_text,
             "free_text_mode": match parsed.free_text_mode {
