@@ -12,7 +12,7 @@ use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, OrphanReactions,
 };
-use datalib_etl_chat_common::{RenderProfile, WhenTsPrecision};
+use datalib_etl_chat_common::{RecordStampPrecision, RenderProfile};
 use datalib_etl_render::inputs::Inputs;
 use datalib_schema::providers::Provider;
 
@@ -84,8 +84,8 @@ pub fn profile_for(network: &str) -> RenderProfile {
         reaction_kind: format!("{label} Reaction"),
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         // Beeper is the one source whose upstream stamps are meaningful
-        // below the second, and its `when_ts` has always said so.
-        when_ts_precision: WhenTsPrecision::Millis,
+        // below the second, and its `created_at` has always said so.
+        stamp_precision: RecordStampPrecision::Millis,
         render_version: RENDER_VERSION,
     }
 }

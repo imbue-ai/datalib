@@ -867,6 +867,43 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # confirms the PK is real in doltlite, which is the assumption
         # the whole collision story rests on.
         self.assertEqual(self._duplicate_uuids(), [], "grid_rows.uuid must be unique")
+        # One document row per rendered document, across every
+        # provider: `is_document` is what a Browse opens on and what the
+        # store enforces per document, and this is the check that no
+        # renderer got past that with a document the index never saw.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT m.markdown_uuid, COUNT(g.uuid) FROM markdowns m "
+                "  LEFT JOIN grid_rows g "
+                "    ON g.markdown_uuid = m.markdown_uuid AND g.is_document = 1 "
+                "GROUP BY m.markdown_uuid HAVING COUNT(g.uuid) != 1;",
+            ),
+            [],
+            "every markdown must have exactly one is_document row",
+        )
+        self.assertEqual(
+            self._scalar(
+                self._index_db, "SELECT COUNT(*) FROM grid_rows WHERE is_document = 1;"
+            ),
+            self._scalar(self._index_db, "SELECT COUNT(*) FROM markdowns;"),
+            "the document rows and the markdowns are the same set",
+        )
+        # A document's stamps are the document row's, on every provider:
+        # created no later than modified, and `markdowns` a copy of them.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT g.provider, g.kind, g.created_at, g.modified_at, m.created_at, m.modified_at "
+                "FROM grid_rows g JOIN markdowns m ON m.markdown_uuid = g.uuid "
+                "WHERE g.is_document = 1 AND ("
+                "  IFNULL(g.created_at, '') != IFNULL(m.created_at, '') "
+                "  OR IFNULL(g.modified_at, '') != IFNULL(m.modified_at, '') "
+                "  OR g.created_at_utc > g.modified_at_utc);",
+            ),
+            [],
+            "a document row's stamps are what markdowns carries, and ordered",
+        )
         # No two sources may claim one markdown. This is the overlap
         # that used to erase a source's rows without an error.
         self.assertEqual(

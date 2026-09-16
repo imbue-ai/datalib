@@ -92,11 +92,11 @@ async fn renders_the_weight_page_then_skips_an_unchanged_store() {
     assert!(page_row.text.contains("77.6 kg"), "{}", page_row.text);
     assert!(
         page_row
-            .when_ts
+            .created_at
             .as_deref()
             .is_some_and(|t| t.ends_with("+00:00")),
         "{:?}",
-        page_row.when_ts
+        page_row.created_at
     );
     let device_row = doc.rows.iter().find(|r| r.kind == "Garmin Device").unwrap();
     assert_eq!(device_row.channel.as_deref(), Some("Forerunner 265"));

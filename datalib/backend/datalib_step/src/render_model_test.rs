@@ -348,6 +348,8 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
                 .entire_chat(format!("/chat/{id}"))
                 .text(text)
                 .markdown_uuid(Some(id.to_string()))
+                // The synthetic document's first row stands for it.
+                .is_document(*uuid == doc.rows[0].0)
                 .build()
                 .expect("row")
         })

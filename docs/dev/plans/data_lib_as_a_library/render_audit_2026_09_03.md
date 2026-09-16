@@ -117,7 +117,7 @@ brings the total to **545**. That is the honest size of the surface.
 `GridRow::builder().build()` is the tree's one validating chokepoint
 ([`grid_rows_builder.rs:153`](../../../../datalib/backend/schema/src/grid_rows_builder.rs)),
 and it is a good one — it rejects an empty `uuid`/`provider`/`kind`/
-`source_label` and a `when_ts` that is not RFC 3339 with an explicit
+`source_label` and a `created_at` that is not RFC 3339 with an explicit
 offset. Its own module comment explains that validating here turns "a
 silent display bug into a loud error a provider's own tests trip over."
 
@@ -136,7 +136,7 @@ exactly one failure mode, and it is "kill the step."
 maps errors onto the DAG taxonomy by substring-matching the error
 chain. Anything that is not recognizably auth-, rate-limit- or
 network-shaped falls through the final `else` to `"data"`. A
-`GridRowError::InvalidWhenTs` on one row of forty thousand is therefore
+`GridRowError::InvalidStamp` on one row of forty thousand is therefore
 classified identically to "the raw store will not open."
 
 This is R2's diagnosis exactly, now confirmed end to end:
@@ -425,7 +425,7 @@ cost.
 
 **This is the section with concrete, present-tense bugs.** The
 architecture doc is unambiguous: when upstream gives no timestamp and
-none can be inherited from a parent, `when_ts` is **null** — "not
+none can be inherited from a parent, `created_at` is **null** — "not
 'epoch,' not 'now,' not 'midnight UTC of the row's date.'"
 
 The `datalib-time` crate enforces this properly. Its module doc calls
@@ -460,8 +460,8 @@ that R1's sink is the unblocking change and not bookkeeping.
 
 ### Why null is genuinely better here
 
-The grid sorts on `when_ts_utc`, derived from `when_ts` via
-`split_when_ts`, which returns `None` on failure "so the caller can
+The grid sorts on `created_at_utc`, derived from `created_at` via
+`split_record_stamp`, which returns `None` on failure "so the caller can
 leave both index columns NULL rather than fabricate a value." The
 machinery for a null timestamp is already built and already correct.
 A 1970 stamp is strictly worse than null in three ways: it sorts into a
@@ -480,7 +480,7 @@ provider.
 
 The fix is `Option<i64>`, with the existing microsecond-bump
 inheritance (already implemented in anthropic and chatgpt, and correct)
-applied first and `None` surviving to a null `when_ts`.
+applied first and `None` surviving to a null `created_at`.
 
 ## 6. R5 — verification against the source
 
@@ -496,7 +496,7 @@ others." Measured:
   by nothing with source independence.
 - **It checks identity, never content.** It recomputes `uuid` from
   `(upstream_entity_kind, upstream_id, upstream_scope)` and compares.
-  Nothing compares `author`, `when_ts`, `source_url` or `text` back to
+  Nothing compares `author`, `created_at`, `source_url` or `text` back to
   the raw payload — which is Pass A's whole proposal, and it is not
   built.
 - **Ten of seventeen providers have no insta golden either**: email,
@@ -656,7 +656,7 @@ for `chrono::DateTime::parse_from_rfc3339` inside provider crates would
 keep it true.
 
 **P4 — `Option<i64>` for `NormalizedChatItem.date_ms`,** so "no
-timestamp" is expressible and nulls survive to `when_ts` (§5).
+timestamp" is expressible and nulls survive to `created_at` (§5).
 
 **P5 — Split the loader's failure modes.** In `load_all_batch`, keep
 the hard failure for a `uuid` collision (a real correctness emergency,

@@ -27,4 +27,5 @@ tokio = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
+datalib-time = { path = "../time" }
 tempfile = "3"

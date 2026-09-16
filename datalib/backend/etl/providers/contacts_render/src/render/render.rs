@@ -124,13 +124,16 @@ fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
         group_label: contact.addressbook.clone(),
         display_name: contact.display_name.clone(),
         external_id: Some(contact.uid.clone()),
-        // vCard `REV` → grid-ready `when_ts`. Fastmail emits *basic* ISO 8601
-        // (`20260605T191839Z`), which isn't RFC 3339 and would be rejected at
-        // `GridRow::build`; coerce it (already-valid values pass through).
-        when_ts: contact
+        // A card carries no creation stamp.
+        created_at: None,
+        // vCard `REV` is the revision stamp. Fastmail emits *basic* ISO
+        // 8601 (`20260605T191839Z`), which isn't RFC 3339 and would be
+        // rejected at `GridRow::build`; coerce it (already-valid values
+        // pass through).
+        modified_at: contact
             .revision
             .as_deref()
-            .and_then(datalib_time::coerce_when_ts),
+            .and_then(datalib_time::coerce_record_stamp),
         // CardDAV carries no per-contact public web URL (see the prior
         // note in this file's history re: Fastmail's internal short ids).
         source_url: None,
@@ -213,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_maps_fields_uuids_and_when_ts() {
+    fn normalize_maps_fields_uuids_and_stamps() {
         let n = normalize(&sample(), "tng_contacts");
         assert_eq!(
             n.contact_uuid,
@@ -223,7 +226,8 @@ mod tests {
         assert_eq!(n.group_label, "Bridge");
         assert_eq!(n.display_name.as_deref(), Some("Jean-Luc Picard"));
         assert_eq!(n.external_id.as_deref(), Some("tng-picard"));
-        assert_eq!(n.when_ts.as_deref(), Some("2370-04-15T00:00:00Z"));
+        assert_eq!(n.created_at, None, "a card has no creation stamp");
+        assert_eq!(n.modified_at.as_deref(), Some("2370-04-15T00:00:00Z"));
         // Org `;` becomes ` — `; address `;` becomes `, `; typed labels.
         let labels: Vec<&str> = n.fields.iter().map(|f| f.label.as_str()).collect();
         assert_eq!(
@@ -242,18 +246,18 @@ mod tests {
 
     // Fastmail exports the vCard `REV` in *basic* ISO 8601 (no separators,
     // e.g. `20260605T191839Z`). That string is not RFC 3339, so flowing it
-    // straight into `when_ts` makes `GridRow::build` reject the row and drops
+    // straight into `modified_at` makes `GridRow::build` reject the row and drops
     // the contact's `.grid_rows.json`. Normalize must canonicalize it to an
-    // explicit-offset RFC 3339 `when_ts` the grid accepts.
+    // explicit-offset RFC 3339 stamp the grid accepts.
     #[test]
     fn normalize_canonicalizes_basic_iso_rev() {
         let mut c = sample();
         c.revision = Some("20260605T191839Z".to_string());
         let n = normalize(&c, "fastmail_contacts");
-        assert_eq!(n.when_ts.as_deref(), Some("2026-06-05T19:18:39+00:00"));
+        assert_eq!(n.modified_at.as_deref(), Some("2026-06-05T19:18:39+00:00"));
         // The grid's own contract must accept it (this is what was failing).
-        datalib_time::validate_iso_offset(n.when_ts.as_deref().unwrap())
-            .expect("normalized when_ts must satisfy GridRow's RFC 3339 contract");
+        datalib_time::validate_iso_offset(n.modified_at.as_deref().unwrap())
+            .expect("normalized modified_at must satisfy GridRow's RFC 3339 contract");
     }
 
     #[test]

@@ -41,7 +41,8 @@ pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<Normaliz
                 group_label: GROUP_LABEL.to_string(),
                 display_name: str_field(v, "name").map(str::to_string),
                 external_id: None,
-                when_ts: since.clone(),
+                created_at: since.clone(),
+                modified_at: None,
                 source_url: None,
                 fields: since
                     .map(|s| vec![ContactField::new("Friends since", s)])
@@ -75,7 +76,11 @@ mod tests {
         assert_eq!(contacts[0].display_name.as_deref(), Some("William Riker"));
         assert_eq!(contacts[0].group_label, "Friends");
         assert_eq!(contacts[0].fields[0].label, "Friends since");
-        assert!(contacts[0].when_ts.as_deref().unwrap().starts_with("2362-"));
+        assert!(contacts[0]
+            .created_at
+            .as_deref()
+            .unwrap()
+            .starts_with("2362-"));
         assert_eq!(contacts[0].inputs[0].table, FRIENDS_TABLE);
     }
 }

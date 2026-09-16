@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn problems_serialize_without_their_empty_options() {
-        let p = Problem::field("when_ts", Reason::CoercionFailed, "not-a-date");
+        let p = Problem::field("created_at", Reason::CoercionFailed, "not-a-date");
         let j = serde_json::to_string(&p).unwrap();
         assert!(j.contains(r#""reason":"coercion_failed""#), "{j}");
         assert!(

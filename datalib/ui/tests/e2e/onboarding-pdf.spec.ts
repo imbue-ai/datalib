@@ -23,17 +23,17 @@ import {
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
 declare const process: { env: Record<string, string | undefined> };
 
-const BASE = process.env.FW_E2E_ONBOARDING_URL;
+const BASE = process.env.DATALIB_TEST_E2E_ONBOARDING_URL;
 /// The folder the source scans. Seeded by playwright.config.ts with the
 /// two Captain's Log PDFs; the third arrives mid-test.
-const SCAN_DIR = process.env.FW_E2E_PDF_SCAN_DIR;
+const SCAN_DIR = process.env.DATALIB_TEST_E2E_PDF_SCAN_DIR;
 /// The held-back document, copied in at step 12.
-const LATECOMER = process.env.FW_E2E_PDF_LATECOMER;
+const LATECOMER = process.env.DATALIB_TEST_E2E_PDF_LATECOMER;
 /// The folder holding the generated `signal-backup-*` snapshot, which
 /// is what a Signal source's "Backup folder" field wants — the
 /// downloader scans it for the newest snapshot rather than being handed
 /// one. Built by playwright.config.ts from the checked-in TNG spec.
-const SIGNAL_BACKUP_DIR = process.env.FW_E2E_SIGNAL_BACKUP_DIR;
+const SIGNAL_BACKUP_DIR = process.env.DATALIB_TEST_E2E_SIGNAL_BACKUP_DIR;
 
 /// The three rows a sync of `pdfs/ingest` drives: the source, its render
 /// sibling, and the fan-in that makes the documents searchable.
@@ -112,7 +112,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
   test.skip(
     !BASE || !SCAN_DIR || !LATECOMER,
-    "needs FW_E2E_ONBOARDING_URL + FW_E2E_PDF_SCAN_DIR + FW_E2E_PDF_LATECOMER from playwright.config.ts",
+    "needs DATALIB_TEST_E2E_ONBOARDING_URL + DATALIB_TEST_E2E_PDF_SCAN_DIR + DATALIB_TEST_E2E_PDF_LATECOMER from playwright.config.ts",
   );
 
   test("a new library indexes a PDF folder, and picks up a file added later", async ({
@@ -311,7 +311,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // everything mean something a per-row Sync does not.
     test.skip(
       !SIGNAL_BACKUP_DIR,
-      "needs FW_E2E_SIGNAL_BACKUP_DIR — signal_make_fixture from run_e2e.sh",
+      "needs DATALIB_TEST_E2E_SIGNAL_BACKUP_DIR — signal_make_fixture from run_e2e.sh",
     );
     page.on("dialog", (d) => void d.accept());
 
@@ -391,7 +391,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 6. and the Signal messages are searchable ────────────────────
     await openExplore(page);
-    await searchAndSettle(page, "source:Signal type:all");
+    await searchAndSettle(page, "source:Signal");
     const signalRows = await gridRows(page);
     expect(signalRows.length, "the Signal messages should be indexed").toBeGreaterThan(0);
     expect(

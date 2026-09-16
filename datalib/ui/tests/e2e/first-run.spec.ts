@@ -6,7 +6,7 @@ import { test, expect } from "@playwright/test";
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
 declare const process: { env: Record<string, string | undefined> };
 
-const EMPTY_URL = process.env.FW_E2E_EMPTY_URL;
+const EMPTY_URL = process.env.DATALIB_TEST_E2E_EMPTY_URL;
 
 test("an empty folder gets an explained bootstrap, not a 502", async ({
   page,

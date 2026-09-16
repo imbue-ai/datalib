@@ -68,7 +68,7 @@ pub fn message_uuid(message_guid: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::AppleMessages,
         source_label: "Messages".to_string(),
         chat_kind: "Messages Chat".to_string(),

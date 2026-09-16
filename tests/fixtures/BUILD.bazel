@@ -127,15 +127,17 @@ filegroup(
 # qmd.tar.
 # Tar packaging is *not* the pipeline binary's concern — it operates
 # at the layer of DB + qmd files.
+#
+# The pipeline binaries are `srcs`, not `tools`, on purpose. `tools` are
+# configured for the exec platform, which would build `datalib_step` — and
+# the 99 crates under it — a second time beside the copies the tests link
+# and `:dist` ships. As `srcs` they are the same files the tests use. They
+# arrive without their runfiles, which the playback pipeline never needs
+# (`latchkey` resolution is lazy and only live downloads reach it).
 genrule(
     name = "ingested_tng",
-    srcs = [":source_json"],
-    outs = [
-        "ingested/backend_index.doltlite_db",
-        "ingested/qmd.tar",
-        "ingested/qmd_md.tar",
-    ],
-    tools = [
+    srcs = [
+        ":source_json",
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/datalib_step:datalib_step",
         # CLI that converts the signal TNG JSON spec into an encrypted
@@ -151,6 +153,13 @@ genrule(
         # emits no download step and renders over the store this binary
         # writes.
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
+    ],
+    outs = [
+        "ingested/backend_index.doltlite_db",
+        "ingested/qmd.tar",
+        "ingested/qmd_md.tar",
+    ],
+    tools = [
         "run_sync_pipeline.py",
         "tar_qmd.py",
     ],
