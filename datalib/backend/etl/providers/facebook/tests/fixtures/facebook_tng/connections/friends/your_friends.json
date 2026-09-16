@@ -1,0 +1,16 @@
+{
+  "friends_v2": [
+    {
+      "name": "William Riker",
+      "timestamp": 12433860000
+    },
+    {
+      "name": "Data",
+      "timestamp": 12433860300
+    },
+    {
+      "name": "Beverly Crusher",
+      "timestamp": 12437260200
+    }
+  ]
+}

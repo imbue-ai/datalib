@@ -666,6 +666,32 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: null, defaultName: "google-takeout", nameHint: "My Google Takeout", wizard: false },
+  {
+    type: "facebook",
+    label: "Facebook",
+    blurb: "Posts, photo albums, comments, reactions and friends from a data export.",
+    keywords: ["facebook", "meta", "export", "posts", "photos", "friends"],
+    kind: "export",
+    icon: "facebook",
+    defaultName: "facebook",
+    nameHint: "My Facebook",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your unpacked Facebook export folder",
+        required: true,
+        target: "export.path",
+        label: "Export folder",
+        placeholder: "~/Downloads/facebook-<id>-<date>",
+        help:
+          "The unzipped \"Download your information\" export, requested in JSON format — " +
+          "the folder holding your_facebook_activity/, connections/ and the rest. " +
+          "The HTML format is not read.",
+      },
+    ],
+  },
   { type: "linkedin", label: "LinkedIn", blurb: "Messages and connections from a data export.", keywords: ["linkedin", "export", "connections"], kind: "export", icon: "linkedin", defaultName: "linkedin", nameHint: "My LinkedIn", wizard: false },
   {
     type: "signal",

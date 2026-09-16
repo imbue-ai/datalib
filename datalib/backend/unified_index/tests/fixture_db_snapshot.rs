@@ -108,7 +108,7 @@ async fn snapshot_grid_rows_and_documents() {
                 message_index, entire_chat, text, slack_link, qmd_path, \
                 source_url, git_sha, upstream_id, upstream_entity_kind, upstream_scope, \
                 notion_page_uuid, \
-                notion_block_uuid, markdown_uuid \
+                notion_block_uuid, markdown_uuid, byte_size, item_count \
          FROM grid_rows ORDER BY uuid",
     )
     .fetch_all(&pool)
@@ -156,6 +156,8 @@ async fn snapshot_grid_rows_and_documents() {
                 "notion_page_uuid": r.try_get::<Option<String>, _>("notion_page_uuid").ok().flatten(),
                 "notion_block_uuid": r.try_get::<Option<String>, _>("notion_block_uuid").ok().flatten(),
                 "markdown_uuid": r.try_get::<Option<String>, _>("markdown_uuid").ok().flatten(),
+                "byte_size": r.try_get::<Option<i64>, _>("byte_size").ok().flatten(),
+                "item_count": r.try_get::<Option<i64>, _>("item_count").ok().flatten(),
             })
         })
         .collect();

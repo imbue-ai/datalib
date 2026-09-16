@@ -38,6 +38,9 @@ const EXTRA: Record<string, BrowseColumn[]> = {
   sms_backup_restore: ["channel", "author", "project"],
   apple_messages: ["channel", "author"],
   linkedin: ["channel", "author", "account"],
+  // Posts, albums, comments, reactions and friends, all the owner's own:
+  // `author` is who wrote it, `account` whose export it is.
+  facebook: ["author", "account"],
 
   // Mail and address books: a correspondent and a mailbox.
   email: ["channel", "author", "account"],

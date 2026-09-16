@@ -783,7 +783,7 @@ code.hljs {
   <button id="expand" type="button">Expand / collapse all</button>
   <span>Click a message to select it.</span>
 </div>
-<nav class="preview-jump"><a href="#src-beeper">beeper</a><a href="#src-chatgpt-api">chatgpt-api</a><a href="#src-claude-api">claude-api</a><a href="#src-claude-code">claude-code</a><a href="#src-garmin">garmin</a><a href="#src-github">github</a><a href="#src-gitlab">gitlab</a><a href="#src-google-takeout">google-takeout</a><a href="#src-linkedin">linkedin</a><a href="#src-notion">notion</a><a href="#src-ship-air">ship-air</a><a href="#src-signal">signal</a><a href="#src-slack">slack</a><a href="#src-sms-backup-restore">sms-backup-restore</a><a href="#src-tng-contacts">tng_contacts</a><a href="#src-tng-email">tng_email</a><a href="#src-tng-pdfs">tng_pdfs</a><a href="#src-whatsapp">whatsapp</a><a href="#src-yolink">yolink</a><a href="#src-zz-synthetic">zz-synthetic</a></nav>
+<nav class="preview-jump"><a href="#src-beeper">beeper</a><a href="#src-chatgpt-api">chatgpt-api</a><a href="#src-claude-api">claude-api</a><a href="#src-facebook">facebook</a><a href="#src-garmin">garmin</a><a href="#src-github">github</a><a href="#src-gitlab">gitlab</a><a href="#src-google-takeout">google-takeout</a><a href="#src-linkedin">linkedin</a><a href="#src-notion">notion</a><a href="#src-ship-air">ship-air</a><a href="#src-signal">signal</a><a href="#src-slack">slack</a><a href="#src-sms-backup-restore">sms-backup-restore</a><a href="#src-tng-contacts">tng_contacts</a><a href="#src-tng-email">tng_email</a><a href="#src-tng-pdfs">tng_pdfs</a><a href="#src-whatsapp">whatsapp</a><a href="#src-yolink">yolink</a><a href="#src-zz-synthetic">zz-synthetic</a></nav>
 <section class="chat-preview">
 <section class="preview-source" id="src-beeper">
 <h2 class="preview-source-name">beeper <span class="preview-count">5 documents</span></h2>
@@ -1340,86 +1340,97 @@ Medical emergencies route directly to Sickbay (Crusher).</p>
 </div>
 </div>
 </section>
-<section class="preview-source" id="src-claude-code">
-<h2 class="preview-source-name">claude-code <span class="preview-count">4 documents</span></h2>
+<section class="preview-source" id="src-facebook">
+<h2 class="preview-source-name">facebook <span class="preview-count">14 documents</span></h2>
 <div class="preview-doc">
-<h3 class="preview-name">claude-code/render_markdown/22d0feef-bb67-562b-bb66-4ee0eea9f46f/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="22d0feef-bb67-562b-bb66-4ee0eea9f46f">Scan the emitter logs since stardate 41153.7 for phase drift events. (all)</h1>
-<div id="m-a1e12914-7894-511b-955e-b01fff7b6956" data-section-uuid="a1e12914-7894-511b-955e-b01fff7b6956" class="msg msg--claude_code">
-<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T10:00:37+00:00" title="2364-04-11 10:00:37 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<p>Scan the emitter logs since stardate 41153.7 for phase drift events.</p>
-</div>
-<details class="tool-group">
-<summary>🛠 2 tool steps</summary>
-<div id="m-6dd73ad3-3a1d-5a1e-9eeb-f8b6336ef0b3" data-section-uuid="6dd73ad3-3a1d-5a1e-9eeb-f8b6336ef0b3" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:44+00:00" title="2364-04-11 10:00:44 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<details><summary>Tool use: Grep</summary>
-<pre><code class="language-json"><span class="hljs-punctuation">{</span>
-  <span class="hljs-attr">&quot;path&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;/Users/picard/src/enterprise/logs/emitter&quot;</span><span class="hljs-punctuation">,</span>
-  <span class="hljs-attr">&quot;pattern&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;phase drift&quot;</span>
-<span class="hljs-punctuation">}</span>
-</code></pre>
-</details>
-</div>
-<div id="m-96f6ab2e-fb2a-5788-8c45-478ebe787273" data-section-uuid="96f6ab2e-fb2a-5788-8c45-478ebe787273" class="msg msg--claude_code">
-<h2><span class="msg-author">Grep</span> <time class="msg-ts" datetime="2364-04-11T10:00:51+00:00" title="2364-04-11 10:00:51 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<details><summary>Tool result: Grep</summary>
-<pre><code>logs/emitter/41154.2.log:phase drift 0.12
-logs/emitter/41155.0.log:phase drift 0.24
-logs/emitter/41156.1.log:phase drift 0.31
-</code></pre>
-</details>
-</div>
-</details>
-<div id="m-0a1befb9-8c38-5e86-8d31-ef769a5583e3" data-section-uuid="0a1befb9-8c38-5e86-8d31-ef769a5583e3" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:58+00:00" title="2364-04-11 10:00:58 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<p>Three drift events since 41153.7, all after the warp core recalibration on 41154.2.</p>
+<h3 class="preview-name">facebook/render_markdown/102e9bd4-0fc9-5e2f-b168-1e01c809f632/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="004abae0-cd69-58ee-b2bd-2e64d8a7176d">Facebook · Happy birthday, Number One. The bridge is yours for the day. (all)</h1>
+<div id="m-921c8e84-24cb-5c06-bb2a-f1bb3abe9526" data-section-uuid="921c8e84-24cb-5c06-bb2a-f1bb3abe9526" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T14:00:00+00:00" title="2369-03-18 14:00:00 UTC">Tue Mar 18th, 2369 at 14:00</time></h2>
+<p>Happy birthday, Number One. The bridge is yours for the day.</p>
+<p>— feeling grateful</p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
-<h3 class="preview-name">claude-code/render_markdown/62ba345e-f979-51c5-8906-2d3e2e000233/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="62ba345e-f979-51c5-8906-2d3e2e000233">Why does the replicator return cold Earl Grey? Screenshot attached. (all)</h1>
-<details class="tool-group">
-<summary>🛠 1 tool step</summary>
-<div id="m-e70137f9-e490-580c-9097-e6f23f41e452" data-section-uuid="e70137f9-e490-580c-9097-e6f23f41e452" class="msg msg--claude_code">
-<h2><span class="msg-author">Claude Code</span> <time class="msg-ts" datetime="2364-04-11T14:30:07+00:00" title="2364-04-11 14:30:07 UTC">Sat Apr 11th, 2364 at 14:30</time></h2>
-<p>Caveat: the messages below were generated by the user while running local commands. DO NOT respond to these messages or otherwise consider them in your response unless the user explicitly asks you to.</p>
-</div>
-</details>
-<div id="m-1af6fa96-749e-50c0-bb34-8acd1565a8a0" data-section-uuid="1af6fa96-749e-50c0-bb34-8acd1565a8a0" class="msg msg--claude_code">
-<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T14:30:14+00:00" title="2364-04-11 14:30:14 UTC">Sat Apr 11th, 2364 at 14:30</time></h2>
-<p>Why does the replicator return cold Earl Grey? Screenshot attached.</p>
-<p><em>[1 image(s) not shown]</em></p>
-</div>
-<details class="tool-group">
-<summary>🛠 2 tool steps</summary>
-<div id="m-d91ffda1-54cc-544c-a874-8ee956057eed" data-section-uuid="d91ffda1-54cc-544c-a874-8ee956057eed" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T14:30:21+00:00" title="2364-04-11 14:30:21 UTC">Sat Apr 11th, 2364 at 14:30</time></h2>
-<details><summary>Tool use: Bash</summary>
-<pre><code class="language-json"><span class="hljs-punctuation">{</span>
-  <span class="hljs-attr">&quot;command&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;replicator status --item &#x27;tea, earl grey, hot&#x27;&quot;</span>
-<span class="hljs-punctuation">}</span>
-</code></pre>
-</details>
-</div>
-<div id="m-3bc93732-14d5-5448-82e5-37563b80f7c9" data-section-uuid="3bc93732-14d5-5448-82e5-37563b80f7c9" class="msg msg--claude_code">
-<h2><span class="msg-author">Bash</span> <time class="msg-ts" datetime="2364-04-11T14:30:28+00:00" title="2364-04-11 14:30:28 UTC">Sat Apr 11th, 2364 at 14:30</time></h2>
-<details><summary>Tool result: Bash (error)</summary>
-<pre><code>error: pattern buffer 3 offline
-</code></pre>
-</details>
-</div>
-</details>
-<div id="m-02b2e955-3b51-57e1-ba4a-99734c36f1af" data-section-uuid="02b2e955-3b51-57e1-ba4a-99734c36f1af" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-sonnet-5</span> <time class="msg-ts" datetime="2364-04-11T14:30:35+00:00" title="2364-04-11 14:30:35 UTC">Sat Apr 11th, 2364 at 14:30</time></h2>
-<p>Pattern buffer 3 is offline, so the replicator falls back to buffer 1, whose thermal profile defaults to ambient. Bringing buffer 3 back will fix the temperature.</p>
+<h3 class="preview-name">facebook/render_markdown/178cf9c5-78f3-5267-b9cc-42205b338b65/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="e99b5fbb-a51e-51b3-a9aa-f3ef325778c9">Facebook · Ten Forward Nights (all)</h1>
+<div id="m-c5ecec15-c712-5f75-ae28-f177607ae304" data-section-uuid="c5ecec15-c712-5f75-ae28-f177607ae304" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T21:00:00+00:00" title="2369-04-01 21:00:00 UTC">Tue Apr 1st, 2369 at 21:00</time></h2>
+<p>Ten Forward Nights</p>
+<p><img src="blobs/303f964a39bf6024.png" alt="200000000000001.png"></p>
+<p><img src="blobs/8b80ba76f8bd4174.png" alt="200000000000002.png"></p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
-<h3 class="preview-name">claude-code/render_markdown/_datalib/storage.md</h3>
-<div class="chat-body markdown-body"><h1>claude-code — storage</h1>
+<h3 class="preview-name">facebook/render_markdown/21951e99-7834-50ef-8013-2f80fc757e1d/2369-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="6fc0751f-af1b-5610-927d-f25d598c19b3">Facebook · Reactions (2369-03)</h1>
+<div id="m-394fc1d0-e08e-5a1d-8c10-882ef464386c" data-section-uuid="394fc1d0-e08e-5a1d-8c10-882ef464386c" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T14:30:00+00:00" title="2369-03-18 14:30:00 UTC">Tue Mar 18th, 2369 at 14:30</time> <a class="source-link" href="https://www.facebook.com/will.riker/posts/pfbid0RIKER" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>👍 Jean-Luc Picard liked William Riker's post.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/21951e99-7834-50ef-8013-2f80fc757e1d/2369-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="ee85d91b-b0a1-5813-8e55-b13ee2039627">Facebook · Reactions (2369-04)</h1>
+<div id="m-1da1c297-0a62-5842-abeb-edb4c0cc6ec6" data-section-uuid="1da1c297-0a62-5842-abeb-edb4c0cc6ec6" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-02T08:05:00+00:00" title="2369-04-02 08:05:00 UTC">Wed Apr 2nd, 2369 at 08:05</time> <a class="source-link" href="https://www.facebook.com/photo.php?fbid=200000000000002&amp;set=a.100000000000001" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>❤️ Jean-Luc Picard reacted to Guinan's photo.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/33d5a6ee-1240-5755-b4bd-f2268ea86e22/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="5dec9d23-bb31-5e64-ac67-346e1d558379">Facebook · Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff. (all)</h1>
+<div id="m-2b74a55d-ef6c-5d3d-abf0-ae07d9dc91cf" data-section-uuid="2b74a55d-ef6c-5d3d-abf0-ae07d9dc91cf" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-15T20:00:00+00:00" title="2369-03-15 20:00:00 UTC">Sat Mar 15th, 2369 at 20:00</time></h2>
+<p>Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.</p>
+<p>📍 <a href="https://www.facebook.com/pages/Ten-Forward/300000000000001">Ten Forward</a> — Deck 10, USS Enterprise</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/50069ba5-b1f5-5b33-a324-23e2331bae7d/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="50069ba5-b1f5-5b33-a324-23e2331bae7d">Beverly Crusher</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Friends since</td>
+<td>2364-02-14T18:30:00+00:00</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/931b96c6-e4b7-51cd-a97f-c3b923711a79/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="04c14b01-decd-5613-a853-3fd5ceafec39">Facebook · Ten Forward Nights (all)</h1>
+<div id="m-aed4dc0b-4a5b-576e-9756-a647588fc959" data-section-uuid="aed4dc0b-4a5b-576e-9756-a647588fc959" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T20:50:00+00:00" title="2369-04-01 20:50:00 UTC">Tue Apr 1st, 2369 at 20:50</time></h2>
+<p>Off-duty evenings on Deck 10.</p>
+</div>
+<div id="m-159c9eca-c75f-56ca-8dde-0b58a49ce41f" data-section-uuid="159c9eca-c75f-56ca-8dde-0b58a49ce41f" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T20:50:00+00:00" title="2369-04-01 20:50:00 UTC">Tue Apr 1st, 2369 at 20:50</time></h2>
+<p><img src="blobs/303f964a39bf6024.png" alt="200000000000001.png"></p>
+</div>
+<div id="m-a392fac2-6b27-5c75-9327-7234cf4e067a" data-section-uuid="a392fac2-6b27-5c75-9327-7234cf4e067a" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T20:52:00+00:00" title="2369-04-01 20:52:00 UTC">Tue Apr 1st, 2369 at 20:52</time></h2>
+<p>Guinan behind the bar.</p>
+<p><img src="blobs/8b80ba76f8bd4174.png" alt="200000000000002.png"></p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>facebook — storage</h1>
 <p>Measured 2369-04-15T00:00:00+00:00.</p>
 <table>
 <thead>
@@ -1434,180 +1445,198 @@ logs/emitter/41156.1.log:phase drift 0.31
 <tbody>
 <tr>
 <td>Source Size</td>
-<td><code>claude-code/ingest</code></td>
+<td><code>facebook/ingest</code></td>
 <td>‹size›</td>
-<td>2 files</td>
-<td><span id="m-0bf45f94-ffca-5f66-b9a0-9333feb537fe" data-section-uuid="0bf45f94-ffca-5f66-b9a0-9333feb537fe"><code>0bf45f94</code></span></td>
+<td>4 files</td>
+<td><span id="m-ccb38526-3521-5652-9c06-14e7d784d380" data-section-uuid="ccb38526-3521-5652-9c06-14e7d784d380"><code>ccb38526</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>claude-code/ingest/entities.doltlite_db</code></td>
+<td><code>facebook/ingest/blobs.doltlite_db</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-e8fcf883-f0a6-5639-bdfd-672b81b63e61" data-section-uuid="e8fcf883-f0a6-5639-bdfd-672b81b63e61"><code>e8fcf883</code></span></td>
+<td><span id="m-8fcab811-c94d-596e-a58d-f5a80bfe632e" data-section-uuid="8fcab811-c94d-596e-a58d-f5a80bfe632e"><code>8fcab811</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>claude-code/ingest/entities.doltlite_db#ingested_files</code></td>
+<td><code>facebook/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td></td>
+<td>4 rows</td>
+<td><span id="m-f7f39ca9-6c03-51de-b680-a49da41351c0" data-section-uuid="f7f39ca9-6c03-51de-b680-a49da41351c0"><code>f7f39ca9</code></span></td>
+</tr>
+<tr>
+<td>Store</td>
+<td><code>facebook/ingest/entities.doltlite_db</code></td>
+<td>‹size›</td>
+<td></td>
+<td><span id="m-e8d1451a-003e-5949-aa1c-6367b39216e3" data-section-uuid="e8d1451a-003e-5949-aa1c-6367b39216e3"><code>e8d1451a</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#ads_information_story_views_in_past_7_days</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-6d653749-5c97-5c2e-ae9a-3144a4e70208" data-section-uuid="6d653749-5c97-5c2e-ae9a-3144a4e70208"><code>6d653749</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#connections_friends_your_friends</code></td>
 <td></td>
 <td>3 rows</td>
-<td><span id="m-420626c7-684f-5f3f-86d1-93f94554a0a4" data-section-uuid="420626c7-684f-5f3f-86d1-93f94554a0a4"><code>420626c7</code></span></td>
+<td><span id="m-c366bf73-47d3-544c-9b02-f1a2e7ad8d20" data-section-uuid="c366bf73-47d3-544c-9b02-f1a2e7ad8d20"><code>c366bf73</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>claude-code/ingest/entities.doltlite_db#records</code></td>
+<td><code>facebook/ingest/entities.doltlite_db#logged_information_search_your_search_history</code></td>
 <td></td>
-<td>24 rows</td>
-<td><span id="m-4d685c86-6bfe-546a-9bcb-af2e919b0fa8" data-section-uuid="4d685c86-6bfe-546a-9bcb-af2e919b0fa8"><code>4d685c86</code></span></td>
+<td>1 row</td>
+<td><span id="m-65f5f382-7410-5295-b883-68443fc7c72c" data-section-uuid="65f5f382-7410-5295-b883-68443fc7c72c"><code>65f5f382</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>claude-code/ingest/entities.doltlite_db#transcripts</code></td>
+<td><code>facebook/ingest/entities.doltlite_db#media_blobs</code></td>
+<td></td>
+<td>8 rows</td>
+<td><span id="m-aef37c2c-7775-5577-b6bf-e26568c38544" data-section-uuid="aef37c2c-7775-5577-b6bf-e26568c38544"><code>aef37c2c</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#personal_information_profile_information_profile_information</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-2a0cdb68-0220-5d02-a52c-20b39040f506" data-section-uuid="2a0cdb68-0220-5d02-a52c-20b39040f506"><code>2a0cdb68</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_comments</code></td>
 <td></td>
 <td>3 rows</td>
-<td><span id="m-81d901ac-75cf-5655-aeae-e52484582ad7" data-section-uuid="81d901ac-75cf-5655-aeae-e52484582ad7"><code>81d901ac</code></span></td>
+<td><span id="m-fc664d5d-3e30-5a80-a2f1-2c8627a46847" data-section-uuid="fc664d5d-3e30-5a80-a2f1-2c8627a46847"><code>fc664d5d</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_likes_and_reactions</code></td>
+<td></td>
+<td>4 rows</td>
+<td><span id="m-1304a28f-a50e-50b4-9e23-67ca558a7d7a" data-section-uuid="1304a28f-a50e-50b4-9e23-67ca558a7d7a"><code>1304a28f</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_album</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-f1af1763-abc5-5ff6-b38f-11884222e34b" data-section-uuid="f1af1763-abc5-5ff6-b38f-11884222e34b"><code>f1af1763</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_posts_on_other_pages_and_profiles</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-0d2390aa-976e-55b2-b0a8-6ad98a275064" data-section-uuid="0d2390aa-976e-55b2-b0a8-6ad98a275064"><code>0d2390aa</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_posts_check_ins_photos_and_videos</code></td>
+<td></td>
+<td>4 rows</td>
+<td><span id="m-1299d232-1804-5d84-af61-d3af0bc30582" data-section-uuid="1299d232-1804-5d84-af61-d3af0bc30582"><code>1299d232</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_videos</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-ac4f9954-18f8-56b1-ae09-f9b4a2094e55" data-section-uuid="ac4f9954-18f8-56b1-ae09-f9b4a2094e55"><code>ac4f9954</code></span></td>
 </tr>
 </tbody>
 </table>
 </div>
 </div>
 <div class="preview-doc">
-<h3 class="preview-name">claude-code/render_markdown/a4d3483a-15a5-5434-bd12-77967f5a5584/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="a4d3483a-15a5-5434-bd12-77967f5a5584">Deflector dish drift (all) <a class="source-link" href="https://claude.ai/code/cse_01TNGdeflector" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<div id="m-fc98d210-1f11-5a64-a07f-cfa3390177af" data-section-uuid="fc98d210-1f11-5a64-a07f-cfa3390177af" class="msg msg--claude_code">
-<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T10:00:14+00:00" title="2364-04-11 10:00:14 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<p>The deflector dish is 0.3 degrees off axis. Find why the realignment script fails.</p>
+<h3 class="preview-name">facebook/render_markdown/abc0c7cf-ac1c-5a3c-8620-645fd9a577ae/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="abc0c7cf-ac1c-5a3c-8620-645fd9a577ae">Data</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Friends since</td>
+<td>2364-01-06T10:05:00+00:00</td>
+</tr>
+</tbody>
+</table>
 </div>
-<details class="tool-group">
-<summary>🛠 4 tool steps</summary>
-<div id="m-d7310c24-6876-532e-a50e-77e348f0e4c1" data-section-uuid="d7310c24-6876-532e-a50e-77e348f0e4c1" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:21+00:00" title="2364-04-11 10:00:21 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<details><summary>Thinking</summary>
-<blockquote>
-<p>The emitter array logs are the first place to look.</p>
-</blockquote>
-</details>
 </div>
-<div id="m-6ad4a1ca-b68e-5795-b044-572209b212e3" data-section-uuid="6ad4a1ca-b68e-5795-b044-572209b212e3" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:21+00:00" title="2364-04-11 10:00:21 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<details><summary>Tool use: Bash</summary>
-<pre><code class="language-json"><span class="hljs-punctuation">{</span>
-  <span class="hljs-attr">&quot;command&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;bin/diag emitter --verbose&quot;</span><span class="hljs-punctuation">,</span>
-  <span class="hljs-attr">&quot;description&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Run the emitter diagnostic&quot;</span>
-<span class="hljs-punctuation">}</span>
-</code></pre>
-</details>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/b27ed612-4631-5353-adca-37b0047401d6/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="86398f3b-7760-5199-9b61-02c28908e383">Facebook · Jean-Luc Picard added a life event from January 5, 2364: Took command of the En… (all)</h1>
+<div id="m-44de9fb2-5809-5ba3-a19d-8d774239b000" data-section-uuid="44de9fb2-5809-5ba3-a19d-8d774239b000" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-20T12:00:00+00:00" title="2369-03-20 12:00:00 UTC">Thu Mar 20th, 2369 at 12:00</time></h2>
+<p><strong>Took command of the Enterprise</strong></p>
+<p>Stardate 41153.7 — a new ship, a new crew. ✨</p>
+<p>📍 Farpoint Station — Deneb IV</p>
 </div>
-<div id="m-cb747396-3166-58b7-a5e8-42afee5aa474" data-section-uuid="cb747396-3166-58b7-a5e8-42afee5aa474" class="msg msg--claude_code">
-<h2><span class="msg-author">Bash</span> <time class="msg-ts" datetime="2364-04-11T10:00:28+00:00" title="2364-04-11 10:00:28 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<details><summary>Tool result: Bash</summary>
-<pre><code>emitter array: 24 of 24 online
-phase variance: 0.31 deg
-last calibration: stardate 41153.7
-</code></pre>
-</details>
 </div>
-<div id="m-2e654a5b-5186-5bee-aaff-34648111dfdf" data-section-uuid="2e654a5b-5186-5bee-aaff-34648111dfdf" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:35+00:00" title="2364-04-11 10:00:35 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<details><summary>Tool use: Read</summary>
-<pre><code class="language-json"><span class="hljs-punctuation">{</span>
-  <span class="hljs-attr">&quot;file_path&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;/Users/picard/src/enterprise/src/deflector/calibrate.py&quot;</span>
-<span class="hljs-punctuation">}</span>
-</code></pre>
-</details>
 </div>
-</details>
-<div id="m-b5a9774f-02ef-52a8-8955-ddaa018c56ee" data-section-uuid="b5a9774f-02ef-52a8-8955-ddaa018c56ee" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:35+00:00" title="2364-04-11 10:00:35 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<p>Phase variance matches the 0.3 degrees you saw. Let me read the calibration routine.</p>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/eaa1e8f3-9b67-59f2-b035-89055ce0fd45/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="ea0c9c99-f0d2-5bb6-99f1-f59f22aee0e8">Facebook · Two views of the bridge before alpha shift. (all)</h1>
+<div id="m-06f44fc9-b5e1-52ea-bfe6-556b05324854" data-section-uuid="06f44fc9-b5e1-52ea-bfe6-556b05324854" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-16T09:30:00+00:00" title="2369-03-16 09:30:00 UTC">Sun Mar 16th, 2369 at 09:30</time></h2>
+<p>Two views of the bridge before alpha shift.</p>
+<p>The bridge at dawn.</p>
+<p>— with Data</p>
+<p><img src="blobs/0303506702c3ec28.png" alt="200000000000003.png"></p>
+<p><img src="blobs/156f6002713189bc.png" alt="200000000000004.png"></p>
 </div>
-<details class="tool-group">
-<summary>🛠 2 tool steps</summary>
-<div id="m-3ef8aa85-0880-5787-833d-3eaf712da589" data-section-uuid="3ef8aa85-0880-5787-833d-3eaf712da589" class="msg msg--claude_code">
-<h2><span class="msg-author">Read</span> <time class="msg-ts" datetime="2364-04-11T10:00:42+00:00" title="2364-04-11 10:00:42 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<details><summary>Tool result: Read</summary>
-<pre><code>     1	def calibrate(emitters):
-     2	    variance = phase_variance(emitters)
-     3	    if variance &gt; 0.5:
-     4	        realign(emitters)
-     5	    return variance
-</code></pre>
-</details>
 </div>
-<div id="m-bcd16c32-3da8-590c-9213-236ebd83c668" data-section-uuid="bcd16c32-3da8-590c-9213-236ebd83c668" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:49+00:00" title="2364-04-11 10:00:49 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<details><summary>Tool use: Agent</summary>
-<pre><code class="language-json"><span class="hljs-punctuation">{</span>
-  <span class="hljs-attr">&quot;description&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Scan emitter logs&quot;</span><span class="hljs-punctuation">,</span>
-  <span class="hljs-attr">&quot;prompt&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Scan the emitter logs since stardate 41153.7 for phase drift events.&quot;</span><span class="hljs-punctuation">,</span>
-  <span class="hljs-attr">&quot;subagent_type&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Explore&quot;</span>
-<span class="hljs-punctuation">}</span>
-</code></pre>
-</details>
 </div>
-</details>
-<div id="m-a07ef58b-c41e-58e4-9138-ab0ea43f547e" data-section-uuid="a07ef58b-c41e-58e4-9138-ab0ea43f547e" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:49+00:00" title="2364-04-11 10:00:49 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
-<p>The threshold is 0.5 degrees, so a 0.31 degree drift never triggers <code>realign</code>. I'll delegate the log check while I fix it.</p>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/f1087c63-5bea-51db-8ec2-cca5afe91003/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="f1087c63-5bea-51db-8ec2-cca5afe91003">William Riker</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Friends since</td>
+<td>2364-01-06T10:00:00+00:00</td>
+</tr>
+</tbody>
+</table>
 </div>
-<details class="tool-group">
-<summary>🛠 3 tool steps</summary>
-<div id="m-9c5eeb42-b6a0-5a76-a8e1-b5f4bb3c39c6" data-section-uuid="9c5eeb42-b6a0-5a76-a8e1-b5f4bb3c39c6" class="msg msg--claude_code">
-<h2><span class="msg-author">Agent</span> <time class="msg-ts" datetime="2364-04-11T10:01:03+00:00" title="2364-04-11 10:01:03 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
-<details><summary>Tool result: Agent</summary>
-<pre><code>Three drift events since 41153.7, all after the warp core recalibration on 41154.2.
-</code></pre>
-</details>
 </div>
-<div id="m-3f7e7abc-6894-531a-92c2-543cd957d66d" data-section-uuid="3f7e7abc-6894-531a-92c2-543cd957d66d" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:01:10+00:00" title="2364-04-11 10:01:10 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
-<details><summary>Tool use: Edit</summary>
-<pre><code class="language-json"><span class="hljs-punctuation">{</span>
-  <span class="hljs-attr">&quot;file_path&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;/Users/picard/src/enterprise/src/deflector/calibrate.py&quot;</span><span class="hljs-punctuation">,</span>
-  <span class="hljs-attr">&quot;new_string&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;    if variance &gt; 0.25:&quot;</span><span class="hljs-punctuation">,</span>
-  <span class="hljs-attr">&quot;old_string&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;    if variance &gt; 0.5:&quot;</span>
-<span class="hljs-punctuation">}</span>
-</code></pre>
-</details>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/fc358ba4-b6be-5ed7-98e4-cc9dd07265d7/2369-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="fc29f459-ba89-522c-bf3e-226407c25868">Facebook · Comments (2369-03)</h1>
+<div id="m-84872844-eec2-51c2-b542-069c279df7bf" data-section-uuid="84872844-eec2-51c2-b542-069c279df7bf" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-16T10:00:00+00:00" title="2369-03-16 10:00:00 UTC">Sun Mar 16th, 2369 at 10:00</time></h2>
+<p>And the same view an hour later.</p>
+<p><em>Jean-Luc Picard commented on his own photo.</em></p>
+<p><img src="blobs/156f6002713189bc.png" alt="200000000000004.png"></p>
 </div>
-<div id="m-2af3ca18-cf65-5063-a8ed-302792995af8" data-section-uuid="2af3ca18-cf65-5063-a8ed-302792995af8" class="msg msg--claude_code">
-<h2><span class="msg-author">Edit</span> <time class="msg-ts" datetime="2364-04-11T10:01:17+00:00" title="2364-04-11 10:01:17 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
-<details><summary>Tool result: Edit</summary>
-<pre><code>The file has been updated successfully.
-</code></pre>
-</details>
+<div id="m-6a41e419-80e9-572a-b609-00c393320584" data-section-uuid="6a41e419-80e9-572a-b609-00c393320584" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T15:00:00+00:00" title="2369-03-18 15:00:00 UTC">Tue Mar 18th, 2369 at 15:00</time></h2>
+<p>Enjoy the chair, Will.</p>
+<p><em>Jean-Luc Picard commented on William Riker's post.</em></p>
 </div>
-</details>
-<div id="m-cbd4ca0e-7dee-54f8-a974-9a9da1c4bbeb" data-section-uuid="cbd4ca0e-7dee-54f8-a974-9a9da1c4bbeb" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:01:24+00:00" title="2364-04-11 10:01:24 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
-<p>Lowered the realignment threshold to 0.25 degrees in <code>src/deflector/calibrate.py</code>. The drift started after the warp core recalibration on stardate 41154.2, so it is worth checking whether that changed the emitter phase reference.</p>
 </div>
-<div id="m-d18956ce-ccc4-5cc5-9b88-6d48cb442e81" data-section-uuid="d18956ce-ccc4-5cc5-9b88-6d48cb442e81" class="msg msg--claude_code">
-<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T10:01:38+00:00" title="2364-04-11 10:01:38 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
-<p>Ship it.</p>
 </div>
-<details class="tool-group">
-<summary>🛠 2 tool steps</summary>
-<div id="m-8c7eb7e5-887a-557a-987a-d3fe0c478fc2" data-section-uuid="8c7eb7e5-887a-557a-987a-d3fe0c478fc2" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:01:45+00:00" title="2364-04-11 10:01:45 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
-<details><summary>Tool use: Bash</summary>
-<pre><code class="language-json"><span class="hljs-punctuation">{</span>
-  <span class="hljs-attr">&quot;command&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;gh pr create --title &#x27;Lower deflector realignment threshold&#x27; --body &#x27;Drift of 0.31 deg never triggered realign.&#x27;&quot;</span>
-<span class="hljs-punctuation">}</span>
-</code></pre>
-</details>
-</div>
-<div id="m-baec7f4c-62ca-57d0-9b7e-3ff47363a5eb" data-section-uuid="baec7f4c-62ca-57d0-9b7e-3ff47363a5eb" class="msg msg--claude_code">
-<h2><span class="msg-author">Bash</span> <time class="msg-ts" datetime="2364-04-11T10:01:52+00:00" title="2364-04-11 10:01:52 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
-<details><summary>Tool result: Bash</summary>
-<pre><code>https://github.com/starfleet/enterprise/pull/1701
-</code></pre>
-</details>
-</div>
-</details>
-<div id="m-cc6b0152-064e-51dc-8f6f-11d746f3b380" data-section-uuid="cc6b0152-064e-51dc-8f6f-11d746f3b380" class="msg msg--claude_code">
-<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:01:59+00:00" title="2364-04-11 10:01:59 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
-<p>Opened <a href="https://github.com/starfleet/enterprise/pull/1701">PR #1701</a>.</p>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/fc358ba4-b6be-5ed7-98e4-cc9dd07265d7/2369-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="640d4e72-f900-5a80-88d8-3093a1133925">Facebook · Comments (2369-04)</h1>
+<div id="m-3a4f8394-afb5-5e4a-9669-69c955997c63" data-section-uuid="3a4f8394-afb5-5e4a-9669-69c955997c63" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-02T08:00:00+00:00" title="2369-04-02 08:00:00 UTC">Wed Apr 2nd, 2369 at 08:00</time></h2>
+<p>Guinan's synthehol never disappoints. 🍸</p>
+<p><em>Jean-Luc Picard commented on his own album.</em></p>
 </div>
 </div>
 </div>

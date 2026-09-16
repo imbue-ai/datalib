@@ -268,6 +268,12 @@ pub fn plan(
             datalib_etl_linkedin,
             datalib_etl_linkedin_render
         ),
+        SourceType::Facebook => arm!(
+            datalib_etl_facebook_config::FacebookConfig,
+            datalib_etl_facebook_config::FacebookRenderConfig,
+            datalib_etl_facebook,
+            datalib_etl_facebook_render
+        ),
         SourceType::GoogleTakeout => arm!(
             datalib_etl_google_takeout_config::GoogleTakeoutConfig,
             datalib_etl_google_takeout_config::GoogleTakeoutRenderConfig,
