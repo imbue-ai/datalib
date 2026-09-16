@@ -81,11 +81,11 @@ pub struct RenderProfile {
     /// rows — the `entity_kind` component of the `datalib_id` recipe
     /// that minted their `uuid`.
     pub chat_entity_kind: &'static str,
-    /// Precision of the `when_ts` this provider stamps on its grid
+    /// Precision of the `created_at` this provider stamps on its grid
     /// rows. Not a free choice: changing it changes every row, so the
     /// provider's whole tree re-renders. Beeper is the one source whose
     /// upstream timestamps are meaningful below the second.
-    pub when_ts_precision: WhenTsPrecision,
+    pub stamp_precision: RecordStampPrecision,
     /// Each provider bumps its own render version when its render
     /// layer changes meaningfully (column changes, item-shape changes,
     /// new field on grid_rows). The chat-common renderer stamps this
@@ -571,19 +571,25 @@ fn build_grid_rows(
 ) -> Vec<GridRow> {
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + doc.items.len());
 
-    // The chat-level row is stamped with the earliest *real* timestamp
-    // in the bucket. `min()` over the items that have one rather than
-    // "the first item's", for two reasons: an undated item sorts to the
-    // front (`None < Some` in every provider's `sort_by_key`), so
-    // reading item 0 would hand a whole conversation a null; and a
-    // bucket with no dated item at all — including the empty bucket
-    // `render_markdown` renders as "_(no messages)_" — then correctly
-    // gets `None` instead of the 1970 stamp it used to get. Providers
-    // sort ascending, so for a fully-dated bucket this is the same value
-    // `items.first()` gave.
-    let first_ts = when_ts_from_ms(
-        doc.items.iter().filter_map(|i| i.date_ms).min(),
-        profile.when_ts_precision,
+    // The document row brackets the bucket: created at the earliest
+    // *real* stamp in it, modified at the latest — a reaction counts, it
+    // is a change to the thread. `min()`/`max()` over the items that
+    // have a stamp rather than the first and last items', because an
+    // undated item sorts to the front (`None < Some` in every provider's
+    // `sort_by_key`), and a bucket with no dated item at all — including
+    // the empty bucket `render_markdown` renders as "_(no messages)_" —
+    // then gets `None` rather than a 1970 stamp.
+    let dated = || doc.items.iter().filter_map(|i| i.date_ms);
+    let first_ts = stamp_from_ms(dated().min(), profile.stamp_precision);
+    let last_ts = stamp_from_ms(
+        dated()
+            .chain(
+                doc.items
+                    .iter()
+                    .flat_map(|i| i.reactions.iter().filter_map(|r| r.date_ms)),
+            )
+            .max(),
+        profile.stamp_precision,
     );
     let conversation_name = Some(chat.display.clone());
     let entire_chat = format!("/chat/{}", doc.markdown_uuid);
@@ -595,7 +601,9 @@ fn build_grid_rows(
             .provider(profile.provider)
             .kind(profile.chat_kind.clone())
             .source_label(profile.source_label.clone())
-            .when_ts(first_ts)
+            .is_document(true)
+            .created_at(first_ts)
+            .modified_at(last_ts)
             .byte_size(Some(bodies.iter().map(|b| b.len() as i64).sum()))
             .item_count(Some(doc.items.len() as i64))
             .author(chat.author.clone())
@@ -649,7 +657,7 @@ fn build_grid_rows(
                 // exactly one workspace/account, and every row inside
                 // it was minted under that same `Scope::Upstream`.
                 .upstream_scope(chat.upstream_scope.clone())
-                .when_ts(when_ts_from_ms(item.date_ms, profile.when_ts_precision))
+                .created_at(stamp_from_ms(item.date_ms, profile.stamp_precision))
                 .byte_size(Some(text.len() as i64))
                 .item_count(Some(1))
                 // An empty display is "upstream named nobody", which is a
@@ -733,7 +741,7 @@ fn reaction_row(
         .upstream_id(r.source_ref.as_ref().map(|s| s.native_id.clone()))
         .upstream_entity_kind(r.source_ref.as_ref().map(|s| s.entity_kind.clone()))
         .upstream_scope(chat.upstream_scope.clone())
-        .when_ts(when_ts_from_ms(r.date_ms, profile.when_ts_precision))
+        .created_at(stamp_from_ms(r.date_ms, profile.stamp_precision))
         .author(non_empty(&r.reactor_display))
         .account(chat.account.clone())
         .org_uuid(chat.org_uuid.clone())
@@ -785,12 +793,12 @@ fn attachment_search_text(item: &NormalizedChatItem) -> String {
 }
 
 // Format helpers
-use datalib_time::{when_ts_from_unix_millis, WhenTsPrecision};
+use datalib_time::{record_stamp_from_unix_millis, RecordStampPrecision};
 
 /// Seconds precision, as this renderer has always emitted. Changing it
 /// would re-render every document chat-common has written.
-fn when_ts_from_ms(ms: Option<i64>, precision: WhenTsPrecision) -> Option<String> {
-    when_ts_from_unix_millis(ms, precision)
+fn stamp_from_ms(ms: Option<i64>, precision: RecordStampPrecision) -> Option<String> {
+    record_stamp_from_unix_millis(ms, precision)
 }
 
 fn human_bytes(n: i64) -> String {
@@ -1013,7 +1021,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let chat = mk_chat();
@@ -1194,7 +1202,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
@@ -1211,7 +1219,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1242,7 +1250,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1267,7 +1275,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1301,7 +1309,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1321,7 +1329,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         }
     }
@@ -1330,7 +1338,7 @@ mod tests {
     /// upstream never stamped used to land in the grid as a real-looking
     /// `1970-01-01T00:00:00+00:00`. It must be null instead.
     #[test]
-    fn undated_item_gets_a_null_when_ts_not_the_epoch() {
+    fn undated_item_gets_a_null_created_at_not_the_epoch() {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items[0].date_ms = None;
@@ -1339,17 +1347,47 @@ mod tests {
         let rows = rows_of(&profile, &chat);
         for r in &rows {
             assert_eq!(
-                r.when_ts, None,
+                r.created_at, None,
                 "{} row fabricated a timestamp: {:?}",
-                r.kind, r.when_ts
+                r.kind, r.created_at
             );
         }
         assert!(
-            !rows
-                .iter()
-                .any(|r| r.when_ts.as_deref().is_some_and(|t| t.starts_with("1970"))),
+            !rows.iter().any(|r| r
+                .created_at
+                .as_deref()
+                .is_some_and(|t| t.starts_with("1970"))),
             "no row may carry an epoch stand-in",
         );
+    }
+
+    /// The chat row is the one document row, created at the first
+    /// message and modified at the last change — here the reaction,
+    /// which lands ten seconds after the only message.
+    #[test]
+    fn chat_row_is_the_document_and_brackets_the_bucket() {
+        let profile = test_profile();
+        let rows = rows_of(&profile, &mk_chat());
+        let docs: Vec<&GridRow> = rows.iter().filter(|r| r.is_document).collect();
+        assert_eq!(docs.len(), 1, "{rows:?}");
+        let chat = docs[0];
+        assert_eq!(chat.kind, profile.chat_kind);
+        assert_eq!(
+            chat.created_at.as_deref(),
+            Some("2364-04-11T00:00:00+00:00")
+        );
+        assert_eq!(
+            chat.modified_at.as_deref(),
+            Some("2364-04-11T00:00:10+00:00")
+        );
+        for r in rows.iter().filter(|r| !r.is_document) {
+            assert!(
+                r.modified_at.is_none(),
+                "{} row: {:?}",
+                r.kind,
+                r.modified_at
+            );
+        }
     }
 
     /// An empty bucket is reachable — `render_markdown` renders it as
@@ -1363,7 +1401,7 @@ mod tests {
 
         let rows = rows_of(&profile, &chat);
         assert_eq!(rows.len(), 1, "only the chat-level row");
-        assert_eq!(rows[0].when_ts, None);
+        assert_eq!(rows[0].created_at, None);
     }
 
     /// A dated bucket is unaffected, and a bucket whose *first* item is
@@ -1383,7 +1421,7 @@ mod tests {
 
         let rows = rows_of(&profile, &chat);
         assert_eq!(
-            rows[0].when_ts.as_deref(),
+            rows[0].created_at.as_deref(),
             Some("2364-04-11T00:00:00+00:00"),
             "chat row keeps the bucket's earliest real stamp",
         );
@@ -1408,7 +1446,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();

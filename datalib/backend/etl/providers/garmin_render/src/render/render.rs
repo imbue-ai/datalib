@@ -135,7 +135,7 @@ fn render_markdown(
 ) -> String {
     let mut out = String::with_capacity(8 * 1024);
     let title = page_title(parsed, source_id);
-    let when_ts = parsed
+    let created_at = parsed
         .latest_weigh_in()
         .and_then(|w| iso(w.timestamp_gmt_ms));
 
@@ -144,8 +144,8 @@ fn render_markdown(
     let _ = writeln!(out, "source_id: {source_id}");
     out.push_str("provider: garmin\n");
     let _ = writeln!(out, "title: {}", yaml_safe(&title));
-    if let Some(ts) = &when_ts {
-        let _ = writeln!(out, "when_ts: {}", yaml_safe(ts));
+    if let Some(ts) = &created_at {
+        let _ = writeln!(out, "created_at: {}", yaml_safe(ts));
     }
     out.push_str("---\n\n");
     out.push_str(
@@ -295,7 +295,14 @@ fn build_grid_rows(
         .provider(Provider::Garmin)
         .kind("Garmin Weight")
         .source_label("Garmin")
-        .when_ts(
+        .is_document(true)
+        .created_at(
+            parsed
+                .weigh_ins
+                .first()
+                .and_then(|w| iso(w.timestamp_gmt_ms)),
+        )
+        .modified_at(
             parsed
                 .latest_weigh_in()
                 .and_then(|w| iso(w.timestamp_gmt_ms)),
@@ -317,7 +324,7 @@ fn build_grid_rows(
                 .provider(Provider::Garmin)
                 .kind("Garmin Device")
                 .source_label("Garmin")
-                .when_ts(d.last_sync.as_deref().and_then(garmin_stamp_to_iso))
+                .created_at(d.last_sync.as_deref().and_then(garmin_stamp_to_iso))
                 .channel(Some(d.name.clone()))
                 .conversation_name(Some(title.clone()))
                 .conversation_uuid(m_uuid.to_string())

@@ -8,9 +8,9 @@ pub mod types;
 
 pub use account::account_label;
 pub use render::{render_all, RenderProfile, RenderSummary, LAYOUT_VERSION};
-// Re-exported so a provider can name its `when_ts` precision without
+// Re-exported so a provider can name its `created_at` precision without
 // taking a dependency on `datalib-time` just for the enum.
-pub use datalib_time::WhenTsPrecision;
+pub use datalib_time::RecordStampPrecision;
 pub use types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,

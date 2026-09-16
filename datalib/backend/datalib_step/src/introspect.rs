@@ -371,9 +371,8 @@ pub fn plan(
     if subjects.is_empty() {
         return Ok(None);
     }
-    // The tree row is the document's canonical row: `upsert_markdown`
-    // looks for the row whose uuid equals the markdown's, and that is
-    // the one whose title and timestamp should describe the file.
+    // The tree row is the document: the one whose title and stamps
+    // describe the file, and the one marked `is_document` below.
     let markdown_uuid = subjects
         .iter()
         .find(|s| s.kind == MeasurementKind::Tree)
@@ -394,7 +393,11 @@ pub fn plan(
                 .provider(Provider::Datalib)
                 .kind(s.kind.label())
                 .source_label(SOURCE_LABEL)
-                .when_ts(Some(now.to_string()))
+                .is_document(uuid == markdown_uuid)
+                // A measurement is an instant: it came to be and was
+                // last true at the same moment.
+                .created_at(Some(now.to_string()))
+                .modified_at(Some(now.to_string()))
                 // No `account`: this row measures a source, it belongs
                 // to no upstream login, and the group id it used to
                 // carry here polluted every `account:` filter. The

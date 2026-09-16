@@ -15,7 +15,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_schema::providers::Provider;
-use datalib_time::WhenTsPrecision;
+use datalib_time::RecordStampPrecision;
 
 use crate::render::{render_all, RenderProfile, ENTITY_KIND_CONVERSATION};
 use crate::types::{
@@ -34,7 +34,7 @@ pub fn sample_profile() -> RenderProfile {
         message_kind: "Message".to_string(),
         reaction_kind: "Reaction".to_string(),
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
-        when_ts_precision: WhenTsPrecision::Seconds,
+        stamp_precision: RecordStampPrecision::Seconds,
         render_version: 1,
     }
 }

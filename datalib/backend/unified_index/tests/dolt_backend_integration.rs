@@ -1,7 +1,9 @@
 //! End-to-end integration test for the doltlite backend.
 
-use datalib_schema::grid_rows::DDL as GRID_DDL;
+use datalib_schema::grid_rows::{GridRow, DDL as GRID_DDL};
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
+use datalib_schema::providers::Provider;
+use datalib_table::BulkUpsertable;
 use datalib_unified_index::dolt_repo::DoltRepo;
 use datalib_unified_index::query::parse_query;
 use datalib_unified_index::repo::IndexRepo;
@@ -84,24 +86,25 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     // For Anthropic chats the rendered file is 1:1 with the
     // conversation, so markdown_uuid == conversation_uuid here.
     sqlx::query(
-        "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, when_ts_utc, when_offset, \
+        "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, created_offset, \
          author, account, project, channel, conversation_name, conversation_uuid, \
-         message_index, entire_chat, text, slack_link, qmd_path, source_url, markdown_uuid) \
+         message_index, entire_chat, text, slack_link, qmd_path, source_url, markdown_uuid, \
+         is_document) \
          VALUES ('c-1','claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
                  '2026-04-01T10:00:00.000000Z','+00:00', \
                  NULL,'acct-a',NULL,NULL,'Test conv','c-1',NULL,'/chat/c-1', \
-                 'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1')",
+                 'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1', 1)",
     )
     .execute(repo.index_pool())
     .await
     .expect("insert chat row");
     sqlx::query(
-        "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, when_ts_utc, when_offset, \
+        "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, created_offset, \
          author, account, project, channel, conversation_name, conversation_uuid, \
-         message_index, entire_chat, text, slack_link, markdown_uuid) \
+         message_index, entire_chat, text, slack_link, markdown_uuid, is_document) \
          VALUES ('m-1','claude','User Input','Claude','2026-04-01T10:01:00+00:00', \
                  '2026-04-01T10:01:00.000000Z','+00:00', \
-                 'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','','c-1')",
+                 'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','','c-1', 0)",
     )
     .execute(repo.index_pool())
     .await
@@ -122,7 +125,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     assert_eq!(rows[1].kind, "User Input");
 
     let filtered = repo
-        .search(&parse_query("source:Claude type:all"), 100)
+        .search(&parse_query("source:Claude"), 100)
         .await
         .unwrap();
     assert!(!filtered.is_empty());
@@ -182,34 +185,36 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     // Both rows sit under `claude-work/render_markdown/`: the chat is
     // that source's data, the measurement is datalib describing it.
     sqlx::query(
-        "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, when_ts_utc, \
-         when_offset, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid) \
+        "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, \
+         created_offset, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid, \
+         is_document) \
          VALUES ('c-1','claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
                  '2026-04-01T10:00:00.000000Z','+00:00','c-1','/chat/c-1','summary', \
-                 'claude-work/render_markdown/chats/c-1.md','c-1')",
+                 'claude-work/render_markdown/chats/c-1.md','c-1', 1)",
     )
     .execute(repo.index_pool())
     .await
     .expect("insert chat row");
     sqlx::query(
-        "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, when_ts_utc, \
-         when_offset, account, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid) \
+        "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, \
+         created_offset, account, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid, \
+         is_document) \
          VALUES ('s-1','datalib','Store','Storage','2026-04-01T10:00:00+00:00', \
                  '2026-04-01T10:00:00.000000Z','+00:00','claude-work','s-1','/chat/s-1', \
                  'claude-work/ingest/entities.doltlite_db', \
-                 'claude-work/render_markdown/_datalib/storage.md','s-1')",
+                 'claude-work/render_markdown/_datalib/storage.md','s-1', 0)",
     )
     .execute(repo.index_pool())
     .await
     .expect("insert storage row");
 
-    let all = repo.search(&parse_query("type:all"), 100).await.unwrap();
+    let all = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(all.len(), 2, "{all:?}");
     let storage = all.iter().find(|r| r.uuid == "s-1").expect("storage row");
     assert_eq!(storage.source_id, "datalib");
 
     let measured = repo
-        .search(&parse_query("source_id:claude-work type:all"), 100)
+        .search(&parse_query("source_id:claude-work"), 100)
         .await
         .unwrap();
     assert_eq!(
@@ -219,7 +224,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     );
 
     let datalibs = repo
-        .search(&parse_query("source_id:datalib type:all"), 100)
+        .search(&parse_query("source_id:datalib"), 100)
         .await
         .unwrap();
     assert_eq!(
@@ -229,4 +234,90 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
+}
+
+/// The SELECT list in `dolt_repo` is hand-written and the row mapper
+/// reads each column with `try_get(..).unwrap_or_default()`, so a
+/// column left out of the list comes back as a blank rather than an
+/// error — the one failure nothing downstream can see. Write a row
+/// with every column filled, through the same `BulkUpsertable` contract
+/// the index writes with, and require every field on the wire to be
+/// filled on the way back.
+#[tokio::test]
+async fn every_wire_field_survives_the_round_trip() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    for (_t, ddl) in GRID_DDL {
+        sqlx::query(*ddl).execute(repo.index_pool()).await.unwrap();
+    }
+
+    let row = GridRow::builder()
+        .uuid("row-1")
+        .provider(Provider::Claude)
+        .kind("Chat")
+        .source_label("Claude")
+        .is_document(true)
+        .created_at(Some("2026-06-02T13:00:00-07:00".to_string()))
+        .modified_at(Some("2026-06-03T09:30:00-07:00".to_string()))
+        .author(Some("Jean-Luc Picard".to_string()))
+        .account(Some("acct-1701".to_string()))
+        .project(Some("proj-1701".to_string()))
+        .org_uuid(Some("org-1701".to_string()))
+        .org_name(Some("Starfleet".to_string()))
+        .channel(Some("bridge".to_string()))
+        .conversation_name(Some("Captain's Log".to_string()))
+        .conversation_uuid("row-1")
+        .message_index(Some(0))
+        .entire_chat("/chat/row-1")
+        .text("Stardate 47988.1")
+        .slack_link(Some("slack://x".to_string()))
+        .qmd_path(Some("claude-api/render_markdown/row-1.md".to_string()))
+        .source_url(Some("https://claude.ai/chat/row-1".to_string()))
+        .git_sha(Some("abc123".to_string()))
+        .upstream_id(Some("row-1".to_string()))
+        .upstream_entity_kind(Some("conversation".to_string()))
+        .upstream_scope(Some("org-1701".to_string()))
+        .notion_page_uuid(Some("page-1".to_string()))
+        .notion_block_uuid(Some("block-1".to_string()))
+        .markdown_uuid(Some("row-1".to_string()))
+        .byte_size(Some(4096))
+        .item_count(Some(7))
+        .build()
+        .unwrap();
+    // The INSERT the index itself uses, from the derived column list —
+    // so this test cannot drift from the DDL either.
+    let columns = std::iter::once(GridRow::ID_COLUMN)
+        .chain(GridRow::TYPED_COLUMNS.iter().copied())
+        .collect::<Vec<_>>();
+    let placeholders = vec!["?"; columns.len()].join(", ");
+    let sql = format!(
+        "INSERT INTO grid_rows ({}) VALUES ({placeholders})",
+        columns.join(", ")
+    );
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+        .execute(repo.index_pool())
+        .await
+        .unwrap();
+
+    let rows = repo.search(&parse_query(""), 10).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    let wire = serde_json::to_value(&rows[0]).unwrap();
+    // Filled by the applet from the config, or only by a free-text
+    // search: absent from a repo's own answer by design.
+    let not_the_repos: [&str; 3] = ["provider_ref", "source_ref", "score"];
+    for key in not_the_repos {
+        assert!(wire.get(key).is_none(), "{key}: {wire}");
+    }
+    for (key, value) in wire.as_object().unwrap() {
+        let blank = value.is_null() || value.as_str().is_some_and(str::is_empty);
+        assert!(
+            !blank,
+            "SearchRow.{key} came back blank from a fully populated row: \
+             is its column in SEARCH_ROW_COLUMNS?"
+        );
+    }
+    assert_eq!(wire["is_document"], true);
+    assert_eq!(wire["modified_at"], "2026-06-03T09:30:00-07:00");
+    drop(repo);
 }

@@ -44,6 +44,7 @@ rust_test(
     edition = "2021",
     deps = [
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:tempfile",
     ],
 )

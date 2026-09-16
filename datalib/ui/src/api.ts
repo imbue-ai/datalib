@@ -13,10 +13,19 @@ export type SearchRow = {
   message_index: number | null;
   snippet: string;
   sender: string;
-  // Null when the row has no source-side timestamp (e.g. contacts
-  // without a `REV:` field, or any row whose underlying entity isn't
-  // event-shaped). AG Grid renders null as an empty cell.
-  when: string | null;
+  // When the thing came into being, as the source wrote it. Null when
+  // the row has no source-side timestamp (a contact, or any row whose
+  // underlying entity isn't event-shaped). AG Grid renders null as an
+  // empty cell.
+  created_at: string | null;
+  // When it last changed, as the source wrote it: the last message of a
+  // thread, a PR's updated_at, a vCard's REV. Null on a row not known
+  // to have changed since created_at — most messages.
+  modified_at: string | null;
+  // True on the one row per rendered document that *is* the document
+  // (the thread, the PR, the page); false on every row inside one.
+  // `is:document` in the search bar.
+  is_document: boolean;
   conversation_name: string;
   project: string;
   account: string;

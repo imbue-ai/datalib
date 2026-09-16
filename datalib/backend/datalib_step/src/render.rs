@@ -755,6 +755,7 @@ mod plan_tests {
             .entire_chat(format!("/chat/{uuid}"))
             .text("body")
             .markdown_uuid(Some(uuid.to_string()))
+            .is_document(true)
             .build()
             .unwrap();
         store
@@ -883,6 +884,7 @@ mod stale_tree_tests {
             .entire_chat(format!("/chat/{chat_uuid}"))
             .text("body")
             .markdown_uuid(Some(chat_uuid.to_string()))
+            .is_document(true)
             .build()
             .unwrap();
         store
