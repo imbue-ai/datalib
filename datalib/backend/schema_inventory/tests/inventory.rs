@@ -150,6 +150,10 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
             datalib_etl_sms_backup_restore::ingest::schema_raw::full_ddl(),
         ),
         (
+            "claude_code/raw",
+            datalib_etl_claude_code::ingest::schema_raw::full_ddl(),
+        ),
+        (
             "whatsapp/raw",
             owned(datalib_etl_whatsapp::schema_raw::ALL_DDL),
         ),

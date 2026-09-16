@@ -39,6 +39,12 @@
       "reach": "local"
     }
   ],
+  "claude_code": [
+    {
+      "path": "sessions",
+      "reach": "local"
+    }
+  ],
   "contacts": [
     {
       "path": "carddav",

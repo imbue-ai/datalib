@@ -55,6 +55,9 @@ pub enum IdNamespace {
     /// keyspace, so an export-seeded mirror kept fresh by the API does
     /// not mint two ids for one conversation.
     Claude,
+    /// Claude Code sessions: every key is one Claude Code minted (a
+    /// session id, a record uuid, a tool-use id).
+    ClaudeCode,
     Chatgpt,
     Slack,
     /// Not a provider: datalib's own measurements of a source's mirror,

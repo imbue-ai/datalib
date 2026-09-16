@@ -19,6 +19,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         SourceType::Contacts => datalib_etl_contacts_config::ContactsConfig::METHODS,
         SourceType::Chatgpt => datalib_etl_chatgpt_config::ChatgptConfig::METHODS,
         SourceType::Claude => datalib_etl_claude_config::ClaudeConfig::METHODS,
+        SourceType::ClaudeCode => datalib_etl_claude_code_config::ClaudeCodeConfig::METHODS,
         SourceType::Email => datalib_etl_email_config::EmailConfig::METHODS,
         SourceType::Fsindex => datalib_etl_fsindex_config::FsindexConfig::METHODS,
         SourceType::Garmin => datalib_etl_garmin_config::GarminConfig::METHODS,

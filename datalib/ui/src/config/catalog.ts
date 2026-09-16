@@ -635,6 +635,36 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
+  {
+    type: "claude_code",
+    // With nothing filled in the form still writes `sessions = {}`, which
+    // is the standard store: every Claude Code on this machine keeps its
+    // transcripts under ~/.claude/projects.
+    method: "sessions",
+    label: "Claude Code",
+    blurb: "Mirror your Claude Code sessions — terminal, desktop and IDE — from their store on this machine.",
+    keywords: ["claude", "code", "anthropic", "agent", "sessions", "transcripts", "coding"],
+    kind: "local",
+    icon: "claude",
+    defaultName: "claude-code",
+    nameHint: "Claude Code on this Mac",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the Claude Code sessions folder",
+        required: false,
+        target: "sessions.path",
+        label: "Sessions folder",
+        placeholder: "~/.claude/projects",
+        help:
+          "Leave empty for the standard store, ~/.claude/projects. Point it elsewhere for " +
+          "a copy of that folder from another machine. A session Claude Code later deletes " +
+          "stays in the mirror.",
+      },
+    ],
+  },
   { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: null, defaultName: "google-takeout", nameHint: "My Google Takeout", wizard: false },
   {
     type: "facebook",

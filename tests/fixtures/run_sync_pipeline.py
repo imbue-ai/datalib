@@ -81,6 +81,9 @@ Args (positional):
     26: facebook_tng  Facebook "Download your information" export dir
                       (the JSON flavour). File-backed; the ingest step
                       walks its `path` directly.
+    27: claude_code_tng  A `~/.claude/projects` tree: two sessions and a
+                      subagent transcript. File-backed; the ingest
+                      step walks it directly.
 
 Args 21+ are appended rather than grouped with the other binaries
 (1-4) and fixture paths (7-20) deliberately: every index here is
@@ -164,6 +167,7 @@ def main() -> int:
     garmin_spec = Path(sys.argv[24]).resolve()
     airvisual_fx = Path(sys.argv[25]).resolve()
     facebook_fx = Path(sys.argv[26]).resolve()
+    claude_code_fx = Path(sys.argv[27]).resolve()
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -279,6 +283,8 @@ def main() -> int:
         # File-backed and rendering: the export's posts, album, comments,
         # reactions and friends become markdown + grid_rows.
         "facebook": ("facebook", facebook_fx, facebook_fx),
+        # The transcripts root, as Claude Code lays it out.
+        "claude-code": ("claude_code", claude_code_fx, claude_code_fx),
     }
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
@@ -574,6 +580,8 @@ def _source_config(
         # ingest step is never run. `api = {}` would fail validation
         # outright anyway (yolink requires at least one `api.devices`).
         pass
+    elif type_str == "claude_code":
+        source["sessions"] = {"path": str(input_path)}
     elif type_str == "airvisual":
         # One device per folder; serial and name come from each folder's
         # latest_config_measurements.json.
