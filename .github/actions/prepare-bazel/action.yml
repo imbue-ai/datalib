@@ -36,13 +36,19 @@ runs:
     # never a wrong build. The key is the set of lockfiles that decide
     # what gets fetched; `restore-keys` makes any older entry a starting
     # point when one of them changes.
+    #
+    # One entry per job, not one shared: the two `test.yml` jobs fetch
+    # different sets (the musl build takes no GGUFs and a different Rust
+    # toolchain), and on a shared key whichever job finished first
+    # would save its smaller set for both — measured: the musl job's
+    # 1.3 GB won, and the next test run fetched the ~2 GB it lacked.
     - name: Restore the bazel repository cache
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/bazel-repository-cache
-        key: bazel-repo-${{ runner.os }}-${{ hashFiles('MODULE.bazel.lock', '**/pnpm-lock.yaml', '**/Cargo.lock', 'requirements.txt') }}
+        key: bazel-repo-${{ runner.os }}-${{ github.job }}-${{ hashFiles('MODULE.bazel.lock', '**/pnpm-lock.yaml', '**/Cargo.lock', 'requirements.txt') }}
         restore-keys: |
-          bazel-repo-${{ runner.os }}-
+          bazel-repo-${{ runner.os }}-${{ github.job }}-
 
     - name: Point bazel at the repository cache
       shell: bash
