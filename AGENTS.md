@@ -1303,11 +1303,12 @@ It means the crate is being built in the exec configuration as well as
 the target one, and nothing is shared between the two. A `genrule` puts
 its `tools` there, so one that names a pipeline binary drags the whole
 backend along (#484 measured 51 duplicate compiles and −19% on a cold
-run when it stopped). Use `target_tools_genrule` from
-`tools/target_tools_genrule.bzl` for a tool that is also what the tests
-link; `aquery 'mnemonic("Rustc", //...)'` grouped by `Configuration:`
-is the check, and the only exec-config Rustc actions left should be the
-dependency-free `qmd_indexer` chain.
+run when it stopped). A pipeline binary a genrule runs goes in `srcs`,
+not `tools` — same files the tests link, no second copy (see the
+comment on `//tests/fixtures:ingested_tng`); `aquery 'mnemonic("Rustc",
+//...)'` grouped by `Configuration:` is the check, and the only
+exec-config Rustc actions left should be the dependency-free
+`qmd_indexer` chain.
 
 **Runs are bimodal, so ask which mode you are in first.** A warm run
 executes 0 tests and takes ~3 min; a cold one rebuilds ~345 actions and
