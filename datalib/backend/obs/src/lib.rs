@@ -34,7 +34,7 @@ pub enum LogFormat {
 pub struct ObsArgs {
     /// Renderer for the local stderr stream. `auto` picks pretty on a
     /// TTY, JSON otherwise.
-    #[arg(long, value_enum, default_value_t = LogFormat::Auto, env = "FW_LOG_FORMAT")]
+    #[arg(long, value_enum, default_value_t = LogFormat::Auto, env = "DATALIB_LOG_FORMAT")]
     pub log_format: LogFormat,
 
     /// `tracing-subscriber` env filter directive. Same grammar as

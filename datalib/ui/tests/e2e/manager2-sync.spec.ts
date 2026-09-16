@@ -36,8 +36,8 @@ import {
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
 declare const process: { env: Record<string, string | undefined> };
 
-const STEP_BIN = process.env.FW_E2E_DATALIB_STEP;
-const PDF_DIR = process.env.FW_E2E_PDF_FIXTURE_DIR;
+const STEP_BIN = process.env.DATALIB_TEST_E2E_DATALIB_STEP;
+const PDF_DIR = process.env.DATALIB_TEST_E2E_PDF_FIXTURE_DIR;
 
 /// This spec's own data root, asked of the backend rather than read
 /// from the environment.
@@ -112,7 +112,7 @@ test.describe("a real sync, driven from the grid", () => {
 
   test.skip(
     !STEP_BIN || !PDF_DIR,
-    "needs FW_E2E_DATALIB_STEP + FW_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
+    "needs DATALIB_TEST_E2E_DATALIB_STEP + DATALIB_TEST_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
   );
 
   // A step's `command` is split shell-style, so a binary path is

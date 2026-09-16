@@ -37,8 +37,8 @@ import {
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
 declare const process: { env: Record<string, string | undefined> };
 
-const STEP_BIN = process.env.FW_E2E_DATALIB_STEP;
-const PLAYBACK = process.env.FW_E2E_PLAYBACK_DIR;
+const STEP_BIN = process.env.DATALIB_TEST_E2E_DATALIB_STEP;
+const PLAYBACK = process.env.DATALIB_TEST_E2E_PLAYBACK_DIR;
 
 const SOURCES = ["chatgpt-replay", "claude-replay"] as const;
 const INGESTS = SOURCES.map((s) => `${s}/ingest`);
@@ -177,7 +177,7 @@ test.describe("a streaming sync, watched live", () => {
 
   test.skip(
     !STEP_BIN || !PLAYBACK,
-    "needs FW_E2E_DATALIB_STEP + FW_E2E_PLAYBACK_DIR from run_e2e.sh",
+    "needs DATALIB_TEST_E2E_DATALIB_STEP + DATALIB_TEST_E2E_PLAYBACK_DIR from run_e2e.sh",
   );
 
   // Carry the `[[applets]]` stanza forward from whatever was there.
