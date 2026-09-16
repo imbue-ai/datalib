@@ -69,6 +69,9 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
         org_name: r.try_get("org_name").unwrap_or_default(),
         entire_chat: r.try_get("entire_chat").unwrap_or_default(),
         source: r.try_get("source_label").unwrap_or_default(),
+        provider: provider.clone().unwrap_or_default(),
+        provider_ref: None,
+        source_ref: None,
         source_id: source_id_for(provider.as_deref(), &qmd_path),
         kind,
         author,
@@ -414,6 +417,20 @@ impl IndexRepo for DoltRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The SELECT list is hand-written and the DDL is derived from
+    /// `GridRow`; a name here the table does not have fails every
+    /// search with "no such column", but only once a search runs.
+    #[test]
+    fn every_selected_column_is_in_the_grid_rows_ddl() {
+        let (_, ddl_columns) = datalib_schema::grid_rows::COLUMNS[0];
+        for name in SEARCH_ROW_COLUMNS.split(',').map(str::trim) {
+            assert!(
+                ddl_columns.contains(&name),
+                "SEARCH_ROW_COLUMNS names `{name}`, which grid_rows does not have"
+            );
+        }
+    }
 
     /// The stanza is the first path segment, matching how
     /// `datalib-step` names a source from its declared outputs and how

@@ -21,6 +21,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/columns:datalib_columns",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/query:datalib_query",
@@ -120,6 +121,8 @@ rust_test(
     deps = [
         ":datalib_unified_index",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/table:datalib_table",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

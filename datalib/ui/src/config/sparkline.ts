@@ -10,11 +10,11 @@
 // ago — one sample, far to the left — would draw as a single point
 // instead of the flat line it actually is.
 
-/// One measurement, as the API hands it out.
-export type UsageSample = {
+/// One measurement, as a `timeseries` cell carries it.
+export type Sample = {
   /// ISO-8601 with an explicit offset, per the repo's convention.
   at: string;
-  bytes: number;
+  value: number;
 };
 
 export type SparkOpts = {
@@ -43,12 +43,12 @@ export type SparkOpts = {
 /// degenerate box.
 export type Spark = { line: string; area: string };
 
-export function sparkline(samples: UsageSample[], opts: SparkOpts): Spark | null {
+export function sparkline(samples: Sample[], opts: SparkOpts): Spark | null {
   const { nowMs, windowMs, width, height } = opts;
   if (width <= 0 || height <= 0 || windowMs <= 0) return null;
 
   const points = samples
-    .map((s) => ({ ms: Date.parse(s.at), bytes: s.bytes }))
+    .map((s) => ({ ms: Date.parse(s.at), value: s.value }))
     // A stamp we can't read is dropped rather than guessed at: every
     // one of these was written by us, so an unparsable one means a row
     // from somewhere else.
@@ -70,10 +70,10 @@ export function sparkline(samples: UsageSample[], opts: SparkOpts): Spark | null
   // The value the window opens at: the newest sample at or before the
   // left edge, else the first sample we have. Without this a series
   // whose only sample predates the window would start from nothing.
-  let held = points[0].bytes;
+  let held = points[0].value;
   for (const p of points) {
     if (p.ms > start) break;
-    held = p.bytes;
+    held = p.value;
   }
 
   const out: string[] = [];
@@ -89,11 +89,11 @@ export function sparkline(samples: UsageSample[], opts: SparkOpts): Spark | null
   for (const p of points) {
     // At or before the left edge it is carry-in, already folded into
     // `held` above; a value equal to `held` is not a step at all.
-    if (p.ms <= start || p.bytes === held) continue;
+    if (p.ms <= start || p.value === held) continue;
     const x = xOf(p.ms);
     // Hold the old value up to the instant it changed, then step.
     put(x, yOf(held));
-    held = p.bytes;
+    held = p.value;
     put(x, yOf(held));
   }
   put(width, yOf(held));
@@ -108,13 +108,11 @@ export function sparkline(samples: UsageSample[], opts: SparkOpts): Spark | null
 }
 
 /// The largest value a set of series reaches, current values included.
-export function calibrationMax(
-  series: { bytes: number | null; history: UsageSample[] }[],
-): number {
+export function calibrationMax(series: { value: number | null; samples: Sample[] }[]): number {
   let max = 0;
   for (const s of series) {
-    if (s.bytes !== null) max = Math.max(max, s.bytes);
-    for (const h of s.history) max = Math.max(max, h.bytes);
+    if (s.value !== null) max = Math.max(max, s.value);
+    for (const h of s.samples) max = Math.max(max, h.value);
   }
   return max;
 }

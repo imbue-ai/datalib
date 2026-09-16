@@ -1,7 +1,9 @@
 //! End-to-end integration test for the doltlite backend.
 
-use datalib_schema::grid_rows::DDL as GRID_DDL;
+use datalib_schema::grid_rows::{GridRow, DDL as GRID_DDL};
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
+use datalib_schema::providers::Provider;
+use datalib_table::BulkUpsertable;
 use datalib_unified_index::dolt_repo::DoltRepo;
 use datalib_unified_index::query::parse_query;
 use datalib_unified_index::repo::IndexRepo;
@@ -232,4 +234,90 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
+}
+
+/// The SELECT list in `dolt_repo` is hand-written and the row mapper
+/// reads each column with `try_get(..).unwrap_or_default()`, so a
+/// column left out of the list comes back as a blank rather than an
+/// error — the one failure nothing downstream can see. Write a row
+/// with every column filled, through the same `BulkUpsertable` contract
+/// the index writes with, and require every field on the wire to be
+/// filled on the way back.
+#[tokio::test]
+async fn every_wire_field_survives_the_round_trip() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    for (_t, ddl) in GRID_DDL {
+        sqlx::query(*ddl).execute(repo.index_pool()).await.unwrap();
+    }
+
+    let row = GridRow::builder()
+        .uuid("row-1")
+        .provider(Provider::Claude)
+        .kind("Chat")
+        .source_label("Claude")
+        .is_document(true)
+        .created_at(Some("2026-06-02T13:00:00-07:00".to_string()))
+        .modified_at(Some("2026-06-03T09:30:00-07:00".to_string()))
+        .author(Some("Jean-Luc Picard".to_string()))
+        .account(Some("acct-1701".to_string()))
+        .project(Some("proj-1701".to_string()))
+        .org_uuid(Some("org-1701".to_string()))
+        .org_name(Some("Starfleet".to_string()))
+        .channel(Some("bridge".to_string()))
+        .conversation_name(Some("Captain's Log".to_string()))
+        .conversation_uuid("row-1")
+        .message_index(Some(0))
+        .entire_chat("/chat/row-1")
+        .text("Stardate 47988.1")
+        .slack_link(Some("slack://x".to_string()))
+        .qmd_path(Some("claude-api/render_markdown/row-1.md".to_string()))
+        .source_url(Some("https://claude.ai/chat/row-1".to_string()))
+        .git_sha(Some("abc123".to_string()))
+        .upstream_id(Some("row-1".to_string()))
+        .upstream_entity_kind(Some("conversation".to_string()))
+        .upstream_scope(Some("org-1701".to_string()))
+        .notion_page_uuid(Some("page-1".to_string()))
+        .notion_block_uuid(Some("block-1".to_string()))
+        .markdown_uuid(Some("row-1".to_string()))
+        .byte_size(Some(4096))
+        .item_count(Some(7))
+        .build()
+        .unwrap();
+    // The INSERT the index itself uses, from the derived column list —
+    // so this test cannot drift from the DDL either.
+    let columns = std::iter::once(GridRow::ID_COLUMN)
+        .chain(GridRow::TYPED_COLUMNS.iter().copied())
+        .collect::<Vec<_>>();
+    let placeholders = vec!["?"; columns.len()].join(", ");
+    let sql = format!(
+        "INSERT INTO grid_rows ({}) VALUES ({placeholders})",
+        columns.join(", ")
+    );
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+        .execute(repo.index_pool())
+        .await
+        .unwrap();
+
+    let rows = repo.search(&parse_query(""), 10).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    let wire = serde_json::to_value(&rows[0]).unwrap();
+    // Filled by the applet from the config, or only by a free-text
+    // search: absent from a repo's own answer by design.
+    let not_the_repos: [&str; 3] = ["provider_ref", "source_ref", "score"];
+    for key in not_the_repos {
+        assert!(wire.get(key).is_none(), "{key}: {wire}");
+    }
+    for (key, value) in wire.as_object().unwrap() {
+        let blank = value.is_null() || value.as_str().is_some_and(str::is_empty);
+        assert!(
+            !blank,
+            "SearchRow.{key} came back blank from a fully populated row: \
+             is its column in SEARCH_ROW_COLUMNS?"
+        );
+    }
+    assert_eq!(wire["is_document"], true);
+    assert_eq!(wire["modified_at"], "2026-06-03T09:30:00-07:00");
+    drop(repo);
 }

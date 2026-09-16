@@ -8,6 +8,7 @@
 // single-column page in a new tab.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
+import { typedColumns } from "./typedColumns";
 import {
   ModuleRegistry,
   AllCommunityModule,
@@ -29,15 +30,14 @@ import {
 import { AllEnterpriseModule } from "ag-grid-enterprise";
 import {
   fetchAccounts,
-  fetchConfig,
   fetchQmdState,
   fetchSearch,
   type AccountsMap,
+  type ColumnSpec,
   type QmdDocState,
   type SearchRow,
 } from "@/api";
-import { entryForStep, listGroups, listSteps, slugify, sourceStepsOf } from "@/config/sourceSteps";
-import { iconUrl } from "@/config/icons";
+import { slugify } from "@/config/sourceSteps";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import {
@@ -47,37 +47,10 @@ import {
   revealInFileManager,
 } from "@/desktop";
 import { openExternal } from "@/externalLinks";
-import { keepExcludeItems, withToken } from "@/grid/query";
 import { subscribeLive } from "@/live";
-import claudeIconUrl from "@/assets/claude.svg";
-import chatgptIconUrl from "@/assets/chatgpt.svg";
-import slackIconUrl from "@/assets/slack.svg";
-import githubIconUrl from "@/assets/github.svg";
-import gitlabIconUrl from "@/assets/gitlab.svg";
-import notionIconUrl from "@/assets/notion.svg";
-import whatsappIconUrl from "@/assets/whatsapp.svg";
-import signalIconUrl from "@/assets/signal.svg";
-import emailIconUrl from "@/assets/email.svg";
-import smsIconUrl from "@/assets/sms.svg";
-import appleMessagesIconUrl from "@/assets/apple_messages.svg";
-import linkedinIconUrl from "@/assets/linkedin.svg";
 import { encodeColumns } from "@/router/columns";
+import { keepExcludeItems, withToken } from "@/grid/query";
 import type { CardCtx } from "./types";
-
-const SOURCE_ICONS: Record<string, string> = {
-  Claude: claudeIconUrl,
-  ChatGPT: chatgptIconUrl,
-  Slack: slackIconUrl,
-  GitHub: githubIconUrl,
-  GitLab: gitlabIconUrl,
-  Notion: notionIconUrl,
-  WhatsApp: whatsappIconUrl,
-  Signal: signalIconUrl,
-  Mail: emailIconUrl,
-  SMS: smsIconUrl,
-  Messages: appleMessagesIconUrl,
-  LinkedIn: linkedinIconUrl,
-};
 
 ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule]);
 
@@ -109,6 +82,8 @@ watch(
   { immediate: true },
 );
 const rows = ref<SearchRow[]>([]);
+/// The columns the applet declares for its rows — see `ColumnSpec`.
+const columns = ref<ColumnSpec[]>([]);
 // The query whose results are actually painted right now — not `query`
 // (what is typed) and not `!loading` (which flips in both directions
 // within one tick, so an observer can miss the transition entirely).
@@ -123,12 +98,6 @@ const qmdError = ref<string | null>(null);
 const accounts = ref<AccountsMap>({});
 
 // --- qmd index state (the Indexed / Embedded columns) ---------------
-const sourceNames = ref<Map<string, string>>(new Map());
-// Group id → the mark and label of the catalog entry its ingest step
-// matches. Finer than `SOURCE_ICONS`, which is keyed on the provider
-// and so cannot tell a Gmail source from a Fastmail one.
-const sourceMarks = ref<Map<string, { url: string; label: string }>>(new Map());
-
 const qmdState = ref<Map<string, QmdDocState>>(new Map());
 // Collection-wide totals, shown next to the row count.
 const qmdSummary = ref<{ documents: number; embedded: number } | null>(null);
@@ -147,50 +116,6 @@ function currentMarkdownUuids(): string[] {
     if (r.markdown_uuid) seen.add(r.markdown_uuid);
   }
   return [...seen];
-}
-
-/// Read the names out of `config.toml`. Once, on mount: the config
-/// changes on human time, and a stale name is a cosmetic miss, not a
-/// wrong row. A failure leaves the map empty, which shows source ids —
-/// the same thing the column showed before names existed.
-async function loadSourceNames() {
-  try {
-    const cfg = await fetchConfig();
-    // A row's `source_id` is the group its document lives under
-    // (`work-slack`) — the directory, not a step id — so the join is
-    // group id → the group's name, and a group with no name shows its
-    // id, the same as the column showed before names existed.
-    const m = new Map<string, string>();
-    const marks = new Map<string, { url: string; label: string }>();
-    const steps = listSteps(cfg.text);
-    for (const group of listGroups(cfg.text)) {
-      if (group.name) m.set(group.id, group.name);
-      const ingest = sourceStepsOf(group.id, steps).ingest;
-      const entry = ingest && entryForStep(ingest, steps);
-      const url = iconUrl(entry?.icon);
-      if (entry && url) marks.set(group.id, { url, label: entry.label });
-    }
-    sourceNames.value = m;
-    sourceMarks.value = marks;
-    gridApi?.refreshCells({ columns: ["source", "source_id"], force: true });
-  } catch {
-    /* names are cosmetic; the column falls back to the source id */
-  }
-}
-
-/// Datalib's own rows — each source's storage report — are filed under
-/// datalib rather than under the source they measure, so their
-/// `source_id` names no configured group and the display name has to
-/// come from here.
-const DATALIB_SOURCE_ID = "datalib";
-const DATALIB_SOURCE_NAME = "Datalib";
-
-/// What the "Source" column shows: the configured name when there is
-/// one, else the id — the directory the row's document lives under.
-function sourceNameFor(row: SearchRow | null | undefined): string {
-  if (!row?.source_id) return "";
-  if (row.source_id === DATALIB_SOURCE_ID) return DATALIB_SOURCE_NAME;
-  return sourceNames.value.get(row.source_id) ?? row.source_id;
 }
 
 // True when either index-state column is on screen. Both are hidden by
@@ -422,10 +347,10 @@ type FilterCtx = {
 // is on UUID only — the slug is decoration so URLs/tokens are self-describing.
 const FILTER_COLUMNS: Record<
   string,
-  { key: string; header: string; uuidCol?: keyof SearchRow }
+  { key: string; header: string; uuidCol?: keyof SearchRow; field?: keyof SearchRow }
 > = {
-  source: { key: "source", header: "Provider" },
-  source_id: { key: "source_id", header: "Source" },
+  provider_ref: { key: "source", header: "Provider", field: "source" },
+  source_ref: { key: "source_id", header: "Source", field: "source_id" },
   kind: { key: "kind", header: "Type" },
   channel: { key: "channel", header: "Channel" },
   author: { key: "author", header: "Author", uuidCol: "author" },
@@ -458,6 +383,7 @@ function openFeedbackForSearchBar(ev: MouseEvent) {
 function appendFilterToQuery(token: string) {
   query.value = withToken(query.value, token);
 }
+
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -496,7 +422,7 @@ function buildFilterCtx(colId: string, data: SearchRow): FilterCtx | null {
   const meta = FILTER_COLUMNS[colId];
   if (!meta) return null;
   const row = data as Record<string, unknown>;
-  const cellRaw = row[colId];
+  const cellRaw = row[(meta.field ?? colId) as string];
   if (meta.uuidCol) {
     const uuid = row[meta.uuidCol as string];
     if (typeof uuid !== "string" || uuid.length === 0) return null;
@@ -579,6 +505,9 @@ async function runSearch(q: string) {
   qmdError.value = null;
   try {
     const r = await fetchSearch(q, SEARCH_LIMIT, inflight.signal);
+    if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
+      columns.value = r.columns;
+    }
     rows.value = r.rows;
     total.value = r.total_estimated;
     const qe =
@@ -678,6 +607,11 @@ function applyDefaultSort() {
       if (last >= 0) api.ensureIndexVisible(last, "bottom");
     }
   };
+  // The grid is mounted once its rows and columns have landed, so at
+  // grid-ready they are already in: scroll now, before the first paint
+  // is seen at the wrong end. The two paths below cover rows that
+  // arrive into a grid that already exists.
+  if (api.getDisplayedRowCount() > 0) scrollToEnd();
   // Subscribe to the next rowDataUpdated event, then deregister.
   // Wrapped in a try/catch because ag-grid versions disagree on
   // whether one-shot subscriptions are allowed.
@@ -710,15 +644,18 @@ function applyDefaultSort() {
 // "every optional column": a column named here appears in the default
 // grid whenever its values vary, which is exactly what `hide: true` on
 // a colDef is there to prevent. It stays the set it has always been.
-const ADAPTIVE_FIELDS: (keyof SearchRow)[] = [
-  "score",
-  "source",
-  "kind",
-  "channel",
-  "created_at",
-  "author",
-  "account",
-];
+/// Column id → the row field it reads. The Provider column is the
+/// resolved `provider_ref`, but "is it the same on every row" is a
+/// question about the `source` string behind it.
+const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
+  score: "score",
+  provider_ref: "source",
+  kind: "kind",
+  channel: "channel",
+  created_at: "created_at",
+  author: "author",
+  account: "account",
+};
 
 /// The preset's columns, or null when this card has none — or when the
 /// user's own persisted column state has superseded it, which is the
@@ -739,10 +676,12 @@ function presetColumns(): Set<string> | null {
 // `snippet` is excluded because it is the content, not a facet: a
 // corpus where every row's text matched would otherwise hide the one
 // column worth reading.
-function adaptiveFields(): (keyof SearchRow)[] {
+function adaptiveFields(): [string, keyof SearchRow][] {
   const allowed = presetColumns();
-  if (!allowed) return ADAPTIVE_FIELDS;
-  return [...allowed].filter((c) => c !== "snippet") as (keyof SearchRow)[];
+  if (!allowed) return Object.entries(ADAPTIVE_FIELDS) as [string, keyof SearchRow][];
+  return [...allowed]
+    .filter((c) => c !== "snippet")
+    .map((c) => [c, ADAPTIVE_FIELDS[c] ?? (c as keyof SearchRow)]);
 }
 
 function stringifyForCompare(v: unknown): string {
@@ -752,12 +691,12 @@ function stringifyForCompare(v: unknown): string {
 
 function applyAdaptiveVisibility() {
   if (!gridApi || rows.value.length === 0) return;
-  const state = adaptiveFields().map((field) => {
+  const state = adaptiveFields().map(([colId, field]) => {
     const first = stringifyForCompare(rows.value[0][field]);
     const allSame = rows.value.every(
       (r) => stringifyForCompare(r[field]) === first,
     );
-    return { colId: field as string, hide: allSame };
+    return { colId, hide: allSame };
   });
   restoring = true;
   gridApi.applyColumnState({ state });
@@ -777,8 +716,7 @@ function applyPresetColumns() {
     ...columns.map((colId) => ({ colId, hide: false })),
     // …and hide everything else the grid offers. `snippet` is in every
     // preset, so nothing here can hide the text column by accident.
-    ...columnDefs.value
-      .map((c) => (c.colId ?? c.field) as string)
+    ...allColumnIds()
       .filter((colId) => colId && !wanted.has(colId))
       .map((colId) => ({ colId, hide: true })),
   ];
@@ -802,7 +740,6 @@ onMounted(async () => {
   } catch {
     /* accounts mapping is best-effort */
   }
-  void loadSourceNames();
   runSearch(query.value);
 });
 
@@ -832,91 +769,69 @@ function openRow(row: SearchRow) {
   window.open(href, "_blank", "noopener");
 }
 
-const columnDefs = computed<ColDef<SearchRow>[]>(() => [
-  {
-    field: "score",
-    headerName: "Score",
-    width: 90,
+/// What this card adds to the applet's declared columns: the widths and
+/// hovers a type cannot know, the account-name formatting on the
+/// author/account cells (the accounts map is the browser's), and the
+/// two-line clamp on the text.
+const columnOverrides: Record<string, ColDef<SearchRow>> = {
+  score: {
     // Default sort is applied programmatically on row updates (see
-    // applyDefaultSort) — we don't bake it into the colDef so a user
-    // re-sort sticks across query changes.
-    valueFormatter: (p) => {
-      const v = p.value;
-      return typeof v === "number" ? v.toFixed(3) : "";
-    },
-    cellStyle: { "text-align": "right" } as Record<string, string>,
-    // QMD scores aren't comparable across queries; hide the filter UI
-    // (range filter would be misleading) but keep the column sortable.
+    // applyDefaultSort) — not baked into the colDef so a user re-sort
+    // sticks across query changes. QMD scores aren't comparable across
+    // queries; hide the filter UI but keep the column sortable.
     filter: false,
   },
-  {
-    field: "source",
-    headerName: "Provider",
-    headerTooltip:
-      "Which service this came from. A property of the source's *type* — two Slack " +
-      "workspaces share it; the Source column is what separates them.",
-    width: 90,
-    cellRenderer: (params: { value: unknown; data?: SearchRow }) => {
-      const v = typeof params.value === "string" ? params.value : "";
-      // The configured source's own mark first — Gmail and Fastmail are
-      // both provider "Mail", and only the config knows which this is.
-      const mark = sourceMarks.value.get(params.data?.source_id ?? "");
-      const url = mark?.url ?? SOURCE_ICONS[v];
-      if (!url) return v;
-      const label = mark?.label ?? v;
-      const img = document.createElement("img");
-      img.src = url;
-      img.alt = label;
-      img.title = label;
-      img.className = "source-icon";
-      return img;
+  provider_ref: { width: 110 },
+  source_ref: { width: 130 },
+  kind: { width: 110 },
+  conversation_name: { width: 200 },
+  channel: { width: 130 },
+  // The default order, in the definition so the first paint is already
+  // sorted rather than re-sorted a beat after rows land. Safe to bake
+  // in now that the definitions are built once: `applyDefaultSort`
+  // still switches to score when a free-text search returns scores,
+  // and a user's own sort sticks because nothing rebuilds the columns.
+  created_at: { sort: "asc" },
+  snippet: {
+    flex: 1,
+    minWidth: 200,
+    // Two-line clamp via a custom cellRenderer. autoHeight is
+    // intentionally OFF (per-row measurement was the dominant render
+    // cost on large result sets), and the row height is fixed at 52px
+    // to fit two lines. We render our own <div> so the clamp styles
+    // land on the direct text container — AG Grid's default
+    // .ag-cell-value span sits inside a flex cell and won't clamp
+    // reliably.
+    cellRenderer: (p: { value: unknown }) => {
+      const div = document.createElement("div");
+      div.className = "datalib-clamp-2";
+      div.textContent = p.value == null ? "" : String(p.value);
+      return div;
     },
   },
-  // The configured source, as opposed to the provider icon left of it:
-  // two Slack workspaces are one "Provider" and two of these.
-  {
-    field: "source_id",
-    colId: "source_id",
-    headerName: "Source",
-    headerTooltip:
-      "The configured source this row came from — its id is its directory under the " +
-      "data root; the cell shows the name config.toml gives it. Datalib's own rows, " +
-      "like a source's storage report, say Datalib rather than the source they describe",
+  author: {
     width: 130,
-    valueGetter: (p) => sourceNameFor(p.data),
-    tooltipValueGetter: (p) => {
-      const id = p.data?.source_id ?? "";
-      if (!id) return "";
-      if (id === DATALIB_SOURCE_ID) return "Datalib's own row, not a source's data";
-      const name = sourceNames.value.get(id);
-      return name ? `${name} — stored in ${id}/` : `Stored in ${id}/`;
+    valueFormatter: (p) => {
+      const v = p.value as string | undefined;
+      if (!v) return "";
+      return accounts.value[v]?.label ?? v;
     },
   },
-  { field: "kind", headerName: "Type", width: 110 },
-  // Populated by every provider — the chat's title, the PR's title, the
-  // page's name. Hidden by default in the unified grid, where the
-  // snippet already carries the gist; browse presets show it, because
-  // inside one source it is the column that names the thing.
-  {
-    field: "conversation_name",
-    headerName: "Conversation",
-    width: 200,
-    hide: true,
-  },
-  {
-    field: "project",
-    headerName: "Project",
-    width: 150,
-    hide: true,
-    headerTooltip:
-      "What the source calls a grouping above the conversation: a Claude project, " +
-      "a GitHub repo, a GitLab project path.",
-  },
-  // Two columns rather than one combined "search state": `qmd update`
-  // and `qmd embed` are separate passes, so "in the keyword index" and
-  // "reachable by semantic search" are genuinely different facts, and
-  // the gap between them is exactly what a user hunting a missing
-  // result needs to see.
+  account: { valueFormatter: (p) => accountLabel(p.value as string) },
+  // Cell renders the human-readable org_name; the row also carries
+  // org_uuid (shown on hover) so filtering / scripts can target the
+  // stable opaque key.
+  org_name: { width: 130, tooltipField: "org_uuid" },
+};
+
+/// Two columns rather than one combined "search state": `qmd update`
+/// and `qmd embed` are separate passes, so "in the keyword index" and
+/// "reachable by semantic search" are genuinely different facts, and
+/// the gap between them is exactly what a user hunting a missing
+/// result needs to see. The card's own, not the applet's: they are
+/// answered by a second request the card makes only when they are on
+/// screen.
+const extraColumns: ColDef<SearchRow>[] = [
   {
     colId: "qmd_indexed",
     headerName: "Indexed",
@@ -941,104 +856,42 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     tooltipValueGetter: (p) => qmdFlagTooltip(p.data, "embedded"),
     cellStyle: { "text-align": "center" } as Record<string, string>,
   },
-  { field: "channel", headerName: "Channel", width: 130 },
-  {
-    field: "created_at",
-    headerName: "Created",
-    width: 165,
-  },
-  // Off by default in the unified grid, where most rows are messages
-  // with nothing here; a Browse of one source names it, and there — one
-  // row per thread — it is the column that says which are still alive.
-  {
-    field: "modified_at",
-    headerName: "Modified",
-    width: 165,
-    hide: true,
-  },
-  {
-    field: "snippet",
-    headerName: "Contents",
-    flex: 1,
-    minWidth: 200,
-    // Two-line clamp via a custom cellRenderer. autoHeight is intentionally
-    // OFF (per-row measurement was the dominant render cost on large
-    // result sets), and the row height is fixed at 52px to fit two lines.
-    // We render our own <div> so the clamp styles land on the direct text
-    // container — AG Grid's default .ag-cell-value span sits inside a
-    // flex cell and won't clamp reliably.
-    cellRenderer: (p: { value: unknown }) => {
-      const div = document.createElement("div");
-      div.className = "datalib-clamp-2";
-      div.textContent = p.value == null ? "" : String(p.value);
-      return div;
-    },
-  },
-  {
-    field: "author",
-    headerName: "Author",
-    width: 130,
-    valueFormatter: (p) => {
-      const v = p.value as string | undefined;
-      if (!v) return "";
-      return accounts.value[v]?.label ?? v;
-    },
-  },
-  {
-    field: "account",
-    headerName: "Account",
-    width: 150,
-    hide: true,
-    valueFormatter: (p) => accountLabel(p.value as string),
-  },
-  {
-    // Cell renders the human-readable org_name; the row also carries
-    // org_uuid (shown on hover as the tooltip) so filtering / scripts
-    // can target the stable opaque key.
-    field: "org_name",
-    headerName: "Org",
-    width: 130,
-    hide: true,
-    tooltipField: "org_uuid",
-  },
-  // Both null on most rows — they carry a value on the storage rows
-  // every source emits, and wherever a provider has a real size or
-  // count to report (a PDF's page count).
-  {
-    field: "byte_size",
-    headerName: "Size",
-    width: 110,
-    hide: true,
-    // Binary units, matching what the storage report's text says, so
-    // the column and the preview pane never disagree.
-    valueFormatter: (p) => formatBytes(p.value),
-    cellStyle: { "text-align": "right" } as Record<string, string>,
-  },
-  {
-    field: "item_count",
-    headerName: "Items",
-    width: 90,
-    hide: true,
-    headerTooltip:
-      "What is being counted depends on the row's Type: rows for a Table, " +
-      "files for a Source Size, pages for a PDF.",
-    valueFormatter: (p) =>
-      typeof p.value === "number" ? p.value.toLocaleString() : "",
-    cellStyle: { "text-align": "right" } as Record<string, string>,
-  },
-]);
+];
 
-const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"];
-
-function formatBytes(value: unknown): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "";
-  let v = value;
-  let u = 0;
-  while (v >= 1024 && u + 1 < BYTE_UNITS.length) {
-    v /= 1024;
-    u += 1;
+/// The preset's columns, then the column state the URL carries. The
+/// grid is mounted only once the applet has declared its columns, so
+/// by grid-ready there is something to apply them to.
+function applyInitialColumnState() {
+  if (!gridApi) return;
+  applyPresetColumns();
+  if (colsEncoded) {
+    const state = decodeColumnState(colsEncoded);
+    if (state) {
+      restoring = true;
+      gridApi.applyColumnState({ state, applyOrder: true });
+      restoring = false;
+      // An explicit persisted column state carries the user's sort
+      // choice — don't clobber it with our default.
+      if (state.some((c) => c.sort != null)) userSortedManually = true;
+    }
   }
-  return u === 0 ? `${value} B` : `${v.toFixed(1)} ${BYTE_UNITS[u]}`;
+}
+
+/// The grid's columns: the applet's, drawn by type, refined by the
+/// overrides above, with the card's own beside `project` — among the
+/// facets, where a 640px card still has them on screen.
+const columnDefs = computed<ColDef<SearchRow>[]>(() => {
+  const typed = typedColumns<SearchRow>(columns.value, {
+    rows: () => rows.value,
+    overrides: columnOverrides,
+  });
+  const at = typed.findIndex((c) => c.colId === "project") + 1;
+  return [...typed.slice(0, at), ...extraColumns, ...typed.slice(at)];
+});
+
+/// Every column id the grid can show, declared or the card's own.
+function allColumnIds(): string[] {
+  return columnDefs.value.map((c) => (c.colId ?? c.field) as string);
 }
 
 const defaultColDef: ColDef = {
@@ -1283,21 +1136,14 @@ const gridOptions: GridOptions<SearchRow> = {
     // open — fine for tests, which drive a single grid.
     (window as unknown as { __fwGridApi?: GridApi<SearchRow> }).__fwGridApi =
       e.api;
-    applyPresetColumns();
-    if (colsEncoded) {
-      const state = decodeColumnState(colsEncoded);
-      if (state) {
-        restoring = true;
-        gridApi.applyColumnState({ state, applyOrder: true });
-        restoring = false;
-        // An explicit persisted column state carries the user's sort
-        // choice — don't clobber it with our default.
-        if (state.some((c) => c.sort != null)) userSortedManually = true;
-      }
-    }
-    // Rows may already be loaded by the time the grid is ready.
+    applyInitialColumnState();
+    // The rows are already loaded by the time the grid is ready — it is
+    // mounted once they and their columns have landed — so this is the
+    // moment the `rows` watcher below would otherwise have.
+    applyAdaptiveVisibility();
     applyDefaultSort();
     tryRestoreSelection();
+    refreshQmdState();
   },
   onRowSelected: (e: RowSelectedEvent<SearchRow>) => {
     if (!e.node.isSelected() || !e.data) return;
@@ -1398,7 +1244,13 @@ const gridOptions: GridOptions<SearchRow> = {
     <p v-if="error" class="error">error: {{ error }}</p>
 
     <div class="grid-wrap" :data-shown-query="shownQuery">
+      <!-- Mounted once the applet has declared its columns: AG Grid
+           resets column state whenever it is handed new definitions,
+           so a grid created before them would lose the preset, the
+           URL's column state and the tool panel's toggles the moment
+           they arrived. -->
       <AgGridVue
+        v-if="columns.length > 0"
         class="grid"
         :class="{ 'grid--loading': loading }"
         :rowData="rows"
@@ -1514,7 +1366,7 @@ const gridOptions: GridOptions<SearchRow> = {
      so the percentage resolves after all. The assertion guards the
      surface (it fails the moment that stops being true); the rule stays
      because it is correct independent of what an ancestor happens to
-     do. The same pattern under `.m2-grid` in views/Manager2View.vue —
+     do. The same pattern under `.m2-grid` in cards/sourcesCard.css —
      flex-sized, no positioned ancestor — did collapse, to 2px, and its
      spec does fail without the fix. */
   position: absolute;
@@ -1555,18 +1407,12 @@ const gridOptions: GridOptions<SearchRow> = {
 
 <style>
 /* Built by a cellRenderer, so it never receives the scoped-style
-   attribute — same reason `.source-icon` and `.datalib-clamp-2` live in
+   attribute — same reason `.datalib-clamp-2` lives in
    this unscoped block. */
 .qmd-flag {
   display: inline-block;
   font-size: 0.95em;
   line-height: 1;
-}
-.source-icon {
-  width: 20px;
-  height: 20px;
-  vertical-align: middle;
-  display: inline-block;
 }
 .datalib-clamp-2 {
   display: -webkit-box;

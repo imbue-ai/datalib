@@ -8,6 +8,9 @@ publish.workspace = true
 name = "datalib_unified_index"
 path = "src/lib.rs"
 
+# The code also consumes datalib-columns, which is bazel-only (no
+# Cargo.toml) — this manifest feeds crate_universe's third-party
+# resolution and does not cargo-compile. BUILD.bazel is the dep truth.
 [dependencies]
 app-schema = { path = "../app_schema" }
 datalib-core = { path = "../core" }
@@ -26,4 +29,5 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+datalib-table = { path = "../table" }
 tempfile = "3"

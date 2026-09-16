@@ -48,8 +48,8 @@ The second one exists because the Tauri desktop app renders in a
 way that has shipped twice. WebKit resolves a child's percentage `height`
 against the parent's *specified* height, so `height: 100%` under a
 flex-sized parent that declares no height of its own computes to `auto` and
-an AG Grid root collapses — to 2px of border in the
-[`Manager2View`](/datalib/ui/src/views/Manager2View.vue) case. Chromium
+an AG Grid root collapses — to 2px of border in the Manage screen's
+case (now the sources card, `ui/src/cards/SourcesCard.ce.vue`). Chromium
 resolves against the flexed height and looks perfect.
 
 **What this means for how you assert.** Every row and header stays in the

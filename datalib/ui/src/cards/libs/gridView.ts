@@ -2,9 +2,14 @@
 // grid card (see cards/GridCard.ce.vue). The card titles itself
 // there, via ctx.setTitle, tracking the live query.
 import GridCard from "../GridCard.ce.vue";
+import tableGridCss from "../tableGrid.css?inline";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
 
 export function gridView(opts?: { q?: string; columns?: string[] }): CardRender {
-  return vueCard(GridCard, { q: opts?.q ?? "", columns: opts?.columns });
+  return vueCard(
+    GridCard,
+    { q: opts?.q ?? "", columns: opts?.columns },
+    { styleSources: [tableGridCss] },
+  );
 }

@@ -935,6 +935,7 @@ dependencies = [
  "datalib-core",
  "datalib-qmd-indexer",
  "datalib-schema",
+ "datalib-time",
  "datalib-unified-index",
  "mime_guess",
  "serde",
@@ -942,6 +943,7 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "tokio",
+ "toml",
 ]
 
 [[package]]
@@ -2309,6 +2311,7 @@ dependencies = [
  "datalib-obs",
  "datalib-runtime",
  "datalib-schema",
+ "datalib-table",
  "datalib-time",
  "serde",
  "serde_json",

@@ -17,6 +17,7 @@ import { computed, provide, reactive, ref, watch } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
 import { createBus } from "@/cards/bus";
 import { displayTitle } from "@/cards/title";
+import { setCardHelp } from "@/cards/help";
 import type { CardCtx, HostCommands } from "@/cards/types";
 import {
   addSibling,
@@ -148,6 +149,7 @@ function ctxFor(leaf: TileLeaf): CardCtx {
       setTitle: (title) => {
         titles.set(cardId, title);
       },
+      setHelp: (html) => setCardHelp(cardId, html),
       bus,
       host,
     };

@@ -52,9 +52,9 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({
   // Initializing lands on the Manage view, where a source can be added —
   // a library with no sources is not finished, so there is no
   // congratulations screen in between.
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await expect(page.getByRole("button", { name: "+ Data Source" })).toBeVisible();
-  expect(new URL(page.url()).pathname).toBe("/sources2");
+  expect(decodeURIComponent(new URL(page.url()).pathname)).toContain("sourcesView()");
 
   // The file is on disk and valid, and it carries the applet whose
   // absence was the original error.

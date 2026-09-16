@@ -58,12 +58,11 @@ async function resolveDataRoot(request: APIRequestContext): Promise<string> {
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
 async function writeConfig(page: Page, text: string) {
   await openManager(page);
-  await page.getByText("Advanced — edit config.toml directly").click();
   await page.locator(".m2-editor").fill(text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
@@ -89,15 +88,32 @@ async function recordFrames(page: Page, ids: readonly string[]): Promise<void> {
     const w = window as unknown as { __frames?: Frame[] };
     const frames: Frame[] = [];
     w.__frames = frames;
+    // The Sources grid lives in a card's shadow root, which neither
+    // `document.querySelector` nor an observer on `document.body` can
+    // see into: query every open shadow root, and observe them too.
+    const roots = (): (Document | ShadowRoot)[] => {
+      const out: (Document | ShadowRoot)[] = [document];
+      for (const el of document.querySelectorAll("*")) {
+        if (el.shadowRoot) out.push(el.shadowRoot);
+      }
+      return out;
+    };
+    const deepQuery = (sel: string): Element | null => {
+      for (const r of roots()) {
+        const el = r.querySelector(sel);
+        if (el) return el;
+      }
+      return null;
+    };
     const read = (): Frame => {
       const status: Record<string, string | null> = {};
       const activity: Record<string, string> = {};
       for (const id of ids) {
-        const row = document.querySelector(`.ag-row[row-id="${CSS.escape(id)}"]`);
+        const row = deepQuery(`.ag-row[row-id="${CSS.escape(id)}"]`);
         status[id] =
           row?.querySelector('[col-id="status"] [role="img"]')?.getAttribute("aria-label") ?? null;
         activity[id] =
-          row?.querySelector('[col-id="activity"] .m2-activity')?.getAttribute("title") ?? "";
+          row?.querySelector('[col-id="activity"] .tg-chips')?.getAttribute("title") ?? "";
       }
       return { t: Date.now(), status, activity };
     };
@@ -111,13 +127,16 @@ async function recordFrames(page: Page, ids: readonly string[]): Promise<void> {
       if (!same) frames.push(next);
     };
     sample();
-    new MutationObserver(sample).observe(document.body, {
-      subtree: true,
-      childList: true,
-      characterData: true,
-      attributes: true,
-      attributeFilter: ["aria-label", "title"],
-    });
+    const observer = new MutationObserver(sample);
+    for (const r of roots()) {
+      observer.observe(r === document ? document.body : r, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["aria-label", "title"],
+      });
+    }
   }, ids as string[]);
 }
 

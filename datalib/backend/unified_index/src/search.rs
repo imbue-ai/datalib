@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct SearchRow {
     /// Stable per-row identifier; equals the `uuid` column of `grid_rows`.
     pub uuid: String,
@@ -42,6 +42,17 @@ pub struct SearchRow {
     /// workspaces both say "Slack" here; `source_id` is what tells them
     /// apart.
     pub source: String,
+    /// The `grid_rows.provider` tag behind `source` (`slack`, `claude`).
+    pub provider: String,
+    /// `source` and `source_id`, resolved for the grid's Provider and
+    /// Source columns: the configured source's own mark and label where
+    /// the config says which it is (Gmail, not Mail), the group's name
+    /// rather than its id. Filled by the applet, which reads the
+    /// config; absent from a repo's raw answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<datalib_columns::Identity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ref: Option<datalib_columns::Identity>,
     /// The **id** of the configured source this row came from: the
     /// first path segment of the row's `qmd_path`, which is the group's
     /// directory under the data root (`slack/render_markdown/…` →
