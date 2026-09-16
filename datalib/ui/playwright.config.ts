@@ -181,9 +181,11 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
     : {},
   // The control spec starts, stops and restarts those same downloads
   // from the table, so each has to last long enough to be acted on
-  // partway through: slower still.
+  // partway through: slower still. A tape of five requests at 2.5 s
+  // was ~12 s, and a config save with its remount ate most of that on
+  // a CI runner; at 5 s the window is ~25 s.
   "manager2-control": PLAYBACK_DIR
-    ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "2500" }
+    ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "5000" }
     : {},
 };
 

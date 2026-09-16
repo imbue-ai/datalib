@@ -125,6 +125,22 @@ async function start(page: Page, s: Source) {
   await expect(page.getByText(/Queued a sync for/)).toBeVisible();
 }
 
+/// The row of a download that another action must not have disturbed:
+/// still in flight, or over on its own terms. A replayed tape lasts a
+/// known number of seconds, and a config save with its remount can take
+/// most of that on a slow runner, so "still Running" is a race the spec
+/// cannot win every time; "not Failed, not Stopped" is the claim.
+const UNDISTURBED = /^(Running|Succeeded)$/;
+async function untilUndisturbed(page: Page, id: string, timeout = 10_000) {
+  await expect
+    .poll(() => statusOf(page, id), {
+      timeout,
+      intervals: [200],
+      message: `${id} was disturbed`,
+    })
+    .toMatch(UNDISTURBED);
+}
+
 /// Wait until the runner has this source's download in flight, as the
 /// row paints it.
 async function untilRunning(page: Page, id: string, timeout = 45_000) {
@@ -271,7 +287,7 @@ async function writeConfigAndOpen(page: Page, sources: Source[], names?: Record<
 }
 
 test.describe("sources run independently, one job at a time", () => {
-  // Three replayed downloads at 2.5 s per request, run one after another
+  // Three replayed downloads at 5 s per request, run one after another
   // by the worker, plus a stop and a restart.
   test.setTimeout(300_000);
 
@@ -292,7 +308,7 @@ test.describe("sources run independently, one job at a time", () => {
     // runner read it at start and must not notice; the row must still
     // say Running once the table is remounted from the new config.
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
-    await untilRunning(page, ingestOf(CHATGPT), 10_000);
+    await untilUndisturbed(page, ingestOf(CHATGPT));
     const claudeWas = await stampsBefore(page, [ingestOf(CLAUDE), renderOf(CLAUDE)]);
     await start(page, CLAUDE);
     // The second source is taken on at once — queued behind the first
@@ -301,7 +317,7 @@ test.describe("sources run independently, one job at a time", () => {
     await expect
       .poll(() => statusOf(page, ingestOf(CLAUDE)), { timeout: 5_000 })
       .toMatch(/^(Queued|Running)$/);
-    expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
+    expect(await statusOf(page, ingestOf(CHATGPT))).toMatch(UNDISTURBED);
     await expect(stopBtn(page, `group:${CLAUDE.id}`)).toBeVisible();
     console.log(
       `[e2e] with ${CHATGPT.id} running, ${CLAUDE.id} reads ${await statusOf(page, ingestOf(CLAUDE))}; ` +
@@ -310,14 +326,14 @@ test.describe("sources run independently, one job at a time", () => {
 
     // ── 3. a third, while the other two are both in flight ────────────
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE, PDFS]);
-    await untilRunning(page, ingestOf(CHATGPT), 10_000);
+    await untilUndisturbed(page, ingestOf(CHATGPT));
     const pdfsWas = await stampsBefore(page, [ingestOf(PDFS), renderOf(PDFS)]);
     await start(page, PDFS);
     await expect
       .poll(() => statusOf(page, ingestOf(PDFS)), { timeout: 5_000 })
       .toMatch(/^(Queued|Running)$/);
-    expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
-    expect(await statusOf(page, ingestOf(CLAUDE))).toMatch(/^(Queued|Running)$/);
+    expect(await statusOf(page, ingestOf(CHATGPT))).toMatch(UNDISTURBED);
+    expect(await statusOf(page, ingestOf(CLAUDE))).toMatch(/^(Queued|Running|Succeeded)$/);
 
     // ── every source finishes, in whatever order the worker took them ─
     for (const [id, before] of Object.entries({ ...was, ...claudeWas, ...pdfsWas })) {
@@ -382,9 +398,17 @@ test.describe("sources run independently, one job at a time", () => {
           async () => {
             stopped = await jobFor(request, CHATGPT);
             if (stopped && !stopped.active) return "finished";
-            if (await stopping.isVisible()) {
+            // Read the face without waiting for it: `isDisabled()` waits
+            // for the element to exist, and the Stopping button leaves
+            // the DOM the moment the runner is gone — a sample that lands
+            // in that gap would hang the poll until its timeout, long
+            // after the job it is waiting on has finished.
+            const faces = await stopping.evaluateAll((els) =>
+              els.map((el) => (el as HTMLButtonElement).disabled),
+            );
+            if (faces.length > 0) {
               windingDown = {
-                disabled: (windingDown?.disabled ?? true) && (await stopping.isDisabled()),
+                disabled: (windingDown?.disabled ?? true) && faces.every(Boolean),
                 banner: (windingDown?.banner ?? false) || (await banner.isVisible()),
               };
             }
