@@ -21,6 +21,7 @@ const CATALOG: &[Entry] = &[
     e("slack", None, "Slack", Some("slack")),
     e("claude", Some("api"), "Claude", Some("claude")),
     e("claude", Some("export"), "Claude export", Some("claude")),
+    e("claude_code", None, "Claude Code", Some("claude")),
     e("chatgpt", None, "ChatGPT", Some("chatgpt")),
     e("github", None, "GitHub", Some("github")),
     e("gitlab", None, "GitLab", Some("gitlab")),

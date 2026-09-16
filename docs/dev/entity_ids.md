@@ -246,6 +246,7 @@ fixture is UUID-shaped.
 | Provider | Status | Scope |
 |---|---|---|
 | claude | ported | `ProviderGlobal` |
+| claude_code | ported | `ProviderGlobal` — session ids, record uuids and tool-use ids are all Claude Code's own, unique across machines |
 | chatgpt | ported | `ProviderGlobal` |
 | slack | ported | `Upstream(team_id)` |
 | github, gitlab | pending | `Upstream(repo)` — recipe already carries it |

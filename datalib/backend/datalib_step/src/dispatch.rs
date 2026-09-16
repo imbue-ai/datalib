@@ -321,6 +321,12 @@ pub fn plan(
             datalib_etl_whatsapp,
             datalib_etl_whatsapp_render
         ),
+        SourceType::ClaudeCode => arm!(
+            datalib_etl_claude_code_config::ClaudeCodeConfig,
+            datalib_etl_claude_code_config::ClaudeCodeRenderConfig,
+            datalib_etl_claude_code,
+            datalib_etl_claude_code_render
+        ),
         SourceType::SmsBackupRestore => arm!(
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreConfig,
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreRenderConfig,

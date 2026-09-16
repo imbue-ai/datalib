@@ -78,6 +78,9 @@ Args (positional):
     25: airvisual_tng  Two AirVisual Pros' data folders (the share's
                       own layout). File-backed; the ingest step walks
                       each folder directly.
+    26: claude_code_tng  A `~/.claude/projects` tree: two sessions and a
+                      subagent transcript. File-backed; the ingest
+                      step walks it directly.
 
 Args 21+ are appended rather than grouped with the other binaries
 (1-4) and fixture paths (7-20) deliberately: every index here is
@@ -160,6 +163,7 @@ def main() -> int:
     pdf_fx = Path(sys.argv[23]).resolve()
     garmin_spec = Path(sys.argv[24]).resolve()
     airvisual_fx = Path(sys.argv[25]).resolve()
+    claude_code_fx = Path(sys.argv[26]).resolve()
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -272,6 +276,8 @@ def main() -> int:
         # Two AirVisual Pros' data folders under this tree, one
         # `export.devices` entry each; renders one page of plots.
         "ship-air": ("airvisual", airvisual_fx, airvisual_fx),
+        # The transcripts root, as Claude Code lays it out.
+        "claude-code": ("claude_code", claude_code_fx, claude_code_fx),
     }
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
@@ -565,6 +571,8 @@ def _source_config(
         # ingest step is never run. `api = {}` would fail validation
         # outright anyway (yolink requires at least one `api.devices`).
         pass
+    elif type_str == "claude_code":
+        source["sessions"] = {"path": str(input_path)}
     elif type_str == "airvisual":
         # One device per folder; serial and name come from each folder's
         # latest_config_measurements.json.

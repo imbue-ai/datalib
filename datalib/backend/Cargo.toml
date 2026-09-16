@@ -56,6 +56,8 @@ members = [
     "etl/providers/signal_render",
     "etl/providers/slack",
     "etl/providers/slack_render",
+    "etl/providers/claude_code",
+    "etl/providers/claude_code_render",
     "etl/providers/sms_backup_restore",
     "etl/providers/sms_backup_restore_render",
     "etl/providers/yolink",

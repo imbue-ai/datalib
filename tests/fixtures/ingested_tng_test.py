@@ -147,6 +147,8 @@ EXPECTED_PROVIDERS = frozenset(
         # File-backed, from two Pros' data folders; one page of plots.
         "airvisual",
         "claude",
+        # File-backed: the fixture is a `~/.claude/projects` tree.
+        "claude_code",
         "beeper",
         "contacts",
         # Not a source: the per-source storage report every render wave

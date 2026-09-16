@@ -140,3 +140,32 @@ describe("seedFieldValues", () => {
     expect(seedFieldValues(SLACK)["api.refresh_window_days"]).toBe("");
   });
 });
+
+describe("a path field left empty", () => {
+  const CLAUDE_CODE = catalogFor("claude_code")!;
+
+  it("writes the bare method table, not an empty path", () => {
+    // `sessions = {}` is a complete selection: the standard store. A
+    // `path = ""` would send the ingest to the current directory.
+    const out = buildStep({
+      entry: CLAUDE_CODE,
+      group: "claude-code",
+      phase: "download",
+      values: { "sessions.path": "" },
+    });
+    expect(out).toContain("sessions = {}");
+    expect(out).not.toContain('path = ""');
+  });
+
+  it("writes the path once one is typed", () => {
+    const out = buildStep({
+      entry: CLAUDE_CODE,
+      group: "claude-code",
+      phase: "download",
+      values: { "sessions.path": "/backups/claude-projects" },
+    });
+    expect(out).toContain("[steps.params.sessions]");
+    expect(out).toContain('path = "/backups/claude-projects"');
+    expect(out).not.toContain("sessions = {}");
+  });
+});

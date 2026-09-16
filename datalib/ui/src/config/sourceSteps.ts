@@ -581,7 +581,9 @@ export function fieldIsActive(field: Field, values: FieldValues): boolean {
 function isSet(field: Field, value: unknown): boolean {
   if (value === undefined || value === null) return false;
   if (field.kind === "string_list") return Array.isArray(value) && value.length > 0;
-  if (field.kind === "text" || field.kind === "date") return String(value).trim() !== "";
+  if (field.kind === "text" || field.kind === "date" || field.kind === "path") {
+    return String(value).trim() !== "";
+  }
   if (field.kind === "int") return value !== "" && Number.isFinite(Number(value));
   if (field.kind === "bytes") return parseByteSize(bytesText(value)) !== null;
     // A select normally holds one of its options, so it is always written. The

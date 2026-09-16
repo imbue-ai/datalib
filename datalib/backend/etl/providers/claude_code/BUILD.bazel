@@ -1,0 +1,64 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# TNG-themed Claude Code transcripts in the layout `~/.claude/projects`
+# has: two sessions under one project directory, one with a subagent
+# transcript. Used by :claude_code_fixture_e2e and the central fixture
+# pipeline at //tests/fixtures:ingested_tng.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/claude_code_tng/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_claude_code",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_claude_code",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/claude_code_config:datalib_etl_claude_code_config",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "claude_code_unittests",
+    size = "small",
+    crate = ":datalib_etl_claude_code",
+    edition = "2021",
+)
+
+# Ingest the checked-in fixture, assert the rows, render, and read the
+# documents back — the whole provider against the real file layout.
+rust_test(
+    name = "claude_code_fixture_e2e",
+    size = "small",
+    srcs = ["tests/fixture_e2e.rs"],
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "CLAUDE_CODE_FIXTURE_DIR": "datalib/backend/etl/providers/claude_code/tests/fixtures/claude_code_tng",
+    },
+    deps = [
+        ":datalib_etl_claude_code",
+        "//datalib/backend/etl/providers/claude_code_render:datalib_etl_claude_code_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

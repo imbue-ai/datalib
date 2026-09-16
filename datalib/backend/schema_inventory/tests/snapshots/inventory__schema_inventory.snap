@@ -1189,6 +1189,35 @@ sms_messages_bookkeeping
     volatile_payload
     tz_offset
 
+== claude_code/raw ==
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at_utc
+    tz_offset
+records
+    id
+    payload
+    transcript_id
+    session_id
+    record_type
+    timestamp
+    parent_uuid
+    is_sidechain
+transcripts
+    id
+    payload
+    session_id
+    agent_id
+    cwd
+    git_branch
+    title
+    started_at
+    updated_at
+    rel_path
+
 == whatsapp/raw ==
 wa_media_files
     blake3

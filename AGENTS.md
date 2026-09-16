@@ -228,6 +228,19 @@ reference doc it relates to.
   the `api` method still to build for a published outdoor unit.
   `datalib/backend/etl/timeseries_render/` is what its render and
   yolink's share.
+- [`datalib/backend/etl/providers/claude_code/INGEST.md`](datalib/backend/etl/providers/claude_code/INGEST.md)
+  — the `claude_code` source: Claude Code's own transcripts under
+  `~/.claude/projects`, one raw row per record. **Read before adding
+  any agent-transcript source** (Codex, Gemini CLI, Cowork are next):
+  what a transcript line is, which lines are rows and which fold into
+  the session, how a subagent keys on `(sessionId, agentId)`, and why
+  the tables have no bookkeeping sidecar.
+  [`docs/dev/plans/agent_sessions.md`](docs/dev/plans/agent_sessions.md)
+  is the investigation behind it (2026-09-16) and the plan for the
+  rest: Claude Code cloud via the CLI's own OAuth route on
+  `api.anthropic.com`, Cowork, Codex local and cloud, the ChatGPT
+  bulk export the `chatgpt` source still lacks, and Gemini CLI — and
+  the `email` argument for why each is its own type.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
   — the `email` source's three download modes (JMAP, Gmail API, mbox),
   what keeps them writing one deduped schema, and why an IMAP mode was

@@ -75,12 +75,12 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
 
 [[steps]]
 group = "unified_index"
 function = "qmd_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -141,6 +141,35 @@ path = "~/backups/claude-export"
 group = "claude-export"
 function = "render_markdown"
 inputs = ["claude-export/ingest"]
+
+# --- Claude Code --------------------------------------------------------
+
+# Claude Code sessions — terminal, desktop app and IDE extension — read
+# off the store Claude Code itself keeps on this machine. No API, no
+# credentials. An empty `sessions` table reads the standard location,
+# `~/.claude/projects`; give it a `path` for a copy of that folder from
+# another machine. Every content record of every transcript becomes a
+# raw row; render emits one document per session, and one per subagent
+# transcript, with tool calls and results folded away. A session Claude
+# Code later deletes stays in the mirror.
+[[groups]]
+id = "claude-code"
+type = "claude_code"
+
+[[steps]]
+group = "claude-code"
+function = "ingest"
+[steps.params.sessions]
+
+[[steps]]
+group = "claude-code"
+function = "render_markdown"
+inputs = ["claude-code/ingest"]
+# How much of one tool result reaches the page. The raw store keeps all
+# of it; a tool result that echoes a whole file is cut here, with a
+# marker saying so.
+[steps.params]
+max_tool_result_bytes = 16384
 
 # --- ChatGPT ------------------------------------------------------------
 
