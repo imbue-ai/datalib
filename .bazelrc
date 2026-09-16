@@ -356,6 +356,19 @@ try-import %workspace%/.bazelrc.user
 # half-updated file behind.
 common:ci --lockfile_mode=error
 
+# CI builds without the bytes. Every run is mostly remote cache hits —
+# ~4400 on a warm `main` run — and without this each hit's outputs are
+# downloaded onto the runner (~320 thread-seconds, ~40 s of wall clock)
+# and then written a second time into a `--disk_cache` that dies with
+# the container. `minimal` fetches only what a local action or a test
+# needs; a failed test's log is still fetched for `--test_output=errors`
+# (checked, not assumed: a deliberately failing test on a probe run
+# printed its stderr under these flags). The one step that needs real
+# files on disk — staging `//datalib/backend:bin` into the tarball —
+# passes `--remote_download_toplevel` on its own command line.
+build:ci --remote_download_minimal
+build:ci --disk_cache=
+
 # Auto-apply per-OS `build:<os>` configs below based on the build host.
 common --enable_platform_specific_config
 

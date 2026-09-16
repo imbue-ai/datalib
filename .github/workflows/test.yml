@@ -326,7 +326,9 @@ jobs:
           else
               mode=(--jobs=16)
           fi
-          bazel build "${flags[@]}" "${mode[@]}" --build_metadata=ROLE=CI //datalib/backend:bin
+          # `--config=ci` builds without the bytes; the tarball needs them.
+          bazel build "${flags[@]}" "${mode[@]}" --build_metadata=ROLE=CI \
+            --remote_download_toplevel //datalib/backend:bin
           bindir="$(bazel info bazel-bin "${flags[@]}")/datalib/backend/bin"
           version="$(sed -n -E 's/^version = "([^"]+)"$/\1/p' datalib/backend/Cargo.toml)"
           stage="datalib-${version}-x86_64-unknown-linux-gnu"
