@@ -94,10 +94,11 @@ things the note never mentioned.
   — `exit 3` if not, deliberately, so a multi-GB HuggingFace download
   could not masquerade as a hang. CI filled it with a `qmd pull` behind
   an `actions/cache`. Both halves are gone now: the three GGUFs are
-  pinned in `MODULE.bazel` as `@qmd_model_*` and reach the materializer
-  (and the fixture's index genrule) as bazel inputs, and `.bazelrc`'s
-  `buildbuddy` config fetches them through BuildBuddy's remote
-  downloader rather than from HuggingFace.
+  fetched by a build action (`//third-party/qmd_models`) and reach the
+  materializer (and the fixture's index genrule) as bazel inputs. The
+  action's outputs live in the remote cache, so a run that does not
+  need the bytes never moves them, and one that does takes them from
+  BuildBuddy rather than HuggingFace unless the cache has lost them.
 * **`HOME=/github/home`.** GitHub forces that for container steps, while
   the image bakes its caches under `/root`, so every lookup landed in an
   empty directory. One `--test_env` flag still redirects the lookup that

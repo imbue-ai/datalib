@@ -15,9 +15,9 @@ brew install bazel cmake
 # 2. (Nothing to do here any more.) This step used to be
 #    `mkdir -p ~/.cache/qmd/models`, because `.bazelrc` bind-mounted that
 #    directory into every sandboxed action and a missing one failed the
-#    build. qmd's three GGUF models are now pinned in MODULE.bazel
-#    (`@qmd_model_*`) and reach both the fixture's index genrule and the
-#    materialized demo root as ordinary bazel inputs, so neither
+#    build. qmd's three GGUF models are now fetched by a build action
+#    (`//third-party/qmd_models`) and reach both the fixture's index
+#    genrule and the materialized demo root as ordinary bazel inputs, so neither
 #    `bazel test //...` nor `bazelisk run //datalib:dev_tng` needs
 #    anything in your home directory. The app you build still downloads
 #    models there at sync time, as a user's would.
@@ -113,7 +113,7 @@ Runs:
   from the `rules_js`-linked `node_modules` and a Bazel-managed Node, and
   the remaining host reach is the Playwright **browser cache** at
   `~/.cache/ms-playwright` (`env_inherit = HOME`). The qmd models used to
-  be a second such reach and are now bazel inputs (`@qmd_model_*`). What
+  be a second such reach and are now bazel outputs (`//third-party/qmd_models`). What
   is left is why it is tagged `requires-network` + `no-sandbox`, and what
   CI has to arrange for explicitly — see [`testing.md`](testing.md).
 

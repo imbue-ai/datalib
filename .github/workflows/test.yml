@@ -209,8 +209,8 @@ jobs:
           #
           #   1. The qmd GGUFs are absent from the `-slim`-based image,
           #      and the suite refused to run without them. They are
-          #      bazel inputs now (`@qmd_model_*`), so the suite brings
-          #      its own.
+          #      bazel inputs now (`//third-party/qmd_models`), so the
+          #      suite brings its own.
           #   2. `HOME=/github/home`, which GitHub forces for container
           #      steps, points every cache lookup away from the `/root`
           #      the image bakes into. That still matters for Playwright's
@@ -260,8 +260,8 @@ jobs:
           # specific lookup is the mechanism that actually works.
           #
           # qmd models: nothing to arrange here any more, and the
-          # steps that used to arrange it are gone. The GGUFs are pinned
-          # in MODULE.bazel (`@qmd_model_*`) and reach their two
+          # steps that used to arrange it are gone. The GGUFs are
+          # fetched by `//third-party/qmd_models` and reach their two
           # consumers as bazel inputs: the
           # `//tests/fixtures:ingested_tng_qmd` genrule (embedding model
           # only) and `tests/fixtures/materialize_tng_root.sh`, which the
@@ -278,11 +278,10 @@ jobs:
           # themselves, and on 2026-09-03 one of those downloads drew a
           # 429 from HuggingFace and failed a merge-gating build.
           #
-          # The fetch has to happen somewhere, and a fresh container has
-          # an empty repository cache — so `.bazelrc`'s `buildbuddy`
-          # config routes repository downloads through BuildBuddy's
-          # remote downloader. The models come from the same host as the
-          # action cache, and HuggingFace is not in the loop at all.
+          # The fetch is a remote-cached build action, so a warm run
+          # never moves the bytes at all, and a cold one takes them from
+          # BuildBuddy's action cache; HuggingFace is reached only when
+          # that cache has lost them, with retries on a 429.
           #
           # Three flags went with those steps:
           # `--sandbox_add_mount_pair=/root/.cache/qmd/models`,
