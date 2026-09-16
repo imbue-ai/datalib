@@ -681,3 +681,58 @@ async fn frontend_routes_are_behind_the_token_gate() {
         );
     }
 }
+
+/// The first requests after a config change arrive together — the
+/// Manage screen asks for `/api/frontend` and the grid's search in
+/// the same tick after `POST /api/config/init` — and every one of
+/// them must be served. With the reload unserialized, each caller ran
+/// its own reconcile from the same "nothing running" baseline, and
+/// the second one's `stop_except` killed the applet the first had
+/// just started, which then answered its request with 502.
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_first_requests_after_a_config_change_all_succeed() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_tree(tmp.path());
+    let log = tmp.path().join("starts.log");
+    let cmd = start_logging_command(tmp.path(), &log);
+
+    // No config at all: the state a fresh root is in before onboarding
+    // writes one.
+    let state = state_with(tmp.path(), "").await;
+    std::fs::remove_file(tmp.path().join("config.toml")).unwrap();
+    let app = router(AppState {
+        applets: Arc::new(AppletRegistry::from_data_root(tmp.path(), None)),
+        ..state
+    });
+    let (status, _) = get_json(&app, "/applet/a/channels").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "no config, so no applet");
+
+    for round in 0..5 {
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            applet_stanza("a", &cmd, Some(&format!("round {round}"))),
+        )
+        .unwrap();
+        let mut tasks = Vec::new();
+        for i in 0..8 {
+            let app = app.clone();
+            let uri = if i % 2 == 0 {
+                "/api/frontend"
+            } else {
+                "/applet/a/channels"
+            };
+            tasks.push(tokio::spawn(
+                async move { (uri, get_json(&app, uri).await) },
+            ));
+        }
+        for t in tasks {
+            let (uri, (status, body)) = t.await.unwrap();
+            assert_eq!(status, StatusCode::OK, "round {round}: {uri} → {body}");
+        }
+        assert_eq!(
+            starts(&log, "a"),
+            round + 1,
+            "round {round}: one config change is one start"
+        );
+    }
+}
