@@ -170,6 +170,11 @@ pub struct AppletRegistry {
     /// against a config whose own `binary_dir` may have changed.
     binary_dir_override: Option<PathBuf>,
     state: std::sync::RwLock<RegistryState>,
+    /// Held for the whole of a reload. Two requests that both notice a
+    /// config change must not both reconcile: each would start the
+    /// applets from the same baseline, and the second's `stop_except`
+    /// would kill what the first had just started, mid-response.
+    reload: Mutex<()>,
     supervisor: Supervisor,
 }
 
@@ -238,6 +243,7 @@ impl AppletRegistry {
         Self {
             data_root,
             binary_dir_override,
+            reload: Mutex::new(()),
             state: std::sync::RwLock::new(RegistryState {
                 store_stamp,
                 entries,
@@ -260,6 +266,7 @@ impl AppletRegistry {
     }
 
     pub fn refresh_if_config_changed(&self) {
+        let _one_at_a_time = self.reload.lock().unwrap_or_else(|e| e.into_inner());
         let current = config_stamp_of(&self.data_root);
         let (prev_entries, prev_binary_dir) = {
             let Ok(state) = self.state.read() else { return };

@@ -2,6 +2,10 @@
 // Bottom-right toast tray. Mounted once in App.vue; reads the module-
 // level `toasts` array from `@/toasts`. No props — every consumer pushes
 // via `pushToast(...)`.
+//
+// A toast is drawn over everything and owns none of it: only its ×
+// takes the pointer, so a click on whatever it happens to cover — a
+// dialog's submit button, say — still lands there.
 import { toasts, dismissToast } from "@/toasts";
 </script>
 
@@ -42,7 +46,7 @@ import { toasts, dismissToast } from "@/toasts";
   pointer-events: none;
 }
 .datalib-toast {
-  pointer-events: auto;
+  pointer-events: none;
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
@@ -73,6 +77,7 @@ import { toasts, dismissToast } from "@/toasts";
   white-space: pre-wrap;
 }
 .datalib-toast__close {
+  pointer-events: auto;
   background: transparent;
   border: none;
   color: inherit;
