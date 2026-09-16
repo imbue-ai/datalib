@@ -72,6 +72,7 @@ rust_library(
     deps = [
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/columns:datalib_columns",
+        "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/history:datalib_history",
@@ -388,6 +389,7 @@ rust_binary(
     ],
     deps = [
         ":datalib_http",
+        "//datalib/backend/parent_watch:datalib_parent_watch",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
         "@datalib_crates//:clap",

@@ -33,6 +33,8 @@ members = [
     "etl/providers/gitlab_render",
     "etl/providers/email",
     "etl/providers/email_render",
+    "etl/providers/facebook",
+    "etl/providers/facebook_render",
     "etl/providers/garmin",
     "etl/providers/garmin_render",
     "etl/providers/linkedin",

@@ -61,6 +61,7 @@ import {
 import TableGrid from "./TableGrid.ce.vue";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
+import { copyToClipboard } from "@/clipboard";
 import { browseColumns, browseQuery } from "@/config/browsePresets";
 import RunLogPanel from "@/components/RunLogPanel.vue";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
@@ -837,27 +838,6 @@ function copyIdButton(id: string, label: string): HTMLButtonElement {
   return btn;
 }
 
-/// The async clipboard first; the selection-and-`copy` route when that
-/// is refused, as DocCard does — it is what works in a webview that
-/// has not granted the permission.
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      return document.execCommand("copy");
-    } catch {
-      return false;
-    } finally {
-      document.body.removeChild(ta);
-    }
-  }
-}
 
 const COUNT_FMT = new Intl.NumberFormat();
 function formatCount(n: number | null | undefined): string {

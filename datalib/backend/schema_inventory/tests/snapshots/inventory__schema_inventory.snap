@@ -1345,6 +1345,21 @@ garmin_wellness_files_bookkeeping
     volatile_payload
     tz_offset
 
+== facebook/raw ==
+media_blobs
+    id
+    owner_id
+    uri
+    blake3
+media_blobs_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+
 == unified_index/grid ==
 edges
     edge_uuid

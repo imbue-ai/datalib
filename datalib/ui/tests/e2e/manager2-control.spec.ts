@@ -35,9 +35,9 @@ import {
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
 declare const process: { env: Record<string, string | undefined> };
 
-const STEP_BIN = process.env.FW_E2E_DATALIB_STEP;
-const PLAYBACK = process.env.FW_E2E_PLAYBACK_DIR;
-const PDF_DIR = process.env.FW_E2E_PDF_FIXTURE_DIR;
+const STEP_BIN = process.env.DATALIB_TEST_E2E_DATALIB_STEP;
+const PLAYBACK = process.env.DATALIB_TEST_E2E_PLAYBACK_DIR;
+const PDF_DIR = process.env.DATALIB_TEST_E2E_PDF_FIXTURE_DIR;
 
 /// The sources this file starts and stops. Each replays one tape, and
 /// the two tapes are the two API-backed providers the harness
@@ -175,7 +175,7 @@ async function dumpStopEvidence(request: APIRequestContext, why: string): Promis
     console.warn(`[e2e] ${why}: could not read the API: ${e}`);
   }
   try {
-    const servers = JSON.parse(process.env.FW_E2E_SERVERS ?? "[]") as { name: string; log: string }[];
+    const servers = JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as { name: string; log: string }[];
     const mine = servers.find((s) => s.name === "sandbox-manager2-control");
     if (!mine) return;
     const tail = readFileSync(mine.log, "utf8").split("\n").slice(-80).join("\n");
@@ -218,7 +218,7 @@ test.afterEach(async ({ page }) => {
 
 test.skip(
   !STEP_BIN || !PLAYBACK || !PDF_DIR,
-  "needs FW_E2E_DATALIB_STEP + FW_E2E_PLAYBACK_DIR + FW_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
+  "needs DATALIB_TEST_E2E_DATALIB_STEP + DATALIB_TEST_E2E_PLAYBACK_DIR + DATALIB_TEST_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
 );
 
 // Carry the `[[applets]]` stanza forward from whatever was there.

@@ -1,0 +1,64 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# TNG-themed Facebook export (the JSON flavour) used by the e2e test and
+# the central fixture pipeline. Same file layout and record shapes as a
+# real "Download your information" export.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/facebook_tng/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_facebook",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_facebook",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/facebook_config:datalib_etl_facebook_config",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "facebook_unittests",
+    size = "small",
+    crate = ":datalib_etl_facebook",
+    edition = "2021",
+)
+
+# End-to-end: ingest the checked-in TNG export, commit, render every
+# feed, and assert the landed tables, the CAS'd media and the rendered
+# documents.
+rust_test(
+    name = "facebook_e2e",
+    size = "medium",
+    srcs = ["tests/facebook_e2e.rs"],
+    crate_root = "tests/facebook_e2e.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {"FACEBOOK_TNG_FIXTURE": "datalib/backend/etl/providers/facebook/tests/fixtures/facebook_tng"},
+    deps = [
+        ":datalib_etl_facebook",
+        "//datalib/backend/etl/providers/facebook_render:datalib_etl_facebook_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

@@ -23,7 +23,7 @@ declare const process: { env: Record<string, string | undefined> };
 /// spec write the file underneath a running server without any other
 /// spec noticing.
 function dataRoot(): string {
-  const sandboxes = JSON.parse(process.env.FW_E2E_SANDBOXES ?? "[]") as {
+  const sandboxes = JSON.parse(process.env.DATALIB_TEST_E2E_SANDBOXES ?? "[]") as {
     spec: string;
     root: string;
   }[];
