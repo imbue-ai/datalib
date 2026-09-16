@@ -1298,6 +1298,17 @@ mainly so you can (a) not panic, and (b) decide deliberately whether a
 small helper really belongs in a shared crate — the `rdeps` number is
 the price tag.
 
+**A `[for tool]` suffix on a `Compiling Rust …` line is a second copy.**
+It means the crate is being built in the exec configuration as well as
+the target one, and nothing is shared between the two. A `genrule` puts
+its `tools` there, so one that names a pipeline binary drags the whole
+backend along (#484 measured 51 duplicate compiles and −19% on a cold
+run when it stopped). Use `target_tools_genrule` from
+`tools/target_tools_genrule.bzl` for a tool that is also what the tests
+link; `aquery 'mnemonic("Rustc", //...)'` grouped by `Configuration:`
+is the check, and the only exec-config Rustc actions left should be the
+dependency-free `qmd_indexer` chain.
+
 **Runs are bimodal, so ask which mode you are in first.** A warm run
 executes 0 tests and takes ~3 min; a cold one rebuilds ~345 actions and
 takes ~20, with almost nothing in between. A rising *median* therefore
