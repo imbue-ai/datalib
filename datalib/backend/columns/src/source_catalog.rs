@@ -33,6 +33,7 @@ const CATALOG: &[Entry] = &[
     e("yolink", None, "YoLink", Some("yolink")),
     e("google_takeout", None, "Google Takeout", None),
     e("linkedin", None, "LinkedIn", Some("linkedin")),
+    e("facebook", None, "Facebook", Some("facebook")),
     e("signal", None, "Signal", Some("signal")),
     e("whatsapp", None, "WhatsApp", Some("whatsapp")),
     e("sms_backup_restore", None, "SMS & calls", Some("sms")),

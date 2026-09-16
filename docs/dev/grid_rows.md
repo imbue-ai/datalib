@@ -170,6 +170,11 @@ they sit beside the shared blob store.
 | notion.page | `Notion Page` (`Notion Database` for a collection_view_page) |
 | notion.heading.h1/h2/h3 | `Notion Heading 1` / `2` / `3` |
 | notion.thread / notion.comment | `Notion Comment Thread` / `Notion Comment` |
+| facebook.post / its one item | `Facebook Post` / `Facebook Post Message` |
+| facebook.album / description / photo | `Facebook Album` / `Facebook Album Message` / `Facebook Photo` |
+| facebook.comments / comment | `Facebook Comments` / `Facebook Comment` (one chat per source, a document per month) |
+| facebook.reactions / reaction | `Facebook Reactions` / `Facebook Reaction` (likewise) |
+| facebook.friend | `Contact` |
 
 `source_label` is the plain product name: `Claude`, `ChatGPT`, `Slack`,
 `GitHub`, `GitLab`, `Notion`.
@@ -256,6 +261,7 @@ resolve against". A source with no login at all (a PDF folder, a
 | slack | the `users` row for `workspaces.self_user_id`: `profile.email`, else real name, else handle, else the bare `U…` id | — | `channels.name` |
 | email | the `accounts` row: `emailAddress` (mbox), `email` (Gmail), else JMAP's `name` — which RFC 8620 defines as the owner's address — else the account id | — | — |
 | linkedin | the `Primary` row of `email_addresses` (else the first, else `profile`'s first + last name); every row of the export, connections included | — | `Connections` for a contact |
+| facebook | `profile_v2.emails.emails[0]` (else `profile_v2.name.full_name`) from `…profile_information`; every row of the export, friends included | — | `Friends` for a contact |
 | github | — | `pull_request.base.repo.full_name` | — |
 | gitlab | — | `merge_request.references.full`, else `project_path` | — |
 | notion | — | — | — |

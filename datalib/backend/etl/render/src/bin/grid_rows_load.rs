@@ -24,7 +24,7 @@ use tracing::{debug, info, info_span};
 struct Args {
     /// Input root. The loader reads each stanza's render store at
     /// `<out>/<stanza>/render_markdown/indexed_markdown.doltlite_db`.
-    #[arg(long, env = "FW_OUT")]
+    #[arg(long, env = "DATALIB_OUT")]
     out: PathBuf,
 
     /// Path to the doltlite database file. Defaults to
@@ -35,12 +35,12 @@ struct Args {
     /// After loading, run the qmd indexer over `<out>`. qmd
     /// update is incremental — repeated invocations only re-index changed
     /// `.md` files.
-    #[arg(long, env = "FW_QMD_INDEX")]
+    #[arg(long, env = "DATALIB_QMD_INDEX")]
     qmd_index: bool,
 
     /// Skip the embedding pass when running the qmd indexer. Useful for
     /// CI / smoke tests where the ~300MB model download isn't desired.
-    #[arg(long, env = "FW_QMD_NO_EMBED")]
+    #[arg(long, env = "DATALIB_QMD_NO_EMBED")]
     qmd_no_embed: bool,
 
     #[command(flatten)]

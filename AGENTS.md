@@ -228,6 +228,15 @@ reference doc it relates to.
   the `api` method still to build for a published outdoor unit.
   `datalib/backend/etl/timeseries_render/` is what its render and
   yolink's share.
+- [`datalib/backend/etl/providers/facebook/INGEST.md`](datalib/backend/etl/providers/facebook/INGEST.md)
+  — the `facebook` source: a "Download your information" export in
+  its JSON format. Read it before touching any export-shaped provider
+  that keeps every file: one table per JSON file named for its path,
+  one row per record, the media each record points at in the CAS, and
+  the `\u00XX`-per-byte encoding bug every string has to be run
+  through first. It also says why comments and reactions are bucketed
+  by month rather than threaded per post, and that Messenger is not
+  built because the account we have never sent a message.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
   — the `email` source's three download modes (JMAP, Gmail API, mbox),
   what keeps them writing one deduped schema, and why an IMAP mode was
@@ -258,6 +267,13 @@ reference doc it relates to.
 - [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md)
   — the live recipe for porting the remaining providers to CAS blobs +
   incremental render.
+- [`docs/dev/plans/diff_renderer.md`](docs/dev/plans/diff_renderer.md)
+  — *proposal*, nothing built: showing how one document changed
+  between two commits of its render store. **Read before asking a
+  store which commits changed a row**: the answer is `dolt_diff_<t>`
+  with no ref filter, and the measured reason `dolt_history_<t>` and
+  `dolt_blame_<t>` are the wrong tool on our text-keyed tables (their
+  key pushdown is integer-only; 20s against ~1s on 200k rows).
 - [`docs/dev/plans/multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md)
   — *proposal*, nothing built: replacing the `qmd_index` step with a
   retrieval layer that takes an arbitrary `grid_rows` metadata
@@ -1307,6 +1323,18 @@ mainly so you can (a) not panic, and (b) decide deliberately whether a
 small helper really belongs in a shared crate — the `rdeps` number is
 the price tag.
 
+**A `[for tool]` suffix on a `Compiling Rust …` line is a second copy.**
+It means the crate is being built in the exec configuration as well as
+the target one, and nothing is shared between the two. A `genrule` puts
+its `tools` there, so one that names a pipeline binary drags the whole
+backend along (#484 measured 51 duplicate compiles and −19% on a cold
+run when it stopped). A pipeline binary a genrule runs goes in `srcs`,
+not `tools` — same files the tests link, no second copy (see the
+comment on `//tests/fixtures:ingested_tng`); `aquery 'mnemonic("Rustc",
+//...)'` grouped by `Configuration:` is the check, and the only
+exec-config Rustc actions left should be the dependency-free
+`qmd_indexer` chain.
+
 **Runs are bimodal, so ask which mode you are in first.** A warm run
 executes 0 tests and takes ~3 min; a cold one rebuilds ~345 actions and
 takes ~20, with almost nothing in between. A rising *median* therefore
@@ -1314,6 +1342,15 @@ usually means cold runs got more frequent, not that anything got slower.
 It is **not** the e2e suite: on a 1254s cold run every executed test
 together came to 200s. The rest is opt-mode Rust, and blast radius is
 the only lever on it.
+
+**A `pull_request` run builds the merge of the PR into `main` as it is
+at that moment** (`HEAD is now at … Merge <pr> into <main>` in the
+checkout step), not the branch head. So when `main` moves, the PR's
+next run re-executes whatever is unique to the PR *and* downstream of
+what `main` changed — a new fixture rule re-runs the fixture, and with
+it the e2e suite — even though the PR itself did not change. A
+`workflow_dispatch` run builds the bare branch head; compare like with
+like before calling a cache key unstable.
 
 A run can also be slow without compiling anything — check whether the
 job *started* late (`created_at` vs the job's `started_at`) before

@@ -102,10 +102,10 @@ export default async function globalSetup(): Promise<void> {
   );
   const token = process.env.DATALIB_TOKEN ?? "";
   await awaitHealthy(
-    JSON.parse(process.env.FW_E2E_SERVERS ?? "[]") as Server[],
+    JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as Server[],
     token,
   );
-  const sandboxes = JSON.parse(process.env.FW_E2E_SANDBOXES ?? "[]") as {
+  const sandboxes = JSON.parse(process.env.DATALIB_TEST_E2E_SANDBOXES ?? "[]") as {
     url: string;
   }[];
   await warmApplets(

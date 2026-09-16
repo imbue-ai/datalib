@@ -1,0 +1,26 @@
+[
+  {
+    "timestamp": 12597863400,
+    "data": [
+      {
+        "reaction": {
+          "reaction": "LIKE",
+          "actor": "Jean-Luc Picard"
+        }
+      }
+    ],
+    "title": "Jean-Luc Picard liked William Riker's post."
+  },
+  {
+    "timestamp": 12599136300,
+    "data": [
+      {
+        "reaction": {
+          "reaction": "LOVE",
+          "actor": "Jean-Luc Picard"
+        }
+      }
+    ],
+    "title": "Jean-Luc Picard reacted to Guinan's photo."
+  }
+]

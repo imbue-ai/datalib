@@ -38,6 +38,7 @@ import {
   type SearchRow,
 } from "@/api";
 import { slugify } from "@/config/sourceSteps";
+import { copyToClipboard } from "@/clipboard";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import {
@@ -403,17 +404,7 @@ async function copyIds(targets: SearchRow[], pick: (r: SearchRow) => string) {
     .filter((v) => v.length > 0)
     .join(",");
   if (text.length === 0) return;
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Fallback for non-secure contexts.
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-  }
+  await copyToClipboard(text);
 }
 
 // Build a FilterCtx for the cell at `colId` on the given row, or null

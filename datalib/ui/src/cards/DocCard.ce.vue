@@ -9,6 +9,7 @@
 //   highlight on the target span when the destination is its own doc.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { fetchChat, type ChatResponse, type EdgeOut } from "@/api";
+import { copyToClipboard } from "@/clipboard";
 import ChatBody from "./ChatBody.ce.vue";
 import FeedbackButton from "@/components/FeedbackButton.ce.vue";
 import FeedbackModal from "@/components/FeedbackModal.vue";
@@ -220,17 +221,7 @@ async function onCopy() {
     closeCtxMenu();
     return;
   }
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Fallback for non-secure contexts.
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-  }
+  await copyToClipboard(text);
   closeCtxMenu();
 }
 

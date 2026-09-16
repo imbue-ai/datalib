@@ -1,0 +1,179 @@
+[
+  {
+    "timestamp": 12597624000,
+    "attachments": [
+      {
+        "data": [
+          {
+            "place": {
+              "name": "Ten Forward",
+              "coordinate": {
+                "latitude": 0.0,
+                "longitude": 0.0
+              },
+              "address": "Deck 10, USS Enterprise"
+            }
+          }
+        ]
+      },
+      {
+        "data": [
+          {
+            "place": {
+              "name": "Ten Forward",
+              "coordinate": {
+                "latitude": 0.0,
+                "longitude": 0.0
+              },
+              "address": "Deck 10, USS Enterprise",
+              "url": "https://www.facebook.com/pages/Ten-Forward/300000000000001"
+            }
+          }
+        ]
+      }
+    ],
+    "data": [
+      {
+        "post": "Tea, Earl Grey, hot. \u00e2\u0098\u0095 Evening in Ten Forward with the senior staff."
+      },
+      {}
+    ],
+    "title": "Jean-Luc Picard was at Ten Forward."
+  },
+  {
+    "timestamp": 12597672600,
+    "attachments": [
+      {
+        "data": [
+          {
+            "media": {
+              "uri": "your_facebook_activity/posts/media/your_posts/200000000000003.png",
+              "creation_timestamp": 12597672300,
+              "media_metadata": {
+                "photo_metadata": {
+                  "exif_data": [
+                    {
+                      "upload_ip": "10.0.0.1",
+                      "taken_timestamp": 12597672305
+                    }
+                  ]
+                }
+              },
+              "description": "The bridge at dawn."
+            }
+          },
+          {
+            "media": {
+              "uri": "your_facebook_activity/posts/media/your_posts/200000000000004.png",
+              "creation_timestamp": 12597672360,
+              "media_metadata": {
+                "photo_metadata": {
+                  "exif_data": [
+                    {
+                      "upload_ip": "10.0.0.1",
+                      "taken_timestamp": 12597672365
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "tags": [
+      {
+        "name": "Data"
+      }
+    ],
+    "data": [
+      {
+        "post": "Two views of the bridge before alpha shift."
+      },
+      {}
+    ],
+    "title": "Jean-Luc Picard added 2 new photos."
+  },
+  {
+    "timestamp": 12598027200,
+    "attachments": [
+      {
+        "data": [
+          {
+            "life_event": {
+              "title": "Took command of the Enterprise",
+              "description": "Stardate 41153.7 \u00e2\u0080\u0094 a new ship, a new crew. \u00e2\u009c\u00a8",
+              "start_date": {
+                "year": 2364,
+                "month": 1,
+                "day": 5
+              },
+              "place": {
+                "name": "Farpoint Station",
+                "coordinate": {
+                  "latitude": 0.0,
+                  "longitude": 0.0
+                },
+                "address": "Deneb IV"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "data": [
+      {
+        "backdated_timestamp": 12433770000
+      },
+      {}
+    ],
+    "title": "Jean-Luc Picard added a life event from January 5, 2364: Took command of the Enterprise"
+  },
+  {
+    "timestamp": 12599096400,
+    "attachments": [
+      {
+        "data": [
+          {
+            "media": {
+              "uri": "your_facebook_activity/posts/media/TenForwardNights_100000000000001/200000000000001.png",
+              "creation_timestamp": 12599095800,
+              "media_metadata": {
+                "photo_metadata": {
+                  "exif_data": [
+                    {
+                      "upload_ip": "10.0.0.1",
+                      "taken_timestamp": 12599095805
+                    }
+                  ]
+                }
+              },
+              "title": "Ten Forward Nights"
+            }
+          },
+          {
+            "media": {
+              "uri": "your_facebook_activity/posts/media/TenForwardNights_100000000000001/200000000000002.png",
+              "creation_timestamp": 12599095920,
+              "media_metadata": {
+                "photo_metadata": {
+                  "exif_data": [
+                    {
+                      "upload_ip": "10.0.0.1",
+                      "taken_timestamp": 12599095925
+                    }
+                  ]
+                }
+              },
+              "title": "Ten Forward Nights"
+            }
+          }
+        ]
+      }
+    ],
+    "data": [
+      {}
+    ],
+    "title": "Jean-Luc Picard added 2 new photos."
+  }
+]

@@ -226,30 +226,54 @@ sync. The exception is an interrupted run, which leaves a
 messages before trusting `HEAD^1`, and walk further back (`HEAD~10`, or
 a hash from `dolt_log`) for a wider window.
 
-### History of a single table
+### Which commits changed one row
+
+Leave `from_ref` / `to_ref` off `dolt_diff_<table>` and it walks every
+adjacent commit pair on the branch, one row per row that changed
+between them, with `to_commit` / `from_commit` / `diff_type`:
 
 ```sh
 doltlite -readonly slack/ingest/entities.doltlite_db \
-  "SELECT commit_hash, commit_date, id, ts
-     FROM dolt_history_messages
-    ORDER BY commit_date DESC
-    LIMIT 20;"
+  "SELECT to_commit, to_commit_date, diff_type
+     FROM dolt_diff_messages
+    WHERE coalesce(to_id, from_id) = '<the id>';"
 ```
 
-One row per (commit, primary-key) pair. Useful for tracing when a
-specific row first appeared or last changed.
+Each pair costs a diff proportional to what changed in it, and the
+`WHERE` can name any column, not just the key. The total cost is the
+table's churn over its life — a full re-render adds a table's worth
+permanently — so bound it with the range form,
+`WHERE from_ref = '<old>..HEAD'`, when the store has years behind it.
 
-### `git blame` for a single row
+Which commits touched which tables at all is the commit-level
+`dolt_diff` vtab, and costs nothing:
 
 ```sh
 doltlite -readonly slack/ingest/entities.doltlite_db \
-  "SELECT commit, committer, commit_date, message
+  "SELECT commit_hash, date, table_name FROM dolt_diff WHERE table_name = 'messages';"
+```
+
+### `dolt_history_<table>` and `dolt_blame_<table>`: not for our tables
+
+Both look like the tool for the question above and neither is. Their
+primary-key pushdown exists only for **integer** keys
+(`doltliteBestIndexIntPkRange` in `doltlite_history.c` and
+`doltlite_blame.c`); every table in this tree keys on a `VARCHAR`, so
+`WHERE id = ?` is applied after each commit's whole table has been
+read. Measured on doltlite 0.50.3 against a 200k-row table with 63
+commits: 20s for either, against ~1s for the `dolt_diff_<table>` walk.
+`dolt_history_<table>` also lists a row at every commit it *existed*
+in, changed or not.
+
+They still work, just slowly, and blame's `commit` column has to be
+quoted because it is a keyword:
+
+```sh
+doltlite -readonly slack/ingest/entities.doltlite_db \
+  "SELECT \"commit\", commit_date, message
      FROM dolt_blame_messages
     WHERE id = '<uuid>';"
 ```
-
-(Replace `messages` with any table; the `dolt_blame_<table>` vtab is
-created for each.)
 
 ### Pretty output
 
@@ -282,10 +306,11 @@ The common-use subset:
 | `dolt_status` | vtab | uncommitted-changes summary. |
 | `dolt_schemas` | vtab | per-branch schema diff. |
 | `dolt_diff_stat(from, to, table)` | table-valued fn | per-table row/cell counts. Call with 3 args; the vtab form doesn't accept WHERE filters. |
+| `dolt_diff` | vtab | which tables each commit on the branch changed. |
 | `dolt_diff_summary` | vtab | which tables differ, data vs schema. Filter with `from_ref` / `to_ref`. |
-| `dolt_diff_<table>` | vtab | row-level diff for one table. Filter with `from_ref` / `to_ref`. |
-| `dolt_history_<table>` | vtab | every committed version of every row in one table. |
-| `dolt_blame_<table>` | vtab | per-row `git blame`. |
+| `dolt_diff_<table>` | vtab | row-level diff for one table. Filter with `from_ref` / `to_ref`, or leave both off for every adjacent pair on the branch. |
+| `dolt_history_<table>` | vtab | every committed version of every row in one table. Full scan per commit on a text key — see above. |
+| `dolt_blame_<table>` | vtab | per-row `git blame`. Same caveat. |
 | `dolt_conflicts_<table>` | vtab | merge conflicts surviving a `dolt_merge`. |
 | `dolt_commit_ancestors` | vtab | the commit DAG. |
 

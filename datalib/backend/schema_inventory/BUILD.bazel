@@ -35,6 +35,7 @@ rust_test(
         "//datalib/backend/etl/providers/whatsapp:datalib_etl_whatsapp",
         "//datalib/backend/etl/providers/yolink:datalib_etl_yolink",
         "//datalib/backend/etl/providers/garmin:datalib_etl_garmin",
+        "//datalib/backend/etl/providers/facebook:datalib_etl_facebook",
         "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:insta",
     ],

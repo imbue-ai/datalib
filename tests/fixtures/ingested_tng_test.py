@@ -158,6 +158,9 @@ EXPECTED_PROVIDERS = frozenset(
         "gitlab",
         "google_takeout",
         "email",
+        # File-backed: the TNG export's posts, album, comments, reactions
+        # and friends.
+        "facebook",
         "linkedin",
         "notion",
         "chatgpt",
