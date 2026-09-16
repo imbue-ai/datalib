@@ -61,6 +61,7 @@ import emailIconUrl from "@/assets/email.svg";
 import smsIconUrl from "@/assets/sms.svg";
 import appleMessagesIconUrl from "@/assets/apple_messages.svg";
 import linkedinIconUrl from "@/assets/linkedin.svg";
+import facebookIconUrl from "@/assets/facebook.svg";
 import { encodeColumns } from "@/router/columns";
 import type { CardCtx } from "./types";
 
@@ -77,6 +78,7 @@ const SOURCE_ICONS: Record<string, string> = {
   SMS: smsIconUrl,
   Messages: appleMessagesIconUrl,
   LinkedIn: linkedinIconUrl,
+  Facebook: facebookIconUrl,
 };
 
 ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule]);

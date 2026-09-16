@@ -57,6 +57,9 @@ pub enum SourceType {
     /// `contacts` provider crate (its config crate is still `contacts_config`).
     Contacts,
     Email,
+    /// A "Download your information" export, unpacked. The JSON flavour;
+    /// the HTML one is not read.
+    Facebook,
     Fsindex,
     /// Garmin Connect, over the API the Connect phone app uses.
     Garmin,

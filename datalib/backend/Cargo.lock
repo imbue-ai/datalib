@@ -1405,6 +1405,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-etl-facebook"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "datalib-etl",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "datalib-etl-facebook-render"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "datalib-etl",
+ "datalib-etl-facebook",
+ "datalib-etl-render",
+ "datalib-schema",
+ "datalib-time",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "datalib-etl-fsindex"
 version = "0.32.0"
 dependencies = [

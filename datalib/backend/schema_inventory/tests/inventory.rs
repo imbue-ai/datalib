@@ -161,6 +161,12 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
             "garmin/raw",
             datalib_etl_garmin::ingest::schema_raw::full_ddl(),
         ),
+        // Only the media edge: every other facebook table is named for
+        // the export file it came from, at ingest time.
+        (
+            "facebook/raw",
+            datalib_etl_facebook::ingest::schema_raw::media_ddl(),
+        ),
         // The shared render/index and app stores, from `PortableTable`.
         (
             "unified_index/grid",

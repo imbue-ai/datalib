@@ -95,6 +95,7 @@ type that is not one product spells its sources out — email's are
 | Apple Messages | `apple_messages` | The Messages app's own `chat.db` on a Mac (or a copy) | iMessage / SMS chats with tapbacks; attachments by name |
 | SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
+| Facebook | `facebook` | "Download your information" export (JSON) | Posts, photo albums, comments, reactions; friends as contacts; every other file of the export mirrored to the raw store |
 | YoLink | `yolink` | Web API | Per-device sensor CSV history, rendered as one page of interactive plots |
 | Garmin | `garmin` | Web API (its own login, not latchkey) | Per-day health metrics (sleep, heart rate, stress, body battery, HRV, SpO2, …), weigh-ins, activities + original FIT files, devices, records, gear, badges, workouts, goals; the weigh-ins rendered as one page with an interactive plot |
 | Perseus | `perseus` | Public download | TEI editions of Greek and Latin texts from PerseusDL |

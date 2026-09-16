@@ -1,0 +1,22 @@
+{
+  "videos_v2": [
+    {
+      "uri": "your_facebook_activity/posts/media/videos/600000000000001.mp4",
+      "creation_timestamp": 12598027200,
+      "media_metadata": {
+        "video_metadata": {
+          "exif_data": [
+            {
+              "upload_ip": "10.0.0.1",
+              "upload_timestamp": 0
+            }
+          ]
+        }
+      },
+      "title": "",
+      "description": "Farpoint, from orbit. @[170100000000002:2048:Data]",
+      "dubbing_info": [],
+      "media_variants": []
+    }
+  ]
+}
