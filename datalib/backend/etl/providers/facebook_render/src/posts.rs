@@ -37,6 +37,8 @@ pub fn build_posts(
 }
 
 fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
+    let inputs = Inputs::default();
+    inputs.read(POSTS_TABLE, row_id);
     let mut body: Vec<String> = data_values(v, "post")
         .filter_map(Value::as_str)
         .map(strip_mentions)
@@ -45,7 +47,7 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let mut places: Vec<String> = Vec::new();
     for entry in attachment_entries(v) {
         if let Some(media) = entry.get("media") {
-            if let Some(att) = media_attachment(media) {
+            if let Some(att) = media_attachment(media, row_id, &inputs) {
                 attachments.push(att);
                 if let Some(caption) = media_caption(media, None) {
                     if !body.contains(&caption) {
@@ -101,8 +103,7 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let display = display_for(title.as_deref(), &text, "Facebook post");
     one_item_chat(
         &format!("post:{row_id}"),
-        POSTS_TABLE,
-        row_id,
+        inputs,
         display,
         None,
         None,
@@ -132,6 +133,8 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
 /// A post on someone else's page or profile: the `label_values` shape,
 /// keyed by Facebook's own `fbid`.
 fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
+    let inputs = Inputs::default();
+    inputs.read(OTHER_POSTS_TABLE, row_id);
     let mut body: Vec<String> = Vec::new();
     if let Some(msg) = label_value(v, "Message").and_then(|lv| str_field(lv, "value")) {
         body.push(strip_mentions(msg));
@@ -143,7 +146,7 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         .into_iter()
         .flatten()
     {
-        if let Some(att) = media_attachment(media) {
+        if let Some(att) = media_attachment(media, row_id, &inputs) {
             attachments.push(att);
             if let Some(caption) = media_caption(media, None) {
                 if !body.contains(&caption) {
@@ -161,8 +164,7 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let fbid = str_field(v, "fbid").map(str::to_string);
     one_item_chat(
         &format!("post:{row_id}"),
-        OTHER_POSTS_TABLE,
-        row_id,
+        inputs,
         display,
         fbid,
         None,
@@ -223,19 +225,15 @@ fn display_for(title: Option<&str>, text: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn one_item_chat(
     id: &str,
-    table: &str,
-    row_id: &str,
+    inputs: Inputs,
     display: String,
     external_id: Option<String>,
     source_url: Option<String>,
     item: NormalizedChatItem,
     owner: &Owner,
 ) -> NormalizedChat {
-    let inputs = Inputs::default();
-    inputs.read(table, row_id);
     for input in &owner.inputs {
         inputs.read(&input.table, &input.id);
     }
@@ -297,6 +295,7 @@ mod tests {
         );
         assert_eq!(chats[0].display, "Tea, Earl Grey, hot.");
         assert_eq!(item.date_ms, Some(12_600_000_000_000));
+        assert_eq!(chats[0].inputs.len(), 1);
         assert_eq!(chats[0].inputs[0].table, POSTS_TABLE);
     }
 
@@ -371,6 +370,10 @@ mod tests {
             Some("Happy birthday, Number One.\n\n— feeling grateful")
         );
         assert_eq!(chats[0].external_id.as_deref(), Some("400000000000001"));
-        assert_eq!(chats[0].inputs[0].table, OTHER_POSTS_TABLE);
+        let tables: Vec<&str> = chats[0].inputs.iter().map(|i| i.table.as_str()).collect();
+        assert!(tables.contains(&OTHER_POSTS_TABLE), "{tables:?}");
+        // The photo's edge is declared too, so the bytes arriving
+        // re-renders the post.
+        assert!(tables.contains(&"media_blobs"), "{tables:?}");
     }
 }

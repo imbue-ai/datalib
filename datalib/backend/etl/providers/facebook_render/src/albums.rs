@@ -31,6 +31,8 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         .filter_map(|p| ts_ms(p, "creation_timestamp"))
         .min();
     let id = format!("album:{row_id}");
+    let inputs = Inputs::default();
+    inputs.read(ALBUMS_TABLE, row_id);
 
     let mut items = Vec::with_capacity(photos.len() + 1);
     if let Some(description) = str_field(v, "description") {
@@ -51,7 +53,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         });
     }
     for (i, photo) in photos.iter().enumerate() {
-        let Some(att) = media_attachment(photo) else {
+        let Some(att) = media_attachment(photo, row_id, &inputs) else {
             continue;
         };
         let uri = att.ref_id.clone().unwrap_or_else(|| i.to_string());
@@ -73,8 +75,6 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     }
     items.sort_by_key(|i| i.date_ms);
 
-    let inputs = Inputs::default();
-    inputs.read(ALBUMS_TABLE, row_id);
     for input in &owner.inputs {
         inputs.read(&input.table, &input.id);
     }

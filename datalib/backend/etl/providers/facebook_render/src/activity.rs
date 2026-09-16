@@ -52,7 +52,7 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
         }
         let attachments: Vec<_> = attachment_entries(v)
             .filter_map(|e| e.get("media"))
-            .filter_map(media_attachment)
+            .filter_map(|m| media_attachment(m, row_id, &inputs))
             .collect();
         items.push(NormalizedChatItem {
             message_uuid: ns_id(&format!("msg:comment:{row_id}")),
@@ -315,7 +315,12 @@ mod tests {
         let second = &chats[0].buckets[1].items[0];
         assert_eq!(second.kind, ItemKind::Attachment);
         assert_eq!(second.attachments[0].ref_id.as_deref(), Some("m/4.png"));
-        assert_eq!(chats[0].inputs.len(), 2);
+        // Two comment rows, plus the media edge the second one shows.
+        assert_eq!(chats[0].inputs.len(), 3);
+        assert!(chats[0]
+            .inputs
+            .iter()
+            .any(|i| i.table == "media_blobs" && i.id == "c2#m/4.png"));
     }
 
     #[test]

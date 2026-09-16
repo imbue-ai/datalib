@@ -2,8 +2,12 @@
 //! shapes (`timestamp`, `data[]`, `attachments[].data[]`, `label_values`),
 //! the mention markup, and one attachment per media file.
 
+use datalib_etl::blob_cas::CasEdgeRow as _;
+use datalib_etl::bulk::BulkUpsertable as _;
 use datalib_etl_chat_common::render::{RenderProfile, ENTITY_KIND_CONVERSATION};
 use datalib_etl_chat_common::types::NormalizedAttachment;
+use datalib_etl_facebook::ingest::schema_raw::MediaBlobRow;
+use datalib_etl_render::inputs::Inputs;
 use datalib_schema::providers::Provider;
 use serde_json::Value;
 
@@ -104,9 +108,17 @@ pub fn strip_mentions(text: &str) -> String {
 }
 
 /// One attachment for a `media` object: the export-relative `uri` is the
-/// CAS ref, and the bytes are resolved through the chat's bundle.
-pub fn media_attachment(media: &Value) -> Option<NormalizedAttachment> {
+/// CAS ref, and the bytes are resolved through the chat's bundle. The
+/// `media_blobs` edge from `owner_id` (the record's row) to the uri is
+/// declared read, so the bytes arriving, changing or going re-renders
+/// the document that shows them.
+pub fn media_attachment(
+    media: &Value,
+    owner_id: &str,
+    inputs: &Inputs,
+) -> Option<NormalizedAttachment> {
     let uri = str_field(media, "uri")?;
+    inputs.read(MediaBlobRow::TABLE, &MediaBlobRow::pk_recipe(owner_id, uri));
     Some(NormalizedAttachment {
         rel_path: None,
         file_name: uri.rsplit('/').next().map(str::to_string),
