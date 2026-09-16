@@ -28,7 +28,7 @@ pub const RENDER_VERSION: u32 = 1;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::ClaudeCode,
         source_label: "Claude Code".to_string(),
         chat_kind: "Claude Code Session".to_string(),

@@ -34,11 +34,11 @@ expression: snapshot
       "kind": "storage",
       "markdown_uuid": "0bf45f94-ffca-5f66-b9a0-9333feb537fe",
       "md_path": "claude-code/render_markdown/_datalib/storage.md",
+      "modified_at": "2369-04-15T00:00:00+00:00",
       "provider": "datalib",
       "renderer_version": "rust-v1.2",
       "source_id": "claude-code",
-      "title": "claude-code storage",
-      "updated_at": "2369-04-15T00:00:00+00:00"
+      "title": "claude-code storage"
     },
     {
       "bucket_key": "0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba",
@@ -178,11 +178,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "22d0feef-bb67-562b-bb66-4ee0eea9f46f",
       "md_path": "claude-code/render_markdown/22d0feef-bb67-562b-bb66-4ee0eea9f46f/all.md",
+      "modified_at": "2364-04-11T10:00:58+00:00",
       "provider": "claude_code",
       "renderer_version": "rust-v1.1",
       "source_id": "claude-code",
-      "title": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
-      "updated_at": "2364-04-11T10:00:58+00:00"
+      "title": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift"
     },
     {
       "bucket_key": "31ab2c83-77e2-53bd-b225-c3a70f9acec4",
@@ -430,11 +430,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "62ba345e-f979-51c5-8906-2d3e2e000233",
       "md_path": "claude-code/render_markdown/62ba345e-f979-51c5-8906-2d3e2e000233/all.md",
+      "modified_at": "2364-04-11T14:30:35+00:00",
       "provider": "claude_code",
       "renderer_version": "rust-v1.1",
       "source_id": "claude-code",
-      "title": "Why does the replicator return cold Earl Grey? Screenshot attached.",
-      "updated_at": "2364-04-11T14:30:35+00:00"
+      "title": "Why does the replicator return cold Earl Grey? Screenshot attached."
     },
     {
       "bucket_key": "fc358ba4-b6be-5ed7-98e4-cc9dd07265d7",
@@ -730,11 +730,11 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
       "md_path": "claude-code/render_markdown/a4d3483a-15a5-5434-bd12-77967f5a5584/all.md",
+      "modified_at": "2364-04-11T10:01:59+00:00",
       "provider": "claude_code",
       "renderer_version": "rust-v1.1",
       "source_id": "claude-code",
-      "title": "Deflector dish drift",
-      "updated_at": "2364-04-11T10:01:59+00:00"
+      "title": "Deflector dish drift"
     },
     {
       "bucket_key": "a9d22a8f-656e-5347-bd95-454448be45e7",
@@ -1295,6 +1295,7 @@ expression: snapshot
       "channel": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_name": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_uuid": "62ba345e-f979-51c5-8906-2d3e2e000233",
+      "created_at": "2364-04-11T14:30:35+00:00",
       "entire_chat": "/chat/62ba345e-f979-51c5-8906-2d3e2e000233",
       "git_sha": null,
       "item_count": 1,
@@ -1316,8 +1317,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "58d10040-b2df-5e0e-89b0-366b91100f4c",
       "upstream_scope": null,
-      "uuid": "02b2e955-3b51-57e1-ba4a-99734c36f1af",
-      "when_ts": "2364-04-11T14:30:35+00:00"
+      "uuid": "02b2e955-3b51-57e1-ba4a-99734c36f1af"
     },
     {
       "account": "picard@enterprise.starfleet",
@@ -1543,6 +1543,7 @@ expression: snapshot
       "channel": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
       "conversation_name": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
       "conversation_uuid": "22d0feef-bb67-562b-bb66-4ee0eea9f46f",
+      "created_at": "2364-04-11T10:00:58+00:00",
       "entire_chat": "/chat/22d0feef-bb67-562b-bb66-4ee0eea9f46f",
       "git_sha": null,
       "item_count": 1,
@@ -1564,8 +1565,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "c335b59d-42d5-5674-a297-4cf9ad22aedd",
       "upstream_scope": null,
-      "uuid": "0a1befb9-8c38-5e86-8d31-ef769a5583e3",
-      "when_ts": "2364-04-11T10:00:58+00:00"
+      "uuid": "0a1befb9-8c38-5e86-8d31-ef769a5583e3"
     },
     {
       "account": null,
@@ -2349,6 +2349,7 @@ expression: snapshot
       "channel": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_name": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_uuid": "62ba345e-f979-51c5-8906-2d3e2e000233",
+      "created_at": "2364-04-11T14:30:14+00:00",
       "entire_chat": "/chat/62ba345e-f979-51c5-8906-2d3e2e000233",
       "git_sha": null,
       "item_count": 1,
@@ -2370,8 +2371,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "4641e147-95cd-56a9-9805-112fd39b2cf6",
       "upstream_scope": null,
-      "uuid": "1af6fa96-749e-50c0-bb34-8acd1565a8a0",
-      "when_ts": "2364-04-11T14:30:14+00:00"
+      "uuid": "1af6fa96-749e-50c0-bb34-8acd1565a8a0"
     },
     {
       "account": null,
@@ -2628,6 +2628,7 @@ expression: snapshot
       "channel": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
       "conversation_name": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
       "conversation_uuid": "22d0feef-bb67-562b-bb66-4ee0eea9f46f",
+      "created_at": "2364-04-11T10:00:37+00:00",
       "entire_chat": "/chat/22d0feef-bb67-562b-bb66-4ee0eea9f46f",
       "git_sha": null,
       "item_count": 4,
@@ -2649,8 +2650,7 @@ expression: snapshot
       "upstream_entity_kind": "session",
       "upstream_id": "91ad7d3f-2915-5956-995d-cba3754abadc#ae0c430478585517d",
       "upstream_scope": null,
-      "uuid": "22d0feef-bb67-562b-bb66-4ee0eea9f46f",
-      "when_ts": "2364-04-11T10:00:37+00:00"
+      "uuid": "22d0feef-bb67-562b-bb66-4ee0eea9f46f"
     },
     {
       "account": null,
@@ -2814,6 +2814,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:01:17+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -2835,8 +2836,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_result",
       "upstream_id": "c4909ce7-86c5-5e57-bb54-2cca3d3fa222#toolu_04edit",
       "upstream_scope": null,
-      "uuid": "2af3ca18-cf65-5063-a8ed-302792995af8",
-      "when_ts": "2364-04-11T10:01:17+00:00"
+      "uuid": "2af3ca18-cf65-5063-a8ed-302792995af8"
     },
     {
       "account": "picard@enterprise.starfleet",
@@ -2938,6 +2938,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:00:35+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -2959,8 +2960,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_use",
       "upstream_id": "d52e7ff3-826a-5c2b-8ead-8e0fc3dae50f#toolu_02read",
       "upstream_scope": null,
-      "uuid": "2e654a5b-5186-5bee-aaff-34648111dfdf",
-      "when_ts": "2364-04-11T10:00:35+00:00"
+      "uuid": "2e654a5b-5186-5bee-aaff-34648111dfdf"
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -3248,6 +3248,7 @@ expression: snapshot
       "channel": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_name": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_uuid": "62ba345e-f979-51c5-8906-2d3e2e000233",
+      "created_at": "2364-04-11T14:30:28+00:00",
       "entire_chat": "/chat/62ba345e-f979-51c5-8906-2d3e2e000233",
       "git_sha": null,
       "item_count": 1,
@@ -3269,8 +3270,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_result",
       "upstream_id": "72c704a5-027f-54fa-8da1-42cb8d448c4b#toolu_06tea",
       "upstream_scope": null,
-      "uuid": "3bc93732-14d5-5448-82e5-37563b80f7c9",
-      "when_ts": "2364-04-11T14:30:28+00:00"
+      "uuid": "3bc93732-14d5-5448-82e5-37563b80f7c9"
     },
     {
       "account": "picard@enterprise.starfleet",
@@ -3372,6 +3372,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:00:42+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -3393,8 +3394,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_result",
       "upstream_id": "067112eb-d10b-5103-b48e-77fc10c58c6c#toolu_02read",
       "upstream_scope": null,
-      "uuid": "3ef8aa85-0880-5787-833d-3eaf712da589",
-      "when_ts": "2364-04-11T10:00:42+00:00"
+      "uuid": "3ef8aa85-0880-5787-833d-3eaf712da589"
     },
     {
       "account": "picard@enterprise.starfleet",
@@ -3434,6 +3434,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:01:10+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -3455,8 +3456,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_use",
       "upstream_id": "c446534e-6cca-5448-bc1c-df4366837c83#toolu_04edit",
       "upstream_scope": null,
-      "uuid": "3f7e7abc-6894-531a-92c2-543cd957d66d",
-      "when_ts": "2364-04-11T10:01:10+00:00"
+      "uuid": "3f7e7abc-6894-531a-92c2-543cd957d66d"
     },
     {
       "account": null,
@@ -4426,6 +4426,7 @@ expression: snapshot
       "channel": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_name": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_uuid": "62ba345e-f979-51c5-8906-2d3e2e000233",
+      "created_at": "2364-04-11T14:30:07+00:00",
       "entire_chat": "/chat/62ba345e-f979-51c5-8906-2d3e2e000233",
       "git_sha": null,
       "item_count": 5,
@@ -4447,8 +4448,7 @@ expression: snapshot
       "upstream_entity_kind": "session",
       "upstream_id": "16e654a6-fc21-5e23-a5a4-def9b696c409",
       "upstream_scope": null,
-      "uuid": "62ba345e-f979-51c5-8906-2d3e2e000233",
-      "when_ts": "2364-04-11T14:30:07+00:00"
+      "uuid": "62ba345e-f979-51c5-8906-2d3e2e000233"
     },
     {
       "account": "picard@enterprise.starfleet",
@@ -4798,6 +4798,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:00:21+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -4819,8 +4820,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_use",
       "upstream_id": "36b83d71-fb70-5b33-b114-b21af3a6c3af#toolu_01dish",
       "upstream_scope": null,
-      "uuid": "6ad4a1ca-b68e-5795-b044-572209b212e3",
-      "when_ts": "2364-04-11T10:00:21+00:00"
+      "uuid": "6ad4a1ca-b68e-5795-b044-572209b212e3"
     },
     {
       "account": null,
@@ -4922,6 +4922,7 @@ expression: snapshot
       "channel": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
       "conversation_name": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
       "conversation_uuid": "22d0feef-bb67-562b-bb66-4ee0eea9f46f",
+      "created_at": "2364-04-11T10:00:44+00:00",
       "entire_chat": "/chat/22d0feef-bb67-562b-bb66-4ee0eea9f46f",
       "git_sha": null,
       "item_count": 1,
@@ -4943,8 +4944,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_use",
       "upstream_id": "6cd74182-a132-53f6-970f-a6cbd458bcb1#toolu_a1grep",
       "upstream_scope": null,
-      "uuid": "6dd73ad3-3a1d-5a1e-9eeb-f8b6336ef0b3",
-      "when_ts": "2364-04-11T10:00:44+00:00"
+      "uuid": "6dd73ad3-3a1d-5a1e-9eeb-f8b6336ef0b3"
     },
     {
       "account": "picard@enterprise.starfleet",
@@ -5728,6 +5728,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:01:45+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -5749,8 +5750,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_use",
       "upstream_id": "2f9729e5-14f6-5677-a804-edf4dac9511f#toolu_05gh",
       "upstream_scope": null,
-      "uuid": "8c7eb7e5-887a-557a-987a-d3fe0c478fc2",
-      "when_ts": "2364-04-11T10:01:45+00:00"
+      "uuid": "8c7eb7e5-887a-557a-987a-d3fe0c478fc2"
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -6069,6 +6069,7 @@ expression: snapshot
       "channel": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
       "conversation_name": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
       "conversation_uuid": "22d0feef-bb67-562b-bb66-4ee0eea9f46f",
+      "created_at": "2364-04-11T10:00:51+00:00",
       "entire_chat": "/chat/22d0feef-bb67-562b-bb66-4ee0eea9f46f",
       "git_sha": null,
       "item_count": 1,
@@ -6090,8 +6091,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_result",
       "upstream_id": "d3ad7bbf-deea-5a78-9f60-784243458708#toolu_a1grep",
       "upstream_scope": null,
-      "uuid": "96f6ab2e-fb2a-5788-8c45-478ebe787273",
-      "when_ts": "2364-04-11T10:00:51+00:00"
+      "uuid": "96f6ab2e-fb2a-5788-8c45-478ebe787273"
     },
     {
       "account": null,
@@ -6286,6 +6286,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:01:03+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -6307,8 +6308,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_result",
       "upstream_id": "7ac158c5-00de-5cdb-8c40-c1dd74a9d392#toolu_03agent",
       "upstream_scope": null,
-      "uuid": "9c5eeb42-b6a0-5a76-a8e1-b5f4bb3c39c6",
-      "when_ts": "2364-04-11T10:01:03+00:00"
+      "uuid": "9c5eeb42-b6a0-5a76-a8e1-b5f4bb3c39c6"
     },
     {
       "account": "data@enterprise.starfleet.test",
@@ -6472,6 +6472,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:00:49+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -6493,8 +6494,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "5bdaa12c-f702-5c80-ad8a-4031c7ca845c",
       "upstream_scope": null,
-      "uuid": "a07ef58b-c41e-58e4-9138-ab0ea43f547e",
-      "when_ts": "2364-04-11T10:00:49+00:00"
+      "uuid": "a07ef58b-c41e-58e4-9138-ab0ea43f547e"
     },
     {
       "account": null,
@@ -6503,6 +6503,7 @@ expression: snapshot
       "channel": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
       "conversation_name": "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift",
       "conversation_uuid": "22d0feef-bb67-562b-bb66-4ee0eea9f46f",
+      "created_at": "2364-04-11T10:00:37+00:00",
       "entire_chat": "/chat/22d0feef-bb67-562b-bb66-4ee0eea9f46f",
       "git_sha": null,
       "item_count": 1,
@@ -6524,8 +6525,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "e586ebd5-e367-51f8-aad8-805459f18ecb",
       "upstream_scope": null,
-      "uuid": "a1e12914-7894-511b-955e-b01fff7b6956",
-      "when_ts": "2364-04-11T10:00:37+00:00"
+      "uuid": "a1e12914-7894-511b-955e-b01fff7b6956"
     },
     {
       "account": null,
@@ -6627,6 +6627,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:00:14+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 17,
@@ -6648,8 +6649,7 @@ expression: snapshot
       "upstream_entity_kind": "session",
       "upstream_id": "91ad7d3f-2915-5956-995d-cba3754abadc",
       "upstream_scope": null,
-      "uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
-      "when_ts": "2364-04-11T10:00:14+00:00"
+      "uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584"
     },
     {
       "account": null,
@@ -7154,6 +7154,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:00:35+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -7175,8 +7176,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "d52e7ff3-826a-5c2b-8ead-8e0fc3dae50f",
       "upstream_scope": null,
-      "uuid": "b5a9774f-02ef-52a8-8955-ddaa018c56ee",
-      "when_ts": "2364-04-11T10:00:35+00:00"
+      "uuid": "b5a9774f-02ef-52a8-8955-ddaa018c56ee"
     },
     {
       "account": "googlechat",
@@ -7247,6 +7247,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:01:52+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -7268,8 +7269,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_result",
       "upstream_id": "a7a12210-5294-5a5a-8b0b-ad114d2e0527#toolu_05gh",
       "upstream_scope": null,
-      "uuid": "baec7f4c-62ca-57d0-9b7e-3ff47363a5eb",
-      "when_ts": "2364-04-11T10:01:52+00:00"
+      "uuid": "baec7f4c-62ca-57d0-9b7e-3ff47363a5eb"
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -7309,6 +7309,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:00:49+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -7330,8 +7331,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_use",
       "upstream_id": "5bdaa12c-f702-5c80-ad8a-4031c7ca845c#toolu_03agent",
       "upstream_scope": null,
-      "uuid": "bcd16c32-3da8-590c-9213-236ebd83c668",
-      "when_ts": "2364-04-11T10:00:49+00:00"
+      "uuid": "bcd16c32-3da8-590c-9213-236ebd83c668"
     },
     {
       "account": null,
@@ -7836,6 +7836,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:00:28+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -7857,8 +7858,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_result",
       "upstream_id": "751d09a4-cce3-53c6-b99c-797804097042#toolu_01dish",
       "upstream_scope": null,
-      "uuid": "cb747396-3166-58b7-a5e8-42afee5aa474",
-      "when_ts": "2364-04-11T10:00:28+00:00"
+      "uuid": "cb747396-3166-58b7-a5e8-42afee5aa474"
     },
     {
       "account": null,
@@ -7867,6 +7867,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:01:24+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -7888,8 +7889,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "b668b214-dbe9-5835-bece-70113d396bc3",
       "upstream_scope": null,
-      "uuid": "cbd4ca0e-7dee-54f8-a974-9a9da1c4bbeb",
-      "when_ts": "2364-04-11T10:01:24+00:00"
+      "uuid": "cbd4ca0e-7dee-54f8-a974-9a9da1c4bbeb"
     },
     {
       "account": "data@enterprise.starfleet.test",
@@ -7929,6 +7929,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:01:59+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -7950,8 +7951,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "05d90c8b-0875-5854-8deb-494ce2bc2fb8",
       "upstream_scope": null,
-      "uuid": "cc6b0152-064e-51dc-8f6f-11d746f3b380",
-      "when_ts": "2364-04-11T10:01:59+00:00"
+      "uuid": "cc6b0152-064e-51dc-8f6f-11d746f3b380"
     },
     {
       "account": null,
@@ -8084,6 +8084,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:01:38+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -8105,8 +8106,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "ac651f69-f571-5c15-83b0-2f146ad05bab",
       "upstream_scope": null,
-      "uuid": "d18956ce-ccc4-5cc5-9b88-6d48cb442e81",
-      "when_ts": "2364-04-11T10:01:38+00:00"
+      "uuid": "d18956ce-ccc4-5cc5-9b88-6d48cb442e81"
     },
     {
       "account": "data@enterprise.starfleet.test",
@@ -8301,6 +8301,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:00:21+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -8322,8 +8323,7 @@ expression: snapshot
       "upstream_entity_kind": "thinking_block",
       "upstream_id": "36b83d71-fb70-5b33-b114-b21af3a6c3af#0",
       "upstream_scope": null,
-      "uuid": "d7310c24-6876-532e-a50e-77e348f0e4c1",
-      "when_ts": "2364-04-11T10:00:21+00:00"
+      "uuid": "d7310c24-6876-532e-a50e-77e348f0e4c1"
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -8363,6 +8363,7 @@ expression: snapshot
       "channel": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_name": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_uuid": "62ba345e-f979-51c5-8906-2d3e2e000233",
+      "created_at": "2364-04-11T14:30:21+00:00",
       "entire_chat": "/chat/62ba345e-f979-51c5-8906-2d3e2e000233",
       "git_sha": null,
       "item_count": 1,
@@ -8384,8 +8385,7 @@ expression: snapshot
       "upstream_entity_kind": "tool_use",
       "upstream_id": "fc9612fb-f63d-5c82-9499-d0b6b4cc02d3#toolu_06tea",
       "upstream_scope": null,
-      "uuid": "d91ffda1-54cc-544c-a874-8ee956057eed",
-      "when_ts": "2364-04-11T14:30:21+00:00"
+      "uuid": "d91ffda1-54cc-544c-a874-8ee956057eed"
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -8704,6 +8704,7 @@ expression: snapshot
       "channel": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_name": "Why does the replicator return cold Earl Grey? Screenshot attached.",
       "conversation_uuid": "62ba345e-f979-51c5-8906-2d3e2e000233",
+      "created_at": "2364-04-11T14:30:07+00:00",
       "entire_chat": "/chat/62ba345e-f979-51c5-8906-2d3e2e000233",
       "git_sha": null,
       "item_count": 1,
@@ -8725,8 +8726,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "5d298dc5-a028-55bd-89cf-113c944c292e",
       "upstream_scope": null,
-      "uuid": "e70137f9-e490-580c-9097-e6f23f41e452",
-      "when_ts": "2364-04-11T14:30:07+00:00"
+      "uuid": "e70137f9-e490-580c-9097-e6f23f41e452"
     },
     {
       "account": null,
@@ -9510,6 +9510,7 @@ expression: snapshot
       "channel": "Deflector dish drift",
       "conversation_name": "Deflector dish drift",
       "conversation_uuid": "a4d3483a-15a5-5434-bd12-77967f5a5584",
+      "created_at": "2364-04-11T10:00:14+00:00",
       "entire_chat": "/chat/a4d3483a-15a5-5434-bd12-77967f5a5584",
       "git_sha": null,
       "item_count": 1,
@@ -9531,8 +9532,7 @@ expression: snapshot
       "upstream_entity_kind": "record",
       "upstream_id": "8331f9d5-58db-584f-b136-64060d05f0f7",
       "upstream_scope": null,
-      "uuid": "fc98d210-1f11-5a64-a07f-cfa3390177af",
-      "when_ts": "2364-04-11T10:00:14+00:00"
+      "uuid": "fc98d210-1f11-5a64-a07f-cfa3390177af"
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
