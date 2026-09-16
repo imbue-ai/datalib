@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calibrationMax, sparkline, type UsageSample } from "./sparkline";
+import { calibrationMax, sparkline, type Sample } from "./sparkline";
 
 /// A fixed window, so every expectation below is in round numbers:
 /// 100 px wide, 10 px tall, five minutes ending at t=0 by these stamps.
@@ -7,8 +7,8 @@ const NOW = Date.parse("2026-09-02T10:05:00-07:00");
 const WINDOW = 5 * 60 * 1000;
 const BOX = { nowMs: NOW, windowMs: WINDOW, width: 100, height: 10, inset: 0 };
 
-function at(minutesAgo: number, bytes: number): UsageSample {
-  return { at: new Date(NOW - minutesAgo * 60_000).toISOString(), bytes };
+function at(minutesAgo: number, value: number): Sample {
+  return { at: new Date(NOW - minutesAgo * 60_000).toISOString(), value };
 }
 
 describe("sparkline", () => {
@@ -69,7 +69,7 @@ describe("sparkline", () => {
   it("returns nothing when there is nothing to draw", () => {
     expect(sparkline([], { ...BOX, max: 100 })).toBeNull();
     // A stamp we can't read is dropped rather than guessed at.
-    expect(sparkline([{ at: "whenever", bytes: 5 }], { ...BOX, max: 100 })).toBeNull();
+    expect(sparkline([{ at: "whenever", value: 5 }], { ...BOX, max: 100 })).toBeNull();
   });
 
   it("survives a zero maximum rather than dividing by it", () => {
@@ -84,11 +84,11 @@ describe("calibrationMax", () => {
     // draw, and a max taken from `bytes` alone would put it off the
     // top of the box.
     expect(
-      calibrationMax([{ bytes: 10, history: [at(4, 900), at(1, 10)] }]),
+      calibrationMax([{ value: 10, samples: [at(4, 900), at(1, 10)] }]),
     ).toBe(900);
   });
 
   it("ignores a row with nothing on disk", () => {
-    expect(calibrationMax([{ bytes: null, history: [] }, { bytes: 7, history: [] }])).toBe(7);
+    expect(calibrationMax([{ value: null, samples: [] }, { value: 7, samples: [] }])).toBe(7);
   });
 });

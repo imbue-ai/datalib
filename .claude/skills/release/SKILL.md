@@ -31,9 +31,9 @@ published from a local machine — the tag is the trigger.
 - `datalib/tauri/tauri.conf.json`'s `"version"` is the desktop
   app's own version and is **not** part of this procedure.
 - One repo outside this one pins the released version:
-  `qi-imbue/datalib-inspiration`, the published Minds inspiration,
-  which installs the musl binaries from a tag and links agents at that
-  tag's `docs/agent_user.md`. It is bumped *after* the release
+  `qi-imbue/datalib-inspiration`, the published Minds template, which
+  installs the musl binaries from a tag at boot and links agents at
+  that tag's `docs/agent_user.md`. It is bumped *after* the release
   publishes (step 12), not with it.
 
 ## Procedure
@@ -154,11 +154,13 @@ published from a local machine — the tag is the trigger.
 
 ## Updating the inspiration repo
 
-`qi-imbue/datalib-inspiration` is a bootable snapshot of a Minds agent
-that mirrors your data with datalib. Its `datalib` skill installs the
-fully-static musl binaries from a pinned tag and sends the agent to that
-same tag's `docs/agent_user.md` — deliberately, so the tools an agent has
-and the guide it reads can't drift apart.
+`qi-imbue/datalib-inspiration` is a Minds template (their v2 format,
+since 2026-09-15: `template.md` + `template.toml` + `template.svg`
+over a default-workspace-template base) whose agent mirrors your data
+with datalib. An env.d unit installs the fully-static musl binaries
+from a pinned tag at boot, and the `datalib` skill sends the agent to
+that same tag's `docs/agent_user.md` — deliberately, so the tools an
+agent has and the guide it reads can't drift apart.
 
 1. Get a current clone. Don't assume one is already on the machine —
    this step used to name `~/on/datalib-inspiration`, a path that
@@ -170,29 +172,40 @@ and the guide it reads can't drift apart.
    ```
 2. Replace every `v<old>` datalib pin with `vX.Y.Z` in exactly four
    files — `.agents/skills/datalib/SKILL.md`, `README.md`,
-   `inspiration-datalib.md`, and `system/apps/data/run_datalib_http.sh`.
-   That covers the `install.sh` raw URL, the `DATALIB_VERSION` env var
-   (it appears twice: the skill installs the binaries on first use, and
-   the web-UI service installs them at boot if the skill hasn't yet —
-   they must agree), the `docs/agent_user.md` links (including the
-   relative-link base), and the "pinned to datalib v..." prose. Grep the
-   four files for the literal old version — `grep -n v<old> README.md
-   inspiration-datalib.md .agents/skills/datalib/SKILL.md
-   system/apps/data/run_datalib_http.sh` — rather than for a URL shape;
-   the pins are spelled several different ways.
-3. Leave two things alone:
+   `template.md`, and `system/scripts/env.d/2000-datalib-binaries.sh`.
+   That covers `PINNED_VERSION` in the env.d unit (the one place the
+   binaries are fetched from), the `docs/agent_user.md` links
+   (including the relative-link base), and the "pinned to datalib
+   v..." prose in the skill, the README and the template's "How it
+   works". Find them by grepping the whole repo for the literal old
+   version rather than for a URL shape — the pins are spelled several
+   different ways, and this file list has changed shape once already
+   (the v1 `inspiration-datalib.md` and `system/apps/data/` are gone):
+
+   ```sh
+   git grep -n v<old> -- ':!system/vendor' ':!*/changelog/*'
+   ```
+
+   Anything that grep prints outside the four files is either a new
+   pin (bump it, and add the file to this list) or history (below).
+3. Leave three things alone:
    - `system/vendor/mngr/**`, which is vendored from mngr. Its
      `DATALIB_CURL_VERSION` pins the datalib *curl* release the latchkey
      gateway ships and moves on mngr's own cadence, not this one.
    - "as of datalib v..." capability notes (e.g. which providers work
      inside Minds). Those record when a fact became true and are only
      touched when the fact changes.
-4. Read the release's commits against the inspiration's prose and fix
-   what went stale — the pin is not the whole contract. The two files
-   describe real behaviour (which sources work and under what
-   conditions, where the store lives, what needs a recent Minds app), so
-   a change to any of that lands here even when nothing about the
-   install or the config format moved.
+   - History: the "Publication history" entries at the bottom of
+     `template.md` (the file itself says earlier entries are never
+     rewritten) and the per-change notes under `.agents/changelog/`
+     and `system/changelog/`. A `v<old>` there is a record of what
+     that version did, not a pin.
+4. Read the release's commits against the template's prose and fix
+   what went stale — the pin is not the whole contract. `template.md`
+   and the skill describe real behaviour (which sources work and under
+   what conditions, how a source is spelled in the config, where the
+   store lives, what needs a recent Minds app), so a change to any of
+   that lands here even when nothing about the install moved.
 5. Commit as `datalib inspiration: bump pinned version to vX.Y.Z`.
    The repo is unprotected, but `thad-imbue` has no push access to it
    (a direct push and a branch push both 403), so it lands through a
@@ -207,5 +220,7 @@ and the guide it reads can't drift apart.
 
    Someone with write access there has to merge it; check that the
    previous bump's PR was actually merged before assuming the pin moved
-   (v0.28.0's #2 and v0.31.1's #3 were still open when v0.32.0's #4 was
-   opened, superseding both).
+   (v0.28.0's #2, v0.31.1's #3 and v0.32.0's #4 were all still open
+   when v0.33.0's was opened — #4 against the v1 layout, so it could
+   no longer merge at all). Close a superseded one when you open its
+   successor.

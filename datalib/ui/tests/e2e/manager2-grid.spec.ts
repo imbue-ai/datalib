@@ -5,7 +5,7 @@ import { expectGridPainted } from "./grid-helpers";
 
 test("the Pipeline table paints at full height", async ({ page }) => {
   await page.goto("/sources2");
-  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 
   // Rows are bound. This stayed true throughout the bug, so it is the
   // precondition — not the check.

@@ -44,7 +44,7 @@ const SYNCED_ROWS = ["pdfs/ingest", "pdfs/render_markdown", "unified_index/grid_
 /// nothing on disk, which the column renders as an em dash rather than
 /// as a flat line at zero.
 async function bytesOf(page: Page, id: string): Promise<number | null> {
-  const label = row(page, id).locator('[col-id="bytes"] .m2-plot-label');
+  const label = row(page, id).locator('[col-id="disk"] .tg-plot-label');
   if ((await label.count()) === 0) return null;
   const text = ((await label.first().textContent()) ?? "").trim();
   const m = /^([\d.]+)\s*(B|kB|MB|GB|TB)$/.exec(text);
@@ -136,8 +136,8 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await page.getByRole("button", { name: "Initialize empty data library" }).click();
 
     // ── 3. landing in Manager2 ───────────────────────────────────────
-    await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe("/sources2");
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+    expect(decodeURIComponent(new URL(page.url()).pathname)).toContain("sourcesView()");
     // The scaffold's one group is the table's whole content, and its
     // three entries are under it.
     await expect(groupRow(page, "unified_index")).toContainText("Unified Index");
@@ -261,7 +261,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     copyFileSync(LATECOMER!, `${SCAN_DIR}/warp_core_manual.pdf`);
 
     await page.goto(`${BASE}/sources2`);
-    await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     // Re-read rather than reuse: this is a fresh page, and the numbers
     // it shows are the ones the assertion below is about.
     const beforeSecond = await bytesOf(page, "pdfs/ingest");
@@ -316,7 +316,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     page.on("dialog", (d) => void d.accept());
 
     await page.goto(`${BASE}/sources2`);
-    await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     // A fresh browser context: the groups are folded again.
     await expandGroup(page, "pdfs");
 

@@ -18,6 +18,7 @@ onMounted(() => {
     cardId: "sources-dag-panel",
     initialState: "",
     setTitle: () => {},
+    setHelp: () => {},
     bus: { publish: () => {}, subscribe: () => () => {} },
     host: {
       openCards: () => [],

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { RouterView, RouterLink } from "vue-router";
+import { MANAGE_STACK } from "@/router";
 import SyncProgressChrome from "@/components/SyncProgressChrome.vue";
 import ToastStack from "@/components/ToastStack.vue";
 import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
+import RootStorageBar from "@/components/RootStorageBar.vue";
 import FirstRunView from "@/views/FirstRunView.vue";
 import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import { fetchConfig, type ConfigResponse } from "@/api";
@@ -59,7 +61,7 @@ onUnmounted(() => stop?.());
       <nav v-if="!gate" class="datalib-tabs" aria-label="Navigation">
         <RouterLink class="datalib-tab" to="/">Explore</RouterLink>
         <RouterLink class="datalib-tab" to="/sources">Manage</RouterLink>
-        <RouterLink class="datalib-tab" to="/sources2">Manager2</RouterLink>
+        <RouterLink class="datalib-tab" :to="MANAGE_STACK">Manager2</RouterLink>
       </nav>
       <div class="datalib-spacer" />
       <!-- Lightweight sync indicator in the header's flexible space —
@@ -74,6 +76,9 @@ onUnmounted(() => stop?.());
     />
     <ConfigErrorView v-else-if="gate === 'config-error' && config" :config="config" />
     <RouterView v-else-if="checked" />
+    <!-- The data root as a whole, on every view: what it weighs and
+         which way it is moving. -->
+    <RootStorageBar v-if="!gate && checked" />
     <ToastStack />
     <!-- Agent hand-off instructions dialog; opened via handoff.ts from
          the card surface and the Manage tab's config editor. -->

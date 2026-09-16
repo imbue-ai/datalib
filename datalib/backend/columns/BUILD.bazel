@@ -1,0 +1,30 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The column-type vocabulary a table's producer declares, and the value
+# shapes each type carries. Third-party deps only, so Bazel-only like
+# the `<p>_config` crates, and depended on only by what serves rows —
+# `datalib-http` and the applets — so a change here rebuilds nothing
+# that downloads. See docs/dev/plans/data_centric_ui.md §2.
+rust_library(
+    name = "datalib_columns",
+    srcs = [
+        "src/lib.rs",
+        "src/source_catalog.rs",
+    ],
+    crate_name = "datalib_columns",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:strum",
+    ],
+)
+
+rust_test(
+    name = "columns_unittests",
+    size = "small",
+    crate = ":datalib_columns",
+    edition = "2021",
+    deps = [],
+)

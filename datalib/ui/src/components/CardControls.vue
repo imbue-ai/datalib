@@ -12,6 +12,7 @@ import { computed, ref, watch } from "vue";
 import { encodeColumns } from "@/router/columns";
 import { modifyComponentWithAgent } from "@/handoff";
 import { ensureFrontend, frontendManifest } from "@/cards/frontendRegistry";
+import { cardHelp } from "@/cards/help";
 import type { CardCtx } from "@/cards/types";
 
 const props = defineProps<{
@@ -43,6 +44,21 @@ function handOff() {
 const aloneHref = computed(() =>
   encodeColumns([{ code: props.source, state: props.ctx.initialState }]),
 );
+
+// ---- help (?) ----
+//
+// Shown only when the card offered some via ctx.setHelp. The popup is
+// teleported out of the layout, so it sits over everything and takes
+// the page's own styles rather than the card's.
+const help = cardHelp(props.ctx.cardId);
+const helpOpen = ref(false);
+function onHelpKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") helpOpen.value = false;
+}
+watch(helpOpen, (open) => {
+  if (open) window.addEventListener("keydown", onHelpKeydown);
+  else window.removeEventListener("keydown", onHelpKeydown);
+});
 
 // ---- back / forward over the card's own source history ----
 const history = ref<string[]>([props.source]);
@@ -85,6 +101,26 @@ function goForward() {
   >
     🤖
   </button>
+  <button
+    v-if="help"
+    class="card-control card-control--help"
+    title="what this card shows, and how to work it"
+    :aria-expanded="helpOpen"
+    @click="helpOpen = !helpOpen"
+  >
+    ?
+  </button>
+  <Teleport to="body">
+    <div v-if="helpOpen && help" class="card-help-backdrop" @click.self="helpOpen = false">
+      <div class="card-help" role="dialog" aria-modal="true" aria-label="About this card">
+        <header class="card-help-head">
+          <h3>About this card</h3>
+          <button class="card-help-close" @click="helpOpen = false">Close</button>
+        </header>
+        <div class="card-help-body" v-html="help" />
+      </div>
+    </div>
+  </Teleport>
   <button
     class="card-control card-control--back"
     :disabled="!canBack"
@@ -152,4 +188,49 @@ function goForward() {
   font-size: 0.95rem;
   line-height: 1.2rem;
 }
+</style>
+
+<style>
+/* The help popup is teleported to <body>, outside this component's
+   scope, so its styles are global. */
+.card-help-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: color-mix(in srgb, var(--datalib-bg) 60%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.card-help {
+  width: min(720px, 90vw);
+  max-height: 85vh;
+  overflow: auto;
+  background: var(--datalib-card-bg);
+  color: var(--datalib-fg);
+  border: 1px solid var(--datalib-border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.card-help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--datalib-border);
+}
+.card-help-head h3 { margin: 0; font-size: 15px; }
+.card-help-close {
+  padding: 2px 9px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  background: var(--datalib-card-bg);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.card-help-body { padding: 4px 16px 16px; font-size: 13px; line-height: 1.5; }
+.card-help-body p { margin: 10px 0; }
+.card-help-body code { font-size: 12px; }
 </style>
