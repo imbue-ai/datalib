@@ -285,19 +285,23 @@ reference doc it relates to.
   synthetic corpus — drawn through the app's own markdown-it, card CSS
   and decoration module, so a rendering change is reviewed by opening a
   file rather than by building a data root.
-- [`docs/dev/plans/data_centric_ui.md`](docs/dev/plans/data_centric_ui.md) —
-  *proposal*, nothing built (revised 2026-09-15): one typed table
-  viewer plus the markdown one, with column types declared by whoever
-  serves the rows, and the Manage screen's sources tree ported onto it
-  as an ordinary card. **Built (2026-09-15)** through the card: the
-  row join lives in `GET /api/manage/rows` (`http/src/manage/`), the
-  vocabulary in `datalib/backend/columns`, the viewer in
-  `ui/src/cards/TableGrid.ce.vue`, and the Manage screen is the
-  `sourcesView()` + `configView()` cards (`Manager2View.vue` is gone),
-  and the search grid draws through `cards/typedColumns.ts` over
-  columns the applet declares. Read its checkpoint for what the last
-  step taught about where the viewer's altitude is. The crate split
-  and the run store it depended on have both landed.
+- [`docs/dev/plans/completed/data_centric_ui.md`](docs/dev/plans/completed/data_centric_ui.md)
+  — **built (2026-09-15)**, except its §5 (per-table change frames):
+  one typed table viewer beside the markdown one, with column types
+  declared by whoever serves the rows. The row join is
+  `GET /api/manage/rows` (`http/src/manage/`), the vocabulary is
+  `datalib/backend/columns` (mirrored by hand in `ui/src/api.ts`),
+  `cards/typedColumns.ts` turns declared columns into grid column
+  definitions, `cards/TableGrid.ce.vue` is a thin grid over it for a
+  card that wants only a table, and the Manage screen is the
+  `sourcesView()` + `configView()` cards (`Manager2View.vue` is gone).
+  The search grid declares its columns in the `unified_index` applet
+  and draws them through `typedColumns`, keeping its own grid. Read
+  the checkpoint at the end of its §"Sequencing" before adding a
+  table: it names the three client-side escape hatches the port
+  left, and why the vocabulary is a function rather than a component
+  — a host that already owns a grid is handed definitions, not a
+  second grid.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md)
   — **read before adding a source to the Add/Edit wizard**: a field
   that asks for a file or folder must offer a native OS picker, not a

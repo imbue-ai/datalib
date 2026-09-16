@@ -22,7 +22,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 3;
+pub const LAYOUT_VERSION: u32 = 4;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -593,6 +593,7 @@ fn build_grid_rows(
     );
     let conversation_name = Some(chat.display.clone());
     let entire_chat = format!("/chat/{}", doc.markdown_uuid);
+    let bodies: Vec<String> = doc.items.iter().map(message_body).collect();
 
     rows.extend(
         GridRow::builder()
@@ -603,6 +604,8 @@ fn build_grid_rows(
             .is_document(true)
             .created_at(first_ts)
             .modified_at(last_ts)
+            .byte_size(Some(bodies.iter().map(|b| b.len() as i64).sum()))
+            .item_count(Some(doc.items.len() as i64))
             .author(chat.author.clone())
             .account(chat.account.clone())
             .org_uuid(chat.org_uuid.clone())
@@ -636,19 +639,7 @@ fn build_grid_rows(
 
     let _ = chat_title; // reserved for future per-message title context
 
-    for (idx, item) in doc.items.iter().enumerate() {
-        let text = match item.kind {
-            ItemKind::Text => item.text.clone().unwrap_or_default(),
-            ItemKind::Attachment => item
-                .text
-                .clone()
-                .unwrap_or_else(|| attachment_search_text(item)),
-            ItemKind::System => item
-                .system_note
-                .clone()
-                .or_else(|| item.text.clone())
-                .unwrap_or_default(),
-        };
+    for (idx, (item, text)) in doc.items.iter().zip(bodies).enumerate() {
         rows.extend(
             GridRow::builder()
                 .uuid(item.message_uuid.clone())
@@ -667,6 +658,8 @@ fn build_grid_rows(
                 // it was minted under that same `Scope::Upstream`.
                 .upstream_scope(chat.upstream_scope.clone())
                 .created_at(stamp_from_ms(item.date_ms, profile.stamp_precision))
+                .byte_size(Some(text.len() as i64))
+                .item_count(Some(1))
                 // An empty display is "upstream named nobody", which is a
                 // null — never a row whose author is the empty string,
                 // and never a stand-in like "unknown".
@@ -771,6 +764,24 @@ fn reaction_row(
 
 fn non_empty(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_string())
+}
+
+/// The message-level row's `text`, and the bytes its `byte_size` counts:
+/// the body alone, never an attachment's bytes, so the number means one
+/// thing on every provider whether or not it knows its attachments' sizes.
+fn message_body(item: &NormalizedChatItem) -> String {
+    match item.kind {
+        ItemKind::Text => item.text.clone().unwrap_or_default(),
+        ItemKind::Attachment => item
+            .text
+            .clone()
+            .unwrap_or_else(|| attachment_search_text(item)),
+        ItemKind::System => item
+            .system_note
+            .clone()
+            .or_else(|| item.text.clone())
+            .unwrap_or_default(),
+    }
 }
 
 fn attachment_search_text(item: &NormalizedChatItem) -> String {
@@ -956,6 +967,46 @@ mod tests {
             &mut b,
         );
         assert_eq!(a[0].uuid, b[0].uuid);
+    }
+
+    /// A message weighs its body in bytes, the document weighs the sum
+    /// of its messages and counts them, and a reaction is neither.
+    #[test]
+    fn document_size_and_count_are_the_sum_of_its_messages() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        chat.buckets[0].items.push(NormalizedChatItem {
+            message_uuid: "55555555-5555-5555-5555-555555555555".to_string(),
+            author_id: "2".to_string(),
+            author_display: "Worf".to_string(),
+            date_ms: Some(12442118420000),
+            text: None,
+            kind: ItemKind::System,
+            attachments: vec![],
+            reactions: vec![],
+            system_note: Some("Worf joined 🖖".to_string()),
+            source_url: None,
+            kind_label: None,
+            source_ref: None,
+            is_aside: false,
+        });
+        let rows = rows_of(&profile, &chat);
+
+        let by_kind = |k: &str| rows.iter().filter(|r| r.kind == k).collect::<Vec<_>>();
+        let messages = by_kind(&profile.message_kind);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].byte_size, Some("Make it so.".len() as i64));
+        // Bytes, not characters: the vulcan salute is four of them.
+        assert_eq!(messages[1].byte_size, Some("Worf joined 🖖".len() as i64));
+        assert_eq!(messages[1].byte_size, Some(16));
+        assert!(messages.iter().all(|m| m.item_count == Some(1)));
+
+        let doc = &by_kind(&profile.chat_kind)[0];
+        assert_eq!(doc.byte_size, Some(11 + 16));
+        assert_eq!(doc.item_count, Some(2));
+
+        let reaction = &by_kind(&profile.reaction_kind)[0];
+        assert_eq!((reaction.byte_size, reaction.item_count), (None, None));
     }
 
     /// Bumping the shared layout must re-render every chat provider

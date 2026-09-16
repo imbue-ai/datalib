@@ -211,18 +211,19 @@ pub struct GridRow {
     #[col(sql = "VARCHAR(96)")]
     pub markdown_uuid: Option<String>,
     /// How many bytes the thing this row describes occupies. A file's
-    /// size on disk, a store's size, an attachment's length. NULL when
-    /// the row describes something with no meaningful size.
+    /// size on disk, a store's size, a chat message's body in UTF-8, a
+    /// conversation's messages summed. NULL when the row describes
+    /// something with no meaningful size.
     ///
-    /// Bytes on disk, not a logical sum of field lengths — the two
-    /// disagree, and a column that silently mixes them is worse than
-    /// one that is absent. A producer that can only compute a logical
-    /// size should leave this NULL and say so in `text`.
+    /// Which of those it is depends on `kind`, and the table in
+    /// `docs/dev/grid_rows.md` says which. Never mix them under one
+    /// kind: a store row measures the file, never a sum of its fields.
     #[col(sql = "BIGINT")]
     pub byte_size: Option<i64>,
     /// How many things this row counts: rows in a table, files under a
-    /// directory, entries in a playlist. NULL when the row is a single
-    /// thing rather than a collection of them.
+    /// directory, messages in a conversation. 1 when the row is one of
+    /// the things a collection counts (a message); NULL when it is a
+    /// single thing that is not counted by anything (a reaction).
     ///
     /// Deliberately unitless — what is being counted is `kind`'s job to
     /// say, not this column's.
