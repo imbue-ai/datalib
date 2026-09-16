@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-facebook"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "datalib-etl",
@@ -1422,7 +1422,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-facebook-render"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "chrono",
