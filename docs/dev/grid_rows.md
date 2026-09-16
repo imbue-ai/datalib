@@ -316,7 +316,8 @@ reports is silently dropped from free-text results.
 
 ### `byte_size`, `item_count`
 
-Two nullable measurements, both NULL on most rows.
+Two nullable measurements. What each one measures is decided per
+`kind`, and this table is the list:
 
 | provider.kind | `byte_size` | `item_count` |
 |---|---|---|
@@ -324,18 +325,29 @@ Two nullable measurements, both NULL on most rows.
 | datalib.Store | the `.doltlite_db` file's size | — |
 | datalib.Table | — (see below) | rows in the table |
 | pdf.document | — | pages in the document |
+| any chat-common conversation row | the sum of its messages' `byte_size` | messages in the document |
+| any chat-common message row | the body's UTF-8 length | 1 |
+| any chat-common reaction row | — | — |
 
 On a `datalib.*` row, `byte_size` is bytes on disk **as of the last
 render that rewrote the row** — see "Storage rows" below for why that
-is not "now". Everywhere else it is bytes on disk, and never a logical
-sum of field lengths.
-The two disagree, and a column that quietly mixes them is worse than one
-that is absent — a producer that can only compute a logical size leaves
-it NULL and says so in `text`.
+is not "now". On a chat-common row it is the message body — the same
+string that lands in `text` — and nothing else: not the attachments,
+whose sizes only some providers know, and not the raw payload, which
+the renderer never sees. So a conversation's `byte_size` is exactly the
+sum of its message rows', and its `item_count` is exactly how many of
+them there are. Reactions have their own rows but are not messages, so
+they carry neither.
+
+Bytes on disk and a byte length of content are different measurements,
+and one kind must never mix them: a producer that measures a file
+reports the file, and a producer that can only compute a logical size
+for something that *has* an on-disk size leaves the column NULL. Adding
+a kind here means adding a row to this table.
 
 `item_count` is deliberately unitless. What is being counted is `kind`'s
 job to say: a Table counts rows, a Source Size counts files, a PDF
-document counts pages.
+document counts pages, a conversation counts messages.
 
 ## Storage rows: what a source weighs
 
