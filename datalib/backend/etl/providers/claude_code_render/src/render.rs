@@ -86,9 +86,9 @@ pub fn render(
         })
     })?;
 
-    if transcripts.is_empty() {
-        return Ok(RenderOutcome::default());
-    }
+    // No early return on an empty store: a run that deleted every
+    // transcript still has to declare their buckets empty so the
+    // documents go.
     let all_chats = build_chats(&transcripts, &records, max_tool_result_bytes);
 
     let mut outcome = RenderOutcome {
@@ -103,15 +103,14 @@ pub fn render(
     let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
         by_uuid.get(key).map(|id| id.to_string())
     });
-    let uuid_of: HashMap<&str, &str> = all_chats
-        .iter()
-        .map(|c| (c.id.as_str(), c.chat_uuid.as_str()))
-        .collect();
+    // The bucket key is minted from the raw id alone, so a transcript
+    // the diff names as deleted is still declared — with no documents,
+    // which is what removes the ones it had.
     outcome.buckets = narrowed
         .render
         .iter()
         .flatten()
-        .filter_map(|key| uuid_of.get(key.as_str()).map(|u| u.to_string()))
+        .map(|tid| chat_uuid_of(tid))
         .chain(narrowed.gone.iter().cloned())
         .map(|key| Bucket {
             key,
@@ -181,6 +180,15 @@ async fn scan_diff(
         },
     )
     .await
+}
+
+/// The document id for a raw transcript id, with no row in hand.
+fn chat_uuid_of(tid: &str) -> String {
+    let (session_id, agent_id) = match tid.split_once('#') {
+        Some((s, a)) => (s, Some(a)),
+        None => (tid, None),
+    };
+    ids::transcript(session_id, agent_id).uuid
 }
 
 fn build_chats(
@@ -276,6 +284,7 @@ fn build_chat(
         (None, _) => own_title.clone(),
     };
     let id = ids::transcript(session_id, agent_id);
+    debug_assert_eq!(id.uuid, chat_uuid_of(tid));
     NormalizedChat {
         path_prefix: None,
         id: tid.to_string(),
@@ -828,6 +837,18 @@ mod tests {
         let f = fenced("a\n```\nb");
         assert!(f.starts_with("````\n"), "{f}");
         assert!(f.ends_with("\n````"), "{f}");
+    }
+
+    /// A deleted transcript has no row to mint its document id from, so
+    /// the id has to come from the raw id alone — and agree with the one
+    /// the chat was rendered under.
+    #[test]
+    fn a_transcripts_document_id_needs_no_row() {
+        let transcripts = vec![meta("s1", "t", None), meta("s1#a9", "u", Some("a9"))];
+        let chats = build_chats(&transcripts, &[], 1024);
+        for c in &chats {
+            assert_eq!(c.chat_uuid, chat_uuid_of(&c.id), "{}", c.id);
+        }
     }
 
     #[test]
