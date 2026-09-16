@@ -448,7 +448,12 @@ fn start_backend(app: &AppHandle, root: PathBuf) -> anyhow::Result<String> {
         .arg("--url-file")
         .arg(&url_file)
         .env("DATALIB_BIND", "127.0.0.1:0")
-        .stdin(Stdio::null())
+        // The backend exits when this pipe hits EOF, which the kernel
+        // arranges however the shell goes — the `kill` at exit is for
+        // the ways it can still run code, this is for the ones it
+        // can't. `child` keeps the write end; never `take()` it.
+        .env("DATALIB_PARENT_PIPE", "1")
+        .stdin(Stdio::piped())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
         .spawn()

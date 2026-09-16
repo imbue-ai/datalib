@@ -561,13 +561,10 @@ impl Supervisor {
         // end goes to EOF. That is the one signal that survives SIGKILL, which
         // is why the shutdown handler in `main` is not enough by itself.
         //
-        // `DATALIB_APPLET_PARENT_PIPE` is how the applet knows this stdin
-        // means that: an applet is an ordinary program someone may run by
-        // hand, where reading stdin unbidden would swallow a terminal's input
-        // and an immediate EOF from `< /dev/null` would look like a dead
-        // parent.
+        // The env var is how the applet knows this stdin means that; see
+        // `datalib_parent_watch`.
         cmd.stdin(Stdio::piped());
-        cmd.env("DATALIB_APPLET_PARENT_PIPE", "1");
+        cmd.env(datalib_parent_watch::ENV_VAR, "1");
         // stdout is the readiness channel; stderr is the log, captured
         // so a server that dies on startup can say why. Without the
         // latter the only symptom is a readiness failure, which names
