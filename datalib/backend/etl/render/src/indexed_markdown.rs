@@ -106,15 +106,31 @@ pub struct IndexedMarkdownStore {
 }
 
 /// Run a future to completion from a synchronous caller.
+///
+/// Without a runtime to join, the future runs on one process-wide
+/// runtime rather than a fresh one per call. A per-call runtime is
+/// dropped as soon as the future completes, and sqlx returns a
+/// checked-out connection to its pool from a task *spawned* at drop
+/// (`PoolConnection::drop`): kill the runtime first and that task never
+/// runs, the pool forgets the connection, and the next `acquire` opens
+/// a second connection to the same doltlite file while the first is
+/// still closing on its worker thread — two live handles on one store,
+/// surfacing as `database is locked` under load.
 pub fn blocking<F: std::future::Future>(fut: F) -> F::Output {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
-        Err(_) => tokio::runtime::Builder::new_current_thread()
+        Err(_) => fallback_runtime().block_on(fut),
+    }
+}
+
+fn fallback_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .expect("build a runtime for a blocking store call")
-            .block_on(fut),
-    }
+            .expect("build a runtime for blocking store calls")
+    })
 }
 
 impl IndexedMarkdownStore {
@@ -920,6 +936,32 @@ mod tests {
 
     fn store(dir: &Path) -> IndexedMarkdownStore {
         IndexedMarkdownStore::open(dir).expect("open store")
+    }
+
+    /// A store call from a thread with no runtime must hand its
+    /// connection back to the pool. With a runtime built and dropped per
+    /// call, sqlx's return-to-pool task died with the runtime, the pool's
+    /// size fell to 0, and the next call opened a second connection to
+    /// the same file while the first was still closing — `database is
+    /// locked`, about once in thirty runs under a parallel test load.
+    #[test]
+    fn a_store_call_without_a_runtime_returns_its_connection_to_the_pool() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        assert!(tokio::runtime::Handle::try_current().is_err());
+        for i in 0..3 {
+            st.put_document(td.path(), &doc(td.path(), &format!("d{i}"), "fp"))
+                .unwrap();
+            // `size` is the pool's own count of live connections; the
+            // dying runtime dropped the guard that decrements it. Whether
+            // it is idle yet is a race with the return task, so not asserted.
+            assert_eq!(
+                st.pool.size(),
+                1,
+                "call {i}: the one connection is still pooled"
+            );
+        }
+        st.close();
     }
 
     fn row(uuid: &str, markdown_uuid: &str) -> GridRow {
