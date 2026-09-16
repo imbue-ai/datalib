@@ -267,6 +267,13 @@ reference doc it relates to.
 - [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md)
   — the live recipe for porting the remaining providers to CAS blobs +
   incremental render.
+- [`docs/dev/plans/diff_renderer.md`](docs/dev/plans/diff_renderer.md)
+  — *proposal*, nothing built: showing how one document changed
+  between two commits of its render store. **Read before asking a
+  store which commits changed a row**: the answer is `dolt_diff_<t>`
+  with no ref filter, and the measured reason `dolt_history_<t>` and
+  `dolt_blame_<t>` are the wrong tool on our text-keyed tables (their
+  key pushdown is integer-only; 20s against ~1s on 200k rows).
 - [`docs/dev/plans/multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md)
   — *proposal*, nothing built: replacing the `qmd_index` step with a
   retrieval layer that takes an arbitrary `grid_rows` metadata
