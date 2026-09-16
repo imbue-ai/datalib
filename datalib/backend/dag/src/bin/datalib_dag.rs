@@ -246,8 +246,10 @@ async fn main() -> Result<()> {
                 // as the run's lines with no step — and only there:
                 // stderr is the NDJSON event stream, which a fmt layer
                 // would interleave prose into.
-                let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,sqlx=warn"));
+                let filter =
+                    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                        tracing_subscriber::EnvFilter::new(datalib_runs::DEFAULT_LOG_FILTER)
+                    });
                 let _ = tracing_subscriber::registry()
                     .with(filter)
                     .with(datalib_runs::StoreLayer::new(store.log_sink()))

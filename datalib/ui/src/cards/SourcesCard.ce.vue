@@ -67,7 +67,7 @@ import RunLogPanel from "@/components/RunLogPanel.vue";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
-import { subscribeLive } from "@/live";
+import { changed, subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
 
 const props = defineProps<{ ctx: CardCtx }>();
@@ -526,7 +526,7 @@ function openHistory(targets: Row[]) {
 }
 
 /// While the panel is open, a step that just committed shows up without
-/// a reopen. Cheap enough to do on every `dag_changed`: the walk is
+/// a reopen. Cheap enough to do on every `dag` frame: the walk is
 /// bounded and the answer is small.
 function refreshHistory() {
   const trees = historyFor.value.map((r) => r.id);
@@ -1413,16 +1413,16 @@ onMounted(async () => {
   unsubscribe = subscribeLive({
     job: onJobEvent,
     root: (e) => {
-      // The store frame is acted on only while a run is in flight. Between
-      // runs the store moves for the server's own log lines, and a refetch
-      // on each of those that itself logged something would never stop.
-      if (e.kind === "dag_changed" || (e.kind === "run_store_changed" && manage.value?.run?.live)) {
+      if (changed(e, "manage.rows")) {
         // Deliberately *not* a fresh walk: this fires a few times a second
         // while a run is going. The sampler is already walking on its own
         // cadence; this just reads what it found.
         void loadRows();
-        refreshHistory();
-      } else if (e.kind === "config_changed") {
+      }
+      // The runner's record moving is the nearest thing to "a step
+      // committed" — nothing watches the stores themselves.
+      if (changed(e, "dag")) refreshHistory();
+      if (e.kind === "config_changed") {
         // Config and record together, for the "Never run" reason above.
         void reloadAll();
       }

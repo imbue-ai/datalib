@@ -1351,7 +1351,7 @@ async fn pipeline_storage(
     Query(p): Query<StorageParams>,
 ) -> Json<usage::PipelineStorage> {
     if flag_is_set(p.refresh.as_deref()) {
-        usage::sample_on_demand(&s.usage, &s.app, s.root.clone()).await;
+        usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
     }
     let steps = usage::declared_trees(&s.config_path());
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
@@ -1587,7 +1587,7 @@ struct RunLogParams {
     #[serde(default)]
     step: Option<String>,
     /// Only lines after this `seq` — how a client tails: remember the
-    /// last `seq` it saw and ask again on the next `run_store_changed` frame.
+    /// last `seq` it saw and ask again on the next `log` frame.
     #[serde(default)]
     after_seq: Option<i64>,
     #[serde(default)]

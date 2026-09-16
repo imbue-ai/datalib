@@ -210,7 +210,7 @@ pub async fn get_manage_rows(
     Query(p): Query<ManageParams>,
 ) -> Json<ManageResponse> {
     if crate::flag_is_set(p.refresh.as_deref()) {
-        usage::sample_on_demand(&s.usage, &s.app, s.root.clone()).await;
+        usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
     }
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();

@@ -56,6 +56,10 @@ data_root = "~/tmp/dr-dag"
 [run_history]
 max_runs = 100
 max_age_days = 30
+# The app server's own log lines belong to no run and rotate faster:
+# these are their limits.
+process_log_days = 3
+process_log_lines = 200000
 
 # ── slack ──────────────────────────────────────────────────────────
 # A group has two names. Its `id` is the identity: unique, path-safe,

@@ -10,7 +10,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 use crate::{is_terminal, runs_path, Retention, INDEXES, SCHEMA_VERSION};
-use app_schema::runs::{LogRow, MetricRow, MetricSampleRow, Process, RunRow, StepRunRow};
+use app_schema::runs::{
+    LogRow, MetricRow, MetricSampleRow, Process, RunRow, StepRunRow, StorePart,
+};
 
 /// How often the writer thread flushes. 200ms is under the threshold
 /// where a progress display reads as laggy, and far above the cost of
@@ -18,7 +20,7 @@ use app_schema::runs::{LogRow, MetricRow, MetricSampleRow, Process, RunRow, Step
 const FLUSH_EVERY: Duration = Duration::from_millis(200);
 
 /// How far back a snapshot looks for samples. A rate is a live
-/// question, and the snapshot is read on every `run_store_changed` frame —
+/// question, and the snapshot is read on every `manage.rows` frame —
 /// several times a second during a run — so the window query must not
 /// scan a day-long run's every sample each time.
 const RATE_WINDOW: Duration = Duration::from_secs(10 * 60);
@@ -211,6 +213,30 @@ pub async fn snapshot_of(data_root: &Path, run_id: Option<&str>) -> Snapshot {
     let out = read_snapshot(&pool, run_id).await.unwrap_or_default();
     pool.close().await;
     out
+}
+
+/// How many times each part of the store has been written, for a
+/// watcher that saw the file move and wants to know which readers to
+/// wake. Empty for a missing store; a part never written is absent.
+pub async fn versions(data_root: &Path) -> BTreeMap<StorePart, i64> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return BTreeMap::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return BTreeMap::new();
+    };
+    let rows = sqlx::query("SELECT what, version FROM store_changes")
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .filter_map(|r| {
+            let what: String = r.get("what");
+            Some((StorePart::parse(&what)?, r.get::<i64, _>("version")))
+        })
+        .collect()
 }
 
 /// Recent runs, newest first. With `step`, only the runs that step took
@@ -725,39 +751,75 @@ async fn begin_run(pool: &SqlitePool, run: &RunInfo) -> Result<(), sqlx::Error> 
         .execute(&mut *tx)
         .await?;
     }
+    bump(&mut tx, StorePart::Runs).await?;
     tx.commit().await?;
     prune_unowned_lines(pool, run.retention).await
 }
 
-/// Age out the lines outside any run. They belong to no run the count
-/// limit could remove, so the age limit is the only one that applies.
+/// Count one write to `what`, inside the transaction that made it.
+/// Retention is deliberately not counted: it takes lines away that no
+/// tail is waiting on, and a watcher woken for it would find nothing
+/// new to show.
+async fn bump(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    what: StorePart,
+) -> Result<(), sqlx::Error> {
+    let (changed_at_utc, tz_offset) = now_split();
+    sqlx::query(
+        "INSERT INTO store_changes (what, version, changed_at_utc, tz_offset) VALUES (?, 1, ?, ?) \
+         ON CONFLICT(what) DO UPDATE SET version = store_changes.version + 1, \
+           changed_at_utc = excluded.changed_at_utc, tz_offset = excluded.tz_offset",
+    )
+    .bind(what.as_str())
+    .bind(changed_at_utc)
+    .bind(tz_offset)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Retention for the lines outside any run: their own, shorter age,
+/// and a row cap — a server at `debug` between syncs must not grow the
+/// file for a month.
 async fn prune_unowned_lines(pool: &SqlitePool, retention: Retention) -> Result<(), sqlx::Error> {
-    let cutoff = age_cutoff(retention);
+    let cutoff = cutoff_days_ago(retention.process_log_days);
     sqlx::query("DELETE FROM log WHERE run_id IS NULL AND ts_utc < ?")
         .bind(&cutoff)
         .execute(pool)
         .await?;
+    sqlx::query(
+        "DELETE FROM log WHERE run_id IS NULL AND seq < \
+         (SELECT seq FROM log WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?)",
+    )
+    .bind(retention.process_log_lines.max(1) as i64 - 1)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
-/// The UTC stamp before which a run, or a line outside any run, is
-/// older than retention keeps. Text order is instant order, so this is
-/// one comparison.
+/// The UTC stamp before which a run is older than retention keeps.
+/// Text order is instant order, so this is one comparison.
 fn age_cutoff(retention: Retention) -> String {
+    cutoff_days_ago(retention.max_age_days)
+}
+
+fn cutoff_days_ago(days: u32) -> String {
     datalib_time::IsoOffsetTimestamp::now_local()
-        .bump_micros(-(retention.max_age_days as i64) * 86_400 * 1_000_000)
+        .bump_micros(-(days as i64) * 86_400 * 1_000_000)
         .to_utc_and_offset()
         .0
 }
 
 async fn end_run(pool: &SqlitePool, run_id: &str) -> Result<(), sqlx::Error> {
     let (finished_at_utc, _) = now_split();
+    let mut tx = pool.begin().await?;
     sqlx::query("UPDATE runs SET finished_at_utc = ? WHERE run_id = ?")
         .bind(finished_at_utc)
         .bind(run_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-    Ok(())
+    bump(&mut tx, StorePart::Runs).await?;
+    tx.commit().await
 }
 
 async fn flush(
@@ -774,6 +836,19 @@ async fn flush(
     let run_id = scope.run_id();
     let process = scope.process().as_str();
     let mut tx = pool.begin().await?;
+    if !batch.steps.is_empty() {
+        bump(&mut tx, StorePart::StepRuns).await?;
+    }
+    if !batch.logs.is_empty() {
+        let part = match scope {
+            Scope::Run(_) => StorePart::RunLog,
+            Scope::Process { .. } => StorePart::ProcessLog,
+        };
+        bump(&mut tx, part).await?;
+    }
+    if !batch.metrics.is_empty() {
+        bump(&mut tx, StorePart::Metrics).await?;
+    }
     for s in batch.steps.into_values() {
         sqlx::query(
             "INSERT INTO step_runs \
