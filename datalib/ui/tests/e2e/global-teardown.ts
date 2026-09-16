@@ -8,7 +8,7 @@ declare const process: {
 };
 
 export default function globalTeardown(): void {
-  const servers = JSON.parse(process.env.FW_E2E_SERVERS ?? "[]") as {
+  const servers = JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as {
     pid: number;
   }[];
   for (const s of servers) {

@@ -39,11 +39,11 @@ need_runfile() {
   echo "$out"
 }
 
-samples_bin="$(need_runfile "$FW_SAMPLES_BIN_RLOC")"
-node_bin="$(need_runfile "$FW_NODE_BIN_RLOC")"
-preview_js="$(need_runfile "$FW_PREVIEW_JS_RLOC")"
-golden="$(need_runfile "$FW_GOLDEN_RLOC")"
-fixture_tar="$(need_runfile "$FW_FIXTURE_MD_RLOC")"
+samples_bin="$(need_runfile "$DATALIB_TEST_SAMPLES_BIN_RLOC")"
+node_bin="$(need_runfile "$DATALIB_TEST_NODE_BIN_RLOC")"
+preview_js="$(need_runfile "$DATALIB_TEST_PREVIEW_JS_RLOC")"
+golden="$(need_runfile "$DATALIB_TEST_GOLDEN_RLOC")"
+fixture_tar="$(need_runfile "$DATALIB_TEST_FIXTURE_MD_RLOC")"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
