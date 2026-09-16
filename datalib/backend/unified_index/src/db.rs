@@ -84,8 +84,8 @@ fn first_chars(s: &str, n: usize) -> String {
 
 /// Map a query [`Field`] to the underlying `grid_rows` column it
 /// constrains, or `None` for fields that aren't single-column equality
-/// filters (Before/After are range, Is/Type set `documents`, Subj/Other
-/// have no column yet).
+/// filters (Before/After are range, Is sets `documents`, Subj/Other have
+/// no column yet).
 fn column_for_field(f: &Field) -> Option<&'static str> {
     match f {
         Field::Source => Some("source_label"),
@@ -98,9 +98,7 @@ fn column_for_field(f: &Field) -> Option<&'static str> {
         Field::Account => Some("account"),
         Field::Project => Some("project"),
         Field::NotionPage => Some("notion_page_uuid"),
-        Field::Before | Field::After | Field::Is | Field::Type | Field::Subj | Field::Other(_) => {
-            None
-        }
+        Field::Before | Field::After | Field::Is | Field::Subj | Field::Other(_) => None,
     }
 }
 
@@ -220,7 +218,7 @@ mod tests {
 
     #[test]
     fn empty_query_produces_no_where() {
-        let (sql, params) = build_where(&parse_query("type:all"), "");
+        let (sql, params) = build_where(&parse_query(""), "");
         assert!(sql.is_empty());
         assert!(params.is_empty());
     }
@@ -232,14 +230,11 @@ mod tests {
         assert!(params.is_empty());
         let (sql, _) = build_where(&parse_query("-is:document"), "");
         assert_eq!(sql, " WHERE is_document = 0");
-        // The old spelling still works and produces the same clause.
-        let (sql, _) = build_where(&parse_query("type:chat"), "");
-        assert_eq!(sql, " WHERE is_document = 1");
     }
 
     #[test]
     fn source_filter_emits_equality_clause() {
-        let (sql, params) = build_where(&parse_query("source:Claude type:all"), "");
+        let (sql, params) = build_where(&parse_query("source:Claude"), "");
         assert_eq!(sql, " WHERE source_label = ?");
         assert_eq!(params, vec!["Claude"]);
     }
@@ -249,14 +244,14 @@ mod tests {
     /// workspaces are one `source` and two `source_id`s.
     #[test]
     fn source_id_filter_matches_the_qmd_path_prefix() {
-        let (sql, params) = build_where(&parse_query("source_id:slack type:all"), "");
+        let (sql, params) = build_where(&parse_query("source_id:slack"), "");
         assert_eq!(
             sql,
             " WHERE INSTR(qmd_path, ?) = 1 AND (provider IS NULL OR provider != ?)"
         );
         assert_eq!(params, vec!["slack/", "datalib"]);
 
-        let (sql, params) = build_where(&parse_query("-source_id:slack type:all"), "");
+        let (sql, params) = build_where(&parse_query("-source_id:slack"), "");
         assert_eq!(
             sql,
             " WHERE (qmd_path IS NULL OR INSTR(qmd_path, ?) != 1 OR provider = ?)"
@@ -271,16 +266,16 @@ mod tests {
     /// real source's id has to exclude them despite the path.
     #[test]
     fn source_id_filter_files_measurements_under_datalib() {
-        let (sql, params) = build_where(&parse_query("source_id:datalib type:all"), "");
+        let (sql, params) = build_where(&parse_query("source_id:datalib"), "");
         assert_eq!(sql, " WHERE provider = ?");
         assert_eq!(params, vec!["datalib"]);
 
-        let (sql, params) = build_where(&parse_query("-source_id:datalib type:all"), "");
+        let (sql, params) = build_where(&parse_query("-source_id:datalib"), "");
         assert_eq!(sql, " WHERE (provider IS NULL OR provider != ?)");
         assert_eq!(params, vec!["datalib"]);
 
         // The other direction: `slack`'s own rows, not what slack weighs.
-        let (sql, _) = build_where(&parse_query("source_id:slack type:all"), "");
+        let (sql, _) = build_where(&parse_query("source_id:slack"), "");
         assert!(sql.contains("provider != ?"), "{sql}");
     }
 
@@ -290,7 +285,7 @@ mod tests {
     /// `slackXwork` stanza. INSTR takes its needle verbatim.
     #[test]
     fn source_id_filter_does_not_go_through_like() {
-        let (sql, params) = build_where(&parse_query("source_id:slack_work type:all"), "");
+        let (sql, params) = build_where(&parse_query("source_id:slack_work"), "");
         assert!(!sql.contains("LIKE"), "{sql}");
         assert_eq!(params, vec!["slack_work/", "datalib"]);
     }
@@ -300,7 +295,7 @@ mod tests {
     /// separate `slack-personal` stanza.
     #[test]
     fn source_id_filter_matches_whole_segments_only() {
-        let (_, params) = build_where(&parse_query("source_id:slack type:all"), "");
+        let (_, params) = build_where(&parse_query("source_id:slack"), "");
         assert_eq!(params, vec!["slack/", "datalib"]);
         assert!(!"slack-personal/render_markdown/x.md".starts_with("slack/"));
     }
@@ -311,14 +306,14 @@ mod tests {
     #[test]
     fn the_old_source_name_spelling_builds_the_same_clause() {
         assert_eq!(
-            build_where(&parse_query("source_name:slack type:all"), ""),
-            build_where(&parse_query("source_id:slack type:all"), ""),
+            build_where(&parse_query("source_name:slack"), ""),
+            build_where(&parse_query("source_id:slack"), ""),
         );
     }
 
     #[test]
     fn negated_filter_keeps_nulls() {
-        let (sql, _) = build_where(&parse_query("-channel:announce type:all"), "");
+        let (sql, _) = build_where(&parse_query("-channel:announce"), "");
         assert!(sql.contains("(channel IS NULL OR channel != ?)"));
     }
 

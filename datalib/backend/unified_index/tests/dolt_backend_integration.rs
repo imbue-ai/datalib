@@ -125,7 +125,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     assert_eq!(rows[1].kind, "User Input");
 
     let filtered = repo
-        .search(&parse_query("source:Claude type:all"), 100)
+        .search(&parse_query("source:Claude"), 100)
         .await
         .unwrap();
     assert!(!filtered.is_empty());
@@ -208,13 +208,13 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     .await
     .expect("insert storage row");
 
-    let all = repo.search(&parse_query("type:all"), 100).await.unwrap();
+    let all = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(all.len(), 2, "{all:?}");
     let storage = all.iter().find(|r| r.uuid == "s-1").expect("storage row");
     assert_eq!(storage.source_id, "datalib");
 
     let measured = repo
-        .search(&parse_query("source_id:claude-work type:all"), 100)
+        .search(&parse_query("source_id:claude-work"), 100)
         .await
         .unwrap();
     assert_eq!(
@@ -224,7 +224,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     );
 
     let datalibs = repo
-        .search(&parse_query("source_id:datalib type:all"), 100)
+        .search(&parse_query("source_id:datalib"), 100)
         .await
         .unwrap();
     assert_eq!(

@@ -236,7 +236,7 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
     // is that it updates itself.
     const grid = await context.newPage();
     await grid.goto("/");
-    await searchAndSettle(grid, `source_id:${SOURCES[0]} type:all`);
+    await searchAndSettle(grid, `source_id:${SOURCES[0]}`);
     await expect(grid.getByText("no matches.")).toBeVisible();
 
     await recordFrames(page, STEPS);
@@ -316,7 +316,7 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
     await settleRunner(page, 120_000);
     const search = (await (
       await page.request.get(
-        `/applet/unified_index/search?q=${encodeURIComponent(`source_id:${SOURCES[0]} type:all`)}&limit=1000`,
+        `/applet/unified_index/search?q=${encodeURIComponent(`source_id:${SOURCES[0]}`)}&limit=1000`,
       )
     ).json()) as { rows: unknown[] };
     expect(search.rows.length, "the tapes hold more than one conversation").toBeGreaterThan(

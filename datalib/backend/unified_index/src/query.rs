@@ -1,7 +1,7 @@
 //! The unified grid's reading of the shared search-bar grammar
-//! (`datalib_query`): which keys are `grid_rows` fields, how `is:document`
-//! resolves, and the `qmd:` / `qmd_vsearch:` predicates that route free
-//! text to the semantic index.
+//! (`datalib_query`): which keys are `grid_rows` fields, what
+//! `is:document` means, and the `qmd:` / `qmd_vsearch:` predicates that
+//! route free text to the semantic index.
 
 use std::collections::BTreeMap;
 
@@ -10,7 +10,6 @@ pub enum Field {
     Before,
     After,
     Subj,
-    Type,
     /// The provider's human label ("Slack") — one value per source
     /// *type*, so it cannot separate two configured Slack workspaces.
     Source,
@@ -49,7 +48,6 @@ impl Field {
             "before" => Field::Before,
             "after" => Field::After,
             "subj" => Field::Subj,
-            "type" => Field::Type,
             "source" => Field::Source,
             "source_id" => Field::SourceId,
             // `source_name:` is what this filter was called while a
@@ -146,10 +144,8 @@ pub struct ParsedQuery {
     /// How `free_text` should be evaluated against the qmd index.
     pub free_text_mode: FreeTextMode,
     /// `Some(true)` keeps only the document rows, `Some(false)` only the
-    /// rows inside documents, `None` both. Set by `is:document` and its
-    /// negation, and by `type:chat` / `type:message` / `type:all`, the
-    /// spellings this filter had before every source rendered documents
-    /// — kept because people typed them. Last one wins.
+    /// rows inside documents, `None` both: `is:document` and its
+    /// negation, last one wins.
     pub documents: Option<bool>,
 }
 
@@ -210,13 +206,8 @@ pub fn parse_query(s: &str) -> ParsedQuery {
     let free_text = free_terms.join(" ");
     let documents = terms
         .iter()
-        .fold(None, |acc, t| match (&t.field, t.value.as_str()) {
-            (Field::Is, "document") => Some(!t.negate),
-            (Field::Type, "chat") => Some(!t.negate),
-            (Field::Type, "message") => Some(t.negate),
-            (Field::Type, "all") => None,
-            _ => acc,
-        });
+        .filter(|t| t.field == Field::Is && t.value == "document")
+        .fold(None, |_, t| Some(!t.negate));
     ParsedQuery {
         terms,
         filters,
@@ -253,15 +244,12 @@ mod tests {
     }
 
     #[test]
-    fn is_document_and_its_old_spellings() {
+    fn is_document_sets_the_documents_filter() {
         assert_eq!(parse_query("treemap is:document").documents, Some(true));
         assert_eq!(parse_query("-is:document").documents, Some(false));
         assert_eq!(parse_query("is:unread").documents, None);
-        assert_eq!(parse_query("type:chat").documents, Some(true));
-        assert_eq!(parse_query("type:message").documents, Some(false));
-        assert_eq!(parse_query("type:all").documents, None);
         // Last one wins, and the free text is untouched.
-        let q = parse_query("treemap type:chat -is:document");
+        let q = parse_query("treemap is:document -is:document");
         assert_eq!(q.documents, Some(false));
         assert_eq!(q.free_text, "treemap");
     }
