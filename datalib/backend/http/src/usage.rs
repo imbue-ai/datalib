@@ -30,6 +30,8 @@ use datalib_core::repo::DynAppRepo;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
+use crate::watch::{RootEvent, Table};
+
 /// How often the root is walked *while a run is in flight*. Between
 /// runs it isn't walked at all — see the module docs.
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
@@ -419,12 +421,15 @@ pub fn declared_trees(config_path: &Path) -> Vec<String> {
 }
 
 /// Walk the root once and fold what it finds into the monitor and the
-/// store. Returns false when the walk did not happen.
+/// store, then say so on `events`: a writer in this process knows what
+/// it wrote, which the filesystem watcher never would for a doltlite
+/// file. Returns false when the walk did not happen.
 pub async fn sample_once(
     monitor: &UsageMonitor,
     repo: &DynAppRepo,
     root: Arc<PathBuf>,
     coalesce_since: Option<Instant>,
+    events: &crate::watch::RootTx,
 ) -> bool {
     // Serialize first, then re-check: while this was queued behind
     // another walk, that walk may have answered the question.
@@ -452,13 +457,23 @@ pub async fn sample_once(
     if let Err(e) = repo.record_disk_usage(&rows).await {
         tracing::warn!("usage: could not record {} sample(s): {e}", rows.len());
     }
+    // `Err` means nobody is subscribed. The Manage rows carry each
+    // tree's bytes, so they moved too.
+    for table in [Table::Storage, Table::ManageRows] {
+        let _ = events.send(RootEvent::TableChanged { table });
+    }
     true
 }
 
 /// A measurement asked for by a request, rather than by the clock.
-pub async fn sample_on_demand(monitor: &UsageMonitor, repo: &DynAppRepo, root: Arc<PathBuf>) {
+pub async fn sample_on_demand(
+    monitor: &UsageMonitor,
+    repo: &DynAppRepo,
+    root: Arc<PathBuf>,
+    events: &crate::watch::RootTx,
+) {
     let arrived = Instant::now();
-    sample_once(monitor, repo, root, Some(arrived)).await;
+    sample_once(monitor, repo, root, Some(arrived), events).await;
 }
 
 pub fn pipeline_is_running(root: &Path) -> bool {
@@ -485,7 +500,7 @@ pub async fn run(
     // Subscribe before the startup walk, so a run that begins during it
     // is not missed.
     let mut rx = events.subscribe();
-    sample_once(&monitor, &repo, root.clone(), None).await;
+    sample_once(&monitor, &repo, root.clone(), None, &events).await;
 
     let mut was_running = false;
     let mut last_walk = Instant::now();
@@ -500,9 +515,13 @@ pub async fn run(
             // only at shutdown. Nothing left to wake us.
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         }
+        // This loop's own `storage` frame comes back through `rx` too;
+        // it costs one pass through `should_walk`, which a frame never
+        // satisfies on its own — a walk needs a run to have started,
+        // ended, or been going for the interval.
         let running = pipeline_is_running(&root);
         if should_walk(running, was_running, last_walk.elapsed()) {
-            sample_once(&monitor, &repo, root.clone(), None).await;
+            sample_once(&monitor, &repo, root.clone(), None, &events).await;
             last_walk = Instant::now();
         }
         was_running = running;

@@ -9,7 +9,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { fetchPipelineStorage, type PipelineStorage } from "@/api";
 import { formatBytes } from "@/config/bytes";
 import { sparkline } from "@/config/sparkline";
-import { subscribeLive } from "@/live";
+import { changed, subscribeLive } from "@/live";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 
 const storage = ref<PipelineStorage | null>(null);
@@ -122,9 +122,9 @@ onMounted(() => {
   void load(true);
   unsubscribe = subscribeLive({
     root: (e) => {
-      // Not a fresh walk: this fires a few times a second while a run
-      // is going, and the sampler is already walking on its own.
-      if (e.kind === "dag_changed") void load();
+      // The sampler says when it has walked; there is nothing new to
+      // read between its samples.
+      if (changed(e, "storage")) void load();
     },
     // A job ending is the last chance for a while: the backend's own
     // tick stops as soon as the run lets go of the root.

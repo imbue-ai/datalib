@@ -2,12 +2,18 @@
 //!
 //! Rides the same SSE connection as job progress, as named `root` frames, so
 //! a client has one connection, one reconnect policy, and one heartbeat to
-//! judge liveness by.
+//! judge liveness by. A frame names a *dataset* a reader fetches, not the
+//! file that moved: one file can feed several readers, and one file —
+//! the run store — is written by two processes for two audiences. The
+//! filesystem says a file moved; the store says which of its parts did
+//! (`datalib_runs::versions`); this module turns both into the datasets
+//! to fetch again.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use datalib_runs::StorePart;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -19,25 +25,70 @@ const DEBOUNCE: Duration = Duration::from_millis(300);
 /// silent stream.
 pub const HEARTBEAT: Duration = Duration::from_secs(10);
 
+/// A dataset the UI fetches, named by what serves it. A card subscribes
+/// to the ones it reads and refetches those; a change to anything else
+/// never reaches it. The set is closed and mirrored by hand in
+/// `ui/src/live.ts`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+pub enum Table {
+    /// `GET /api/dag`: the runner's record, `system/dag_state.json`,
+    /// written on every step state change. Covers a `datalib-dag` run
+    /// started from a terminal, which the job stream never sees because
+    /// no job row exists for it.
+    #[serde(rename = "dag")]
+    #[strum(serialize = "dag")]
+    Dag,
+    /// `GET /api/manage/rows`: the join over the config, the record,
+    /// the run store's runs, steps, metrics and the run's own log
+    /// lines, and the storage samples. Not the server's log lines: a
+    /// row never reads those, and a refetch that logged a line would
+    /// otherwise be the next refetch's cause.
+    #[serde(rename = "manage.rows")]
+    #[strum(serialize = "manage.rows")]
+    ManageRows,
+    /// `GET /api/runs`: which runs exist and which steps took part.
+    #[serde(rename = "runs")]
+    #[strum(serialize = "runs")]
+    Runs,
+    /// `GET /api/log` and a run's log: any line, from either writer.
+    #[serde(rename = "log")]
+    #[strum(serialize = "log")]
+    Log,
+    /// `GET /api/pipeline/storage`: the sampler walked the root.
+    #[serde(rename = "storage")]
+    #[strum(serialize = "storage")]
+    Storage,
+}
+
+impl Table {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
 /// Something in the data root moved, or the stream is still alive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RootEvent {
     /// `<root>/config.toml` was written — by this server's own
-    /// `PUT /api/config`, by an agent, or by hand in an editor.
+    /// `PUT /api/config`, by an agent, or by hand in an editor. The
+    /// datasets the config feeds are reported beside it as
+    /// [`RootEvent::TableChanged`] frames.
     ConfigChanged,
-    /// The runner's record moved: `system/dag_state.json`, written on
-    /// every step state change. This is the one that covers a
-    /// `datalib-dag` run started from a terminal, which the job stream
-    /// can never see because no job row exists for it.
-    DagChanged,
-    /// The run store moved: `system/runs.sqlite`, written several times
-    /// a second by a run in flight (progress, metrics, log lines) and,
-    /// between runs, by this server's own log. Kept apart from
-    /// `DagChanged` for that second writer: a subscriber that refetched
-    /// on every one of these would refetch on its own log lines — and
-    /// a refetch that logs would never stop.
-    RunStoreChanged,
+    /// A dataset's inputs moved; fetch it again. Payload-free like the
+    /// rest: every consumer already diffs what it fetches.
+    TableChanged { table: Table },
     /// A component appeared, changed or vanished under
     /// `system/frontend/`.
     FrontendChanged,
@@ -54,7 +105,18 @@ pub enum RootEvent {
 /// `GET /api/sync/stream` alongside the job channel.
 pub type RootTx = broadcast::Sender<RootEvent>;
 
-fn classify(root: &Path, path: &Path) -> Option<RootEvent> {
+/// A file the watcher reports on. What the filesystem can say; the
+/// datasets it feeds are `expand`'s business.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Moved {
+    Config,
+    DagState,
+    RunStore,
+    Frontend,
+    GridIndex,
+}
+
+fn classify(root: &Path, path: &Path) -> Option<Moved> {
     // The atomic-write temp files are the same change reported twice;
     // the rename that follows is the one worth reporting.
     let name = path.file_name()?.to_str()?;
@@ -62,28 +124,90 @@ fn classify(root: &Path, path: &Path) -> Option<RootEvent> {
         return None;
     }
     if path == root.join("config.toml") {
-        return Some(RootEvent::ConfigChanged);
+        return Some(Moved::Config);
     }
     let system = root.join("system");
     if path.starts_with(system.join("frontend")) {
-        return Some(RootEvent::FrontendChanged);
+        return Some(Moved::Frontend);
     }
     if path.parent() == Some(system.as_path()) {
         if name == "dag_state.json" {
-            return Some(RootEvent::DagChanged);
+            return Some(Moved::DagState);
         }
         // `runs.sqlite-wal` / `-journal` are the same write as the
         // database itself, so match on the stem rather than equality.
         if name.starts_with("runs.sqlite") {
-            return Some(RootEvent::RunStoreChanged);
+            return Some(Moved::RunStore);
         }
     }
     if path.parent() == Some(datalib_core::layout::grid_index_dir(root).as_path())
         && name.starts_with(datalib_core::layout::GRID_DB)
     {
-        return Some(RootEvent::IndexChanged);
+        return Some(Moved::GridIndex);
     }
     None
+}
+
+/// The datasets a part of the run store feeds.
+fn tables_of(part: StorePart) -> &'static [Table] {
+    match part {
+        StorePart::Runs | StorePart::StepRuns => &[Table::Runs, Table::ManageRows],
+        StorePart::Metrics => &[Table::ManageRows],
+        StorePart::RunLog => &[Table::Log, Table::ManageRows],
+        StorePart::ProcessLog => &[Table::Log],
+    }
+}
+
+/// Which parts of the run store moved since the last look, by their
+/// write counters. `seen` is updated in place. A store that was
+/// replaced — a schema bump remakes the file — reads as every part
+/// moving, which is right: everything a reader held is gone.
+fn moved_parts(
+    now: &BTreeMap<StorePart, i64>,
+    seen: &mut BTreeMap<StorePart, i64>,
+) -> Vec<StorePart> {
+    let moved = now
+        .iter()
+        .filter(|(part, v)| seen.get(part) != Some(v))
+        .map(|(part, _)| *part)
+        .collect();
+    *seen = now.clone();
+    moved
+}
+
+/// The frames one debounced burst of file moves becomes.
+async fn expand(
+    root: &Path,
+    moved: &HashSet<Moved>,
+    seen: &mut BTreeMap<StorePart, i64>,
+) -> HashSet<RootEvent> {
+    let mut out = HashSet::new();
+    let table = |t: Table| RootEvent::TableChanged { table: t };
+    for m in moved {
+        match m {
+            Moved::Config => {
+                out.insert(RootEvent::ConfigChanged);
+                out.insert(table(Table::Dag));
+                out.insert(table(Table::ManageRows));
+            }
+            Moved::DagState => {
+                out.insert(table(Table::Dag));
+                out.insert(table(Table::ManageRows));
+            }
+            Moved::RunStore => {
+                for part in moved_parts(&datalib_runs::versions(root).await, seen) {
+                    out.extend(tables_of(part).iter().map(|t| table(*t)));
+                }
+            }
+            Moved::Frontend => {
+                out.insert(RootEvent::FrontendChanged);
+            }
+            Moved::GridIndex => {
+                out.insert(RootEvent::IndexChanged);
+            }
+        }
+    }
+    out
 }
 
 pub fn spawn(root: PathBuf, tx: RootTx) {
@@ -120,7 +244,7 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
 
     // notify calls back on its own thread, so hand off through an
     // unbounded channel rather than doing any work there.
-    let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<RootEvent>();
+    let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<Moved>();
     let watch_root = root.clone();
     let mut watcher =
         match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -132,8 +256,8 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
                 return;
             }
             for path in &ev.paths {
-                if let Some(kind) = classify(&watch_root, path) {
-                    let _ = raw_tx.send(kind);
+                if let Some(moved) = classify(&watch_root, path) {
+                    let _ = raw_tx.send(moved);
                 }
             }
         }) {
@@ -172,6 +296,10 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
         // task now holds — so the watch lasts as long as the process,
         // which is exactly its intended lifetime.
         let mut watcher = watcher;
+        // The store's write counters as of the last burst. Started from
+        // the store so the first burst reports only what moved in it,
+        // not everything the store already held.
+        let mut seen = datalib_runs::versions(&root).await;
         loop {
             // Open a window on the first event, then coalesce
             // everything that lands inside it. One burst → one message
@@ -183,20 +311,20 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             let deadline = tokio::time::Instant::now() + DEBOUNCE;
             // Ends on the window closing (`Err`) or the sender going
             // away (`Ok(None)`) — both mean "publish what you have".
-            while let Ok(Some(kind)) = tokio::time::timeout_at(deadline, raw_rx.recv()).await {
-                pending.insert(kind);
+            while let Ok(Some(moved)) = tokio::time::timeout_at(deadline, raw_rx.recv()).await {
+                pending.insert(moved);
             }
             // The grid index's directory appears partway through the
             // first sync, and a watch on a path that did not exist was
             // never registered. The runner's record moves throughout a
             // run, so arming on it converges within that run.
-            if !index_watched && pending.contains(&RootEvent::DagChanged) {
+            if !index_watched && pending.contains(&Moved::DagState) {
                 index_watched = watcher
                     .watch(&grid_index, RecursiveMode::NonRecursive)
                     .is_ok();
             }
-            for kind in pending {
-                let _ = tx.send(kind);
+            for event in expand(&root, &pending, &mut seen).await {
+                let _ = tx.send(event);
             }
         }
     });
@@ -211,24 +339,67 @@ mod tests {
         let root = Path::new("/data");
         assert_eq!(
             classify(root, &root.join("config.toml")),
-            Some(RootEvent::ConfigChanged)
+            Some(Moved::Config)
         );
         assert_eq!(
             classify(root, &root.join("system/dag_state.json")),
-            Some(RootEvent::DagChanged)
+            Some(Moved::DagState)
         );
         assert_eq!(
             classify(root, &root.join("system/runs.sqlite-wal")),
-            Some(RootEvent::RunStoreChanged)
+            Some(Moved::RunStore)
         );
         assert_eq!(
             classify(root, &root.join("system/frontend/user/abc.js")),
-            Some(RootEvent::FrontendChanged)
+            Some(Moved::Frontend)
         );
         assert_eq!(
             classify(root, &root.join("unified_index/grid_index/db.doltlite_db")),
-            Some(RootEvent::IndexChanged)
+            Some(Moved::GridIndex)
         );
+    }
+
+    /// The wire spelling is what `ui/src/live.ts` switches on.
+    #[test]
+    fn table_names_agree_between_strum_and_serde() {
+        use strum::VariantArray;
+        for &t in Table::VARIANTS {
+            assert_eq!(
+                serde_json::to_string(&t).unwrap(),
+                format!("\"{}\"", t.as_str())
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&RootEvent::TableChanged {
+                table: Table::ManageRows
+            })
+            .unwrap(),
+            r#"{"kind":"table_changed","table":"manage.rows"}"#
+        );
+    }
+
+    /// The point of asking the store which part moved: the server's own
+    /// log lines wake the log grid and nothing else. Without this every
+    /// refetch of the Manage rows that logged a line would be the cause
+    /// of the next one.
+    #[test]
+    fn a_server_log_line_wakes_the_log_and_not_the_manage_rows() {
+        let mut seen = BTreeMap::from([(StorePart::ProcessLog, 3), (StorePart::Metrics, 7)]);
+        let now = BTreeMap::from([(StorePart::ProcessLog, 4), (StorePart::Metrics, 7)]);
+        let tables: HashSet<Table> = moved_parts(&now, &mut seen)
+            .into_iter()
+            .flat_map(|p| tables_of(p).iter().copied())
+            .collect();
+        assert_eq!(tables, HashSet::from([Table::Log]));
+        assert_eq!(seen, now, "the look is remembered");
+
+        // A run's line is both a log line and an input to the rows.
+        let now = BTreeMap::from([(StorePart::ProcessLog, 4), (StorePart::RunLog, 1)]);
+        let tables: HashSet<Table> = moved_parts(&now, &mut seen)
+            .into_iter()
+            .flat_map(|p| tables_of(p).iter().copied())
+            .collect();
+        assert_eq!(tables, HashSet::from([Table::Log, Table::ManageRows]));
     }
 
     /// The reason the directory watch filters by name at all. `system/`
@@ -314,12 +485,16 @@ mod tests {
 
         let system = td.path().join("system");
         let mut n = 0;
-        heard(&mut rx, RootEvent::DagChanged, move || {
-            n += 1;
-            let tmp = system.join("dag_state.json.tmp");
-            std::fs::write(&tmp, format!("{{\"n\":{n}}}")).unwrap();
-            std::fs::rename(&tmp, system.join("dag_state.json")).unwrap();
-        })
+        heard(
+            &mut rx,
+            RootEvent::TableChanged { table: Table::Dag },
+            move || {
+                n += 1;
+                let tmp = system.join("dag_state.json.tmp");
+                std::fs::write(&tmp, format!("{{\"n\":{n}}}")).unwrap();
+                std::fs::rename(&tmp, system.join("dag_state.json")).unwrap();
+            },
+        )
         .await;
     }
 
@@ -372,6 +547,54 @@ mod tests {
             "reading the data root was reported as changing it — on Linux \
              that is a feedback loop, not just a spurious refetch"
         );
+    }
+
+    /// The server's own log line, written through the real writer,
+    /// reaches a subscriber as the log dataset — and as nothing else.
+    /// The negative half is the one that matters: a `manage.rows` here
+    /// would be the Manage screen refetching on its own log lines.
+    #[tokio::test]
+    async fn a_server_log_line_reaches_the_log_and_nothing_else() {
+        let td = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = broadcast::channel(64);
+        spawn(td.path().to_path_buf(), tx);
+        // Let the spawn read the store's counters before the first line
+        // lands, so the line is what moves and not the file appearing.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let server = datalib_runs::ProcessLogWriter::start(
+            td.path(),
+            datalib_runs::Process::Http,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        let mut n = 0;
+        heard(
+            &mut rx,
+            RootEvent::TableChanged { table: Table::Log },
+            || {
+                n += 1;
+                server.log(datalib_runs::LogRow {
+                    level: "debug".into(),
+                    msg: format!("line {n}"),
+                    ..Default::default()
+                });
+            },
+        )
+        .await;
+        drop(server);
+        tokio::time::sleep(Duration::from_millis(1_000)).await;
+        while let Ok(got) = rx.try_recv() {
+            assert!(
+                !matches!(
+                    got,
+                    RootEvent::TableChanged {
+                        table: Table::ManageRows
+                    }
+                ),
+                "a server log line was reported as a change to the Manage rows"
+            );
+        }
     }
 
     /// The control for the filter, and the reason `classify` is not

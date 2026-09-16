@@ -61,7 +61,8 @@ pub struct DagConfig {
 }
 
 /// The retention rule for `system/runs.sqlite`, as a person writes it in
-/// `config.toml`. Both limits apply.
+/// `config.toml`. Both run limits apply; the app server's own log
+/// lines, which belong to no run, have their own two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunHistory {
@@ -71,6 +72,24 @@ pub struct RunHistory {
     /// Drop a run older than this many days, however few runs there are.
     #[serde(default = "RunHistory::default_max_age_days")]
     pub max_age_days: u32,
+    /// Drop a server log line older than this many days.
+    #[serde(default = "RunHistory::default_process_log_days")]
+    pub process_log_days: u32,
+    /// Keep at most this many server log lines, newest first.
+    #[serde(default = "RunHistory::default_process_log_lines")]
+    pub process_log_lines: u32,
+}
+
+impl Default for RunHistory {
+    fn default() -> Self {
+        let r = datalib_runs::Retention::default();
+        Self {
+            max_runs: r.max_runs,
+            max_age_days: r.max_age_days,
+            process_log_days: r.process_log_days,
+            process_log_lines: r.process_log_lines,
+        }
+    }
 }
 
 impl RunHistory {
@@ -80,11 +99,19 @@ impl RunHistory {
     fn default_max_age_days() -> u32 {
         datalib_runs::Retention::default().max_age_days
     }
+    fn default_process_log_days() -> u32 {
+        datalib_runs::Retention::default().process_log_days
+    }
+    fn default_process_log_lines() -> u32 {
+        datalib_runs::Retention::default().process_log_lines
+    }
 
     pub fn retention(self) -> datalib_runs::Retention {
         datalib_runs::Retention {
             max_runs: self.max_runs,
             max_age_days: self.max_age_days,
+            process_log_days: self.process_log_days,
+            process_log_lines: self.process_log_lines,
         }
     }
 }

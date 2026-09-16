@@ -7,12 +7,9 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::Arc;
 
-use datalib_runs::{Process, ProcessLogWriter, Retention, StoreLayer};
+use datalib_runs::{Process, ProcessLogWriter, Retention, StoreLayer, DEFAULT_LOG_FILTER};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-
-/// The same default the other datalib binaries take (`datalib_obs`).
-const DEFAULT_FILTER: &str = "info,sqlx=warn,hyper=warn";
 
 /// Install the subscriber and start the store writer. Call once, after
 /// the data root is claimed: a server refused the root must not write
@@ -24,7 +21,7 @@ pub fn init(root: &Path) -> Option<Arc<ProcessLogWriter>> {
     let writer = ProcessLogWriter::start(root, Process::Http, retention_of(root)).map(Arc::new);
     let store = writer.as_ref().map(|w| StoreLayer::new(Arc::downgrade(w)));
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_FILTER));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER));
     let stderr = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(std::io::stderr().is_terminal())

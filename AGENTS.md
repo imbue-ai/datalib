@@ -103,11 +103,14 @@ reference doc it relates to.
   `datalib_runs::StoreLayer`, a `tracing` layer that writes every
   event as a row with no `run_id` and `process = http` (the runner's
   rows say `dag`), and the Manage screen's **Server log** button is
-  the same grid as a step's log opened on `process:http`. The one
-  rule that came with it: a `runs.sqlite` write is a
-  `run_store_changed` frame, not `dag_changed`, and the Manage
-  screen acts on it only while a run is live — otherwise a refetch
-  that logged a line would trigger the next refetch, forever.
+  the same grid as a step's log opened on `process:http`. Both
+  processes record down to `debug` by default
+  (`datalib_runs::DEFAULT_LOG_FILTER`; `RUST_LOG` overrides), and the
+  server's lines have their own, shorter retention
+  (`[run_history] process_log_days` / `process_log_lines`). The store
+  also counts its own writes per part (`store_changes`), which is how
+  `watch.rs` tells a run's progress from the server's log lines when
+  the one file moves — see `data_centric_ui.md` §5 under **UI**.
 - [`docs/dev/plans/streaming_steps_plan.md`](docs/dev/plans/streaming_steps_plan.md)
   — *plan*, partly built: how to build the above, measured against the
   tree, with each step marked done or not. Read it before touching how
@@ -293,9 +296,12 @@ reference doc it relates to.
   and decoration module, so a rendering change is reviewed by opening a
   file rather than by building a data root.
 - [`docs/dev/plans/completed/data_centric_ui.md`](docs/dev/plans/completed/data_centric_ui.md)
-  — **built (2026-09-15)**, except its §5 (per-table change frames):
-  one typed table viewer beside the markdown one, with column types
-  declared by whoever serves the rows. The row join is
+  — **built (2026-09-15, §5 on 2026-09-16)**: one typed table viewer
+  beside the markdown one, with column types declared by whoever
+  serves the rows, and live updates named by dataset — a `root` frame
+  is `{kind: "table_changed", table: "manage.rows"}` (`watch::Table`,
+  mirrored in `ui/src/live.ts`), and a card refetches only what it
+  reads. The row join is
   `GET /api/manage/rows` (`http/src/manage/`), the vocabulary is
   `datalib/backend/columns` (mirrored by hand in `ui/src/api.ts`),
   `cards/typedColumns.ts` turns declared columns into grid column

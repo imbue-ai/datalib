@@ -869,9 +869,9 @@ export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
 // `GET /api/sync/stream`. The worker + enqueue/cancel handlers emit
 // these the instant they write a job's state, so the UI updates without
 // polling. What a running job's steps are doing is not here: the runner
-// writes that to the run store, and its writes arrive as
-// `run_store_changed` root frames (its record's as `dag_changed`), on
-// which the page refetches `/api/dag`.
+// writes that to the run store, and its writes arrive as `table_changed`
+// root frames naming the datasets they feed (`manage.rows`, `log`, …),
+// on which a page refetches what it reads.
 export type JobProgressEvent = {
   id: string;
   kind: string;
@@ -987,8 +987,7 @@ export function fetchRuns(
 }
 
 // A run's log lines, oldest first. Tail by remembering the last `seq`
-// seen and passing it as `afterSeq` on the next `run_store_changed`
-// frame.
+// seen and passing it as `afterSeq` on the next `log` frame.
 export function fetchRunLog(
   run: string,
   opts: { step?: string; afterSeq?: number; limit?: number } = {},

@@ -11,17 +11,26 @@
 
 import type { JobProgressEvent } from "@/api";
 
+/// A dataset the server serves, named by what serves it. Mirrors
+/// `watch::Table` by hand. A consumer names the ones it reads and
+/// refetches on those; a change to anything else never reaches it.
+export type LiveTable = "dag" | "manage.rows" | "runs" | "log" | "storage";
+
 /// One `root` frame. Mirrors `watch::RootEvent`; see that module for
 /// what each kind covers and why the frame carries no payload (every
 /// consumer already diffs what it fetches, so the event only has to say
 /// "ask again").
 export type RootEvent =
   | { kind: "config_changed" }
-  | { kind: "dag_changed" }
-  | { kind: "run_store_changed" }
+  | { kind: "table_changed"; table: LiveTable }
   | { kind: "frontend_changed" }
   | { kind: "index_changed" }
   | { kind: "heartbeat" };
+
+/// Whether a frame says `table` should be fetched again.
+export function changed(e: RootEvent, table: LiveTable): boolean {
+  return e.kind === "table_changed" && e.table === table;
+}
 
 export type LiveHandlers = {
   /// A sync job moved.

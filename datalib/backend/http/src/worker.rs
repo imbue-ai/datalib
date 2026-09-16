@@ -19,7 +19,8 @@ use tokio::sync::broadcast;
 /// (`GET /api/sync/stream`) the instant the worker writes it — so the UI
 /// reflects a job starting or ending without polling. What the run is
 /// doing in between reaches the UI another way: the runner's writes to
-/// `system/runs.sqlite` are pushed as `run_store_changed` root frames.
+/// `system/runs.sqlite` are pushed as `table_changed` root frames naming
+/// the datasets they feed (`watch.rs`).
 #[derive(Debug, Clone, Serialize)]
 pub struct ProgressEvent {
     pub id: String,

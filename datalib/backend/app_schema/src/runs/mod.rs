@@ -30,11 +30,16 @@ pub mod step_runs {
     include!("step_runs.rs");
 }
 
+pub mod store_changes {
+    include!("store_changes.rs");
+}
+
 pub use log::{LogLevel, LogRow, Process, Stream};
 pub use metric_samples::MetricSampleRow;
 pub use metrics::MetricRow;
 pub use run::RunRow;
 pub use step_runs::StepRunRow;
+pub use store_changes::{StoreChangeRow, StorePart};
 
 /// Every table's `CREATE TABLE`, in creation order.
 pub fn ddl() -> Vec<&'static str> {
@@ -44,6 +49,7 @@ pub fn ddl() -> Vec<&'static str> {
         log::DDL,
         metrics::DDL,
         metric_samples::DDL,
+        store_changes::DDL,
     ]
     .iter()
     .flat_map(|d| d.iter().map(|(_, sql)| *sql))
@@ -97,6 +103,13 @@ mod tests {
                 format!("\"{}\"", p.as_str())
             );
             assert_eq!(Process::parse(p.as_str()), Some(p));
+        }
+        for &p in StorePart::VARIANTS {
+            assert_eq!(
+                serde_json::to_string(&p).unwrap(),
+                format!("\"{}\"", p.as_str())
+            );
+            assert_eq!(StorePart::parse(p.as_str()), Some(p));
         }
         assert_eq!(LogLevel::parse("fatal"), None, "no guessing");
     }

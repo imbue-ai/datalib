@@ -3,8 +3,8 @@
 //! hold.
 
 use datalib_runs::{
-    log_after, log_query, snapshot, LogQuery, LogRow, MetricRow, Process, ProcessLogWriter,
-    Retention, RunWriter, StepRunRow,
+    log_after, log_query, snapshot, versions, LogQuery, LogRow, MetricRow, Process,
+    ProcessLogWriter, Retention, RunWriter, StepRunRow, StorePart,
 };
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
@@ -157,6 +157,7 @@ async fn log_query_spans_runs_and_reads_terms() {
     let keep = Retention {
         max_runs: 100,
         max_age_days: 36500,
+        ..Retention::default()
     };
     for (run, msg) in [("run-1", "first"), ("run-2", "second")] {
         let w = RunWriter::start(td.path(), run, run, keep).unwrap();
@@ -230,6 +231,7 @@ async fn runs_accumulate_and_the_snapshot_is_the_newest() {
     let keep = Retention {
         max_runs: 100,
         max_age_days: 36500,
+        ..Retention::default()
     };
     {
         let id = "2026-01-01T00:00:00+00:00";
@@ -261,6 +263,7 @@ async fn runs_can_be_listed_by_step_and_read_by_id() {
     let keep = Retention {
         max_runs: 100,
         max_age_days: 36500,
+        ..Retention::default()
     };
     {
         let id = "2026-01-01T00:00:00+00:00";
@@ -299,6 +302,7 @@ async fn retention_keeps_the_newest_runs_and_sweeps_their_rows() {
     let keep_two = Retention {
         max_runs: 2,
         max_age_days: 3650,
+        ..Retention::default()
     };
     for day in 1..=4 {
         let id = format!("2026-01-0{day}T00:00:00+00:00");
@@ -341,6 +345,7 @@ async fn retention_drops_runs_older_than_the_window() {
     let a_day = Retention {
         max_runs: 100,
         max_age_days: 1,
+        ..Retention::default()
     };
     {
         let w = RunWriter::start(td.path(), "old", "2000-01-01T00:00:00+00:00", a_day).unwrap();
@@ -408,7 +413,7 @@ async fn a_store_from_another_schema_version_is_replaced() {
 /// more at the end — so a series that moved twice inside the floor still
 /// leaves its first and last values. The snapshot carries the newest two
 /// per series, oldest first, from the last few minutes only — a rate is
-/// a live question, and the query runs on every `run_store_changed` frame —
+/// a live question, and the query runs on every `manage.rows` frame —
 /// and when each step last logged.
 #[tokio::test]
 async fn the_snapshot_carries_two_recent_samples_per_series_and_the_last_log_time() {
@@ -488,6 +493,7 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let keep = Retention {
         max_runs: 1,
         max_age_days: 36500,
+        ..Retention::default()
     };
     let server = ProcessLogWriter::start(td.path(), Process::Http, keep).unwrap();
     server.log(LogRow {
@@ -559,8 +565,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     assert!(servers_only.iter().all(|l| l.run_id.is_none()));
 }
 
-/// A line outside any run is kept only by age, and both writers apply
-/// that when they open.
+/// A line outside any run has its own age limit, shorter than a run's,
+/// and both writers apply it when they open.
 #[tokio::test]
 async fn old_process_lines_age_out_when_a_writer_opens() {
     let td = tempfile::tempdir().unwrap();
@@ -569,6 +575,8 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
     let keep = Retention {
         max_runs: 100,
         max_age_days: 30,
+        process_log_days: 3,
+        ..Retention::default()
     };
     {
         let server = ProcessLogWriter::start(td.path(), Process::Http, keep).unwrap();
@@ -604,4 +612,110 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
         all.iter().map(|l| l.msg.as_str()).collect::<Vec<_>>(),
         ["fresh"]
     );
+}
+
+/// The server's lines are also capped by count, newest kept, so a
+/// chatty day at `debug` cannot grow the file past the cap.
+#[tokio::test]
+async fn process_lines_past_the_cap_go_oldest_first() {
+    let td = tempfile::tempdir().unwrap();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
+    let recent = |secs_ago: i64| now.bump_micros(-secs_ago * 1_000_000).to_utc_and_offset().0;
+    let keep = Retention {
+        process_log_lines: 2,
+        ..Retention::default()
+    };
+    {
+        let server = ProcessLogWriter::start(td.path(), Process::Http, keep).unwrap();
+        for (i, msg) in ["one", "two", "three"].iter().enumerate() {
+            server.log(LogRow {
+                ts_utc: recent(30 - i as i64),
+                level: "debug".into(),
+                msg: msg.to_string(),
+                ..Default::default()
+            });
+        }
+    }
+    // The cap is applied when a writer opens; a second one does it.
+    drop(ProcessLogWriter::start(td.path(), Process::Http, keep).unwrap());
+    let all = log_query(
+        td.path(),
+        &LogQuery {
+            run: None,
+            step: None,
+            q: "process:http",
+            after_seq: 0,
+            limit: 100,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        all.iter().map(|l| l.msg.as_str()).collect::<Vec<_>>(),
+        ["two", "three"]
+    );
+}
+
+/// Every write counts itself under the part of the store it touched,
+/// and a run's log lines count apart from the server's — that is what
+/// lets a watcher wake the Manage screen for one and not the other.
+#[tokio::test]
+async fn each_part_of_the_store_counts_its_own_writes() {
+    let td = tempfile::tempdir().unwrap();
+    assert!(
+        versions(td.path()).await.is_empty(),
+        "no store, no versions"
+    );
+
+    let run_id = "run-1";
+    {
+        let w = start(td.path(), run_id);
+        w.step(at("a", "running", ""));
+        w.log(LogRow {
+            step: Some("a".into()),
+            level: "info".into(),
+            msg: "hello".into(),
+            ..Default::default()
+        });
+        w.metric(metric("a", "rows", 1));
+    }
+    let after_run = versions(td.path()).await;
+    for part in [
+        StorePart::Runs,
+        StorePart::StepRuns,
+        StorePart::Metrics,
+        StorePart::RunLog,
+    ] {
+        assert!(
+            after_run.get(&part).is_some_and(|v| *v > 0),
+            "{part:?}: {after_run:?}"
+        );
+    }
+    assert_eq!(after_run.get(&StorePart::ProcessLog), None);
+
+    {
+        let server =
+            ProcessLogWriter::start(td.path(), Process::Http, Retention::default()).unwrap();
+        server.log(LogRow {
+            level: "debug".into(),
+            msg: "served".into(),
+            ..Default::default()
+        });
+    }
+    let after_server = versions(td.path()).await;
+    assert!(after_server
+        .get(&StorePart::ProcessLog)
+        .is_some_and(|v| *v > 0));
+    for part in [
+        StorePart::Runs,
+        StorePart::StepRuns,
+        StorePart::Metrics,
+        StorePart::RunLog,
+    ] {
+        assert_eq!(
+            after_server.get(&part),
+            after_run.get(&part),
+            "{part:?} moved for a server line"
+        );
+    }
 }

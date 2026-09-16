@@ -13,9 +13,9 @@
 // token to it the same way there.
 //
 // The tail is a cursor, not a stream: the store assigns each line a
-// monotone `seq`, and each `run_store_changed` frame (someone wrote the
-// store — the runner, or the server itself) asks for the lines after
-// the last one seen. A run that has finished is read once.
+// monotone `seq`, and each `log` frame (someone wrote a line — the
+// runner, or the server itself) asks for the lines after the last one
+// seen. A run that has finished is read once.
 import { computed, onMounted, onUnmounted, ref, shallowRef } from "vue";
 import { AgGridVue } from "ag-grid-vue3";
 import {
@@ -39,7 +39,7 @@ import {
 import { ContextMenuModule, RowGroupingModule, RowGroupingPanelModule } from "ag-grid-enterprise";
 import { keepExcludeItems, withToken } from "@/grid/query";
 import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
-import { subscribeLive } from "@/live";
+import { changed, subscribeLive } from "@/live";
 import {
   compareStamps,
   formatRelative,
@@ -375,7 +375,7 @@ onMounted(() => {
   void loadRuns();
   unsubscribe = subscribeLive({
     root: (e) => {
-      if (e.kind === "run_store_changed" && live.value) void load(false);
+      if (changed(e, "log") && live.value) void load(false);
     },
     resync: () => {
       void loadRuns();

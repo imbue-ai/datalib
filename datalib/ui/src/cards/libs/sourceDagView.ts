@@ -1,7 +1,7 @@
 // Builtin view: visualize the sync pipeline's step DAG.
 import type { CardRender } from "../types";
 import { fetchDag, type DagResponse, type DagStep } from "@/api";
-import { subscribeLive } from "@/live";
+import { changed, subscribeLive } from "@/live";
 
 /// The node's colour class for a runner state. The legend's words, not
 /// the runner's: `succeeded` reads as done, `skipped_up_to_date` as up
@@ -251,15 +251,13 @@ export function sourceDagView(): CardRender {
     }
 
     const unsubscribe = subscribeLive({
-      // The shape of the graph is the config, so it is redrawn when the
-      // config moves; the colours are the runner's record, redrawn when
-      // that moves — instead of the 15-second poll this replaces, which
-      // every mounted card ran independently and which made a saved
-      // config take up to fifteen seconds to show.
+      // The shape of the graph is the config and the colours are the
+      // runner's record; `GET /api/dag` is both, and the `dag` frame is
+      // sent when either moves — instead of the 15-second poll this
+      // replaces, which every mounted card ran independently and which
+      // made a saved config take up to fifteen seconds to show.
       root: (e) => {
-        if (!disposed && (e.kind === "config_changed" || e.kind === "dag_changed")) {
-          void load();
-        }
+        if (!disposed && changed(e, "dag")) void load();
       },
       resync: () => {
         if (!disposed) void load();

@@ -52,6 +52,7 @@ fn write_two_runs(root: &Path) {
     let keep = Retention {
         max_runs: 100,
         max_age_days: 36500,
+        ..Retention::default()
     };
     let t = "2026-09-11T10:00:00+01:00";
     {
