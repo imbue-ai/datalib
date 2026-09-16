@@ -51,43 +51,14 @@ pub fn announce_port(port: u16) {
     let _ = out.flush();
 }
 
-fn exit_with_parent() {
-    if std::env::var_os("DATALIB_APPLET_PARENT_PIPE").is_none() {
-        return;
-    }
-    std::thread::spawn(|| {
-        use std::io::{Read, Write};
-        let mut stdin = std::io::stdin().lock();
-        let mut scratch = [0u8; 64];
-        loop {
-            match stdin.read(&mut scratch) {
-                // The gateway is gone. Leave the way it would have made
-                // us leave.
-                Ok(0) => break,
-                // Nothing is supposed to arrive, but a byte is not a
-                // reason to die.
-                Ok(_) => continue,
-                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
-        }
-        // Best effort, and it matters which way round: stderr is a
-        // pipe to the same gateway that just died, so this write takes
-        // EPIPE — and `eprintln!` *panics* on a failed write, which
-        // would kill this thread and leave the process running. Which
-        // is exactly the leak being fixed, reintroduced one line from
-        // the exit that fixes it. `announce_port` above writes
-        // best-effort for the same reason.
-        let _ = writeln!(
-            std::io::stderr(),
-            "datalib-applet: parent pipe closed, exiting"
-        );
-        std::process::exit(0);
-    });
-}
-
 fn main() {
-    exit_with_parent();
+    if let Err(e) = datalib_parent_watch::exit_with_parent(|| {
+        datalib_parent_watch::report("datalib-applet: parent gone, exiting");
+        std::process::exit(0);
+    }) {
+        eprintln!("datalib-applet: {e}");
+        std::process::exit(2);
+    }
     if let Err(e) = run() {
         eprintln!("datalib-applet: {e:#}");
         std::process::exit(1);

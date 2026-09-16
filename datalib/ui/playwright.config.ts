@@ -270,15 +270,21 @@ function spawnBackend(
   const log = path.join(dir, `${name}.log`);
   rmSync(urlFile, { force: true });
   const fd = openSync(log, "w");
+  // stdin is a pipe this process holds open and never writes to. When
+  // the runner dies — including a SIGKILL that runs no `globalTeardown`
+  // — the kernel closes it, and the backend takes the EOF as its cue to
+  // exit (`datalib_parent_watch`). Workers re-importing this config
+  // attach through `FW_E2E_SERVERS` and hold no copy of the pipe.
   const child = spawn(
     backendBin,
     [root, "--no-open", "--url-file", urlFile],
     {
-      stdio: ["ignore", fd, fd],
+      stdio: ["pipe", fd, fd],
       env: {
         ...process.env,
         DATALIB_BIND: "127.0.0.1:0",
         DATALIB_TOKEN: API_TOKEN,
+        DATALIB_PARENT_PIPE: "1",
         ...env,
       },
     },
