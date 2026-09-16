@@ -228,6 +228,15 @@ reference doc it relates to.
   the `api` method still to build for a published outdoor unit.
   `datalib/backend/etl/timeseries_render/` is what its render and
   yolink's share.
+- [`datalib/backend/etl/providers/facebook/INGEST.md`](datalib/backend/etl/providers/facebook/INGEST.md)
+  — the `facebook` source: a "Download your information" export in
+  its JSON format. Read it before touching any export-shaped provider
+  that keeps every file: one table per JSON file named for its path,
+  one row per record, the media each record points at in the CAS, and
+  the `\u00XX`-per-byte encoding bug every string has to be run
+  through first. It also says why comments and reactions are bucketed
+  by month rather than threaded per post, and that Messenger is not
+  built because the account we have never sent a message.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
   — the `email` source's three download modes (JMAP, Gmail API, mbox),
   what keeps them writing one deduped schema, and why an IMAP mode was

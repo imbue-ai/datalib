@@ -1,0 +1,53 @@
+{
+  "name": "Ten Forward Nights",
+  "photos": [
+    {
+      "uri": "your_facebook_activity/posts/media/TenForwardNights_100000000000001/200000000000001.png",
+      "creation_timestamp": 12599095800,
+      "media_metadata": {
+        "photo_metadata": {
+          "exif_data": [
+            {
+              "upload_ip": "10.0.0.1",
+              "taken_timestamp": 12599095805
+            }
+          ]
+        }
+      },
+      "title": "Ten Forward Nights"
+    },
+    {
+      "uri": "your_facebook_activity/posts/media/TenForwardNights_100000000000001/200000000000002.png",
+      "creation_timestamp": 12599095920,
+      "media_metadata": {
+        "photo_metadata": {
+          "exif_data": [
+            {
+              "upload_ip": "10.0.0.1",
+              "taken_timestamp": 12599095925
+            }
+          ]
+        }
+      },
+      "title": "Ten Forward Nights",
+      "description": "Guinan behind the bar."
+    }
+  ],
+  "cover_photo": {
+    "uri": "your_facebook_activity/posts/media/TenForwardNights_100000000000001/200000000000001.png",
+    "creation_timestamp": 12599095800,
+    "media_metadata": {
+      "photo_metadata": {
+        "exif_data": [
+          {
+            "upload_ip": "10.0.0.1",
+            "taken_timestamp": 12599095805
+          }
+        ]
+      }
+    },
+    "title": "Ten Forward Nights"
+  },
+  "last_modified_timestamp": 12599096400,
+  "description": "Off-duty evenings on Deck 10."
+}

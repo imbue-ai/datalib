@@ -48,6 +48,8 @@ pub enum Provider {
     /// one tag. Named for the thing, not for whichever protocol a
     /// particular mirror happens to use.
     Email,
+    /// A "Download your information" export, the JSON flavour.
+    Facebook,
     /// Garmin Connect: a watch's worth of health and activity data.
     Garmin,
     Github,

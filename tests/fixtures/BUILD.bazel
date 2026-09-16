@@ -110,6 +110,7 @@ filegroup(
         "//datalib/backend/etl/providers/pdf:pdf_fixture",
         "//datalib/backend/etl/providers/garmin:tng_fixture",
         "//datalib/backend/etl/providers/airvisual:tng_fixture",
+        "//datalib/backend/etl/providers/facebook:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -208,6 +209,9 @@ genrule(
             "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
             # AirVisual: two Pros' data folders (arg 25, appended likewise).
             "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
+            # Facebook export dir (arg 26, appended likewise). File-backed;
+            # posts, an album, comments, reactions and friends render.
+            "datalib/backend/etl/providers/facebook/tests/fixtures/facebook_tng",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         # It lives under the `unified_index/` tree the index steps own
@@ -280,6 +284,8 @@ py_test(
         "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
         # AirVisual (arg 25, appended likewise).
         "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
+        # Facebook (arg 26, appended likewise).
+        "datalib/backend/etl/providers/facebook/tests/fixtures/facebook_tng",
     ],
     data = [
         "run_sync_pipeline.py",
@@ -338,6 +344,8 @@ py_test(
         "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
         # AirVisual (arg 25, appended likewise).
         "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
+        # Facebook (arg 26, appended likewise).
+        "datalib/backend/etl/providers/facebook/tests/fixtures/facebook_tng",
     ],
     data = [
         "run_sync_pipeline.py",

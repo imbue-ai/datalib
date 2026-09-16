@@ -1,0 +1,37 @@
+{
+  "timestamp": 12597861600,
+  "media": [],
+  "label_values": [
+    {
+      "label": "Message",
+      "value": "Happy birthday, Number One. The bridge is yours for the day."
+    },
+    {
+      "label": "Last modified",
+      "timestamp_value": 12597861600
+    },
+    {
+      "label": "Media",
+      "media": []
+    },
+    {
+      "label": "Target"
+    },
+    {
+      "label": "Detected dialect",
+      "value": "English (All)"
+    },
+    {
+      "dict": [],
+      "title": "Attachments"
+    },
+    {
+      "label": "Feeling/activity",
+      "value": "feeling grateful"
+    },
+    {
+      "timestamp_value": 12597861600
+    }
+  ],
+  "fbid": "400000000000001"
+}

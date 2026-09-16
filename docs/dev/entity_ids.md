@@ -254,6 +254,7 @@ fixture is UUID-shaped.
 | notion | pending | `ProviderGlobal` — page ids are Notion UUIDs |
 | pdf, perseus | pending | `Content` |
 | linkedin, google_takeout, sms_backup_restore | pending | `ProviderGlobal` |
+| facebook | pending | `ProviderGlobal` — every record hashes to its row id (only `fbid`-bearing ones carry Facebook's own id) |
 | whatsapp | pending | `Upstream(account_jid)` — needs parse plumbing |
 | apple_messages | ported | `ProviderGlobal` — `message.guid` is a UUID Messages mints; `chat.guid` (`iMessage;-;+1…`) is unique per Apple ID, so two sources from two Apple IDs texting one number contend, which `IdClaims` reports |
 | signal | pending | `ProviderGlobal` on recipient identifiers |

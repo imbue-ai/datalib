@@ -337,6 +337,28 @@ Point `export.path` at that directory. Each export is complete,
 so the sample config sets `always_clear_before_ingest = true` to let a
 newer export drop what LinkedIn stopped including.
 
+## Facebook
+
+Facebook's own export: **Settings & privacy** → **Settings** →
+**Accounts Center** → **Your information and permissions** →
+**Download your information**. Choose **Facebook**, pick **JSON** as the
+format (the HTML flavour is not read), **High** media quality, and the
+date range you want, then unzip the files it emails you into one
+directory:
+
+```sh
+unzip ~/Downloads/facebook-*.zip -d ~/backups/Facebook
+```
+
+A large account comes as several zips; unzipping them all into the one
+directory is right, because they are slices of one tree
+(`your_facebook_activity/`, `connections/`, …). Point `export.path` at
+that directory. Every JSON file in it becomes a table in the raw store,
+every photo or video a record points at is copied into the store, and
+the posts, albums, comments, reactions and friends are rendered. Each
+export is complete, so re-ingesting a newer one drops what Facebook
+stopped including.
+
 ## Beeper
 
 Reads the Beeper Texts desktop app's local data directory (on macOS,
