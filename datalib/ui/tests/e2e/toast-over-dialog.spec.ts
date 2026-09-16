@@ -6,6 +6,7 @@
 // primary button is checked with a trial click, and the real click goes
 // to Cancel beside it.
 import { test, expect, type Locator } from "@playwright/test";
+import { stubClipboard } from "./grid-helpers";
 
 // Small enough that the dialog reaches its max height and its footer
 // sits where the toast tray is.
@@ -59,7 +60,12 @@ test("an error toast over the wizard does not eat clicks on its buttons", async 
   );
   expect(hit, "the toast body took the pointer").toBe(false);
 
-  // Its × is the one thing it does own.
+  // Its two buttons are what it does own. Copy stands in for the text
+  // selection the pass-through gives up.
+  const readClipboard = await stubClipboard(page);
+  await toast.getByRole("button", { name: "Copy" }).click({ timeout: 5_000 });
+  await expect.poll(readClipboard).toContain("unified_index/search");
+  await expect(toast.getByRole("button", { name: "Copied" })).toBeVisible();
   await toast.getByRole("button", { name: "Dismiss" }).click({ timeout: 5_000 });
   await expect(toast).toHaveCount(0);
 

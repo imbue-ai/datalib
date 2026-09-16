@@ -3,10 +3,23 @@
 // level `toasts` array from `@/toasts`. No props — every consumer pushes
 // via `pushToast(...)`.
 //
-// A toast is drawn over everything and owns none of it: only its ×
-// takes the pointer, so a click on whatever it happens to cover — a
-// dialog's submit button, say — still lands there.
+// A toast is drawn over everything and owns none of it: only its two
+// buttons take the pointer, so a click on whatever it happens to cover
+// — a dialog's submit button, say — still lands there. That is also
+// why there is a Copy button: the text cannot be selected.
+import { ref } from "vue";
 import { toasts, dismissToast } from "@/toasts";
+import { copyToClipboard } from "@/clipboard";
+
+const copiedId = ref<number | null>(null);
+async function copy(id: number, message: string) {
+  if (await copyToClipboard(message)) {
+    copiedId.value = id;
+    window.setTimeout(() => {
+      if (copiedId.value === id) copiedId.value = null;
+    }, 1500);
+  }
+}
 </script>
 
 <template>
@@ -20,6 +33,14 @@ import { toasts, dismissToast } from "@/toasts";
         :aria-live="t.level === 'error' ? 'assertive' : 'polite'"
       >
         <span class="datalib-toast__msg">{{ t.message }}</span>
+        <button
+          class="datalib-toast__copy"
+          type="button"
+          :aria-label="copiedId === t.id ? 'Copied' : 'Copy'"
+          @click="copy(t.id, t.message)"
+        >
+          {{ copiedId === t.id ? "Copied" : "Copy" }}
+        </button>
         <button
           class="datalib-toast__close"
           type="button"
@@ -76,17 +97,26 @@ import { toasts, dismissToast } from "@/toasts";
   word-break: break-word;
   white-space: pre-wrap;
 }
+.datalib-toast__copy,
 .datalib-toast__close {
   pointer-events: auto;
   background: transparent;
   border: none;
   color: inherit;
-  font-size: 1.1rem;
   line-height: 1;
   cursor: pointer;
   padding: 0 0.2rem;
   opacity: 0.7;
 }
+.datalib-toast__copy {
+  font-size: 0.75rem;
+  align-self: center;
+  white-space: nowrap;
+}
+.datalib-toast__close {
+  font-size: 1.1rem;
+}
+.datalib-toast__copy:hover,
 .datalib-toast__close:hover {
   opacity: 1;
 }
