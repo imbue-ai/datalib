@@ -8,7 +8,7 @@ and the rest is the argument. The open questions at the end are the
 loose ends, with what each costs.
 
 This supersedes §3 ("Pipeline state as a table") and §4 ("Run logs,
-beside the data") of [`data_centric_ui.md`](../data_centric_ui.md). That
+beside the data") of [`data_centric_ui.md`](data_centric_ui.md). That
 proposal put each step's log in a file under the step's own tree; the
 decision here is one file per data root, for the reasons in
 [§"One file, not one per step"](#one-file-not-one-per-step). Issues:

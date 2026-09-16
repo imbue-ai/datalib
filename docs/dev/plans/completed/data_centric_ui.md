@@ -1,17 +1,20 @@
 # Design: a data-centric UI
 
 **Status: built (2026-09-15), except §5's per-table change frames.**
-Written
-2026-09-09 against `a4752fb5`; revised 2026-09-15 against `9a45cff4`.
-Per [`AGENTS.md`](../../../AGENTS.md), don't cite this file as a
-description of the tree. Where it says "today", that was checked
-against the later commit; where it says "would", nothing exists.
+Written 2026-09-09 against `a4752fb5`; revised 2026-09-15 against
+`9a45cff4`; landed through #454 and #466 (tracked in #455). Kept as
+the record of what was decided, and for the checkpoint at the end of
+§"Sequencing" — what porting the sources tree and the search grid
+taught about where the viewer's altitude is. Per
+[`AGENTS.md`](../../../../AGENTS.md), don't cite this file as a
+description of the tree: where it says "today", that was checked
+against `9a45cff4`; where it says "would", read the code.
 
 **What the revision changed.** Two of the first draft's pieces landed
 by other routes — the crate split
-([`provider_crate_split.md`](completed/provider_crate_split.md)) and
+([`provider_crate_split.md`](provider_crate_split.md)) and
 the pipeline store plus run logs
-([`logs_and_metrics.md`](completed/logs_and_metrics.md), which also
+([`logs_and_metrics.md`](logs_and_metrics.md), which also
 rejected this draft's per-step log files; its "One file, not one per
 step" says why). The `ColumnSpec` this draft extended no longer exists.
 And the Manage screen grew from a flat grid into a tree with a
@@ -50,11 +53,11 @@ to get the scope wrong.
 - **The card system.** A card is a JS expression evaluated into its own
   shadow root, hosted by a layout that owns placement and chrome. Three
   layouts, a cross-card bus, host commands, a new-card gallery. See
-  [`cards.md`](../cards.md) and `ui/src/cards/types.ts`.
+  [`cards.md`](../../cards.md) and `ui/src/cards/types.ts`.
 - **Applets.** Any program can contribute card components *and* the
   endpoints behind them, declared in `config.toml`. `unified_index` is
   the precedent for an endpoints-only applet. See
-  [`applets.md`](../applets.md).
+  [`applets.md`](../../applets.md).
 - **A live channel.** One SSE connection for the whole page, carrying
   payload-free `root` frames (`config_changed`, `dag_changed`,
   `frontend_changed`, `index_changed`) that mean "ask again".
