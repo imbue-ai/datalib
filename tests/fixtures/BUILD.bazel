@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//tools:target_tools_genrule.bzl", "target_tools_genrule")
 
 # Surface this BUILD file as a data target so //tools:version_pins_test
 # can read the QMD_VERSION constant out of it at test time.
@@ -125,7 +126,11 @@ filegroup(
 # qmd.tar.
 # Tar packaging is *not* the pipeline binary's concern — it operates
 # at the layer of DB + qmd files.
-genrule(
+#
+# Not a plain `genrule`: that would build the pipeline binaries in the
+# exec configuration, a second copy of the whole backend beside the one
+# the tests and `:dist` use. See tools/target_tools_genrule.bzl.
+target_tools_genrule(
     name = "ingested_tng",
     srcs = [":source_json"],
     outs = [
