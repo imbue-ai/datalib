@@ -28,7 +28,7 @@ pub const RENDER_VERSION: u32 = 3;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         chat_kind: "LinkedIn Chat".to_string(),
@@ -260,7 +260,7 @@ fn nonempty(s: &str) -> Option<&str> {
 }
 
 /// TODO(problem-sink): a shape we don't recognize is dropped silently.
-/// `None` is the right *value* for `when_ts`, but nothing anywhere
+/// `None` is the right *value* for `created_at`, but nothing anywhere
 /// records that we discarded something upstream actually sent — that is
 /// only half of R1 ("drop, count, log; never abort, never hide"). When
 /// the problem sink exists (see

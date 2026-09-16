@@ -15,7 +15,7 @@ Parts of this are not novel — the data pipeline aspect shares shape with Flume
 This document describes the principles we strive towards for the **ingestion (download) side**: how raw data lands on disk, what shape it has at rest, and the operational properties (monitorable, stoppable, resumable, incrementally cheap, verifiable) the download stage aims for. It is aspirational as much as descriptive: a new provider, table, or transformation should be judged against it, and divergences should be either justified or fixed.
 
 ## Related documents
-The **parse and render stage** — deserializing a stored payload, projecting it to `GridRow` + markdown, its data-quality rules, its incrementality, and the `GridRow.when_ts` policy — is [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md). The tables render writes into are covered by the focused dev notes [`docs/dev/grid_rows.md`](grid_rows.md) and [`docs/dev/edges.md`](edges.md). Where understanding "download" requires a downstream concept (the render-store contract render emits, the `GridRow` projection the UI reads), this document touches on it briefly.
+The **parse and render stage** — deserializing a stored payload, projecting it to `GridRow` + markdown, its data-quality rules, its incrementality, and the `GridRow.created_at` policy — is [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md). The tables render writes into are covered by the focused dev notes [`docs/dev/grid_rows.md`](grid_rows.md) and [`docs/dev/edges.md`](edges.md). Where understanding "download" requires a downstream concept (the render-store contract render emits, the `GridRow` projection the UI reads), this document touches on it briefly.
 
 Practitioner-facing material — how we test, how to add a provider, how the schema evolves, and the open questions — lives in the companion [`data_architecture_ingestion_practices.md`](/docs/dev/data_architecture_ingestion_practices.md).
 
@@ -430,7 +430,7 @@ Detection is available, not delivered. See [`TODO.md`](/TODO.md).
 
 ## Timestamps: one clock, no fabrication
 
-What goes in `GridRow.when_ts` — the global-ordering policy, the
+What goes in `GridRow.created_at` — the global-ordering policy, the
 microsecond-bump recipe for sub-items, no-fabricated-timestamps, and
 which entity kinds legitimately have none — is a projection concern and
 lives in [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#6-timestamps).

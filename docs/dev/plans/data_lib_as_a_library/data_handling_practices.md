@@ -146,7 +146,7 @@ exactly that from identity to **content**:
 
 > For N random `grid_rows` per provider, fetch the raw payload by
 > `upstream_id` and assert the pass-through scalars agree —
-> `author`, `when_ts`, `source_url`, and a prefix of `text`.
+> `author`, `created_at`, `source_url`, and a prefix of `text`.
 
 Every failure is one of three things: a real loss, a deliberate rule
 that belongs in R3's table, or a mapping we cannot express in SQL (fine

@@ -302,7 +302,7 @@ edit the struct directly:
 Give each field a `#[col(sql = "…")]` portable type;
 `#[derive(PortableTable)]` produces the matching `CREATE TABLE` DDL (and
 `COLUMNS` / `TABLES` metadata) at compile time. Columns computed at load time
-(e.g. `grid_rows.when_ts_utc`) are declared with
+(e.g. `grid_rows.created_at_utc`) are declared with
 `#[derived(name = "…", sql = "…")]` on the field they trail.
 
 ## Version policy: 7-day burn-in

@@ -61,7 +61,7 @@ landing in the architecture docs where they belong.
 
 **Everything that was misfiled now lives here**, with a pointer left
 behind at each old location: the backpointers bullet (§3), the
-`GridRow.when_ts` policy (§6 — the `datalib-time` crate contract stays
+`GridRow.created_at` policy (§6 — the `datalib-time` crate contract stays
 in the ingestion doc, since download stamps its own `fetched_at_utc` with
 it), the render cursor and the render-side progress question (§5), the
 render-store contract (§2), and the `GridRow` family taxonomy (§3).
@@ -537,7 +537,7 @@ rule, and the tree already follows it in four places:
 
 | faithful column | unified companion | what the unification buys |
 | --- | --- | --- |
-| `when_ts` — source offset preserved verbatim | `when_ts_utc` + `when_offset`, derived at load by `split_when_ts` | one zone and one width, so lexical order *is* chronological order |
+| `created_at` — source offset preserved verbatim | `created_at_utc` + `created_offset`, derived at load by `split_record_stamp` | one zone and one width, so lexical order *is* chronological order |
 | `upstream_id` + `upstream_entity_kind` + `upstream_scope` — the provider's own identity, byte-exact | `uuid` — our v5 over the five-component recipe | one id space across every provider; stable across re-render |
 | `upstream_entity_kind` — the upstream's own word, which "may not [be reworded], because `uuid` derives from it" | `kind` — the grid's display label, which "may be reworded freely" | one Kind column the UI can filter on |
 | `blake3` — the whole file | `payload_blake3` — the metadata-excluding digest | "same audio, different tags" becomes a query |
@@ -563,7 +563,7 @@ string a `uuid` was minted under, kept so the id can be regenerated and
 checked.
 
 The rule has a real limit, and knowing it stops the pattern from
-becoming ritual: `when_ts_utc` carries no scheme column and should not,
+becoming ritual: `created_at_utc` carries no scheme column and should not,
 because there is only ever one way to render an instant in UTC. Stamp
 the recipe when a *choice* was made, not merely when a derivation
 happened.
@@ -618,7 +618,7 @@ and the sink has a taxonomy rather than a severity:
 | a value whose type the contract does not cover | null that field — never pass it through untyped |
 
 `GridRowBuilder::build_or_record` is this sink for the grid-row stage:
-a `when_ts` that will not parse is nulled and the row kept, a row with
+a `created_at` that will not parse is nulled and the row kept, a row with
 no identity is dropped, and each lands as a `render_problems` row.
 
 Every one emits `{source, stage, key_or_path, field, reason, sample}`,
@@ -792,9 +792,14 @@ download-side. Worth measuring.
 
 If [object identity](data_architecture_ingestion.md#object-identity-ship-of-theseus-on-uuids) is "UUIDs give global object identity," this is its temporal sibling: **timestamps give global temporal ordering** across every provider that has a time-shape to its data. That global ordering is what makes the UI's union grid time-sortable, what makes `before:` / `after:` queries mean the same thing across Slack and GitHub and Notion, and what lets a sync delta be "what happened in the last week" instead of "what happened to be at the top of each provider's result list."
 
-The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with explicit offset.** Concretely, in `GridRow.when_ts`:
+The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with explicit offset.** There are two of them, and they mean different ends of the thing:
 
-- **Real upstream timestamp when one exists.** A Slack message's `ts`, a GitHub PR's `created_at`, a Notion page's `last_edited_time`. Preserved with the explicit offset upstream gave us (typically `+00:00` for APIs that hand back UTC).
+- **`created_at`** is when the thing came into being — a Slack message's `ts`, a PR's `created_at`, a page's `created_time`. For a document row (the thread, the conversation, the PR) it is the earliest moment in the document: the first message, not the last. It is the global sort key.
+- **`modified_at`** is when it last changed — the last message or reaction in a thread, a PR's `updated_at`, a page's `last_edited_time`, a vCard's `REV`. For a row inside a document it is the edit stamp where the source keeps one and **null** otherwise; null means "not known to have changed since it was created", never a copy of `created_at`.
+
+The per-provider table is in [`grid_rows.md`](grid_rows.md#created_at-and-modified_at). Concretely, for either stamp:
+
+- **Real upstream timestamp when one exists.** Preserved with the explicit offset upstream gave us (typically `+00:00` for APIs that hand back UTC).
 - **Microsecond-bump for synthesized timestamps.** Blocks and sub-items that lack their own timestamp (chat blocks within a message, ChatGPT messages within a conversation that only has a create_time) get a synthesized one by bumping microseconds off the parent's stamp. This keeps within-parent order stable across re-runs and guarantees no collision with real stamps (real timestamps don't carry per-row µs precision from upstream).
 - **Strict ISO-8601 with offset, not bare `Z` or naive.** A naive timestamp can't be globally sorted alongside a `+02:00` one without a hidden timezone assumption.
 
@@ -807,7 +812,7 @@ documented in
 ### No fabricated timestamps
 A logical corollary of the broader "[don't make up data](data_architecture_ingestion.md#wire-fidelity-of-the-raw-store)" principle, called out here because timestamps are the easiest place to accidentally violate it:
 
-- When upstream gives us no timestamp and we can't pick one up from a parent (no `bump_micros` source), `when_ts` is **null**. Not "epoch," not "now," not "midnight UTC of the row's date."
+- When upstream gives us no timestamp and we can't pick one up from a parent (no `bump_micros` source), `created_at` is **null**. Not "epoch," not "now," not "midnight UTC of the row's date."
 - When upstream's timestamp string is naive and we haven't audited that feed, parsing returns an error — surfaced as a warning in the per-run summary, not silently rescued.
 - Fallback paths that synthesize a value when upstream is silent are anti-patterns even when they "look plausible." They mask incompleteness in ways the consumer can't tell apart from real data.
 
@@ -818,7 +823,7 @@ Some upstream object types genuinely don't have a meaningful timestamp:
 - **Perseus texts and other immutable corpora.** The corpus is upstream-frozen; per-section "timestamps" would be nonsense.
 - **Workspace/account metadata** (Slack `team`, GitHub `org`): arguably has a creation date, but it isn't shown in any time-ordered view.
 
-For these `when_ts` is **null** and the consumer query filters them out of time-ordered views — the principle is "**event-shaped** rows get real timestamps," not "every row everywhere." A new provider should decide explicitly which of its row types are event-shaped and document the source of `when_ts` for each.
+For these `created_at` is **null** and the consumer query filters them out of time-ordered views — the principle is "**event-shaped** rows get real timestamps," not "every row everywhere." A new provider should decide explicitly which of its row types are event-shaped and document the source of `created_at` for each.
 
 ## See also
 

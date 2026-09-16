@@ -30,7 +30,7 @@ use datalib_schema::providers::Provider;
 ///     The render step discards it wholesale; see
 ///     `DataProcessor::render_version`.
 /// v6: a message with no `create_time` — and no previous item's stamp to
-///     inherit from — gets a null `when_ts` instead of a real-looking
+///     inherit from — gets a null `created_at` instead of a real-looking
 ///     `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
 /// v8: `account` is the login's email rather than OpenAI's opaque
@@ -39,7 +39,7 @@ pub const RENDER_VERSION: u32 = 8;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Chatgpt,
         source_label: "ChatGPT".to_string(),
         chat_kind: "Chat".to_string(),
@@ -321,9 +321,9 @@ fn capitalize(s: &str) -> String {
 }
 
 /// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
-/// is the right value for `when_ts`, but nothing records that upstream
+/// is the right value for `created_at`, but nothing records that upstream
 /// sent something we could not read — half of R1. See the note on
-/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
+/// `datalib_time::record_stamp_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse an ISO-8601 timestamp to unix millis. Accepts `…Z` and explicit
 /// offsets; returns `None` on anything unparseable (callers fall back to
 /// the bumped previous time).
@@ -344,7 +344,7 @@ mod timestamp_tests {
 
     /// The parse helper must answer `None` for anything it cannot read,
     /// so the caller falls through to inheriting the previous item's
-    /// stamp and — when there is none — to a null `when_ts`.
+    /// stamp and — when there is none — to a null `created_at`.
     #[test]
     fn iso_to_ms_refuses_to_invent_a_timestamp() {
         assert_eq!(

@@ -165,7 +165,7 @@ export default function channels(appletId) {
         const who = el("div", "sv-who");
         who.append(
           el("span", "sv-author", t.author || "unknown"),
-          el("span", "sv-when", stamp(t.when_ts)),
+          el("span", "sv-when", stamp(t.created_at)),
         );
         msg.append(who, el("div", "sv-text", t.text || "(no text)"));
 

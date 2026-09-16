@@ -49,16 +49,16 @@ pub struct MarkdownRow {
     /// the renderer falls back to a snippet of the first message.
     #[col(sql = "TEXT")]
     pub title: Option<String>,
-    /// Earliest authored timestamp for content in this markdown (ISO-8601
-    /// with explicit offset, per AGENTS.md). Sourced from the underlying
-    /// provider — not when we ingested it.
+    /// The document row's `grid_rows.created_at`, copied here so the
+    /// table answers without a join: when the document came into being,
+    /// as the source wrote it (ISO-8601 with explicit offset, per
+    /// AGENTS.md) — not when we ingested it.
     #[col(sql = "VARCHAR(40)")]
     pub created_at: Option<String>,
-    /// Latest authored timestamp for content in this markdown (ISO-8601
-    /// with explicit offset). Drives the sync page's `Last updated`
-    /// column.
+    /// The document row's `grid_rows.modified_at`, likewise: when it last
+    /// changed, as the source wrote it.
     #[col(sql = "VARCHAR(40)")]
-    pub updated_at: Option<String>,
+    pub modified_at: Option<String>,
     /// Path to the rendered markdown file, relative to the **data
     /// root** — `<stanza>/render_markdown/...`, derived by
     /// `grid_index::apply_one` stripping the data root off the absolute

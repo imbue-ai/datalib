@@ -18,7 +18,7 @@ pub const SOURCE_LABEL: &str = "Facebook";
 
 pub fn profile(chat_kind: &str, message_kind: &str) -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Facebook,
         source_label: SOURCE_LABEL.to_string(),
         chat_kind: chat_kind.to_string(),

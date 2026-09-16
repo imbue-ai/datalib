@@ -19,7 +19,7 @@ X" as verified and a marked one as not.
 datalib exposes three read surfaces over mirrored data:
 
 - **SQL** — the `grid_rows` union table (one row per message/document,
-  with `provider`, `kind`, `when_ts`, `author`, `channel`,
+  with `provider`, `kind`, `created_at`, `author`, `channel`,
   `conversation_uuid`, `text`, `entire_chat`).
 - **Markdown** — `<name>/rendered_md/`, one document per
   conversation, plus a sibling `blobs/` directory per document.
@@ -34,7 +34,7 @@ adds.
 Four forcing constraints:
 
 1. **Arbitrary metadata prefilter.** Not a partition. A boolean over
-   several fields (`author`, `kind`, `when_ts` ranges, `channel`,
+   several fields (`author`, `kind`, `created_at` ranges, `channel`,
    `provider`). QMD's only pushed-down filter is `collections`.
 2. **Scale.** ~250k emails, threaded into an estimated 25–40k documents.
 3. **Multiple vector spaces.** Text embeddings now; CLIP over media

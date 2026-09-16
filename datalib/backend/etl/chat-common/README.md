@@ -78,7 +78,7 @@ accident:
 
 Most of a provider's shape reaches the renderer through
 `RenderProfile` — its `grid_rows` taxonomy, its `source_label`, its
-`when_ts` precision. Three knobs exist for one source each, and are
+`created_at` precision. Three knobs exist for one source each, and are
 worth knowing about before you invent a fourth:
 
 - **`RenderProfile` is per *call*, not per source.** Beeper bridges

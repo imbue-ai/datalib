@@ -29,7 +29,8 @@ pub struct DoltRepo {
 /// constant because `search` and `search_by_uuids` select exactly the
 /// same set through [`search_row_from`]; two hand-kept lists drifted for
 /// as long as they existed.
-const SEARCH_ROW_COLUMNS: &str = "uuid, provider, kind, source_label, when_ts, author, account, \
+const SEARCH_ROW_COLUMNS: &str =
+    "uuid, provider, kind, source_label, created_at, modified_at, is_document, author, account, \
      project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
      message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, upstream_id, \
      upstream_entity_kind, qmd_path, byte_size, item_count";
@@ -58,7 +59,9 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
             snippet(&text, needle)
         },
         sender: author.clone(),
-        when: r.try_get::<Option<String>, _>("when_ts").ok().flatten(),
+        created_at: r.try_get::<Option<String>, _>("created_at").ok().flatten(),
+        modified_at: r.try_get::<Option<String>, _>("modified_at").ok().flatten(),
+        is_document: r.try_get::<bool, _>("is_document").unwrap_or(false),
         conversation_name: r.try_get("conversation_name").unwrap_or_default(),
         project: r.try_get("project").unwrap_or_default(),
         account: r.try_get("account").unwrap_or_default(),
@@ -134,7 +137,7 @@ impl IndexRepo for DoltRepo {
         let (where_sql, params) = build_where(q, &needle);
         let sql = format!(
             "SELECT {SEARCH_ROW_COLUMNS} FROM grid_rows{} \
-             ORDER BY when_ts_utc ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
+             ORDER BY created_at_utc ASC, is_document DESC, uuid \
              LIMIT ?",
             where_sql
         );
@@ -171,7 +174,7 @@ impl IndexRepo for DoltRepo {
         // across the rows of a single markdown, so picking the canonical
         // (Chat / Slack Thread / per-provider top-level row) keeps the
         // result deterministic.
-        let sql = "SELECT conversation_name, account, project, channel, when_ts, source_label, \
+        let sql = "SELECT conversation_name, account, project, channel, created_at, source_label, \
                           COALESCE(source_url, slack_link) AS source_url_or_link \
                    FROM grid_rows \
                    WHERE markdown_uuid = ? \
@@ -192,7 +195,7 @@ impl IndexRepo for DoltRepo {
             account: r.try_get("account").ok(),
             project: r.try_get("project").ok(),
             channel: r.try_get("channel").ok(),
-            when_ts: r.try_get("when_ts").ok(),
+            created_at: r.try_get("created_at").ok(),
             source_label: r.try_get("source_label").ok(),
             source_url: r.try_get("source_url_or_link").ok(),
         }))
@@ -230,7 +233,8 @@ impl IndexRepo for DoltRepo {
 
     async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError> {
         let rows = match sqlx::query(
-            "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider FROM grid_rows",
+            "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider, is_document \
+             FROM grid_rows",
         )
         .fetch_all(&self.pool)
         .await
@@ -246,6 +250,7 @@ impl IndexRepo for DoltRepo {
                 kind: r.try_get("kind").unwrap_or_default(),
                 qmd_path: r.try_get("qmd_path").unwrap_or_default(),
                 provider: r.try_get("provider").unwrap_or_default(),
+                is_document: r.try_get("is_document").unwrap_or(false),
             });
         }
         Ok(out)
@@ -412,6 +417,20 @@ impl IndexRepo for DoltRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The SELECT list is hand-written and the DDL is derived from
+    /// `GridRow`; a name here the table does not have fails every
+    /// search with "no such column", but only once a search runs.
+    #[test]
+    fn every_selected_column_is_in_the_grid_rows_ddl() {
+        let (_, ddl_columns) = datalib_schema::grid_rows::COLUMNS[0];
+        for name in SEARCH_ROW_COLUMNS.split(',').map(str::trim) {
+            assert!(
+                ddl_columns.contains(&name),
+                "SEARCH_ROW_COLUMNS names `{name}`, which grid_rows does not have"
+            );
+        }
+    }
 
     /// The stanza is the first path segment, matching how
     /// `datalib-step` names a source from its declared outputs and how

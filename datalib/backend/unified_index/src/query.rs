@@ -1,7 +1,7 @@
 //! The unified grid's reading of the shared search-bar grammar
-//! (`datalib_query`): which keys are `grid_rows` fields, how `type:`
-//! resolves, and the `qmd:` / `qmd_vsearch:` predicates that route free
-//! text to the semantic index.
+//! (`datalib_query`): which keys are `grid_rows` fields, what
+//! `is:document` means, and the `qmd:` / `qmd_vsearch:` predicates that
+//! route free text to the semantic index.
 
 use std::collections::BTreeMap;
 
@@ -10,7 +10,6 @@ pub enum Field {
     Before,
     After,
     Subj,
-    Type,
     /// The provider's human label ("Slack") — one value per source
     /// *type*, so it cannot separate two configured Slack workspaces.
     Source,
@@ -26,6 +25,11 @@ pub enum Field {
     SourceId,
     Kind,
     Channel,
+    /// `is:document` — the rows that are whole rendered documents (a
+    /// thread, a conversation, a PR, a page) rather than places inside
+    /// one; `-is:document` for the inverse. Any other `is:` value is
+    /// unknown and matches nothing.
+    Is,
     /// UUID-load-bearing filter on `conversation_uuid`. Token values follow
     /// the Notion-style `slug-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee` pattern;
     /// the slug is non-load-bearing and discarded at filter time.
@@ -44,7 +48,6 @@ impl Field {
             "before" => Field::Before,
             "after" => Field::After,
             "subj" => Field::Subj,
-            "type" => Field::Type,
             "source" => Field::Source,
             "source_id" => Field::SourceId,
             // `source_name:` is what this filter was called while a
@@ -53,6 +56,7 @@ impl Field {
             "source_name" => Field::SourceId,
             "kind" => Field::Kind,
             "channel" => Field::Channel,
+            "is" => Field::Is,
             "convo" => Field::Convo,
             "author" => Field::Author,
             "account" => Field::Account,
@@ -105,13 +109,6 @@ fn is_uuid_shape(s: &str) -> bool {
     true
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RowType {
-    Chat,
-    Message,
-    All,
-}
-
 /// One filter occurrence from the query string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilterTerm {
@@ -146,7 +143,10 @@ pub struct ParsedQuery {
     pub free_text: String,
     /// How `free_text` should be evaluated against the qmd index.
     pub free_text_mode: FreeTextMode,
-    pub resolved_type: RowType,
+    /// `Some(true)` keeps only the document rows, `Some(false)` only the
+    /// rows inside documents, `None` both: `is:document` and its
+    /// negation, last one wins.
+    pub documents: Option<bool>,
 }
 
 pub fn parse_query(s: &str) -> ParsedQuery {
@@ -204,19 +204,16 @@ pub fn parse_query(s: &str) -> ParsedQuery {
         }
     }
     let free_text = free_terms.join(" ");
-    let resolved_type = match filters.get(&Field::Type).and_then(|v| v.first()) {
-        Some(t) if t == "chat" => RowType::Chat,
-        Some(t) if t == "message" => RowType::Message,
-        Some(t) if t == "all" => RowType::All,
-        _ if free_text.is_empty() => RowType::All,
-        _ => RowType::Message,
-    };
+    let documents = terms
+        .iter()
+        .filter(|t| t.field == Field::Is && t.value == "document")
+        .fold(None, |_, t| Some(!t.negate));
     ParsedQuery {
         terms,
         filters,
         free_text,
         free_text_mode,
-        resolved_type,
+        documents,
     }
 }
 
@@ -231,25 +228,29 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_resolves_to_all() {
+    fn empty_query_keeps_every_row() {
         let q = parse_query("");
-        assert_eq!(q.resolved_type, RowType::All);
+        assert_eq!(q.documents, None);
         assert_eq!(q.free_text, "");
         assert!(q.filters.is_empty());
         assert!(q.terms.is_empty());
     }
 
     #[test]
-    fn free_text_resolves_to_message() {
+    fn free_text_alone_keeps_every_row() {
         let q = parse_query("treemap layout");
-        assert_eq!(q.resolved_type, RowType::Message);
+        assert_eq!(q.documents, None);
         assert_eq!(q.free_text, "treemap layout");
     }
 
     #[test]
-    fn type_override_wins() {
-        let q = parse_query("treemap type:chat");
-        assert_eq!(q.resolved_type, RowType::Chat);
+    fn is_document_sets_the_documents_filter() {
+        assert_eq!(parse_query("treemap is:document").documents, Some(true));
+        assert_eq!(parse_query("-is:document").documents, Some(false));
+        assert_eq!(parse_query("is:unread").documents, None);
+        // Last one wins, and the free text is untouched.
+        let q = parse_query("treemap is:document -is:document");
+        assert_eq!(q.documents, Some(false));
         assert_eq!(q.free_text, "treemap");
     }
 

@@ -68,7 +68,7 @@ test("the Source column shows the configured name, and source_id: filters by id"
   // --- `source_id:` narrows to one source --------------------------
   // Every visible cell must read `slack` — the filter is a whole-segment
   // prefix test on qmd_path, not a substring match on anything.
-  await searchAndSettle(page, "source_id:slack type:all");
+  await searchAndSettle(page, "source_id:slack");
   await expect(page.locator(SOURCE_CELLS).first()).toBeVisible();
   expect(
     await distinctSourceCells(page),
@@ -77,14 +77,14 @@ test("the Source column shows the configured name, and source_id: filters by id"
   // `source_name:` is the spelling this filter had before a source had
   // a name to collide with, so it is in saved queries and in people's
   // fingers. It has to keep landing on the same rows.
-  await searchAndSettle(page, "source_name:slack type:all");
+  await searchAndSettle(page, "source_name:slack");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["slack"]);
 
   // A stanza that exists in the fixture but isn't the one asked for
   // must be excluded, so the filter is provably doing work.
-  await searchAndSettle(page, "source_id:claude-api type:all");
+  await searchAndSettle(page, "source_id:claude-api");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["claude-api"]);
@@ -93,7 +93,7 @@ test("the Source column shows the configured name, and source_id: filters by id"
   // under `datalib` rather than the source they measure, which is why
   // neither search above turned one up. They have their own bucket,
   // and the column spells it out.
-  await searchAndSettle(page, "source_id:datalib type:all");
+  await searchAndSettle(page, "source_id:datalib");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["Datalib"]);
@@ -119,13 +119,13 @@ inputs = ["slack/ingest"]
   );
 
   await openGrid(page);
-  await searchAndSettle(page, "source_id:slack type:all");
+  await searchAndSettle(page, "source_id:slack");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["Work Slack"]);
 
   // The filter token still carries the id, not the name: the index has
   // never heard of names, and two sources may share one.
-  await searchAndSettle(page, 'source_id:"Work Slack" type:all');
+  await searchAndSettle(page, 'source_id:"Work Slack"');
   await expect(page.locator(SOURCE_CELLS)).toHaveCount(0);
 });

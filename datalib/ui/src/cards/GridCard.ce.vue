@@ -565,7 +565,7 @@ function applyDefaultSort() {
     gridApi.applyColumnState({
       state: [
         { colId: "score", sort: "desc", sortIndex: 0 },
-        { colId: "when", sort: null, sortIndex: null },
+        { colId: "created_at", sort: null, sortIndex: null },
       ],
       defaultState: { sort: null },
     });
@@ -573,7 +573,7 @@ function applyDefaultSort() {
     gridApi.applyColumnState({
       state: [
         { colId: "score", sort: null, sortIndex: null },
-        { colId: "when", sort: "asc", sortIndex: 0 },
+        { colId: "created_at", sort: "asc", sortIndex: 0 },
       ],
       defaultState: { sort: null },
     });
@@ -643,7 +643,7 @@ const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   provider_ref: "source",
   kind: "kind",
   channel: "channel",
-  when: "when",
+  created_at: "created_at",
   author: "author",
   account: "account",
 };
@@ -782,7 +782,7 @@ const columnOverrides: Record<string, ColDef<SearchRow>> = {
   // in now that the definitions are built once: `applyDefaultSort`
   // still switches to score when a free-text search returns scores,
   // and a user's own sort sticks because nothing rebuilds the columns.
-  when: { sort: "asc" },
+  created_at: { sort: "asc" },
   snippet: {
     flex: 1,
     minWidth: 200,
@@ -895,6 +895,11 @@ const defaultColDef: ColDef = {
 const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
   animateRows: false,
+  // Two dozen columns is nothing to virtualize, and with it on a column
+  // past the right edge has no header cell in the DOM at all — which
+  // reads, to a test asking "is this column shown", exactly like a
+  // hidden one.
+  suppressColumnVirtualisation: true,
   // Empty results are reported once, by the "no matches." line below the
   // grid — which is gated so it stays hidden while a search is in flight
   // or the error banner is up. AG Grid's own "No Rows To Show" overlay

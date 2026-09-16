@@ -319,7 +319,7 @@ async fn parse_async(
                 source_ref: None,
                 emoji: emoji.unwrap_or_else(|| "?".to_string()),
                 // A NULL `timestamp` column is "we don't know when",
-                // which is a null `when_ts` — not 1970.
+                // which is a null `created_at` — not 1970.
                 date_ms: timestamp,
             });
     }
@@ -349,8 +349,8 @@ async fn parse_async(
             Some(ts) => period.key_for_ms(ts),
             // An undated message still has to be filed somewhere;
             // `key_for_undated` documents why that is the epoch
-            // bucket and not a new `"undated"` key. Its `when_ts`
-            // is null regardless — bucketing and `when_ts` answer
+            // bucket and not a new `"undated"` key. Its `created_at`
+            // is null regardless — bucketing and `created_at` answer
             // different questions.
             None => period.key_for_undated(),
         };
@@ -495,7 +495,7 @@ fn build_item(
         author_id,
         author_display,
         // A NULL `timestamp` column is "we don't know when", which is a
-        // null `when_ts` — not 1970. See
+        // null `created_at` — not 1970. See
         // `docs/dev/data_architecture_parse_and_render.md` §6.
         date_ms: timestamp,
         text: text_data,

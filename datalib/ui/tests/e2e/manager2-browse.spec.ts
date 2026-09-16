@@ -7,6 +7,7 @@
 // with that type's columns. Every link is in a different file.
 
 import { test, expect, type Page } from "@playwright/test";
+import { searchAndSettle } from "./grid-helpers";
 
 const ROWS = '.ag-grid-scrolling-rows [role="row"]';
 const SEARCH = '[data-testid="search-input"]';
@@ -120,27 +121,37 @@ test.afterEach(async ({ page }) => {
 test("a source's row opens that source, with its type's columns", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browse(page, "slack", "source_id:slack");
+  await browse(page, "slack", "source_id:slack is:document");
 
   // The card stack IS the URL, which is what makes a browse
   // bookmarkable and shareable rather than a transient view.
   await expect(page).toHaveURL(/source_id%3Aslack/);
 
-  // Every row came from this source. The Source column is hidden here —
-  // one value, so the adaptive rule drops it — which is why this reads
-  // the Type column instead.
+  // Every row came from this source, and every row is a document: one
+  // per thread, not the messages inside them. Both facts leave one
+  // value in their column — Source, Kind — and the adaptive rule drops
+  // a column with one value, so neither is on screen; the channel is,
+  // and every one of them is a Slack channel or DM. The storage rows sit
+  // in this source's directory but are filed under datalib, so a browse
+  // of the source is the source's data — see docs/dev/grid_rows.md.
+  await expect
+    .poll(async () => {
+      const channels = await columnValues(page, "channel");
+      return channels.length > 0 && channels.every((c) => /^[#@]/.test(c.trim()));
+    })
+    .toBe(true);
+  await expect(page.locator('.ag-header-cell[col-id="kind"]')).toHaveCount(0);
+
+  // The messages are one chip-delete away: drop `is:document` and the
+  // Kind column earns its place back, with the thread's rows under it.
+  await searchAndSettle(page, "source_id:slack");
   await expect
     .poll(async () => {
       const kinds = await columnValues(page, "kind");
-      return kinds.length > 0 && kinds.every((k) => k.trim().length > 0);
+      return kinds.length > 0 && kinds.every((k) => /^Slack /.test(k.trim()));
     })
     .toBe(true);
-  // Slack's own kinds and nothing else. The storage rows sit in this
-  // source's directory but are filed under datalib, so a browse of the
-  // source is the source's data — see docs/dev/grid_rows.md.
-  for (const k of await columnValues(page, "kind")) {
-    expect(k.trim()).toMatch(/^Slack /);
-  }
+  expect(await columnValues(page, "kind")).toContain("Slack Message");
 
   // Slack's preset: a channel and an author, and no Project — Slack has
   // no such thing, and a column of empty cells is what a preset exists
@@ -153,13 +164,16 @@ test("a source's row opens that source, with its type's columns", async ({ page 
 test("a different type gets a different column set", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  await browse(page, "github", "source_id:github");
+  await browse(page, "github", "source_id:github is:document");
 
   // GitHub's preset is an author and the repo the row belongs to, and
   // no channel — the opposite pair to Slack's, from the same fixture.
   // Only `author` is asserted on screen: this library holds one
   // repository, so every row agrees on `project` and the adaptive rule
-  // trims it. A preset is a ceiling, not a fixed set.
+  // trims it. A preset is a ceiling, not a fixed set — and the two PRs
+  // share an author too, so the column shows once the review comments
+  // are back in the grid.
+  await searchAndSettle(page, "source_id:github");
   await expect(page.locator('.ag-header-cell[col-id="author"]')).toBeVisible();
   await expect(page.locator('.ag-header-cell[col-id="channel"]')).toHaveCount(0);
 });

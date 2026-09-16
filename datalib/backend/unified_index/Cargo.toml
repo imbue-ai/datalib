@@ -29,4 +29,5 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+datalib-table = { path = "../table" }
 tempfile = "3"

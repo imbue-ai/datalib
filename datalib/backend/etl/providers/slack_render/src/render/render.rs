@@ -30,7 +30,7 @@ use datalib_schema::providers::Provider;
 ///     output directory. A v3 tree cannot be updated in place; the
 ///     render step discards it wholesale. See
 ///     `DataProcessor::render_version`.
-/// v5: a `ts` we cannot parse is a null `when_ts` instead of a
+/// v5: a `ts` we cannot parse is a null `created_at` instead of a
 ///     real-looking `1970-01-01T00:00:00` — see
 ///     `docs/dev/data_architecture_parse_and_render.md` §6. Any document
 ///     holding such a row renders differently, so stale docs must go.
@@ -50,7 +50,7 @@ pub struct RenderSummary {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Slack,
         source_label: "Slack".to_string(),
         chat_kind: "Slack Thread".to_string(),
