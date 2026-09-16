@@ -1051,6 +1051,11 @@ const defaultColDef: ColDef = {
 const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
   animateRows: false,
+  // Two dozen columns is nothing to virtualize, and with it on a column
+  // past the right edge has no header cell in the DOM at all — which
+  // reads, to a test asking "is this column shown", exactly like a
+  // hidden one.
+  suppressColumnVirtualisation: true,
   // Empty results are reported once, by the "no matches." line below the
   // grid — which is gated so it stays hidden while a search is in flight
   // or the error banner is up. AG Grid's own "No Rows To Show" overlay
