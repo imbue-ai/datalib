@@ -6,7 +6,7 @@
 # Callers must run `actions/checkout` first — a local composite action is
 # loaded from the checked-out workspace, so it cannot check itself out.
 name: Prepare bazel environment
-description: Configure the BuildBuddy remote cache.
+description: Configure the BuildBuddy remote cache and persist bazel's repository cache.
 
 inputs:
   buildbuddy-api-key:
@@ -20,6 +20,35 @@ inputs:
 runs:
   using: composite
   steps:
+    # Bazel's repository cache: every archive a repository rule downloads
+    # (the Rust toolchain, rustfmt, Python, Node, ~300 crates, ~240 npm
+    # tarballs, the three qmd GGUF models — ~2.5 GB), keyed by its own
+    # sha256. Without this it is re-downloaded into the empty container
+    # on every run: on a warm run of `main` that was ~320 thread-seconds
+    # of `Fetching repository`, and most of the ~100 s that looked like
+    # "analysis" (the same analysis takes ~10 s with the repositories
+    # already fetched). BuildBuddy's remote downloader only changes
+    # where the bytes come from, not that they are fetched.
+    #
+    # Safe to persist in a way the action/disk cache was not (see the
+    # test.yml header): entries are content-addressed and bazel verifies
+    # the sha256 on use, so a stale or partial cache costs a download,
+    # never a wrong build. The key is the set of lockfiles that decide
+    # what gets fetched; `restore-keys` makes any older entry a starting
+    # point when one of them changes.
+    - name: Restore the bazel repository cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/bazel-repository-cache
+        key: bazel-repo-${{ runner.os }}-${{ hashFiles('MODULE.bazel.lock', '**/pnpm-lock.yaml', '**/Cargo.lock', 'requirements.txt') }}
+        restore-keys: |
+          bazel-repo-${{ runner.os }}-
+
+    - name: Point bazel at the repository cache
+      shell: bash
+      run: |
+        echo "common --repository_cache=${RUNNER_TEMP}/bazel-repository-cache" >> .bazelrc.user
+
     # Drop the key into the workspace `.bazelrc.user` (gitignored) —
     # `.bazelrc`'s `try-import` at the bottom picks it up, and
     # `build --config=buildbuddy` activates the remote cache + BES endpoint.
@@ -34,7 +63,7 @@ runs:
       run: |
         set -euo pipefail
         if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-            cat > .bazelrc.user <<EOF
+            cat >> .bazelrc.user <<EOF
         common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
         build --config=buildbuddy
         EOF
