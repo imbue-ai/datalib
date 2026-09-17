@@ -277,8 +277,11 @@ pub fn parse_multistatus(url: &str, body: &str) -> Result<Multistatus, CarddavEr
                 }
             }
             Ok(Event::Text(t)) => {
-                let txt = t.unescape().unwrap_or_default().into_owned();
+                let txt = t.decode().unwrap_or_default().into_owned();
                 text_capture.append(&txt);
+            }
+            Ok(Event::GeneralRef(r)) => {
+                text_capture.append(&datalib_etl::xml::reference_text(&r, false));
             }
             Ok(Event::End(e)) => {
                 let name = local_name(e.name().as_ref());

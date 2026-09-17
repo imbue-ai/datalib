@@ -254,8 +254,16 @@ fn parse_one(path: &Path) -> Result<FlatMap> {
                     continue;
                 }
                 if let Some(top) = stack.last_mut() {
-                    let decoded = t.unescape().with_context(|| "decoding TEI text node")?;
+                    let decoded = t.decode().with_context(|| "decoding TEI text node")?;
                     push_normalized(&mut top.text, &decoded);
+                }
+            }
+            Ok(Event::GeneralRef(r)) => {
+                if !in_body {
+                    continue;
+                }
+                if let Some(top) = stack.last_mut() {
+                    push_normalized(&mut top.text, &datalib_etl::xml::reference_text(&r, false));
                 }
             }
             Ok(Event::CData(c)) => {
@@ -290,8 +298,7 @@ impl DivFrame {
         let mut f = DivFrame::default();
         for attr in e.attributes().flatten() {
             let key = attr.key.as_ref();
-            let val = attr
-                .unescape_value()
+            let val = datalib_etl::xml::attr_value(&attr)
                 .map(|v| v.into_owned())
                 .unwrap_or_default();
             if key == b"subtype" {
@@ -392,13 +399,23 @@ fn read_cts(input_path: &Path) -> Result<BTreeMap<String, (String, String)>> {
             }
             Ok(Event::Text(t)) => {
                 if !sink.is_empty() {
-                    let decoded = t.unescape().unwrap_or_default();
+                    let decoded = t.decode().unwrap_or_default();
                     let target = if sink == "label" {
                         &mut label
                     } else {
                         &mut description
                     };
                     target.push_str(&decoded);
+                }
+            }
+            Ok(Event::GeneralRef(r)) => {
+                if !sink.is_empty() {
+                    let target = if sink == "label" {
+                        &mut label
+                    } else {
+                        &mut description
+                    };
+                    target.push_str(&datalib_etl::xml::reference_text(&r, false));
                 }
             }
             Ok(Event::End(e)) => {
@@ -431,8 +448,7 @@ fn edition_attrs(e: &BytesStart) -> (String, String) {
     let mut lang = String::new();
     for attr in e.attributes().flatten() {
         let key = attr.key.as_ref();
-        let val = attr
-            .unescape_value()
+        let val = datalib_etl::xml::attr_value(&attr)
             .map(|v| v.into_owned())
             .unwrap_or_default();
         if key == b"urn" {

@@ -546,7 +546,10 @@ mod live {
             // `latchkey [--account <acct>] curl` — the account selector is a
             // latchkey *global* option and so must precede the subcommand;
             // `latchkey_curl_command` is the one place that knows that.
-            crate::latchkey::latchkey_curl_command(&req.latchkey)
+            crate::latchkey::latchkey_curl_command(&req.latchkey).map_err(|e| HttpError::Spawn {
+                service: req.service,
+                message: format!("{e:#}"),
+            })?
         };
         cmd.arg("-sS");
         // -D - dumps the response header block to stdout so we can

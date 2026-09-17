@@ -52,13 +52,39 @@ macOS app, and the prod docker image with its doc test (#469). It does
 not build the CI image.
 
 **BuildBuddy** (`imbue.buildbuddy.io`) is the action cache, the build
-event stream and the remote downloader for both `test.yml` jobs.
-`.github/actions/prepare-bazel` writes the API key from the
-`BUILD_BUDDY_API_KEY` secret into the gitignored `.bazelrc.user` at
-run time, and `.bazelrc`'s `--config=buildbuddy` turns it on. The
-image build sees none of it: `devcontainer.yml` never runs
-`prepare-bazel`, `.bazelrc.user` is in `.dockerignore`, and what the
-image bakes is public archives verified by sha256.
+event stream and the remote downloader for both `test.yml` bazel jobs.
+`.github/actions/prepare-bazel` writes an API key into the gitignored
+`.bazelrc.user` at run time, and `.bazelrc`'s `--config=buildbuddy`
+turns it on. The image build sees none of it: `devcontainer.yml` never
+runs `prepare-bazel`, `.bazelrc.user` is in `.dockerignore`, and what
+the image bakes is public archives verified by sha256.
+
+## Two caches: contributor and release
+
+Bazel does not verify an action-cache hit, so whoever can write a
+cache decides what a build reading it ships. Two BuildBuddy *groups*
+(a group is BuildBuddy's isolation unit: its own cache, its own keys)
+keep a release from replaying anything a laptop or a PR run wrote:
+
+| group | key (GitHub secret) | writes | reads |
+|---|---|---|---|
+| contributor | `BUILD_BUDDY_API_KEY` | every laptop with the key, PR and dispatch runs of `test.yml`, `intel-curl-smoke.yml` | the same |
+| release | `BUILD_BUDDY_RELEASE_API_KEY` | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | `release.yml`, read-only (`--config=buildbuddy-release-readonly`) |
+
+Two BuildBuddy *organizations*, each on its own subdomain
+(`imbue.buildbuddy.io`, `imbue-release.buildbuddy.io`): a key only
+works against its own org's host, so `prepare-bazel` takes the key and
+the config together. A tag builds a commit that is already on `main`,
+so the release build hits exactly what the `main` run of that commit
+produced; the `-readonly` config is what keeps it from writing, not the
+key. Without the release secret a tag build runs cold (~20 min a leg)
+rather than falling back to the contributor cache — that is the
+intended failure mode.
+
+The release org exists and its read-write key is the repository
+secret; a second org means creating it from BuildBuddy's org switcher,
+minting a key under its Settings → API keys, and `gh secret set
+BUILD_BUDDY_RELEASE_API_KEY --repo imbue-ai/datalib`.
 
 ## The caches, and what each is for
 

@@ -41,12 +41,18 @@
 # sha256 of the content — cross-checked against `shasum -a 256` of a warm
 # `~/.cache/qmd/models` before being written down here.
 #
+# The same table lives in `datalib/backend/runtime/src/qmd.rs`
+# (`PINNED_MODELS`), where the shipped binaries provision and verify the
+# files at run time; `//tools:qmd_model_pins_test` holds the two equal.
+#
 # `requires-network` is what lets the sandbox reach the origin on a cache
 # miss; `no-remote-exec` keeps the fetch off the remote executors, which
 # have no business talking to HuggingFace. A miss is rare — the action's
 # key is the URL and the digest — and the script retries a 429 with
 # backoff, which is the failure that made these bazel inputs in the first
 # place.
+exports_files(["BUILD.bazel"])  # read by //tools:qmd_model_pins_test
+
 MODELS = [
     (
         "embeddinggemma",

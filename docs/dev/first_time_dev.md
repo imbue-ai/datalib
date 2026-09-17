@@ -13,9 +13,10 @@ just want to *run* the released tools against your own data, start with the
 brew install bazel cmake
 
 # That is all: qmd's models and Node are Bazel inputs, so the build needs
-# nothing in your home directory. A host Node is needed to RUN the
-# shipped CLI (it shells out to latchkey and qmd at sync time), not to
-# build the repo.
+# nothing in your home directory — not even to RUN a sync. The binaries
+# shell out to latchkey and qmd through a staged `runtime/` tree (the
+# .app, the tarball and the dev launchers all carry one; see "running
+# one by hand" below), never through a host Node.
 ```
 
 ### Linux iteration via devcontainer
@@ -218,14 +219,31 @@ No `--binary-dir` is needed: `datalib-dag` resolves each step's
 bare `datalib-step` in the config finds the sibling binary. Add
 `--sync <step-id>[,<step-id>…]` to run a subset of the graph.
 
+A sync also spawns `latchkey` and `qmd`, which the binaries run from a
+`runtime/` tree (Node plus both package trees, lockfile-pinned by
+Bazel) found beside themselves or through `DATALIB_RUNTIME_DIR`. The
+`bazel run //datalib:serve|dev|dev_tng` launchers stage one for you;
+for a hand-run binary, stage it once and point at it:
+
+```sh
+scripts/stage_runtime.sh ~/.cache/datalib/runtime
+export DATALIB_RUNTIME_DIR=~/.cache/datalib/runtime
+```
+
+Without a tree the spawn fails with a message naming both fixes. The
+third, `DATALIB_ALLOW_NPX=1`, runs the tool through `npx -y` from the
+live registry instead — a dev-only escape hatch that prints a warning
+every time it fires, because the transitive packages are unpinned and
+their install scripts run.
+
 ### QMD search index (default-on, incremental)
 
 The `qmd_index` step rebuilds the qmd search index over `<root>`
 after the markdown tree is rendered + loaded. The indexer
-(`datalib/backend/qmd_indexer/`) shells out to the qmd CLI — the
-app-bundled runtime when one is staged (the Tauri bundle and the Bazel
-fixture genrule both stage one), else `npx -y @tobilu/qmd@<version>` —
-with `XDG_CACHE_HOME=<root>/unified_index/qmd_index` (the step's own tree), so the index lands at `<root>/unified_index/qmd_index/qmd/index.sqlite`
+(`datalib/backend/qmd_indexer/`) shells out to the qmd CLI from the
+staged runtime tree (above) — after `datalib_qmd_models` has put the
+pinned, sha256-verified GGUFs in place, so qmd never fetches a model
+itself — with `XDG_CACHE_HOME=<root>/unified_index/qmd_index` (the step's own tree), so the index lands at `<root>/unified_index/qmd_index/qmd/index.sqlite`
 (the scan root stays `<root>` over the `*/render_markdown/**/*.md` mask), alongside the per-stanza
 `<name>/render_markdown/` trees and `unified_index/grid_index/db.doltlite_db`. This is what the search bar's hybrid / vector
 queries hit (see `datalib/backend/unified_index/src/qmd/`).

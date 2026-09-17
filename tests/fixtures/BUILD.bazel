@@ -398,11 +398,10 @@ py_test(
 #     a models dir inside the sandbox — so this action no longer reads
 #     the host's `~/.cache/qmd/models`, and no longer downloads it on a
 #     machine where that cache is cold (which is every CI run).
-#   * Embeds only; it does not `qmd pull`. Pull exists to put the query
-#     expansion and reranker models in place for interactive querying,
-#     which the fixture never does — and it is also the step that would
-#     re-download our staged model, since it treats "cached file whose
-#     etag I cannot confirm" as stale. The driver passes `--no-pull`.
+#   * Embeds only. Nothing runs `qmd pull` any more (it re-downloads on
+#     any etag difference against HuggingFace `main`); the indexer needs
+#     the embedding model already in its models dir, which is what the
+#     Bazel input above supplies.
 #   * SQLite output is NOT byte-stable across runs (timestamps, packing).
 #     This rule is correctness-only. That does not stop it from being
 #     CACHEABLE, though — bazel keys an action on its inputs, never on
