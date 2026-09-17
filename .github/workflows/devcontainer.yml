@@ -6,10 +6,13 @@
 #
 # Runs on every push to `main` that touches the Dockerfile or what Bazel
 # fetches (the image carries a pre-fetched output base, so a toolchain
-# or lockfile bump is what makes it stale), and on demand for any
-# branch. Every build is tagged `:sha-<commit>`; `:latest` — the tag
-# `test.yml` pulls — moves only on a `main` push or when a dispatch asks
-# for it, and only after the image has proved it can analyse the tree.
+# or lockfile bump is what makes it stale), on every pull request that
+# touches the Dockerfile or this file, and on demand for any branch.
+# Every build is tagged `:sha-<commit>`; `:latest` — the tag `test.yml`
+# pulls — moves only on a `main` push or when a dispatch asks for it,
+# and only after the image has proved it can analyse the tree. A PR's
+# build is how to try a Dockerfile change: dispatch `test.yml` with its
+# `sha-` tag.
 name: devcontainer
 
 on:
@@ -25,6 +28,10 @@ on:
       - datalib/backend/Cargo.lock
       - requirements.txt
       - "**/pnpm-lock.yaml"
+  pull_request:
+    paths:
+      - .devcontainer/**
+      - .github/workflows/devcontainer.yml
   workflow_dispatch:
     inputs:
       publish_latest:
@@ -38,7 +45,7 @@ permissions:
 
 concurrency:
   group: devcontainer-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
