@@ -1,115 +1,70 @@
-# Devcontainer that inherits from the prod runtime image and adds the
-# Bazel build toolchain on top. The prod image already carries
-# `ubuntu:24.04` + Node 22 + latchkey + the doltlite CLI + qmd + the
-# bind-mount target directories, so inheriting from it gives the
-# devcontainer all of that
-# "for free" — no Dockerfile mirroring, no double download. Contributors
-# qmd's three default GGUFs at /root/.cache/qmd/models come with it too
-# when building against `datalib:<ver>` — the default, and what a local
-# devcontainer gets. `release.yml` builds the PUBLISHED devcontainer
-# against `datalib:<ver>-slim` instead, which omits them; only CI pulls
-# that image.
+# The image `bazel test //...` runs in on CI, and the devcontainer a
+# contributor opens the repo in. Built from `ubuntu:24.04` directly — it
+# used to inherit the prod runtime image, which bought it a Node it only
+# needs at build time and cost it a publish that could only run after
+# a release's prod-image job, so the CI image went unpublished for four
+# releases while that job failed on an unrelated doc check (#469).
 #
-# Neither the build nor the tests care either way any more: the models
-# are fetched by `//third-party/qmd_models` and reach the fixture's
-# index genrule and the materialized demo root as bazel inputs. What the
-# baked copy still buys, in the full image, is a first `datalib` sync
-# that doesn't stall on a 2.2 GB download. See `QMD_PREFETCH_MODELS` in
-# `datalib/docker/Dockerfile`.
+# What the build needs from the host is short, because Bazel brings its
+# own Node, Python, Rust, qmd, doltlite and models: a C/C++ toolchain
+# and the libraries two build scripts link, `python3` for the fixture
+# scripts, `rsync` for the e2e wrapper, the stock `sqlite3` CLI for the
+# beeper extract, and Playwright's browsers with their OS libraries.
+# Node, latchkey and bun are here for the person, not the build: the
+# app falls back to `npx -y latchkey@<pin>` for auth, and qmd's own dev
+# loop is `bun`.
 #
-# Contributors who've already pulled the prod image during `docker pull
-# ghcr.io/imbue-ai/datalib:<ver>` (or anyone who ran
-# `scripts/build_docker.sh --load`) reuse the cached layers; a fresh
-# `devcontainer up` only needs to fetch the dev-only build toolchain
-# layers added below.
-#
-# Pin: the FROM tag tracks a published prod image, by exact version
-# rather than `:latest`, so a devcontainer build is reproducible.
-#
-# It must equal [workspace.package].version in
-# datalib/backend/Cargo.toml — `//datalib/backend:version_consistency_test`
-# enforces that, alongside the same check for dag's and http's
-# BUILD.bazel `version` attrs. The pin had drifted twenty minor versions
-# behind (0.5.2 against a 0.25.0 release series) before the test covered
-# it.
-#
-# There is a short window during a release, between the version-bump
-# commit and `release.yml` publishing the new tag, where this points at
-# an image that does not exist yet. That is the same window the rest of
-# the version bump lives in; `release.yml` closes it minutes later.
-ARG PROD_IMAGE_TAG=0.33.0
-FROM ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}
-
-# Reset the prod image's ENTRYPOINT. Prod wraps everything in
-# `tini -- datalib-entrypoint.sh`, which bootstraps
-# LATCHKEY_ENCRYPTION_KEY from a per-bind-mount key file before
-# exec'ing the user's command. Inside a VS Code devcontainer that
-# wrapping just gets in the way — interactive shells, `bazel run`,
-# `cargo test`, etc. don't want latchkey state magically appearing.
-ENTRYPOINT []
-CMD []
+# Published by `.github/workflows/devcontainer.yml` — on every push to
+# `main` that touches this file or what Bazel fetches, and on demand —
+# as `ghcr.io/imbue-ai/datalib_devcontainer:<sha>` and `:latest`. Nothing
+# here depends on a release having happened.
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Build toolchain that prod doesn't ship. Items already present in
-# prod (build-essential, python3, sudo-not-needed, etc) are NOT
-# repeated here — apt would happily skip them, but listing only the
-# deltas makes the dev-vs-prod surface visible.
-#
-# cmake + perl + pkg-config + libssl-dev
-#                   protobuf-src's (and formerly boring-sys2's)
-#                   build-script deps.
-# lld               rustc on Linux still defaults to the deprecated
-#                   gold linker and warns; lld present means we can
-#                   opt in via RUSTFLAGS/--linkopt if we want to
-#                   silence that.
-# git               needed by some build scripts (workspace_status.sh,
-#                   rules_rust crate fetches that vendor from git).
-# python3-pip       `tests/fixtures/build_qmd_index.py` and friends.
-# rsync             `//datalib/ui:e2e_test`'s wrapper (run_e2e.sh)
-#                   stages the Playwright spec tree via `rsync -aL`.
-#                   macOS ships rsync; Ubuntu's base image here does not.
-# sqlite3           the beeper provider's extract shells out to the
-#                   *stock* `sqlite3` CLI (it can't link rusqlite — see
-#                   beeper/src/extract/index_db.rs — and doltlite
-#                   misreads stock SQLite type codes). macOS ships
-#                   /usr/bin/sqlite3; on Ubuntu the runtime lib
-#                   (libsqlite3-0) does NOT carry the CLI, so the
-#                   `//tests/fixtures:ingested_tng` genrule failed with
-#                   "spawn sqlite3: No such file or directory" until
-#                   this was added.
-# unzip + zip       rules_rust workspace setup occasionally pulls
-#                   these in; cheap to keep.
+# cmake + perl + pkg-config + libssl-dev   protobuf-src's build script.
+# lld               rustc on Linux defaults to the deprecated gold
+#                   linker and warns; lld present means we can opt in.
+# git               workspace_status.sh, crate fetches that vendor from git.
+# rsync             `//datalib/ui:e2e_test`'s wrapper stages the spec
+#                   tree with `rsync -aL`.
+# sqlite3           the beeper extract shells out to the *stock* CLI
+#                   (doltlite misreads stock type codes); libsqlite3-0
+#                   alone does not carry it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
         cmake \
+        curl \
         git \
+        gnupg \
         libsqlite3-0 \
         libssl-dev \
         lld \
+        openssl \
         perl \
         pkg-config \
+        python3 \
         python3-pip \
         rsync \
         sqlite3 \
         unzip \
         zip \
-    && rm -rf /var/lib/apt/lists/* \
-    # Symlink the unversioned SONAME that the (currently) buggy
-    # exec-config datalib_sync_bin's DT_NEEDED expects. The
-    # `--host_linkopt=-Wl,--as-needed` we added to .bazelrc fixes the
-    # source of the bug, but until BuildBuddy's cache is reseeded with
-    # post-fix actions, the warmup will still pull a stale cached
-    # exec-config tool with the phantom dep. The symlink lets it run;
-    # once the cache reseeds, the symlink becomes a dead pointer
-    # (harmless).
-    && for d in /usr/lib/*-linux-gnu; do \
-            [ -f "${d}/libsqlite3.so.0" ] || continue; \
-            ln -sf libsqlite3.so.0 "${d}/libsqlite3.so"; \
-       done
+    && rm -rf /var/lib/apt/lists/*
 
-# bun — not needed for the bazel build, but qmd's own dev workflow
-# uses it (`bun install`, `bun src/cli/qmd.ts <cmd>`) so working
-# inside `third-party/qmd/` doesn't need extra setup.
+# Node, the same major the prod image ships, and latchkey at the same
+# pin: `//tools:version_pins_test` holds both in step with
+# `datalib/docker/Dockerfile`. Playwright's installer below needs `npx`;
+# everything else that runs Node under `bazel test` uses Bazel's own.
+ARG NODE_MAJOR=22
+RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version && npm --version
+ARG LATCHKEY_VERSION=3.11.0
+RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
+
+# bun — qmd's own dev workflow (`bun install`, `bun src/cli/qmd.ts`).
 ARG BUN_VERSION=1.4.0
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && mv /root/.bun/bin/bun /usr/local/bin/bun \
@@ -118,57 +73,31 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && bun --version
 
 # Playwright's browsers + their OS libraries, for `//datalib/ui:e2e_test`.
-# The test resolves them from `~/.cache/ms-playwright` via
-# `env_inherit = ["HOME"]` (HOME=/root here).
+# Both engines the suite drives: Chromium runs the bulk of it, WebKit the
+# grid-bearing specs in the engine the Tauri app uses (WKWebView), where
+# a collapsed AG Grid has shipped twice while every Chromium assertion
+# passed. `run_e2e.sh` calls `playwright install` at test time, but
+# `--with-deps` needs root and a package index, which a test action has
+# neither of — so both engines are baked here and that call is a no-op.
 #
-# **Both engines the suite drives.** Chromium runs the bulk of it;
-# WebKit runs the `webkit` project, which re-runs the grid-bearing specs
-# in the engine the Tauri desktop app actually uses (WKWebView). That
-# project is not redundant coverage — WebKit resolves a child's
-# percentage `height` against the parent's *specified* height, and the
-# resulting collapsed AG Grid has shipped twice while every Chromium
-# assertion passed. See the project's comment in
-# `datalib/ui/playwright.config.ts`.
+# PLAYWRIGHT_VERSION MUST match the resolved `playwright` version in
+# `datalib/ui/pnpm-lock.yaml` (`//tools:version_pins_test`); a mismatch
+# means Bazel's Playwright looks for a browser revision that isn't here.
 #
-# `run_e2e.sh` does call `playwright install` at test time, so the
-# browser *downloads* could in principle happen there. What cannot is
-# `--with-deps`: apt-installing the shared libraries each engine needs
-# takes root and a package index, and a bazel test action has neither.
-# So both engines are baked here, dependencies and all, and the call in
-# run_e2e.sh becomes a no-op that fetches only what this image lacks.
-# `E2E_BROWSERS` narrows that call for a caller that wants one engine.
-#
-# WebKit is the more expensive of the two — its apt closure is
-# substantially larger than Chromium's, and it is most of what this
-# layer adds to the image. It is worth it: without WebKit here, CI can
-# only ever run a Chromium-shaped subset of the suite.
-#
-# PLAYWRIGHT_VERSION MUST match the resolved `playwright` /
-# `@playwright/test` version in `datalib/ui/pnpm-lock.yaml` — a
-# mismatch means the bazel-linked Playwright looks for a browser
-# revision that isn't on disk. Bump both together.
-#
-# NOTE: `//datalib/ui:e2e_test` is a CI merge gate again, and this layer
-# is what lets it launch a browser there. Two caveats worth knowing if
-# you touch it: CI cannot see this cache via `$HOME` (GitHub forces
-# `HOME=/github/home` for container steps), so `test.yml` passes
-# `--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` to
-# reach it; and the qmd GGUFs the same suite needs are NOT here, because
-# this image is published against the `-slim` prod base — the suite
-# brings its own, as bazel inputs (`//third-party/qmd_models`).
+# The cache lands at /root/.cache/ms-playwright. GitHub forces
+# HOME=/github/home for container steps, so `test.yml` points the suite
+# at it with `--test_env=PLAYWRIGHT_BROWSERS_PATH`.
 ARG PLAYWRIGHT_VERSION=1.62.1
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /root/.npm
 
-# uv — `precommit_test` drives ruff / pyright through `uv run`, so the
-# image needs `uv` on PATH for the in-bazel pre-commit check to work
-# in CI. Pull the static binary from astral's official image rather
-# than running their install script: no curl-to-bash, no networked
-# install step, and bumping the version is a single tag edit.
+# uv — `//:lint` drives ruff / pyright through it. The static binary from
+# astral's image: no curl-to-bash, one tag to bump.
 COPY --from=ghcr.io/astral-sh/uv:0.11.20 /uv /uvx /bin/
 
-# bazelisk reads `.bazelversion` and downloads the matching bazel, so
-# we only pin bazelisk here.
+# bazelisk reads `.bazelversion` and downloads the matching bazel. Its
+# download cache is pinned to a path outside $HOME so the bazel binary
+# baked below is found whatever HOME a CI runner forces.
 ARG BAZELISK_VERSION=1.29.0
 ARG TARGETARCH
 RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
@@ -180,102 +109,58 @@ RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
         "https://github.com/bazelbuild/bazelisk/releases/download/v${BAZELISK_VERSION}/bazelisk-linux-${ARCH}" \
     && chmod +x /usr/local/bin/bazelisk \
     && ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel
+ENV BAZELISK_HOME=/opt/bazel/bazelisk
 
-# Run the devcontainer as `root` (inherited from the prod image's USER).
-# That removes a whole class of friction:
-#
-#   * No symlink-shenanigans to make qmd's pre-baked GGUFs at
-#     /root/.cache/qmd/models reachable from a different `$HOME` — an
-#     app run inside the container finds them where qmd looks. (The
-#     BUILD no longer cares either way; it takes its models from
-#     `//third-party/qmd_models`.)
-#   * No `chmod 0755 /root` to grant a non-root user traversal access
-#     to the models directory.
-#   * No `chown`-on-named-volume dance in postCreateCommand.
-#
-# Tradeoff: files the contributor creates via the workspace bind mount
-# are owned by uid 0. On Docker-Desktop-on-macOS that's fine — VirtioFS
-# maps container uids back to the host user. On a native Linux host
-# (rare for devcontainer users today), the tree would need `sudo` to
-# clean up.
-
+# Root, deliberately: no uid dance for the workspace bind mount on
+# Docker Desktop (VirtioFS maps uids back to the host user), and CI
+# container steps run as root regardless.
 WORKDIR /workspaces/datalib
 
-# Cache warmup: pre-populate bazel's repository cache by running
-# `bazelisk fetch` against the workspace source. `fetch` resolves the
-# bzlmod graph + every external repo + crate_universe dependency tree
-# (the genuinely cold-and-slow parts of a first build) and writes the
-# results into the repository cache and external repo dirs. It does
-# NOT compile anything — which means we skip ~20 min of tokio / sqlx /
-# doltlite compilation that would otherwise need to fit
-# inside BuildKit's RUN container.
+# The pre-fetched output base, for CI.
 #
-# Subsequent contributor `bazelisk build` invocations inside the
-# devcontainer reuse the resolved repo state and skip straight to
-# action execution — the long pole on cold builds is the external
-# dep fetches (crate downloads, the doltlite amalgamation) not the
-# compile, so this captures most of the warm-cache win.
+# A warm CI run spent most of its bazel time before the first action:
+# every external repository — the Rust toolchain, rustfmt, Python, Node,
+# ~300 crates — downloaded into an empty container and, mostly,
+# extracted on 4 vCPUs (~77 s to "Analyzed"; the same analysis takes
+# ~10 s with the repositories on disk). Fetching them here, into an
+# output base at a fixed path, puts them in the image instead:
+# `prepare-bazel` points CI's bazel at the same path, the repository
+# marker files validate, and nothing is fetched again. A bump to a
+# toolchain or lockfile between image builds just refetches that delta.
 #
-# The workspace source is bind-mounted ephemerally via BuildKit
-# (`--mount=type=bind`) — it isn't COPYed into a layer. That has two
-# good consequences:
-#   * Image size doesn't grow by the size of the workspace.
-#   * The layer's cache key is driven by the RUN command text alone,
-#     not by source contents — so day-to-day source edits between
-#     image builds DON'T invalidate this warmup step. The warmup
-#     re-runs only when the Dockerfile, the parent prod image, or
-#     this RUN command itself changes.
+# The workspace is bind-mounted for the fetch, not COPYed, so the image
+# does not carry the source and this layer's key is the command text
+# (plus the mounted files it reads). `--batch` because BuildKit's RUN
+# container is too small for a resident bazel server's JVM.
+# `--lockfile_mode=error` so a stale MODULE.bazel.lock fails the image
+# build here rather than every CI run that pulls it.
 #
-# Cache visibility at runtime: `devcontainer.json` mounts named volumes
-# at `/root/.cache/bazel` and `/root/Library/Caches/bazel-disk-cache`.
-# Docker named volumes inherit the image's contents at the mount point
-# on FIRST creation (only — subsequent mounts overlay), so a fresh
-# devcontainer gets the baked caches automatically; rebuilds reuse
-# whatever the volume accumulated during prior sessions.
-#
-# Skip with `--build-arg WARM_BAZEL_CACHE=false` for fast iteration on
-# the Dockerfile itself (or when network is unavailable at build time).
-# Target is the Rust backend specifically — `//...` would drag in the
-# Vue e2e Playwright machinery which needs a browser cache the image
-# doesn't ship.
+# Off by default: a local devcontainer keeps bazel's default output
+# base under /root/.cache/bazel, which `devcontainer.json` puts on a
+# named volume; only the CI publish passes `PREFETCH_OUTPUT_BASE=true`.
+ARG PREFETCH_OUTPUT_BASE=false
+RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
+    if [ "${PREFETCH_OUTPUT_BASE}" = "true" ]; then \
+        bazelisk --batch --host_jvm_args=-Xmx2048m \
+            --output_base=/opt/bazel/output-base \
+            fetch --lockfile_mode=error //... \
+        && rm -rf /opt/bazel/output-base/execroot /opt/bazel/output-base/action_cache; \
+    else \
+        bazelisk version; \
+    fi
+
+# Cache warmup for a LOCAL devcontainer: resolve and fetch the backend's
+# external repositories into the default output base (the named volume
+# in `devcontainer.json` inherits the image's contents on first
+# creation), then compile it in opt mode into the disk cache, so the
+# first interactive build skips straight to what was edited. Skip with
+# `--build-arg WARM_BAZEL_CACHE=false` when iterating on this file.
 ARG WARM_BAZEL_CACHE=true
-# `--batch` runs bazel single-shot without a persistent server daemon.
-# The normal server-mode startup involves a JVM that allocates ~1.5 GB
-# heap and listens on a unix socket; under BuildKit's RUN container
-# (which inherits Docker Desktop's modest memory budget), the JVM gets
-# OOM-killed before it can finish listening, and the bazel client
-# times out with "couldn't connect to server after 120 seconds".
-# Batch mode bypasses all of that — each invocation is a one-shot
-# fork.
-#
-# `--host_jvm_args=-Xmx<N>m` caps the JVM heap so an under-resourced
-# environment doesn't trigger the same OOM. 1 GB is plenty for a
-# fetch (no compilation) and stays well under BuildKit's slice;
-# the build step downstream gets more headroom since it has to hold
-# the action graph.
-
-# Step 1: fetch — resolves bzlmod graph + crate_universe + every
-# external repo (doltlite amalgamation download, the curl-impersonate
-# archives, rules_rust toolchains, etc.), writes them into
-# /root/.cache/bazel/_bazel_root/<hash>/external/.
 RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
     if [ "${WARM_BAZEL_CACHE}" = "true" ]; then \
-        bazelisk --batch --host_jvm_args=-Xmx1024m fetch //datalib/backend/...:all; \
+        bazelisk --batch --host_jvm_args=-Xmx1024m fetch //datalib/backend/...:all \
+        && bazelisk --batch --host_jvm_args=-Xmx4096m build //datalib/backend/...:all -c opt; \
     fi
 
-# Step 2: build — compiles the Rust backend in opt mode and lands
-# every action's output in the disk cache. With step 1's external
-# deps already warm, this step is just compilation; the contributor's
-# first interactive `bazel build` hits the disk cache and skips
-# straight to whatever they've actually edited. Heap bumped to 4 GB
-# because the action graph + analysis caches get hefty.
-RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
-    if [ "${WARM_BAZEL_CACHE}" = "true" ]; then \
-        bazelisk --batch --host_jvm_args=-Xmx4096m build //datalib/backend/...:all -c opt; \
-    fi
-
-# Bazel's output base lives under /root/.cache/bazel; the disk cache
-# (~/Library/Caches/bazel-disk-cache on macOS) maps to
-# /root/Library/Caches/bazel-disk-cache inside this container — see
-# `.bazelrc`'s `build --disk_cache=...`. Override at run time with
-# `--disk_cache=...` if you want a different layout.
+ENTRYPOINT []
+CMD ["bash"]

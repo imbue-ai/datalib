@@ -1,15 +1,14 @@
-// Devcontainer that inherits from the prod runtime image
-// (`ghcr.io/imbue-ai/datalib:<tag>`, see `PROD_IMAGE_TAG` ARG
-// in `.devcontainer/Dockerfile`) and layers the Bazel build toolchain
-// on top, so contributors can repro Linux-only build issues locally
-// without re-downloading the ~2.25 GB qmd model layer that the prod
-// image already ships. Spin up via VS Code's "Reopen in Container"
+// A Linux devcontainer with the Bazel build toolchain, built from
+// `.devcontainer/Dockerfile` (its own `ubuntu:24.04` image — the same
+// one CI runs in, minus CI's pre-fetched output base), so contributors
+// can repro Linux-only build issues locally. The qmd models are bazel
+// outputs (`//third-party/qmd_models`), not image content.
+// Spin up via VS Code's "Reopen in Container"
 // or `devcontainer up --workspace-folder .`. Bazel + npm caches are
 // persisted in named volumes so the second `bazel build` doesn't
 // pay the cold-cache cost.
 //
-// We run as `root` to match the prod image's user — that lets bazel
-// pick up the qmd model cache at /root/.cache/qmd/models without any
+// We run as `root` — that lets bazel and qmd share one HOME without any
 // symlink-shenanigans. The tradeoff is that files the contributor
 // creates via the workspace bind mount end up owned by uid 0; that's
 // fine on Docker-Desktop-on-macOS (VirtioFS remaps to the host user),
@@ -52,11 +51,6 @@
     //                               ~ resolves to)
     //   /root/.npm                — npx download cache for the qmd
     //                               npm pkg
-    //
-    // NOT mounted: /root/.cache/qmd/models. The prod image bakes the
-    // three GGUFs there and the devcontainer inherits them; mounting
-    // a named volume here would overlay (and hide) the baked models
-    // with an empty volume on first launch.
     //
     // Docker named volumes inherit the image's content at the mount
     // point on FIRST creation (the Dockerfile's cache-warmup step
