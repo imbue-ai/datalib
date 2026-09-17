@@ -161,11 +161,7 @@ pub fn resolve_binary_dir() -> Option<PathBuf> {
 }
 
 pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
-    match repo.recover_running_jobs().await {
-        Ok(0) => {}
-        Ok(n) => tracing::warn!("worker: recovered {n} orphaned running job(s) → failed"),
-        Err(e) => tracing::error!("worker: startup recovery failed: {e}"),
-    }
+    recover(&repo, &cfg).await;
     match &cfg.dag_bin {
         Some(p) => tracing::info!("worker: ready (dag runner: {})", p.display()),
         None => tracing::warn!(
@@ -180,7 +176,7 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
                 if let Err(e) = run_job(&repo, &cfg, job).await {
                     tracing::error!("worker: job {id} errored: {e:#}");
                     let msg = format!("{e:#}");
-                    let _ = repo.finish_job(&id, JobState::Failed, Some(&msg)).await;
+                    finish(&repo, &id, JobState::Failed, Some(&msg)).await;
                     // Minimal terminal event so the UI stops showing it as
                     // active; it'll refetch the row for the full error.
                     let _ = cfg.progress_tx.send(ProgressEvent {
@@ -204,6 +200,162 @@ pub async fn run(repo: DynAppRepo, cfg: WorkerConfig) {
 
 fn emit(tx: &ProgressTx, job: &SyncJobRow, state: JobState, msg: Option<&str>) {
     let _ = tx.send(ProgressEvent::new(job, state, msg.map(str::to_string)));
+}
+
+/// A write to the job row that must land: one that did not leaves the
+/// UI showing a job as running, or uncancellable, until the next boot.
+/// The store is a doltlite file this process owns; a failed statement
+/// is a passing condition, so try once more, and say so at `error`
+/// when even that fails.
+async fn must_write<F, Fut>(what: &str, job_id: &str, write: F)
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<(), datalib_core::repo::RepoError>>,
+{
+    let first = match write().await {
+        Ok(()) => return,
+        Err(e) => e,
+    };
+    tracing::error!("worker: job {job_id}: {what} failed ({first}); retrying once");
+    if let Err(e) = write().await {
+        tracing::error!(
+            "worker: job {job_id}: {what} failed again ({e}); the row is wrong until the \
+             next boot"
+        );
+    }
+}
+
+async fn finish(repo: &DynAppRepo, job_id: &str, state: JobState, msg: Option<&str>) {
+    must_write("finish_job", job_id, || repo.finish_job(job_id, state, msg)).await;
+}
+
+/// What became of every job the previous server left active, decided
+/// from what is actually there — the runner's pid, the run store — and
+/// written to the row with the reason. A job still `pending` stays
+/// queued; the loop claims it.
+///
+/// The runner exits with the server (`datalib_parent_watch`), so a
+/// `running` job here is normally one whose runner died with the last
+/// server. The other answers are kept because they are cheap to tell
+/// apart and each is what a person would want to read.
+async fn recover(repo: &DynAppRepo, cfg: &WorkerConfig) {
+    let jobs = match repo.list_jobs(true, 1_000).await {
+        Ok(jobs) => jobs,
+        Err(e) => {
+            tracing::error!("worker: startup recovery could not list jobs: {e}");
+            return;
+        }
+    };
+    for job in jobs
+        .iter()
+        .filter(|j| j.job_state() != Some(JobState::Pending))
+    {
+        let (state, why) = what_became_of(&cfg.root, job).await;
+        tracing::warn!(
+            "worker: job {} recovered as {}: {why}",
+            job.id,
+            state.as_str()
+        );
+        finish(repo, &job.id, state, Some(&why)).await;
+        emit(&cfg.progress_tx, job, state, Some(&why));
+    }
+}
+
+async fn what_became_of(root: &std::path::Path, job: &SyncJobRow) -> (JobState, String) {
+    let pid = job.pid.and_then(|p| u32::try_from(p).ok());
+    let runner_alive = pid.is_some_and(alive);
+    if job.job_state() == Some(JobState::Canceled) {
+        if let Some(pid) = pid.filter(|_| runner_alive) {
+            terminate(pid);
+        }
+        return (
+            JobState::Canceled,
+            "canceled by user; the server restarted before the runner had finished stopping".into(),
+        );
+    }
+    if let Some(pid) = pid.filter(|_| runner_alive) {
+        // A runner from before this build, or one whose pipe was lost:
+        // nobody can record how it ends, so end it.
+        terminate(pid);
+        return (
+            JobState::Failed,
+            format!(
+                "interrupted: the server restarted while this job ran; its runner (pid {pid}) \
+                 was still going and has been told to stop"
+            ),
+        );
+    }
+    let run = datalib_runs::snapshot_of(root, Some(&job.id)).await;
+    if run.run_id.as_deref() != Some(job.id.as_str()) {
+        return (
+            JobState::Failed,
+            "interrupted: the server stopped while this job ran, before its runner had \
+             recorded a run"
+                .into(),
+        );
+    }
+    let failed: Vec<&str> = run
+        .steps
+        .iter()
+        .filter(|s| s.state == datalib_dag::run_state::RunState::Failed.as_str())
+        .map(|s| s.step.as_str())
+        .collect();
+    let unfinished: Vec<&str> = run
+        .steps
+        .iter()
+        .filter(|s| !datalib_runs::is_terminal(&s.state))
+        .map(|s| s.step.as_str())
+        .collect();
+    match (run.finished_at_utc, failed.is_empty()) {
+        (Some(at), true) => (
+            JobState::Done,
+            format!("the server stopped while this job ran; the run finished on its own at {at}"),
+        ),
+        (Some(at), false) => (
+            JobState::Failed,
+            format!(
+                "the server stopped while this job ran; the run finished on its own at {at} \
+                 with failed step(s): {}",
+                failed.join(", ")
+            ),
+        ),
+        (None, _) => (
+            JobState::Failed,
+            format!(
+                "interrupted: the server stopped while this job ran, and its runner with it; \
+                 step(s) mid-run: {}",
+                if unfinished.is_empty() {
+                    "none".to_string()
+                } else {
+                    unfinished.join(", ")
+                }
+            ),
+        ),
+    }
+}
+
+/// Whether `pid` is a live process — not a zombie, which `kill(0)`
+/// would still count.
+fn alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output();
+        match out {
+            Ok(out) => {
+                let stat = String::from_utf8_lossy(&out.stdout);
+                let stat = stat.trim();
+                !stat.is_empty() && !stat.starts_with('Z')
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 fn terminate(pid: u32) {
@@ -261,10 +413,15 @@ pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> 
             command.env("PATH", joined);
         }
     }
-    // Both pipes are drained, and only their tail is kept: the runner
-    // records everything a run says in the store itself.
+    // Both output pipes are drained, and only their tail is kept: the
+    // runner records everything a run says in the store itself. stdin is
+    // the parent pipe: nothing is written to it, and its closing — this
+    // process exiting however it exits — is what tells the runner to
+    // stop (`datalib_parent_watch`), so a run never outlives the server
+    // that has to record how it ended.
     command
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
+        .env(datalib_parent_watch::ENV_VAR, "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -279,7 +436,11 @@ pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> 
         .spawn()
         .map_err(|e| anyhow::anyhow!("spawn {}: {e}", dag_bin.display()))?;
     let pid = child.id();
-    repo.set_job_pid(&job.id, pid as i64).await.ok();
+    // Without the pid on the row a cancel has nothing to signal.
+    must_write("set_job_pid", &job.id, || {
+        repo.set_job_pid(&job.id, pid as i64)
+    })
+    .await;
 
     let tail = Arc::new(Mutex::new(VecDeque::with_capacity(TAIL_LINES)));
     let mut readers = Vec::new();
@@ -410,6 +571,178 @@ fn push_segment(seg: &[u8], tail: &Mutex<VecDeque<String>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use app_schema::sync_jobs::JobKind;
+    use datalib_core::app_store::AppStore;
+    use datalib_runs::{Retention, RunWriter, StepRunRow};
+
+    async fn store(root: &std::path::Path) -> DynAppRepo {
+        Arc::new(AppStore::open(root).await.unwrap())
+    }
+
+    /// A job the last server claimed and never finished, as the next
+    /// boot finds it.
+    async fn running_job(repo: &DynAppRepo) -> SyncJobRow {
+        repo.enqueue_job(JobKind::All, Some("a/ingest"))
+            .await
+            .unwrap();
+        repo.claim_next_job().await.unwrap().expect("claimed")
+    }
+
+    fn step_row(step: &str, state: &str) -> StepRunRow {
+        StepRunRow {
+            step: step.into(),
+            state: state.into(),
+            attempt: 1,
+            updated_at_utc: "2026-09-17T10:00:00Z".into(),
+            ..Default::default()
+        }
+    }
+
+    /// A job the backend died while stopping — `canceled` on request,
+    /// never stamped finished by a worker that is gone — would otherwise
+    /// hold its steps claimed in the UI until the end of time.
+    #[tokio::test]
+    async fn recovery_closes_a_cancel_the_worker_never_finished() {
+        let td = tempfile::tempdir().unwrap();
+        let repo = store(td.path()).await;
+        let job = running_job(&repo).await;
+        repo.request_cancel_job(&job.id).await.unwrap();
+        let mid = repo.get_job(&job.id).await.unwrap().unwrap();
+        assert!(mid.is_active() && mid.is_stopping());
+
+        let (state, why) = what_became_of(td.path(), &mid).await;
+        assert_eq!(state, JobState::Canceled, "still canceled, not failed");
+        assert!(why.starts_with("canceled by user"), "{why}");
+    }
+
+    /// The runner died with the server before it recorded a run: the
+    /// job says so, rather than "backend restarted".
+    #[tokio::test]
+    async fn a_job_whose_runner_never_recorded_a_run_is_interrupted() {
+        let td = tempfile::tempdir().unwrap();
+        let repo = store(td.path()).await;
+        let job = running_job(&repo).await;
+        let (state, why) = what_became_of(td.path(), &job).await;
+        assert_eq!(state, JobState::Failed);
+        assert!(
+            why.contains("before its runner had recorded a run"),
+            "{why}"
+        );
+    }
+
+    /// The run store knows more than the job row: a run that finished
+    /// after the server let go is done, or failed with the steps named;
+    /// one still going when the runner died names the steps it was on.
+    #[tokio::test]
+    async fn the_run_store_says_how_a_recovered_job_ended() {
+        let td = tempfile::tempdir().unwrap();
+        let repo = store(td.path()).await;
+        let keep = Retention::default();
+
+        let job = running_job(&repo).await;
+        {
+            let w = RunWriter::start(td.path(), &job.id, "2026-09-17T10:00:00Z", keep).unwrap();
+            w.step(step_row("a/ingest", "succeeded"));
+        }
+        let (state, why) = what_became_of(td.path(), &job).await;
+        assert_eq!(state, JobState::Done, "{why}");
+        assert!(why.contains("finished on its own"), "{why}");
+        repo.finish_job(&job.id, state, Some(&why)).await.unwrap();
+
+        let job = running_job(&repo).await;
+        {
+            let w = RunWriter::start(td.path(), &job.id, "2026-09-17T10:00:00Z", keep).unwrap();
+            w.step(step_row("a/ingest", "failed"));
+            w.step(step_row("a/render_markdown", "blocked"));
+        }
+        let (state, why) = what_became_of(td.path(), &job).await;
+        assert_eq!(state, JobState::Failed);
+        assert!(why.contains("failed step(s): a/ingest"), "{why}");
+        assert!(!why.contains("render_markdown"), "{why}");
+        repo.finish_job(&job.id, state, Some(&why)).await.unwrap();
+
+        let job = running_job(&repo).await;
+        // Kept alive across the look, the way a SIGKILLed runner's
+        // record is: started, never stamped finished.
+        let w = RunWriter::start(td.path(), &job.id, "2026-09-17T10:00:00Z", keep).unwrap();
+        w.step(step_row("a/ingest", "succeeded"));
+        w.step(step_row("a/render_markdown", "running"));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let (state, why) = what_became_of(td.path(), &job).await;
+        assert_eq!(state, JobState::Failed);
+        assert!(why.contains("step(s) mid-run: a/render_markdown"), "{why}");
+        assert!(!why.contains("a/ingest"), "{why}");
+        drop(w);
+    }
+
+    /// A store whose first `finish_job` fails: the write must land on
+    /// the retry. Before this a failed `finish_job` was dropped on the
+    /// floor, and the job showed as running until the next boot.
+    struct FailsOnce {
+        inner: DynAppRepo,
+        failed: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl datalib_core::repo::AppRepo for FailsOnce {
+        async fn get_job(
+            &self,
+            job_id: &str,
+        ) -> Result<Option<SyncJobRow>, datalib_core::repo::RepoError> {
+            self.inner.get_job(job_id).await
+        }
+        async fn finish_job(
+            &self,
+            job_id: &str,
+            state: JobState,
+            error: Option<&str>,
+        ) -> Result<(), datalib_core::repo::RepoError> {
+            if !self.failed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return Err(datalib_core::repo::RepoError::Internal(
+                    "database is locked".into(),
+                ));
+            }
+            self.inner.finish_job(job_id, state, error).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_finish_is_retried_and_lands() {
+        let td = tempfile::tempdir().unwrap();
+        let real = store(td.path()).await;
+        let job = running_job(&real).await;
+        let flaky: DynAppRepo = Arc::new(FailsOnce {
+            inner: real.clone(),
+            failed: std::sync::atomic::AtomicBool::new(false),
+        });
+        finish(&flaky, &job.id, JobState::Done, None).await;
+        let after = real.get_job(&job.id).await.unwrap().unwrap();
+        assert_eq!(after.job_state(), Some(JobState::Done));
+        assert!(!after.is_active());
+    }
+
+    /// Boot recovery writes every active job's outcome and leaves the
+    /// queue's pending jobs for the loop.
+    #[tokio::test]
+    async fn recovery_finishes_the_active_jobs_and_keeps_the_pending_ones() {
+        let td = tempfile::tempdir().unwrap();
+        let repo = store(td.path()).await;
+        let running = running_job(&repo).await;
+        let pending = repo.enqueue_job(JobKind::All, None).await.unwrap();
+        let cfg = WorkerConfig {
+            root: Arc::new(td.path().to_path_buf()),
+            dag_bin: None,
+            binary_dir: None,
+            progress_tx: broadcast::channel(16).0,
+        };
+        recover(&repo, &cfg).await;
+        let after = repo.get_job(&running.id).await.unwrap().unwrap();
+        assert_eq!(after.job_state(), Some(JobState::Failed));
+        assert!(after.error.unwrap().starts_with("interrupted"));
+        assert!(after.finished_at_utc.is_some());
+        let still = repo.get_job(&pending.id).await.unwrap().unwrap();
+        assert_eq!(still.job_state(), Some(JobState::Pending));
+    }
 
     fn tail_of(lines: &[&str]) -> VecDeque<String> {
         lines.iter().map(|l| l.to_string()).collect()

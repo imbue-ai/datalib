@@ -76,6 +76,7 @@ rust_library(
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/history:datalib_history",
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -104,7 +105,11 @@ rust_test(
     size = "small",
     crate = ":datalib_http",
     edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
     deps = [
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
     ],
 )

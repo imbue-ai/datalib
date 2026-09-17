@@ -1258,6 +1258,9 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
+      "message": "schema: grid index"
+    },
+    {
       "message": "datalib-step grid_index (all passes summed): markdowns_loaded=106 markdowns_read=106 markdowns_removed=1 rows_inserted=463"
     }
   ],
@@ -10090,7 +10093,7 @@ expression: snapshot
   ],
   "summary": {
     "documents_count": 104,
-    "dolt_log_count": 2,
+    "dolt_log_count": 3,
     "grid_rows_count": 273,
     "storage_rows_count": 188
   }

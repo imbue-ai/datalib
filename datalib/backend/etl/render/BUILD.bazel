@@ -60,7 +60,6 @@ rust_binary(
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
-        "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],

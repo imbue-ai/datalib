@@ -351,6 +351,11 @@ async fn open_inner(
                 )
             })?;
     }
+    // A caller with no DDL installs its schema itself and commits it
+    // itself (`open_index`); a commit here would be an empty one.
+    if ddl().next().is_none() {
+        return Ok(pool);
+    }
     // Commit the schema before handing back the pool: doltlite only
     // materializes `dolt_diff_<table>` for tables that exist at HEAD, so an
     // uncommitted table makes the first sync's delta vanish with a warning.
