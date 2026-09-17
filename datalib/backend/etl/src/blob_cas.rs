@@ -11,10 +11,9 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
+use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
 // Schema
@@ -74,23 +73,15 @@ pub struct BlobCas {
 }
 
 impl BlobCas {
+    /// The download step's handle on its CAS: what every writer gets from
+    /// [`crate::doltlite_raw::open`] — a crashed run's dirty blobs sealed
+    /// into a rescue commit, the schema committed, one connection never
+    /// recycled — without the download bookkeeping tables, which belong
+    /// to the entity store beside it.
     pub async fn open(cas_path: &Path) -> Result<Self> {
-        if let Some(parent) = cas_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create dir {}", parent.display()))?;
-        }
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))
-            .with_context(|| format!("sqlite uri for {}", cas_path.display()))?
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
+        let pool = crate::doltlite_raw::open_derived(cas_path, &[CAS_OBJECTS_DDL])
             .await
-            .context("open blob cas pool")?;
-        sqlx::query(CAS_OBJECTS_DDL)
-            .execute(&pool)
-            .await
-            .context("apply cas_objects DDL")?;
+            .context("open blob cas")?;
         Ok(Self { pool })
     }
 
@@ -899,6 +890,46 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
+
+    /// A run that died between its SQL writes and its commit — a killed
+    /// process, a panic — leaves its blobs in the working set. The next
+    /// open seals them into their own commit rather than folding them,
+    /// silently, into whatever this run commits next. This used to open
+    /// with a bare pool and skip that.
+    #[tokio::test]
+    async fn blobs_a_killed_run_left_uncommitted_are_rescued_by_the_next_open() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("blobs.doltlite_db");
+        let cas = BlobCas::open(&path).await.unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(cas.pool()).await {
+            return;
+        }
+        let hash = cas.put(b"left behind", None).await.unwrap();
+        // No commit: the process is gone.
+        cas.close().await;
+
+        let cas = BlobCas::open(&path).await.unwrap();
+        let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+            .fetch_all(cas.pool())
+            .await
+            .unwrap();
+        assert!(
+            messages.iter().any(|m| m.starts_with("rescue:")),
+            "no rescue commit: {messages:?}"
+        );
+        let head = crate::pin::head(cas.pool()).await.unwrap().unwrap();
+        // Audited: the hash is `Pin::at`-checked and the table is a literal.
+        let at_head: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM dolt_at_cas_objects('{}') WHERE blake3 = '{hash}'",
+            head.commit()
+        )))
+        .fetch_one(cas.pool())
+        .await
+        .unwrap();
+        assert_eq!(at_head, 1, "the orphaned blob is committed now");
+        cas.close().await;
+    }
     use tempfile::tempdir;
 
     #[tokio::test(flavor = "multi_thread")]

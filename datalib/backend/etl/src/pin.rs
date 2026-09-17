@@ -175,7 +175,7 @@ fn store_filename(pool: &sqlx::SqlitePool) -> String {
 /// committed table, so their total absence *while tables exist* is the
 /// signal. A store with no tables at all needs no answer here — nothing
 /// creates a view, and the read fails loudly on its own.
-pub(crate) async fn carries_committed_schema(pool: &sqlx::SqlitePool) -> bool {
+pub async fn carries_committed_schema(pool: &sqlx::SqlitePool) -> bool {
     let tables: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
     )
