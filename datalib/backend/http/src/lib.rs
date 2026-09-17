@@ -320,7 +320,9 @@ async fn proxy_applet(
     Path((id, rest)): Path<(String, String)>,
     req: axum::extract::Request,
 ) -> Response<Body> {
-    proxy_impl(s, id, format!("/{rest}"), req).await
+    // The extractor percent-decoded `rest`; put it back the way it came,
+    // since the proxy writes the request line by hand.
+    proxy_impl(s, id, format!("/{}", applets::encode_path(&rest)), req).await
 }
 
 async fn proxy_applet_root(

@@ -1,6 +1,7 @@
 //! `datalib-applet` — the applet host, one subcommand per applet.
 #![allow(clippy::disallowed_macros)]
 
+mod gate;
 mod slack;
 mod unified_index;
 

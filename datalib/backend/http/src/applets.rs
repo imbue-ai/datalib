@@ -45,6 +45,15 @@ pub const ENV_APPLET_ID: &str = "DATALIB_APPLET_ID";
 /// than assuming the mount layout.
 pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
 
+/// The secret an applet requires on every request, carried in
+/// [`APPLET_SECRET_HEADER`]. The gateway mints one per process, hands it
+/// to each applet in this variable at spawn, and sends it on everything
+/// it forwards. Without it the applet's loopback port is a second door to
+/// the data the gateway keeps behind the API token, open to any local
+/// process and to a web page that resolves its own hostname to 127.0.0.1.
+pub const ENV_APPLET_SECRET: &str = "DATALIB_APPLET_SECRET";
+pub const APPLET_SECRET_HEADER: &str = "X-Datalib-Applet-Secret";
+
 /// The prefix of the one line an applet prints to **stdout** once it
 /// has written its components and bound its port: the readiness
 /// signal, carrying the port the gateway proxies to.
@@ -73,6 +82,7 @@ fn base_command(
     entry: &AppletEntry,
     data_root: &Path,
     binary_dir: Option<&Path>,
+    secret: &str,
 ) -> anyhow::Result<Command> {
     let argv = split_command(&entry.id, &entry.command)?;
     let mut cmd = Command::new(&argv[0]);
@@ -92,6 +102,7 @@ fn base_command(
     cmd.env(datalib_dag::subprocess::ENV_DATA_ROOT, data_root);
     cmd.env(ENV_APPLET_ID, &entry.id);
     cmd.env(ENV_APPLET_BASE, format!("/applet/{}/", entry.id));
+    cmd.env(ENV_APPLET_SECRET, secret);
     for (k, v) in &entry.env {
         cmd.env(k, v);
     }
@@ -176,6 +187,18 @@ pub struct AppletRegistry {
     /// would kill what the first had just started, mid-response.
     reload: Mutex<()>,
     supervisor: Supervisor,
+    /// See [`ENV_APPLET_SECRET`]. One per registry, so every applet this
+    /// process starts answers to the same one.
+    secret: String,
+}
+
+fn mint_secret() -> String {
+    // Two v4 UUIDs, the same 244 bits the API token is made of.
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 struct RegistryState {
@@ -228,6 +251,7 @@ impl AppletRegistry {
         binary_dir: Option<PathBuf>,
     ) -> Self {
         let supervisor = Supervisor::default();
+        let secret = mint_secret();
         // Nothing is running yet, so every entry starts and every
         // applet namespace is rebuilt.
         let errors = reconcile(
@@ -236,6 +260,7 @@ impl AppletRegistry {
             &entries,
             &data_root,
             binary_dir.as_deref(),
+            &secret,
         );
         let store = crate::frontend::FrontendStore::scan(&data_root);
         let config_stamp = config_stamp_of(&data_root);
@@ -253,6 +278,7 @@ impl AppletRegistry {
                 config_stamp,
             }),
             supervisor,
+            secret,
         }
     }
 
@@ -296,6 +322,7 @@ impl AppletRegistry {
             &entries,
             &self.data_root,
             binary_dir.as_deref(),
+            &self.secret,
         );
         let store = crate::frontend::FrontendStore::scan(&self.data_root);
 
@@ -389,7 +416,14 @@ impl AppletRegistry {
                 })
             }
         };
-        forward(port, method, path_and_query, content_type, body)
+        forward(
+            port,
+            method,
+            path_and_query,
+            content_type,
+            body,
+            Some(&self.secret),
+        )
     }
 }
 
@@ -411,6 +445,7 @@ fn reconcile(
     next: &[AppletEntry],
     data_root: &Path,
     binary_dir: Option<&Path>,
+    secret: &str,
 ) -> BTreeMap<String, String> {
     // `port` is also the liveness check, and it reaps: an applet that
     // died since it was started reports gone here and gets started
@@ -448,7 +483,7 @@ fn reconcile(
                 scope.spawn(move || {
                     (
                         entry.id.clone(),
-                        supervisor.start(entry, data_root, binary_dir, &dir),
+                        supervisor.start(entry, data_root, binary_dir, &dir, secret),
                     )
                 })
             })
@@ -544,8 +579,9 @@ impl Supervisor {
         data_root: &Path,
         binary_dir: Option<&Path>,
         frontend_dir: &Path,
+        secret: &str,
     ) -> Result<u16, String> {
-        let mut cmd = base_command(entry, data_root, binary_dir)
+        let mut cmd = base_command(entry, data_root, binary_dir, secret)
             .map_err(|e| format!("applet {:?}: {e:#}", entry.id))?;
         // `0` means "any port": the child asks the OS for one and
         // reports what it got.
@@ -756,13 +792,62 @@ pub struct ProxyResponse {
     pub body: Vec<u8>,
 }
 
+/// Percent-encode a path the router has already decoded, so it can be
+/// put back on a request line. Every byte outside RFC 3986's `pchar` set
+/// (and `/`) is encoded, `%` included: the router decoded `%2F` and `%0D`
+/// along with everything else, and a bare CR, LF or space here would let
+/// a caller end the request line and write headers of their own.
+pub fn encode_path(decoded: &str) -> String {
+    let mut out = String::with_capacity(decoded.len());
+    for b in decoded.bytes() {
+        let keep = b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b':'
+                    | b'@'
+                    | b'/'
+            );
+        if keep {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 pub fn forward(
     port: u16,
     method: &str,
     path_and_query: &str,
     content_type: Option<&str>,
     body: &[u8],
+    secret: Option<&str>,
 ) -> Result<ProxyResponse, String> {
+    // The caller encodes; this is the check that it did, because the
+    // request below is written by hand.
+    if path_and_query
+        .bytes()
+        .any(|b| matches!(b, b'\r' | b'\n' | b' '))
+    {
+        return Err(format!(
+            "refusing to forward a malformed target {path_and_query:?}"
+        ));
+    }
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
         .map_err(|e| format!("connect 127.0.0.1:{port}: {e}"))?;
@@ -773,6 +858,9 @@ pub fn forward(
     let mut req = format!(
         "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n"
     );
+    if let Some(secret) = secret {
+        req.push_str(&format!("{APPLET_SECRET_HEADER}: {secret}\r\n"));
+    }
     if !body.is_empty() {
         req.push_str(&format!("Content-Length: {}\r\n", body.len()));
         // Carry the caller's own content type. Hardcoding JSON here
@@ -894,6 +982,29 @@ mod tests {
             .expect("some path");
         let parts: Vec<PathBuf> = std::env::split_paths(&joined).collect();
         assert_eq!(parts[0], user);
+    }
+
+    /// A decoded path goes back on the wire encoded: a space, a CR/LF pair
+    /// and a literal `%` must not reach the request line as themselves.
+    #[test]
+    fn encode_path_makes_a_decoded_path_safe_for_a_request_line() {
+        assert_eq!(
+            encode_path("/asset/u/blobs/a b.png"),
+            "/asset/u/blobs/a%20b.png"
+        );
+        assert_eq!(encode_path("/x\r\nEvil: 1"), "/x%0D%0AEvil:%201");
+        assert_eq!(encode_path("/100%"), "/100%25");
+        assert_eq!(encode_path("/search"), "/search");
+        assert_eq!(encode_path("/é"), "/%C3%A9");
+    }
+
+    #[test]
+    fn forward_refuses_an_unencoded_target() {
+        let err = match forward(1, "GET", "/x\r\nEvil: 1", None, b"", None) {
+            Err(e) => e,
+            Ok(_) => panic!("a target with CR/LF in it was forwarded"),
+        };
+        assert!(err.contains("malformed"), "{err}");
     }
 
     #[test]

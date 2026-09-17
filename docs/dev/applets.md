@@ -41,13 +41,14 @@ program installed in `~/.datalib/bin` works for either kind of entry.
 merged into the child — all as for a step, so there is one set of
 rules.
 
-The child also gets three variables:
+The child also gets four variables:
 
 | variable | value |
 | --- | --- |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (also the cwd) — the step protocol's spelling, reused deliberately |
 | `DATALIB_APPLET_ID` | this instance's config id, the same value `--applet-id` carries |
 | `DATALIB_APPLET_BASE` | `/applet/<id>/`, the prefix the gateway proxies here. An applet that emits absolute URLs must build them from this rather than assuming the mount layout |
+| `DATALIB_APPLET_SECRET` | a secret the gateway minted for this process. **Every request the gateway forwards carries it in an `X-Datalib-Applet-Secret` header, and an applet must refuse a request without it**, and any request whose `Host` is not `127.0.0.1:<its own port>`. The port is loopback, but loopback is not private: any process of the same user can connect, and so can a web page whose hostname resolves to 127.0.0.1. The gateway keeps its routes behind the API token; this is what keeps the applet's port from being a second door to the same data. To run an applet by hand, set the variable to any value and send it. |
 
 `id` must be a valid JavaScript identifier. It is both the mount
 prefix (`/applet/<id>/`) and a name injected into card source, and card

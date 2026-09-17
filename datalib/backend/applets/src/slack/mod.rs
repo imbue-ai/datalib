@@ -331,20 +331,26 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
         .local_addr()
         .context("read the bound address")?
         .port();
+    let gate = crate::gate::Gate::from_env(bound)?;
     eprintln!("datalib-applet slack: listening on 127.0.0.1:{bound}, tree {tree}");
     // Written and bound, in that order — now the gateway may look.
     crate::announce_port(bound);
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        if let Err(e) = handle(stream, &tree_path, &workspace) {
+        if let Err(e) = handle(stream, &tree_path, &workspace, &gate) {
             eprintln!("datalib-applet slack: request failed: {e:#}");
         }
     }
     Ok(())
 }
 
-fn handle(mut stream: TcpStream, tree: &Path, workspace: &str) -> Result<()> {
+fn handle(
+    mut stream: TcpStream,
+    tree: &Path,
+    workspace: &str,
+    gate: &crate::gate::Gate,
+) -> Result<()> {
     let mut buf = [0u8; 8192];
     let n = stream.read(&mut buf)?;
     let head = String::from_utf8_lossy(&buf[..n]);
@@ -357,40 +363,49 @@ fn handle(mut stream: TcpStream, tree: &Path, workspace: &str) -> Result<()> {
         Some((p, q)) => (p, q),
         None => (target, ""),
     };
+    let header = |name: &str| header_value(&head, name);
 
-    let (status, body) = match path {
-        // Level 1.
-        "/channels" => {
-            let resp = channels_response(tree, workspace);
-            warn(&resp.warnings);
-            (200, serde_json::to_string(&resp)?)
-        }
-        // Level 2: one channel's threads, each with its opening
-        // message. Level 3 is the rendered document itself, which the
-        // card opens through `documentView` — no endpoint needed.
-        "/channel" => match query_param(query, "name") {
-            Some(channel) => {
-                let resp = channel_response(tree, &channel);
+    let (status, body) = if !gate.admits(header("host"), header(crate::gate::SECRET_HEADER)) {
+        (
+            401,
+            r#"{"error":"this port answers only to the datalib gateway"}"#.to_string(),
+        )
+    } else {
+        match path {
+            // Level 1.
+            "/channels" => {
+                let resp = channels_response(tree, workspace);
                 warn(&resp.warnings);
                 (200, serde_json::to_string(&resp)?)
             }
-            None => (
-                400,
-                serde_json::json!({ "error": "/channel needs ?name=<channel>" }).to_string(),
+            // Level 2: one channel's threads, each with its opening
+            // message. Level 3 is the rendered document itself, which the
+            // card opens through `documentView` — no endpoint needed.
+            "/channel" => match query_param(query, "name") {
+                Some(channel) => {
+                    let resp = channel_response(tree, &channel);
+                    warn(&resp.warnings);
+                    (200, serde_json::to_string(&resp)?)
+                }
+                None => (
+                    400,
+                    serde_json::json!({ "error": "/channel needs ?name=<channel>" }).to_string(),
+                ),
+            },
+            // A readiness probe the gateway may use once it wants something
+            // stronger than "the port accepts".
+            "/health" => (200, r#"{"ok":true}"#.to_string()),
+            _ => (
+                404,
+                serde_json::json!({ "error": format!("no route {path}") }).to_string(),
             ),
-        },
-        // A readiness probe the gateway may use once it wants something
-        // stronger than "the port accepts".
-        "/health" => (200, r#"{"ok":true}"#.to_string()),
-        _ => (
-            404,
-            serde_json::json!({ "error": format!("no route {path}") }).to_string(),
-        ),
+        }
     };
 
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         _ => "Not Found",
     };
     let resp = format!(
@@ -400,6 +415,19 @@ fn handle(mut stream: TcpStream, tree: &Path, workspace: &str) -> Result<()> {
     stream.write_all(resp.as_bytes())?;
     stream.flush()?;
     Ok(())
+}
+
+/// One header's value out of a raw request head, by case-insensitive
+/// name. Only the first request line and its headers are read: the body,
+/// if any, follows the blank line.
+fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines()
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim().eq_ignore_ascii_case(name).then(|| v.trim())
+        })
 }
 
 fn warn(warnings: &[String]) {
