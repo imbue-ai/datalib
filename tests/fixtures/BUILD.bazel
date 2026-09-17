@@ -72,7 +72,7 @@ sh_binary(
 #
 # `bazelisk build //tests/fixtures:ingested_tng` runs the full
 # pipeline (ingest -> render) against the checked-in TNG-themed source
-# JSON and emits two outputs:
+# JSON and emits four outputs:
 #
 #   * backend_index.doltlite_db -- the doltlite (SQLite-compatible) file the backend reads.
 #   * qmd.tar    -- the rendered conversation tree (markdown, each
@@ -81,6 +81,9 @@ sh_binary(
 #   * qmd_md.tar -- markdown alone, the sole input to :ingested_tng_qmd.
 #                   See tar_qmd.py for why the embedder gets its own
 #                   narrower archive.
+#   * config_body.toml -- every source as a render-only group plus the
+#                   two fan-ins, for materialize_tng_root.sh to declare
+#                   in the root it builds from the tars.
 
 filegroup(
     name = "source_json",
@@ -154,6 +157,7 @@ genrule(
         "ingested/backend_index.doltlite_db",
         "ingested/qmd.tar",
         "ingested/qmd_md.tar",
+        "ingested/config_body.toml",
     ],
     tools = [
         "run_sync_pipeline.py",
@@ -225,6 +229,9 @@ genrule(
         # It lives under the `unified_index/` tree the index steps own
         # (see core::layout).
         "cp $(RULEDIR)/sync_workspace/unified_index/grid_index/db.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
+        # The sources as render-only groups, for materialize_tng_root.sh
+        # to splice into the root's config.toml.
+        "cp $(RULEDIR)/sync_workspace/config_body.toml $(execpath ingested/config_body.toml)",
         # Tar the render_markdown tree hermetically: the whole tree into
         # qmd.tar, and markdown alone into qmd_md.tar. See tar_qmd.py for
         # why the embedding action gets its own narrower archive.
