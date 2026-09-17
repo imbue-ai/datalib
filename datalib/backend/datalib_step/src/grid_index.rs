@@ -2,11 +2,9 @@
 //! the unified grid table at `unified_index/grid_index`.
 
 use std::path::Path;
-use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use datalib_etl_render::grid_index::{build_grid_index_for, init_schema};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use datalib_etl_render::grid_index::{build_grid_index_for, open_index};
 
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
@@ -41,16 +39,7 @@ pub async fn run(
             data_root,
         ));
     }
-    // Pool size 1: doltlite's HEAD pointer + working tree are
-    // per-connection (see datalib_etl::doltlite_raw module docs).
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(opts)
-        .await
-        .with_context(|| format!("open doltlite at {}", db_path.display()))?;
-    init_schema(&pool).await?;
+    let pool = open_index(&db_path).await?;
 
     // The stores to read come from the graph, not from a directory scan:
     // the same rule the qmd step follows, so the two indexes agree on
