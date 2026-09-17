@@ -24,7 +24,7 @@ test("a group's commit history opens from the context menu as a tree", async ({ 
 
   const rows = dialog.locator(ROWS);
   await expect(rows).not.toHaveCount(0, { timeout: 10_000 });
-  // Geometry, not just DOM: the modal's grid is a second AG Grid under a
+  // Geometry, not just DOM: the modal's grid is a second grid under a
   // flex parent, the shape that has collapsed to 2px in WebKit before.
   await expectGridPainted(dialog.locator(".slickgrid-container"), "commit history grid");
 

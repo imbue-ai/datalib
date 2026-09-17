@@ -70,7 +70,7 @@
 
 .m2-grid {
   margin-top: 8px;
-  /* A definite height is what makes AG Grid scroll internally — both
+  /* A definite height is what makes the grid scroll internally — both
      ways. */
   flex: 1 1 auto;
   min-height: 180px;

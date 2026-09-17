@@ -17,8 +17,8 @@ import type { SearchRow } from "@/api";
 
 /// A column a preset may name. Typed against the row the grid actually
 /// paints, so a preset naming a field that does not exist is a compile
-/// error rather than a column that silently never appears — AG Grid
-/// ignores an unknown `colId` without complaint.
+/// error rather than a column that silently never appears — the grid
+/// ignores an unknown column id without complaint.
 export type BrowseColumn = keyof SearchRow;
 
 /// Columns every source's browse opens with, in this order. `kind` leads

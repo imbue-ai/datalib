@@ -17,9 +17,9 @@
 // runner, or the server itself) asks for the lines after the last one
 // seen. A run that has finished is read once.
 //
-// The grid is slickgrid-vue (MIT), not AG Grid: this panel is the
-// spike for replacing the enterprise modules, and the drag-to-group
-// bar, the header menu and the right-click menu all come from it.
+// The one grid on the `slickgrid-vue` wrapper rather than the vanilla
+// bundle: this panel is not inside a shadow root, so the wrapper's
+// document-level container lookup works here.
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import {
   SlickgridVue,

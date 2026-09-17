@@ -54,7 +54,7 @@ async function writeConfig(page: Page, text: string): Promise<void> {
 }
 
 /// The Browse button on a group's row. Group rows carry `group:<id>` as
-/// their AG Grid row id (see `groupRowKey`), which beats matching on the
+/// their row key (`groupRow` in the helpers), which beats matching on the
 /// Name cell — that cell also renders the directory name beside the
 /// label.
 const groupRowOf = (page: Page, groupId: string) =>

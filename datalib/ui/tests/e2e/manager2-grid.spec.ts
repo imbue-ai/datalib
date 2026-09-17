@@ -16,7 +16,7 @@ test("the Pipeline table paints at full height", async ({ page }) => {
   // The check: the grid occupies real space on screen.
   await expectGridPainted(page.locator(".tg-grid .slickgrid-container"), "Manager2 grid");
 
-  // Headers too — they live in their own AG Grid viewport, and a
+  // Headers too — they live in their own header viewport, and a
   // container that collapses takes both with it.
   await expect(page.locator('.tg-grid .slick-header-column[col-id="name"]')).toBeVisible();
 });

@@ -15,7 +15,7 @@ export type SearchRow = {
   sender: string;
   // When the thing came into being, as the source wrote it. Null when
   // the row has no source-side timestamp (a contact, or any row whose
-  // underlying entity isn't event-shaped). AG Grid renders null as an
+  // underlying entity isn't event-shaped). The grid renders null as an
   // empty cell.
   created_at: string | null;
   // When it last changed, as the source wrote it: the last message of a
