@@ -171,14 +171,42 @@ test  --experimental_disk_cache_gc_max_size=150G
 #
 # `--remote_upload_local_results=true` is the default but we name it
 # explicitly so it's obvious this is a read+write cache, not a
-# read-only mirror. Untrusted CI contexts (PR builds from forks) should
-# pass `--remote_upload_local_results=false` to avoid poisoning the
-# cache with unverified outputs.
+# read-only mirror.
+#
+# WHICH cache is decided by the API key, and there are two BuildBuddy
+# groups (a group is BuildBuddy's isolation unit — separate caches,
+# separate keys). Bazel never verifies an action-cache hit, so whoever
+# can write a cache decides what a build that reads it ships:
+#
+#   * the contributor org, `imbue.buildbuddy.io` — every laptop with the
+#     key, every PR run. What `--config=buildbuddy` reaches.
+#   * the release org, `imbue-release.buildbuddy.io` — written only by
+#     `test.yml` runs of commits on `main` (PR-gated code), read by
+#     `release.yml` on a tag, which builds the same commit and so hits
+#     what main just built. A separate org is a separate subdomain, a
+#     separate cache and its own key: nothing with the contributor key
+#     can write to it, and the release build itself never writes
+#     (`buildbuddy-release-readonly` below). docs/dev/ci.md §"Two
+#     caches" has the setup.
 build:buildbuddy --bes_results_url=https://imbue.buildbuddy.io/invocation/
 build:buildbuddy --bes_backend=grpcs://imbue.buildbuddy.io
 build:buildbuddy --remote_cache=grpcs://imbue.buildbuddy.io
 build:buildbuddy --remote_timeout=600
 build:buildbuddy --remote_upload_local_results=true
+
+# The release org: same flags, its own host (a later flag overrides an
+# earlier one, so this inherits the timeout and the downloader
+# fallback below and swaps only the endpoints). Read+write — what a
+# `main` run of test.yml uses to fill it.
+build:buildbuddy-release --config=buildbuddy
+build:buildbuddy-release --bes_results_url=https://imbue-release.buildbuddy.io/invocation/
+build:buildbuddy-release --bes_backend=grpcs://imbue-release.buildbuddy.io
+build:buildbuddy-release --remote_cache=grpcs://imbue-release.buildbuddy.io
+build:buildbuddy-release --experimental_remote_downloader=grpcs://imbue-release.buildbuddy.io
+
+# The tag build's view of the release org: read, never write.
+build:buildbuddy-release-readonly --config=buildbuddy-release
+build:buildbuddy-release-readonly --remote_upload_local_results=false
 
 # Fetch repository downloads through BuildBuddy too, not just action
 # results. Bazel asks BuildBuddy for the URL; BuildBuddy serves it from

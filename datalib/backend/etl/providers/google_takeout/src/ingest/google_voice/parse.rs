@@ -87,7 +87,11 @@ fn attr(e: &BytesStart, name: &[u8]) -> Option<String> {
     e.attributes()
         .flatten()
         .find(|a| a.key.as_ref() == name)
-        .and_then(|a| a.unescape_value().ok().map(|c| c.into_owned()))
+        .and_then(|a| {
+            datalib_etl::xml::attr_value(&a)
+                .ok()
+                .map(|c| c.into_owned())
+        })
 }
 
 fn has_class(e: &BytesStart, want: &str) -> bool {
@@ -164,8 +168,13 @@ pub fn parse_chat_log(html: &str) -> Vec<ParsedMessage> {
                     m.attachments.push(src);
                 }
             }
-            Ok(Event::Text(t)) => {
-                let txt = t.unescape().map(|c| c.into_owned()).unwrap_or_default();
+            // A reference (`&amp;`, `&#8217;`) is text too — same handling.
+            Ok(event @ (Event::Text(_) | Event::GeneralRef(_))) => {
+                let txt = match event {
+                    Event::Text(t) => t.decode().map(|c| c.into_owned()).unwrap_or_default(),
+                    Event::GeneralRef(r) => datalib_etl::xml::reference_text(&r, true),
+                    _ => unreachable!(),
+                };
                 if in_q {
                     q_text.push_str(&txt);
                 } else if capture_fn && in_tel {
@@ -265,8 +274,13 @@ pub fn parse_haudio(html: &str) -> ParsedEvent {
                     _ => {}
                 }
             }
-            Ok(Event::Text(t)) => {
-                let txt = t.unescape().map(|c| c.into_owned()).unwrap_or_default();
+            // A reference (`&amp;`, `&#8217;`) is text too — same handling.
+            Ok(event @ (Event::Text(_) | Event::GeneralRef(_))) => {
+                let txt = match event {
+                    Event::Text(t) => t.decode().map(|c| c.into_owned()).unwrap_or_default(),
+                    Event::GeneralRef(r) => datalib_etl::xml::reference_text(&r, true),
+                    _ => unreachable!(),
+                };
                 if in_full_text {
                     full_text.push_str(&txt);
                 } else if capture_fn && in_tel {
@@ -332,7 +346,10 @@ pub fn parse_bills(html: &str) -> (Vec<String>, Vec<Vec<String>>) {
                 _ => {}
             },
             Ok(Event::Text(t)) if in_th || in_td => {
-                cell.push_str(&t.unescape().map(|c| c.into_owned()).unwrap_or_default());
+                cell.push_str(&t.decode().map(|c| c.into_owned()).unwrap_or_default());
+            }
+            Ok(Event::GeneralRef(r)) if in_th || in_td => {
+                cell.push_str(&datalib_etl::xml::reference_text(&r, true));
             }
             Ok(Event::End(e)) => match e.name().as_ref() {
                 b"th" => {

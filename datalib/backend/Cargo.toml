@@ -7,6 +7,7 @@ members = [
     "unified_index",
     "core",
     "runtime",
+    "qmd_models",
     "dag",
     "dirtree_diff",
     "http",

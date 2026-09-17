@@ -14,6 +14,10 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
   || { echo>&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
 set -u
 
+# The Node + qmd + latchkey trees a sync spawns (see dev_runtime.sh).
+# shellcheck disable=SC1090
+source "$(rlocation _main/datalib/dev_runtime.sh)"
+
 BIN="$(rlocation _main/datalib/backend/http/datalib_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 

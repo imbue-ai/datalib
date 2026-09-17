@@ -380,44 +380,6 @@ impl AppRepo for AppStore {
         // testing and produced "commit conflict".)
         Ok(())
     }
-    async fn recover_running_jobs(&self) -> Result<usize, RepoError> {
-        let mut conn = self
-            .jobs_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let (finished_at_utc, tz_offset) =
-            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        let res = sqlx::query(
-            "UPDATE sync_jobs SET state = ?, finished_at_utc = ?, tz_offset = ?, pid = NULL, \
-             error = 'interrupted: backend restarted while job was running' \
-             WHERE state = ?",
-        )
-        .bind(JobState::Failed.as_str())
-        .bind(&finished_at_utc)
-        .bind(&tz_offset)
-        .bind(JobState::Running.as_str())
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("recover running: {e}")))?;
-        // A job told to stop is `canceled` from the moment it is asked
-        // and finished only when the worker stamps it, so one the
-        // backend died in the middle of stopping would read as still
-        // winding down forever. It is as finished as it is going to get.
-        let stuck = sqlx::query(
-            "UPDATE sync_jobs SET finished_at_utc = ?, tz_offset = ?, pid = NULL              WHERE state = ? AND started_at_utc IS NOT NULL AND finished_at_utc IS NULL",
-        )
-        .bind(&finished_at_utc)
-        .bind(&tz_offset)
-        .bind(JobState::Canceled.as_str())
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("recover canceled: {e}")))?;
-        // No DOLT_COMMIT — see the note in `enqueue_job`.
-        let n = (res.rows_affected() + stuck.rows_affected()) as usize;
-        Ok(n)
-    }
-
     async fn record_disk_usage(&self, rows: &[DiskUsageRow]) -> Result<(), RepoError> {
         if rows.is_empty() {
             return Ok(());
@@ -524,49 +486,6 @@ mod tests {
             tz_offset: None,
             bytes,
         }
-    }
-
-    /// A job the backend died while stopping — `canceled` on request,
-    /// never stamped finished by a worker that is gone — would otherwise
-    /// hold its steps claimed in the UI until the end of time.
-    #[tokio::test]
-    async fn recovery_closes_a_cancel_the_worker_never_finished() {
-        let td = tempfile::tempdir().unwrap();
-        let store = AppStore::open(td.path()).await.unwrap();
-        let job = store
-            .enqueue_job(app_schema::sync_jobs::JobKind::All, Some("a/ingest"))
-            .await
-            .unwrap();
-        let claimed = store.claim_next_job().await.unwrap().expect("claimed");
-        assert_eq!(claimed.id, job.id);
-        store.request_cancel_job(&job.id).await.unwrap();
-        let mid = store.get_job(&job.id).await.unwrap().unwrap();
-        assert_eq!(mid.job_state(), Some(JobState::Canceled));
-        assert!(
-            mid.finished_at_utc.is_none(),
-            "a cancel request does not finish the job: {:?}",
-            mid.finished_at_utc
-        );
-
-        // Winding down is still active: the chrome and the Manage screen
-        // list it, and `is_active` agrees.
-        assert!(mid.is_active() && mid.is_stopping());
-        let active = store.list_jobs(true, 10).await.unwrap();
-        assert_eq!(
-            active.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(),
-            [job.id.as_str()]
-        );
-
-        assert_eq!(store.recover_running_jobs().await.unwrap(), 1);
-        let after = store.get_job(&job.id).await.unwrap().unwrap();
-        assert_eq!(
-            after.job_state(),
-            Some(JobState::Canceled),
-            "still canceled, not failed"
-        );
-        assert!(after.finished_at_utc.is_some(), "…and now finished");
-        assert!(!after.is_active());
-        assert!(store.list_jobs(true, 10).await.unwrap().is_empty());
     }
 
     /// The disk-usage timeseries round-trips, and — the part worth

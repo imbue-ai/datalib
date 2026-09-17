@@ -283,6 +283,35 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     reconcile_index_schema(pool).await
 }
 
+/// The `grid_index` step's handle on the index: the one way to open it
+/// for writing.
+///
+/// Through [`datalib_etl::doltlite_raw::open_derived`] for what every
+/// writer gets there — a crashed run's dirty rows sealed into their own
+/// rescue commit, one connection never recycled — and with no DDL of
+/// its own, because the index reconciles its schema by
+/// [`init_schema`]'s all-or-nothing rule rather than `open`'s per-table
+/// one. The schema is then committed here, as `open` would have: a
+/// reader cannot tell a table nobody committed from a source with no
+/// rows, and one build without doltlite fails loudly at this check
+/// instead of indexing nothing and reporting success.
+pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
+    let pool = datalib_etl::doltlite_raw::open_derived(db_path, &[])
+        .await
+        .with_context(|| format!("open the grid index at {}", db_path.display()))?;
+    init_schema(&pool).await?;
+    datalib_etl::doltlite_raw::commit_run(&pool, "schema: grid index")
+        .await
+        .context("commit the grid index schema")?;
+    anyhow::ensure!(
+        datalib_etl::pin::carries_committed_schema(&pool).await,
+        "opened {} but its tables are not committed: either the schema commit \
+         did not take, or this binary is not linked against doltlite",
+        db_path.display()
+    );
+    Ok(pool)
+}
+
 /// The table a DDL statement creates, for error messages. Degrades to the
 /// raw SQL rather than panicking.
 fn table_of(ddl: &str) -> String {
@@ -1123,6 +1152,55 @@ async fn insert_grid_row(
     .await
     .with_context(|| format!("insert moved grid_row {}", row.uuid))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod open_index_tests {
+    use super::*;
+
+    /// A `grid_index` pass that died after its SQL `COMMIT` and before its
+    /// `dolt_commit` leaves the batch in the working set. The next
+    /// `open_index` seals it into a rescue commit — so the applet, which
+    /// reads at HEAD, sees those rows — rather than a bare pool folding
+    /// them into the next pass's commit unremarked.
+    #[tokio::test]
+    async fn rows_a_killed_pass_left_uncommitted_are_rescued_by_the_next_open() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("db.doltlite_db");
+        let pool = open_index(&path).await.expect("open_index");
+        if !datalib_etl::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+        sqlx::query(
+            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
+             renderer_version) VALUES ('m-1', 'src', 'claude', 'chat', 'x.md', 'v')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let pool = open_index(&path).await.expect("reopen");
+        let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(
+            messages.iter().any(|m| m.starts_with("rescue:")),
+            "no rescue commit: {messages:?}"
+        );
+        let head = datalib_etl::pin::head(&pool).await.unwrap().unwrap();
+        // Audited: the hash is `Pin::at`-checked and the table is a literal.
+        let at_head: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM dolt_at_markdowns('{}')",
+            head.commit()
+        )))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(at_head, 1, "the orphaned row is committed now");
+        pool.close().await;
+    }
 }
 
 #[cfg(test)]

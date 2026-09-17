@@ -1,5 +1,31 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
+# What a dev launcher needs to stage a `DATALIB_RUNTIME_DIR` (see
+# dev_runtime.sh): the Bazel-managed Node and the two package stores,
+# plus their locations as runfiles paths — `rlocationpath` rather than a
+# hand-written `_main/...` string, so a moved target fails at analysis
+# time instead of at `rlocation` time. Every launcher that reaches
+# serve_dev.sh carries both, because `env` applies only to the target
+# `bazel run` was given, not to a script it execs.
+_DEV_RUNTIME_DATA = [
+    "dev_runtime.sh",
+    "@nodejs_host//:node_bin",
+    "//third-party/qmd/runtime:qmd_tree",
+    "//third-party/qmd/runtime:package.json",
+    "//third-party/qmd/runtime:qmd_package_dir",
+    "//third-party/latchkey/runtime:latchkey_tree",
+    "//third-party/latchkey/runtime:package.json",
+    "//third-party/latchkey/runtime:latchkey_package_dir",
+]
+
+_DEV_RUNTIME_ENV = {
+    "DATALIB_DEV_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+    "DATALIB_DEV_QMD_PKG_RLOC": "$(rlocationpath //third-party/qmd/runtime:package.json)",
+    "DATALIB_DEV_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+    "DATALIB_DEV_LATCHKEY_PKG_RLOC": "$(rlocationpath //third-party/latchkey/runtime:package.json)",
+    "DATALIB_DEV_LATCHKEY_DIR_RLOC": "$(rlocationpath //third-party/latchkey/runtime:latchkey_package_dir)",
+}
+
 # Backend-only: launch datalib_http_bin and open browser at /api/health.
 sh_binary(
     name = "serve",
@@ -12,7 +38,8 @@ sh_binary(
         # exports it as $DATALIB_BINARY_DIR and takes $DATALIB_DAG_BIN
         # from inside it.
         "//datalib/backend:bin",
-    ],
+    ] + _DEV_RUNTIME_DATA,
+    env = _DEV_RUNTIME_ENV,
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
@@ -30,7 +57,8 @@ sh_binary(
         # `:bin`; dev.sh exports $DATALIB_DAG_BIN and $DATALIB_BINARY_DIR
         # from it so UI-triggered syncs run end-to-end.
         "//datalib/backend:bin",
-    ],
+    ] + _DEV_RUNTIME_DATA,
+    env = _DEV_RUNTIME_ENV,
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
@@ -48,7 +76,8 @@ sh_binary(
     data = [
         ":serve",
         "//tests/fixtures:materialize_tng_root",
-    ],
+    ] + _DEV_RUNTIME_DATA,
+    env = _DEV_RUNTIME_ENV,
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
@@ -66,6 +95,7 @@ sh_binary(
         ":serve",
         "//datalib/backend:bin",
         "//datalib/backend/etl/providers/perseus:tiny_fixture",
-    ],
+    ] + _DEV_RUNTIME_DATA,
+    env = _DEV_RUNTIME_ENV,
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )

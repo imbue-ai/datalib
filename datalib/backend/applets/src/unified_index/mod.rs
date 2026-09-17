@@ -145,13 +145,24 @@ fn ensure_models(root: &std::path::Path) {
              continuing with {}/models as-is",
             qmd_dir.display()
         );
-    } else if !datalib_qmd_indexer::models_present(&qmd_dir.join("models")) {
-        eprintln!(
-            "datalib-applet unified_index: model cache cold — the first \
-             semantic search will download models (one-time, shared \
-             across data roots)"
-        );
+        return;
     }
+    // Verify (and on a cold cache, fetch) the pinned models off the
+    // request path: a 2 GB download must not hold up the SQL side of
+    // search, and qmd would otherwise pull unpinned copies itself on
+    // the first semantic query.
+    let effective = datalib_qmd_models::effective_models_dir(&qmd_dir, &models_dir);
+    std::thread::spawn(move || {
+        if let Err(e) =
+            datalib_qmd_models::ensure_models(&effective, datalib_qmd_models::PINNED_MODELS)
+        {
+            eprintln!(
+                "datalib-applet unified_index: could not provision qmd's models in {} ({e:#}); \
+                 semantic search will fail until `datalib-step pull-models` succeeds",
+                effective.display()
+            );
+        }
+    });
 }
 
 #[derive(Debug, Deserialize)]

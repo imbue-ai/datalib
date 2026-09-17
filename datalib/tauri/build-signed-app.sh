@@ -159,6 +159,11 @@ export APPLE_API_KEY_PATH="$notary_key"
 export APPLE_API_ISSUER
 
 # ---- Build, sign, notarize ----------------------------------------------
+# The Tauri CLI at the version pnpm-lock.yaml names, from the tarballs it
+# names, with no install script run — never `pnpm dlx`, which resolves
+# from the live registry at signing time. In CI this is a no-op: the
+# workflow installs it before the signing secrets are exported.
+pnpm install --frozen-lockfile --ignore-scripts
 # shellcheck disable=SC2054  # app,dmg is one comma-separated CLI argument
 build_args=(build --bundles app,dmg)
 if [[ -n "${DATALIB_APP_VERSION:-}" ]]; then
@@ -170,7 +175,7 @@ fi
 # tries. A retry after a real build failure is cheap: everything up to the
 # failure is incremental.
 attempt=0
-until pnpm dlx @tauri-apps/cli@2 "${build_args[@]}"; do
+until pnpm exec tauri "${build_args[@]}"; do
     attempt=$((attempt + 1))
     if (( attempt >= 3 )); then
         echo "ERROR: tauri build failed after $attempt attempts." >&2

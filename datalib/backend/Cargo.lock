@@ -934,6 +934,7 @@ dependencies = [
  "clap",
  "datalib-core",
  "datalib-qmd-indexer",
+ "datalib-qmd-models",
  "datalib-schema",
  "datalib-time",
  "datalib-unified-index",
@@ -1028,6 +1029,7 @@ dependencies = [
  "datalib-time",
  "ignore",
  "indicatif 0.18.6",
+ "quick-xml",
  "runfiles",
  "serde",
  "serde_json",
@@ -1928,6 +1930,7 @@ dependencies = [
  "quick-xml",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "tokenizers 0.21.4",
  "tokio",
@@ -2297,6 +2300,18 @@ dependencies = [
  "anyhow",
  "datalib-obs",
  "datalib-runtime",
+]
+
+[[package]]
+name = "datalib-qmd-models"
+version = "0.33.0"
+dependencies = [
+ "anyhow",
+ "datalib-obs",
+ "datalib-runtime",
+ "reqwest",
+ "sha2 0.11.0",
+ "tempfile",
 ]
 
 [[package]]
@@ -4884,9 +4899,9 @@ checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 
 [[package]]
 name = "quick-xml"
-version = "0.36.2"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "memchr",
 ]
@@ -5173,6 +5188,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -5294,9 +5310,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "log",
  "once_cell",
