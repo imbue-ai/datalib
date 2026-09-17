@@ -10,7 +10,7 @@ use datalib_etl_fsindex::ingest::schema_raw::{DIRS_DDL, FILES_DDL};
 /// (its `size` doubling as `entries`, which these tests never read
 /// back), anything else in `files`.
 async fn make_scan(path: &Path, rows: &[(&str, &str, i64, &str)]) -> Commit {
-    let pool = store::open(path).await.unwrap();
+    let pool = store::open_scratch(path).await.unwrap();
     for ddl in [FILES_DDL, DIRS_DDL] {
         sqlx::query(ddl).execute(&pool).await.unwrap();
     }
@@ -96,7 +96,7 @@ async fn two_independent_files_unify_and_diff() {
     store::unify(&unified, &left_path, &right_path)
         .await
         .unwrap();
-    let pool = store::open(&unified).await.unwrap();
+    let pool = store::open_scratch(&unified).await.unwrap();
 
     let diff = fetch_both(&pool, &left, &right).await.unwrap();
     let mut removed: Vec<&str> = diff.removed.iter().map(|e| e.path.as_str()).collect();
@@ -156,7 +156,7 @@ async fn the_fetching_connection_cannot_see_what_it_fetched() {
     let right = make_scan(&right_path, &[("b.txt", "file", 1, &digest(0x22))]).await;
 
     let scratch = tmp.path().join("scratch.doltlite_db");
-    let pool = store::open(&scratch).await.unwrap();
+    let pool = store::open_scratch(&scratch).await.unwrap();
     for (name, path) in [("l", &left_path), ("r", &right_path)] {
         let url = format!("file://{}", std::fs::canonicalize(path).unwrap().display());
         sqlx::query("SELECT dolt_remote('add', ?, ?)")
@@ -181,7 +181,7 @@ async fn the_fetching_connection_cannot_see_what_it_fetched() {
     pool.close().await;
 
     // The same file, a new connection: fine.
-    let reopened = store::open(&scratch).await.unwrap();
+    let reopened = store::open_scratch(&scratch).await.unwrap();
     let diff = fetch_both(&reopened, &left, &right).await.unwrap();
     assert_eq!(diff.removed.len(), 1);
     assert_eq!(diff.added.len(), 1);
@@ -195,7 +195,7 @@ async fn two_commits_in_one_file_diff_directly() {
     let path = tmp.path().join("scans.doltlite_db");
 
     let first = make_scan(&path, &[("a.txt", "file", 1, &digest(0x11))]).await;
-    let pool = store::open(&path).await.unwrap();
+    let pool = store::open_scratch(&path).await.unwrap();
     sqlx::query("INSERT INTO files (id, kind, size, blake3) VALUES ('b.txt','file',2,?)")
         .bind(hex::decode(digest(0x22)).unwrap())
         .execute(&pool)
@@ -221,7 +221,7 @@ async fn reads_see_the_commit_not_the_working_set() {
     let path = tmp.path().join("scan.doltlite_db");
     let commit = make_scan(&path, &[("a.txt", "file", 1, &digest(0x11))]).await;
 
-    let pool = store::open(&path).await.unwrap();
+    let pool = store::open_scratch(&path).await.unwrap();
     // Uncommitted: this lands in the working set only.
     sqlx::query("INSERT INTO files (id, kind, size, blake3) VALUES ('uncommitted.txt','file',9,?)")
         .bind(hex::decode(digest(0x33)).unwrap())
@@ -253,7 +253,7 @@ async fn digest_lookup_finds_surviving_copies() {
     )
     .await;
 
-    let pool = store::open(&path).await.unwrap();
+    let pool = store::open_scratch(&path).await.unwrap();
     let want = [digest(0x44), digest(0x99)]
         .into_iter()
         .map(|d| ("file".to_string(), d.to_uppercase()))
@@ -283,7 +283,7 @@ async fn duplicate_candidates_respect_the_threshold() {
         ],
     )
     .await;
-    let pool = store::open(&path).await.unwrap();
+    let pool = store::open_scratch(&path).await.unwrap();
 
     let all = store::duplicate_candidates(&pool, &commit, 1)
         .await
@@ -310,7 +310,7 @@ async fn refs_resolve_against_their_own_file() {
     let path = tmp.path().join("scan.doltlite_db");
     let head = make_scan(&path, &[("a.txt", "file", 1, &digest(0x11))]).await;
 
-    let pool = store::open(&path).await.unwrap();
+    let pool = store::open_scratch(&path).await.unwrap();
     assert_eq!(store::resolve_ref(&pool, "main").await.unwrap(), head);
     assert_eq!(store::resolve_ref(&pool, "HEAD").await.unwrap(), head);
     assert!(store::resolve_ref(&pool, "no-such-branch").await.is_err());

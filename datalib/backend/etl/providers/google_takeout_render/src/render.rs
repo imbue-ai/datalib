@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::Context;
 use anyhow::Result;
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
@@ -97,19 +96,15 @@ pub fn render(
     let Some((messages, groups, voice_messages, voice_blobs, scan)) =
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                let db = RawDb::open_reader(&db_path).await?;
-                // Pin before reading: the driver's pin when it made one,
-                // else HEAD. No commit means nothing has been committed here
-                // to render, which is emptiness rather than a reason to read
+                // Pinned at open: the driver's pin when it made one, else
+                // HEAD. No commit means nothing has been committed here to
+                // render, which is emptiness rather than a reason to read
                 // the working set.
-                let pin = range.pin(db.pool()).await?;
+                let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
+                    return Ok(None);
+                };
+                let pin = db.pin().expect("a reader is pinned at open").clone();
                 let loaded = async {
-                    let Some(pin) = pin else {
-                        return anyhow::Ok(None);
-                    };
-                    datalib_etl::pin::install_views(db.pool(), &pin)
-                        .await
-                        .context("pin the google_takeout raw store for render")?;
                     let messages = db
                         .load_payloads_with_id(datalib_etl::pin::Reads::At(&pin), "chat_messages")
                         .await?;

@@ -47,6 +47,8 @@ pub struct RawDb {
     /// file read-only is an error and creating it would be a write
     /// render does not own.
     cas: Option<BlobCas>,
+    /// The commit a reader is pinned at; `None` for the writer.
+    pin: Option<datalib_etl::pin::Pin>,
 }
 
 impl RawDb {
@@ -60,27 +62,39 @@ impl RawDb {
         Ok(Self {
             pool,
             cas: Some(cas),
+            pin: None,
         })
     }
 
     /// Open the store to *read* it, for the render pass: no rescue
     /// commit, no DDL, no commit — three writes to a file render does not
     /// own. See `datalib_etl::doltlite_raw::open_reader`.
-    pub async fn open_reader(db_path: &Path) -> Result<Self> {
+    ///
+    /// Pinned at `commit`, else HEAD; `None` when nothing is committed.
+    pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
+        let Some(reader) = dr::open_reader(db_path, commit).await? else {
+            return Ok(None);
+        };
         let cas_path = cas_path_for(db_path);
         let cas = if cas_path.is_file() {
             Some(BlobCas::open_reader(&cas_path).await?)
         } else {
             None
         };
-        Ok(Self {
-            pool: dr::open_reader(db_path).await?,
+        Ok(Some(Self {
+            pool: reader.pool().clone(),
             cas,
-        })
+            pin: Some(reader.pin().clone()),
+        }))
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// The commit this reader reads at. `None` on the writer's handle.
+    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
+        self.pin.as_ref()
     }
 
     /// `None` only on a reader whose store has no CAS file — see the field.

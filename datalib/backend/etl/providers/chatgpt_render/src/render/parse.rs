@@ -489,14 +489,23 @@ fn parse_doltlite(db_path: &Path, range: RawRange<'_>) -> Result<ParsedChatGPTAp
 }
 
 async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<ParsedChatGPTApi> {
-    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
+    // Pinned at open — at the driver's commit, else HEAD — with the views
+    // installed before anything reads. No commit means nothing has been
+    // committed here to render: emptiness, not a reason to read the
+    // working set.
+    let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
-        .with_context(|| format!("open chatgpt doltlite for render {}", db_path.display()))?;
+        .with_context(|| format!("open chatgpt doltlite for render {}", db_path.display()))?
+    else {
+        return Ok(ParsedChatGPTApi::default());
+    };
+    let pool = reader.pool().clone();
+    let pin = reader.pin().clone();
 
     let cas_path = blob_cas::cas_path_for(db_path);
     let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
         Some(
-            datalib_etl::doltlite_raw::open_reader(&cas_path)
+            datalib_etl::blob_cas::open_cas_reader(&cas_path)
                 .await
                 .with_context(|| format!("open chatgpt CAS for render {}", cas_path.display()))?,
         )
@@ -509,14 +518,6 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
     // already exist when the diff runs — its bucket query joins live tables.
     // No commit at all means nothing has been committed here to render, which
     // is emptiness, not a reason to read the working set.
-
-    let Some(pin) = range.pin(&pool).await? else {
-        return Ok(ParsedChatGPTApi::default());
-    };
-
-    datalib_etl::pin::install_views(&pool, &pin)
-        .await
-        .context("pin the chatgpt raw store for render")?;
 
     // Load `me` + `conversations` payloads (filtered if Phase 1
     // narrowed the set).

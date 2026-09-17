@@ -29,6 +29,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runtime:datalib_runtime",
@@ -125,6 +126,7 @@ rust_binary(
     deps = [
         ":datalib_etl",
         "//datalib/backend/history:datalib_history",
+        "//datalib/backend/pin:datalib_pin",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",

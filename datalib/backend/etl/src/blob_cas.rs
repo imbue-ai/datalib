@@ -66,6 +66,14 @@ pub struct CasInsert<'a> {
     pub content_type: Option<&'a str>,
 }
 
+/// The CAS read-only, as a bare pool, for a render that reads blobs
+/// beside its pinned entity store. Unpinned, deliberately: most
+/// downloads never commit the CAS, so a read at HEAD would find no blob
+/// (`doltlite_raw::open_reader_unpinned`).
+pub async fn open_cas_reader(cas_path: &Path) -> Result<SqlitePool> {
+    crate::doltlite_raw::open_reader_unpinned(cas_path).await
+}
+
 /// Per-source CAS handle. Single sqlx pool of size 1, same as every
 /// other doltlite store in this codebase.
 #[derive(Clone, Debug)]
@@ -102,7 +110,7 @@ impl BlobCas {
     /// does not own.
     pub async fn open_reader(cas_path: &Path) -> Result<Self> {
         Ok(Self {
-            pool: crate::doltlite_raw::open_reader(cas_path).await?,
+            pool: open_cas_reader(cas_path).await?,
         })
     }
 

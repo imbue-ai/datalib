@@ -79,26 +79,24 @@ pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedGarmin> {
     }
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let pool = datalib_etl::doltlite_raw::open_reader(&db_path)
+            // Pinned at open, at the driver's commit else HEAD. No commit
+            // means nothing has been committed here to render.
+            let Some(reader) = datalib_etl::doltlite_raw::open_reader(&db_path, range.pin)
                 .await
                 .with_context(|| {
                     format!("open garmin doltlite for render {}", db_path.display())
-                })?;
-            let parsed = parse_pinned(&pool, range).await;
-            pool.close().await;
+                })?
+            else {
+                return Ok(ParsedGarmin::default());
+            };
+            let parsed = parse_pinned(reader.pool(), reader.pin()).await;
+            reader.close().await;
             parsed
         })
     })
 }
 
-async fn parse_pinned(pool: &SqlitePool, range: RawRange<'_>) -> Result<ParsedGarmin> {
-    let Some(pin) = range.pin(pool).await? else {
-        return Ok(ParsedGarmin::default());
-    };
-    datalib_etl::pin::install_views(pool, &pin)
-        .await
-        .context("pin the garmin raw store for render")?;
-
+async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<ParsedGarmin> {
     let (display_name, full_name) = load_account(pool).await?;
     let weigh_ins = load_weigh_ins(pool).await?;
     let devices = load_devices(pool).await?;

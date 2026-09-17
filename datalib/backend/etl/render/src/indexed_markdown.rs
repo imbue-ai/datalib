@@ -103,6 +103,8 @@ pub struct IndexedMarkdownStore {
     /// The run-pinned "now" stamped onto problem rows — see
     /// [`Self::with_now`].
     now: String,
+    /// The commit a reader was opened at; `None` for the owner's handle.
+    pin: Option<datalib_etl::pin::Pin>,
 }
 
 /// Run a future to completion from a synchronous caller.
@@ -145,6 +147,7 @@ impl IndexedMarkdownStore {
             pool,
             path,
             now: datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs(),
+            pin: None,
         })
     }
 
@@ -155,17 +158,33 @@ impl IndexedMarkdownStore {
     /// writes [`Self::open`] does on the way in. Read that function's note for
     /// what those are and why they are a hazard here specifically.
     ///
+    /// Pinned at open — at `commit`, or HEAD — so every read through this
+    /// handle names one commit: `changed_since`'s diff and
+    /// `documents_matching`'s rows must agree. `None` means the store has
+    /// no commit to read; the caller contributes nothing rather than
+    /// reading the working set.
+    ///
     /// No `now`, no write lock: nothing reached through this handle may write.
-    pub fn open_for_reading(rendered_root: &Path) -> Result<Self> {
+    pub fn open_for_reading(rendered_root: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         let path = path_for(rendered_root);
-        let pool = blocking(datalib_etl::doltlite_raw::open_reader(&path))
-            .with_context(|| format!("open render store for reading {}", path.display()))?;
-        Ok(Self {
+        let Some(reader) = blocking(datalib_etl::doltlite_raw::open_reader(&path, commit))
+            .with_context(|| format!("open render store for reading {}", path.display()))?
+        else {
+            return Ok(None);
+        };
+        let pool = reader.pool().clone();
+        Ok(Some(Self {
             write_lock: WriteLock::new(pool.clone()),
             pool,
             path,
             now: String::new(),
-        })
+            pin: Some(reader.pin().clone()),
+        }))
+    }
+
+    /// The commit this reader reads at. `None` on the owner's handle.
+    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
+        self.pin.as_ref()
     }
 
     /// Use the run-pinned "now" (`--now` / `$DATALIB_DAG_NOW`) for the
@@ -725,40 +744,6 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// Pin this store and install the `pinned_<table>` views, before anything
-    /// reads it. `None` means the store has no commits — nothing has been
-    /// committed here to read, and the caller should contribute nothing
-    /// rather than fall back to the working set.
-    ///
-    /// Everything below reads through the views this installs, so it has to
-    /// come first: `changed_since`'s diff and `documents_matching`'s rows must
-    /// name the same commit, and the views must exist before either runs.
-    pub fn pin_for_reading(&self) -> Result<Option<datalib_etl::pin::Pin>> {
-        blocking(async {
-            let Some(pin) = datalib_etl::pin::head(&self.pool).await? else {
-                return Ok(None);
-            };
-            datalib_etl::pin::install_views(&self.pool, &pin)
-                .await
-                .context("install pinned views over the render store")?;
-            Ok(Some(pin))
-        })
-    }
-
-    /// Pin one commit of this store, HEAD or earlier, and install the
-    /// views over it. What a consumer does to read a checkpoint after
-    /// the fact — and what a test does to ask whether every commit a
-    /// render made was one a consumer may read.
-    pub fn pin_at(&self, commit: &str) -> Result<datalib_etl::pin::Pin> {
-        blocking(async {
-            let pin = datalib_etl::pin::Pin::at(commit.to_string())?;
-            datalib_etl::pin::install_views(&self.pool, &pin)
-                .await
-                .context("install pinned views over the render store")?;
-            Ok(pin)
-        })
-    }
-
     /// Every commit in this store as `(hash, message)`, newest first.
     /// Empty without doltlite.
     pub fn log(&self) -> Result<Vec<(String, String)>> {
@@ -839,7 +824,7 @@ impl IndexedMarkdownStore {
         only: Option<&HashSet<String>>,
         pin: &datalib_etl::pin::Pin,
     ) -> Result<Vec<RenderedMarkdown>> {
-        let _ = pin; // the views were installed by `pin_for_reading`
+        let _ = pin; // the views were installed at `open_for_reading`
         blocking(async {
             let mds: Vec<datalib_schema::markdowns::MarkdownRow> =
                 sqlx::query_as("SELECT * FROM pinned_markdowns markdowns ORDER BY markdown_uuid")

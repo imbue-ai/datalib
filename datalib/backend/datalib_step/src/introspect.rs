@@ -31,9 +31,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
-use std::str::FromStr;
 
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_id::{entity_id_str, IdNamespace, Scope};
@@ -138,22 +136,6 @@ fn human_bytes(n: i64) -> String {
     }
 }
 
-/// Open a store without claiming it. Read-only matters: doltlite's
-/// working set is per *file* and shared across processes, so a
-/// read-write handle here could sweep another writer's in-flight rows
-/// into a commit.
-async fn open_read_only(db_path: &Path) -> Result<SqlitePool> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
-        .with_context(|| format!("open {}", db_path.display()))?
-        .read_only(true)
-        .create_if_missing(false);
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(opts)
-        .await
-        .with_context(|| format!("connect {}", db_path.display()))
-}
-
 /// The suffix `doltlite_raw::bookkeeping_ddl_for` gives a sidecar
 /// table. Pinned against that generator by a test rather than trusted.
 const BOOKKEEPING_SUFFIX: &str = "_bookkeeping";
@@ -208,11 +190,37 @@ async fn table_names(pool: &SqlitePool) -> Result<Vec<String>> {
         .collect()
 }
 
-async fn row_count(pool: &SqlitePool, table: &str) -> Result<i64> {
+/// A store opened to count its rows, and whether the count reads the
+/// pin. The entity store counts at HEAD — what it holds, not what
+/// another process is mid-way through writing. The blob CAS is the one
+/// store read unpinned (`open_cas_reader` says why): counted at HEAD it
+/// would report no blobs at all.
+async fn open_for_counting(abs: &Path) -> Result<Option<(SqlitePool, bool)>> {
+    if abs.file_name().and_then(|n| n.to_str()) == Some(datalib_etl::raw_layout::BLOBS_DB) {
+        return Ok(Some((
+            datalib_etl::blob_cas::open_cas_reader(abs).await?,
+            false,
+        )));
+    }
+    Ok(datalib_etl::doltlite_raw::open_reader(abs, None)
+        .await?
+        .map(|reader| (reader.pool().clone(), true)))
+}
+
+async fn row_count(pool: &SqlitePool, table: &str, pinned: bool) -> Result<i64> {
     // Audited: `table` came from `sqlite_master` on this same file, so
     // it is an identifier the engine itself just handed us; there is no
-    // caller-supplied text in the string.
-    let sql = format!("SELECT COUNT(*) FROM \"{}\"", table.replace('"', "\"\""));
+    // caller-supplied text in the string. `pinned_` is the view prefix
+    // `open_reader` installed.
+    let sql = format!(
+        "SELECT COUNT(*) FROM \"{}{}\"",
+        if pinned {
+            datalib_etl::pin::VIEW_PREFIX
+        } else {
+            ""
+        },
+        table.replace('"', "\"\"")
+    );
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_one(pool)
         .await
@@ -258,11 +266,16 @@ pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
             bytes: size,
             items: None,
         });
-        // A store we cannot open is worth saying nothing about rather
-        // than failing the whole render — the file's size is already
-        // recorded above, which is the half that never fails.
-        let pool = match open_read_only(&abs).await {
-            Ok(p) => p,
+        // A store we cannot open, or one with nothing committed yet, is
+        // worth saying nothing about rather than failing the whole render
+        // — the file's size is already recorded above, which is the half
+        // that never fails.
+        let (pool, pinned) = match open_for_counting(&abs).await {
+            Ok(Some(opened)) => opened,
+            Ok(None) => {
+                tracing::info!(store = %rel, "introspect: nothing committed yet; not counting");
+                continue;
+            }
             Err(e) => {
                 tracing::warn!(store = %rel, error = %e, "introspect: could not open store");
                 continue;
@@ -277,7 +290,7 @@ pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
             }
         };
         for table in tables {
-            match row_count(&pool, &table).await {
+            match row_count(&pool, &table, pinned).await {
                 Ok(n) => subjects.push(Subject {
                     path: format!("{rel}#{table}"),
                     kind: MeasurementKind::Table,
@@ -472,6 +485,13 @@ pub fn counts_unchanged(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn commit(pool: &SqlitePool) {
+        sqlx::query("SELECT dolt_commit('-Am', 'seed')")
+            .execute(pool)
+            .await
+            .expect("dolt_commit");
+    }
     use tempfile::tempdir;
 
     fn subject(
@@ -691,6 +711,8 @@ mod tests {
                 .await
                 .unwrap();
         }
+        // The scan counts committed rows, as the ingest step leaves them.
+        commit(&pool).await;
         pool.close().await;
 
         let subjects = scan(td.path(), "src/ingest").await.unwrap();
@@ -773,6 +795,8 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // The scan counts committed rows, as the ingest step leaves them.
+        commit(&pool).await;
         pool.close().await;
 
         let subjects = scan(td.path(), "src/ingest").await.unwrap();
@@ -823,7 +847,10 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // The scan counts committed rows, as the ingest step leaves them.
+        commit(&pool).await;
         pool.close().await;
+        drop(pool);
         let first = scan(td.path(), "src/ingest").await.unwrap();
 
         // A second run: another `sync_runs` row, no new content.
@@ -834,7 +861,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // The scan counts committed rows, as the ingest step leaves them.
+        commit(&pool).await;
         pool.close().await;
+        drop(pool);
         let second = scan(td.path(), "src/ingest").await.unwrap();
         assert!(
             counts_unchanged(&previous(&first), &samples(&second)),
@@ -847,6 +877,8 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // The scan counts committed rows, as the ingest step leaves them.
+        commit(&pool).await;
         pool.close().await;
         let third = scan(td.path(), "src/ingest").await.unwrap();
         assert!(

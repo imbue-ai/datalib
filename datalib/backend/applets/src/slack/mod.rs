@@ -223,19 +223,17 @@ fn read_rows(
         // commits (datalib/backend/etl/README.md, "Connection pools").
         // And it reads at HEAD, not the working set, so a render pass in
         // flight is not half-served.
-        let pool = datalib_etl::doltlite_raw::open_reader(store).await?;
-        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
-            pool.close().await;
+        let Some(reader) = datalib_etl::doltlite_raw::open_reader(store, None).await? else {
             return Ok(Vec::new());
         };
-        datalib_etl::pin::install_views(&pool, &pin).await?;
+        let pool = reader.pool();
         let rows = sqlx::query(
             "SELECT channel, markdown_uuid, message_index, \
                         IFNULL(created_at, ''), IFNULL(author, ''), text \
                  FROM pinned_grid_rows \
                  WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL",
         )
-        .fetch_all(&pool)
+        .fetch_all(pool)
         .await?;
         let out = rows
             .into_iter()
@@ -250,7 +248,7 @@ fn read_rows(
                 ))
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
-        pool.close().await;
+        reader.close().await;
         Ok(out)
     })
 }

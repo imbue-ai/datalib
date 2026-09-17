@@ -59,6 +59,7 @@ rust_test(
     deps = [
         ":datalib_etl_garmin",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde_json",
