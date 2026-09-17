@@ -90,7 +90,7 @@ jobs:
             bazel-config: "--config=musl-aarch64"
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # `tools/workspace_status.sh` runs `git describe --tags`; the
           # default shallow clone has no tag history, so describe would
@@ -115,7 +115,7 @@ jobs:
       #     workspaces — small win and historically the flakiest layer.
       #   * bazelisk-cache saves a ~20s binary download, not worth
       #     a slot in the 10 GB-per-repo actions/cache quota.
-      - uses: bazel-contrib/setup-bazel@0.19.0
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: false
           disk-cache: false
@@ -449,13 +449,13 @@ jobs:
     env:
       VAULT_AUTH_ROLE: datalib_release_gh
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       # The tauri beforeBuildCommand bazel-builds the bundled
       # datalib-http / datalib-dag / datalib-step binaries; same cache layering
       # rationale as the build job above (BuildBuddy serves actions,
       # repository-cache keeps the crate_universe / rules tarballs).
-      - uses: bazel-contrib/setup-bazel@0.19.0
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: false
           disk-cache: false
@@ -484,7 +484,7 @@ jobs:
       # says rust-version = "1.83"). Plain rustup, no third-party action;
       # the runner image carries rustup, with the official installer as
       # fallback in case a future image drops it.
-      - name: Install Rust (stable)
+      - name: Install Rust (1.98.0, the version Bazel builds with)
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
@@ -493,15 +493,15 @@ jobs:
               echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
               export PATH="$HOME/.cargo/bin:$PATH"
           fi
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup default stable
+          rustup toolchain install 1.98.0 --profile minimal --no-self-update
+          rustup default 1.98.0
           rustc --version
 
       # scripts/ensure_pnpm.sh bootstraps pnpm via corepack, but corepack
       # is being removed from newer Node distributions — install the
       # pinned pnpm (packageManager in datalib/ui/package.json)
       # directly so the runner image's Node choices can't break us.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           package_json_file: datalib/ui/package.json
 
@@ -510,7 +510,7 @@ jobs:
         # APPLE_API_ISSUER identify the notarization key inside it. The
         # action leaves all three in $GITHUB_ENV for the build step,
         # where build-signed-app.sh picks them up.
-        uses: imbue-ai/use-vault-secrets@main
+        uses: imbue-ai/use-vault-secrets@38aac6d2f537009c6e58849f8fdd34ea16084103 # main, 2026-09-17
         with:
           role: ${{ env.VAULT_AUTH_ROLE }}
           secrets: |
@@ -578,7 +578,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       # GHA `ubuntu-latest` ships with ~14 GB free disk, which doesn't
       # fit a buildx run of our ~2.7 GB image × two architectures plus
@@ -638,7 +638,7 @@ jobs:
           ls -la ctx/dist/amd64 ctx/dist/arm64
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       # Pin a recent BuildKit explicitly. The `buildx-stable-1` tag that
       # `setup-buildx-action` defaults to was on a BuildKit old enough to
@@ -651,12 +651,12 @@ jobs:
       # ≥ 0.18 speaks the v2 API; `moby/buildkit:latest` keeps us on
       # whatever's current.
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
           driver-opts: image=moby/buildkit:latest
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -798,7 +798,7 @@ jobs:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # `.devcontainer/Dockerfile`'s bazelisk warmup is gated off
           # (WARM_BAZEL_CACHE=false) so we don't actually need full
@@ -828,17 +828,17 @@ jobs:
           echo "Free disk after:" && df -h /
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       # See note in docker-publish above: pin a current BuildKit so
       # GHA Cache Service v2 works.
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
           driver-opts: image=moby/buildkit:latest
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
