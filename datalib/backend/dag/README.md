@@ -210,6 +210,15 @@ naming no step) looks exactly like one it did.
 They must be *different* files: the server spawns the runner, so one shared
 lock would deadlock the server against its own child.
 
+The runner also exits with the server: the worker spawns it on a parent
+pipe (`datalib_parent_watch`, `DATALIB_PARENT_PIPE`), and when the pipe
+closes — the server exited, or the desktop shell SIGKILLed it — the
+runner SIGINTs its steps so they checkpoint, gives them fifteen seconds,
+then kills what is left and exits. A run that outlived its server would
+have nobody to record how it ended: the job row stays `running` and the
+next boot cannot tell a run still going from one that died. That boot
+reads the run store to say what became of each job it finds active.
+
 `flock(2)` rather than a pid file, because the kernel releases it when the
 holder dies — a crashed process leaves no stale lock to reason about. The
 file's contents are advisory: they exist so a refusal can name the holder,

@@ -131,6 +131,10 @@ pub(crate) async fn run_subprocess(
         // own `env:` entries win on key collision.
         .envs(extra_env)
         .envs(env)
+        // The runner's own parent pipe is not the step's: with the
+        // variable inherited and stdin `/dev/null`, a step that watches
+        // its parent would refuse to start.
+        .env_remove(datalib_parent_watch::ENV_VAR)
         .current_dir(&ctx.data_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -413,21 +417,33 @@ impl Drop for RegisteredChild {
     }
 }
 
+/// SIGINT every running step, so each checkpoints and exits `stopped`.
 pub fn interrupt_children() {
     #[cfg(unix)]
-    {
-        let pids: Vec<u32> = CHILD_PIDS
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|s| s.iter().copied().collect())
-            .unwrap_or_default();
-        for pid in pids {
-            // Safety: plain kill(2) with a valid signal; racing a
-            // just-exited pid is benign (ESRCH).
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGINT);
-            }
+    signal_children(libc::SIGINT);
+}
+
+/// SIGKILL every running step. For the exits `std::process::exit` takes,
+/// where no `kill_on_drop` runs: a step that ignored its SIGINT must not
+/// outlive the runner, holding its store open.
+pub fn kill_children() {
+    #[cfg(unix)]
+    signal_children(libc::SIGKILL);
+}
+
+#[cfg(unix)]
+fn signal_children(signal: libc::c_int) {
+    let pids: Vec<u32> = CHILD_PIDS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|s| s.iter().copied().collect())
+        .unwrap_or_default();
+    for pid in pids {
+        // Safety: plain kill(2) with a valid signal; racing a
+        // just-exited pid is benign (ESRCH).
+        unsafe {
+            libc::kill(pid as libc::pid_t, signal);
         }
     }
 }
