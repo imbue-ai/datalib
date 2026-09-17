@@ -135,4 +135,4 @@ jobs:
           package-name: ${{ github.event.repository.name }}_devcontainer
           package-type: container
           min-versions-to-keep: 6
-          ignore-versions: '^(latest|[0-9]+\\.[0-9]+\\.[0-9]+)$'
+          ignore-versions: '^(latest|[0-9]+\.[0-9]+\.[0-9]+)$'
