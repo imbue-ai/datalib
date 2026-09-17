@@ -519,7 +519,8 @@ const gridOptions = shallowRef<GridOption>({
   draggableGrouping: {
     dropPlaceHolderText:
       "Drag a column here to group the lines by it — Run, Process, Level, Target",
-    hideToggleAllButton: true,
+    hideToggleAllButton: false,
+    toggleAllButtonText: "Expand / collapse all",
     // The theme ships these icons but draws nothing for the plugin's
     // default classes; the chip's controls are invisible without them.
     deleteIconCssClass: "mdi mdi-close",

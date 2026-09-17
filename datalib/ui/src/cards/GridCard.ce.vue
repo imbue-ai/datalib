@@ -1191,7 +1191,11 @@ function gridOptions(): GridOption {
     preHeaderPanelHeight: 30,
     draggableGrouping: {
       dropPlaceHolderText: GROUP_HINT,
-      hideToggleAllButton: true,
+      // One control to fold or open every group, shown only while
+      // something is grouped; the right-click menu has the same pair.
+      hideToggleAllButton: false,
+      toggleAllButtonText: "Expand / collapse all",
+      toggleAllPlaceholderText: "Fold every group, or open every one",
       deleteIconCssClass: "mdi mdi-close",
       sortAscIconCssClass: "mdi mdi-arrow-up",
       sortDescIconCssClass: "mdi mdi-arrow-down",

@@ -216,12 +216,53 @@
 .tg-link { color: inherit; text-decoration: underline dotted; }
 
 /* ── slickgrid cells ───────────────────────────────────────────── */
-/* Column rules, in the app's own border colour: the theme draws none
-   between cells, and a row of unrelated values reads as one line
-   without them. */
+/* The theme, brought closer to the app: its own font rather than
+   Roboto, a one-line header with the sort mark beside the name rather
+   than a two-line one with the mark below, and column rules in the
+   app's border colour — the theme draws none between cells, and a row
+   of unrelated values reads as one line without them. */
 .grid-pane {
+  --slick-font-family: inherit;
+  --slick-font-size-base: 13px;
+  --slick-header-font-size: 13px;
+  --slick-header-font-weight: 600;
+  --slick-header-row-count: 1;
+  --slick-header-column-height: 20px;
+  --slick-icon-sort-position-top: 4px;
+  --slick-header-column-name-margin-right: 18px;
   --slick-cell-border-right: 1px solid var(--datalib-border);
   --slick-header-column-border-right: 1px solid var(--datalib-border);
+}
+.grid-pane .slick-header-column {
+  display: flex;
+  align-items: center;
+}
+/* Centred in a tall row, but still a block: a flex cell would turn its
+   text into an item that no longer takes the ellipsis. */
+.grid-pane .slick-cell {
+  align-content: center;
+}
+/* The theme dresses the filter row for Bootstrap, which is not here:
+   the boxes are the app's inputs instead. */
+.grid-pane .slick-headerrow input.form-control {
+  width: 100%;
+  box-sizing: border-box;
+  height: 22px;
+  margin: 2px 0;
+  padding: 0 6px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 3px;
+  background: var(--datalib-input-bg, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+.grid-pane .slick-headerrow input.form-control:focus {
+  outline: none;
+  border-color: var(--datalib-accent, #4a8bff);
+}
+.grid-pane .slick-row.slick-group .slick-group-title {
+  font-weight: 600;
 }
 /* Rows are what get selected here; the cell the click landed in is
    not a thing to outline. */
