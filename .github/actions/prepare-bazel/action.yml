@@ -18,6 +18,14 @@ inputs:
       pushes, the contributor group's on everything else.
     required: false
     default: ""
+  buildbuddy-config:
+    description: >
+      The `.bazelrc` config the key belongs to: `buildbuddy` (the
+      contributor org) or `buildbuddy-release` (the release org, its own
+      host). A key only works against its own org's host, so the two
+      inputs travel together.
+    required: false
+    default: buildbuddy
 
 runs:
   using: composite
@@ -50,14 +58,15 @@ runs:
       shell: bash
       env:
         BUILDBUDDY_API_KEY: ${{ inputs.buildbuddy-api-key }}
+        BUILDBUDDY_CONFIG: ${{ inputs.buildbuddy-config }}
       run: |
         set -euo pipefail
         if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
             cat >> .bazelrc.user <<EOF
         common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-        build --config=buildbuddy
+        build --config=${BUILDBUDDY_CONFIG}
         EOF
-            echo "BuildBuddy remote cache enabled for this job."
+            echo "BuildBuddy remote cache enabled for this job (--config=${BUILDBUDDY_CONFIG})."
         else
             echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
         fi

@@ -69,19 +69,22 @@ keep a release from replaying anything a laptop or a PR run wrote:
 | group | key (GitHub secret) | writes | reads |
 |---|---|---|---|
 | contributor | `BUILD_BUDDY_API_KEY` | every laptop with the key, PR and dispatch runs of `test.yml`, `intel-curl-smoke.yml` | the same |
-| release | `BUILD_BUDDY_RELEASE_API_KEY` | `test.yml` on a `push` to `main` — PR-gated code only | `release.yml`, read-only (`--config=buildbuddy-release`) |
+| release | `BUILD_BUDDY_RELEASE_API_KEY` | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | `release.yml`, read-only (`--config=buildbuddy-release-readonly`) |
 
-A tag builds a commit that is already on `main`, so the release build
-hits exactly what the `main` run of that commit produced; the
-`buildbuddy-release` config is what keeps it from writing, not the
+Two BuildBuddy *organizations*, each on its own subdomain
+(`imbue.buildbuddy.io`, `imbue-release.buildbuddy.io`): a key only
+works against its own org's host, so `prepare-bazel` takes the key and
+the config together. A tag builds a commit that is already on `main`,
+so the release build hits exactly what the `main` run of that commit
+produced; the `-readonly` config is what keeps it from writing, not the
 key. Without the release secret a tag build runs cold (~20 min a leg)
 rather than falling back to the contributor cache — that is the
 intended failure mode.
 
-**Setting it up** (once, by a BuildBuddy org admin): create a second
-group in the BuildBuddy org, mint a read-write API key in it, and add
-it to the repository as `BUILD_BUDDY_RELEASE_API_KEY`. Nothing in the
-tree has to change.
+The release org exists and its read-write key is the repository
+secret; a second org means creating it from BuildBuddy's org switcher,
+minting a key under its Settings → API keys, and `gh secret set
+BUILD_BUDDY_RELEASE_API_KEY --repo imbue-ai/datalib`.
 
 ## The caches, and what each is for
 

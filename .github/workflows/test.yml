@@ -198,6 +198,7 @@ jobs:
       - uses: ./.github/actions/prepare-bazel
         with:
           buildbuddy-api-key: ${{ github.event_name == 'push' && secrets.BUILD_BUDDY_RELEASE_API_KEY || secrets.BUILD_BUDDY_API_KEY }}
+          buildbuddy-config: ${{ github.event_name == 'push' && 'buildbuddy-release' || 'buildbuddy' }}
 
       # `-c opt --config=release` mirrors the build mode `release.yml`'s
       # dist build uses, so the BuildBuddy action cache populated here
@@ -410,6 +411,7 @@ jobs:
       - uses: ./.github/actions/prepare-bazel
         with:
           buildbuddy-api-key: ${{ github.event_name == 'push' && secrets.BUILD_BUDDY_RELEASE_API_KEY || secrets.BUILD_BUDDY_API_KEY }}
+          buildbuddy-config: ${{ github.event_name == 'push' && 'buildbuddy-release' || 'buildbuddy' }}
 
       - name: bazel build //datalib/backend:dist (musl static)
         run: |

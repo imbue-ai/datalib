@@ -167,8 +167,8 @@ jobs:
       # what it ships, and bazel verifies none of them. So this is the
       # RELEASE group's key — a cache only `test.yml` runs of commits on
       # `main` write to, which is what makes a hit here "what main just
-      # built" — and `--config=buildbuddy-release`, which reads and
-      # never writes. Never the contributor key: every laptop and every
+      # built" — and `--config=buildbuddy-release-readonly`, which
+      # reads and never writes. Never the contributor key: every laptop and every
       # PR run writes that cache. Without the secret this leg runs cold
       # (~20 min), which is the right failure mode.
       - name: Configure BuildBuddy remote cache
@@ -179,7 +179,7 @@ jobs:
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
               cat > .bazelrc.user <<EOF
           common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy-release
+          build --config=buildbuddy-release-readonly
           EOF
               echo "BuildBuddy release cache enabled for this job (read-only)."
           else
@@ -496,7 +496,7 @@ jobs:
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
               cat > .bazelrc.user <<EOF
           common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy-release
+          build --config=buildbuddy-release-readonly
           EOF
               echo "BuildBuddy release cache enabled for this job (read-only)."
           else
