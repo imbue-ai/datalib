@@ -13,9 +13,9 @@
 #
 # Bazel action cache is served by BuildBuddy (see the "Configure
 # BuildBuddy remote cache" step below); there's no GHA-side bazel
-# cache and no main-branch warmup run. Tag pushes hit BuildBuddy's
-# warm cache directly — populated by every contributor build and by
-# the `test.yml` workflow on main / PRs.
+# cache and no main-branch warmup run. Tag pushes read the RELEASE
+# group's cache — populated only by `test.yml` runs of commits on
+# main, never by contributor laptops or PR runs — and write nothing.
 name: release
 
 on:
@@ -158,37 +158,32 @@ jobs:
           bazel version
           rustc --version || true
 
-      # Wire BuildBuddy remote cache for this build. `.bazelrc.user` is
-      # gitignored so we can drop the API key into it from a repo
+      # Wire the BuildBuddy remote cache for this build. `.bazelrc.user`
+      # is gitignored so we can drop the API key into it from a repo
       # secret without polluting the source tree; the `try-import` at
-      # the bottom of `.bazelrc` picks it up automatically, and the
-      # `build:buildbuddy` config block does the rest.
+      # the bottom of `.bazelrc` picks it up automatically.
       #
-      # If the secret isn't set (e.g. a PR from a fork; manual local
-      # `act` runs without secrets configured) the step writes nothing
-      # and bazel runs without remote caching — actions still execute
-      # locally, just without the cross-machine cache hits.
-      #
-      # `--remote_upload_local_results=true` is the BuildBuddy default
-      # but we name it explicitly in `.bazelrc` so a future reader
-      # doesn't wonder why CI's outputs land in the shared cache. For
-      # CI specifically the read+write semantics are exactly what we
-      # want: matrix builds populate linux-amd64 + linux-arm64 (and
-      # darwin-arm64) action results that subsequent devcontainer
-      # warmups + contributor builds cache-hit.
+      # SUPPLY CHAIN: a release build replays action-cache hits into
+      # what it ships, and bazel verifies none of them. So this is the
+      # RELEASE group's key — a cache only `test.yml` runs of commits on
+      # `main` write to, which is what makes a hit here "what main just
+      # built" — and `--config=buildbuddy-release-readonly`, which
+      # reads and never writes. Never the contributor key: every laptop and every
+      # PR run writes that cache. Without the secret this leg runs cold
+      # (~20 min), which is the right failure mode.
       - name: Configure BuildBuddy remote cache
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
         run: |
           set -euo pipefail
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
               cat > .bazelrc.user <<EOF
           common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy
+          build --config=buildbuddy-release-readonly
           EOF
-              echo "BuildBuddy remote cache enabled for this job."
+              echo "BuildBuddy release cache enabled for this job (read-only)."
           else
-              echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
+              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
           fi
 
       # Defense in depth against "tagged the wrong version" or "forgot
@@ -354,6 +349,28 @@ jobs:
               cp bazel-bin/datalib/backend/etl/latchkey_curl_impersonate "${stage}/latchkey-curl-impersonate"
               chmod +x "${stage}"/*
 
+              # The bundled Node + qmd + latchkey trees, beside the
+              # binaries: `runtime/` is where the resolver looks first,
+              # so a tarball user runs both tools without Node, npm or
+              # npx on the host — the same trees the .app ships,
+              # lockfile-pinned by Bazel. The `latchkey` launcher runs
+              # the bundled one with the dispatch curl beside it.
+              #
+              # Not on the musl legs: the Bazel Node is a glibc build
+              # (nodejs.org ships no musl one), and a "fully static"
+              # tarball must not carry a binary that needs a libc.
+              if [[ "${TRIPLE}" != *musl* ]]; then
+                  scripts/stage_runtime.sh "${stage}/runtime"
+                  install -m 0755 scripts/latchkey-wrapper.sh "${stage}/latchkey"
+                  # Smoke the staged tree on the runner (same triple as
+                  # the artifact): the Node runs, and qmd loads from it.
+                  # latchkey is left out — its `--version` initializes
+                  # a keyring, which a bare runner has none of.
+                  "${stage}/runtime/node/bin/node" --version
+                  "${stage}/runtime/node/bin/node" \
+                      "${stage}"/runtime/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js --version
+              fi
+
               tarball="datalib-${TRIPLE}.tar.gz"
               tar -czf "${tarball}" "${stage}"
               checksum "${tarball}"
@@ -439,6 +456,13 @@ jobs:
   # replaces softprops/action-gh-release, and there's deliberately no
   # cargo cache (Swatinem/rust-cache) — a cold compile only costs a few
   # minutes on a rare tag build and doesn't eat the 10 GB cache quota.
+  #
+  # The same rule for what the build FETCHES: everything that talks to
+  # a registry or a cache — the pinned Tauri CLI from pnpm-lock.yaml,
+  # the cargo crates, the Bazel actions the beforeBuildCommand and the
+  # runtime staging run — is fetched or built in the steps BEFORE the
+  # secrets export, so the signing step itself is a cache hit that
+  # downloads nothing. The export is the last setup step, on purpose.
   macos-app:
     name: macos-app (signed + notarized)
     runs-on: macos-14  # Apple Silicon
@@ -462,20 +486,21 @@ jobs:
           repository-cache: true
           external-cache: false
 
-      # See the build job's identically-named step for the full story.
+      # See the build job's identically-named step for the full story:
+      # the release group's key, and no uploads.
       - name: Configure BuildBuddy remote cache
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
         run: |
           set -euo pipefail
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
               cat > .bazelrc.user <<EOF
           common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy
+          build --config=buildbuddy-release-readonly
           EOF
-              echo "BuildBuddy remote cache enabled for this job."
+              echo "BuildBuddy release cache enabled for this job (read-only)."
           else
-              echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
+              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
           fi
 
       # The tauri crate is built by cargo (not bazel's hermetic rust
@@ -505,11 +530,47 @@ jobs:
         with:
           package_json_file: datalib/ui/package.json
 
+      # The Tauri CLI at the version pnpm-lock.yaml names, from the
+      # tarballs it names, install scripts off. build-signed-app.sh runs
+      # the same install (a no-op here) and then `pnpm exec tauri`, never
+      # `pnpm dlx`, which resolved whatever 2.x was current at signing
+      # time.
+      - name: Install the pinned Tauri CLI
+        run: |
+          set -euo pipefail
+          cd datalib/tauri
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm exec tauri --version
+
+      # Every fetch the build will make, made now: the shell's crates
+      # (`cargo fetch` against the committed Cargo.lock), and the Bazel
+      # targets the beforeBuildCommand copies out and stage-runtime.sh
+      # rsyncs — so the signing step's bazel invocations are analysis +
+      # cache hits with no network, and no crate lands after the certs
+      # are in scope. The target list mirrors tauri.conf.json's
+      # beforeBuildCommand plus the three in scripts/stage_runtime.sh.
+      - name: Prebuild the bundled binaries and runtime
+        run: |
+          set -euo pipefail
+          (cd datalib/tauri && cargo fetch --locked)
+          bazel build --build_metadata=ROLE=CI \
+              //datalib/backend/http:datalib_http_bin \
+              //datalib/backend/dag:datalib_dag_bin \
+              //datalib/backend/datalib_step:datalib_step \
+              //datalib/backend/applets:datalib_applet \
+              //datalib/backend/migrate_config:datalib_migrate_config_bin \
+              //datalib/backend/etl:latchkey_curl_dispatch \
+              //datalib/backend/etl:latchkey_curl_impersonate \
+              //datalib/tauri:bundled_node \
+              //third-party/qmd/runtime:qmd_tree \
+              //third-party/latchkey/runtime:latchkey_tree
+
       - name: Export signing credentials
         # CERTS_TAR_GZ is the base64 certs tarball; APPLE_API_KEY_ID /
         # APPLE_API_ISSUER identify the notarization key inside it. The
         # action leaves all three in $GITHUB_ENV for the build step,
-        # where build-signed-app.sh picks them up.
+        # where build-signed-app.sh picks them up. LAST of the setup
+        # steps — see the SUPPLY CHAIN note on the job.
         uses: imbue-ai/use-vault-secrets@38aac6d2f537009c6e58849f8fdd34ea16084103 # main, 2026-09-17
         with:
           role: ${{ env.VAULT_AUTH_ROLE }}

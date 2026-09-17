@@ -90,7 +90,7 @@ impl QmdRunner {
         scope: &CollectionScope,
         extra: &[&str],
     ) -> Result<Vec<QmdHit>> {
-        let mut cmd = crate::qmd::qmd_command(&self.cfg.qmd_version);
+        let mut cmd = crate::qmd::qmd_command(&self.cfg.qmd_version)?;
         cmd.arg(mode)
             .arg(q)
             .arg("-n")

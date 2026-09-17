@@ -3,24 +3,39 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config, DTYPE};
 use hf_hub::api::tokio::Api;
+use hf_hub::{Repo, RepoType};
+use sha2::{Digest, Sha256};
 use tokenizers::Tokenizer;
 
-/// HuggingFace model ID. Pulls the `main` branch tip — `pranaydeeps/
-/// Ancient-Greek-BERT` is effectively dormant upstream (last update
-/// 2021), so silent-rewrite risk is small in practice. SHA-pinning
-/// via `Repo::with_revision` is desirable on principle but tickles
-/// a bug in `hf-hub` 0.3's redirect handler (HuggingFace returns a
-/// relative `Location` header for commit-pinned URLs and reqwest
-/// rejects the follow-up with "relative URL without a base"). Revisit
-/// when this crate bumps to `hf-hub` 0.4, which restructures the
-/// metadata path and is expected to fix this. Last known good
-/// commit SHA: `5e3e29ece1d63029baa226f11105b1e8277c4f07`.
+/// HuggingFace model ID, pinned to one commit: `resolve/main/…` is a
+/// moving pointer, and a re-upload would change every alignment score
+/// without a diff anywhere in this tree.
 pub const MODEL_ID: &str = "pranaydeeps/Ancient-Greek-BERT";
+pub const MODEL_REVISION: &str = "5e3e29ece1d63029baa226f11105b1e8277c4f07";
+
+/// sha256 of each file at [`MODEL_REVISION`]: the weights' digest is
+/// HuggingFace's LFS oid for the blob (which is its sha256), the two
+/// small files were hashed after download. Checked after every fetch
+/// and on every load, since hf-hub's cache is just files on disk.
+const PINNED_FILES: &[(&str, &str)] = &[
+    (
+        "config.json",
+        "257eaf6fc45aa72a3e0b19dc257d2557f37718524424eab217a83acb8a28bfeb",
+    ),
+    (
+        "tokenizer.json",
+        "67cf6361f5ffb48cc2068a82be13b63abbba1b7f84f226b1083257a7befe0a49",
+    ),
+    (
+        "model.safetensors",
+        "380c4da303a7a9fdac71c16f166d67633bcb258dfb0cf9c0a94e4af9bcdd0fc1",
+    ),
+];
 
 #[derive(Clone)]
 pub struct Embedder {
@@ -37,17 +52,15 @@ impl Embedder {
     pub async fn load() -> Result<Self> {
         let device = Device::Cpu;
         let api = Api::new().context("init hf-hub Api")?;
-        let repo = api.model(MODEL_ID.to_string());
+        let repo = api.repo(Repo::with_revision(
+            MODEL_ID.to_string(),
+            RepoType::Model,
+            MODEL_REVISION.to_string(),
+        ));
 
         let config_path = fetch(&repo, "config.json").await?;
         let tokenizer_path = fetch(&repo, "tokenizer.json").await?;
-        let weights_path = match repo.get("model.safetensors").await {
-            Ok(p) => p,
-            Err(_) => repo
-                .get("pytorch_model.bin")
-                .await
-                .context("fetch weights (safetensors or pytorch_model.bin)")?,
-        };
+        let weights_path = fetch(&repo, "model.safetensors").await?;
 
         let config: Config =
             serde_json::from_slice(&std::fs::read(&config_path).context("read config.json")?)
@@ -55,19 +68,15 @@ impl Embedder {
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("load tokenizer.json: {e}"))?;
 
-        let vb = if weights_path.extension().and_then(|s| s.to_str()) == Some("safetensors") {
-            // Safety: mmap of an immutable on-disk file; standard
-            // candle pattern. The lifetime of the mapping is tied to
-            // VarBuilder which the BertModel keeps alive.
-            unsafe {
-                VarBuilder::from_mmaped_safetensors(
-                    std::slice::from_ref(&weights_path),
-                    DTYPE,
-                    &device,
-                )?
-            }
-        } else {
-            VarBuilder::from_pth(&weights_path, DTYPE, &device)?
+        // Safety: mmap of an immutable on-disk file; standard candle
+        // pattern. The lifetime of the mapping is tied to VarBuilder
+        // which the BertModel keeps alive.
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(
+                std::slice::from_ref(&weights_path),
+                DTYPE,
+                &device,
+            )?
         };
         let model = BertModel::load(vb, &config).context("BertModel::load")?;
 
@@ -110,7 +119,42 @@ impl Embedder {
 }
 
 async fn fetch(repo: &hf_hub::api::tokio::ApiRepo, file: &str) -> Result<PathBuf> {
-    repo.get(file)
+    let path = repo
+        .get(file)
         .await
-        .with_context(|| format!("hf-hub fetch {MODEL_ID}/{file}"))
+        .with_context(|| format!("hf-hub fetch {MODEL_ID}@{MODEL_REVISION}/{file}"))?;
+    let want = PINNED_FILES
+        .iter()
+        .find(|(name, _)| *name == file)
+        .map(|(_, sha)| *sha)
+        .with_context(|| format!("{file} has no pinned sha256"))?;
+    let got = sha256_file(&path)?;
+    if got != want {
+        bail!(
+            "{} is not the pinned {MODEL_ID}@{MODEL_REVISION}/{file}: sha256 {got}, expected {want}",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
+fn sha256_file(path: &std::path::Path) -> Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f
+            .read(&mut buf)
+            .with_context(|| format!("read {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }

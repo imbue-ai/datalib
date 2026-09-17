@@ -1,4 +1,6 @@
-//! CI-visible guard for the DACTAL page's CSP (issue #138, mitigation 4).
+//! CI-visible guard for the two Content-Security-Policies: the app
+//! page's (the second layer behind DOMPurify) and the DACTAL page's
+//! (issue #138, mitigation 4).
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -11,6 +13,11 @@ use tower::ServiceExt;
 const TOKEN: &str = "dactal-csp-itest";
 
 async fn fetch(path: &str) -> (StatusCode, String) {
+    let (status, _, body) = fetch_with_headers(path).await;
+    (status, body)
+}
+
+async fn fetch_with_headers(path: &str) -> (StatusCode, axum::http::HeaderMap, String) {
     let db_path = tempfile::TempDir::with_prefix("datalib-http-csp-itest-")
         .expect("create tempdir")
         .keep()
@@ -41,10 +48,77 @@ async fn fetch(path: &str) -> (StatusCode, String) {
         .unwrap();
     let resp = router(state).oneshot(req).await.unwrap();
     let status = resp.status();
+    let headers = resp.headers().clone();
     let bytes = axum::body::to_bytes(resp.into_body(), 4 * 1024 * 1024)
         .await
         .unwrap();
-    (status, String::from_utf8_lossy(&bytes).into_owned())
+    (
+        status,
+        headers,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
+}
+
+fn header_directive(csp: &str, name: &str) -> String {
+    csp.split(';')
+        .map(|d| d.split_whitespace().collect::<Vec<_>>().join(" "))
+        .find(|d| d.starts_with(name))
+        .unwrap_or_default()
+}
+
+/// The app page's policy is a header, so it covers the SPA fallback too
+/// (`/anything` is the same document). What it must keep: no inline
+/// script and no foreign script, which is what makes a sanitizer bypass
+/// inert; `'unsafe-eval'`, which the card system needs; Tauri's IPC
+/// origins in `connect-src`, or the desktop app's file pickers go dead.
+#[tokio::test]
+async fn the_app_page_carries_its_csp() {
+    for path in ["/", "/some/card/route"] {
+        let (status, headers, html) = fetch_with_headers(path).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert!(
+            html.contains("<div id=\"app\">"),
+            "{path} is not the app shell"
+        );
+        let csp = headers
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert_eq!(
+            header_directive(csp, "script-src"),
+            "script-src 'self' 'unsafe-eval'",
+            "{path}: {csp}"
+        );
+        assert!(
+            !header_directive(csp, "script-src").contains("'unsafe-inline'"),
+            "{path}: {csp}"
+        );
+        let connect = header_directive(csp, "connect-src");
+        assert!(connect.contains("'self'"), "{path}: {csp}");
+        assert!(
+            connect.contains("ipc:") && connect.contains("http://ipc.localhost"),
+            "{path}: Tauri's IPC origins must stay in connect-src: {csp}"
+        );
+        assert_eq!(
+            header_directive(csp, "object-src"),
+            "object-src 'none'",
+            "{csp}"
+        );
+        assert_eq!(
+            header_directive(csp, "frame-ancestors"),
+            "frame-ancestors 'none'",
+            "{csp}"
+        );
+        assert_eq!(
+            headers.get("x-content-type-options").unwrap(),
+            "nosniff",
+            "{path}"
+        );
+    }
+    // A bundle asset is not a document; the policy belongs to the page.
+    let (status, headers, _) = fetch_with_headers("/dactal/main.js").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers.get("content-security-policy").is_none());
 }
 
 #[tokio::test]
@@ -60,8 +134,9 @@ async fn the_dactal_page_still_carries_its_csp() {
 
     // The two directives that do the work. `script-src 'self'` kills the
     // <script src="https://dactal.org/…"> injections in
-    // dactal_utils.js:325 and :381; `connect-src 'self'` kills the
-    // fetch() in :393 that feeds `new Function`.
+    // dactal_utils.js:325 and :381; `connect-src 'none'` kills the
+    // fetch() in :393 that feeds `new Function` — and every other
+    // request, since the page's rows arrive by message from the host.
     assert_eq!(
         directive(&html, "script-src"),
         "script-src 'self' 'unsafe-eval'",
@@ -71,8 +146,8 @@ async fn the_dactal_page_still_carries_its_csp() {
     );
     assert_eq!(
         directive(&html, "connect-src"),
-        "connect-src 'self'",
-        "connect-src must stay 'self'. Full policy:\n{}",
+        "connect-src 'none'",
+        "connect-src must stay 'none'. Full policy:\n{}",
         csp_of(&html)
     );
 

@@ -10,28 +10,28 @@ pub async fn run(source_type: SourceType, params: &serde_json::Value) -> Result<
         SourceType::Email => {
             let config: datalib_etl_email_config::EmailConfig =
                 serde_json::from_value(params.clone())
-                    .context("parse --params as an email download config")?;
+                    .context("parse the params as an email download config")?;
             let report = datalib_etl_email::probe::probe(&config).await?;
             Ok(serde_json::to_value(report)?)
         }
         SourceType::Claude => {
             let config: datalib_etl_claude_config::ClaudeConfig =
                 serde_json::from_value(params.clone())
-                    .context("parse --params as a claude download config")?;
+                    .context("parse the params as a claude download config")?;
             let report = datalib_etl_claude::probe::probe(&config).await?;
             Ok(serde_json::to_value(report)?)
         }
         SourceType::Chatgpt => {
             let config: datalib_etl_chatgpt_config::ChatgptConfig =
                 serde_json::from_value(params.clone())
-                    .context("parse --params as a chatgpt download config")?;
+                    .context("parse the params as a chatgpt download config")?;
             let report = datalib_etl_chatgpt::probe::probe(&config).await?;
             Ok(serde_json::to_value(report)?)
         }
         SourceType::Slack => {
             let config: datalib_etl_slack_config::SlackConfig =
                 serde_json::from_value(params.clone())
-                    .context("parse --params as a slack download config")?;
+                    .context("parse the params as a slack download config")?;
             let report = datalib_etl_slack::probe::probe(&config).await?;
             Ok(serde_json::to_value(report)?)
         }
@@ -43,11 +43,11 @@ pub async fn run(source_type: SourceType, params: &serde_json::Value) -> Result<
     }
 }
 
-/// The `probe` subcommand end to end: parse `--params`, run the
+/// The `probe` subcommand end to end: read the params file, run the
 /// provider's probe, and write the answer where the caller reads it.
 /// Never returns on failure.
 #[allow(clippy::disallowed_macros)]
-pub async fn run_cli(source_type: &str, params_flag: Option<&str>) -> ! {
+pub async fn run_cli(source_type: &str, params_file: Option<&std::path::Path>) -> ! {
     let report = async {
         let source_type = SourceType::parse(source_type).ok_or_else(|| {
             anyhow::anyhow!(
@@ -55,7 +55,7 @@ pub async fn run_cli(source_type: &str, params_flag: Option<&str>) -> ! {
                 SourceType::known_list()
             )
         })?;
-        let params = crate::source::parse_params(params_flag)?;
+        let params = crate::source::read_params(params_file)?;
         run(source_type, &params).await
     }
     .await;

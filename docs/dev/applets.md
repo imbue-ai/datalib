@@ -37,9 +37,11 @@ and resolved through `binary_dir`, then `~/.datalib/bin`, then the
 inherited `PATH` — the same order a step's command resolves in, so a
 program installed in `~/.datalib/bin` works for either kind of entry.
 `params` is forwarded as
-`--params <json>`, the working directory is the data root, and `env` is
-merged into the child — all as for a step, so there is one set of
-rules.
+`--params-file <path>` (a JSON file only the owner can read, deleted
+when the applet stops — params can hold tokens, and `ps` shows every
+user every command line), the working directory is the data root, and
+`env` is merged into the child — all as for a step, so there is one set
+of rules.
 
 The child also gets four variables:
 
@@ -71,7 +73,7 @@ reachable to repair it.
 One invocation, one process:
 
 ```
-<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params <json>]
+<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params-file <path>]
 ```
 
 **Write the directory, bind a port, then print

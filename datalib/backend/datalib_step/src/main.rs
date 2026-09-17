@@ -3,7 +3,7 @@
 //! Run with no subcommand it is a step: it reads which function to
 //! perform, which group it is under and what tree to write from the
 //! environment the runner sets (`DATALIB_DAG_FUNCTION`, `DATALIB_DAG_GROUP`,
-//! `DATALIB_DAG_GROUP_TYPE`, `DATALIB_DAG_STEP`). The two subcommands are
+//! `DATALIB_DAG_GROUP_TYPE`, `DATALIB_DAG_STEP`). The subcommands are
 //! utilities that are not steps.
 
 mod dispatch;
@@ -51,12 +51,14 @@ struct Cli {
     /// the environment the runner sets.
     #[command(subcommand)]
     cmd: Option<Cmd>,
-    /// Step params, as JSON — the runner appends this from the config
-    /// entry's `params`. Phase-specific: for `ingest` it is the
-    /// provider's download config subtree, for `render_markdown` the slim
-    /// render config (render knobs only); absent means an empty one.
-    #[arg(long, global = true)]
-    params: Option<String>,
+    /// A JSON file holding the step's params — the runner writes the
+    /// config entry's `params` there and appends the flag. Phase-specific:
+    /// for `ingest` it is the provider's download config subtree, for
+    /// `render_markdown` the slim render config (render knobs only);
+    /// absent means an empty one. A file, not an argument: params carry
+    /// tokens, and argv is readable by every user on the machine.
+    #[arg(long = "params-file", global = true)]
+    params_file: Option<PathBuf>,
     /// Declared input step ids (JSON string array), appended by the
     /// runner from the config entry's `inputs`. Accepted so every step
     /// command shares one flag surface; the resolved list this binary
@@ -118,9 +120,19 @@ enum Cmd {
         #[arg(long, default_value = "garmin.com")]
         domain: String,
     },
+    /// Utility (not a pipeline step): put qmd's pinned GGUF models in
+    /// place, sha256-verified — what the `qmd_index` step does before
+    /// it indexes, runnable ahead of time (an image build, a first-run
+    /// warmup). Needs no data root.
+    PullModels {
+        /// Where the models go; default is qmd's own cache,
+        /// `$XDG_CACHE_HOME/qmd/models` or `~/.cache/qmd/models`.
+        #[arg(long)]
+        models_dir: Option<PathBuf>,
+    },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
-    /// for one source from a raw fixture tree (`--params
-    /// '{"fixture_path": …}'`), for later replay via `--playback-root`.
+    /// for one source from a raw fixture tree (`--params-file` naming a
+    /// `{"fixture_path": …}`), for later replay via `--playback-root`.
     Synthesize {
         /// Source type, as a group's `type` would name it.
         source_type: String,
@@ -179,7 +191,39 @@ async fn main() {
     // exactly one JSON object, so an `outcome` event line after it
     // would corrupt the only thing its caller reads.
     if let Some(Cmd::Probe { source_type }) = &cli.cmd {
-        probe::run_cli(source_type, cli.params.as_deref()).await;
+        probe::run_cli(source_type, cli.params_file.as_deref()).await;
+    }
+    // `pull-models` likewise: nothing here is a step.
+    if let Some(Cmd::PullModels { models_dir }) = &cli.cmd {
+        let dir = models_dir
+            .clone()
+            .unwrap_or_else(datalib_qmd_indexer::default_models_dir);
+        // Off the async runtime: the fetch is blocking I/O, and reqwest's
+        // blocking client refuses to be dropped on a runtime thread.
+        let ensure = {
+            let dir = dir.clone();
+            tokio::task::spawn_blocking(move || {
+                datalib_qmd_models::ensure_models(&dir, datalib_qmd_models::PINNED_MODELS)
+            })
+            .await
+            .expect("pull-models task panicked")
+        };
+        match ensure {
+            Ok(outcomes) => {
+                for (model, outcome) in datalib_qmd_models::PINNED_MODELS.iter().zip(outcomes) {
+                    datalib_obs::status_line!(
+                        "{:?}: {}",
+                        outcome,
+                        dir.join(model.cache_name()).display()
+                    );
+                }
+                std::process::exit(0);
+            }
+            Err(e) => {
+                datalib_obs::status_line!("error: {e:#}");
+                std::process::exit(1);
+            }
+        }
     }
     // `login` likewise: it talks to a terminal, not to the runner.
     if let Some(Cmd::Login {
@@ -271,7 +315,7 @@ async fn run(
     control: &datalib_etl::control::DownloadControl,
     emitter: &Emitter,
 ) -> Result<Vec<events::OutputClaim>> {
-    let params = source::parse_params(cli.params.as_deref())?;
+    let params = source::read_params(cli.params_file.as_deref())?;
     match cli.cmd {
         Some(Cmd::Synthesize {
             source_type,
@@ -282,6 +326,7 @@ async fn run(
         // there for why it cannot come through the outcome path.
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
         Some(Cmd::Login { .. }) => unreachable!("login is answered in main"),
+        Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
         None => {
             let env = StepEnv::from_env()?;
             run_function(

@@ -5,12 +5,13 @@
 `third-party/qmd/package.json`. It exists as a **reference for the qmd
 format** — read-only documentation in code form. What we run is the
 registry package at the pin in `datalib/backend/runtime/src/qmd.rs`
-(`DEFAULT_QMD_VERSION`): the desktop app bundles a Node runtime plus the
-`qmd` and `latchkey` package trees, all three produced by Bazel from
-lockfiles (`//datalib/tauri:bundled_node`,
-`//third-party/qmd/runtime:qmd_tree`,
-`//third-party/latchkey/runtime:latchkey_tree`); every other environment
-falls back to `npx -y @tobilu/qmd@<version>`.
+(`DEFAULT_QMD_VERSION`): the desktop app, the release tarball and the
+dev launchers all carry a Node runtime plus the `qmd` and `latchkey`
+package trees, all three produced by Bazel from lockfiles
+(`//datalib/tauri:bundled_node`, `//third-party/qmd/runtime:qmd_tree`,
+`//third-party/latchkey/runtime:latchkey_tree`, staged by
+`scripts/stage_runtime.sh`). `npx -y @tobilu/qmd@<version>` survives
+only as an opt-in dev fallback (`DATALIB_ALLOW_NPX=1`).
 
 ## Why we don't run from the vendored tree
 

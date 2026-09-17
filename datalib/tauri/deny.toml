@@ -1,0 +1,54 @@
+# cargo-deny policy for the desktop shell, a separate cargo workspace
+# (see README.md). Same shape and intent as datalib/backend/deny.toml,
+# which explains the four checks; only the ignore list differs, because
+# the tauri dependency tree carries its own unmaintained transitive
+# crates. Run by the `deny` job in .github/workflows/test.yml.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Unmaintained, all under `tauri` itself, none with an upgrade on our
+# side. Remove an entry when a tauri bump drops the crate.
+ignore = [
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error, via tauri -> muda -> gtk -> glib-macros 0.18" },
+    { id = "RUSTSEC-2025-0075", reason = "unic-char-range, via tauri-utils -> urlpattern" },
+    { id = "RUSTSEC-2025-0080", reason = "unic-common, via tauri-utils -> urlpattern" },
+    { id = "RUSTSEC-2025-0081", reason = "unic-char-property, via tauri-utils -> urlpattern" },
+    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version, via tauri-utils -> urlpattern" },
+    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident, via tauri-utils -> urlpattern" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[licenses]
+version = 2
+private = { ignore = true }
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "OpenSSL",
+    "CDLA-Permissive-2.0",
+    "0BSD",
+]
+confidence-threshold = 0.8

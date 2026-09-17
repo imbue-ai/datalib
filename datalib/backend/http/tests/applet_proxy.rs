@@ -123,6 +123,8 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
             },
         )
         .unwrap();
+    // The applet reads at HEAD, as the render step leaves it.
+    store.commit("test").unwrap();
     store.close();
 }
 

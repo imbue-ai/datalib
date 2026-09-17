@@ -179,36 +179,30 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 /// pin).
 pub use datalib_runtime::node_runtime::{latchkey_cli_hint, LATCHKEY_VERSION};
 
-/// Entry script of the `latchkey` npm package inside a staged runtime
-/// tree (its package.json `bin` target), equivalent to what
-/// `npx latchkey` execs.
-const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
-
-/// `std::process::Command` for `latchkey`. Sets `LATCHKEY_CURL` to the
-/// shim on first call. If the shim can't be found, logs a warning and
-/// returns the `Command` anyway — callers may still succeed against
-/// non-CF endpoints.
-pub fn latchkey_command() -> std::process::Command {
+/// `std::process::Command` for `latchkey` from the staged runtime tree
+/// (`datalib_runtime::node_runtime::latchkey_command` decides; the
+/// error says where it looked). Sets `LATCHKEY_CURL` to the shim on
+/// first call. If the shim can't be found, logs a warning and returns
+/// the `Command` anyway — callers may still succeed against non-CF
+/// endpoints.
+pub fn latchkey_command() -> anyhow::Result<std::process::Command> {
     warn_if_missing();
-    datalib_runtime::node_runtime::bundled_command("latchkey", LATCHKEY_VERSION, LATCHKEY_ENTRY_REL)
-        .unwrap_or_else(|| {
-            datalib_runtime::node_runtime::npx_command(&format!("latchkey@{LATCHKEY_VERSION}"))
-        })
+    Ok(datalib_runtime::node_runtime::latchkey_command()?)
 }
 
-pub fn latchkey_tokio_command() -> tokio::process::Command {
-    tokio::process::Command::from(latchkey_command())
+pub fn latchkey_tokio_command() -> anyhow::Result<tokio::process::Command> {
+    Ok(tokio::process::Command::from(latchkey_command()?))
 }
 
 pub fn latchkey_curl_command(
     settings: &datalib_source_common::LatchkeySettings,
-) -> tokio::process::Command {
-    let mut cmd = latchkey_tokio_command();
+) -> anyhow::Result<tokio::process::Command> {
+    let mut cmd = latchkey_tokio_command()?;
     if let Some(account) = settings.account() {
         cmd.arg("--account").arg(account);
     }
     cmd.arg("curl");
-    cmd
+    Ok(cmd)
 }
 
 fn warn_if_missing() {
@@ -249,7 +243,9 @@ mod tests {
         let settings = datalib_source_common::LatchkeySettings {
             account: Some("thad@imbue.com".to_string()),
         };
-        let cmd = latchkey_curl_command(&settings);
+        // SAFETY: the test reads the env for no other reason.
+        unsafe { std::env::set_var(datalib_runtime::node_runtime::ALLOW_NPX_ENV, "1") };
+        let cmd = latchkey_curl_command(&settings).expect("npx fallback enabled above");
         let args: Vec<String> = cmd
             .as_std()
             .get_args()
@@ -271,7 +267,10 @@ mod tests {
     /// so latchkey resolves the single stored credential itself.
     #[test]
     fn no_account_configured_passes_no_selector() {
-        let cmd = latchkey_curl_command(&datalib_source_common::LatchkeySettings::default());
+        // SAFETY: the test reads the env for no other reason.
+        unsafe { std::env::set_var(datalib_runtime::node_runtime::ALLOW_NPX_ENV, "1") };
+        let cmd = latchkey_curl_command(&datalib_source_common::LatchkeySettings::default())
+            .expect("npx fallback enabled above");
         let args: Vec<String> = cmd
             .as_std()
             .get_args()

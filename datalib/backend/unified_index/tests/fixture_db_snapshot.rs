@@ -217,7 +217,10 @@ async fn snapshot_grid_rows_and_documents() {
             continue;
         };
         let Some(fields) = msg.strip_prefix("datalib-step grid_index: ") else {
-            dolt_log.push(json!({ "message": msg }));
+            // Without the ` run=<id>` stamp every step commit carries: the
+            // id is minted per build.
+            let message = msg.rsplit_once(" run=").map_or(msg.as_str(), |(m, _)| m);
+            dolt_log.push(json!({ "message": message }));
             continue;
         };
         passes += 1;

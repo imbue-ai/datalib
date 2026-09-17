@@ -66,11 +66,13 @@ pub struct IndexOptions {
     /// Collections to unregister once this run's indexing pass is done.
     /// See [`run_index`] for why the removal cannot come earlier.
     pub retire_collections: Vec<String>,
+    /// Where the GGUF models already are. The indexer never fetches
+    /// one: `qmd pull` compares an etag against HuggingFace `main` and
+    /// re-downloads on any difference, which is how a re-upload upstream
+    /// would silently change every embedding. The caller provisions the
+    /// pinned, sha256-verified files (`datalib_qmd_models`) before this
+    /// runs, and qmd finds them in place.
     pub models_dir: PathBuf,
-    /// Whether to run `qmd pull` before embedding. On by default,
-    /// because it is what puts the query-expansion and reranker models
-    /// in place for the first interactive query.
-    pub pull: bool,
 }
 
 impl IndexOptions {
@@ -82,7 +84,6 @@ impl IndexOptions {
             groups: Vec::new(),
             retire_collections: Vec::new(),
             models_dir: default_models_dir(),
-            pull: true,
         }
     }
 }
@@ -102,22 +103,23 @@ pub fn default_models_dir() -> PathBuf {
     home.join(".cache").join("qmd").join("models")
 }
 
-/// The GGUF model files `npx -y @tobilu/qmd@<DEFAULT_QMD_VERSION> pull`
-/// lands in the cache dir, by their on-disk filenames (qmd derives these
-/// from the HF URIs). Used by [`models_present`] to detect a cold cache
-/// (the backend logs a first-search-will-download heads-up).
-pub const REQUIRED_MODELS: &[&str] = &[
-    "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf",
-    "hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf",
-];
+/// The pinned models `qmd embed` needs, by the on-disk names
+/// node-llama-cpp looks for. Just the embedding model: the fixture's
+/// embed action stages only that one, and query expansion / reranking
+/// are the applet's concern.
+pub fn embed_model_names() -> Vec<String> {
+    datalib_runtime::qmd::PINNED_MODELS
+        .iter()
+        .take(1)
+        .map(|m| m.cache_name())
+        .collect()
+}
 
-/// True when every [`REQUIRED_MODELS`] file exists and is non-empty
-/// under `models_dir` (symlinks are followed, so passing the per-root
-/// `<root>/qmd/models` link resolves out to the shared cache). Lets a
-/// caller skip the network round-trip of `qmd pull` when the cache is
-/// already warm.
-pub fn models_present(models_dir: &Path) -> bool {
-    REQUIRED_MODELS.iter().all(|name| {
+/// True when every file in `names` exists and is non-empty under
+/// `models_dir` (symlinks are followed, so passing the per-root
+/// `<root>/qmd/models` link resolves out to the shared cache).
+pub fn models_present(models_dir: &Path, names: &[String]) -> bool {
+    names.iter().all(|name| {
         std::fs::metadata(models_dir.join(name))
             .map(|m| m.is_file() && m.len() > 0)
             .unwrap_or(false)
@@ -167,17 +169,28 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
         "[qmd-indexer] models dir  = {} (symlinked)",
         opts.models_dir.display()
     );
+    let probe = datalib_runtime::qmd::qmd_command(&opts.qmd_version)?;
     status_line!(
         "[qmd-indexer] qmd package = @tobilu/qmd@{} ({})",
         opts.qmd_version,
-        if datalib_runtime::node_runtime::is_bundled(&datalib_runtime::qmd::qmd_command(
-            &opts.qmd_version
-        )) {
+        if datalib_runtime::node_runtime::is_bundled(&probe) {
             "bundled runtime"
         } else {
             "via npx"
         }
     );
+    // Through the link, not `opts.models_dir`: a root whose link was
+    // made earlier (the test fixture's, pointing at bazel outputs) reads
+    // its models from wherever that link goes.
+    let models_link = qmd_dir.join("models");
+    if !models_present(&models_link, &embed_model_names()) {
+        bail!(
+            "embedding model missing from {} — expected {}; the caller provisions \
+             it (`datalib-step pull-models`) before indexing",
+            models_link.display(),
+            embed_model_names().join(", ")
+        );
+    }
     status_line!("[qmd-indexer] embed       = {}", opts.embed);
     status_line!("[qmd-indexer] collections = {}", opts.groups.join(", "));
     status_line!(
@@ -221,15 +234,6 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     // has not run in the window, and it is not worth finding out.
     for name in &opts.retire_collections {
         retire_collection(&cache_home, &opts.qmd_version, name)?;
-    }
-
-    // Pull BEFORE embed, and the order is the whole point.
-    if opts.pull {
-        if let Err(e) = run_qmd(&cache_home, &opts.qmd_version, &["pull"]) {
-            status_line!("[qmd-indexer] qmd pull failed (non-fatal): {e:#}");
-        }
-    } else {
-        status_line!("[qmd-indexer] pull        = skipped (models pre-staged)");
     }
 
     if opts.embed {
@@ -289,7 +293,7 @@ pub fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
 }
 
 fn capture_qmd_status(cache_home: &Path, qmd_version: &str) -> Result<String> {
-    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version);
+    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version)?;
     cmd.arg("status");
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
@@ -319,7 +323,7 @@ fn capture_qmd_status(cache_home: &Path, qmd_version: &str) -> Result<String> {
 /// aborts with "Collection '<name>' already exists" — which for our
 /// idempotent re-runs is success, not failure.
 fn ensure_collection(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
-    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version);
+    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version)?;
     cmd.args(args);
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
@@ -353,7 +357,7 @@ fn ensure_collection(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Res
 /// for a name it doesn't have, which for a re-run of a migration that
 /// already happened is success.
 fn retire_collection(cache_home: &Path, qmd_version: &str, name: &str) -> Result<()> {
-    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version);
+    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version)?;
     cmd.args(["collection", "remove", name]);
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
@@ -388,11 +392,7 @@ fn retire_collection(cache_home: &Path, qmd_version: &str, name: &str) -> Result
 }
 
 fn run_qmd(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
-    // Resolution (bundled runtime vs npx, `$NPX_BIN` override) lives in
-    // `datalib_runtime::qmd::qmd_command`. Bazel actions don't get
-    // `$NPX_BIN` forwarded (would bust action cache keys) and instead
-    // rely on `PATH` (pinned in `.bazelrc`).
-    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version);
+    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version)?;
     cmd.args(args);
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
@@ -448,23 +448,25 @@ mod tests {
     }
 
     #[test]
-    fn models_present_requires_every_required_model_nonempty() {
+    fn models_present_requires_every_named_model_nonempty() {
         let base = std::env::temp_dir().join(format!("qmd-models-present-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
+        let names = embed_model_names();
+        assert_eq!(names, ["hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"]);
 
         // Nothing there yet → absent.
-        assert!(!models_present(&base));
+        assert!(!models_present(&base, &names));
 
-        // All required models present + non-empty → present.
-        for name in REQUIRED_MODELS {
+        // Every named model present + non-empty → present.
+        for name in &names {
             std::fs::write(base.join(name), b"gguf").unwrap();
         }
-        assert!(models_present(&base));
+        assert!(models_present(&base, &names));
 
         // A zero-byte (partial/truncated) model doesn't count.
-        std::fs::write(base.join(REQUIRED_MODELS[0]), b"").unwrap();
-        assert!(!models_present(&base));
+        std::fs::write(base.join(&names[0]), b"").unwrap();
+        assert!(!models_present(&base, &names));
 
         let _ = std::fs::remove_dir_all(&base);
     }

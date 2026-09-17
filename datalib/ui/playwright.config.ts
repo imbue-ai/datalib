@@ -491,6 +491,9 @@ export default defineConfig({
         /url-sync\.spec\.ts/,
         /yolink-plots\.spec\.ts/,
         /gallery\.spec\.ts/,
+        // The sandboxed DACTAL iframe: an opaque origin loading module
+        // scripts, which WebKit and Chromium have disagreed about.
+        /dactal-sandbox\.spec\.ts/,
         // /sources2 — the Manager2 Pipeline table, and the commit-history
         // grid it opens in a modal.
         /manager2-grid\.spec\.ts/,

@@ -1,5 +1,5 @@
 //! What the runner tells a step about itself: the environment it sets and
-//! the `--params` flag it appends.
+//! the `--params-file` flag it appends.
 
 use anyhow::{Context, Result};
 
@@ -113,19 +113,27 @@ fn required(name: &str) -> Result<String> {
     Ok(v)
 }
 
-pub fn parse_params(params: Option<&str>) -> Result<serde_json::Value> {
-    match params {
+/// The step's params: the JSON object in the file `--params-file` names,
+/// or an empty one when the runner passed no file.
+pub fn read_params(path: Option<&std::path::Path>) -> Result<serde_json::Value> {
+    match path {
         None => Ok(serde_json::Value::Object(Default::default())),
-        Some(s) => {
-            let v: serde_json::Value = serde_json::from_str(s)
-                .context("parse --params as JSON (the provider's config subtree)")?;
-            anyhow::ensure!(
-                v.is_object(),
-                "--params must be a JSON object (the provider's config subtree), got {v}"
-            );
-            Ok(v)
+        Some(p) => {
+            let text = std::fs::read_to_string(p)
+                .with_context(|| format!("read the params file {}", p.display()))?;
+            parse_params(&text)
         }
     }
+}
+
+pub fn parse_params(text: &str) -> Result<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(text)
+        .context("parse the params file as JSON (the provider's config subtree)")?;
+    anyhow::ensure!(
+        v.is_object(),
+        "the params file must hold a JSON object (the provider's config subtree), got {v}"
+    );
+    Ok(v)
 }
 
 #[cfg(test)]
@@ -134,19 +142,32 @@ mod tests {
 
     #[test]
     fn params_parse_verbatim_and_default_empty() {
-        let p = parse_params(Some(r#"{"api":{"media":true}}"#)).unwrap();
+        let p = parse_params(r#"{"api":{"media":true}}"#).unwrap();
         assert_eq!(p["api"]["media"], true);
-        assert!(parse_params(None).unwrap().as_object().unwrap().is_empty());
+        assert!(read_params(None).unwrap().as_object().unwrap().is_empty());
         // A leftover old-format `type:` tag inside the params is passed
         // through; the provider config's deny_unknown/ignore rules
         // decide its fate downstream, not this layer.
-        assert!(parse_params(Some(r#"{"type":"slack"}"#)).is_ok());
+        assert!(parse_params(r#"{"type":"slack"}"#).is_ok());
     }
 
     #[test]
     fn params_reject_non_objects_and_junk() {
-        assert!(parse_params(Some("[1,2]")).is_err());
-        assert!(parse_params(Some("not json")).is_err());
+        assert!(parse_params("[1,2]").is_err());
+        assert!(parse_params("not json").is_err());
+    }
+
+    #[test]
+    fn params_come_from_the_named_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("params.json");
+        std::fs::write(&path, r#"{"api":{"channels":["c"]}}"#).unwrap();
+        let p = read_params(Some(&path)).unwrap();
+        assert_eq!(p["api"]["channels"][0], "c");
+        let err = read_params(Some(&dir.path().join("missing.json")))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("read the params file"), "{err}");
     }
 
     fn env(step: &str, group: &str, function: &str, inputs: &[&str]) -> StepEnv {

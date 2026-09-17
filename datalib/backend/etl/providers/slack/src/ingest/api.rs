@@ -293,7 +293,7 @@ async fn download_one_file(
     // the dispatch curl routes it to the impersonating curl. The helper
     // supplies `[--account <acct>] curl`, so this fetch runs as the same
     // identity as the API calls that discovered the file.
-    let mut cmd = latchkey_curl_command(latchkey);
+    let mut cmd = latchkey_curl_command(latchkey)?;
     cmd.arg("-fSL")
         .arg("-H")
         .arg(IMPERSONATE_MARKER_HEADER)

@@ -20,60 +20,16 @@
 //!
 //! See `docs/dev/plans/streaming_steps_plan.md`.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
+
+/// The commit a store is read at. The type lives in `datalib_pin`, with
+/// its reasons, so the search applet and the app server pin the same way
+/// without linking this crate.
+pub use datalib_pin::Pin;
 
 /// Prefix for the per-connection pinned views: `users` is read as
 /// `pinned_users`.
 pub const VIEW_PREFIX: &str = "pinned_";
-
-/// The commit a store is read at: a full hash, and nothing else.
-///
-/// Two states this deliberately cannot hold, because each is a way to end up
-/// reading rows nobody committed.
-///
-/// **Not `HEAD`.** It resolves when the query runs rather than when the pin
-/// was taken, so a pin carrying it would let one pass's diff and its content
-/// reads name two different commits — the exact race streaming introduces.
-///
-/// **Not "no pin".** A store with nothing committed has nothing to read, so
-/// there is no such thing as pinning to it. Callers that find no commit must
-/// decide what to do — a consumer should do nothing that pass and wait — and
-/// having no variant for it is what stops that decision from being made by
-/// accident, silently, in favour of the working set.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Pin(String);
-
-/// Doltlite commit hashes are 40 lowercase hex characters, and the engine
-/// rejects a shortened prefix (`ref not found`), so there is no shorter form
-/// to accept.
-const HASH_LEN: usize = 40;
-
-impl Pin {
-    pub fn at(commit: impl Into<String>) -> Result<Pin> {
-        let commit = commit.into();
-        if commit.len() != HASH_LEN
-            || !commit
-                .bytes()
-                .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() && b <= b'f')
-        {
-            bail!(
-                "not a doltlite commit hash: {commit:?} \
-                 (want {HASH_LEN} lowercase hex characters)"
-            );
-        }
-        Ok(Pin(commit))
-    }
-
-    /// The pin a scan produced. `None` out means the scan named no commit —
-    /// no commits yet, or no dolt extensions — and is the caller's to handle.
-    pub fn from_scan(commit: Option<&str>) -> Result<Option<Pin>> {
-        commit.map(Pin::at).transpose()
-    }
-
-    pub fn commit(&self) -> &str {
-        &self.0
-    }
-}
 
 /// Whose store a read is against.
 ///
@@ -114,15 +70,7 @@ impl Reads<'_> {
 /// commit the diff did not see. This is for the consumers that do no diff at
 /// all, and for a sibling store (a blob CAS) with a HEAD of its own.
 pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
-    // `dolt_hashof` resolves the ref, rather than ordering `dolt_log()` by a
-    // `date` that only has second resolution -- checkpointing commits several
-    // times a second, so ties are the normal case, not the edge one.
-    let commit: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
-        .fetch_optional(pool)
-        .await
-        // No `dolt_hashof` at all is a build without the extensions, which
-        // reads the same as a store with nothing committed: no pin.
-        .unwrap_or(None);
+    let commit = datalib_pin::head(pool).await?;
     if commit.is_none() {
         // Every caller turns this into "nothing to read". The render paths
         // now skip on it rather than reporting a completed pass over zero
@@ -146,7 +94,7 @@ pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
         );
         return Ok(None);
     }
-    Pin::from_scan(commit.as_deref())
+    Ok(commit)
 }
 
 /// The file a pool is against, for a log line.
@@ -175,7 +123,7 @@ fn store_filename(pool: &sqlx::SqlitePool) -> String {
 /// committed table, so their total absence *while tables exist* is the
 /// signal. A store with no tables at all needs no answer here — nothing
 /// creates a view, and the read fails loudly on its own.
-pub(crate) async fn carries_committed_schema(pool: &sqlx::SqlitePool) -> bool {
+pub async fn carries_committed_schema(pool: &sqlx::SqlitePool) -> bool {
     let tables: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
     )
@@ -275,44 +223,6 @@ fn is_table_name(s: &str) -> bool {
             .is_some_and(|b| b.is_ascii_lowercase() || b == b'_')
         && s.bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const HASH: &str = "cb290c9a12e6e5c1053568c864ab582adbf42743";
-
-    /// `HEAD` resolves when the query runs, so a pin holding it would let a
-    /// consumer's diff and its content reads name different commits. The type
-    /// refuses it, which is how that race is made unrepresentable rather than
-    /// merely discouraged.
-    #[test]
-    fn only_a_full_commit_hash_is_a_pin() {
-        assert!(Pin::at(HASH).is_ok());
-        for bad in [
-            "HEAD",
-            "HEAD~1",
-            "cb290c9a",
-            "",
-            "CB290C9A12E6E5C1053568C864AB582ADBF42743",
-            "cb290c9a12e6e5c1053568c864ab582adbf4274g",
-            "cb290c9a12e6e5c1053568c864ab582adbf427433",
-        ] {
-            assert!(Pin::at(bad).is_err(), "{bad:?} was accepted as a pin");
-        }
-    }
-
-    /// A scan that named no commit hands back `None`, not a pin that reads
-    /// the working set. The caller has to say what to do about it, which is
-    /// the point: for a streaming consumer the answer is "do nothing this
-    /// pass", and that must never be reached by default.
-    #[test]
-    fn a_scan_that_named_no_commit_has_no_pin() {
-        assert_eq!(Pin::from_scan(None).unwrap(), None);
-        assert_eq!(Pin::from_scan(Some(HASH)).unwrap().unwrap().commit(), HASH);
-        assert!(Pin::from_scan(Some("nonsense")).is_err());
-    }
 }
 
 #[cfg(test)]

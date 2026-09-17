@@ -235,8 +235,7 @@ fn attrs(e: &BytesStart) -> Result<Attrs> {
     for attr in e.attributes() {
         let attr = attr.context("parse attribute")?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-        let val = attr
-            .unescape_value()
+        let val = datalib_etl::xml::attr_value(&attr)
             .context("unescape attribute")?
             .into_owned();
         map.insert(key, val);

@@ -26,6 +26,7 @@ rust_library(
         # events.rs). Keeps the timestamp format identical to the rest of
         # the tree's logs; the binary already depended on it.
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -35,6 +36,7 @@ rust_library(
         "@datalib_crates//:serde_json",
         "@datalib_crates//:shlex",
         "@datalib_crates//:strum",
+        "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
         "@datalib_crates//:tracing",
@@ -49,7 +51,6 @@ rust_test(
     crate = ":datalib_dag",
     edition = "2021",
     deps = [
-        "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
 )
@@ -76,11 +77,33 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":datalib_dag",
+        "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing-subscriber",
+    ],
+)
+
+# The runner exits with the process that started it, and takes its
+# steps along. Runs the real binary under the parent-watch probe, which
+# is the parent the test can SIGKILL.
+rust_test(
+    name = "parent_gone_test",
+    size = "medium",
+    srcs = ["tests/parent_gone.rs"],
+    data = [
+        ":datalib_dag_bin",
+        "//datalib/backend/parent_watch:parent_watch_probe",
+    ],
+    edition = "2021",
+    env = {
+        "DATALIB_DAG_BIN": "$(rootpath :datalib_dag_bin)",
+        "PARENT_WATCH_PROBE": "$(rootpath //datalib/backend/parent_watch:parent_watch_probe)",
+    },
+    deps = [
+        "@datalib_crates//:tempfile",
     ],
 )
 

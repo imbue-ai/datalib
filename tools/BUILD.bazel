@@ -88,7 +88,6 @@ py_test(
         "//:requirements.txt",
         "//datalib/backend/runtime:src/node_runtime.rs",
         "//datalib/backend/runtime:src/qmd.rs",
-        "//datalib/docker:Dockerfile",
         "//datalib/ui:pnpm-lock.yaml",
         "//tests/fixtures:BUILD.bazel",
         "//third-party/doltlite:BUILD.bazel",
@@ -97,6 +96,19 @@ py_test(
         "//third-party/qmd/runtime:package.json",
     ],
     main = "check_version_pins.py",
+)
+
+# The qmd model pins (repo, revision, file, sha256) live in the build's
+# fetch rule and in the Rust table the shipped binaries verify against.
+py_test(
+    name = "qmd_model_pins_test",
+    size = "small",
+    srcs = ["check_qmd_model_pins.py"],
+    data = [
+        "//datalib/backend/runtime:src/qmd.rs",
+        "//third-party/qmd_models:BUILD.bazel",
+    ],
+    main = "check_qmd_model_pins.py",
 )
 
 # The shipped-binary list lives in two places that must agree:

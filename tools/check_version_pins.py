@@ -70,13 +70,13 @@ FAMILIES: list[Family] = [
     Family(
         name="qmd",
         why=(
-            "qmd is installed and invoked from several places that must "
-            "agree, or first-run behavior silently diverges between dev "
-            "and prod: the Dockerfile bakes one version into the image "
-            "while the qmd step invokes another, leaving the baked model "
-            "layer unused. A bump once updated one of two same-named Rust "
-            "constants and missed the other, so search ran qmd 2.1.0 "
-            "against a 2.5.3-built index for six weeks."
+            "qmd is invoked from several places that must agree, or "
+            "first-run behavior silently diverges between dev and prod. "
+            "A bump once updated one of two same-named Rust constants and "
+            "missed the other, so search ran qmd 2.1.0 against a "
+            "2.5.3-built index for six weeks. The Rust constant names the "
+            "directory scripts/stage_runtime.sh stages, and the resolver "
+            "looks the tree up by it."
         ),
         canonical="datalib/backend/runtime/src/qmd.rs",
         sites=[
@@ -85,7 +85,6 @@ FAMILIES: list[Family] = [
                 r'^pub const DEFAULT_QMD_VERSION: &str = "([^"]+)"',
             ),
             ("tests/fixtures/BUILD.bazel", r'^QMD_VERSION = "([^"]+)"'),
-            ("datalib/docker/Dockerfile", r"^ARG QMD_VERSION=(\S+)"),
             # The vendored upstream snapshot, read by
             # //tools:qmd_model_cache_path_test for the cache-path check.
             ("third-party/qmd/package.json", r'"version"\s*:\s*"([^"]+)"'),
@@ -99,10 +98,11 @@ FAMILIES: list[Family] = [
     Family(
         name="latchkey",
         why=(
-            "The Rust constant is what the shipped binaries spawn; the "
-            "Dockerfile is what the image bakes. If they disagree the "
-            "image warms a version the runtime never invokes, and the "
-            "container silently fetches a different latchkey at run time."
+            "The Rust constant is what the shipped binaries spawn and "
+            "the directory name scripts/stage_runtime.sh stages the tree "
+            "under; the devcontainer installs its own copy for hand use. "
+            "If they disagree, a developer's `latchkey` and the one a "
+            "sync runs are different programs."
         ),
         canonical="datalib/backend/runtime/src/node_runtime.rs",
         sites=[
@@ -110,12 +110,12 @@ FAMILIES: list[Family] = [
                 "datalib/backend/runtime/src/node_runtime.rs",
                 r'^pub const LATCHKEY_VERSION: &str = "([^"]+)"',
             ),
-            ("datalib/docker/Dockerfile", r"^ARG LATCHKEY_VERSION=(\S+)"),
             (".devcontainer/Dockerfile", r"^ARG LATCHKEY_VERSION=(\S+)"),
-            # The Bazel-managed package tree the .app bundles. The Rust
-            # constant names the directory stage-runtime.sh stages into,
-            # so a drift here stages a tree the resolver never looks in
-            # and the packaged app silently falls back to npx.
+            # The Bazel-managed package tree the .app and the tarball
+            # bundle. The Rust constant names the directory
+            # scripts/stage_runtime.sh stages into, so a drift here
+            # stages a tree the resolver never looks in and the shipped
+            # binaries refuse to run latchkey.
             (
                 "third-party/latchkey/runtime/package.json",
                 r'"latchkey"\s*:\s*"([^"]+)"',
@@ -174,10 +174,11 @@ FAMILIES: list[Family] = [
         name="node-major",
         why=(
             "Two Node runtimes are in play — the one Bazel resolves, "
-            "which is also the one Tauri now bundles into the .app, and "
-            "the one the prod image installs. They need not be identical "
-            "patch releases, but a major-version split would put the "
-            "shipped app and the image on different N-API ABIs, which is "
+            "which is the one shipped in the .app and the tarball (the "
+            "prod image takes it from the tarball), and the one the "
+            "devcontainer installs. They need not be identical patch "
+            "releases, but a major-version split would put the shipped "
+            "trees and the devcontainer on different N-API ABIs, which is "
             "what decides whether a native module loads."
         ),
         canonical="MODULE.bazel",
@@ -185,7 +186,6 @@ FAMILIES: list[Family] = [
             # Capture only the major from each, since that is the part
             # that has to agree.
             ("MODULE.bazel", r'^NODE_VERSION = "(\d+)\.'),
-            ("datalib/docker/Dockerfile", r"^ARG NODE_MAJOR=(\d+)"),
             (".devcontainer/Dockerfile", r"^ARG NODE_MAJOR=(\d+)"),
         ],
     ),
