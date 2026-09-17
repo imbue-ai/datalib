@@ -4,15 +4,18 @@
 # the end of `release.yml`, behind the prod image's doc check) from
 # producing an image for four releases in a row.
 #
-# Runs on every push to `main` that touches the Dockerfile or what Bazel
-# fetches (the image carries a pre-fetched output base, so a toolchain
-# or lockfile bump is what makes it stale), on every pull request that
-# touches the Dockerfile or this file, and on demand for any branch.
+# Runs when the Dockerfile itself changes (a push to `main`, or a pull
+# request, which builds and smoke-tests without moving `latest`), on a
+# weekly schedule, and on demand. NOT on lockfile changes: the image
+# carries a pre-fetched output base, but a stale one degrades gracefully
+# — bazel fetches only what the lockfiles added since — while the
+# lockfiles change on most PRs (57 merges touched MODULE.bazel.lock in
+# one month). The weekly build is what keeps the pre-fetch close.
 # Every build is tagged `:sha-<commit>`; `:latest` — the tag `test.yml`
-# pulls — moves only on a `main` push or when a dispatch asks for it,
-# and only after the image has proved it can analyse the tree. A PR's
-# build is how to try a Dockerfile change: dispatch `test.yml` with its
-# `sha-` tag.
+# pulls — moves only from `main` or when a dispatch asks, and only
+# after the image has proved it can analyse the tree. To try a PR's
+# image, dispatch `test.yml` with its `sha-` tag. Old `sha-` versions
+# are pruned after each push so GHCR holds a handful, not one per build.
 name: devcontainer
 
 on:
@@ -20,18 +23,16 @@ on:
     branches:
       - main
     paths:
-      - .devcontainer/Dockerfile
+      - .devcontainer/**
       - .github/workflows/devcontainer.yml
       - .bazelversion
-      - MODULE.bazel
-      - MODULE.bazel.lock
-      - datalib/backend/Cargo.lock
-      - requirements.txt
-      - "**/pnpm-lock.yaml"
   pull_request:
     paths:
       - .devcontainer/**
       - .github/workflows/devcontainer.yml
+  schedule:
+    # Monday 05:00 UTC: refresh the pre-fetch before the week's PRs.
+    - cron: "0 5 * * 1"
   workflow_dispatch:
     inputs:
       publish_latest:
@@ -114,8 +115,19 @@ jobs:
         run: |
           set -euo pipefail
           docker push "${IMAGE}:sha-${GITHUB_SHA::12}"
-          if [[ "${{ github.event_name }}" == "push" || "${{ inputs.publish_latest }}" == "true" ]]; then
+          if [[ "${{ github.event_name }}" == "push" || "${{ github.event_name }}" == "schedule" || "${{ inputs.publish_latest }}" == "true" ]]; then
               docker tag "${IMAGE}:sha-${GITHUB_SHA::12}" "${IMAGE}:latest"
               docker push "${IMAGE}:latest"
               echo "moved :latest to sha-${GITHUB_SHA::12}"
           fi
+
+      # GHCR keeps every pushed version. Keep the newest few `sha-` builds
+      # (enough to roll `latest` back by hand) and drop the rest; the
+      # `latest`-tagged version is never among the deleted.
+      - name: Prune old image versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ github.event.repository.name }}_devcontainer
+          package-type: container
+          min-versions-to-keep: 6
+          ignore-versions: '^latest$'

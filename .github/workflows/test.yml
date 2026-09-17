@@ -19,10 +19,10 @@
 # uses) would add ~3 min of apt + cold qmd model download to every run;
 # pulling the pre-built image is closer to ~30s.
 #
-# The devcontainer image is published by `devcontainer.yml` — on every
-# push to `main` that changes the Dockerfile or what Bazel fetches, and
-# on demand — independently of releases. It carries a pre-fetched bazel
-# output base, which `prepare-bazel` points bazel at.
+# The devcontainer image is published by `devcontainer.yml` — when the
+# Dockerfile changes, weekly, and on demand — independently of releases.
+# It carries a pre-fetched bazel output base, which `prepare-bazel`
+# points bazel at.
 name: test
 
 on:

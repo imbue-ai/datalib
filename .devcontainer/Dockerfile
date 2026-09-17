@@ -14,10 +14,10 @@
 # app falls back to `npx -y latchkey@<pin>` for auth, and qmd's own dev
 # loop is `bun`.
 #
-# Published by `.github/workflows/devcontainer.yml` — on every push to
-# `main` that touches this file or what Bazel fetches, and on demand —
-# as `ghcr.io/imbue-ai/datalib_devcontainer:<sha>` and `:latest`. Nothing
-# here depends on a release having happened.
+# Published by `.github/workflows/devcontainer.yml` — when this file
+# changes, weekly, and on demand — as
+# `ghcr.io/imbue-ai/datalib_devcontainer:sha-<commit>` and `:latest`.
+# Nothing here depends on a release having happened.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -126,7 +126,9 @@ WORKDIR /workspaces/datalib
 # output base at a fixed path, puts them in the image instead:
 # `prepare-bazel` points CI's bazel at the same path, the repository
 # marker files validate, and nothing is fetched again. A bump to a
-# toolchain or lockfile between image builds just refetches that delta.
+# toolchain or lockfile between image builds just refetches that delta,
+# which is why lockfile changes do not rebuild the image and a weekly
+# build keeps the delta small.
 #
 # The workspace is bind-mounted for the fetch, not COPYed, so the image
 # does not carry the source and this layer's key is the command text
