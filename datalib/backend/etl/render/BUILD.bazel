@@ -28,6 +28,7 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:similar",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
