@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { selectRowByUuid } from "./grid-helpers";
+import { firstRowUuid, selectRowByUuid, type GridApi } from "./grid-helpers";
 
 // The URL path encodes the whole column stack: a /-separated list of
 // `code:state` segments (see src/router/columns.ts), where `code` is
@@ -10,11 +10,10 @@ import { selectRowByUuid } from "./grid-helpers";
 // state — so the URL is a reload-stable deeplink to the user's
 // current view.
 
-// Resolve a stable target row by its `row-id` (AG Grid's per-row UUID
-// attribute — `getRowId` in GridCard returns `data.uuid`). `.first()` in
-// a virtualized grid is racy: after a sort or scroll, the row at
-// DOM-position-0 can shift mid-test, so a click and the subsequent
-// class-assertion may end up looking at different rows.
+// Resolve a stable target row by its uuid rather than `.first()`: in a
+// virtualized grid the row at DOM-position-0 can shift mid-test after a
+// sort or scroll, so a click and the subsequent assertion may end up
+// looking at different rows.
 //
 // The id is then handed to `selectRowByUuid`, which scrolls that row
 // into view before clicking it and confirms the selection took. Both
@@ -22,11 +21,7 @@ import { selectRowByUuid } from "./grid-helpers";
 // (a fresh load does not always start at the top of the collection),
 // and the click races the app's own view restore.
 async function pinFirstRowId(page: import("@playwright/test").Page) {
-  const first = page.locator('.ag-grid-scrolling-rows [role="row"]').first();
-  await expect(first).toBeVisible({ timeout: 10_000 });
-  const id = await first.getAttribute("row-id");
-  expect(id, "first data row must have a row-id attribute").toBeTruthy();
-  return id!;
+  return firstRowUuid(page);
 }
 
 test.describe("URL reflects app state", () => {
@@ -67,11 +62,19 @@ test.describe("URL reflects app state", () => {
     // document column should come back, without the restore opening
     // a duplicate document column.
     await page.reload();
-    const restoredRow = page
-      .locator('.ag-grid-scrolling-rows [role="row"].ag-row-selected')
-      .first();
-    await expect(restoredRow).toBeVisible({ timeout: 10_000 });
-    await expect(restoredRow).toHaveAttribute("row-id", rowId);
+    await expect(page.locator(".grid-box .slick-cell.selected").first()).toBeVisible({
+      timeout: 10_000,
+    });
+    // The selection the grid holds is the row pinned above, not merely
+    // some row.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (u) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.isSelected(u),
+          rowId,
+        ),
+      )
+      .toBe(true);
     await expect(page.locator(".chat-preview")).toHaveCount(1, {
       timeout: 10_000,
     });

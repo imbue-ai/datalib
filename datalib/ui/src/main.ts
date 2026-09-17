@@ -4,6 +4,10 @@ import App from "./App.vue";
 import router from "./router";
 import { fetchHealth } from "./api";
 import { installExternalLinkHandler } from "./externalLinks";
+// The grid theme, for every grid that is not inside a card's shadow
+// root, and for the menus the grid appends to <body> from those that
+// are — a card imports it a second time, inline, for its own root.
+import "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css";
 
 function applyThemeMode(mode: "light" | "dark") {
   document.documentElement.dataset.theme = mode;

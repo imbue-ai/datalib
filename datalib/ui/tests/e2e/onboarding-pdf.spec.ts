@@ -17,6 +17,9 @@ import {
   stampOf,
   stampsBefore,
   statusOf,
+  SEARCH_ROWS,
+  searchGrid,
+  type GridApi,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -60,40 +63,24 @@ async function gridRows(
 ): Promise<
   { sender: string; conversation_name: string; source: string; source_id: string }[]
 > {
-  return await page.evaluate(() => {
-    type Node = {
-      data?: {
+  return await page.evaluate(
+    () =>
+      (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows() as {
         sender: string;
         conversation_name: string;
         source: string;
         source_id: string;
-      };
-    };
-    const api = (
-      window as unknown as {
-        __fwGridApi?: { forEachNode: (cb: (n: Node) => void) => void };
-      }
-    ).__fwGridApi!;
-    const out: {
-      sender: string;
-      conversation_name: string;
-      source: string;
-      source_id: string;
-    }[] = [];
-    api.forEachNode((n) => {
-      if (n.data) out.push(n.data);
-    });
-    return out;
-  });
+      }[],
+  );
 }
 
 /// Open Explore and wait for it to have painted rows from the applet.
 async function openExplore(page: Page) {
   await page.goto(`${BASE}/`);
-  await expect(page.locator('.ag-grid-scrolling-rows [role="row"]').first()).toBeVisible({
+  await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({
     timeout: 20_000,
   });
-  await expectGridPainted(page.locator(".ag-root-wrapper").first(), "Explore grid");
+  await expectGridPainted(searchGrid(page).first(), "Explore grid");
 }
 
 // Record this file, always — video and trace, passing or failing.

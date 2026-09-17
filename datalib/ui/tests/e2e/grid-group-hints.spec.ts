@@ -2,40 +2,28 @@
 //
 // Grouping this grid by source is the single most useful thing to do
 // with it, and the bar that does it reads as decoration until you know
-// that. Two pieces of text carry the explanation, and they are mutually
-// exclusive — the placeholder is only there while nothing is grouped,
-// and the group column only exists once something is — so both need
-// pinning or half the help can vanish unnoticed.
+// that. The placeholder carries the explanation while nothing is
+// grouped; once something is, its place is taken by a chip for the
+// grouped column, with the grouping's sort and a way to drop it.
 
 import { test, expect, type Page } from "@playwright/test";
+import { SEARCH_ROWS, type GridApi } from "./grid-helpers";
 
-const ROWS = '.ag-grid-scrolling-rows [role="row"]';
-
-/// Our placeholder, wherever AG Grid renders it. There is more than one
-/// empty row-group drop zone on screen (the bar above the grid, and the
-/// columns tool panel's own), and both carry this text — which is the
-/// point, so this asserts on the text rather than trying to name one of
-/// them through the widget's internal classes.
+/// Our placeholder, in the grid's own drop zone.
 const placeholder = (page: Page) =>
-  page.locator(".ag-column-drop-empty-message").first();
+  page.locator(".grid-box .slick-draggable-dropzone-placeholder");
 
 async function openGrid(page: Page) {
   await page.goto("/");
-  await page.locator(ROWS).first().waitFor({ timeout: 15_000 });
+  await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
 }
 
-/// Group by a column the way the panel's own drag does.
+/// Group by a column the way the bar's own drop does.
 async function groupBy(page: Page, colId: string) {
-  await page.evaluate((id) => {
-    const w = window as unknown as {
-      __fwGridApi?: {
-        applyColumnState: (p: {
-          state: { colId: string; rowGroup: boolean }[];
-        }) => void;
-      };
-    };
-    w.__fwGridApi!.applyColumnState({ state: [{ colId: id, rowGroup: true }] });
-  }, colId);
+  await page.evaluate(
+    (id) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.groupBy([id]),
+    colId,
+  );
 }
 
 test("the empty row-group bar explains what dropping a column there does", async ({
@@ -44,33 +32,31 @@ test("the empty row-group bar explains what dropping a column there does", async
   await openGrid(page);
 
   // Nothing is grouped by default, so this is the state a new user
-  // meets. AG Grid's stock text names the mechanism ("set row groups");
-  // ours names the result.
-  await expect(page.locator(ROWS + '[row-id^="row-group-"]')).toHaveCount(0);
+  // meets. The grid's stock text names the mechanism ("drop a column
+  // header here to group by"); ours names the result.
+  await expect(page.locator(".grid-box .slick-group")).toHaveCount(0);
   await expect(placeholder(page)).toContainText("group rows by them");
 });
 
-test("once grouped, the group column explains how to change it", async ({
+test("once grouped, the bar holds a chip for the column and the rows fold under it", async ({
   page,
 }) => {
   await openGrid(page);
   await groupBy(page, "source_ref");
 
-  const header = page.locator('.ag-header-cell[col-id="ag-Grid-AutoColumn"]');
-  await expect(header).toBeVisible();
+  // The bar now holds a chip for the grouped column instead of the
+  // placeholder…
+  const chip = page.locator(".grid-box .slick-dropped-grouping");
+  await expect(chip).toContainText("Source");
+  await expect(placeholder(page)).toBeHidden();
 
-  // Hover-revealed rather than a native `title`: AG Grid renders its own
-  // tooltip unless `enableBrowserTooltips` is set, and the other
-  // `headerTooltip`s in this grid already rely on that.
-  await header.hover();
-  await expect(page.locator(".ag-tooltip")).toContainText(
-    "Drag a column into the bar above",
+  // …and the rows sit under group rows that say what they share and
+  // how many there are. From the top: the grid lands at its end, where
+  // the group row the last rows sit under is above the viewport.
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.scrollToRow(0),
   );
-
-  // The bar itself now holds a chip for the grouped column instead of
-  // the placeholder — which is the whole reason the second half of the
-  // help had to live on the group column.
-  await expect(page.getByRole("listbox", { name: "Row Groups" })).toContainText(
-    "Source",
-  );
+  const group = page.locator(".grid-box .slick-group").first();
+  await expect(group).toBeVisible();
+  await expect(group).toContainText(/Source: .+ \(\d+\)/);
 });

@@ -14,6 +14,9 @@ importers:
       '@slickgrid-universal/event-pub-sub':
         specifier: 10.10.0
         version: 10.10.0
+      '@slickgrid-universal/vanilla-bundle':
+        specifier: 10.11.0
+        version: 10.11.0
       '@tauri-apps/plugin-dialog':
         specifier: ^2.7.3
         version: 2.7.3
@@ -611,6 +614,9 @@ packages:
 
   '@slickgrid-universal/utils@10.10.0':
     resolution: {integrity: sha512-Qwiv7Dl2O7qsV59WdSJjKpOzNZQpYwKJupJfdd/ru0gkEG3aD2Q0njA2hw0m+nhuQcLME+vbrMuMMnMsuQEwfw==}
+
+  '@slickgrid-universal/vanilla-bundle@10.11.0':
+    resolution: {integrity: sha512-QpieyvlFBgNrDeggg5FJBcFNJVc5rueCL7xAIHaJbDRDdifqS+y7cqLI7cQ16A11AQBjPrDxfFGvoc83G2eW7Q==}
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
@@ -1813,6 +1819,17 @@ snapshots:
       '@slickgrid-universal/common': 10.11.0
 
   '@slickgrid-universal/utils@10.10.0': {}
+
+  '@slickgrid-universal/vanilla-bundle@10.11.0':
+    dependencies:
+      '@slickgrid-universal/binding': 10.1.0
+      '@slickgrid-universal/common': 10.11.0
+      '@slickgrid-universal/custom-footer-component': 10.11.0
+      '@slickgrid-universal/empty-warning-component': 10.11.0
+      '@slickgrid-universal/event-pub-sub': 10.10.0
+      '@slickgrid-universal/pagination-component': 10.11.0
+      '@slickgrid-universal/utils': 10.10.0
+      dequal: 2.0.3
 
   '@standard-schema/spec@1.1.0': {}
 

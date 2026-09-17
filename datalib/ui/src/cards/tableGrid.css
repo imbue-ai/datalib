@@ -214,3 +214,14 @@
 .tg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .tg-btn.danger:hover:not(:disabled) { border-color: var(--datalib-log-error); color: var(--datalib-log-error); }
 .tg-link { color: inherit; text-decoration: underline dotted; }
+
+/* ── slickgrid cells ───────────────────────────────────────────── */
+/* Rows are what get selected here; the cell the click landed in is
+   not a thing to outline. */
+.slick-cell.active { box-shadow: none; border-color: transparent; }
+.slick-cell.tg-right { text-align: right; }
+.slick-cell.tg-center { text-align: center; }
+.tg-group-count { color: var(--datalib-muted); }
+/* Text selection and a two-line clamp both want the cell's box to be
+   the text's box, which the theme's flex centring is not. */
+.slick-cell .datalib-clamp-2 { line-height: 1.25; }

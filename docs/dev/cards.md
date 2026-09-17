@@ -217,7 +217,8 @@ keeps it only until the page is gone — so a card must treat
 The grid card is the reference user
 (`datalib/ui/src/cards/GridCard.ce.vue`): it keeps
 `URLSearchParams` of `q` (search query), `sel` (selected row uuid) and
-`cols` (AG Grid column state, base64url-encoded JSON), writing only on
+`cols` (the grid's layout — column order, visibility and widths, the
+sort, the grouping — as base64url-encoded JSON), writing only on
 user-driven changes so a pristine grid keeps clean state.
 
 ### Bus
@@ -273,7 +274,7 @@ so switching back doesn't lose them.
 The factories in `ViewLibs` are the public surface card source
 programs against:
 
-- `gridView(opts?: { q?: string })` — search bar + AG Grid over
+- `gridView(opts?: { q?: string })` — search bar + a SlickGrid over
   `/applet/unified_index/search`. Row click opens the row's document via
   `host.openCard`; double-click opens it as a standalone
   single-column page in a new tab. Persists `q`/`sel`/`cols` state.
@@ -315,15 +316,23 @@ by the column's *type* rather than by the field's name. The vocabulary
 is `datalib_columns` (`datalib/backend/columns/src/lib.rs`), mirrored
 by hand in `datalib/ui/src/api.ts` — change both halves together —
 and the one renderer for all of it is `cards/typedColumns.ts`: a pure
-function from the declared specs to AG Grid column definitions. Two
-kinds of host use it. `cards/TableGrid.ce.vue` is a grid over it for
-a card that wants a table and nothing more (`tableView`, the sources
-card); a card that drives AG Grid itself — its own selection, column
-state in the URL, adaptive visibility (`GridCard`) — calls
-`typedColumns` for its definitions and keeps its own grid. The split
-is deliberate: a component that owned the grid *and* re-exposed AG
-Grid's options for the second kind of host was a wrapper around a
-wrapper, and every option it re-exposed was a place for the two to
+function from the declared specs to column definitions, with the cell
+renderers every grid shares. Two kinds of host use it.
+`cards/TableGrid.ce.vue` is a grid over it for a card that wants a
+table and nothing more (`tableView`, the sources card); a card that
+drives a grid itself — its own selection, column state in the URL,
+adaptive visibility (`GridCard`) — takes its definitions and keeps its
+own grid. Two grids are in the tree while the move off AG Grid
+Enterprise is under way: `typedColumns.ts` makes AG Grid definitions
+for `TableGrid` and the sources card, and `cards/slickColumns.ts`
+makes slickgrid ones from the same renderers for `GridCard`, which
+runs on `@slickgrid-universal/vanilla-bundle` (MIT) — the bundle
+rather than the Vue wrapper because a card is a custom element, and
+the wrapper looks its container up on `document`, which cannot see
+into a shadow root. The split is deliberate: a component that owned
+the grid *and* re-exposed the grid's options for the second kind of
+host was a wrapper around a wrapper, and every option it re-exposed
+was a place for the two to
 disagree.
 
 | type | the cell's value | drawn as |

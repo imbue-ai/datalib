@@ -72,7 +72,7 @@ function formatUnit(n: number, unit: string): string {
   return unit === "bytes" ? formatBytes(n) : n.toLocaleString();
 }
 
-function none(): HTMLElement {
+export function none(): HTMLElement {
   const span = document.createElement("span");
   span.className = "tg-none";
   span.textContent = "—";
@@ -115,7 +115,7 @@ function sparkSvg(samples: Sample[], max: number, windowMs: number): SVGSVGEleme
 
 // ── Cell renderers, one per type ─────────────────────────────────
 
-function renderIdentity(
+export function renderIdentity(
   v: Identity | null | undefined,
   isTreeColumn: boolean,
   isParent: boolean,
@@ -153,7 +153,7 @@ function renderIdentity(
   return wrap;
 }
 
-function renderStatus(s: StatusView | null | undefined): HTMLElement {
+export function renderStatus(s: StatusView | null | undefined): HTMLElement {
   const wrap = document.createElement("span");
   if (!s) return wrap;
   const { key, label } = s;
@@ -208,7 +208,7 @@ function renderStatus(s: StatusView | null | undefined): HTMLElement {
   return wrap;
 }
 
-function renderChips(chips: Chip[] | null | undefined): HTMLElement {
+export function renderChips(chips: Chip[] | null | undefined): HTMLElement {
   const wrap = document.createElement("span");
   wrap.className = "tg-chips";
   if (!chips?.length) return wrap;
@@ -225,7 +225,7 @@ function renderChips(chips: Chip[] | null | undefined): HTMLElement {
   return wrap;
 }
 
-function renderTimestamp(iso: string | null | undefined): HTMLElement {
+export function renderTimestamp(iso: string | null | undefined): HTMLElement {
   if (!iso) return none();
   const span = document.createElement("span");
   span.textContent = formatRelative(iso, Date.now());
@@ -234,7 +234,7 @@ function renderTimestamp(iso: string | null | undefined): HTMLElement {
   return span;
 }
 
-function renderTimeseries(
+export function renderTimeseries(
   v: Timeseries | null | undefined,
   ceiling: number,
   windowSecs: number,
@@ -353,7 +353,7 @@ function actionsRenderer<T>(handlers: Record<string, (row: T) => void>) {
 
 // ── Column definitions, from the specs ───────────────────────────
 
-const WIDTH: Record<ColumnType, number> = {
+export const WIDTH: Record<ColumnType, number> = {
   text: 150,
   count: 90,
   number: 90,

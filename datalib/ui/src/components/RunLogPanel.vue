@@ -32,7 +32,6 @@ import {
   type SlickGrid,
   type SlickgridVueInstance,
 } from "slickgrid-vue";
-import "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css";
 import { filterToken, withToken } from "@/grid/query";
 import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
 import { changed, subscribeLive } from "@/live";

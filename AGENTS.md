@@ -607,7 +607,8 @@ datalib/
     schema/        hand-written row structs (grid_rows/edges/markdowns)
     app_schema/    (feedback/sync_jobs), each deriving CREATE TABLE DDL
                    via #[derive(PortableTable)].
-  ui/          Vue + AG Grid frontend.
+  ui/          Vue frontend; the search grid is SlickGrid, the Manage
+               screen still AG Grid (see docs/dev/cards.md).
 tests/         goldens under tests/__snapshots__/ (Bazel-driven).
 tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
 docs/          dev/ architecture notes; user/ guides + config_examples/;
@@ -823,8 +824,9 @@ When you add or change a `grid_rows` column:
    `datalib/ui/src/api.ts` and declare it in `columns()` in
    `datalib/backend/applets/src/unified_index/columns.rs`, with its
    type from `datalib_columns`. The applet declares the columns and
-   the grid draws them by type (`cards/typedColumns.ts`); a width or a
-   hover the type cannot know goes in `GridCard`'s `columnOverrides`.
+   the grid draws them by type (`cards/slickColumns.ts`, over the
+   renderers in `cards/typedColumns.ts`); a width or a hover the type
+   cannot know goes in `GridCard`'s `columnOverrides`.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## QMDs are write-only
