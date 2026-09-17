@@ -35,8 +35,10 @@ against an image that is not yet `latest`.
 
 **`devcontainer.yml`** builds and publishes that image
 (`.devcontainer/Dockerfile`, `FROM ubuntu:24.04`): on every `v*` tag,
-when the Dockerfile changes (a PR builds and smoke-tests without
-moving `latest`), and on demand. Every build is tagged `sha-<commit>`,
+and on demand — not on pushes or PRs, since a build is ~8 min and
+~2.5 GB and a release's worth of drift costs seconds. To try a
+Dockerfile change early, dispatch it on the branch and then `test.yml`
+with the `sha-` tag it prints. Every build is tagged `sha-<commit>`,
 a tag build also `:X.Y.Z`, and `latest` moves only after
 `.devcontainer/smoke_test.sh` has analysed `//...` from the image
 under a different path and HOME than it was built with, with zero
@@ -238,9 +240,11 @@ test job's pull (64 s → 56–60 s, two runs) and cut the *push* in
 - **Larger GitHub runners.** Billed even on public repos; a 16-core
   box modelled at ~$160/month for a cold run at 47% of today's
   (#324's comments).
-- **Rebuilding the image on every lockfile change.** 67 builds in a
-  month at ~12 min and ~2.5 GB each; a stale pre-fetch costs only the
-  delta.
+- **Rebuilding the image on pushes and PRs.** Lockfile changes alone
+  would have meant 67 builds in a month at ~8 min and ~2.5 GB each,
+  and even Dockerfile-only triggers fire on every review iteration; a
+  stale pre-fetch costs only the delta, so a release's cadence is
+  enough.
 
 ## Next levers, in the order they are worth trying
 
