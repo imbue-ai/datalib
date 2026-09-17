@@ -5,7 +5,7 @@
 # anything. Fails the publish if it does not.
 set -euo pipefail
 
-profile=/tmp/analysis.profile
+profile=/tmp/analysis.profile.gz
 bazelisk --batch --output_base=/opt/bazel/output-base \
     build --nobuild --lockfile_mode=error --profile="$profile" //...
 
