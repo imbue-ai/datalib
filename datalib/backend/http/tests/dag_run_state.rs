@@ -215,7 +215,7 @@ async fn an_open_record_is_live_while_a_runner_holds_the_root() {
         ),
     );
 
-    let _held = datalib_dag::lock::FileLock::acquire_runner(tmp.path()).expect("take the lock");
+    let _held = datalib_dag::lock::acquire_runner(tmp.path()).expect("take the lock");
     let dag = get_dag(tmp.path()).await;
     assert_eq!(dag["run"]["live"], true);
 }

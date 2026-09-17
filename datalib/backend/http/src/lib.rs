@@ -1145,7 +1145,7 @@ pub async fn dag_record(root: &std::path::Path) -> DagRecord {
     // Racy by nature — a run could start a microsecond later — but the
     // answer is only ever used to say "that open record belongs to a
     // run that died", where being one poll stale costs nothing.
-    let live = datalib_dag::lock::FileLock::runner_is_held(root);
+    let live = datalib_dag::lock::runner_is_held(root);
     let run = state.current_run.as_ref().map(|r| DagRunInfo {
         run_id: r.run_id.clone(),
         started_at: r.started_at.clone(),

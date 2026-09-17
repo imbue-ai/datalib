@@ -477,7 +477,7 @@ pub async fn sample_on_demand(
 }
 
 pub fn pipeline_is_running(root: &Path) -> bool {
-    datalib_dag::lock::FileLock::runner_is_held(root)
+    datalib_dag::lock::runner_is_held(root)
 }
 
 fn should_walk(running: bool, was_running: bool, since_last_walk: Duration) -> bool {
@@ -752,7 +752,7 @@ command = "my-step"
         let td = tempfile::tempdir().unwrap();
         assert!(!pipeline_is_running(td.path()), "idle root");
 
-        let held = datalib_dag::lock::FileLock::acquire_runner(td.path()).expect("claim");
+        let held = datalib_dag::lock::acquire_runner(td.path()).expect("claim");
         assert!(pipeline_is_running(td.path()), "a runner holds it");
 
         drop(held);
