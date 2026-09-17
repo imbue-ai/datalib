@@ -86,33 +86,31 @@ pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedYolink> {
     // the same shape every other provider's parse uses.
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let pool = datalib_etl::doltlite_raw::open_reader(&db_path)
+            // Pinned at open, at the driver's commit else HEAD. No commit
+            // means nothing has been committed here to render.
+            let Some(reader) = datalib_etl::doltlite_raw::open_reader(&db_path, range.pin)
                 .await
                 .with_context(|| {
                     format!("open yolink doltlite for render {}", db_path.display())
-                })?;
-            let parsed = parse_pinned(&pool, range).await;
-            pool.close().await;
+                })?
+            else {
+                return Ok(ParsedYolink {
+                    head: None,
+                    devices: Vec::new(),
+                    series: Vec::new(),
+                    scope_config: Vec::new(),
+                    reading_errors: 0,
+                    reading_count: 0,
+                });
+            };
+            let parsed = parse_pinned(reader.pool(), reader.pin()).await;
+            reader.close().await;
             parsed
         })
     })
 }
 
-async fn parse_pinned(pool: &SqlitePool, range: RawRange<'_>) -> Result<ParsedYolink> {
-    let Some(pin) = range.pin(pool).await? else {
-        return Ok(ParsedYolink {
-            head: None,
-            devices: Vec::new(),
-            series: Vec::new(),
-            scope_config: Vec::new(),
-            reading_errors: 0,
-            reading_count: 0,
-        });
-    };
-    datalib_etl::pin::install_views(pool, &pin)
-        .await
-        .context("pin the yolink raw store for render")?;
-
+async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<ParsedYolink> {
     let devices = load_devices(pool).await?;
     let series = load_series(pool).await?;
     let scope_config = load_scope_config(pool).await;

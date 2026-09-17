@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use datalib_flock::{FileLock, LockError};
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
@@ -211,22 +212,67 @@ pub fn db_path_for(p: &Path) -> PathBuf {
 
 // ── Open ────────────────────────────────────────────────────────────
 
+/// The file a writer's claim on `db_path` lives in: a sibling, so the
+/// store itself — which doltlite `flock`s for its own chunk-store lock —
+/// is not what we lock. The name is what `datalib_core::disk` skips when
+/// it measures a tree.
+pub fn lock_path_for(db_path: &Path) -> PathBuf {
+    let mut name = db_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".lock");
+    db_path.with_file_name(name)
+}
+
 /// The pool every open shares: one connection, never recycled.
 ///
 /// Pool size 1 with no recycling because doltlite's HEAD, working set and
 /// active branch are all per-connection, and a replacement connection starts
 /// on `main` with a clean tree. See the README.
 ///
+/// A writer's connection also holds the file's writer lock, for exactly
+/// as long as the connection lives: the lock is handed to the connection
+/// in the pool's `after_connect` hook and released by SQLite when the
+/// connection closes ([`attach_writer_lock`]). So there is no handle that
+/// can commit without holding the lock, and a second writer — another
+/// process, or a second pool in this one — is refused at open with the
+/// holder named, instead of committing the first one's half-written
+/// batch (the README's "one writer per file"). `close().await` waits for
+/// the connection to close, so it is also the moment the lock is free.
+///
 /// `acquire_timeout` is far past sqlx's 30s default because cold opens of
 /// multi-GB stores legitimately take 4-10s inside `sqlite3_open_v2`; 5min is
 /// "something else is wrong" territory.
 async fn connect_pool(db_path: &Path, access: Access) -> Result<SqlitePool> {
     let writable = access == Access::ReadWrite;
+    let mut options = SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .acquire_timeout(Duration::from_secs(300));
     if writable {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
+        // Taken here, before the connection, so a refusal is this open's
+        // error rather than a connect failure inside sqlx.
+        let lock = std::sync::Mutex::new(Some(take_writer_lock(db_path)?));
+        let db_path = db_path.to_path_buf();
+        options = options.after_connect(move |conn, _meta| {
+            let taken = lock.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let db_path = db_path.clone();
+            Box::pin(async move {
+                // The first connection gets the lock taken at open; a
+                // replacement — sqlx re-connecting after the first broke —
+                // takes it afresh, and is refused like anyone else if the
+                // old connection is still closing.
+                let lock = match taken {
+                    Some(lock) => lock,
+                    None => take_writer_lock(&db_path)
+                        .map_err(|e| sqlx::Error::Configuration(e.into()))?,
+                };
+                attach_writer_lock(conn, lock).await
+            })
+        });
     }
     // No `journal_mode` pragma: doltlite manages its own storage and rejects
     // it outright.
@@ -236,14 +282,117 @@ async fn connect_pool(db_path: &Path, access: Access) -> Result<SqlitePool> {
         // it, where for the owner it is the first run.
         .create_if_missing(writable)
         .read_only(!writable);
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .acquire_timeout(Duration::from_secs(300))
-        .connect_with(opts)
-        .await
-        .context("open sqlite pool")
+    options.connect_with(opts).await.context("open sqlite pool")
+}
+
+/// Give the lock to the connection, to be released when the connection
+/// closes. SQLite has no user-data slot on a connection, but a function
+/// registered with a destructor has its destructor run at
+/// `sqlite3_close` — the call `Pool::close()` waits on — so a no-op
+/// function whose "application data" is the lock ties the two lifetimes
+/// together. Doltlite is the SQLite API, so the C entry point is
+/// declared here rather than through `libsqlite3-sys`, which is not a
+/// direct dependency.
+async fn attach_writer_lock(
+    conn: &mut sqlx::sqlite::SqliteConnection,
+    lock: FileLock,
+) -> std::result::Result<(), sqlx::Error> {
+    use std::ffi::{c_char, c_int, c_void};
+
+    extern "C" {
+        fn sqlite3_create_function_v2(
+            db: *mut c_void,
+            name: *const c_char,
+            n_arg: c_int,
+            text_rep: c_int,
+            app: *mut c_void,
+            x_func: Option<unsafe extern "C" fn(*mut c_void, c_int, *mut *mut c_void)>,
+            x_step: Option<unsafe extern "C" fn(*mut c_void, c_int, *mut *mut c_void)>,
+            x_final: Option<unsafe extern "C" fn(*mut c_void)>,
+            x_destroy: Option<unsafe extern "C" fn(*mut c_void)>,
+        ) -> c_int;
+    }
+    unsafe extern "C" fn holds(_ctx: *mut c_void, _n: c_int, _args: *mut *mut c_void) {}
+    unsafe extern "C" fn release(app: *mut c_void) {
+        // Safety: `app` is the `Box<FileLock>` leaked below, and SQLite
+        // calls this exactly once, when the connection closes.
+        drop(unsafe { Box::from_raw(app as *mut FileLock) });
+    }
+    const SQLITE_UTF8: c_int = 1;
+
+    let mut handle = conn.lock_handle().await?;
+    let db = handle.as_raw_handle().as_ptr() as *mut c_void;
+    let app = Box::into_raw(Box::new(lock)) as *mut c_void;
+    // Safety: `db` is the live connection sqlx just handed us, the name is
+    // a NUL-terminated literal, and the callbacks match SQLite's
+    // signatures (the argument types are opaque pointers on both sides).
+    let rc = unsafe {
+        sqlite3_create_function_v2(
+            db,
+            c"datalib_writer_lock".as_ptr(),
+            0,
+            SQLITE_UTF8,
+            app,
+            Some(holds),
+            None,
+            None,
+            Some(release),
+        )
+    };
+    if rc != 0 {
+        // SQLite does not run the destructor on a failed registration.
+        drop(unsafe { Box::from_raw(app as *mut FileLock) });
+        return Err(sqlx::Error::Configuration(
+            format!("register the writer-lock holder on the connection: sqlite rc {rc}").into(),
+        ));
+    }
+    Ok(())
+}
+
+/// How long a writer waits for a lock its own process still holds. A
+/// dropped handle's connection closes on sqlx's worker thread a moment
+/// after the drop, and that moment is the whole reason the README says
+/// close, not drop; waiting it out keeps a stray drop from becoming a
+/// refusal that depends on the machine's speed. A second *live* writer
+/// in this process is still refused, a little later.
+const OWN_CLOSE_GRACE: Duration = Duration::from_secs(2);
+
+fn take_writer_lock(db_path: &Path) -> Result<FileLock> {
+    let lock_path = lock_path_for(db_path);
+    let mine = format!("(pid {})", std::process::id());
+    let started = std::time::Instant::now();
+    let mut lock = loop {
+        match FileLock::acquire(&lock_path) {
+            Ok(lock) => break lock,
+            Err(LockError::Held { holder, .. })
+                if holder.as_deref().is_some_and(|h| h.ends_with(&mine))
+                    && started.elapsed() < OWN_CLOSE_GRACE =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(LockError::Held { holder, .. }) => bail!(
+                "{} already has a writer: {}. One writer per doltlite file — wait for it, \
+                 or open read-only (datalib/backend/etl/README.md, \"Connection pools\")",
+                db_path.display(),
+                holder.unwrap_or_else(|| "(holder unknown)".to_string())
+            ),
+            Err(other) => return Err(anyhow!("{other}")),
+        }
+    };
+    if started.elapsed() > Duration::from_millis(50) {
+        tracing::warn!(
+            path = %db_path.display(),
+            waited_ms = started.elapsed().as_millis() as u64,
+            "a previous writer in this process was still closing; a handle was \
+             dropped where it should have been close().await-ed"
+        );
+    }
+    let program = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "?".to_string());
+    lock.describe(&format!("{program} {mine}"));
+    Ok(lock)
 }
 
 /// [`open`] without the shared download-bookkeeping tables. A *derived*
@@ -276,12 +425,74 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
 /// an intention — and creating the `pinned_<table>` views still works, since
 /// they live in the per-connection temp schema rather than in the file.
 ///
+/// And it pins at open: the handle it hands back names one commit — the
+/// one the caller was given, or HEAD — and has the `pinned_<table>` views
+/// installed, so every content read through [`Reads::At`] names that
+/// commit however long the pass runs. A store with nothing committed
+/// yields `None` rather than a reader onto its working set; the caller
+/// decides what that means (a consumer does nothing that pass).
+///
 /// A schema this store has not got yet is the owner's to add on its next run,
 /// and a read naming a column it lacks fails at prepare time saying so. Probe
 /// with [`column_exists`] and fall back where that is a real possibility;
 /// slack's `load_channels` is the worked example.
-pub async fn open_reader(db_path: &Path) -> Result<SqlitePool> {
+///
+/// [`Reads::At`]: crate::pin::Reads::At
+pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Reader>> {
+    let pool = connect_pool(db_path, Access::ReadOnly).await?;
+    let pin = match commit {
+        Some(commit) => Some(crate::pin::Pin::at(commit)?),
+        None => crate::pin::head(&pool).await?,
+    };
+    let Some(pin) = pin else {
+        pool.close().await;
+        return Ok(None);
+    };
+    crate::pin::install_views(&pool, &pin)
+        .await
+        .with_context(|| format!("pin {} for reading", db_path.display()))?;
+    Ok(Some(Reader { pool, pin }))
+}
+
+/// A read-only connection with no pin, for the one store that cannot be
+/// read at a commit yet: the blob CAS, which most downloads never commit
+/// (docs/dev/audit_2026-09-17.md §7), so a read at HEAD would find no
+/// blob at all. Everything else reads through [`open_reader`].
+pub(crate) async fn open_reader_unpinned(db_path: &Path) -> Result<SqlitePool> {
     connect_pool(db_path, Access::ReadOnly).await
+}
+
+/// A store somebody else writes, read at one commit. Derefs to its pool,
+/// so queries run against `&*reader` or [`Reader::pool`]; content reads
+/// name tables through [`Reads::At`](crate::pin::Reads::At) with
+/// [`Reader::pin`].
+pub struct Reader {
+    pool: SqlitePool,
+    pin: crate::pin::Pin,
+}
+
+impl Reader {
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    pub fn pin(&self) -> &crate::pin::Pin {
+        &self.pin
+    }
+
+    /// Wait for the connection to actually go away; dropping the handle
+    /// only schedules that.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+}
+
+impl std::ops::Deref for Reader {
+    type Target = SqlitePool;
+
+    fn deref(&self) -> &SqlitePool {
+        &self.pool
+    }
 }
 
 /// Whether a pool may write the file it opens. See [`open_reader`].
@@ -1449,8 +1660,6 @@ pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &s
 // to fail.
 #[allow(clippy::disallowed_macros)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
 
     use super::*;
     use serde_json::json;
@@ -1497,73 +1706,45 @@ mod tests {
         open(p, &slices).await.unwrap()
     }
 
-    /// Two live connections to one store make each other's `dolt_commit`
-    /// fail — the reason every caller must hold exactly one handle.
-    ///
-    /// `dolt_commit` takes the store's lock without waiting, and reports
-    /// whoever else holds it as `commit conflict: another connection
-    /// committed to this branch` whether or not that peer committed
-    /// anything. Ordinary DML retries under a busy handler and so rides
-    /// out the overlap; only the commit surfaces it. That asymmetry is
-    /// why a second pool is a timing bug rather than an immediate one,
-    /// and why in the field it reads as a CI flake.
-    ///
-    /// Both sides commit in lockstep so the contention is forced rather
-    /// than hoped for. The round count is what makes a false pass
-    /// impossible in practice; if this ever fails, doltlite has started
-    /// waiting for the store lock, and the pool rules can be revisited.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn two_live_pools_on_one_store_break_each_others_commits() {
-        const ROUNDS: usize = 64;
-
+    /// Two writers on one store used to make each other's `dolt_commit`
+    /// fail with `commit conflict` — a timing bug, because the second
+    /// open itself succeeded. Now the second open is the failure: the
+    /// first's connection holds the file's writer lock for as long as it
+    /// lives, and the refusal names it. A reader is not a writer and
+    /// opens beside it; and once the writer has `close().await`ed the
+    /// store is free again — that call waits for the connection to
+    /// close, and the connection is what held the lock.
+    #[tokio::test]
+    async fn a_second_writer_on_a_live_store_is_refused_and_names_the_holder() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("entities.doltlite_db");
         let first = open_test(&db).await;
-        if !has_dolt_extensions(&first).await {
-            eprintln!("[two-pool test] stock libsqlite3 — nothing to contend over");
-            first.close().await;
-            return;
-        }
+        assert!(FileLock::is_held(&lock_path_for(&db)));
+
         let owned = test_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let second = open(&db, &slices).await.expect("second open");
+        let err = open(&db, &slices)
+            .await
+            .expect_err("a second writer must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("already has a writer"), "{msg}");
+        assert!(
+            msg.contains(&format!("pid {}", std::process::id())),
+            "the holder is named: {msg}"
+        );
+        let _reader = open_reader(&db, None)
+            .await
+            .expect("a reader is not a writer");
 
-        let conflicts = Arc::new(AtomicUsize::new(0));
-        let gate = Arc::new(tokio::sync::Barrier::new(2));
-        let mut writers = Vec::new();
-        for (tag, pool) in [("a", first.clone()), ("b", second.clone())] {
-            let conflicts = conflicts.clone();
-            let gate = gate.clone();
-            writers.push(tokio::spawn(async move {
-                for round in 0..ROUNDS {
-                    sqlx::query("INSERT OR REPLACE INTO widgets (id, name) VALUES (?, ?)")
-                        .bind(format!("{tag}-{round}"))
-                        .bind(tag)
-                        .execute(&pool)
-                        .await
-                        .unwrap();
-                    gate.wait().await;
-                    if let Err(e) = commit_run(&pool, tag).await {
-                        let msg = format!("{e:#}");
-                        assert!(msg.contains("commit conflict"), "unexpected error: {msg}");
-                        conflicts.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            }));
-        }
-        for w in writers {
-            w.await.unwrap();
-        }
-
-        second.close().await;
         first.close().await;
         assert!(
-            conflicts.load(Ordering::Relaxed) > 0,
-            "{ROUNDS} rounds of simultaneous commits from two pools on one \
-             store produced no conflict. Either doltlite now waits for the \
-             store lock instead of failing, or this test stopped contending; \
-             find out which before deleting it."
+            !FileLock::is_held(&lock_path_for(&db)),
+            "close() waited for the connection, and the connection held the lock"
         );
+        let again = open(&db, &slices)
+            .await
+            .expect("free once the writer closed");
+        again.close().await;
     }
 
     // ── Opening costs nothing ─────────────────────────────────────
@@ -1949,7 +2130,7 @@ mod tests {
     async fn open_creates_tables_idempotently() {
         let d = tempdir().unwrap();
         let p = d.path().join("x.doltlite_db");
-        let _ = open_test(&p).await;
+        open_test(&p).await.close().await;
         // Re-opening doesn't error, and the shared tables exist.
         let pool = open_test(&p).await;
         sqlx::query("SELECT COUNT(*) FROM sync_runs")
@@ -2490,9 +2671,12 @@ mod tests {
         let commit = commit_run(&owner, "one row").await.unwrap().unwrap();
         owner.close().await;
 
-        let reader = open_reader(&path).await.unwrap();
+        let reader = open_reader(&path, Some(&commit))
+            .await
+            .unwrap()
+            .expect("a committed store is readable");
         let err = sqlx::query("INSERT INTO t VALUES (2)")
-            .execute(&reader)
+            .execute(reader.pool())
             .await
             .expect_err("a reader must not be able to write the store");
         assert!(
@@ -2500,15 +2684,27 @@ mod tests {
             "expected a readonly-database error, got: {err}"
         );
 
-        crate::pin::install_views(&reader, &crate::pin::Pin::at(&commit).unwrap())
-            .await
-            .expect("temp views install on a read-only connection");
+        // The views were installed at open, on a read-only connection.
+        assert_eq!(reader.pin().commit(), commit);
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_t")
-            .fetch_one(&reader)
+            .fetch_one(reader.pool())
             .await
             .unwrap();
         assert_eq!(n, 1, "and the pinned read works through them");
         reader.close().await;
+
+        // A store with nothing committed has nothing to read: no reader,
+        // rather than one onto the working set. `open_derived`, so the
+        // shared bookkeeping tables do not get committed on the way in.
+        let empty = tmp.path().join("empty.doltlite_db");
+        let w = open_derived(&empty, &[]).await.unwrap();
+        sqlx::query("CREATE TABLE u (id INTEGER PRIMARY KEY)")
+            .execute(&w)
+            .await
+            .unwrap();
+        w.close().await;
+        drop(w);
+        assert!(open_reader(&empty, None).await.unwrap().is_none());
     }
 
     /// Opening a store *commits* whatever it finds dirty. Harmless when the

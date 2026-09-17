@@ -23,6 +23,8 @@ pub const CURSOR_SCOPE_PREFIX: &str = "google_takeout/";
 pub struct RawDb {
     pool: SqlitePool,
     cas: BlobCas,
+    /// The commit a reader is pinned at; `None` for the writer.
+    pin: Option<datalib_etl::pin::Pin>,
 }
 
 impl RawDb {
@@ -38,11 +40,16 @@ impl RawDb {
     /// No DDL, so a store the current downloader has not touched keeps
     /// whatever columns it has; probe with `column_exists` and fall back
     /// where that matters.
-    pub async fn open_reader(db_path: &Path) -> Result<Self> {
-        Ok(Self {
-            pool: datalib_etl::doltlite_raw::open_reader(db_path).await?,
+    /// Pinned at `commit`, else HEAD; `None` when nothing is committed.
+    pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
+        let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            pool: reader.pool().clone(),
             cas: BlobCas::open_reader(&blob_cas::cas_path_for(db_path)).await?,
-        })
+            pin: Some(reader.pin().clone()),
+        }))
     }
 
     pub async fn open(db_path: &Path) -> Result<Self> {
@@ -50,11 +57,20 @@ impl RawDb {
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
         let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
+        Ok(Self {
+            pool,
+            cas,
+            pin: None,
+        })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// The commit this reader reads at. `None` on the writer's handle.
+    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
+        self.pin.as_ref()
     }
 
     pub fn cas(&self) -> &BlobCas {

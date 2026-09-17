@@ -11,7 +11,18 @@ use sqlx::Row;
 use crate::analyze::Explained;
 use crate::model::Entry;
 
-pub async fn open(path: &Path) -> Result<SqlitePool> {
+/// A scan somebody else wrote: read-only, never created, one connection.
+/// The only way this tool touches a store it did not make.
+pub async fn open_reader(path: &Path) -> Result<SqlitePool> {
+    datalib_pin::open_reader(path)
+        .await
+        .with_context(|| format!("open {} read-only", path.display()))
+}
+
+/// A store this process made for itself — the unification scratch in
+/// its own tempdir — and nothing that belongs to anyone else: those are
+/// opened by [`open_reader`], which cannot write them.
+pub async fn open_scratch(path: &Path) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
         .with_context(|| format!("sqlite uri for {}", path.display()))?
         .create_if_missing(true);
@@ -65,7 +76,7 @@ pub async fn resolve_ref(pool: &SqlitePool, reference: &str) -> Result<Commit> {
 }
 
 pub async fn unify(scratch: &Path, left: &Path, right: &Path) -> Result<()> {
-    let pool = open(scratch).await?;
+    let pool = open_scratch(scratch).await?;
     let left = std::fs::canonicalize(left).with_context(|| format!("{}", left.display()))?;
     let right = std::fs::canonicalize(right).with_context(|| format!("{}", right.display()))?;
     for (name, path) in [("dtd_left", &left), ("dtd_right", &right)] {

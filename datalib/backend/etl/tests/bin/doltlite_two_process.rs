@@ -21,7 +21,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_etl::doltlite_raw;
-use datalib_etl::pin::{head, install_views, Pin};
+use datalib_etl::pin::Pin;
 use serde_json::{json, Value};
 
 const TABLE_DDL: &str = "CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT NULL)";
@@ -67,9 +67,14 @@ async fn main() -> Result<()> {
 async fn write(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let started = Instant::now();
-    let pool = doltlite_raw::open(&db, &[TABLE_DDL])
-        .await
-        .context("open read-write")?;
+    // A refused open is a result, not a crash: the test reads what the
+    // refusal said.
+    let pool = match doltlite_raw::open(&db, &[TABLE_DDL]).await {
+        Ok(pool) => pool,
+        Err(e) => {
+            return Ok(json!({ "role": "write", "open_error": format!("{e:#}") }));
+        }
+    };
     let open_ms = started.elapsed().as_millis() as u64;
     if !doltlite_raw::has_dolt_extensions(&pool).await {
         pool.close().await;
@@ -122,15 +127,14 @@ async fn write(args: &Args) -> Result<Value> {
 /// sample the pinned view repeatedly. Every sample must agree.
 async fn read(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
-    let pin = Pin::at(args.str("pin")?)?;
+    let pin = args.str("pin")?;
     let started = Instant::now();
-    let pool = doltlite_raw::open_reader(&db)
+    let reader = doltlite_raw::open_reader(&db, Some(pin))
         .await
-        .context("open read-only")?;
+        .context("open read-only")?
+        .context("the seed commit was published, so there is something to pin")?;
     let open_ms = started.elapsed().as_millis() as u64;
-    let views = install_views(&pool, &pin)
-        .await
-        .context("install pinned views")?;
+    let pool = reader.pool();
     write_atomic(&args.path("ready-out")?, b"ready")?;
 
     let interval = Duration::from_millis(args.num("interval-ms", 250));
@@ -138,7 +142,7 @@ async fn read(args: &Args) -> Result<Value> {
     let mut errors: Vec<String> = Vec::new();
     for _ in 0..args.num("samples", 12) {
         match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pinned_entities")
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
         {
             Ok(n) => samples.push(json!({ "count": n, "at_ms": now_ms() })),
@@ -147,12 +151,12 @@ async fn read(args: &Args) -> Result<Value> {
         tokio::time::sleep(interval).await;
     }
 
-    pool.close().await;
+    let pin = reader.pin().commit().to_string();
+    reader.close().await;
     Ok(json!({
         "role": "read",
         "open_ms": open_ms,
-        "views": views,
-        "pin": pin.commit(),
+        "pin": pin,
         "samples": samples,
         "errors": errors,
     }))
@@ -177,23 +181,26 @@ async fn churn(args: &Args) -> Result<Value> {
             break;
         }
         samples.push(json!({ "at_ms": now_ms() }));
-        let pool = match doltlite_raw::open_reader(&db).await {
-            Ok(p) => p,
+        let reader = match doltlite_raw::open_reader(&db, None).await {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                opened += 1;
+                continue;
+            }
             Err(e) => {
                 errors.push(format!("round {round}: open: {e:#}"));
                 continue;
             }
         };
         opened += 1;
-        match one_pinned_pass(&pool, cursor.as_deref()).await {
-            Ok(Some(head)) => {
+        match one_pinned_pass(&reader, cursor.as_deref()).await {
+            Ok(head) => {
                 pinned += 1;
                 cursor = Some(head);
             }
-            Ok(None) => {}
             Err(e) => errors.push(format!("round {round}: {e:#}")),
         }
-        pool.close().await;
+        reader.close().await;
     }
     Ok(json!({
         "role": "churn",
@@ -239,12 +246,10 @@ async fn history(args: &Args) -> Result<Value> {
     }))
 }
 
-/// The commit this pass read at; `None` when the store had nothing to pin.
-async fn one_pinned_pass(pool: &sqlx::SqlitePool, cursor: Option<&str>) -> Result<Option<String>> {
-    let Some(pin) = head(pool).await? else {
-        return Ok(None);
-    };
-    install_views(pool, &pin).await?;
+/// The commit this pass read at.
+async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
+    let pool = reader.pool();
+    let pin = reader.pin();
     let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_entities")
         .fetch_one(pool)
         .await?;
@@ -256,13 +261,15 @@ async fn one_pinned_pass(pool: &sqlx::SqlitePool, cursor: Option<&str>) -> Resul
     .bind(pin.commit())
     .fetch_one(pool)
     .await?;
-    Ok(Some(pin.commit().to_string()))
+    Ok(pin.commit().to_string())
 }
 
 /// Two read-write pools on one file inside ONE process — the shape
 /// `AGENTS.md` warns about, and the one the two-process scenarios do not
 /// reach. Both opens are bounded, so a pool that really does wait for the
 /// other reports a timeout instead of hanging out the test's clock.
+/// Nowadays the second open is refused outright; this reports what it
+/// said, and that the first still commits.
 async fn double_open(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let budget = Duration::from_millis(args.num("budget-ms", 20_000));
@@ -394,7 +401,7 @@ async fn reopen(args: &Args) -> Result<Value> {
 /// What a fresh process sees once everyone else has let go.
 async fn probe(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
-    let pool = doltlite_raw::open_reader(&db)
+    let pool = datalib_pin::open_reader(&db)
         .await
         .context("open read-only")?;
     let head = doltlite_raw::head_commit(&pool).await?;
@@ -496,7 +503,9 @@ async fn count_on(conn: &mut sqlx::SqliteConnection) -> Result<i64> {
 /// reader sees at each point of the writer's pass.
 async fn watch(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
-    let pool = doltlite_raw::open_reader(&db)
+    // Unpinned on purpose: the working-set count is one of the things
+    // measured.
+    let pool = datalib_pin::open_reader(&db)
         .await
         .context("open read-only")?;
     write_atomic(&args.path("ready-out")?, b"ready")?;

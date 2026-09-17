@@ -75,32 +75,30 @@ pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedAirvisual> {
     // the same shape every other provider's parse uses.
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let pool = datalib_etl::doltlite_raw::open_reader(&db_path)
+            // Pinned at open, at the driver's commit else HEAD. No commit
+            // means nothing has been committed here to render.
+            let Some(reader) = datalib_etl::doltlite_raw::open_reader(&db_path, range.pin)
                 .await
                 .with_context(|| {
                     format!("open airvisual doltlite for render {}", db_path.display())
-                })?;
-            let parsed = parse_pinned(&pool, range).await;
-            pool.close().await;
+                })?
+            else {
+                return Ok(ParsedAirvisual {
+                    head: None,
+                    devices: Vec::new(),
+                    series: Vec::new(),
+                    files: Vec::new(),
+                    sample_count: 0,
+                });
+            };
+            let parsed = parse_pinned(reader.pool(), reader.pin()).await;
+            reader.close().await;
             parsed
         })
     })
 }
 
-async fn parse_pinned(pool: &SqlitePool, range: RawRange<'_>) -> Result<ParsedAirvisual> {
-    let Some(pin) = range.pin(pool).await? else {
-        return Ok(ParsedAirvisual {
-            head: None,
-            devices: Vec::new(),
-            series: Vec::new(),
-            files: Vec::new(),
-            sample_count: 0,
-        });
-    };
-    datalib_etl::pin::install_views(pool, &pin)
-        .await
-        .context("pin the airvisual raw store for render")?;
-
+async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<ParsedAirvisual> {
     let devices = load_devices(pool).await?;
     let series = load_series(pool).await?;
     let files = load_files(pool).await;

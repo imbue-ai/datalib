@@ -243,14 +243,23 @@ fn parse_doltlite(db_path: &Path, range: RawRange<'_>) -> Result<ParsedExport> {
 }
 
 async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<ParsedExport> {
-    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
+    // Pinned at open — at the driver's commit, else HEAD — with the views
+    // installed before anything reads. No commit means nothing has been
+    // committed here to render: emptiness, not a reason to read the
+    // working set.
+    let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
-        .with_context(|| format!("open claude doltlite for render {}", db_path.display()))?;
+        .with_context(|| format!("open claude doltlite for render {}", db_path.display()))?
+    else {
+        return Ok(ParsedExport::default());
+    };
+    let pool = reader.pool().clone();
+    let pin = reader.pin().clone();
 
     let cas_path = blob_cas::cas_path_for(db_path);
     let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
         Some(
-            datalib_etl::doltlite_raw::open_reader(&cas_path)
+            datalib_etl::blob_cas::open_cas_reader(&cas_path)
                 .await
                 .with_context(|| format!("open claude CAS for render {}", cas_path.display()))?,
         )
@@ -266,14 +275,6 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
     // the source holding nothing; reading the working set instead would be
     // worse than either. An empty parse declares no bucket, so it deletes
     // nothing. See the plan's "The sink contract".
-
-    let Some(pin) = range.pin(&pool).await? else {
-        return Ok(ParsedExport::default());
-    };
-
-    datalib_etl::pin::install_views(&pool, &pin)
-        .await
-        .context("pin the claude raw store for render")?;
 
     // These three all read tables the download side also reads; the
     // single copy of each lives in `ingest::db` (users/orgs go

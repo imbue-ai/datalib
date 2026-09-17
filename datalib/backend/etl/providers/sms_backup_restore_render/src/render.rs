@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::Context;
 use anyhow::Result;
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
@@ -76,19 +75,14 @@ pub fn render(
     }
     let (messages, calls, blobs, scan) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open_reader(&db_path).await?;
-            // Pin before reading, and pin the CAS too — separate file,
-            // separate HEAD. No commit means nothing has been committed here
-            // to render, which is emptiness rather than a reason to read the
-            // working set.
-            let pin = range.pin(db.pool()).await?;
+            // Pinned at open. No commit means nothing has been committed
+            // here to render, which is emptiness rather than a reason to
+            // read the working set.
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
+                return Ok(Default::default());
+            };
+            let pin = db.pin().expect("a reader is pinned at open").clone();
             let loaded = async {
-                let Some(pin) = pin else {
-                    return anyhow::Ok(Default::default());
-                };
-                datalib_etl::pin::install_views(db.pool(), &pin)
-                    .await
-                    .context("pin the sms_backup_restore raw store for render")?;
                 let messages = datalib_etl::doltlite_raw::load_payloads_with_id(
                     db.pool(),
                     datalib_etl::pin::Reads::At(&pin),

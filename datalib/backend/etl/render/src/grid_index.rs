@@ -645,24 +645,22 @@ pub async fn build_grid_index_for(
             // open would rescue-commit and schema-commit into it — writing to
             // a file we do not own, and (once producers stream) committing
             // the renderer's in-flight rows on its behalf.
-            let store =
-                crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(&rendered_root)
-                    .with_context(|| format!("open render store for {stanza}"))?;
-            // Pin before anything reads: the diff below and the rows behind
-            // it must name one commit, and the views have to exist before
-            // either query runs.
-            let Some(pin) = store
-                .pin_for_reading()
-                .with_context(|| format!("pin the render store for {stanza}"))?
+            // Pinned at open: the diff below and the rows behind it name
+            // one commit, and the views exist before either query runs.
+            let Some(store) = crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(
+                &rendered_root,
+                None,
+            )
+            .with_context(|| format!("open render store for {stanza}"))?
             else {
                 tracing::warn!(
                     source = %stanza,
                     "index: this store names no commit, so there is nothing \
                      committed to index; skipping it this run"
                 );
-                store.close();
                 continue;
             };
+            let pin = store.pin().expect("a reader is pinned at open").clone();
             let cursor = cursors.get(&stanza).map(String::as_str);
             let scan = store
                 .changed_since(cursor, &pin)
@@ -2199,11 +2197,10 @@ mod source_cursor_tests {
         let cursors = load_source_cursors(&pool).await.unwrap();
         let recorded = cursors.get("src").expect("a cursor for src").clone();
 
-        let store = IndexedMarkdownStore::open_for_reading(&rendered_root(root, "src")).unwrap();
-        let pin = store
-            .pin_for_reading()
+        let store = IndexedMarkdownStore::open_for_reading(&rendered_root(root, "src"), None)
             .unwrap()
             .expect("the store has commits");
+        let pin = store.pin().unwrap().clone();
         let head = store.changed_since(None, &pin).unwrap().new_head;
         store.close();
         assert_eq!(Some(recorded), head, "the cursor is the store's HEAD");

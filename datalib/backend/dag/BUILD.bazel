@@ -26,6 +26,7 @@ rust_library(
         # events.rs). Keeps the timestamp format identical to the rest of
         # the tree's logs; the binary already depended on it.
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
@@ -39,7 +40,6 @@ rust_library(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
-        "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
         "@datalib_crates//:walkdir",
     ],

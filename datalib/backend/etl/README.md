@@ -72,47 +72,59 @@ signal, sort it instead.
 `sync_runs.config` / `summary` stay plain TEXT — tiny, single-row, and worth
 being greppable.
 
-## Connection pools against a doltlite file are always size 1
+## Connection pools: one writer per file, readers pinned
 
 Doltlite's HEAD pointer, working set and active branch are **per
-connection**. A pool bigger than one lands statements on connections that
-disagree about the tree, which shows up as a `dolt_commit` whose hash never
-appears in `dolt_log`, or as `commit conflict: another connection committed
-to this branch`. The dolt maintainers confirm the same is true of Dolt
-itself and recommend the same fix.
+connection**, and the working set is also **per file**, shared across
+processes. Two facts, two rules, both built into `doltlite_raw` rather
+than left to convention.
 
-`open` pins `max_connections(1)` and also disables `idle_timeout` and
-`max_lifetime`. The timeouts matter for the same reason: sqlx would retire
-the very connection whose session state is load-bearing, and its replacement
-starts on `main` with a clean working set. An fsindex scan on a non-`main`
-branch would silently start writing to `main` after 30 minutes and report
-success — and multi-million-entry scans reach that window.
+### Every pool is size 1 and never recycled
 
-Any other code opening a `SqlitePool` against a `.doltlite_db` must do the
-same — and one pool, not two. Size 1 is necessary, not sufficient. A second
-pool shares the first's working set, so an `-Am` commit through either
-sweeps up whatever the other has in flight; and while the two are actually
-mid-write they contend for a lock `dolt_commit` takes without waiting, so
-one of them fails with `commit conflict: another connection committed to
-this branch`. The message names a commit that need not have happened; read
-it as "someone else is writing this store right now".
+A pool bigger than one lands statements on connections that disagree
+about the tree, which shows up as a `dolt_commit` whose hash never
+appears in `dolt_log`, or as `commit conflict: another connection
+committed to this branch`. The dolt maintainers confirm the same is true
+of Dolt itself and recommend the same fix. So every open here pins
+`max_connections(1)` and disables `idle_timeout` and `max_lifetime`:
+sqlx would otherwise retire the very connection whose session state is
+load-bearing, and its replacement starts on `main` with a clean working
+set — an fsindex scan on a non-`main` branch would silently start
+writing to `main` after 30 minutes and report success.
 
-An idle peer costs neither of those —
-`//datalib/backend/etl:doltlite_two_process_test` measures a second
-read-write open landing in ~2ms with both pools then committing — which is
-what makes a second pool a timing bug rather than an immediate one. And a
-pool you dropped is not yet a pool that is gone: sqlx closes its
-connections on a background task, so a store reopened right after the
-previous handle went out of scope can still find the old connection
-there.
+### One writer per file, by construction
 
-So there are two ways to be right, and dropping a handle is neither. Hold
-one handle for as long as the store is in use. Or, where a fresh connection
-is the point — proving a cursor survived the pool that wrote it, or
-mirroring a binary that opens the store per run — `await` a `close()`
-before the next `open`. Every `RawDb` has one; it closes the blob CAS
-alongside the entity pool, which the older `db.pool().clone()` /
-`pool.close()` idiom silently left open.
+`open` and `open_derived` are the only ways to a handle that can commit,
+and each takes the file's writer lock — `flock(2)` on the sibling
+`<store>.doltlite_db.lock`, `datalib_flock` — and gives it to the
+connection, which holds it until it closes. A second writer on the same
+file, in another process or in this one, is refused at open with the
+holder named (`<program> (pid N)`) instead of sharing the first's
+working set: an `-Am` commit through either pool sweeps up whatever the
+other has in flight, and two mid-write pools contend for a lock
+`dolt_commit` takes without waiting. The kernel releases the lock when
+the holder dies, so a killed run leaves no stale claim; the next `open`
+finds its dirty rows and seals them into a rescue commit.
+
+The lock lives exactly as long as the connection: `close().await` waits
+for the connection to close, and that is the moment the store is free.
+A dropped-but-never-closed handle keeps its connection, and so the lock,
+until sqlx's worker thread gets to it a moment later — the window the
+rule "close, not drop" has always been about. A writer that finds its
+own process still holding the lock waits up to two seconds for that
+close and logs that it had to, so a stray drop is a warning rather than
+a refusal that depends on the machine's speed; a second *live* writer in
+the same process is refused after the wait.
+
+Per file, not per root, so two sources with nothing in common can be
+written by two runners at once (#247): the lock says who owns *this*
+store, and nothing about the others.
+
+`datalib-fsindex` and the provider `*_ingest` binaries write through
+`RawDb::open`, so they take the lock; `datalib-dirtree-diff` reads the
+stores it is given through `datalib_pin::open_reader` and writes only
+its own scratch. `datalib-doltlite` is the raw shell and takes no lock:
+run it `-readonly` against a store a sync may be writing.
 
 ### A download takes the store; it never opens one
 
@@ -120,40 +132,38 @@ Every provider's `FetchOptions` carries `pub db: RawDb` — a live handle,
 not a path and not an `Option`. **Whoever opens a store closes it**, and
 for a download that is always the caller: the step's processor, the
 provider's `*_download` binary, or the test. `fetch` borrows it for the
-run and returns.
+run and returns. A `fetch` that opened its own store while the caller
+held one would now be refused at open rather than failing the caller's
+commit later.
 
-The rule is there because the alternative was tried. `db` used to be
-`Option<RawDb>`, and `fetch` opened its own store when the caller passed
-`None`. That pool was never closed, so a caller which then read the store
-back — every download test does — had two live connections on one file,
-and one of the two `dolt_commit`s could fail. Because sqlx closes
-connections on a background task, whether the two actually collided came
-down to timing: green on a quiet laptop, intermittently red on a loaded CI
-runner, always at `commit schema after DDL` inside the second `open`.
+### A reader opens read-only and pinned, and never asks `dolt_status`
 
-`scripts/lint_repo.py`'s check 6 keeps the field non-optional, and
-`two_live_pools_on_one_store_break_each_others_commits` in
-`doltlite_raw.rs` pins the underlying behavior: two pools committing in
-lockstep on one store, and one of them gets `commit conflict`.
+`open_reader(path, commit)` is the read path: read-only, so "a reader
+must not write" is the engine's rule (`attempt to write a readonly
+database`); never creates the file; takes no lock; and pins at open —
+at the commit the caller names (the render driver's) or at HEAD — with
+the `pinned_<table>` views installed, so every content read through
+[`Reads::At`] names one commit however long the pass runs. It hands
+back a `Reader`, or `None` when the store has nothing committed, which
+the caller must decide about (a consumer does nothing that pass) rather
+than fall through to the working set. The `pin.rs` `Pin` refuses `HEAD`
+by name, and the shared loaders take a mandatory `Reads`, so a call site
+has to say whose store it is reading.
 
-### A reader opens read-only, pins a commit, and never asks `dolt_status`
+The one unpinned reader is the blob CAS (`open_cas_reader`): most
+downloads never commit it, so a read at HEAD would find no blob, and
+content addressing is what makes the working-set read safe — a row is
+keyed by the blake3 of its own bytes.
 
-Render reads its raw store through `open_reader`, never `open`: the
-write path rescue-commits, reconciles the schema and commits with `-Am`,
-which is three writes to a store the render step does not own
-(`scripts/lint_repo.py` check 5 enforces it). A reader then takes a
-`Pin` (`pin.rs`; it refuses `HEAD` by name) and reads through the
-`pinned_<t>` views it installs, so every content read names one commit
-however long the pass runs. The two-process test measures what a
-read-only connection may issue beside a live writer — `dolt_hashof`,
-`sqlite_master`, `pragma_module_list`, `CREATE TEMP VIEW`, reads through
-`dolt_at_` views, `dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
-`dolt_diff_summary`, `dolt_diff_stat`, a `COUNT(*)` per table — and that
-list is the allowlist. **`dolt_status` is not on it**: issued from a
-read-only connection while the writer commits, it fails that commit
-and the rows inserted before it are gone (dolthub/doltlite#2832; that
-was #400, `grid_index` asking every render store whether it was dirty).
-The same goes for a hand-run `datalib-doltlite -readonly … dolt_status`
+The two-process test measures what a read-only connection may issue
+beside a live writer — `dolt_hashof`, `sqlite_master`,
+`pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_`
+views, `dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
+`dolt_diff_summary`, `dolt_diff_stat`, a `COUNT(*)` per table — and
+that list is the allowlist. **`dolt_status` is not on it**: issued from
+a read-only connection while the writer commits, it fails that commit
+and the rows inserted before it are gone (dolthub/doltlite#2832). The
+same goes for a hand-run `datalib-doltlite -readonly … dolt_status`
 against a store a sync is writing. Any other statement a reader adds is
 presumed guilty until `doltlite_two_process_test` has run with it.
 
@@ -176,6 +186,8 @@ checked-out connection from a task spawned at drop, and a per-call
 `Runtime::new().block_on(..)` dies before that task runs, leaving the
 next open a second handle on the same file (`indexed_markdown::blocking`
 keeps one process-wide runtime for the no-runtime case).
+
+[`Reads::At`]: src/pin.rs
 
 ## Schema self-healing, and why the DDL runs in two passes
 

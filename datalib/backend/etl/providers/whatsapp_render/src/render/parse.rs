@@ -85,19 +85,16 @@ async fn parse_async(
     source_id: &str,
     range: RawRange<'_>,
 ) -> Result<ParsedWhatsApp> {
-    let pool: SqlitePool = datalib_etl::doltlite_raw::open_reader(db_path)
+    // Pinned at open: the driver's pin when it made one, else HEAD. No
+    // commit means nothing has been committed to render, which is
+    // emptiness rather than a reason to read the working set.
+    let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
-        .with_context(|| format!("open {}", db_path.display()))?;
-
-    // Pin before the first read: the driver's pin when it made one,
-    // else HEAD. No commit means nothing has been committed to render,
-    // which is emptiness rather than a reason to read the working set.
-    let Some(pin) = range.pin(&pool).await? else {
+        .with_context(|| format!("open {}", db_path.display()))?
+    else {
         return Ok(ParsedWhatsApp::default());
     };
-    datalib_etl::pin::install_views(&pool, &pin)
-        .await
-        .context("pin the whatsapp raw store for render")?;
+    let pool: SqlitePool = reader.pool().clone();
 
     let jids = load_jids(&pool).await?;
     let names = JidNames::load(&pool, &jids).await?;
@@ -406,7 +403,7 @@ async fn parse_async(
     let cas_path = blob_cas::cas_path_for(db_path);
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     if cas_path.is_file() {
-        let cas_pool: SqlitePool = datalib_etl::doltlite_raw::open_reader(&cas_path)
+        let cas_pool: SqlitePool = datalib_etl::blob_cas::open_cas_reader(&cas_path)
             .await
             .with_context(|| format!("open CAS for render at {}", cas_path.display()))?;
         for chat in &out {
