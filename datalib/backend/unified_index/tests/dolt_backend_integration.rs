@@ -164,6 +164,10 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         meta.source_url.as_deref(),
         Some("https://claude.ai/chat/c-1")
     );
+    // NULL columns are `None`, not `Some("")`: the sqlite driver decodes a
+    // NULL into an empty string when asked for a bare `String` (#13).
+    assert_eq!(meta.project, None, "project was NULL");
+    assert_eq!(meta.channel, None, "channel was NULL");
 
     let qmd = repo.qmd_path_for_markdown("c-1").await.unwrap();
     assert!(qmd.is_some());

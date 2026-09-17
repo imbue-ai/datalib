@@ -227,14 +227,18 @@ impl IndexRepo for DoltRepo {
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         let Some(r) = row else { return Ok(None) };
+        // Decoded as `Option<String>`, so a SQL NULL is `None`: read into a
+        // bare `String` the sqlite driver hands back `""` for NULL and the
+        // header would show an empty project rather than none (#13).
+        let text = |col: &str| r.try_get::<Option<String>, _>(col).ok().flatten();
         Ok(Some(ChatMeta {
-            name: r.try_get("conversation_name").ok(),
-            account: r.try_get("account").ok(),
-            project: r.try_get("project").ok(),
-            channel: r.try_get("channel").ok(),
-            created_at: r.try_get("created_at").ok(),
-            source_label: r.try_get("source_label").ok(),
-            source_url: r.try_get("source_url_or_link").ok(),
+            name: text("conversation_name"),
+            account: text("account"),
+            project: text("project"),
+            channel: text("channel"),
+            created_at: text("created_at"),
+            source_label: text("source_label"),
+            source_url: text("source_url_or_link"),
         }))
     }
 
