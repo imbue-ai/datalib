@@ -26,9 +26,11 @@ struct Cli {
     /// which one it picked.
     #[arg(short = 'p', long, global = true)]
     port: Option<u16>,
-    /// The config entry's `params`, as JSON.
-    #[arg(long, global = true)]
-    params: Option<String>,
+    /// A JSON file holding the config entry's `params`. A file rather
+    /// than an argument because params can carry tokens, and argv is
+    /// readable by every user on the machine.
+    #[arg(long = "params-file", global = true)]
+    params_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -68,8 +70,13 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let params: serde_json::Value = match &cli.params {
-        Some(json) => serde_json::from_str(json).context("--params is not valid JSON")?,
+    let params: serde_json::Value = match &cli.params_file {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("read the params file {}", path.display()))?;
+            serde_json::from_str(&text)
+                .with_context(|| format!("{} is not valid JSON", path.display()))?
+        }
         None => serde_json::Value::Null,
     };
     // Write, then serve. The order is the contract: the gateway waits

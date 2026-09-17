@@ -914,7 +914,7 @@ impl Runner {
         // coincidence.
         let never_succeeded = !prev.map(|s| s.succeeded).unwrap_or(false);
         // Clause 4: the step itself changed. Editing `params` in the
-        // config changes the argv the runner would execute, so the
+        // config changes what the runner would hand the child, so the
         // fingerprint moves and the step is stale even though nothing
         // it reads did. State written before fingerprints existed has
         // an empty string here, which differs from any real hash and
@@ -1344,8 +1344,17 @@ async fn invoke_with_retry(
         });
         let res = match run {
             StepRun::InProcess(f) => f(ctx.clone()).await,
-            StepRun::Subprocess { argv, env } => {
-                crate::subprocess::run_subprocess(argv, env, child_env, attempt, &ctx, sink).await
+            StepRun::Subprocess { argv, env, params } => {
+                crate::subprocess::run_subprocess(
+                    argv,
+                    env,
+                    params.as_deref(),
+                    child_env,
+                    attempt,
+                    &ctx,
+                    sink,
+                )
+                .await
             }
         };
         match res {

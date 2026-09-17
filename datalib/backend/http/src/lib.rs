@@ -368,11 +368,7 @@ async fn proxy_impl(
     })
     .await;
     match result {
-        Ok(Ok(r)) => Response::builder()
-            .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
-            .header(header::CONTENT_TYPE, r.content_type)
-            .body(Body::from(r.body))
-            .unwrap_or_else(|_| applet_error(StatusCode::BAD_GATEWAY, "malformed applet response")),
+        Ok(Ok(r)) => proxied_response(r),
         // The applet is configured but not answering. Hand the card
         // the reason rather than an empty body it would render as "no
         // data" — the same instinct as a failed step's last stderr
@@ -383,6 +379,22 @@ async fn proxy_impl(
             &format!("proxy task: {e}"),
         ),
     }
+}
+
+/// An applet's answer, as the browser gets it. What an applet serves is
+/// data — a rendered plot page, an attachment out of a render tree — and
+/// a document among it must not run in the app's origin, where it would
+/// hold the session: it gets the same sandbox the DACTAL page does.
+fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
+    let mut resp = Response::builder()
+        .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+    if embed::is_scriptable_document(&r.content_type) {
+        resp = resp.header(header::CONTENT_SECURITY_POLICY, embed::DOCUMENT_SANDBOX_CSP);
+    }
+    resp.header(header::CONTENT_TYPE, r.content_type)
+        .body(Body::from(r.body))
+        .unwrap_or_else(|_| applet_error(StatusCode::BAD_GATEWAY, "malformed applet response"))
 }
 
 fn applet_error(status: StatusCode, msg: &str) -> Response<Body> {
@@ -836,7 +848,7 @@ async fn put_config(
     }
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
+        datalib_core::layout::create_data_root(parent).map_err(|e| {
             tracing::error!("put_config: mkdir {}: {e}", parent.display());
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
@@ -852,7 +864,7 @@ async fn put_config(
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    if let Err(e) = std::fs::write(&tmp, req.text.as_bytes()) {
+    if let Err(e) = write_owner_only(&tmp, req.text.as_bytes()) {
         tracing::error!("put_config: write {}: {e}", tmp.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -893,7 +905,7 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
     let path = s.config_path();
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
+        datalib_core::layout::create_data_root(parent).map_err(|e| {
             tracing::error!("init_config: mkdir {}: {e}", parent.display());
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
@@ -903,11 +915,7 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
     // `create_new` is the whole point: the existence check and the
     // write are one syscall, so this can never overwrite a config that
     // arrived between them.
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
+    match owner_only_options().create_new(true).open(&path) {
         Ok(mut f) => {
             use std::io::Write;
             f.write_all(text.as_bytes()).map_err(|e| {
@@ -934,6 +942,30 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+/// `OpenOptions` for a file only this user may read. The config holds
+/// every source's credentials, so it is never left at the umask's mercy.
+fn owner_only_options() -> std::fs::OpenOptions {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts
+}
+
+/// Create (or truncate) `path` owner-only and write `bytes` to it. A
+/// file that already exists keeps its mode: `mode` applies at creation.
+fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = owner_only_options()
+        .create(true)
+        .truncate(true)
+        .open(path)?;
+    f.write_all(bytes)
 }
 
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
@@ -1677,6 +1709,43 @@ fn repo_err_to_status(e: RepoError) -> StatusCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A document an applet serves is sandboxed on the way out; JSON is
+    /// left alone. The header, not the body, is what a browser reads.
+    #[test]
+    fn proxied_documents_are_sandboxed_and_data_is_not() {
+        let html = proxied_response(applets::ProxyResponse {
+            status: 200,
+            content_type: "text/html; charset=utf-8".into(),
+            body: b"<script>1</script>".to_vec(),
+        });
+        assert_eq!(html.status(), StatusCode::OK);
+        let csp = html
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert!(csp.starts_with("sandbox "), "{csp:?}");
+        assert!(!csp.contains("allow-same-origin"), "{csp:?}");
+        assert_eq!(
+            html.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
+            "nosniff"
+        );
+
+        let json = proxied_response(applets::ProxyResponse {
+            status: 200,
+            content_type: "application/json".into(),
+            body: b"{}".to_vec(),
+        });
+        assert!(json
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .is_none());
+        assert_eq!(
+            json.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
+            "nosniff"
+        );
+    }
 
     /// The rate is the slope of a series' two newest samples; the ages
     /// are how long a running step has gone without a metric moving and
