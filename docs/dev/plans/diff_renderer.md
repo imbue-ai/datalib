@@ -288,14 +288,16 @@ separate decision and nothing here depends on it.
   `diff_source_problem`): a `diff` group must carry `source`, and
   `source` must name a declared group with a `type` that is not `diff`;
   a group of any other type must not carry `source`. A `diff` group's
-  only step is `render_markdown`, and its first input must be
+  only step is `render_markdown`, and its first input, when it has any,
+  must be `<source>/ingest` — a root with no ingest steps at all (the
+  materialized fixture root) declares it with none, and the step reads
   `<source>/ingest`. Violations drop the entry with a diagnostic naming
   the rule, like any other bad entry.
-- **The source's type reaches the step as `DATALIB_DAG_SOURCE_GROUP_TYPE`**,
-  which the loader puts in the step's own `env` — so it is forwarded
-  like any env entry and fingerprinted with it, and changing the
-  source's type re-runs the diff. The runner itself knows nothing about
-  diff groups.
+- **The source's id and type reach the step as `DATALIB_DAG_SOURCE_GROUP`
+  and `DATALIB_DAG_SOURCE_GROUP_TYPE`**, which the loader puts in the
+  step's own `env` — so they are forwarded like any env entry and
+  fingerprinted with it, and changing the source re-runs the diff. The
+  runner itself knows nothing about diff groups.
 - **`datalib-step`** (`source.rs`, `main.rs`, `render_diff.rs`): under
   `type = diff` the render function splits `params.diff` off, plans the
   source type's render wave with the rest, and runs the two-pass

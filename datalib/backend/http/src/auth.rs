@@ -253,8 +253,15 @@ fn query_without_token(query: &str) -> Option<String> {
     (!rest.is_empty()).then(|| rest.join("&"))
 }
 
+/// What needs no session: the agent guides, and the DACTAL page with its
+/// scripts — static files that run sandboxed (`embed.rs`), so a session
+/// would be neither needed nor usable.
 fn is_public(path: &str) -> bool {
-    path == "/agent.md" || path.starts_with("/agent/")
+    path == "/agent.md"
+        || path.starts_with("/agent/")
+        || path
+            .strip_prefix('/')
+            .is_some_and(|p| p.starts_with(crate::embed::PUBLIC_PREFIX))
 }
 
 fn is_api(path: &str) -> bool {
@@ -345,7 +352,13 @@ fn unauthorized(auth: &ApiToken, path: &str) -> Response {
     );
     (
         StatusCode::UNAUTHORIZED,
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'",
+            ),
+        ],
         html,
     )
         .into_response()
@@ -412,9 +425,12 @@ mod tests {
     }
 
     #[test]
-    fn only_the_agent_guides_are_public() {
+    fn only_the_agent_guides_and_the_dactal_statics_are_public() {
         assert!(is_public("/agent.md"));
         assert!(is_public("/agent/cards.md"));
+        assert!(is_public("/dactal/index.html"));
+        assert!(is_public("/dactal/vendor/dactal.js"));
+        assert!(!is_public("/dactalx"));
         assert!(!is_public("/api/health"));
         assert!(!is_public("/"));
         assert!(!is_public("/agentfoo"));

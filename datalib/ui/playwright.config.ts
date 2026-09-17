@@ -128,8 +128,8 @@ signalBackupDir();
 type Sandbox = { spec: string; root: string; url: string };
 
 // A root holding nothing but the index group and the applet that serves
-// it: what `materialize_tng_root.sh` writes, minus the pre-built index
-// and markdown trees. The streaming spec needs this rather than the
+// it: the fixture root minus its sources, the pre-built index and the
+// markdown trees. The streaming spec needs this rather than the
 // fixture root because its sources replay the *same* conversations the
 // fixture already indexed under other ids, and entity ids are
 // provider-global — so against the fixture the index sees every one of
@@ -490,6 +490,9 @@ export default defineConfig({
         /url-sync\.spec\.ts/,
         /yolink-plots\.spec\.ts/,
         /gallery\.spec\.ts/,
+        // The sandboxed DACTAL iframe: an opaque origin loading module
+        // scripts, which WebKit and Chromium have disagreed about.
+        /dactal-sandbox\.spec\.ts/,
         // /sources2 — the Manager2 Pipeline table, and the commit-history
         // grid it opens in a modal.
         /manager2-grid\.spec\.ts/,

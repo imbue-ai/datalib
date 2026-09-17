@@ -84,6 +84,7 @@ async fn init_turns_an_empty_root_into_a_working_library() {
     // declares no sources — an empty library, as advertised.
     let written = tmp.path().join("config.toml");
     assert!(written.is_file(), "expected {}", written.display());
+    assert_owner_only(&written);
     let (_, cfg) = call(&app, "GET", "/api/config").await;
     assert_eq!(cfg["exists"], true);
     assert_eq!(cfg["parsed_ok"], true, "{cfg:?}");
@@ -123,4 +124,41 @@ async fn init_never_clobbers_an_existing_config() {
         std::fs::read_to_string(tmp.path().join("config.toml")).unwrap(),
         mine
     );
+}
+
+/// The config holds every source's credentials, so both writers leave
+/// it readable by its owner only, whatever the umask says.
+#[cfg(unix)]
+fn assert_owner_only(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode,
+        0o600,
+        "{} is {mode:o}, not owner-only",
+        path.display()
+    );
+}
+
+#[cfg(not(unix))]
+fn assert_owner_only(_path: &Path) {}
+
+#[tokio::test]
+async fn put_writes_the_config_owner_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = router(state(tmp.path()).await);
+    let body = serde_json::json!({ "text": "steps = []\n" }).to_string();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::put("/api/config")
+                .header("x-datalib-token", TEST_TOKEN)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_owner_only(&tmp.path().join("config.toml"));
 }

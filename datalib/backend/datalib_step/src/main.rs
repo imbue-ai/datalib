@@ -52,12 +52,14 @@ struct Cli {
     /// the environment the runner sets.
     #[command(subcommand)]
     cmd: Option<Cmd>,
-    /// Step params, as JSON — the runner appends this from the config
-    /// entry's `params`. Phase-specific: for `ingest` it is the
-    /// provider's download config subtree, for `render_markdown` the slim
-    /// render config (render knobs only); absent means an empty one.
-    #[arg(long, global = true)]
-    params: Option<String>,
+    /// A JSON file holding the step's params — the runner writes the
+    /// config entry's `params` there and appends the flag. Phase-specific:
+    /// for `ingest` it is the provider's download config subtree, for
+    /// `render_markdown` the slim render config (render knobs only);
+    /// absent means an empty one. A file, not an argument: params carry
+    /// tokens, and argv is readable by every user on the machine.
+    #[arg(long = "params-file", global = true)]
+    params_file: Option<PathBuf>,
     /// Declared input step ids (JSON string array), appended by the
     /// runner from the config entry's `inputs`. Accepted so every step
     /// command shares one flag surface; the resolved list this binary
@@ -120,8 +122,8 @@ enum Cmd {
         domain: String,
     },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
-    /// for one source from a raw fixture tree (`--params
-    /// '{"fixture_path": …}'`), for later replay via `--playback-root`.
+    /// for one source from a raw fixture tree (`--params-file` naming a
+    /// `{"fixture_path": …}`), for later replay via `--playback-root`.
     Synthesize {
         /// Source type, as a group's `type` would name it.
         source_type: String,
@@ -180,7 +182,7 @@ async fn main() {
     // exactly one JSON object, so an `outcome` event line after it
     // would corrupt the only thing its caller reads.
     if let Some(Cmd::Probe { source_type }) = &cli.cmd {
-        probe::run_cli(source_type, cli.params.as_deref()).await;
+        probe::run_cli(source_type, cli.params_file.as_deref()).await;
     }
     // `login` likewise: it talks to a terminal, not to the runner.
     if let Some(Cmd::Login {
@@ -272,7 +274,7 @@ async fn run(
     control: &datalib_etl::control::DownloadControl,
     emitter: &Emitter,
 ) -> Result<Vec<events::OutputClaim>> {
-    let params = source::parse_params(cli.params.as_deref())?;
+    let params = source::read_params(cli.params_file.as_deref())?;
     match cli.cmd {
         Some(Cmd::Synthesize {
             source_type,

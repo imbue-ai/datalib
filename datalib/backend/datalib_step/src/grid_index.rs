@@ -136,6 +136,7 @@ mod tests {
             step: "unified_index/grid_index".into(),
             group: "unified_index".into(),
             group_type: None,
+            source_group: None,
             source_group_type: None,
             function: crate::function::Function::GridIndex,
             inputs: Vec::new(),

@@ -24,10 +24,11 @@ pub const ENV_ATTEMPT: &str = "DATALIB_DAG_ATTEMPT";
 /// the group declares a type.
 pub const ENV_GROUP: &str = "DATALIB_DAG_GROUP";
 pub const ENV_GROUP_TYPE: &str = "DATALIB_DAG_GROUP_TYPE";
-/// Under a diff group only: the `type` of the group named by its
-/// `source`, which is the renderer the step runs. Set by the loader in
-/// the step's `env` rather than by the runner, so it is fingerprinted
-/// like any other env entry.
+/// Under a diff group only: the group named by its `source` and that
+/// group's `type` — whose raw store the step reads, and which renderer
+/// it runs. Set by the loader in the step's `env` rather than by the
+/// runner, so they are fingerprinted like any other env entry.
+pub const ENV_SOURCE_GROUP: &str = "DATALIB_DAG_SOURCE_GROUP";
 pub const ENV_SOURCE_GROUP_TYPE: &str = "DATALIB_DAG_SOURCE_GROUP_TYPE";
 pub const ENV_FUNCTION: &str = "DATALIB_DAG_FUNCTION";
 pub const ENV_DATA_ROOT: &str = "DATALIB_DAG_DATA_ROOT";
@@ -47,6 +48,47 @@ pub const ENV_REFETCH_BLOBS: &str = "DATALIB_DAG_REFETCH_BLOBS";
 /// Seconds between a step's checkpoints, at most — see
 /// `config::CheckpointCadence`.
 pub const ENV_CHECKPOINT_CADENCE: &str = "DATALIB_DAG_CHECKPOINT_CADENCE";
+
+/// The flag a step's params arrive on: the path of a JSON file holding
+/// the entry's `params` subtree. A file rather than an argument because
+/// params carry tokens, and argv is readable by every user on the
+/// machine; the file is created `0600` and removed when the step exits.
+pub const PARAMS_FILE_FLAG: &str = "--params-file";
+
+/// Where the runner puts those files, under the data root.
+pub const PARAMS_DIR_REL_PATH: &str = "system/params";
+
+/// Write `json` to a fresh owner-only file under `<data_root>/system/params`.
+/// The file lives as long as the returned handle.
+pub fn write_params_file(
+    data_root: &std::path::Path,
+    step_id: &str,
+    json: &str,
+) -> anyhow::Result<tempfile::NamedTempFile> {
+    use std::io::Write;
+    let dir = data_root.join(PARAMS_DIR_REL_PATH);
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(&dir)
+        .with_context(|| format!("create {}", dir.display()))?;
+    // `tempfile` creates with `O_EXCL` and mode 0600, so the file is
+    // never readable by anyone else, not even between create and write.
+    let mut file = tempfile::Builder::new()
+        .prefix(&format!("{}.", step_id.replace('/', "_")))
+        .suffix(".json")
+        .tempfile_in(&dir)
+        .with_context(|| format!("create a params file in {}", dir.display()))?;
+    file.write_all(json.as_bytes())
+        .and_then(|()| file.flush())
+        .with_context(|| format!("write {}", file.path().display()))?;
+    Ok(file)
+}
 
 /// The final stdout line a subprocess step may emit.
 #[derive(Debug, Default, Deserialize)]
@@ -100,6 +142,7 @@ impl WireOutcome {
 pub(crate) async fn run_subprocess(
     argv: &[String],
     env: &BTreeMap<String, String>,
+    params: Option<&str>,
     extra_env: &BTreeMap<String, String>,
     attempt: u32,
     ctx: &StepCtx,
@@ -112,7 +155,18 @@ pub(crate) async fn run_subprocess(
         .ok_or_else(|| internal(anyhow::anyhow!("empty argv")))?;
     let inputs: Vec<&str> = ctx.inputs.iter().map(|a| a.as_str()).collect();
     let changed: Vec<&str> = ctx.changed_inputs.iter().map(|a| a.as_str()).collect();
+    // Held until the child has exited: dropping it deletes the file.
+    let params_file = match params {
+        Some(json) => {
+            Some(write_params_file(&ctx.data_root, &ctx.step_id, json).map_err(internal)?)
+        }
+        None => None,
+    };
     let mut cmd = tokio::process::Command::new(prog);
+    cmd.args(args);
+    if let Some(f) = &params_file {
+        cmd.arg(PARAMS_FILE_FLAG).arg(f.path());
+    }
     for (key, value) in [
         (ENV_GROUP, &ctx.group),
         (ENV_GROUP_TYPE, &ctx.group_type),
@@ -125,8 +179,7 @@ pub(crate) async fn run_subprocess(
             None => cmd.env_remove(key),
         };
     }
-    cmd.args(args)
-        .env(ENV_STEP, &ctx.step_id)
+    cmd.env(ENV_STEP, &ctx.step_id)
         .env(ENV_ATTEMPT, attempt.to_string())
         .env(ENV_DATA_ROOT, &ctx.data_root)
         .env(ENV_INPUTS, inputs.join("\n"))
@@ -458,7 +511,56 @@ mod tests {
         StepRun::Subprocess {
             argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
             env: BTreeMap::new(),
+            params: None,
         }
+    }
+
+    /// Params reach the child as a file only its owner can read, named
+    /// on `--params-file`, and the file is gone once the step exits.
+    #[tokio::test]
+    async fn params_arrive_in_an_owner_only_file_that_does_not_outlive_the_step() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "p/out",
+            StepRun::Subprocess {
+                argv: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    // `$0` is the script name; the runner appends the
+                    // flag and the path after it, so they land in $1 $2.
+                    r#"
+                        mkdir -p p/out
+                        [ "$1" = "--params-file" ] || exit 3
+                        stat -f '%Lp' "$2" > p/out/mode.txt 2>/dev/null || stat -c '%a' "$2" > p/out/mode.txt
+                        cp "$2" p/out/params.json
+                    "#
+                    .into(),
+                    "sh".into(),
+                ],
+                env: BTreeMap::new(),
+                params: Some(r#"{"token":"s3cret"}"#.into()),
+            },
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let rep = Runner::new(root.path()).run(&g).await.unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("p/out/params.json")).unwrap(),
+            r#"{"token":"s3cret"}"#
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("p/out/mode.txt"))
+                .unwrap()
+                .trim(),
+            "600"
+        );
+        let leftover: Vec<_> = std::fs::read_dir(root.path().join(super::PARAMS_DIR_REL_PATH))
+            .unwrap()
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "params file outlived the step: {leftover:?}"
+        );
     }
 
     /// A step written against the older protocol reports
@@ -744,6 +846,7 @@ mod tests {
                     .into(),
                 ],
                 env: [("OVERRIDE_ME".to_string(), "step".to_string())].into(),
+                params: None,
             },
         );
         let g = Graph::build(vec![spec]).unwrap();

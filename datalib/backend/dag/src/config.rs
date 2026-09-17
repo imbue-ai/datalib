@@ -204,7 +204,8 @@ pub struct AppletEntry {
     /// The command to run, split shell-style, resolved the same way a step's
     /// is (`binary_dir`, then `PATH`).
     pub command: String,
-    /// Arbitrary applet parameters, forwarded verbatim as JSON via `--params`.
+    /// Arbitrary applet parameters, forwarded verbatim as the JSON in the
+    /// applet's `--params-file`.
     #[serde(default)]
     pub params: Option<toml::Value>,
     /// Extra environment for the child process.
@@ -252,8 +253,8 @@ pub struct StepEntry {
     /// resolves against the data root; use a bare name or an absolute path
     /// for binaries elsewhere.
     pub command: Option<String>,
-    /// Arbitrary step parameters, forwarded verbatim as JSON via
-    /// `--params`.
+    /// Arbitrary step parameters, forwarded verbatim as the JSON in the
+    /// step's `--params-file`.
     pub params: Option<toml::Value>,
     /// Extra environment for the child process.
     pub env: BTreeMap<String, String>,
@@ -461,7 +462,8 @@ pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
     Ok(accepted.steps.into_iter().map(|(_, spec)| spec).collect())
 }
 
-/// A step's `params` subtree as the JSON the child gets on `--params`.
+/// A step's `params` subtree as the JSON the child reads from its
+/// `--params-file`.
 ///
 /// Walks the tree rather than serializing through serde, because TOML's
 /// date/time types have no JSON counterpart and the `toml` crate smuggles
@@ -918,7 +920,7 @@ fn accept_steps(
     for c in candidates {
         let id = c.entry.id.clone();
         let mut group_type: Option<&str> = None;
-        let mut source_group_type: Option<&str> = None;
+        let mut source_group: Option<(&str, &str)> = None;
         match (&c.entry.group, &c.entry.function) {
             (Some(g), Some(f)) => {
                 if !valid_id_segment(f) {
@@ -959,14 +961,20 @@ fn accept_steps(
                             }
                             // Accepted groups only: a `source` that failed its
                             // own rules dropped the diff group with it.
-                            source_group_type = group
+                            source_group = group
                                 .source
                                 .as_deref()
                                 .and_then(|s| groups.get(s))
-                                .and_then(|src| src.r#type.as_deref());
+                                .and_then(|src| Some((src.id.as_str(), src.r#type.as_deref()?)));
+                            // Its raw store is its source's: named as the first
+                            // input, or — in a root with no ingest steps, like a
+                            // materialized fixture — not named at all, and read
+                            // from `<source>/ingest` by the step.
                             let expected =
                                 format!("{}/ingest", group.source.as_deref().unwrap_or(""));
-                            if c.entry.inputs.first() != Some(&expected) {
+                            if !c.entry.inputs.is_empty()
+                                && c.entry.inputs.first() != Some(&expected)
+                            {
                                 diags.push(c.diag(
                                     Severity::Rejected,
                                     text,
@@ -1136,7 +1144,7 @@ fn accept_steps(
             );
         }
 
-        let spec = match spec_of(&c.entry, group_type, source_group_type) {
+        let spec = match spec_of(&c.entry, group_type, source_group) {
             Ok(spec) => spec,
             Err(e) => {
                 diags.push(c.diag(Severity::Rejected, text, Some("command"), format!("{e:#}")));
@@ -1193,7 +1201,7 @@ const DIFF_GROUP_FUNCTION: &str = "render_markdown";
 fn spec_of(
     e: &StepEntry,
     group_type: Option<&str>,
-    source_group_type: Option<&str>,
+    source_group: Option<(&str, &str)>,
 ) -> Result<StepSpec> {
     let mut argv = match &e.command {
         Some(command) => shlex::split(command)
@@ -1203,28 +1211,32 @@ fn spec_of(
     if argv.is_empty() {
         bail!("empty command");
     }
-    if let Some(params) = &e.params {
-        let json =
-            serde_json::to_string(&params_to_json(params, &e.id)?).context("params → JSON")?;
-        argv.push("--params".to_string());
-        argv.push(json);
-    }
+    let params = match &e.params {
+        Some(params) => {
+            Some(serde_json::to_string(&params_to_json(params, &e.id)?).context("params → JSON")?)
+        }
+        None => None,
+    };
     if !e.inputs.is_empty() {
         argv.push("--inputs".to_string());
         argv.push(serde_json::to_string(&e.inputs).expect("string vec → JSON"));
     }
 
-    // The source's type rides in the step's own environment: forwarded
-    // like any `env` entry, and in the fingerprint with it, so changing
-    // the source's type re-runs the diff.
+    // The source's id and type ride in the step's own environment:
+    // forwarded like any `env` entry, and in the fingerprint with it, so
+    // changing the source re-runs the diff.
     let mut env = e.env.clone();
-    if let Some(t) = source_group_type {
+    if let Some((id, t)) = source_group {
+        env.insert(
+            crate::subprocess::ENV_SOURCE_GROUP.to_string(),
+            id.to_string(),
+        );
         env.insert(
             crate::subprocess::ENV_SOURCE_GROUP_TYPE.to_string(),
             t.to_string(),
         );
     }
-    let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env });
+    let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
     spec.code_version = e.code_version.clone();
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
@@ -1737,35 +1749,39 @@ mod tests {
         let specs = to_specs(&cfg).unwrap();
         assert_eq!(specs.len(), 3);
 
-        let argv = |i: usize| match &specs[i].run {
-            StepRun::Subprocess { argv, .. } => argv.clone(),
+        let run = |i: usize| match &specs[i].run {
+            StepRun::Subprocess { argv, params, .. } => (argv.clone(), params.clone()),
             other => panic!("expected subprocess, got {other:?}"),
         };
-        let dl = argv(0);
+        let (dl, dl_params) = run(0);
         assert_eq!(dl[0], BUILTIN_STEP_PROGRAM);
-        assert_eq!(dl[1], "--params");
-        let params: serde_json::Value = serde_json::from_str(&dl[2]).unwrap();
+        let params: serde_json::Value =
+            serde_json::from_str(dl_params.as_deref().unwrap()).unwrap();
         assert_eq!(params["api"]["channels"][0], "chat-qi");
-        // No inputs declared → no --inputs, and nothing else: the one tree
-        // a step writes is its id, which it reads from the environment,
-        // and so are the function and the provider.
-        assert_eq!(dl.len(), 3);
+        // Params never reach argv (they hold tokens, and argv is public
+        // to every user through `ps`); with no inputs declared there is
+        // nothing else: the one tree a step writes is its id, which it
+        // reads from the environment, and so are the function and the
+        // provider.
+        assert_eq!(dl.len(), 1);
 
         // TOML has no anchors, so the render step repeats the subtree —
         // and must produce byte-identical JSON for it.
-        let rn = argv(1);
-        assert_eq!(rn[2], dl[2]);
-        assert_eq!(&rn[3..], &["--inputs", r#"["slack/ingest"]"#]);
+        let (rn, rn_params) = run(1);
+        assert_eq!(rn_params, dl_params);
+        assert_eq!(&rn[1..], &["--inputs", r#"["slack/ingest"]"#]);
 
-        // Param-less step: just inputs.
+        // Param-less step: just inputs, and no params file to read.
+        let (ix, ix_params) = run(2);
         assert_eq!(
-            argv(2),
+            ix,
             vec![
                 BUILTIN_STEP_PROGRAM,
                 "--inputs",
                 r#"["slack/render_markdown"]"#,
             ]
         );
+        assert_eq!(ix_params, None);
 
         // The composed ids are what everything downstream sees.
         assert_eq!(specs[0].id, "slack/ingest");
@@ -1974,6 +1990,21 @@ mod tests {
                 .contains("DATALIB_DAG_SOURCE_GROUP_TYPE=slack"),
             "the source's type is in the fingerprint"
         );
+    }
+
+    /// A root with no ingest steps — a materialized fixture — declares
+    /// the diff step with no inputs, and the step reads `<source>/ingest`.
+    #[test]
+    fn a_diff_step_may_declare_no_inputs() {
+        let cfg: DagConfig = toml::from_str(&diff_config(
+            r#"type = "diff"
+            source = "slack""#,
+            r#"function = "render_markdown"
+            params.diff = { from = "aaa", to = "bbb" }"#,
+        ))
+        .unwrap();
+        let specs = to_specs(&cfg).unwrap();
+        assert!(specs.iter().any(|s| s.id == "slack-diff/render_markdown"));
     }
 
     /// Every way a diff group can be mis-declared names the rule it broke.
@@ -2185,10 +2216,10 @@ mod tests {
         )
         .unwrap();
         let specs = to_specs(&cfg).unwrap();
-        let StepRun::Subprocess { argv, .. } = &specs[0].run else {
+        let StepRun::Subprocess { params, .. } = &specs[0].run else {
             panic!("expected subprocess");
         };
-        let params: serde_json::Value = serde_json::from_str(&argv[2]).unwrap();
+        let params: serde_json::Value = serde_json::from_str(params.as_deref().unwrap()).unwrap();
         assert_eq!(params["api"]["since"], "2026-06-15");
         assert_eq!(params["api"]["at"], "2026-06-15T10:30:00Z");
     }

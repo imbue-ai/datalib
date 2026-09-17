@@ -1,5 +1,5 @@
 //! What the runner tells a step about itself: the environment it sets and
-//! the `--params` flag it appends.
+//! the `--params-file` flag it appends.
 
 use anyhow::{Context, Result};
 
@@ -13,8 +13,9 @@ pub const GROUP_ENV: &str = "DATALIB_DAG_GROUP";
 pub const GROUP_TYPE_ENV: &str = "DATALIB_DAG_GROUP_TYPE";
 pub const FUNCTION_ENV: &str = "DATALIB_DAG_FUNCTION";
 pub const INPUTS_ENV: &str = "DATALIB_DAG_INPUTS";
-/// Under a diff group only: the `type` of the group whose raw store the
-/// diff compares, which is the renderer this step runs.
+/// Under a diff group only: the group whose raw store the diff compares,
+/// and its `type`, which is the renderer this step runs.
+pub const SOURCE_GROUP_ENV: &str = "DATALIB_DAG_SOURCE_GROUP";
 pub const SOURCE_GROUP_TYPE_ENV: &str = "DATALIB_DAG_SOURCE_GROUP_TYPE";
 /// The group `type` that means "render what changed in another group's
 /// raw store" — `datalib_dag::config::DIFF_GROUP_TYPE`, spelled here as
@@ -30,7 +31,8 @@ pub struct StepEnv {
     pub step: String,
     pub group: String,
     pub group_type: Option<String>,
-    /// Set only under a diff group: the source group's type.
+    /// Set only under a diff group: the source group and its type.
+    pub source_group: Option<String>,
     pub source_group_type: Option<String>,
     pub function: Function,
     /// The trees this step reads, data-root-relative, as the runner
@@ -63,6 +65,9 @@ impl StepEnv {
         let group_type = std::env::var(GROUP_TYPE_ENV)
             .ok()
             .filter(|t| !t.trim().is_empty());
+        let source_group = std::env::var(SOURCE_GROUP_ENV)
+            .ok()
+            .filter(|t| !t.trim().is_empty());
         let source_group_type = std::env::var(SOURCE_GROUP_TYPE_ENV)
             .ok()
             .filter(|t| !t.trim().is_empty());
@@ -77,6 +82,7 @@ impl StepEnv {
             step,
             group,
             group_type,
+            source_group,
             source_group_type,
             function,
             inputs,
@@ -114,12 +120,13 @@ impl StepEnv {
     /// The raw store a render reads: the first input, which is the
     /// ingest step's tree. A render with no inputs — a store seeded by
     /// hand, with no ingest step in front of it — reads the group's own
-    /// `ingest` tree, and says so.
+    /// `ingest` tree, and says so; under a diff group, its source's.
     pub fn raw_store_rel(&self) -> String {
         match self.inputs.first() {
             Some(input) => input.clone(),
             None => {
-                let rel = format!("{}/{}", self.group, Function::Ingest.as_str());
+                let owner = self.source_group.as_deref().unwrap_or(&self.group);
+                let rel = format!("{owner}/{}", Function::Ingest.as_str());
                 tracing::warn!(
                     step = %self.step,
                     raw = %rel,
@@ -142,19 +149,27 @@ fn required(name: &str) -> Result<String> {
     Ok(v)
 }
 
-pub fn parse_params(params: Option<&str>) -> Result<serde_json::Value> {
-    match params {
+/// The step's params: the JSON object in the file `--params-file` names,
+/// or an empty one when the runner passed no file.
+pub fn read_params(path: Option<&std::path::Path>) -> Result<serde_json::Value> {
+    match path {
         None => Ok(serde_json::Value::Object(Default::default())),
-        Some(s) => {
-            let v: serde_json::Value = serde_json::from_str(s)
-                .context("parse --params as JSON (the provider's config subtree)")?;
-            anyhow::ensure!(
-                v.is_object(),
-                "--params must be a JSON object (the provider's config subtree), got {v}"
-            );
-            Ok(v)
+        Some(p) => {
+            let text = std::fs::read_to_string(p)
+                .with_context(|| format!("read the params file {}", p.display()))?;
+            parse_params(&text)
         }
     }
+}
+
+pub fn parse_params(text: &str) -> Result<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(text)
+        .context("parse the params file as JSON (the provider's config subtree)")?;
+    anyhow::ensure!(
+        v.is_object(),
+        "the params file must hold a JSON object (the provider's config subtree), got {v}"
+    );
+    Ok(v)
 }
 
 #[cfg(test)]
@@ -163,13 +178,13 @@ mod tests {
 
     #[test]
     fn params_parse_verbatim_and_default_empty() {
-        let p = parse_params(Some(r#"{"api":{"media":true}}"#)).unwrap();
+        let p = parse_params(r#"{"api":{"media":true}}"#).unwrap();
         assert_eq!(p["api"]["media"], true);
-        assert!(parse_params(None).unwrap().as_object().unwrap().is_empty());
+        assert!(read_params(None).unwrap().as_object().unwrap().is_empty());
         // A leftover old-format `type:` tag inside the params is passed
         // through; the provider config's deny_unknown/ignore rules
         // decide its fate downstream, not this layer.
-        assert!(parse_params(Some(r#"{"type":"slack"}"#)).is_ok());
+        assert!(parse_params(r#"{"type":"slack"}"#).is_ok());
     }
 
     #[test]
@@ -178,13 +193,27 @@ mod tests {
             SOURCE_GROUP_TYPE_ENV,
             datalib_dag::subprocess::ENV_SOURCE_GROUP_TYPE
         );
+        assert_eq!(SOURCE_GROUP_ENV, datalib_dag::subprocess::ENV_SOURCE_GROUP);
         assert_eq!(DIFF_GROUP_TYPE, datalib_dag::config::DIFF_GROUP_TYPE);
     }
 
     #[test]
     fn params_reject_non_objects_and_junk() {
-        assert!(parse_params(Some("[1,2]")).is_err());
-        assert!(parse_params(Some("not json")).is_err());
+        assert!(parse_params("[1,2]").is_err());
+        assert!(parse_params("not json").is_err());
+    }
+
+    #[test]
+    fn params_come_from_the_named_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("params.json");
+        std::fs::write(&path, r#"{"api":{"channels":["c"]}}"#).unwrap();
+        let p = read_params(Some(&path)).unwrap();
+        assert_eq!(p["api"]["channels"][0], "c");
+        let err = read_params(Some(&dir.path().join("missing.json")))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("read the params file"), "{err}");
     }
 
     fn env(step: &str, group: &str, function: &str, inputs: &[&str]) -> StepEnv {
@@ -192,6 +221,7 @@ mod tests {
             step: step.into(),
             group: group.into(),
             group_type: Some("slack".into()),
+            source_group: None,
             source_group_type: None,
             function: Function::parse(function).unwrap(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
@@ -212,5 +242,14 @@ mod tests {
         assert_eq!(e.raw_store_rel(), "elsewhere/ingest");
         let e = env("slack/render_markdown", "slack", "render_markdown", &[]);
         assert_eq!(e.raw_store_rel(), "slack/ingest");
+        let mut diff = env(
+            "slack-diff/render_markdown",
+            "slack-diff",
+            "render_markdown",
+            &[],
+        );
+        diff.group_type = Some(DIFF_GROUP_TYPE.into());
+        diff.source_group = Some("slack".into());
+        assert_eq!(diff.raw_store_rel(), "slack/ingest");
     }
 }

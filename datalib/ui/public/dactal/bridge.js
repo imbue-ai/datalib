@@ -1,5 +1,13 @@
 // Bridge: Datalib `grid_rows` (the denormalized union table served by
-// `/applet/unified_index/search`) -> DACTAL datasets.
+// `/applet/unified_index/search`) -> DACTAL datasets, and the one channel
+// this page has to the outside world.
+//
+// The page runs in a sandboxed iframe with an opaque origin: no cookie,
+// no same-origin `fetch`, no `/api/*`. Rows arrive from the host card
+// over `postMessage` (`fetchSearch` below); the host does the fetching
+// with the session it holds. The card side is
+// `datalib/ui/src/cards/libs/dactalView.ts`, which owns the other half
+// of every message shape here.
 //
 // After loading you MUST call `dactal.survey()` — DACTAL caches the set of
 // known dataset names ("destinations") and only refreshes it in survey().
@@ -85,12 +93,57 @@ export function loadSearchIntoDactal(dactal, searchResponse) {
   };
 }
 
-// Fetch from Datalib's HTTP API. In dev this is proxied to the Rust
-// backend; in Tauri/openhost the same relative path is served by the
-// embedded backend. Mirrors `fetchSearch` in datalib/ui/src/api.ts.
-export async function fetchSearch(q, limit = 500) {
-  const params = new URLSearchParams({ q, limit: String(limit) });
-  const r = await fetch(`/applet/unified_index/search?${params.toString()}`);
-  if (!r.ok) throw new Error(`/applet/unified_index/search -> ${r.status}: ${await r.text()}`);
-  return r.json();
+// --- The host channel ------------------------------------------------------
+
+// True when a card is hosting this page. Opened on its own — a top-level
+// navigation, a stray link — there is nobody to ask for rows and nothing
+// to do, and the page says so instead of evaluating whatever the URL held.
+export const hosted = window.parent !== window;
+
+// The target origin is "*" in both directions: this frame's origin is
+// opaque, so the host cannot name it, and the host's origin is not
+// something a sandboxed page can read. Trust rests on `event.source`
+// instead — only the parent window is listened to here, and the host only
+// answers its own frame.
+function post(msg) {
+  window.parent.postMessage(msg, "*");
+}
+
+const pending = new Map();
+let nextId = 1;
+let onInit = null;
+
+window.addEventListener("message", (e) => {
+  if (e.source !== window.parent) return;
+  const msg = e.data;
+  if (!msg || typeof msg !== "object") return;
+  if (msg.type === "dactal:init") {
+    if (onInit) onInit(msg);
+    return;
+  }
+  const waiting = pending.get(msg.id);
+  if (!waiting) return;
+  pending.delete(msg.id);
+  if (msg.type === "dactal:rows") waiting.resolve({ rows: msg.rows || [] });
+  else if (msg.type === "dactal:error")
+    waiting.reject(new Error(String(msg.message || "search failed")));
+});
+
+// Ask the host for the card's arguments. Resolves with `{load, dq}` once
+// the host answers the `ready` announcement; never resolves unhosted.
+export function awaitInit() {
+  return new Promise((resolve) => {
+    onInit = (msg) => resolve({ load: msg.load || "", dq: msg.dq || "" });
+    post({ type: "dactal:ready" });
+  });
+}
+
+// The working set for a Datalib search, fetched by the host with its
+// session. Same shape `fetchSearch` in datalib/ui/src/api.ts returns.
+export function fetchSearch(q, limit = 500) {
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    pending.set(id, { resolve, reject });
+    post({ type: "dactal:search", id, q, limit });
+  });
 }

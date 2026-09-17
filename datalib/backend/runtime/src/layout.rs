@@ -98,6 +98,26 @@ pub fn lock_file(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(LOCK_FILE)
 }
 
+/// Create `data_root` readable by its owner only, if it does not exist.
+/// Missing parents are created with the process's default mode: they
+/// are the user's own tree (`~/Documents/...`), and only the root holds
+/// the mirror. The mode is not re-applied to a root that already exists.
+pub fn create_data_root(data_root: &Path) -> std::io::Result<()> {
+    if data_root.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = data_root.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(data_root)
+}
+
 /// Body of the `CACHEDIR.TAG` files we drop into derived directories. The
 /// first line is the spec-mandated magic that `restic`/`borg`/`tar
 /// --exclude-caches` (and others) recognize; see <https://bford.info/cachedir/>.
@@ -133,6 +153,26 @@ mod tests {
         // The first line must be the exact magic or `--exclude-caches` tools
         // won't recognize it.
         assert!(CACHEDIR_TAG_BODY.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_data_root_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("lib").join("root");
+        create_data_root(&root).unwrap();
+        assert_eq!(
+            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        // Idempotent, and an existing root is left alone.
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        create_data_root(&root).unwrap();
+        assert_eq!(
+            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
     }
 
     #[test]

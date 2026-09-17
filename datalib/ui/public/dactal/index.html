@@ -4,22 +4,26 @@
 <meta charset="utf-8" />
 <title>DACTAL × Datalib — prototype</title>
 <!--
-  Content-Security-Policy — issue #138, mitigation 4.
+  This page is sandboxed: the host card mounts it with
+  `sandbox="allow-scripts"` and the server sends `Content-Security-Policy:
+  sandbox allow-scripts` with it (datalib/backend/http/src/embed.rs), so
+  however it is reached it runs in an opaque origin — no cookie, no
+  same-origin fetch, no `/api/*`. Rows come from the host over
+  `postMessage` (bridge.js). Issue #146.
 
-  The vendored engine carries live remote-code-loading paths back to
-  dactal.org: `dactal_ai_init()` (dactal_utils.js:325) and `loadscript()`
-  (:381) inject <script src="https://dactal.org/…">, and
-  `loadscript_namespaced()` (:393) fetches from there and runs the text
-  through `new Function`. Nothing in Datalib calls them today — they are
-  dormant, not active — but they are one call away, and a future dataset
-  or a refresh of the vendored snapshot could wake them. Reaching out at
-  *runtime* also defeats the point of pinning a snapshot: it would run
-  whatever dactal.org serves today, with no SRI and no pin.
-
-  `script-src 'self'` kills the two script-tag paths and `connect-src
-  'self'` kills the fetch, so all three fail closed permanently. Doing it
-  here rather than by editing vendor/ keeps the "unmodified pinned
-  copies" property vendor/PROVENANCE.md depends on.
+  The policy below is the second layer, for what the vendored engine
+  could do on its own (issue #138, mitigation 4): `dactal_ai_init()`
+  (dactal_utils.js:325) and `loadscript()` (:381) inject
+  <script src="https://dactal.org/…">, and `loadscript_namespaced()`
+  (:393) fetches from there and runs the text through `new Function`.
+  Nothing in Datalib calls them — they are dormant, not active — but a
+  future dataset or a refresh of the vendored snapshot could wake them,
+  and a runtime fetch would run whatever dactal.org serves today, with no
+  SRI and no pin. `script-src 'self'` kills the two script-tag paths and
+  `connect-src 'none'` kills the fetch (this page makes no request of its
+  own: its data arrives by message), so all three fail closed. Doing it
+  here rather than by editing vendor/ keeps the "unmodified pinned copies"
+  property vendor/PROVENANCE.md depends on.
 
   Why each escape hatch is present:
     'unsafe-eval'  — load-bearing. The query language evaluates
@@ -28,22 +32,20 @@
     style-src      — 'unsafe-inline' is needed for the <style> block
                      below, for the `dactal_css` <style> that main.js
                      injects, and for the inline style= attributes the
-                     vendored renderer emits. Inline *style* is not an
+                     vendored renderer emits. Inline *style* is not a
                      code-execution vector the way inline script is.
     img-src data:  — renderers emit data: URIs for inline images.
   The page's own script is in main.js precisely so that `script-src`
   need not allow 'unsafe-inline' — do not move it back inline.
 
-  Note this is a <meta> CSP, so `frame-ancestors` would be ignored here
-  (it is header-only). That is fine: the API token gate already stops a
-  cross-site page from loading this page at all — no cookie, no 401-free
-  response. A <meta> policy is used anyway so dev (vite serves public/)
-  and prod (the embedded server) get identical behavior from one place.
+  `sandbox` is not repeated here: it is ignored in a <meta> policy,
+  which is why the server sends it as a header. `'self'` in a sandboxed
+  document still means this page's URL origin, so the scripts load.
 -->
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
   script-src 'self' 'unsafe-eval';
-  connect-src 'self';
+  connect-src 'none';
   style-src 'self' 'unsafe-inline';
   img-src 'self' data:;
   font-src 'self';
@@ -54,16 +56,16 @@
 <!--
   DACTAL ships as classic (non-module) scripts that attach to globals:
     - dactal.js                 -> `window.DACTAL` (the engine: parse/execute/load)
-    - dactal_storage_indexeddb.js -> `DACTALdb` (IndexedDB persistence wrapper)
     - dactal_utils.js           -> the table UI: buildView/arrayToTable/render,
                                    the `renderers` registry, and `dactal_css`.
   We reuse the ENGINE and the RENDERER, but NOT DACTAL's full host page
-  (its query page, saved-query store, AI assist, adapters). Instead we wire
-  a tiny query bar to `dactal.executeq()` + `buildView()` ourselves, and pull
-  the working set from Datalib's own `/applet/unified_index/search`.
+  (its query page, saved-query store, AI assist, adapters) and not its
+  IndexedDB store (an opaque origin has none; main.js supplies an
+  in-memory `dactaldb`). Instead we wire a tiny query bar to
+  `dactal.executeq()` + `buildView()` ourselves, and take the working set
+  from the host card, which fetches `/applet/unified_index/search`.
 -->
 <script src="./vendor/dactal.js"></script>
-<script src="./vendor/dactal_storage_indexeddb.js"></script>
 <script src="./vendor/dactal_utils.js"></script>
 <style>
   body { font: 14px/1.4 system-ui, sans-serif; margin: 0; color: #1a1a1a; }

@@ -5,6 +5,9 @@ Generates the DAG config `datalib-dag` needs, runs the synth phase
 (per-source `datalib-step synthesize`) and then the pipeline
 (download → render → index) hermetically against playback fixtures,
 and leaves the staged outputs where `tar_qmd.py` can pick them up.
+Beside them it writes `config_body.toml`: the same sources as
+render-only groups, for `materialize_tng_root.sh` to declare in the
+root it builds from the tars.
 
 Splitting the genrule into a python driver keeps the Bazel `cmd =` block
 readable and concentrates the file-layout logic in one place — the
@@ -324,6 +327,9 @@ def main() -> int:
             # The photo fetch is linkedin's one HTTP path; the synth
             # gate checks this flag.
             source["export"] = {"fetch_photos": True}
+        playback.mkdir(exist_ok=True)
+        params_file = playback / f"synthesize-{name}.params.json"
+        params_file.write_text(json.dumps(source))
         _run(
             [
                 str(step_bin),
@@ -331,8 +337,8 @@ def main() -> int:
                 type_str,
                 "--name",
                 name,
-                "--params",
-                json.dumps(source),
+                "--params-file",
+                str(params_file),
                 "--out",
                 str(playback),
             ],
@@ -344,6 +350,7 @@ def main() -> int:
     # `:ingested_tng_qmd` builds the search index separately.
     notion_seed = _first_notion_page_id(notion_fx)
     steps: list[str] = []
+    root_entries: list[str] = []
     for name, (type_str, _synth_input, extract_input) in sources.items():
         # Per-phase params, as a TOML inline table. The source name
         # isn't in either — each step takes it from its group. Ingest gets
@@ -386,39 +393,44 @@ params = {params}
         # step to name, so its render declares no inputs — which also
         # makes it a fringe step the runner always runs.
         inputs_line = "" if name in PRESEEDED_RAW else f'\ninputs = ["{name}/ingest"]'
+        render_block = f'[[steps]]\ngroup = "{name}"\nfunction = "render_markdown"'
         steps.append(
-            group_block
-            + ingest_block
-            + f"""[[steps]]
-group = "{name}"
-function = "render_markdown"{inputs_line}{render_params_line}"""
+            group_block + ingest_block + render_block + inputs_line + render_params_line
         )
+        # The materialized root gets the render tree but not the raw
+        # store, so there every source is shaped like a pre-seeded one:
+        # a group, a render step with no inputs, no ingest step.
+        root_entries.append(group_block + render_block + render_params_line)
     dag_config = workspace / "dag.toml"
 
     def write_config(diff: tuple[str, str] | None) -> None:
         """The config, with the contacts diff group once its two commits
         are known. A diff group is `type = "diff"` + `source`; its one
         step is `render_markdown` reading the source's ingest tree, and
-        the fan-in names it like any render step."""
+        the fan-in names it like any render step. Written twice: the
+        DAG's own, and the body of a materialized root's, where the diff
+        step — like every render step there — declares no inputs."""
         blocks = list(steps)
+        root_blocks = list(root_entries)
         rendered = [f'"{n}/render_markdown"' for n in sources]
         if diff is not None:
             from_commit, to_commit = diff
-            blocks.append(
-                f"""[[groups]]
-id = "{CONTACTS_DIFF_GROUP}"
-type = "diff"
-source = "tng_contacts"
-
-[[steps]]
-group = "{CONTACTS_DIFF_GROUP}"
-function = "render_markdown"
-inputs = ["tng_contacts/ingest"]
-params.diff = {{ from = "{from_commit}", to = "{to_commit}" }}"""
+            group_block = (
+                f'[[groups]]\nid = "{CONTACTS_DIFF_GROUP}"\ntype = "diff"\n'
+                'source = "tng_contacts"\n\n'
+                f'[[steps]]\ngroup = "{CONTACTS_DIFF_GROUP}"\nfunction = "render_markdown"'
             )
+            params_line = (
+                f'params.diff = {{ from = "{from_commit}", to = "{to_commit}" }}'
+            )
+            blocks.append(
+                f'{group_block}\ninputs = ["tng_contacts/ingest"]\n{params_line}'
+            )
+            root_blocks.append(f"{group_block}\n{params_line}")
             rendered.append(f'"{CONTACTS_DIFF_GROUP}/render_markdown"')
         # The fan-in names its inputs; there is no glob to stand in for
         # "every render step".
+        rendered_list = ", ".join(rendered)
         blocks.append(
             f"""[[groups]]
 id = "unified_index"
@@ -426,13 +438,34 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = [{", ".join(rendered)}]"""
+inputs = [{rendered_list}]"""
         )
         dag_config.write_text(
             f"data_root = {_toml_value(str(workspace))}\n\n"
             + "\n\n".join(blocks)
             + "\n"
         )
+        # Everything a materialized root's config needs but `data_root`
+        # and the applet, which only the materializer knows. Both
+        # fan-ins are declared and wired the way a real root's are; the
+        # index arrives pre-built, so neither has to run for the root to
+        # be browsable.
+        root_blocks.append(
+            f"""[[groups]]
+id = "unified_index"
+name = "Unified Index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = [{rendered_list}]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = [{rendered_list}]"""
+        )
+        (workspace / "config_body.toml").write_text("\n\n".join(root_blocks) + "\n")
 
     # A workspace shared across pipeline runs already has its diff group;
     # the config has to keep naming it, or the index drops its rows.

@@ -1513,12 +1513,16 @@ onUnmounted(() => {
 
     <div class="m2-grid">
       <!-- The typed viewer over the rows the server assembled: a tree,
-           one group row with its steps and applets under it. -->
+           one group row with its steps and applets under it. Every row
+           is rendered: a config is tens of rows, and a source just
+           added lands at the bottom, where a virtualized grid would
+           have no row for it until scrolled to. -->
       <TableGrid
         ref="tableGrid"
         :columns="manage?.columns ?? []"
         :rows="rows"
         :tree="true"
+        :virtualizeRows="false"
         :windowSecs="storage?.window_secs ?? 300"
         :actions="rowActions"
         :contextMenu="contextMenuItems"
