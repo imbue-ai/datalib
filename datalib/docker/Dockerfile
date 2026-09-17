@@ -33,16 +33,11 @@
 # Also baked in: a demo data library at /opt/datalib/demo, ingested at
 # build time from the TNG fixtures — see the demo step near the bottom.
 #
-# Devcontainer: `.devcontainer/Dockerfile` inherits from a published
-# version of THIS image via `FROM ghcr.io/imbue-ai/datalib:<tag>`,
-# so everything below (apt + Node + latchkey + qmd models +
-# bind-mount dirs) is carried into the devcontainer for free
-# — no Dockerfile mirroring, no double download. The devcontainer
-# just adds the Bazel build toolchain (cmake/lld/bun/bazelisk + the
-# `ubuntu` non-root user) on top. When this Dockerfile
-# changes in a way the devcontainer should pick up, bump the
-# `PROD_IMAGE_TAG` ARG in `.devcontainer/Dockerfile` to the next
-# published tag.
+# The devcontainer (`.devcontainer/Dockerfile`) does NOT build on this
+# image: it is its own `ubuntu:24.04` image with the Bazel toolchain,
+# published by `devcontainer.yml` independently of releases. The two
+# share their Node major and latchkey pin through
+# `//tools:version_pins_test`, and nothing else.
 
 FROM ubuntu:24.04
 
@@ -163,13 +158,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # and so an unmounted run still has somewhere to write.
 RUN mkdir -p /root/.latchkey /data
 
-# === SHARED-WITH-DEVCONTAINER STATE ENDS HERE ===
-# Everything below is prod-only: the release binaries and the
-# entrypoint. `FROM ghcr.io/imbue-ai/datalib:<tag>` copies the finished
-# image, so the devcontainer physically gets these layers too — they
-# just aren't what it runs. A contributor there builds the binaries
-# from source with Bazel, and `bazelisk build
-# //third-party/doltlite:doltlite` is the shell they should use, so
+# Everything below is the release binaries and the entrypoint. A
+# contributor in the devcontainer builds the binaries from source with
+# Bazel, and `bazelisk build //third-party/doltlite:doltlite` is the
+# shell they should use, so
 # that it matches the tree they are editing rather than the published
 # tag they inherited.
 

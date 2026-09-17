@@ -26,6 +26,10 @@ third-party/qmd/dist
 # VCS state — bazelisk never reads this.
 .git
 
+# The BuildBuddy key. The image's `fetch` must reach origins directly
+# and bake nothing but public archives; CI adds this file at run time.
+.bazelrc.user
+
 # Editor + OS junk.
 .DS_Store
 .idea
