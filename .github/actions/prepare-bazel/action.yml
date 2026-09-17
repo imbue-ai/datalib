@@ -20,17 +20,22 @@ inputs:
 runs:
   using: composite
   steps:
-    # The devcontainer image carries a pre-fetched output base at this
-    # path (`PREFETCH_OUTPUT_BASE` in `.devcontainer/Dockerfile`): every
+    # The devcontainer image carries a pre-fetched output base at these
+    # paths (`PREFETCH_OUTPUT_BASE` in `.devcontainer/Dockerfile`): every
     # external repository already downloaded and extracted. Pointing
-    # bazel at it is what turns ~77 s of fetching before the first
-    # action into a marker-file check. A startup option has to come
-    # from an rc file or the command line, and `.bazelrc.user` is the
-    # one both jobs already write.
+    # bazel at them is what turns ~77 s of fetching before the first
+    # action into a marker-file check. The user root matters as much as
+    # the output base: Bazel 9's repository contents cache lives under
+    # it, and `external/` is symlinks into that cache. A startup option
+    # has to come from an rc file or the command line, and
+    # `.bazelrc.user` is the one both jobs already write.
     - name: Use the image's pre-fetched output base
       shell: bash
       run: |
-        echo "startup --output_base=/opt/bazel/output-base" >> .bazelrc.user
+        {
+          echo "startup --output_user_root=/opt/bazel/user-root"
+          echo "startup --output_base=/opt/bazel/output-base"
+        } >> .bazelrc.user
 
     # Drop the key into the workspace `.bazelrc.user` (gitignored) —
     # `.bazelrc`'s `try-import` at the bottom picks it up, and

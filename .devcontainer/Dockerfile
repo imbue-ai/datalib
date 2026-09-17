@@ -124,8 +124,19 @@ WORKDIR /workspaces/datalib
 # extracted on 4 vCPUs (~77 s to "Analyzed"; the same analysis takes
 # ~10 s with the repositories on disk). Fetching them here, into an
 # output base at a fixed path, puts them in the image instead:
-# `prepare-bazel` points CI's bazel at the same path, the repository
-# marker files validate, and nothing is fetched again. A bump to a
+# `prepare-bazel` points CI's bazel at the same paths, the repository
+# marker files validate, and nothing is fetched again.
+#
+# Both paths have to be pinned, not just the output base. Bazel 9 keeps
+# fetched repositories in a contents cache under the output *user* root
+# and symlinks `external/<repo>` into it, and that root defaults to
+# `$HOME/.cache/bazel` — `/root` here, `/github/home` on a CI runner.
+# With only the output base pinned, every entry looked absent from the
+# runner's cache and was fetched again (measured: 157 downloads, 50 s,
+# on the first invocation of a run). The downloaded archives are
+# dropped afterwards — 0.7 GB the image would carry for nothing, since
+# the extracted contents are what a run uses and a repository added
+# after the build downloads its own. A bump to a
 # toolchain or lockfile between image builds just refetches that delta,
 # which is why lockfile changes do not rebuild the image and the tag
 # build at each release is what keeps the delta small.
@@ -144,9 +155,11 @@ ARG PREFETCH_OUTPUT_BASE=false
 RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
     if [ "${PREFETCH_OUTPUT_BASE}" = "true" ]; then \
         bazelisk --batch --host_jvm_args=-Xmx2048m \
+            --output_user_root=/opt/bazel/user-root \
             --output_base=/opt/bazel/output-base \
             fetch --lockfile_mode=error //... \
-        && rm -rf /opt/bazel/output-base/execroot /opt/bazel/output-base/action_cache; \
+        && rm -rf /opt/bazel/output-base/execroot /opt/bazel/output-base/action_cache \
+            /opt/bazel/user-root/cache/repos/v1/content_addressable; \
     else \
         bazelisk version; \
     fi

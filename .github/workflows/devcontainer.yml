@@ -100,15 +100,17 @@ jobs:
 
       # The image is only useful if the baked output base is one this
       # tree's bazel accepts as already fetched: analyse `//...` from a
-      # checkout at a *different* path than the one the image was built
-      # against (as CI's is), and require that nothing was downloaded.
+      # checkout at a *different* path and under a *different* HOME than
+      # the image was built with (as CI's are), and require that nothing
+      # was downloaded. The HOME half is what caught the contents-cache
+      # trap the Dockerfile describes.
       # The image is only useful if the baked output base is one this
       # tree's bazel accepts as already fetched: analyse `//...` from a
       # checkout at a *different* path than the one the image was built
       # against (as CI's is), and require that nothing was downloaded.
       - name: Smoke test — analyse the tree from the baked output base
         run: |
-          docker run --rm -v "${PWD}:/src" -w /src "${IMAGE}:sha-${GITHUB_SHA::12}" \
+          docker run --rm -v "${PWD}:/src" -w /src -e HOME=/tmp/not-root "${IMAGE}:sha-${GITHUB_SHA::12}" \
               bash .devcontainer/smoke_test.sh
 
       - name: Push
