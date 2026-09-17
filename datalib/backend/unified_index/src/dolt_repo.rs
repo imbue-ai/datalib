@@ -130,12 +130,18 @@ impl DoltRepo {
         }
     }
 
-    /// Cannot fail today; the `Result` is kept so the open can grow a
-    /// check without every caller changing.
+    /// The directory is created here, the file never is. The server's
+    /// watcher arms its watch on this directory when it exists, and a
+    /// grid that learns of the first `grid_index` pass from that watch
+    /// needs it armed before the pass, not after.
     pub async fn open(root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
+        let db_path = datalib_core::layout::grid_index_db(&root);
+        if let Some(dir) = db_path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
         Ok(Self {
             pool: tokio::sync::RwLock::new(None),
-            db_path: datalib_core::layout::grid_index_db(&root),
+            db_path,
             root,
         })
     }
