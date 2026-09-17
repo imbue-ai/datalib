@@ -27,6 +27,7 @@ rust_library(
         "@datalib_crates//:candle-transformers",
         "@datalib_crates//:chrono",
         "@datalib_crates//:hf-hub",
+        "@datalib_crates//:sha2",
         "@datalib_crates//:quick-xml",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tokenizers",

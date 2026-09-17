@@ -588,21 +588,9 @@ async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
 }
 
 async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::Result<String> {
-    // The same resolution `datalib_etl::latchkey` uses (bundled Node
-    // runtime, else `npx -y latchkey@<pin>`), reached through
+    // The same resolution `datalib_etl::latchkey` uses, reached through
     // `datalib_core` so the pin is not spelled twice.
-    let mut cmd: Command = datalib_core::node_runtime::bundled_command(
-        "latchkey",
-        datalib_core::node_runtime::LATCHKEY_VERSION,
-        LATCHKEY_ENTRY_REL,
-    )
-    .unwrap_or_else(|| {
-        datalib_core::node_runtime::npx_command(&format!(
-            "latchkey@{}",
-            datalib_core::node_runtime::LATCHKEY_VERSION
-        ))
-    })
-    .into();
+    let mut cmd: Command = datalib_core::node_runtime::latchkey_command()?.into();
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -621,11 +609,6 @@ async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::R
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
-
-/// Entry script of the `latchkey` npm package inside a staged runtime
-/// tree. Mirrors `datalib_etl::latchkey::LATCHKEY_ENTRY_REL`, which
-/// this crate cannot import (it links no ETL code).
-const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 
 async fn latchkey_json(args: &[&str], timeout: Duration) -> anyhow::Result<Value> {
     let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();

@@ -193,7 +193,7 @@ fn ensure_started(
 }
 
 fn spawn(state: &mut DaemonState, cfg: &QmdDaemonConfig, index_mtime: SystemTime) -> Result<()> {
-    let mut cmd = crate::qmd::qmd_command(&cfg.qmd_version);
+    let mut cmd = crate::qmd::qmd_command(&cfg.qmd_version)?;
     cmd.arg("mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -52,13 +52,36 @@ macOS app, and the prod docker image with its doc test (#469). It does
 not build the CI image.
 
 **BuildBuddy** (`imbue.buildbuddy.io`) is the action cache, the build
-event stream and the remote downloader for both `test.yml` jobs.
-`.github/actions/prepare-bazel` writes the API key from the
-`BUILD_BUDDY_API_KEY` secret into the gitignored `.bazelrc.user` at
-run time, and `.bazelrc`'s `--config=buildbuddy` turns it on. The
-image build sees none of it: `devcontainer.yml` never runs
-`prepare-bazel`, `.bazelrc.user` is in `.dockerignore`, and what the
-image bakes is public archives verified by sha256.
+event stream and the remote downloader for both `test.yml` bazel jobs.
+`.github/actions/prepare-bazel` writes an API key into the gitignored
+`.bazelrc.user` at run time, and `.bazelrc`'s `--config=buildbuddy`
+turns it on. The image build sees none of it: `devcontainer.yml` never
+runs `prepare-bazel`, `.bazelrc.user` is in `.dockerignore`, and what
+the image bakes is public archives verified by sha256.
+
+## Two caches: contributor and release
+
+Bazel does not verify an action-cache hit, so whoever can write a
+cache decides what a build reading it ships. Two BuildBuddy *groups*
+(a group is BuildBuddy's isolation unit: its own cache, its own keys)
+keep a release from replaying anything a laptop or a PR run wrote:
+
+| group | key (GitHub secret) | writes | reads |
+|---|---|---|---|
+| contributor | `BUILD_BUDDY_API_KEY` | every laptop with the key, PR and dispatch runs of `test.yml`, `intel-curl-smoke.yml` | the same |
+| release | `BUILD_BUDDY_RELEASE_API_KEY` | `test.yml` on a `push` to `main` — PR-gated code only | `release.yml`, read-only (`--config=buildbuddy-release`) |
+
+A tag builds a commit that is already on `main`, so the release build
+hits exactly what the `main` run of that commit produced; the
+`buildbuddy-release` config is what keeps it from writing, not the
+key. Without the release secret a tag build runs cold (~20 min a leg)
+rather than falling back to the contributor cache — that is the
+intended failure mode.
+
+**Setting it up** (once, by a BuildBuddy org admin): create a second
+group in the BuildBuddy org, mint a read-write API key in it, and add
+it to the repository as `BUILD_BUDDY_RELEASE_API_KEY`. Nothing in the
+tree has to change.
 
 ## The caches, and what each is for
 

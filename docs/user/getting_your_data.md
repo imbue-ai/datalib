@@ -6,8 +6,9 @@ export on disk. This doc is only about *access* — for the config file
 and running the sync, see the
 [first-time user guide](first_time_user.md).
 
-Conventions: exports land under `~/backups/`, and `latchkey` runs
-through `npx` so there is nothing to install. Adjust paths to taste and
+Conventions: exports land under `~/backups/`, and `latchkey` is the
+one the datalib installer put on your `PATH` (it runs on the Node
+runtime bundled in the same tarball). Adjust paths to taste and
 point the matching source in your config at them. Wherever a command
 takes a secret, it is written as `$(pbpaste)`: copy the secret to your
 clipboard, then run the command. Your shell history keeps the harmless
@@ -40,7 +41,7 @@ command opens a browser, you sign in and approve every scope it asks
 for, and latchkey keeps the OAuth token:
 
 ```sh
-npx -y latchkey auth browser google-gmail
+latchkey auth browser google-gmail
 ```
 
 Use the `email` source with a `gmail` table on its ingest step. Incremental sync is
@@ -53,7 +54,7 @@ show up as events. Throughput is capped by Google's quota at roughly
 Built into latchkey — no manual export:
 
 ```sh
-npx -y latchkey auth browser slack
+latchkey auth browser slack
 ```
 
 ## Claude.ai
@@ -63,8 +64,8 @@ the session cookie your browser already has. Register the service once,
 then stage the cookie command:
 
 ```sh
-npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
-npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
+latchkey services register claude-ai --base-api-url="https://claude.ai/"
+latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
 ```
 
 Open [claude.ai](https://claude.ai) in a logged-in tab and copy your
@@ -92,12 +93,12 @@ for you. The app's Add Data Source wizard does both from its
 account's conversations to pick from); by hand it is:
 
 ```sh
-npx -y latchkey services register chatgpt \
+latchkey services register chatgpt \
   --base-api-url="https://chatgpt.com/" \
   --login-url="https://chatgpt.com/auth/login" \
   --login-flow=token-capture \
   --login-flow-params='{"tokenUrl": "https://chatgpt.com/api/auth/session", "tokenField": "accessToken"}'
-npx -y latchkey auth browser chatgpt
+latchkey auth browser chatgpt
 ```
 
 The second command opens chatgpt.com, waits for you to log in, and
@@ -118,7 +119,7 @@ services deregister <name>` removes the stale one.
 If you registered `chatgpt` before this guide said to, latchkey will
 have recorded it as a `set`-only service — `latchkey services info
 chatgpt` shows `authOptions` without `browser`, and a name that
-already exists cannot be re-registered. Run `npx -y latchkey services
+already exists cannot be re-registered. Run `latchkey services
 deregister chatgpt` first, then the two commands above.
 
 To supply the token by hand instead (a machine with no browser, say),
@@ -140,7 +141,7 @@ grab it from a logged-in tab via DevTools → **Console**:
 Click anywhere on the page to copy the token, then run:
 
 ```sh
-npx -y latchkey auth set chatgpt -H "Authorization: Bearer $(pbpaste)"
+latchkey auth set chatgpt -H "Authorization: Bearer $(pbpaste)"
 ```
 
 As with Claude.ai, the impersonating curl clears Cloudflare, so no
@@ -153,7 +154,7 @@ Built into latchkey, including the region-prefixed API hosts
 regional datacenter gets. The browser flow stores an OAuth token:
 
 ```sh
-npx -y latchkey auth browser fastmail
+latchkey auth browser fastmail
 ```
 
 If you would rather use an API token, create one at
@@ -162,7 +163,7 @@ under **Integrations** → **API tokens** → **New API token**, give it
 read access to your mail, copy it, and store it instead:
 
 ```sh
-npx -y latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
+latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
 ```
 
 Use the JMAP mode of the `email` source with `hostname =
@@ -181,7 +182,7 @@ Two routes into the `contacts` source, one table each:
   passwords, with contacts access):
 
   ```sh
-  npx -y latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+  latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
   ```
 
 ## GitHub and GitLab
@@ -190,14 +191,14 @@ GitHub is built into latchkey; the browser flow creates a personal
 access token during login:
 
 ```sh
-npx -y latchkey auth browser github
+latchkey auth browser github
 ```
 
 GitLab is built in too, but takes a personal access token you create
 yourself (User settings → Access tokens, with API read access):
 
 ```sh
-npx -y latchkey auth set gitlab -H "PRIVATE-TOKEN: $(pbpaste)"
+latchkey auth set gitlab -H "PRIVATE-TOKEN: $(pbpaste)"
 ```
 
 ## Notion
@@ -224,7 +225,7 @@ injects both — so the credential must carry the version too. Set both
 headers in one `auth set`:
 
 ```sh
-npx -y latchkey auth set notion \
+latchkey auth set notion \
   -H "Authorization: Bearer $(pbpaste)" \
   -H "Notion-Version: 2022-06-28"
 ```
@@ -234,7 +235,7 @@ Omitting the version header gets every request rejected with
 and page access — in one call before running a sync:
 
 ```sh
-npx -y latchkey curl "https://api.notion.com/v1/pages/<page-id>"
+latchkey curl "https://api.notion.com/v1/pages/<page-id>"
 ```
 
 A `200` with a JSON page body means you're set. `400 missing_version`

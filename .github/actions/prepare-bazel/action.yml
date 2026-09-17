@@ -13,7 +13,9 @@ inputs:
     description: >
       BuildBuddy API key. Optional: when empty (a PR from a fork, or a local
       `act` run without secrets) the remote cache is simply not configured and
-      bazel runs everything locally.
+      bazel runs everything locally. Which key decides which cache — see
+      `.bazelrc`'s BuildBuddy block: the release group's key on `main`
+      pushes, the contributor group's on everything else.
     required: false
     default: ""
 
