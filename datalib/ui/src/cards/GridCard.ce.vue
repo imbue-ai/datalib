@@ -26,6 +26,8 @@ import {
   type MenuItemDef,
   type DefaultMenuItem,
   type GetContextMenuItemsParams,
+  type RowClassParams,
+  type CellClassParams,
 } from "ag-grid-community";
 import { AllEnterpriseModule } from "ag-grid-enterprise";
 import {
@@ -885,15 +887,38 @@ function allColumnIds(): string[] {
   return columnDefs.value.map((c) => (c.colId ?? c.field) as string);
 }
 
+/// A diff group's rows say how they differ from the other commit
+/// (`diff_status`; null on every real source's rows), and a modified
+/// row names the columns that moved (`diff_changed_columns`, the
+/// `grid_rows` names, `|`-joined). The row takes a band for the first
+/// and the cell a highlight for the second.
+function changedColumns(row: SearchRow | undefined): Set<string> {
+  const names = row?.diff_changed_columns;
+  if (!names) return new Set();
+  // The one column the grid shows under another name.
+  return new Set(names.split("|").map((c) => (c === "text" ? "snippet" : c)));
+}
+
+const rowClassRules: GridOptions<SearchRow>["rowClassRules"] = {
+  "datalib-diff-added": (p: RowClassParams<SearchRow>) => p.data?.diff_status === "added",
+  "datalib-diff-removed": (p: RowClassParams<SearchRow>) => p.data?.diff_status === "removed",
+  "datalib-diff-modified": (p: RowClassParams<SearchRow>) => p.data?.diff_status === "modified",
+};
+
 const defaultColDef: ColDef = {
   resizable: true,
   sortable: true,
   filter: true,
   enableRowGroup: true,
+  cellClassRules: {
+    "datalib-diff-cell": (p: CellClassParams<SearchRow>) =>
+      changedColumns(p.data).has(p.colDef.colId ?? p.colDef.field ?? ""),
+  },
 };
 
 const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
+  rowClassRules,
   animateRows: false,
   // Two dozen columns is nothing to virtualize, and with it on a column
   // past the right edge has no header cell in the DOM at all — which
@@ -1397,6 +1422,21 @@ const gridOptions: GridOptions<SearchRow> = {
 </style>
 
 <style>
+/* A diff group's rows, by what happened to them between the two
+   commits, and the cells of a modified row that moved. AG Grid owns
+   these elements, so the rules are unscoped, like the two below. The
+   tints sit over the theme's own row background in either scheme. */
+.ag-row.datalib-diff-added .ag-cell {
+  background-color: rgba(34, 197, 94, 0.14);
+}
+.ag-row.datalib-diff-removed .ag-cell {
+  background-color: rgba(239, 68, 68, 0.12);
+  text-decoration: line-through;
+  text-decoration-color: rgba(239, 68, 68, 0.6);
+}
+.ag-row.datalib-diff-modified .ag-cell.datalib-diff-cell {
+  background-color: rgba(234, 179, 8, 0.3);
+}
 /* Built by a cellRenderer, so it never receives the scoped-style
    attribute — same reason `.datalib-clamp-2` lives in
    this unscoped block. */

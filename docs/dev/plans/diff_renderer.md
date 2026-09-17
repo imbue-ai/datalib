@@ -1,7 +1,7 @@
 # Diff groups: a source's changes as a first-class thing in the app
 
-**Status: steps 1–4 of "Order of work" are built (2026-09-17); the UI
-(step 5) and the Slack fixture (step 6) are not.** The contacts diff
+**Status: steps 1–5 of "Order of work" are built (2026-09-17); the
+Slack fixture (step 6) is not.** The contacts diff
 group in the TNG fixture is the working example
 (`tests/fixtures/run_sync_pipeline.py`, `ingested_tng_test`'s
 `_diff_shape`). This replaces an earlier proposal of the same name
@@ -92,15 +92,18 @@ and nothing else. There is no default pair and no diff that maintains
 itself as the source syncs — a person names the two points, and what
 they get is exactly that comparison until they ask for another.
 
-A person creates one from **"Compare…" on a source's row in Manage**
-(not built yet): a picker lists the raw store's commits (date, and the
-sync run that made each, from `datalib_history`) and they choose two.
-The wizard writes the group, its one step, and names the step in both
-fan-ins' `inputs`, exactly as it does for a source (`wireIntoFanIns` in
-`ui/src/config/sourceSteps.ts`). Removing the group removes the tree.
-Running it is `datalib-dag --sync <source>/ingest`: the diff step is
-downstream of the source's ingest and runs in its chain, and nothing
-else in the root re-runs.
+A person creates one from **"Compare two syncs…" on a source's row in
+Manage** (`CompareDialog.vue`): the source's ingest tree's commit
+history (`GET /api/pipeline/history`) fills two pickers, the newest
+sync and the one before it by default, with a name and the document
+cap beside them. Submitting writes the group and its step
+(`buildDiffSource` in `ui/src/config/sourceSteps.ts`), names the step
+in both fan-ins' `inputs` (`wireIntoFanIns`), and syncs the source —
+the diff step is downstream of the source's ingest and runs in its
+chain (`datalib-dag --sync <source>/ingest`), and "Sync now" on the
+diff group does the same (`diff_group_seeds`). Removing the group
+removes the tree. A diff group has no guided edit form; its commits are
+changed in Advanced, or by comparing again.
 
 A *rolling* diff — `from` advancing to the last consumed commit on every
 sync, so the group is a live "what changed in the last sync" view — is
@@ -268,23 +271,28 @@ separate decision and nothing here depends on it.
 
 ## The UI
 
-- **Sources list / Manage.** A `diff` group shows the underlying
-  provider's icon with a delta badge, and "Compare…" on a source's row
-  creates one. The wizard's rule "a source missing one of its two steps
-  gets it back on save" must not add an `ingest` step to a `diff`
-  group; its catalog descriptor has no ingest and no connection section.
+- **Sources list / Manage.** A `diff` group shows with its own icon and
+  the label "Diff" (`source_catalog.rs`, `icons.ts`); the wizard never
+  opens on one (`groupEditBlocked` says where its commits are edited),
+  so its step-repair rule cannot add an `ingest` step to it. "Compare
+  two syncs…" is on every source's row menu (`rowMenu.ts`), and says
+  why not on a step, the index, or a diff group itself.
 - **Grid.** `rowClassRules` on `diff_status` (added → green band,
-  removed → red band) and `cellClassRules` on `diff_changed_columns`
-  (yellow), in `GridCard`. A "changed only" toggle, on by default
-  inside a diff source, filters `diff_status != 'unchanged'`. Real
-  sources have NULL and are unaffected.
+  removed → red band, struck through) and `cellClassRules` on
+  `diff_changed_columns` (yellow, with `text` mapped to the `snippet`
+  column), in `GridCard`. Real sources have NULL and are unaffected.
+- **Changed only.** `change:` is a search filter on `diff_status`
+  (`Field::Change`), and a diff group's Browse opens on
+  `source_id:<group> -change:unchanged` with the two diff columns
+  leading (`browsePresets.ts`) — every row that moved, not one per
+  document. Negation keeps NULL, so the same filter over the whole grid
+  keeps every real row.
 - **Preview.** The highlighted `.md` renders through the same
-  `ChatBody`; the diff classes get CSS. The whole document is shown
-  with context, like a code diff at full context — the opposite default
-  from the grid.
-- **Search.** `source_id:<diff group>` and every other filter already
-  work; `diff_status:added` is one more column filter through the
-  existing typed-column path.
+  `ChatBody`; `.diff-added` / `.diff-removed` / `.diff-modified` are
+  tinted bands with a coloured left border, `ins` / `del` tinted
+  inline, all over the card background so they read in either colour
+  scheme. The whole document is shown with context, like a code diff at
+  full context — the opposite default from the grid.
 
 ## Loader, runner, `datalib-step`
 
@@ -364,8 +372,9 @@ it anyway.
 4. *(built)* Loader + `datalib-step`: the `diff` group, `source`,
    `DATALIB_DAG_SOURCE_GROUP_TYPE`, the two-pass driver, the re-keying.
    The contacts fixture's second commit and diff group; goldens.
-5. UI: colouring rules, the changed-only toggle, diff CSS, the icon,
-   "Compare…" and the wizard rules, the sanitizer test.
+5. *(built)* UI: colouring rules, the `change:` filter and the diff
+   Browse preset, diff CSS, the icon and label, "Compare two syncs…",
+   the sanitizer test.
 6. Slack's second tape and diff group; whatever `chat-common` needs
    that contacts did not show.
 

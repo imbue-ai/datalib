@@ -52,6 +52,9 @@ const CATALOG: &[Entry] = &[
         Some("apple_messages"),
     ),
     e("perseus", None, "Perseus library", None),
+    // Not a provider: a group that renders what changed in another
+    // group's raw store between two commits (docs/dev/plans/diff_renderer.md).
+    e("diff", None, "Diff", Some("diff")),
 ];
 
 const fn e(
