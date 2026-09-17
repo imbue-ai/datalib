@@ -139,3 +139,15 @@ it without a bundler.
 
 `//datalib/ui:chat_preview_test` regenerates the page and diffs it, so
 the checked-in copy cannot drift from the sources it was built from.
+
+## The UI sanitizes what you emit
+
+A message body reaches the markdown as the sender wrote it, and the app
+renders the markdown with HTML enabled because the section wrappers are
+HTML. So before the page shows a document, `ui/src/cards/sanitize.ts`
+runs it through DOMPurify: scripts, event handlers, `javascript:` URLs,
+form controls and foreign iframes are dropped, and only the tags and
+attributes the renderers actually use survive. **A renderer that starts
+emitting a new tag or attribute has to add it there**, or the page will
+silently strip it; `ui/tests/sanitize.test.ts` is where the vocabulary
+is pinned.

@@ -92,7 +92,6 @@ rust_library(
         "@datalib_crates//:shlex",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
-        "@datalib_crates//:tower-http",
         "@datalib_crates//:tracing",
         "@datalib_crates//:tracing-subscriber",
         "@datalib_crates//:uuid",

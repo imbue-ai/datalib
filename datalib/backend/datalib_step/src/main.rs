@@ -343,7 +343,7 @@ async fn run_function(
         }
         Function::GridIndex => {
             writes_the_index_tree(&env, &grid_index::out_rel())?;
-            grid_index::run(data_root, Some(now), emitter).await
+            grid_index::run(data_root, &env, Some(now), emitter).await
         }
         Function::QmdIndex => {
             writes_the_index_tree(&env, &qmd_index::out_rel())?;

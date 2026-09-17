@@ -1207,7 +1207,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self._run_step(
             "claude-api", "render_markdown", "claude", inputs=("claude-api/ingest",)
         )
-        self._run_step("unified_index", "grid_index")
+        # The fan-in reads the sources its inputs name, as the runner
+        # would hand them over; here, the one source under test.
+        self._run_step(
+            "unified_index", "grid_index", inputs=("claude-api/render_markdown",)
+        )
 
         self.assertEqual(
             self._query(
@@ -1286,7 +1290,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "SELECT dolt_commit('-Am', 'test: upstream dropped a pull request');",
         )
         self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
-        self._run_step("unified_index", "grid_index")
+        self._run_step(
+            "unified_index", "grid_index", inputs=("github/render_markdown",)
+        )
 
         github_docs_after = set(
             self._query(

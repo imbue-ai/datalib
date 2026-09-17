@@ -540,9 +540,46 @@ pub async fn apply_one(
 /// Two things fall out of that: a document a source stopped holding can be
 /// named and deleted, and the cursor advances inside the write transaction,
 /// so it can never claim more than the index holds.
+/// Every source under the data root with a render store: the directory
+/// name is the source's id. This is the dev tools' answer to "which
+/// sources"; the step's answer is the graph, see [`build_grid_index_for`].
+pub fn discover_sources(out_dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(entries) = fs::read_dir(out_dir) {
+        for entry in entries.flatten() {
+            if entry.file_name() == datalib_core::layout::SYSTEM_DIR {
+                continue;
+            }
+            let rendered_root = entry.path().join(datalib_etl::layout::RENDER_MARKDOWN_DIR);
+            if crate::indexed_markdown::path_for(&rendered_root).is_file() {
+                out.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 pub async fn build_grid_index(
     pool: &SqlitePool,
     out_dir: &Path,
+    progress: impl Fn(&str),
+    now_override: Option<&str>,
+) -> Result<GridIndexSummary> {
+    let sources = discover_sources(out_dir);
+    build_grid_index_for(pool, out_dir, &sources, progress, now_override).await
+}
+
+/// Stack the render stores of exactly `sources` into the index. The step
+/// passes the groups its declared inputs name, so a source dropped from
+/// the config stops being read on the next run even while its tree is
+/// still on disk — and a directory that is not in the config is never
+/// read at all. A listed source with no store yet is skipped: its render
+/// step has not produced one.
+pub async fn build_grid_index_for(
+    pool: &SqlitePool,
+    out_dir: &Path,
+    sources: &[String],
     progress: impl Fn(&str),
     now_override: Option<&str>,
 ) -> Result<GridIndexSummary> {
@@ -550,10 +587,8 @@ pub async fn build_grid_index(
     // per auto-committed statement bundle, which is ruinous on a full rebuild.
     // An error rolls back, leaving the index exactly as it was.
     let write_lock = WriteLock::new(pool.clone());
-    // One dir per source plus the reserved `system/`; the directory name IS
-    // the source's id. Cursors and the per-source document lists load
-    // before the write transaction opens, because the index pool is one
-    // connection wide.
+    // Cursors and the per-source document lists load before the write
+    // transaction opens, because the index pool is one connection wide.
     let cursors = load_source_cursors(pool).await?;
     let indexed = load_markdown_uuids_by_source(pool).await?;
 
@@ -562,19 +597,20 @@ pub async fn build_grid_index(
     // run will advance, and the ids each source dropped.
     let mut advanced: Vec<(String, String)> = Vec::new();
     let mut removed: Vec<(String, String)> = Vec::new();
-    if let Ok(entries) = fs::read_dir(out_dir) {
+    {
         let mut stanzas: Vec<(String, PathBuf)> = Vec::new();
-        for entry in entries.flatten() {
-            if entry.file_name() == datalib_core::layout::SYSTEM_DIR {
-                continue;
-            }
-            let stanza = entry.file_name().to_string_lossy().into_owned();
-            let rendered_root = entry.path().join(datalib_etl::layout::RENDER_MARKDOWN_DIR);
+        for source in sources {
+            let rendered_root = out_dir
+                .join(source)
+                .join(datalib_etl::layout::RENDER_MARKDOWN_DIR);
             if crate::indexed_markdown::path_for(&rendered_root).is_file() {
-                stanzas.push((stanza, rendered_root));
+                stanzas.push((source.clone(), rendered_root));
+            } else {
+                tracing::info!(source, "index: no render store yet; skipping it this run");
             }
         }
         stanzas.sort();
+        stanzas.dedup();
         for (stanza, rendered_root) in stanzas {
             // Read-only: the render step owns this store, and an ordinary
             // open would rescue-commit and schema-commit into it — writing to
@@ -1826,7 +1862,10 @@ mod source_cursor_tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
     use tempfile::tempdir;
 
-    use crate::grid_index::{build_grid_index, init_schema, load_source_cursors, RenderedMarkdown};
+    use crate::grid_index::{
+        build_grid_index, build_grid_index_for, discover_sources, init_schema, load_source_cursors,
+        RenderedMarkdown,
+    };
     use crate::indexed_markdown::IndexedMarkdownStore;
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
@@ -1905,6 +1944,36 @@ mod source_cursor_tests {
         std::fs::create_dir_all(md.md_path.parent().unwrap()).unwrap();
         std::fs::write(&md.md_path, "# rendered\n").unwrap();
         md
+    }
+
+    /// The step reads the sources the graph names, nothing else: a tree
+    /// left on disk by a source no longer in the config is not indexed,
+    /// and a listed source with no store yet is simply skipped.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn only_the_listed_sources_are_read() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        render(root, "kept", &[doc(root, "kept", "md-k", "kept body")]);
+        render(
+            root,
+            "dropped",
+            &[doc(root, "dropped", "md-d", "dropped body")],
+        );
+
+        let listed = ["kept".to_string(), "not-rendered-yet".to_string()];
+        build_grid_index_for(&pool, root, &listed, |_| {}, None)
+            .await
+            .unwrap();
+        assert_eq!(index_row_count(&pool).await, 1, "only `kept`");
+
+        // The scan is the dev tools' view and reads whatever is there.
+        assert_eq!(
+            discover_sources(root),
+            vec!["dropped".to_string(), "kept".to_string()]
+        );
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(index_row_count(&pool).await, 2);
     }
 
     /// One bucket, several rendered documents, all of them gone when the

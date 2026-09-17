@@ -17,15 +17,10 @@ published from a local machine — the tag is the trigger.
   `datalib/backend/Cargo.toml`.
 - Must match the `version = "..."` fields in
   `datalib/backend/dag/BUILD.bazel` and
-  `datalib/backend/http/BUILD.bazel`, and `ARG PROD_IMAGE_TAG` in
-  `.devcontainer/Dockerfile` — asserted by
+  `datalib/backend/http/BUILD.bazel` — asserted by
   `//datalib/backend:version_consistency_test`, which names the
   offending file on failure. If that test's `data` list has grown, bump
   every file it checks.
-- `ARG PROD_IMAGE_TAG` selects the prod image a LOCAL devcontainer
-  builds FROM, so between this bump and `release.yml` publishing the new
-  tag it points at an image that does not exist yet. That window closes
-  when the tag build finishes.
 - The git tag is `vX.Y.Z` with the same number. Minor bump for
   feature releases, patch for fix-only ones.
 - `datalib/tauri/tauri.conf.json`'s `"version"` is the desktop
@@ -43,8 +38,8 @@ published from a local machine — the tag is the trigger.
 2. Pick the version by reviewing what's shipping:
    `git log v<last>..origin/main --oneline` (find `<last>` with
    `git tag | sort -V | tail -1` — fetch tags first).
-3. Bump all four version fields: `Cargo.toml`, the two `BUILD.bazel`,
-   and `ARG PROD_IMAGE_TAG` in `.devcontainer/Dockerfile`.
+3. Bump all three version fields: `Cargo.toml` and the two
+   `BUILD.bazel`.
 4. Run `tools/repin_cargo.sh` to refresh
    `datalib/backend/Cargo.lock`. Do **not** rely on
    `CARGO_BAZEL_REPIN=1 bazel test //...` for this — when every target
@@ -108,7 +103,7 @@ published from a local machine — the tag is the trigger.
 7. Commit as `chore(release): bump version X.Y.Z → X.Y'.Z'` with a
    short summary of what the release carries (see commits `835946a9`
    and `c05fa424` for the shape). Expected files: `Cargo.toml`,
-   `Cargo.lock`, the two `BUILD.bazel`, `.devcontainer/Dockerfile`, and
+   `Cargo.lock`, the two `BUILD.bazel`, and
    `MODULE.bazel.lock` (per step 6 — expect it, don't treat it as a
    surprise), plus possibly `datalib/tauri/Cargo.lock`.
    Sanity-check before pushing: re-run step 6's *second* (env-var-free)

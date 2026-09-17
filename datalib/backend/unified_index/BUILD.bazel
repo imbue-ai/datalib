@@ -120,6 +120,7 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_unified_index",
+        "//datalib/backend/core:datalib_core",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",
         "@datalib_crates//:serde_json",

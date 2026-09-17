@@ -19,11 +19,11 @@
 # uses) would add ~3 min of apt + cold qmd model download to every run;
 # pulling the pre-built image is closer to ~30s.
 #
-# Bootstrap: the devcontainer image must be published to GHCR before
-# this workflow can succeed. The `devcontainer-publish` job in
-# `release.yml` publishes it on every `v*` tag push. On a fresh repo
-# with no devcontainer image yet, push a tag first; the first PR after
-# can then run this workflow.
+# The devcontainer image is published by `devcontainer.yml` — on every
+# `v*` tag, when the Dockerfile changes, and on demand — on its own
+# rather than as a job inside `release.yml`.
+# It carries a pre-fetched bazel output base, which `prepare-bazel`
+# points bazel at.
 name: test
 
 on:
@@ -33,6 +33,13 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      devcontainer_tag:
+        description: >
+          Tag of ghcr.io/imbue-ai/datalib_devcontainer to run in, e.g. a
+          `sha-<commit>` that `devcontainer.yml` just built, to try an
+          image before it becomes `latest`.
+        type: string
+        default: latest
       remote_execution:
         description: >
           Run the test job on BuildBuddy remote execution instead of on the
@@ -123,29 +130,18 @@ jobs:
       run:
         shell: bash
 
-    # Run the job inside the published devcontainer image. We
-    # deliberately track `:latest` rather than pinning a version: the
-    # image is only republished on `v*` tag pushes (by
-    # `release.yml`'s `devcontainer-publish` job), so `:latest` only
-    # moves on deliberate release events, not opportunistically. In
-    # exchange, contributors don't have to remember to bump a pin in
-    # this file after every release — `.devcontainer/Dockerfile`'s
-    # `PROD_IMAGE_TAG` is the only remaining manual pin (and it
-    # governs reproducible LOCAL devcontainer builds, which is a
-    # property worth keeping).
-    #
-    # Risk: a broken devcontainer image published at `:latest` taints
-    # every subsequent CI run until the next release. Acceptable
-    # because release tagging is a deliberate human action; bad images
-    # surface immediately on the next PR.
+    # `:latest` is moved by `devcontainer.yml` only after the new image
+    # has analysed the tree from its baked output base without fetching
+    # anything, so a broken image cannot become the one every PR pulls.
+    # A dispatch can name a `sha-<commit>` tag to try one first.
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer:latest
+      image: ghcr.io/imbue-ai/datalib_devcontainer:${{ inputs.devcontainer_tag || 'latest' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # `tools/workspace_status.sh` runs `git describe --tags`; the
           # default shallow clone has no tag history, so describe would
@@ -196,32 +192,19 @@ jobs:
       # the suppression is removed and real failures gate merges again.
       - name: bazel test //...
         run: |
-          # `//datalib/ui:e2e_test` (Playwright) IS in this gate. It was
-          # excluded for a long time behind a FIXME whose stated
-          # precondition — a published image carrying `rsync` and both
-          # browsers — has been satisfied since `v0.30.1`, the first
-          # release whose devcontainer-publish actually ran the
-          # `playwright install --with-deps chromium webkit` layer
-          # (WebKit landed in d5be7eb8, five days after v0.29.0, and
-          # v0.30.0's release run failed). What actually
-          # kept it out was two things that note never mentioned, both
-          # now handled above and below:
+          # `//datalib/ui:e2e_test` (Playwright) IS in this gate. The image
+          # bakes both browsers with their OS libraries (the
+          # `playwright install --with-deps chromium webkit` layer in
+          # `.devcontainer/Dockerfile`), and two things the suite needs
+          # are arranged here:
           #
-          #   1. The qmd GGUFs are absent from the `-slim`-based image,
-          #      and the suite refused to run without them. They are
-          #      bazel inputs now (`//third-party/qmd_models`), so the
-          #      suite brings its own.
+          #   1. The qmd GGUFs are not in the image; they are bazel
+          #      inputs (`//third-party/qmd_models`), so the suite brings
+          #      its own.
           #   2. `HOME=/github/home`, which GitHub forces for container
           #      steps, points every cache lookup away from the `/root`
-          #      the image bakes into. That still matters for Playwright's
+          #      the image bakes into. That matters for Playwright's
           #      browser cache — the `--test_env` below redirects it.
-          #
-          # WebKit's arrival was verified in v0.30.1's build log rather
-          # than inferred from the Dockerfile, since layer caching could
-          # have skipped the step:
-          #
-          #   #12 [stage-0 4/10] RUN npx -y "playwright@1.62.1" install --with-deps chromium webkit
-          #   #12 62.88 WebKit 26.5 (playwright webkit v2336) downloaded to /root/.cache/ms-playwright/webkit-2336
           #
           # Why bother gating on this at all, given it costs real
           # wall-clock: CI had never run this suite, which is easy to
@@ -266,10 +249,8 @@ jobs:
           # `//tests/fixtures:ingested_tng_qmd` genrule (embedding model
           # only) and `tests/fixtures/materialize_tng_root.sh`, which the
           # e2e suite runs (all three). Neither reads a host cache, so
-          # neither cares that the devcontainer image CI runs in is built
-          # on the `-slim` prod variant (release.yml passes
-          # `--build-arg PROD_IMAGE_TAG=${version}-slim`) and carries an
-          # EMPTY `/root/.cache/qmd/models`.
+          # neither cares that the devcontainer image carries no
+          # `/root/.cache/qmd/models`.
           #
           # What this replaced: a `Cache the qmd models` + `Populate the
           # qmd models` pair of steps that filled that directory from the
@@ -337,7 +318,7 @@ jobs:
           tar -C artifact -czf "artifact/datalib-x86_64-unknown-linux-gnu.tar.gz" "${stage}"
           ls -la artifact
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: success()
         with:
           name: datalib-x86_64-unknown-linux-gnu
@@ -367,13 +348,13 @@ jobs:
         shell: bash
 
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer:latest
+      image: ghcr.io/imbue-ai/datalib_devcontainer:${{ inputs.devcontainer_tag || 'latest' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 

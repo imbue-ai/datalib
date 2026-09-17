@@ -190,6 +190,19 @@ impl<'a> RunCtx<'a> {
         crate::raw_store::RawStoreSession::open(pool, entity_path, self).await
     }
 
+    /// The same session with the source's blob CAS attached, so every
+    /// seal commits the bytes before the rows that name them. A source
+    /// that keeps a CAS opens its session this way; one whose CAS is
+    /// optional passes `None` when it has none.
+    pub async fn open_store_with_blobs(
+        &self,
+        pool: sqlx::sqlite::SqlitePool,
+        cas_pool: Option<sqlx::sqlite::SqlitePool>,
+        entity_path: std::path::PathBuf,
+    ) -> crate::raw_store::RawStoreSession {
+        crate::raw_store::RawStoreSession::open_with_blobs(pool, cas_pool, entity_path, self).await
+    }
+
     pub fn metrics(&self) -> Arc<DownloadMetrics> {
         self.metrics.clone()
     }

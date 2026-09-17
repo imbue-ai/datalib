@@ -57,7 +57,9 @@ impl DataProcessor for NotionIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
+        let session = ctx
+            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
+            .await;
         // `roots` narrows the mirror; empty means the whole workspace.
         // In playback mode the fixture tree is the workspace, so seeds
         // are derived from every synthesized page response.

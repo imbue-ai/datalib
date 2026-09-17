@@ -20,6 +20,7 @@ import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import type { EdgeOut } from "@/api";
 import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "./asset_urls";
+import { sanitizeRenderedHtml } from "./sanitize";
 // Shared with `tools/chat_preview.mjs`, which inlines this same file so
 // the preview page behaves like the app rather than imitating it.
 import {
@@ -138,8 +139,12 @@ for (const rule of ["html_block", "html_inline"] as const) {
   };
 }
 
+// Sanitized last, after every rewrite: the body is whatever the source
+// sent, and `html: true` above lets it through as HTML.
 const html = computed(() =>
-  md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }),
+  sanitizeRenderedHtml(
+    md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }),
+  ),
 );
 const root = ref<HTMLElement | null>(null);
 
