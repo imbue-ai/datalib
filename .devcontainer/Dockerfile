@@ -11,7 +11,7 @@
 # that image.
 #
 # Neither the build nor the tests care either way any more: the models
-# are pinned in MODULE.bazel (`@qmd_model_*`) and reach the fixture's
+# are fetched by `//third-party/qmd_models` and reach the fixture's
 # index genrule and the materialized demo root as bazel inputs. What the
 # baked copy still buys, in the full image, is a first `datalib` sync
 # that doesn't stall on a 2.2 GB download. See `QMD_PREFETCH_MODELS` in
@@ -155,7 +155,7 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 # `--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` to
 # reach it; and the qmd GGUFs the same suite needs are NOT here, because
 # this image is published against the `-slim` prod base — the suite
-# brings its own, as bazel inputs (`@qmd_model_*` in MODULE.bazel).
+# brings its own, as bazel inputs (`//third-party/qmd_models`).
 ARG PLAYWRIGHT_VERSION=1.62.1
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/*
@@ -188,7 +188,7 @@ RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
 #     /root/.cache/qmd/models reachable from a different `$HOME` — an
 #     app run inside the container finds them where qmd looks. (The
 #     BUILD no longer cares either way; it takes its models from
-#     `@qmd_model_*`.)
+#     `//third-party/qmd_models`.)
 #   * No `chmod 0755 /root` to grant a non-root user traversal access
 #     to the models directory.
 #   * No `chown`-on-named-volume dance in postCreateCommand.

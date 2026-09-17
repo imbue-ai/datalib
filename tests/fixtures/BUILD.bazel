@@ -34,11 +34,7 @@ filegroup(
 # it never opens through every action key.
 filegroup(
     name = "qmd_models",
-    srcs = [
-        "@qmd_model_embeddinggemma//file",
-        "@qmd_model_query_expansion//file",
-        "@qmd_model_reranker//file",
-    ],
+    srcs = ["//third-party/qmd_models:all"],
     visibility = ["//visibility:public"],
 )
 
@@ -391,7 +387,7 @@ py_test(
 #     //third-party/qmd/runtime), which the driver symlinks into a
 #     `DATALIB_RUNTIME_DIR` layout so the indexer resolves them instead
 #     of shelling out to `npx`. The embedding model is a Bazel input too
-#     (`@qmd_model_embeddinggemma`, pinned in MODULE.bazel), staged into
+#     (`//third-party/qmd_models:embeddinggemma`), staged into
 #     a models dir inside the sandbox — so this action no longer reads
 #     the host's `~/.cache/qmd/models`, and no longer downloads it on a
 #     machine where that cache is cold (which is every CI run).
@@ -421,7 +417,7 @@ genrule(
         # The embedding model `qmd embed` loads. See MODULE.bazel for why
         # it is fetched by bazel rather than by qmd, and why its filename
         # has to stay `hf_ggml-org_embeddinggemma-300M-Q8_0.gguf`.
-        "@qmd_model_embeddinggemma//file",
+        "//third-party/qmd_models:embeddinggemma",
     ],
     outs = ["ingested/qmd-index.tar"],
     tools = [
@@ -443,11 +439,11 @@ genrule(
         QMD_VERSION,
         "$(execpath @nodejs_host//:node_bin)",
         "$(execpath //third-party/qmd/runtime:qmd_package_dir)",
-        "$(execpath @qmd_model_embeddinggemma//file)",
+        "$(execpath //third-party/qmd_models:embeddinggemma)",
     ]),
     tags = [
         # No `requires-network`, deliberately. It was here for the model
-        # download, which is now `@qmd_model_embeddinggemma` — a bazel
+        # download, which is now `//third-party/qmd_models:embeddinggemma` — a
         # input, fetched by the repository rule outside the action and
         # kept in the repository cache. The other thing this tag used to
         # cover, fetching qmd ITSELF, went away earlier: the package tree

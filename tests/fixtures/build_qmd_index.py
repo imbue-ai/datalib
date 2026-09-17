@@ -42,7 +42,7 @@ Args (positional):
     5: path to the Node binary (@nodejs_host//:node_bin)
     6: path to the linked `@tobilu/qmd` package dir, used to locate the
        root of the pnpm store it lives in
-    7: path to the embedding GGUF (@qmd_model_embeddinggemma//file)
+    7: path to the embedding GGUF (//third-party/qmd_models:embeddinggemma)
 """
 
 from __future__ import annotations

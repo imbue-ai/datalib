@@ -134,7 +134,7 @@ ARG QMD_VERSION=2.8.3
 # almost every run", and on 2026-09-03 that action executed 15 times
 # against 13 cache hits. What makes the claim true now is that every
 # build-time consumer takes its models as bazel inputs
-# (`@qmd_model_*` in MODULE.bazel) and never looks in this directory.
+# (`//third-party/qmd_models`) and never looks in this directory.
 #
 # The `else` branch still creates the empty directory. Nothing in the
 # build requires it now that `.bazelrc` has no mount pair for it, but a

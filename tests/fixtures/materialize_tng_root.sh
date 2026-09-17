@@ -10,7 +10,7 @@
 #   unified_index/grid_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
 #   unified_index/qmd_index/qmd/index.sqlite QMD index (from qmd-index.tar).
 #   unified_index/qmd_models/          the three qmd GGUFs, linked in from
-#                                      bazel inputs (`:qmd_models`).
+#                                      bazel outputs (`:qmd_models`).
 #   unified_index/qmd_index/qmd/models -> ../../qmd_models
 #   config.toml                        { data_root } plus the
 #                                      `unified_index` applet the grid
@@ -108,8 +108,8 @@ id = "unified_index"
 command = "'$APPLET_BIN' unified_index"
 EOF
 
-# qmd's GGUF models. They arrive as bazel inputs (`:qmd_models`, pinned
-# in MODULE.bazel), so this no longer depends on the developer having run
+# qmd's GGUF models. They arrive as bazel inputs (`:qmd_models`, fetched
+# by //third-party/qmd_models), so this no longer depends on the developer having run
 # qmd at least once — which it used to, refusing with a "populate the
 # shared cache first" message. That check existed because letting qmd
 # download 2.2 GB silently is a multi-minute stall that masquerades as a
@@ -130,9 +130,9 @@ EOF
 MODELS_DIR="$OUT_ROOT/unified_index/qmd_models"
 mkdir -p "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_index/qmd"
 for entry in \
-  "qmd_model_embeddinggemma/file/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf" \
-  "qmd_model_query_expansion/file/hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf" \
-  "qmd_model_reranker/file/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"; do
+  "_main/third-party/qmd_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf" \
+  "_main/third-party/qmd_models/hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf" \
+  "_main/third-party/qmd_models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"; do
   src="$(rlocation "$entry")" || src=""
   if [[ -z "$src" || ! -s "$src" ]]; then
     echo "ERROR: qmd model not found in runfiles: $entry" >&2
