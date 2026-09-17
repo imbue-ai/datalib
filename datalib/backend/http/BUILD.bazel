@@ -105,6 +105,9 @@ rust_test(
     size = "small",
     crate = ":datalib_http",
     edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
     deps = [
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",

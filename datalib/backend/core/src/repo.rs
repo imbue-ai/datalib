@@ -100,10 +100,6 @@ pub trait AppRepo: Send + Sync {
         Err(RepoError::ReadOnly)
     }
 
-    async fn recover_running_jobs(&self) -> Result<usize, RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
     // --- The disk-usage timeseries ------------------------------------
 
     /// Append disk-usage samples. The caller has already applied the

@@ -1,7 +1,9 @@
 //! Stand-in processes for the crate's test: a `child` that watches its
 //! parent and otherwise sleeps, and a `parent` that starts one — with
 //! the pipe (`watch`) or without it (`nowatch`) — prints its pid, and
-//! sleeps until the test kills it.
+//! sleeps until the test kills it. `exec` is the same parent for any
+//! program, so another crate's test can SIGKILL the parent of its own
+//! binary.
 
 // A test fixture with no progress display: stdout is how it reports the
 // child's pid, and the parent never reaps because being SIGKILLed is
@@ -15,8 +17,11 @@ fn main() {
     match args.get(1).map(String::as_str) {
         Some("child") => child(),
         Some("parent") => parent(args.get(2).map(String::as_str) == Some("watch")),
+        Some("exec") if args.len() > 2 => exec(&args[2], &args[3..]),
         _ => {
-            eprintln!("usage: probe child | probe parent (watch|nowatch)");
+            eprintln!(
+                "usage: probe child | probe parent (watch|nowatch) | probe exec PROGRAM ARG…"
+            );
             std::process::exit(64);
         }
     }
@@ -34,18 +39,30 @@ fn child() {
 
 fn parent(watch: bool) {
     let mut cmd = Command::new(std::env::current_exe().expect("own path"));
-    cmd.arg("child")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit());
+    cmd.arg("child");
     if watch {
         cmd.env(datalib_parent_watch::ENV_VAR, "1");
     } else {
         cmd.env_remove(datalib_parent_watch::ENV_VAR);
     }
-    let child = cmd.spawn().expect("spawn probe child");
+    hold(cmd);
+}
+
+fn exec(program: &str, args: &[String]) {
+    let mut cmd = Command::new(program);
+    cmd.args(args).env(datalib_parent_watch::ENV_VAR, "1");
+    hold(cmd);
+}
+
+/// Start the child on a parent pipe, print its pid, and sleep until
+/// killed. `child` stays in scope, so its stdin stays open until we are
+/// gone.
+fn hold(mut cmd: Command) {
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    let child = cmd.spawn().expect("spawn the child");
     println!("{}", child.id());
-    // `child` stays in scope, so its stdin stays open until we are gone.
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
     }
