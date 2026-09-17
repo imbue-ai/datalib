@@ -1,40 +1,97 @@
-// The CSP on the DACTAL page (issue #138, mitigation 4).
-//
-// The vendored engine can load code from dactal.org at runtime — dormant
-// today, one call away always. `public/dactal/index.html` pins that shut
-// with `script-src 'self' 'unsafe-eval'; connect-src 'self'`.
+// The DACTAL card runs its page in a sandboxed iframe (issue #146) and
+// the page keeps its own CSP against the vendored engine's dactal.org
+// paths (issue #138, mitigation 4). Both are checked from inside the
+// running app, because the sandbox is the property under test: the page
+// on its own no longer does anything.
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Frame, type Page } from "@playwright/test";
 
-const PAGE = "/dactal/index.html?dq=rows%2Fsource";
+declare const process: { env: Record<string, string | undefined> };
+const TOKEN = process.env.DATALIB_TOKEN;
 
-test("the CSP leaves DACTAL fully working", async ({ page }) => {
-  await page.goto(PAGE);
+const CARD = "/" + encodeURIComponent('dactalView({ q: "rows/source" })');
 
-  // The engine ran a query and the renderer drew its table. That covers
-  // the three things the policy has to keep allowing: `eval` for the
-  // query language, `main.js` + `vendor/*.js` as same-origin scripts,
-  // and the inline styles the renderer emits.
-  await expect(page.locator("#queryoutput table").first()).toBeVisible({
+// Authenticate the way a browser does — `?token=` once, then the cookie
+// — rather than through the suite's ambient `Authorization` header.
+// Playwright puts that header on every request the page makes, and on
+// a cross-origin one (the sandboxed frame loading its module script
+// from origin `null`) it forces a CORS preflight the server has no
+// answer for. Chromium then drops the script; WebKit does not send the
+// header on that fetch. Neither is what a user's browser does.
+test.use({ extraHTTPHeaders: {} });
+
+/** The DACTAL frame once it has drawn a table — the engine ran a query
+ *  over rows the host handed it. */
+async function loadedFrame(page: Page): Promise<Frame> {
+  expect(TOKEN, "playwright.config.ts should have pinned DATALIB_TOKEN").toBeTruthy();
+  await page.goto(`${CARD}?token=${TOKEN}`);
+  const frame = page.frameLocator('iframe[src="/dactal/index.html"]');
+  await expect(frame.locator("#queryoutput table").first()).toBeVisible({
     timeout: 20_000,
   });
-  await expect(page.locator("#status")).toContainText(/results? for/);
-  await expect(page.locator("#queryoutput .err")).toHaveCount(0);
+  await expect(frame.locator("#status")).toContainText(/results? for/);
+  await expect(frame.locator("#queryoutput .err")).toHaveCount(0);
+  const f = page
+    .frames()
+    .find((f) => f.url().endsWith("/dactal/index.html"));
+  expect(f, "the DACTAL frame should be in the frame tree").toBeTruthy();
+  return f!;
+}
 
-  // `/applet/unified_index/search` is same-origin, so `connect-src 'self'` must not have
-  // blocked the working-set load.
-  await expect(page.locator("#status")).not.toContainText(
-    "could not reach /applet/unified_index/search",
+test("the sandboxed frame gets its rows from the host and nothing else", async ({
+  page,
+}) => {
+  const frame = await loadedFrame(page);
+
+  // The frame element carries the sandbox, without `allow-same-origin`
+  // — with it, the frame could reach up and remove its own sandbox.
+  const sandbox = await page
+    .locator('iframe[src="/dactal/index.html"]')
+    .getAttribute("sandbox");
+  expect(sandbox).toBe("allow-scripts");
+
+  const inside = await frame.evaluate(async () => {
+    // An opaque origin serializes as "null"; a same-origin frame would
+    // say http://127.0.0.1:<port>.
+    const origin = window.origin;
+    // No session, no API: the fetch never leaves the page (the page's
+    // own `connect-src 'none'`), and even without that policy it would
+    // be a cross-origin request from an origin the server never
+    // answers.
+    let apiReached = false;
+    try {
+      const r = await fetch("/applet/unified_index/search?q=&limit=1");
+      apiReached = r.ok;
+    } catch {
+      apiReached = false;
+    }
+    // The renderer's store is the in-memory stand-in, not IndexedDB —
+    // which an opaque origin does not have.
+    const db = (window as unknown as { dactaldb: { store?: unknown } }).dactaldb;
+    return { origin, apiReached, inMemoryStore: db.store instanceof Map };
+  });
+  expect(inside.origin, "the frame must run in an opaque origin").toBe("null");
+  expect(inside.apiReached, "the frame must not reach /applet/*").toBe(false);
+  expect(inside.inMemoryStore).toBe(true);
+});
+
+test("the page opened on its own does nothing", async ({ page }) => {
+  // Reachable without a session (the statics are public) — and inert:
+  // no host, no rows, no query evaluated from the URL.
+  const resp = await page.goto("/dactal/index.html?dq=rows%2Fsource");
+  expect(resp?.status()).toBe(200);
+  expect(resp?.headers()["content-security-policy"]).toMatch(/sandbox/);
+  await expect(page.locator("#status")).toContainText(
+    "runs inside a Datalib card",
   );
+  await expect(page.locator("#queryoutput table")).toHaveCount(0);
+  expect(await page.evaluate(() => window.origin)).toBe("null");
 });
 
 test("the CSP blocks the dactal.org paths and keeps eval", async ({ page }) => {
-  await page.goto(PAGE);
-  await expect(page.locator("#queryoutput table").first()).toBeVisible({
-    timeout: 20_000,
-  });
+  const frame = await loadedFrame(page);
 
-  const result = await page.evaluate(async () => {
+  const result = await frame.evaluate(async () => {
     // The two directives the assertions below are about. Collected as
     // they fire, and — the part that matters — *waited on* rather than
     // slept through: the listener resolves `settled` as soon as both
@@ -79,14 +136,7 @@ test("the CSP blocks the dactal.org paths and keeps eval", async ({ page }) => {
     // A CSP violation report is dispatched asynchronously, after the
     // load it blocked has already rejected — so the `blocked()` calls
     // above can finish before the events arrive, and something has to
-    // wait for them.
-    //
-    // This used to be an unconditional 300 ms sleep, which is a guess
-    // in both directions: too long when the events have already landed
-    // (the normal case, and 300 ms of every run), and silently too
-    // short on a loaded machine, where it would report a partial list
-    // and fail the assertion below about the policy rather than about
-    // the timing. The race is a *deadline*, not a wait: it only
+    // wait for them. The race is a *deadline*, not a wait: it only
     // expires when the events never come, and then the assertion below
     // says which one was missing.
     await Promise.race([settled, new Promise((r) => setTimeout(r, 5_000))]);

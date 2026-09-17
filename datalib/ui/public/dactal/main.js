@@ -1,6 +1,6 @@
 // The DACTAL explorer page's own logic — the query bar, the render loop,
 // and the wiring of the globals DACTAL's vendored renderer expects.
-import { loadSearchIntoDactal, fetchSearch } from "./bridge.js";
+import { loadSearchIntoDactal, fetchSearch, awaitInit, hosted } from "./bridge.js";
 
 // --- Wire up the globals DACTAL's renderer expects -------------------------
 // dactal_utils.js references a bare global `dactal` (the engine instance) and
@@ -9,7 +9,18 @@ import { loadSearchIntoDactal, fetchSearch } from "./bridge.js";
 // clicks re-render into our container instead of DACTAL's host page.
 const dactal = new DACTAL();
 window.dactal = dactal;
-window.dactaldb = new DACTALdb({ dbname: "dactal-datalib-proto", storename: "Data" });
+// The renderer's store, in memory. IndexedDB is not available to a
+// sandboxed page (an opaque origin has no storage), and nothing here
+// needs to outlive the card: the working set is reloaded from the host.
+window.dactaldb = {
+  dbname: "dactal-datalib",
+  persistent_query_history: false,
+  store: new Map(),
+  async keys() { return [...this.store.keys()]; },
+  async get(key) { return this.store.get(key); },
+  async set(key, val) { this.store.set(key, val); },
+  async remove(key) { this.store.delete(key); },
+};
 
 // Inject DACTAL's table styles (normally added by its own host page).
 const css = document.createElement("style");
@@ -66,12 +77,7 @@ function setStatus(prefix, query) {
   statusEl.textContent = prefix + (query ? `“${query}”` : "");
 }
 
-// Card params (set by dactalView(...) via the iframe URL):
-//   ?datalib=<datalib search>  working set to pull from /applet/unified_index/search
-//   ?dq=<dactal query>         initial DACTAL query (default rows/source)
-const PARAMS = new URLSearchParams(location.search);
-const INITIAL_DATALIB = PARAMS.get("datalib") || "";
-const INITIAL_DQ = PARAMS.get("dq") || "rows/source";
+const DEFAULT_DQ = "rows/source";
 
 // Provider-agnostic examples (work over any Datalib corpus). The last
 // one shows bracketing a value that contains spaces/parens — DACTAL treats
@@ -109,20 +115,30 @@ async function load(datalibQuery, initialDq) {
       .join("  ");
     statusEl.textContent =
       `loaded ${summary.rows} rows → datasets: rows + ${ents}.  Try a DACTAL query.`;
-    runQuery(initialDq || INITIAL_DQ);
+    runQuery(initialDq || DEFAULT_DQ);
   } catch (e) {
-    statusEl.innerHTML =
-      `<span class="err">could not reach /applet/unified_index/search (${e.message}). ` +
-      `Serve this page so /api proxies to the Datalib backend — see README.</span>`;
+    statusEl.textContent = "";
+    const err = document.createElement("span");
+    err.className = "err";
+    err.textContent = `the search failed (${e.message})`;
+    statusEl.appendChild(err);
   }
 }
 
 const datalibInput = document.getElementById("datalib");
-datalibInput.value = INITIAL_DATALIB;
 document.getElementById("datalibgo").onclick = () => load(datalibInput.value);
 document.getElementById("dqgo").onclick = () => runQuery();
 dqInput.addEventListener("keydown", (e) => { if (e.key === "Enter") runQuery(); });
 datalibInput.addEventListener("keydown", (e) => { if (e.key === "Enter") load(e.target.value); });
 
-// Initial load from card params (or empty Datalib query → recent rows).
-load(INITIAL_DATALIB, INITIAL_DQ);
+// The card's arguments arrive from the host, not from the URL: a page
+// that ran whatever `?dq=` it was opened with would evaluate a query
+// for anyone who could make the user follow a link.
+if (hosted) {
+  awaitInit().then(({ load: initialLoad, dq }) => {
+    datalibInput.value = initialLoad;
+    load(initialLoad, dq || DEFAULT_DQ);
+  });
+} else {
+  setStatus("This page runs inside a Datalib card — open it with dactalView().");
+}
