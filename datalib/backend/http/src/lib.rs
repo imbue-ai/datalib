@@ -833,7 +833,17 @@ async fn put_config(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    let tmp = path.with_extension("tmp");
+    // One temp name per write, or two PUTs landing together write one
+    // file and the second rename finds it gone. The `.tmp` suffix is what
+    // the root watcher ignores, so it stays.
+    let tmp = path.with_file_name(format!(
+        "config.{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
     if let Err(e) = std::fs::write(&tmp, req.text.as_bytes()) {
         tracing::error!("put_config: write {}: {e}", tmp.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
