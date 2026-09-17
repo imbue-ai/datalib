@@ -3,6 +3,9 @@
 import type { FeedbackContext } from "./feedback/context";
 import { pushToast } from "./toasts";
 
+// `DiffStatus` in datalib_schema, hand-kept in step.
+export type DiffStatus = "added" | "removed" | "modified" | "unchanged";
+
 export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
@@ -80,6 +83,12 @@ export type SearchRow = {
   // How many things this row counts (rows in a measured table, pages in
   // a PDF). Null for rows that are a single thing.
   item_count: number | null;
+  // How the row differs between the two commits its diff group compares
+  // (`DiffStatus` in datalib_schema). Null on every real source's rows —
+  // non-null is what says a row came from a diff tree.
+  diff_status: DiffStatus | null;
+  // For a modified row, the columns whose value differs, `|`-joined.
+  diff_changed_columns: string | null;
   // QMD rank score. Present when the row came from a qmd-routed search;
   // omitted (undefined) for pure structured queries and the LIKE fallback.
   score?: number;

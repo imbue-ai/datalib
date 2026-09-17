@@ -315,6 +315,12 @@ async fn every_wire_field_survives_the_round_trip() {
         .item_count(Some(7))
         .build()
         .unwrap();
+    // The builder has no setters for these: a diff marks a finished row.
+    let row = GridRow {
+        diff_status: Some("modified".to_string()),
+        diff_changed_columns: Some("text".to_string()),
+        ..row
+    };
     // The INSERT the index itself uses, from the derived column list —
     // so this test cannot drift from the DDL either.
     let columns = std::iter::once(GridRow::ID_COLUMN)

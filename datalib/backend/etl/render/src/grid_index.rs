@@ -1186,6 +1186,8 @@ mod insert_round_trip_tests {
             markdown_uuid: Some("md-1701".into()),
             byte_size: Some(4_096),
             item_count: Some(17),
+            diff_status: Some("modified".into()),
+            diff_changed_columns: Some("text|author".into()),
         }
     }
 
@@ -1294,6 +1296,8 @@ mod id_claim_tests {
             markdown_uuid: Some(markdown_uuid.into()),
             byte_size: None,
             item_count: None,
+            diff_status: None,
+            diff_changed_columns: None,
         }
     }
 
@@ -1427,6 +1431,8 @@ mod write_lock_tests {
             markdown_uuid: Some(uuid.clone()),
             byte_size: None,
             item_count: None,
+            diff_status: None,
+            diff_changed_columns: None,
         };
         RenderedMarkdown {
             markdown_uuid: uuid.clone(),
