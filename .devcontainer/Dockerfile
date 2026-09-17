@@ -133,7 +133,10 @@ WORKDIR /workspaces/datalib
 # `$HOME/.cache/bazel` — `/root` here, `/github/home` on a CI runner.
 # With only the output base pinned, every entry looked absent from the
 # runner's cache and was fetched again (measured: 157 downloads, 50 s,
-# on the first invocation of a run). A bump to a
+# on the first invocation of a run). The downloaded archives are
+# dropped afterwards — 0.7 GB the image would carry for nothing, since
+# the extracted contents are what a run uses and a repository added
+# after the build downloads its own. A bump to a
 # toolchain or lockfile between image builds just refetches that delta,
 # which is why lockfile changes do not rebuild the image and the tag
 # build at each release is what keeps the delta small.
@@ -155,7 +158,8 @@ RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
             --output_user_root=/opt/bazel/user-root \
             --output_base=/opt/bazel/output-base \
             fetch --lockfile_mode=error //... \
-        && rm -rf /opt/bazel/output-base/execroot /opt/bazel/output-base/action_cache; \
+        && rm -rf /opt/bazel/output-base/execroot /opt/bazel/output-base/action_cache \
+            /opt/bazel/user-root/cache/repos/v1/content_addressable; \
     else \
         bazelisk version; \
     fi
