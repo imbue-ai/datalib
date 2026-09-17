@@ -1,11 +1,13 @@
 # Diff groups: a source's changes as a first-class thing in the app
 
-**Status: proposal (2026-09-17). Nothing here is built.** This replaces
-an earlier proposal of the same name that diffed the render store's rows
-between two of its commits; that design could list which documents
-changed but could not show *how*, because the render store never held
-the old markdown. Every "already exists" claim below names the file it
-was checked against.
+**Status: steps 1–4 of "Order of work" are built (2026-09-17); the UI
+(step 5) and the Slack fixture (step 6) are not.** The contacts diff
+group in the TNG fixture is the working example
+(`tests/fixtures/run_sync_pipeline.py`, `ingested_tng_test`'s
+`_diff_shape`). This replaces an earlier proposal of the same name
+that diffed the render store's rows between two of its commits; that
+design could list which documents changed but could not show *how*,
+because the render store never held the old markdown.
 
 ## What we want
 
@@ -40,10 +42,14 @@ source = "work-slack"          # the group whose raw store is diffed
 group = "work-slack-diff"
 function = "render_markdown"
 inputs = ["work-slack/ingest"]
-[steps.params]
+[steps.params.diff]
 from = "<raw commit>"          # both required: a diff is asked for,
 to = "<raw commit>"            # never standing
 ```
+
+The pair sits under `params.diff` so the rest of `params` is the
+source type's own render config, parsed as strictly as on the source's
+step (`render_diff::split_params`).
 
 The step renders the source's raw store at two commits, subtracts one
 render from the other, and writes the result as an ordinary render tree
@@ -82,12 +88,15 @@ and nothing else. There is no default pair and no diff that maintains
 itself as the source syncs — a person names the two points, and what
 they get is exactly that comparison until they ask for another.
 
-A person creates one from **"Compare…" on a source's row in Manage**: a
-picker lists the raw store's commits (date, and the sync run that made
-each, from `datalib_history`) and they choose two. The wizard writes the
-group, its one step, and names the step in both fan-ins' `inputs`,
-exactly as it does for a source (`wireIntoFanIns` in
+A person creates one from **"Compare…" on a source's row in Manage**
+(not built yet): a picker lists the raw store's commits (date, and the
+sync run that made each, from `datalib_history`) and they choose two.
+The wizard writes the group, its one step, and names the step in both
+fan-ins' `inputs`, exactly as it does for a source (`wireIntoFanIns` in
 `ui/src/config/sourceSteps.ts`). Removing the group removes the tree.
+Running it is `datalib-dag --sync <source>/ingest`: the diff step is
+downstream of the source's ingest and runs in its chain, and nothing
+else in the root re-runs.
 
 A *rolling* diff — `from` advancing to the last consumed commit on every
 sync, so the group is a live "what changed in the last sync" view — is
@@ -105,20 +114,26 @@ The render driver ([`render.rs`](../../../datalib/backend/datalib_step/src/rende
 `plan_render` the source's own render step uses — with a sink that
 collects instead of stores:
 
-1. **Pass one, at `to`.** `RawRange { cursor: from, pin: to, stale: None }`.
-   The provider's forward scan — the raw `dolt_diff` from `from` to
-   `to` — names the buckets that moved; the provider renders them at
-   `to` and declares each bucket's inputs. Collect the emitted
-   `RenderedMarkdown`s and the declared bucket set *S*. (The driver's
-   reverse lookup through `render_inputs` is not needed: the pair is
-   fixed, so every run is a full walk of the same delta.)
-2. **Pass two, at `from`.** `RawRange { cursor: from, pin: from,
-   stale: S }`. The forward scan from `from` to `from` is empty, so the
-   provider renders exactly *S* — at `from`. A bucket in *S* whose raw
-   row does not exist at `from` comes back through `Narrowed::gone` and
-   produces no document; that is how an added document looks. Two
-   sequential read-only pinned opens of the raw store, each closed
-   before the next, so the one-open-per-file rule holds.
+1. **One pass per side, each scanning from the other.** `RawRange {
+   cursor: from, pin: to, stale: Some(∅) }` renders, at `to`, the
+   buckets the provider's forward scan names — the rows the raw
+   `dolt_diff` says moved, mapped to their buckets through the rows
+   loaded at `to`. Then `RawRange { cursor: to, pin: from, stale:
+   Some(∅) }` does the same at `from`. The passes are symmetric because
+   a *deleted* row has no bucket at `to` — nothing there to load it
+   into — and is named only by the pass at `from`; an added one only by
+   the pass at `to`. The stale set is empty rather than absent so the
+   scan decides alone (`None` means "render everything"), and the
+   driver's `render_inputs` reverse lookup is not used: a diff store
+   has none on its first run, and the pair is fixed, so every run is a
+   full walk of the same delta. Two sequential read-only pinned opens
+   of the raw store per pass, each closed before the next.
+2. **Collect rather than store.** The renderer still writes its `.md`
+   and blobs to their real paths; the sink keeps each emitted
+   `RenderedMarkdown` and its sections in memory (reading the file back
+   as one block for a renderer that declares no sections, and saying
+   so once per source at `warn`), and the subtraction's result
+   overwrites the file.
 3. **Subtract.** For each `markdown_uuid` in the union of the two
    sides: rows keyed by `uuid` — only in `to` is *added*, only in
    `from` is *removed*, in both with any cell different is *modified*
@@ -127,12 +142,38 @@ collects instead of stores:
    a modified section's body gets a word-level inline diff. A document
    only on the `to` side is one whose every section and row is added;
    only on the `from` side, all removed.
-4. **Write**, through the ordinary store path (`put_document`,
-   `put_inputs`, checkpoint, seal), one document per `markdown_uuid` in
-   the union: rows are the union with `diff_status` set, the `.md` is the
-   highlighted document, the bucket's `render_inputs` are pass one's
-   declarations. Every run is a full walk, so the sweep at the end
-   removes whatever a previous pair produced that this pair did not.
+4. **Re-key, then write** through the ordinary store path
+   (`put_document`, `put_inputs`, seal, one commit), one document per
+   `markdown_uuid` in the union: rows are the union with `diff_status`
+   set, the `.md` is the highlighted document, the bucket's
+   `render_inputs` are the `to` side's declarations. A document the
+   scan named whose rows and sections came out identical is not a
+   document of the diff. Every run is a full walk, so the sweep at the
+   end removes whatever a previous pair produced that this pair did not.
+
+**A diff row has its own id.** It is about the source's entity but is
+not it, and the unified index refuses two sources claiming one uuid
+(`IdClaims`). So every uuid a diff document carries — its rows', its
+`markdown_uuid`, its `conversation_uuid` — is minted again by the one
+recipe: `entity_id_str(IdNamespace::Datalib, Scope::SourceInstance(<diff
+group>), "diff", <the source's uuid>)`, the same shape as the storage
+rows. The anchors in the markdown (`id="m-…"`, `data-section-uuid`,
+`data-page-title-uuid`) and the frontmatter's `markdown_uuid:` /
+`chat_uuid:` follow, so a row still scrolls to its section; a path
+never does, since the file and its blobs are where the renderer put
+them; `upstream_id` stays the source's, since it is the backpointer to
+the real thing. `render_diff::rekeyed`.
+
+**What the scan cannot see.** A provider's forward scan diffs its
+content tables — Slack's messages and attachments, contacts' cards and
+address books. A change only in a lookup table (a user renamed in
+`users`, with no message touched) names no bucket, and the diff shows
+nothing for it; the normal render catches that case through the
+reverse lookup in `render_inputs`, which the diff does not use. The
+three providers whose render decides by `RawRange::is_stale` alone
+(airvisual, garmin, yolink — one page of plots each) render nothing
+under a diff group. A source that renders nothing (`ingest_only!`) is
+refused by `datalib-step`.
 
 The prerequisites for "render twice, subtract" to mean anything are
 already rules of the tree, checked here against it: a render is a pure
@@ -165,10 +206,21 @@ AGENTS.md §"Name a closed set of strings".
 added, and nothing else new:
 
 ```html
-<div class="diff-added">   …a whole section that is new…      </div>
-<div class="diff-removed"> …a whole section that is gone…     </div>
-…inside a modified section: <ins>new words</ins> <del>old words</del>…
+<div class="diff-added">    …a whole section that is new…      </div>
+<div class="diff-removed">  …a whole section that is gone…     </div>
+<div class="diff-modified"> …a section on both sides, with
+                             <del>old words</del><ins>new words</ins> inside… </div>
 ```
+
+Inside a modified section the diff is lines first, then the words of a
+line that changed (`diff::inline_diff`): a whole inserted or deleted
+line has its content marked, a changed line only the words that moved.
+A marker never crosses a table cell boundary or a line end, never
+contains an HTML tag, and leaves a line's markdown prefix and a table's
+delimiter row alone — so a diffed heading is still a heading and a
+diffed table is still a table. Unkeyed sections (frontmatter, a
+`<details>` wrapper) come through from the `to` side unmarked; a
+document with no `to` side keeps `from`'s.
 
 The `<div id="m-{uuid}" data-section-uuid="{uuid}">` wrappers stay
 intact inside the diff wrappers, so row-click-to-section still works.
@@ -232,20 +284,23 @@ separate decision and nothing here depends on it.
 
 ## Loader, runner, `datalib-step`
 
-- **Loader** (`dag/src/config.rs`): a `diff` group must carry `source`,
-  and `source` must name a group that has a `type` other than `diff`
-  and an `ingest` step. A `diff` group's only permitted grouped
-  function is `render_markdown`. Violations drop the group with a
-  diagnostic, like any other bad entry.
-- **Runner**: forwards the source group's type to the diff group's
-  steps as `DATALIB_DAG_SOURCE_GROUP_TYPE`, and puts it in the step's
-  fingerprint beside `DATALIB_DAG_GROUP_TYPE`.
-- **`datalib-step`**: `type = diff` dispatches to the source type's
-  `plan_render` (the `SourceType` list stays closed; `diff` is not a
-  `SourceType` but a second word the group loader knows), then to the
-  render driver in diff mode with `from`/`to` from params. Refuses a
-  `diff` group with no `DATALIB_DAG_SOURCE_GROUP_TYPE`, or one whose
-  source type renders nothing (`ingest_only!`).
+- **Loader** (`dag/src/config.rs`, `DIFF_GROUP_TYPE`,
+  `diff_source_problem`): a `diff` group must carry `source`, and
+  `source` must name a declared group with a `type` that is not `diff`;
+  a group of any other type must not carry `source`. A `diff` group's
+  only step is `render_markdown`, and its first input must be
+  `<source>/ingest`. Violations drop the entry with a diagnostic naming
+  the rule, like any other bad entry.
+- **The source's type reaches the step as `DATALIB_DAG_SOURCE_GROUP_TYPE`**,
+  which the loader puts in the step's own `env` — so it is forwarded
+  like any env entry and fingerprinted with it, and changing the
+  source's type re-runs the diff. The runner itself knows nothing about
+  diff groups.
+- **`datalib-step`** (`source.rs`, `main.rs`, `render_diff.rs`): under
+  `type = diff` the render function splits `params.diff` off, plans the
+  source type's render wave with the rest, and runs the two-pass
+  driver. The `SourceType` list stays closed; `diff` is a word the
+  loader knows, not a provider.
 - **The raw store** comes from the step's first input, exactly as a
   render step's does — `source` on the group is for the loader's
   validation, the Manage screen's label and the wizard, not for
@@ -264,23 +319,26 @@ should not say it mirrors Slack.
 The TNG fixture ingests once, so no raw store in it has a second
 commit. Extend `tests/fixtures/run_sync_pipeline.py`:
 
-- **Contacts** (`.vcf` files read from disk): a `carddav_tng_v2/`
-  sibling of `carddav_tng/` with one card added, one removed, and one
-  edited (a phone number and the `ORG`). The pipeline runs the DAG,
-  repoints the `tng_contacts` group's `vcf.path` at v2, and runs it
-  again; the raw store then has two commits, and a `tng_contacts-diff`
-  group in the config renders the delta. Contacts first because one
-  document is one contact, so a field edit is one yellow cell and the
-  shape of every rule is visible in a screen of output.
+- **Contacts** (built): a `carddav_tng_v2/` sibling of `carddav_tng/`
+  with one card added, one removed, and one edited (a phone number and
+  the `ORG`). The pipeline copies `carddav_tng` into the workspace,
+  runs the DAG, lays v2 over the copy and syncs the contacts chain, then
+  writes a `tng_contacts-diff` group with the two commits (read off
+  `system/dag_state.json`) and syncs the chain once more. The `.vcf`
+  ingest had to learn to delete a card gone from a re-read file for the
+  removal to exist at all — it was upsert-only. Contacts first because
+  one document is one contact, so a field edit is one yellow cell and
+  the shape of every rule is visible in a screen of output.
 - **Slack** (HTTP playback): a second playback tape from a
   `slack_api_v2/` fixture dir — one new message, one deleted, one
   edited, one reaction added — so `chat-common`'s aside runs,
   reactions and the `##` header all get exercised. Slack second, and
   through it every `chat-common` provider.
 
-Goldens: the two diff trees' `.md` files and their `grid_rows` join the
-`render_contract_test` / render-preview goldens, so the highlighting
-and the status columns are pinned. A unit test on the subtraction
+Goldens: the diff tree's `.md` files are in the render-preview golden
+and its rows in the fixture-DB snapshot, so the highlighting and the
+status columns are pinned; `ingested_tng_test::_diff_shape` asserts
+the three fates and the changed columns. A unit test on the subtraction
 covers the table above (added / removed / modified with the right
 column list / unchanged, and a document present on one side only).
 `schema_inventory` regenerates for the two columns. The step opens the
@@ -291,17 +349,15 @@ it anyway.
 
 ## Order of work
 
-1. `Section` on `RenderedMarkdown`; `chat-common` and `contact-common`
-   emit sections; the `.md` bytes are unchanged (a golden proves it).
-2. The two `grid_rows` columns, end to end through the checklist, NULL
-   everywhere; `schema_inventory` and the fixture rebuilt.
-3. The subtraction (`datalib_etl_render::diff`): rows, sections,
-   inline word diff (the `similar` crate — a new third-party dep), unit
-   tests. Nothing wired yet.
-4. Loader + runner + `datalib-step`: the `diff` group, `source`,
-   `DATALIB_DAG_SOURCE_GROUP_TYPE`, the driver's two passes and the
-   collecting sink. The contacts fixture's second commit and diff group;
-   goldens.
+1. *(built)* `Section` on `RenderedMarkdown`; `chat-common` and
+   `contact-common` emit sections; the `.md` bytes are unchanged.
+2. *(built)* The two `grid_rows` columns, end to end through the
+   checklist, NULL everywhere.
+3. *(built)* The subtraction (`datalib_etl_render::diff`): rows,
+   sections, line-then-word inline diff (the `similar` crate).
+4. *(built)* Loader + `datalib-step`: the `diff` group, `source`,
+   `DATALIB_DAG_SOURCE_GROUP_TYPE`, the two-pass driver, the re-keying.
+   The contacts fixture's second commit and diff group; goldens.
 5. UI: colouring rules, the changed-only toggle, diff CSS, the icon,
    "Compare…" and the wizard rules, the sanitizer test.
 6. Slack's second tape and diff group; whatever `chat-common` needs

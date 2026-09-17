@@ -138,6 +138,14 @@ const WRAP_CLOSE: &str = "</div>\n\n";
 /// wrapper — is structure rather than content and comes through from
 /// `to` as it is.
 pub fn diff_sections(from: &[Section], to: &[Section]) -> Vec<Section> {
+    if to.is_empty() {
+        // No `to` side at all: the document is gone, and what is shown
+        // is `from`'s, its structure included, every section removed.
+        return from
+            .iter()
+            .map(|s| removed(s).unwrap_or_else(|| s.clone()))
+            .collect();
+    }
     let from_keys: Vec<Key<'_>> = from.iter().map(Key::of).collect();
     let to_keys: Vec<Key<'_>> = to.iter().map(Key::of).collect();
     let mut out = Vec::with_capacity(to.len() + from.len());
@@ -228,16 +236,70 @@ fn removed(s: &Section) -> Option<Section> {
         .map(|uuid| Section::keyed(uuid, format!("{REMOVED_OPEN}{}{WRAP_CLOSE}", s.md)))
 }
 
-/// `to` with the words that differ from `from` marked: a run of deleted
-/// tokens in `<del>`, a run of inserted ones in `<ins>`. Tokens are
-/// HTML tags, words and runs of whitespace, so a marker never lands
-/// inside a tag, and a marker is closed before every newline and
-/// reopened after it, so none ever stands alone on a line where
-/// markdown would take it for a block.
+/// `to` with what differs from `from` marked: lines first, then the
+/// words inside a line that changed. A whole inserted line has its
+/// content wrapped in `<ins>`, a whole deleted line is put back with its
+/// content in `<del>`, and a line that changed gets the words that did
+/// marked. A marker never crosses a table cell boundary or a line end,
+/// never contains an HTML tag, and leaves a line's markdown prefix
+/// (`## `, `- `, `> `) and a table's delimiter row alone, so a diff of a
+/// heading is still a heading and a diff of a table is still a table.
 pub fn inline_diff(from: &str, to: &str) -> String {
+    let from_lines: Vec<&str> = from.split_inclusive('\n').collect();
+    let to_lines: Vec<&str> = to.split_inclusive('\n').collect();
+    let mut out = String::with_capacity(to.len() + from.len() / 4);
+    for op in capture_diff_slices(Algorithm::Myers, &from_lines, &to_lines) {
+        match op {
+            DiffOp::Equal { new_index, len, .. } => {
+                out.extend(to_lines[new_index..new_index + len].iter().copied())
+            }
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => {
+                for line in &to_lines[new_index..new_index + new_len] {
+                    mark_line(&mut out, "ins", line);
+                }
+            }
+            DiffOp::Delete {
+                old_index, old_len, ..
+            } => {
+                for line in &from_lines[old_index..old_index + old_len] {
+                    mark_line(&mut out, "del", line);
+                }
+            }
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                let old = &from_lines[old_index..old_index + old_len];
+                let new = &to_lines[new_index..new_index + new_len];
+                let paired = old.len().min(new.len());
+                for i in 0..paired {
+                    word_diff(&mut out, old[i], new[i]);
+                }
+                for line in &old[paired..] {
+                    mark_line(&mut out, "del", line);
+                }
+                for line in &new[paired..] {
+                    mark_line(&mut out, "ins", line);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// One line, its every cell's content marked.
+fn mark_line(out: &mut String, tag: &str, line: &str) {
+    mark(out, tag, &tokens(line));
+}
+
+/// A changed line: the tokens that differ, marked.
+fn word_diff(out: &mut String, from: &str, to: &str) {
     let from_tokens = tokens(from);
     let to_tokens = tokens(to);
-    let mut out = String::with_capacity(to.len() + from.len() / 4);
     for op in capture_diff_slices(Algorithm::Myers, &from_tokens, &to_tokens) {
         match op {
             DiffOp::Equal { new_index, len, .. } => {
@@ -245,55 +307,89 @@ pub fn inline_diff(from: &str, to: &str) -> String {
             }
             DiffOp::Delete {
                 old_index, old_len, ..
-            } => mark(
-                &mut out,
-                "del",
-                &from_tokens[old_index..old_index + old_len],
-            ),
+            } => mark(out, "del", &from_tokens[old_index..old_index + old_len]),
             DiffOp::Insert {
                 new_index, new_len, ..
-            } => mark(&mut out, "ins", &to_tokens[new_index..new_index + new_len]),
+            } => mark(out, "ins", &to_tokens[new_index..new_index + new_len]),
             DiffOp::Replace {
                 old_index,
                 old_len,
                 new_index,
                 new_len,
             } => {
-                mark(
-                    &mut out,
-                    "del",
-                    &from_tokens[old_index..old_index + old_len],
-                );
-                mark(&mut out, "ins", &to_tokens[new_index..new_index + new_len]);
+                mark(out, "del", &from_tokens[old_index..old_index + old_len]);
+                mark(out, "ins", &to_tokens[new_index..new_index + new_len]);
             }
         }
     }
-    out
 }
 
+/// Emit `run` with its content inside `<tag>`, closing the marker
+/// before anything a marker may not contain — a cell boundary, a line
+/// end, an HTML tag, a markdown prefix, a table delimiter — and
+/// reopening it after. Whitespace rides along inside an open marker
+/// and outside a closed one.
 fn mark(out: &mut String, tag: &str, run: &[&str]) {
     let mut open = false;
+    let mut at_line_start = out.is_empty() || out.ends_with('\n');
+    // Whitespace after marked content is held until the next token says
+    // whether it sits inside the marker (more content follows) or after
+    // it (a boundary follows).
+    let mut held = String::new();
+    let close = |out: &mut String, open: &mut bool, held: &mut String| {
+        if *open {
+            out.push_str(&format!("</{tag}>"));
+            *open = false;
+        }
+        out.push_str(held);
+        held.clear();
+    };
     for token in run {
-        if token.trim().is_empty() {
-            if token.contains('\n') && open {
-                out.push_str(&format!("</{tag}>"));
-                open = false;
-            }
+        let structural = *token == "|"
+            || token.starts_with('<')
+            || is_table_rule(token)
+            || (at_line_start && is_markdown_prefix(token));
+        if token.contains('\n') || structural {
+            close(out, &mut open, &mut held);
             out.push_str(token);
+            at_line_start = token.ends_with('\n');
+            continue;
+        }
+        if token.trim().is_empty() {
+            if open {
+                held.push_str(token);
+            } else {
+                out.push_str(token);
+            }
             continue;
         }
         if !open {
             out.push_str(&format!("<{tag}>"));
             open = true;
         }
+        out.push_str(&held);
+        held.clear();
         out.push_str(token);
+        at_line_start = false;
     }
-    if open {
-        out.push_str(&format!("</{tag}>"));
-    }
+    close(out, &mut open, &mut held);
 }
 
-/// HTML tags whole, words whole, whitespace runs whole.
+/// `---`, `:---:` — a cell of a table's delimiter row.
+fn is_table_rule(token: &str) -> bool {
+    token.len() >= 3 && token.chars().all(|c| c == '-' || c == ':')
+}
+
+/// What a line may start with and still be what it is — a heading, a
+/// list item, a quote.
+fn is_markdown_prefix(token: &str) -> bool {
+    matches!(
+        token,
+        "#" | "##" | "###" | "####" | "#####" | "######" | "-" | "*" | "+" | ">"
+    ) || (token.ends_with('.') && token[..token.len() - 1].chars().all(|c| c.is_ascii_digit()))
+}
+
+/// HTML tags whole, `|` alone, words whole, whitespace runs whole.
 fn tokens(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let bytes = s.as_bytes();
@@ -306,13 +402,15 @@ fn tokens(s: &str) -> Vec<&str> {
                 Some(n) => i + n + 1,
                 None => i + 1,
             }
+        } else if c == b'|' {
+            i + 1
         } else if c.is_ascii_whitespace() {
             i + s[i..]
                 .find(|ch: char| !ch.is_ascii_whitespace())
                 .unwrap_or(s.len() - i)
         } else {
             i + s[i..]
-                .find(|ch: char| ch.is_ascii_whitespace() || ch == '<')
+                .find(|ch: char| ch.is_ascii_whitespace() || ch == '<' || ch == '|')
                 .unwrap_or(s.len() - i)
         };
         out.push(&s[start..end]);
@@ -473,17 +571,41 @@ mod tests {
         let out = inline_diff(from, to);
         assert_eq!(
             out,
-            "## <span class=\"a\">Picard</span> <del><time datetime=\"1\">then</del><ins><time datetime=\"2\">now</ins></time>\n\n\
+            "## <span class=\"a\">Picard</span> <time datetime=\"1\"><del>then</del><time datetime=\"2\"><ins>now</ins></time>\n\n\
              Make it <del>so.</del><ins>so, Number One.</ins>\n"
         );
     }
 
     #[test]
-    fn a_marker_closes_before_a_newline_and_reopens_after() {
-        let out = inline_diff("a\n", "a\nb\nc\n");
-        assert_eq!(out, "a\n<ins>b</ins>\n<ins>c</ins>\n");
-        let out = inline_diff("a\nb\nc\n", "a\n");
-        assert_eq!(out, "a\n<del>b</del>\n<del>c</del>\n");
+    fn whole_lines_are_marked_in_place_and_a_heading_stays_a_heading() {
+        assert_eq!(
+            inline_diff("a\n", "a\nb c\n## d\n"),
+            "a\n<ins>b c</ins>\n## <ins>d</ins>\n"
+        );
+        assert_eq!(
+            inline_diff("a\n- b\nc\n", "a\n"),
+            "a\n- <del>b</del>\n<del>c</del>\n"
+        );
+    }
+
+    #[test]
+    fn a_table_stays_a_table() {
+        let from = "| Field | Value |\n| --- | --- |\n| Org | NCC-1701-D |\n| Phone | 1 |\n";
+        let to =
+            "| Field | Value |\n| --- | --- |\n| Org | NCC-1701-E |\n| Phone | 1 |\n| Home | 2 |\n";
+        assert_eq!(
+            inline_diff(from, to),
+            "| Field | Value |\n| --- | --- |\n| Org | <del>NCC-1701-D</del><ins>NCC-1701-E</ins> |\n\
+             | Phone | 1 |\n| <ins>Home</ins> | <ins>2</ins> |\n"
+        );
+        let gone = inline_diff(to, from);
+        assert!(
+            gone.ends_with("| <del>Home</del> | <del>2</del> |\n"),
+            "{gone}"
+        );
+        // A delimiter row that appears whole is left as it is.
+        let fresh = inline_diff("x\n", "x\n| A |\n| --- |\n| b |\n");
+        assert_eq!(fresh, "x\n| <ins>A</ins> |\n| --- |\n| <ins>b</ins> |\n");
     }
 
     #[test]
@@ -493,10 +615,28 @@ mod tests {
     }
 
     #[test]
+    fn a_document_gone_keeps_its_frontmatter() {
+        let front = Section::unkeyed("---\ntitle: t\n---\n\n".into());
+        let a = Section::keyed("a", "<div>a</div>\n\n".into());
+        let out = diff_sections(&[front.clone(), a.clone()], &[]);
+        assert_eq!(out[0], front);
+        assert_eq!(out[1].md, format!("{REMOVED_OPEN}{}{WRAP_CLOSE}", a.md));
+    }
+
+    #[test]
     fn tokens_keep_tags_words_and_whitespace_whole() {
         assert_eq!(
-            tokens("<a href=\"x y\">hi</a>  there\n"),
-            vec!["<a href=\"x y\">", "hi", "</a>", "  ", "there", "\n"]
+            tokens("<a href=\"x y\">hi</a>  there|x\n"),
+            vec![
+                "<a href=\"x y\">",
+                "hi",
+                "</a>",
+                "  ",
+                "there",
+                "|",
+                "x",
+                "\n"
+            ]
         );
     }
 }

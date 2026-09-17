@@ -305,6 +305,39 @@ impl RawDb {
         Ok(())
     }
 
+    /// Drop the contacts of one address book whose uid is in `uids`, with
+    /// their sidecar rows: what a re-read `.vcf` file no longer carries.
+    /// Idempotent.
+    pub async fn delete_contacts_by_uid(
+        &self,
+        addressbook_id: &str,
+        uids: &[String],
+    ) -> Result<()> {
+        if uids.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin delete contacts tx")?;
+        for uid in uids {
+            let id = contact_pk(addressbook_id, uid);
+            sqlx::query("DELETE FROM contacts WHERE id = ?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .context("delete contact")?;
+            sqlx::query("DELETE FROM contacts_bookkeeping WHERE id = ?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .context("delete contact bookkeeping")?;
+        }
+        tx.commit().await.context("commit delete contacts tx")?;
+        Ok(())
+    }
+
     /// Snapshot every contact row for the render pass, joined
     /// against `addressbooks` so the caller gets the display-name
     /// label without a second query. Same shape regardless of

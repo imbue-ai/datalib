@@ -13,6 +13,13 @@ pub const GROUP_ENV: &str = "DATALIB_DAG_GROUP";
 pub const GROUP_TYPE_ENV: &str = "DATALIB_DAG_GROUP_TYPE";
 pub const FUNCTION_ENV: &str = "DATALIB_DAG_FUNCTION";
 pub const INPUTS_ENV: &str = "DATALIB_DAG_INPUTS";
+/// Under a diff group only: the `type` of the group whose raw store the
+/// diff compares, which is the renderer this step runs.
+pub const SOURCE_GROUP_TYPE_ENV: &str = "DATALIB_DAG_SOURCE_GROUP_TYPE";
+/// The group `type` that means "render what changed in another group's
+/// raw store" — `datalib_dag::config::DIFF_GROUP_TYPE`, spelled here as
+/// this binary's side of the contract.
+pub const DIFF_GROUP_TYPE: &str = "diff";
 
 /// The step as the runner declared it. `step` is the composed id, and
 /// the one tree this process may write; the loader composed it from
@@ -23,6 +30,8 @@ pub struct StepEnv {
     pub step: String,
     pub group: String,
     pub group_type: Option<String>,
+    /// Set only under a diff group: the source group's type.
+    pub source_group_type: Option<String>,
     pub function: Function,
     /// The trees this step reads, data-root-relative, as the runner
     /// resolved them from the config's `inputs`.
@@ -54,6 +63,9 @@ impl StepEnv {
         let group_type = std::env::var(GROUP_TYPE_ENV)
             .ok()
             .filter(|t| !t.trim().is_empty());
+        let source_group_type = std::env::var(SOURCE_GROUP_TYPE_ENV)
+            .ok()
+            .filter(|t| !t.trim().is_empty());
         let inputs = std::env::var(INPUTS_ENV)
             .unwrap_or_default()
             .lines()
@@ -65,8 +77,25 @@ impl StepEnv {
             step,
             group,
             group_type,
+            source_group_type,
             function,
             inputs,
+        })
+    }
+
+    pub fn is_diff_group(&self) -> bool {
+        self.group_type.as_deref() == Some(DIFF_GROUP_TYPE)
+    }
+
+    /// The renderer a diff group's step runs: its source's type, which the
+    /// loader put in this step's environment.
+    pub fn diff_source_type(&self) -> Result<&str> {
+        self.source_group_type.as_deref().with_context(|| {
+            format!(
+                "step {:?} is under diff group {:?} but {SOURCE_GROUP_TYPE_ENV} is not set; \
+                 `datalib-dag` sets it from the group's `source`",
+                self.step, self.group
+            )
         })
     }
 
@@ -144,6 +173,15 @@ mod tests {
     }
 
     #[test]
+    fn the_env_names_agree_with_the_runners() {
+        assert_eq!(
+            SOURCE_GROUP_TYPE_ENV,
+            datalib_dag::subprocess::ENV_SOURCE_GROUP_TYPE
+        );
+        assert_eq!(DIFF_GROUP_TYPE, datalib_dag::config::DIFF_GROUP_TYPE);
+    }
+
+    #[test]
     fn params_reject_non_objects_and_junk() {
         assert!(parse_params(Some("[1,2]")).is_err());
         assert!(parse_params(Some("not json")).is_err());
@@ -154,6 +192,7 @@ mod tests {
             step: step.into(),
             group: group.into(),
             group_type: Some("slack".into()),
+            source_group_type: None,
             function: Function::parse(function).unwrap(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
         }

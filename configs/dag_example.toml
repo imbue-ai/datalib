@@ -115,6 +115,29 @@ group = "claude"
 function = "render_markdown"
 inputs = ["claude/ingest"]
 
+# ── a diff group ───────────────────────────────────────────────────
+# What changed in a source between two of its raw store's commits, as
+# documents with the changes highlighted and grid rows with a
+# `diff_status`. `type = "diff"` and `source` make it one; its one step
+# is `render_markdown`, reading the source's ingest tree, with the two
+# commits under `params.diff` — both required, a diff is asked for and
+# never keeps itself up to date. Named in the fan-ins like any source.
+# The Manage screen's "Compare…" writes one; see
+# docs/dev/plans/diff_renderer.md.
+[[groups]]
+id = "slack-diff"
+name = "Work Slack, this week's changes"
+type = "diff"
+source = "slack"
+
+[[steps]]
+group = "slack-diff"
+function = "render_markdown"
+inputs = ["slack/ingest"]
+[steps.params.diff]
+from = "8f1c2b0d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c"
+to = "3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c"
+
 # ── shared fan-in steps ────────────────────────────────────────────
 # `inputs` names the steps these read, by composed id. Adding a source
 # above means adding its render step's id here too — the wizard does
@@ -127,12 +150,12 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["slack/render_markdown", "claude/render_markdown"]
+inputs = ["slack/render_markdown", "claude/render_markdown", "slack-diff/render_markdown"]
 
 [[steps]]
 group = "unified_index"
 function = "qmd_index"
-inputs = ["slack/render_markdown", "claude/render_markdown"]
+inputs = ["slack/render_markdown", "claude/render_markdown", "slack-diff/render_markdown"]
 
 # ── applets ────────────────────────────────────────────────────────
 # An applet is the third kind of config entry: a long-lived server the

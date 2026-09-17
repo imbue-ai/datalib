@@ -161,18 +161,6 @@ expression: snapshot
       "title": "Jean-Luc Picard"
     },
     {
-      "bucket_key": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
-      "created_at": null,
-      "kind": "chat",
-      "markdown_uuid": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
-      "md_path": "tng_contacts/render_markdown/1db2d2f9-e79a-58ad-978f-eb56fba5060f/index.md",
-      "modified_at": "2370-02-11T00:00:00Z",
-      "provider": "contacts",
-      "renderer_version": "rust-v1.3",
-      "source_id": "tng_contacts",
-      "title": "Bridge"
-    },
-    {
       "bucket_key": "22d0feef-bb67-562b-bb66-4ee0eea9f46f",
       "created_at": "2364-04-11T10:00:37+00:00",
       "kind": "chat",
@@ -219,6 +207,18 @@ expression: snapshot
       "renderer_version": "rust-v1.2",
       "source_id": "linkedin",
       "title": "linkedin storage"
+    },
+    {
+      "bucket_key": "fe56b2f2-2d6a-5074-af37-729c7c466123",
+      "created_at": null,
+      "kind": "chat",
+      "markdown_uuid": "291e7317-9c44-5a0e-8256-8574b0465c70",
+      "md_path": "tng_contacts-diff/render_markdown/fe56b2f2-2d6a-5074-af37-729c7c466123/index.md",
+      "modified_at": "2371-01-09T00:00:00Z",
+      "provider": "contacts",
+      "renderer_version": "rust-v1.3",
+      "source_id": "tng_contacts-diff",
+      "title": "Bridge"
     },
     {
       "bucket_key": "10a5ea3a-8229-54e5-8af3-d23abaa42860",
@@ -545,6 +545,18 @@ expression: snapshot
       "title": "Holodeck safety interlock regression test"
     },
     {
+      "bucket_key": "71e87c5f-57be-5a68-a27e-4ab95bc36810",
+      "created_at": null,
+      "kind": "chat",
+      "markdown_uuid": "71e87c5f-57be-5a68-a27e-4ab95bc36810",
+      "md_path": "tng_contacts/render_markdown/71e87c5f-57be-5a68-a27e-4ab95bc36810/index.md",
+      "modified_at": "2371-01-02T00:00:00Z",
+      "provider": "contacts",
+      "renderer_version": "rust-v1.3",
+      "source_id": "tng_contacts",
+      "title": "Bridge"
+    },
+    {
       "bucket_key": "enterprise-d/holodeck!17",
       "created_at": "2369-04-15T08:00:00.000Z",
       "kind": "mr",
@@ -675,6 +687,18 @@ expression: snapshot
       "renderer_version": "rust-v1.1",
       "source_id": "facebook",
       "title": "Jean-Luc Picard added a life event from January 5, 2364: Took command of the En…"
+    },
+    {
+      "bucket_key": "dcba5673-ef5d-5b92-adf3-c4d2a1571fe3",
+      "created_at": null,
+      "kind": "chat",
+      "markdown_uuid": "883ef5f2-3091-5816-b7a8-3a0a2a3e8a02",
+      "md_path": "tng_contacts-diff/render_markdown/dcba5673-ef5d-5b92-adf3-c4d2a1571fe3/index.md",
+      "modified_at": "2371-01-02T00:00:00Z",
+      "provider": "contacts",
+      "renderer_version": "rust-v1.3",
+      "source_id": "tng_contacts-diff",
+      "title": "Bridge"
     },
     {
       "bucket_key": null,
@@ -898,7 +922,7 @@ expression: snapshot
       "kind": "chat",
       "markdown_uuid": "c27813c9-e0d8-551d-87fe-33ed24b93bb6",
       "md_path": "tng_contacts/render_markdown/c27813c9-e0d8-551d-87fe-33ed24b93bb6/index.md",
-      "modified_at": "2370-04-15T00:00:00Z",
+      "modified_at": "2371-01-09T00:00:00Z",
       "provider": "contacts",
       "renderer_version": "rust-v1.3",
       "source_id": "tng_contacts",
@@ -1169,6 +1193,18 @@ expression: snapshot
       "title": "Will Riker"
     },
     {
+      "bucket_key": "7c6a988a-7c4c-517a-a956-80d624205fe9",
+      "created_at": null,
+      "kind": "chat",
+      "markdown_uuid": "f56682c3-e1a1-57d7-82b8-00ebc5b72447",
+      "md_path": "tng_contacts-diff/render_markdown/7c6a988a-7c4c-517a-a956-80d624205fe9/index.md",
+      "modified_at": "2370-02-11T00:00:00Z",
+      "provider": "contacts",
+      "renderer_version": "rust-v1.3",
+      "source_id": "tng_contacts-diff",
+      "title": "Bridge"
+    },
+    {
       "bucket_key": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
       "created_at": "2026-01-07T09:00:00+00:00",
       "kind": "chat",
@@ -1222,7 +1258,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=101 markdowns_read=101 markdowns_removed=0 rows_inserted=458"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=106 markdowns_read=106 markdowns_removed=1 rows_inserted=463"
     }
   ],
   "grid_rows": [
@@ -2560,37 +2596,6 @@ expression: snapshot
       "uuid": "1da1c297-0a62-5842-abeb-edb4c0cc6ec6"
     },
     {
-      "account": null,
-      "author": "Data",
-      "byte_size": null,
-      "channel": "Bridge",
-      "conversation_name": "Bridge",
-      "conversation_uuid": "5156e157-6274-594f-886c-dbb4e4db0ad9",
-      "created_at": null,
-      "entire_chat": "/contact/1db2d2f9-e79a-58ad-978f-eb56fba5060f",
-      "git_sha": null,
-      "item_count": null,
-      "kind": "Contact",
-      "markdown_uuid": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
-      "message_index": null,
-      "notion_block_uuid": null,
-      "notion_page_uuid": null,
-      "org_name": null,
-      "org_uuid": null,
-      "project": null,
-      "provider": "contacts",
-      "qmd_path": "tng_contacts/render_markdown/1db2d2f9-e79a-58ad-978f-eb56fba5060f/index.md",
-      "slack_link": null,
-      "source_label": "Tng Contacts",
-      "source_url": null,
-      "text_len": 164,
-      "text_sha": "sha256:8ca611df17f22bdf066929d8e63759fac41303b25d13cf1bf7434e906cf2d7e6",
-      "upstream_entity_kind": null,
-      "upstream_id": "tng-data",
-      "upstream_scope": null,
-      "uuid": "1db2d2f9-e79a-58ad-978f-eb56fba5060f"
-    },
-    {
       "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
       "byte_size": 37,
@@ -2775,6 +2780,37 @@ expression: snapshot
       "upstream_id": null,
       "upstream_scope": null,
       "uuid": "264e2a0a-6fad-5355-a42e-bf9b8d274dd3"
+    },
+    {
+      "account": null,
+      "author": "Jean-Luc Picard",
+      "byte_size": null,
+      "channel": "Bridge",
+      "conversation_name": "Bridge",
+      "conversation_uuid": "91ed99b1-ee3e-5fea-a451-e26425a8dcf4",
+      "created_at": null,
+      "entire_chat": "/contact/fe56b2f2-2d6a-5074-af37-729c7c466123",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Contact",
+      "markdown_uuid": "291e7317-9c44-5a0e-8256-8574b0465c70",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "contacts",
+      "qmd_path": "tng_contacts-diff/render_markdown/fe56b2f2-2d6a-5074-af37-729c7c466123/index.md",
+      "slack_link": null,
+      "source_label": "Tng Contacts Diff Contacts",
+      "source_url": null,
+      "text_len": 178,
+      "text_sha": "sha256:5605e6c0a276dbffc47da2ce963aff7df29162b468f8fdf7072042ef6701e8c6",
+      "upstream_entity_kind": null,
+      "upstream_id": "tng-picard",
+      "upstream_scope": null,
+      "uuid": "291e7317-9c44-5a0e-8256-8574b0465c70"
     },
     {
       "account": null,
@@ -5040,6 +5076,37 @@ expression: snapshot
       "uuid": "6fdc8082-ac36-5bd7-a4fd-ea57776d40a3"
     },
     {
+      "account": null,
+      "author": "Worf",
+      "byte_size": null,
+      "channel": "Bridge",
+      "conversation_name": "Bridge",
+      "conversation_uuid": "5156e157-6274-594f-886c-dbb4e4db0ad9",
+      "created_at": null,
+      "entire_chat": "/contact/71e87c5f-57be-5a68-a27e-4ab95bc36810",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Contact",
+      "markdown_uuid": "71e87c5f-57be-5a68-a27e-4ab95bc36810",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "contacts",
+      "qmd_path": "tng_contacts/render_markdown/71e87c5f-57be-5a68-a27e-4ab95bc36810/index.md",
+      "slack_link": null,
+      "source_label": "Tng Contacts",
+      "source_url": null,
+      "text_len": 131,
+      "text_sha": "sha256:ea5f4151b2256ccb23331ac75fb647625cf40825ec0edc4416ad3c6e48155512",
+      "upstream_entity_kind": null,
+      "upstream_id": "tng-worf",
+      "upstream_scope": null,
+      "uuid": "71e87c5f-57be-5a68-a27e-4ab95bc36810"
+    },
+    {
       "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
       "byte_size": null,
@@ -5658,6 +5725,37 @@ expression: snapshot
       "upstream_id": "4200201",
       "upstream_scope": null,
       "uuid": "86debc1f-5dd5-546b-8ec5-e96e9ca7ad2d"
+    },
+    {
+      "account": null,
+      "author": "Worf",
+      "byte_size": null,
+      "channel": "Bridge",
+      "conversation_name": "Bridge",
+      "conversation_uuid": "91ed99b1-ee3e-5fea-a451-e26425a8dcf4",
+      "created_at": null,
+      "entire_chat": "/contact/dcba5673-ef5d-5b92-adf3-c4d2a1571fe3",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Contact",
+      "markdown_uuid": "883ef5f2-3091-5816-b7a8-3a0a2a3e8a02",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "contacts",
+      "qmd_path": "tng_contacts-diff/render_markdown/dcba5673-ef5d-5b92-adf3-c4d2a1571fe3/index.md",
+      "slack_link": null,
+      "source_label": "Tng Contacts Diff Contacts",
+      "source_url": null,
+      "text_len": 131,
+      "text_sha": "sha256:ea5f4151b2256ccb23331ac75fb647625cf40825ec0edc4416ad3c6e48155512",
+      "upstream_entity_kind": null,
+      "upstream_id": "tng-worf",
+      "upstream_scope": null,
+      "uuid": "883ef5f2-3091-5816-b7a8-3a0a2a3e8a02"
     },
     {
       "account": null,
@@ -7543,8 +7641,8 @@ expression: snapshot
       "slack_link": null,
       "source_label": "Tng Contacts",
       "source_url": null,
-      "text_len": 162,
-      "text_sha": "sha256:0fdab1055b1eeac66df4c011ba40135d15f0145291e8e68ca5cfe5f6f62d87ea",
+      "text_len": 178,
+      "text_sha": "sha256:5605e6c0a276dbffc47da2ce963aff7df29162b468f8fdf7072042ef6701e8c6",
       "upstream_entity_kind": null,
       "upstream_id": "tng-picard",
       "upstream_scope": null,
@@ -9349,6 +9447,37 @@ expression: snapshot
       "uuid": "f3cec598-54d7-5c4a-b828-4c2e978d7fd7"
     },
     {
+      "account": null,
+      "author": "Data",
+      "byte_size": null,
+      "channel": "Bridge",
+      "conversation_name": "Bridge",
+      "conversation_uuid": "91ed99b1-ee3e-5fea-a451-e26425a8dcf4",
+      "created_at": null,
+      "entire_chat": "/contact/7c6a988a-7c4c-517a-a956-80d624205fe9",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Contact",
+      "markdown_uuid": "f56682c3-e1a1-57d7-82b8-00ebc5b72447",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "project": null,
+      "provider": "contacts",
+      "qmd_path": "tng_contacts-diff/render_markdown/7c6a988a-7c4c-517a-a956-80d624205fe9/index.md",
+      "slack_link": null,
+      "source_label": "Tng Contacts Diff Contacts",
+      "source_url": null,
+      "text_len": 164,
+      "text_sha": "sha256:8ca611df17f22bdf066929d8e63759fac41303b25d13cf1bf7434e906cf2d7e6",
+      "upstream_entity_kind": null,
+      "upstream_id": "tng-data",
+      "upstream_scope": null,
+      "uuid": "f56682c3-e1a1-57d7-82b8-00ebc5b72447"
+    },
+    {
       "account": "picard@enterprise.starfleet",
       "author": null,
       "byte_size": 94,
@@ -9960,9 +10089,9 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 101,
+    "documents_count": 104,
     "dolt_log_count": 2,
-    "grid_rows_count": 270,
+    "grid_rows_count": 273,
     "storage_rows_count": 188
   }
 }
