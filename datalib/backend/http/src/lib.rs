@@ -26,7 +26,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tower_http::services::ServeDir;
 
 pub mod applets;
 pub mod auth;
@@ -47,9 +46,8 @@ pub use boot::build_state;
 
 #[derive(Clone)]
 pub struct AppState {
-    /// Data root on disk — drives the static `/api/media/*` mount and
-    /// the `accounts.json` lookup. The SQL store is reached through
-    /// [`AppState::repo`].
+    /// Data root on disk — the `accounts.json` lookup and the config
+    /// path. The SQL store is reached through [`AppState::repo`].
     pub root: Arc<PathBuf>,
     /// The two stores this process owns and writes: filed feedback and
     /// the sync job queue, one doltlite file each.
@@ -135,14 +133,6 @@ pub fn user_bin_dir() -> Option<PathBuf> {
 }
 
 pub fn router(state: AppState) -> Router {
-    // Slack image attachments are symlinked into
-    // `<root>/system/media/slack/<file_id>/` by ingest; serve them verbatim so
-    // QMD-embedded `![](...)` URLs resolve.
-    let media_dir = datalib_core::layout::media_dir(&state.root);
-    // Served attachments are re-materializable from the raw blob CAS, so mark
-    // the tree as derived cache for `--exclude-caches` backups. Here rather
-    // than in a pipeline step because no step owns the dir.
-    datalib_core::layout::mark_derived_cache(&media_dir);
     // Cloned out before `state` is moved into `with_state` below.
     let api_token = state.api_token.clone();
     Router::new()
@@ -198,7 +188,6 @@ pub fn router(state: AppState) -> Router {
         // which the applet sees verbatim.
         .route("/applet/{id}/{*rest}", any(proxy_applet))
         .route("/applet/{id}/", any(proxy_applet_root))
-        .nest_service("/api/media", ServeDir::new(media_dir))
         // SPA fallback — anything not matched above is served from the
         // embedded Vite bundle. Client-side routing turns unknown paths
         // into `index.html`.

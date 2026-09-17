@@ -406,12 +406,11 @@ faster.
     ├── jobs.doltlite_db            # sync job queue + history
     ├── runs.sqlite                 # every run's step states, logs and metrics
     ├── usage.doltlite_db           # bytes on disk over time
-    ├── media/                      # attachment bytes served to the UI
     └── frontend/                   # UI components the applets contribute
 ```
 
 > **Backups:** the bulky **derived** trees — each `<name>/render_markdown/`,
-> `unified_index/`, and `system/media/` — are rebuilt from your raw
+> and `unified_index/` — are rebuilt from your raw
 > stores by re-running the pipeline, and each carries a `CACHEDIR.TAG`,
 > so cache-aware backup tools skip them automatically:
 >
