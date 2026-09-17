@@ -322,18 +322,41 @@ renderers every grid shares. Two kinds of host use it.
 table and nothing more (`tableView`, the sources card); a card that
 drives a grid itself — its own selection, column state in the URL,
 adaptive visibility (`GridCard`) — takes its definitions and keeps its
-own grid. Two grids are in the tree while the move off AG Grid
-Enterprise is under way: `typedColumns.ts` makes AG Grid definitions
-for `TableGrid` and the sources card, and `cards/slickColumns.ts`
-makes slickgrid ones from the same renderers for `GridCard`, which
-runs on `@slickgrid-universal/vanilla-bundle` (MIT) — the bundle
-rather than the Vue wrapper because a card is a custom element, and
-the wrapper looks its container up on `document`, which cannot see
-into a shadow root. The split is deliberate: a component that owned
-the grid *and* re-exposed the grid's options for the second kind of
-host was a wrapper around a wrapper, and every option it re-exposed
-was a place for the two to
-disagree.
+own grid. The split is deliberate: a component that owned the grid
+*and* re-exposed the grid's options for the second kind of host was a
+wrapper around a wrapper, and every option it re-exposed was a place
+for the two to disagree.
+
+### The grid, and how to swap it
+
+Every grid is SlickGrid, through `@slickgrid-universal/vanilla-bundle`
+(MIT) — the bundle rather than a framework wrapper because a card is a
+custom element, and the wrapper looks its container up on `document`,
+which cannot see into a shadow root. The run log panel, outside any
+shadow root, uses the `slickgrid-vue` wrapper. AG Grid was here until
+2026-09-17; its Enterprise modules (row grouping, tree data, the side
+bar, the context menu) needed a licence, and this repo is public.
+
+The choice is meant to stay reversible, so the grid is kept behind a
+few seams; these are the files that would change if it were swapped
+again, and the only ones that should know the grid's DOM or options:
+
+- `cards/typedColumns.ts` — `ColumnSpec` → column definitions.
+  `cards/cellRenderers.ts` beneath it is plain DOM and would not change.
+- `cards/TableGrid.ce.vue`, `cards/GridCard.ce.vue` (its grid half),
+  `components/RunLogPanel.vue`, `components/ProbeItemPicker.vue` — the
+  four places a grid is built.
+- `grid/menu.ts` and `grid/rowKeys.ts` — the row menu and the `data-key`
+  a row carries; `grid/query.ts` knows no grid at all.
+- `cards/tableGrid.css` — every `.slick-*` rule; the theme itself comes
+  in through `main.ts` and each card's `styleSources`.
+- `tests/e2e/grid-helpers.ts` — every selector the specs use to reach a
+  grid (`SEARCH_ROWS`, `TABLE_ROWS`, `menuEntry`, `SELECTED_ROWS`, the
+  `window.__fwGridApi` hook). A spec that reaches past these is the
+  thing to fix, not the grid.
+
+Nothing persisted depends on the grid: the URL's `cols` is the card's
+own layout shape and decodes to nothing when it cannot be read.
 
 | type | the cell's value | drawn as |
 |---|---|---|
