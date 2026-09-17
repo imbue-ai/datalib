@@ -156,8 +156,6 @@
   cursor: pointer;
   text-decoration: underline dotted;
 }
-/* The destructive entry, told apart the way the trash button is. */
-.ag-menu-option.m2-menu-danger:not(.ag-menu-option-disabled) { color: var(--datalib-log-error); }
 /* The same control as `button.copy-uuid` in ChatBody: a greyed glyph
    that lights up on hover and flashes its verdict. */
 .m2-copy-id {
