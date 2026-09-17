@@ -102,6 +102,9 @@ pub async fn build_state(
     })
     .await
     .map_err(|e| anyhow::anyhow!("applet discovery panicked: {e}"))?;
+    // Hand edits reach the registry from here; saves reach it from the
+    // handlers that make them. Requests only read it.
+    crate::applets::watch_config(applets.clone(), root_tx.subscribe());
 
     Ok(AppState {
         root,

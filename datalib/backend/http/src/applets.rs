@@ -34,6 +34,9 @@ use std::time::Duration;
 
 use datalib_dag::config::AppletEntry;
 use serde::Serialize;
+use tokio::sync::broadcast;
+
+use crate::watch::RootEvent;
 
 /// The applet's own id, as the gateway knows it. The reference applet
 /// uses it to label its data; anything building an absolute URL should
@@ -173,6 +176,25 @@ fn tail_lines(s: &str, n: usize) -> String {
 
 // The registry
 
+/// The one place a config change reaches the registry from outside a
+/// request: the root watcher says `config.toml` moved, the registry
+/// reconciles. A lagged receiver reloads too — a change may be in the
+/// gap, and a reload of an unchanged file costs a `stat`.
+pub fn watch_config(registry: Arc<AppletRegistry>, mut rx: broadcast::Receiver<RootEvent>) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(RootEvent::ConfigChanged) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                    let registry = registry.clone();
+                    let _ = tokio::task::spawn_blocking(move || registry.reload()).await;
+                }
+                Ok(_) => {}
+                Err(broadcast::error::RecvError::Closed) => return,
+            }
+        }
+    });
+}
+
 /// The applets from `config.toml`, the frontend store they write into,
 /// and the child processes behind `/applet/`.
 pub struct AppletRegistry {
@@ -181,10 +203,10 @@ pub struct AppletRegistry {
     /// against a config whose own `binary_dir` may have changed.
     binary_dir_override: Option<PathBuf>,
     state: std::sync::RwLock<RegistryState>,
-    /// Held for the whole of a reload. Two requests that both notice a
-    /// config change must not both reconcile: each would start the
-    /// applets from the same baseline, and the second's `stop_except`
-    /// would kill what the first had just started, mid-response.
+    /// Held for the whole of a reload. The writer that just saved the
+    /// config and the watcher that noticed the save both call in; the
+    /// second must wait and then find the file already current, not
+    /// reconcile from the same baseline and kill what the first started.
     reload: Mutex<()>,
     supervisor: Supervisor,
     /// See [`ENV_APPLET_SECRET`]. One per registry, so every applet this
@@ -291,7 +313,13 @@ impl AppletRegistry {
         Self::new(entries, data_root.to_path_buf(), binary_dir, resolved)
     }
 
-    pub fn refresh_if_config_changed(&self) {
+    /// Reconcile the running applets with `config.toml` as it is now.
+    /// The two config writers call this before they answer, and
+    /// [`watch_config`] calls it when the watcher reports a hand edit; a
+    /// request never does. Cheap when the file has not moved (one
+    /// `stat` and a store rescan), blocking when it has, since a rebuild
+    /// execs one child per applet.
+    pub fn reload(&self) {
         let _one_at_a_time = self.reload.lock().unwrap_or_else(|e| e.into_inner());
         let current = config_stamp_of(&self.data_root);
         let (prev_entries, prev_binary_dir) = {
