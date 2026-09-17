@@ -216,6 +216,13 @@
 .tg-link { color: inherit; text-decoration: underline dotted; }
 
 /* ── slickgrid cells ───────────────────────────────────────────── */
+/* Column rules, in the app's own border colour: the theme draws none
+   between cells, and a row of unrelated values reads as one line
+   without them. */
+.grid-pane {
+  --slick-cell-border-right: 1px solid var(--datalib-border);
+  --slick-header-column-border-right: 1px solid var(--datalib-border);
+}
 /* Rows are what get selected here; the cell the click landed in is
    not a thing to outline. */
 .slick-cell.active { box-shadow: none; border-color: transparent; }

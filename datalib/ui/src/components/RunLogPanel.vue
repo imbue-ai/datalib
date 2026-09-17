@@ -33,6 +33,8 @@ import {
   type SlickgridVueInstance,
 } from "slickgrid-vue";
 import { filterToken, withToken } from "@/grid/query";
+// The column rules and cell helpers every slickgrid here shares.
+import "@/cards/tableGrid.css";
 import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
 import { changed, subscribeLive } from "@/live";
 import {
