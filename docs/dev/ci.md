@@ -217,9 +217,12 @@ job, from that job's log. Each row's PR has the run ids.
 | 2026-09-17 | the image its own, with the pre-fetched output base (#500, #503) | 75.9 s; `Analyzed` at +72 s | 45 s; `Analyzed` at +16 s |
 | | test job wall clock, warm | ~250 s | ~144 s |
 
-The container pull (`Initialize containers`) is 55–90 s and is the
+The container pull (`Initialize containers`) is 55–75 s and is the
 largest fixed cost left. Dropping the archives from the image brought
-it back to within 7 s of the old, smaller image.
+it back to within 7 s of the old, smaller image; pushing the layers
+zstd-compressed instead of gzip (#506) took a further ~5 s off the
+test job's pull (64 s → 56–60 s, two runs) and cut the *push* in
+`devcontainer.yml` from 189 s to 47 s.
 
 ## Tried and rejected
 
@@ -251,9 +254,7 @@ it back to within 7 s of the old, smaller image.
    between runs, which removes both; self-hosted runners do the same
    at the cost of a machine. Either is a cost decision, not a config
    change.
-3. **zstd-compressed image layers** — pulls decompress faster; cheap
-   to try in `devcontainer.yml`.
-4. **Blast radius** — the only lever on a cold run, and a design
+3. **Blast radius** — the only lever on a cold run, and a design
    question per crate (the `rdeps` numbers above are the price tags).
 
 ## Locally, you are probably not on the remote cache
