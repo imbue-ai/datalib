@@ -21,7 +21,9 @@ per *file* and shared across processes, so two writers on one file
 commit each other's in-flight rows. The `ingest` step owns its group's
 two stores; `render_markdown` owns its render store; `grid_index` owns
 the index; `datalib-http` owns feedback, jobs and usage; the applet only
-reads. `runs.sqlite` is the exception because it is not doltlite: plain
+reads, and reads at HEAD — one `dolt_hashof('HEAD')` per request, every
+table through `dolt_at_<table>(hash)` — so a `grid_index` pass in flight
+is never served. `runs.sqlite` is the exception because it is not doltlite: plain
 SQLite in WAL mode, written by both the runner (its runs) and the server
 (its own log), which SQLite's own locking makes ordinary.
 

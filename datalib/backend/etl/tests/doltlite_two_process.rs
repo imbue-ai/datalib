@@ -420,6 +420,178 @@ fn rows_a_killed_writer_committed_at_the_sql_level_are_rescued_by_the_next_open(
     assert!(rescued(&r), "expected a rescue commit in the log: {r:?}");
 }
 
+/// The rows `grid_index` loads on a pass, as a reader in another process
+/// sees them at each step of that pass. The writer deletes every row and
+/// loads a different number back inside one SQL transaction, `COMMIT`s
+/// it, then `dolt_commit`s; the reader holds one read-only connection --
+/// the shape the search applet holds -- and samples the bare table,
+/// `dolt_hashof('HEAD')` and the count at that HEAD throughout.
+///
+/// What it measures, and what the applet's per-request pin rests on:
+/// a transaction another process has open is invisible here (the reader
+/// never sees the delete without the reload), the window between the SQL
+/// `COMMIT` and the `dolt_commit` shows the whole uncommitted batch to a
+/// working-set read and nothing new to a pinned one, and HEAD moves on a
+/// connection that was open before the commit -- so a long-lived reader
+/// can pin per request without reopening.
+#[test]
+fn what_a_reader_sees_while_a_writer_deletes_and_reloads() {
+    let t = Scratch::new();
+    let mut writer = t.spawn(&[
+        "hold",
+        "--db",
+        &t.db(),
+        "--pin-out",
+        &t.path("pin"),
+        "--delete-when",
+        &t.path("delete-when"),
+        "--deleted-out",
+        &t.path("deleted"),
+        "--reload-when",
+        &t.path("reload-when"),
+        "--reloaded-out",
+        &t.path("reloaded"),
+        "--sql-commit-when",
+        &t.path("sql-commit-when"),
+        "--sql-committed-out",
+        &t.path("sql-committed"),
+        "--dolt-commit-when",
+        &t.path("dolt-commit-when"),
+        "--dolt-committed-out",
+        &t.path("dolt-committed"),
+        "--out",
+        &t.path("hold.json"),
+    ]);
+    let seed = t.await_file("pin", &mut writer);
+
+    let mut reader = t.spawn(&[
+        "watch",
+        "--db",
+        &t.db(),
+        "--phase-file",
+        &t.path("phase"),
+        "--until",
+        &t.path("release"),
+        "--interval-ms",
+        "20",
+        "--ready-out",
+        &t.path("reader-ready"),
+        "--out",
+        &t.path("watch.json"),
+    ]);
+    t.await_file("reader-ready", &mut reader);
+
+    t.phase("before");
+    std::thread::sleep(SETTLE);
+    t.step(&mut writer, "delete-when", "deleted", "deleted");
+    t.step(&mut writer, "reload-when", "reloaded", "reloaded");
+    t.step(
+        &mut writer,
+        "sql-commit-when",
+        "sql-committed",
+        "sql_committed",
+    );
+    let commit = t.step(
+        &mut writer,
+        "dolt-commit-when",
+        "dolt-committed",
+        "dolt_committed",
+    );
+    t.go("release");
+    t.wait("reader", &mut reader);
+    t.wait("writer", &mut writer);
+
+    let writer = t.report("hold.json");
+    if writer["dolt"] == Value::Bool(false) {
+        return;
+    }
+    let reader = t.report("watch.json");
+    let seen = seen_by_phase(&reader);
+    for phase in [
+        "before",
+        "deleted",
+        "reloaded",
+        "sql_committed",
+        "dolt_committed",
+    ] {
+        let in_phase: Vec<&Seen> = seen.iter().filter(|s| s.phase == phase).collect();
+        assert!(
+            !in_phase.is_empty(),
+            "no sample landed wholly inside {phase}"
+        );
+        let (working, head, pinned) = match phase {
+            // A transaction the writer has open is the writer's alone:
+            // neither the delete nor the reload reaches another process.
+            "before" | "deleted" | "reloaded" => (SEED_ROWS, &seed, SEED_ROWS),
+            // `COMMIT`ed at the SQL level, not yet to doltlite: the working
+            // set now shows the batch to anyone, HEAD does not.
+            "sql_committed" => (RELOAD_ROWS, &seed, SEED_ROWS),
+            "dolt_committed" => (RELOAD_ROWS, &commit, RELOAD_ROWS),
+            _ => unreachable!(),
+        };
+        for s in in_phase {
+            assert_eq!(
+                (s.working, s.head.as_deref(), s.pinned),
+                (Some(working), Some(head.as_str()), Some(pinned)),
+                "in {phase}: {s:?}"
+            );
+        }
+    }
+    let slow: Vec<&Value> = samples(&reader)
+        .iter()
+        .filter(|s| s["ms"].as_u64().unwrap_or(0) > 1_000)
+        .collect();
+    assert!(
+        slow.is_empty(),
+        "a read-only sample waited on the writer's transaction: {slow:?}"
+    );
+}
+
+/// Rows the `hold` writer loads back after the delete; the helper's
+/// `RELOAD_ROWS`.
+const RELOAD_ROWS: i64 = 5;
+
+/// How long the reader is left sampling in each phase.
+const SETTLE: Duration = Duration::from_millis(300);
+
+/// One thing the reader saw: the phase it was in, and what the bare
+/// table, HEAD and the count at HEAD answered.
+#[derive(Debug, PartialEq)]
+struct Seen {
+    phase: String,
+    working: Option<i64>,
+    head: Option<String>,
+    pinned: Option<i64>,
+}
+
+/// Every sample that sat wholly inside one phase, deduplicated in order.
+/// A sample that straddled a phase change, and one taken while the
+/// writer was between phases, say nothing about either.
+fn seen_by_phase(reader: &Value) -> Vec<Seen> {
+    let mut out: Vec<Seen> = Vec::new();
+    for s in samples(reader) {
+        if s["phase"] != s["phase_after"] || s["phase"] == TRANSITION {
+            continue;
+        }
+        assert_eq!(s["working_error"], Value::Null, "{s}");
+        assert_eq!(s["head_error"], Value::Null, "{s}");
+        assert_eq!(s["pinned_error"], Value::Null, "{s}");
+        let row = Seen {
+            phase: s["phase"].as_str().unwrap_or_default().to_string(),
+            working: s["working"].as_i64(),
+            head: s["head"].as_str().map(str::to_string),
+            pinned: s["pinned"].as_i64(),
+        };
+        if out.last() != Some(&row) {
+            out.push(row);
+        }
+    }
+    out
+}
+
+/// The phase label while the writer is taking a step.
+const TRANSITION: &str = "transition";
+
 fn rescued(reopen: &Value) -> bool {
     reopen["commit_messages"]
         .as_array()
@@ -543,6 +715,29 @@ impl Scratch {
     fn release(&self, writer: &mut Child) {
         std::fs::write(self.dir.path().join("release"), b"stop").expect("write release");
         self.wait("writer", writer);
+    }
+
+    /// Tell the reader which phase the writer is in.
+    fn phase(&self, name: &str) {
+        let tmp = self.dir.path().join("phase.part");
+        std::fs::write(&tmp, name).expect("write phase");
+        std::fs::rename(&tmp, self.dir.path().join("phase")).expect("rename phase");
+    }
+
+    fn go(&self, name: &str) {
+        std::fs::write(self.dir.path().join(name), b"go").expect("write go-file");
+    }
+
+    /// Have the `hold` writer take one step, then leave the reader
+    /// sampling in the state it left behind. Returns what the writer
+    /// reported for the step.
+    fn step(&self, writer: &mut Child, go: &str, done: &str, phase: &str) -> String {
+        self.phase(TRANSITION);
+        self.go(go);
+        let reported = self.await_file(done, writer);
+        self.phase(phase);
+        std::thread::sleep(SETTLE);
+        reported
     }
 
     fn report(&self, name: &str) -> Value {

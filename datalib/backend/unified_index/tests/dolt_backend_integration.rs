@@ -19,13 +19,15 @@ async fn writer(root: &Path) -> sqlx::SqlitePool {
         .expect("open a writer on the grid index")
 }
 
-/// What the step does after its DDL: a read-only handle takes its schema
-/// from HEAD, so a table that was never committed is not there to read.
-async fn commit_schema(writer: &sqlx::SqlitePool) {
-    sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', 'schema')")
+/// What the step does after its DDL, and again after every batch: the
+/// repo reads at HEAD, so a table or a row that was never committed is
+/// not there to read.
+async fn commit(writer: &sqlx::SqlitePool, what: &str) {
+    sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
+        .bind(what)
         .fetch_one(writer)
         .await
-        .expect("commit the schema");
+        .expect("dolt_commit");
 }
 
 fn unique_db_path() -> PathBuf {
@@ -72,7 +74,7 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
         .execute(&writer)
         .await
         .expect("create decoy grid_rows");
-    commit_schema(&writer).await;
+    commit(&writer, "schema").await;
     let err = repo.search(&parse_query(""), 100).await.unwrap_err();
     assert!(
         err.to_string().contains("no such column"),
@@ -104,7 +106,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
             .await
             .expect("create markdowns");
     }
-    commit_schema(&writer).await;
+    commit(&writer, "schema").await;
     // For Anthropic chats the rendered file is 1:1 with the
     // conversation, so markdown_uuid == conversation_uuid here.
     sqlx::query(
@@ -139,6 +141,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     .execute(&writer)
     .await
     .expect("insert markdown row");
+    commit(&writer, "rows").await;
 
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(rows.len(), 2, "expected 2 rows, got {rows:?}");
@@ -189,6 +192,99 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     let _ = std::fs::remove_file(&db_path);
 }
 
+async fn create_grid_tables(writer: &sqlx::SqlitePool) {
+    for (_t, ddl) in GRID_DDL.iter().chain(MARKDOWNS_DDL.iter()) {
+        sqlx::query(*ddl)
+            .execute(writer)
+            .await
+            .expect("create table");
+    }
+}
+
+async fn insert_chat_row(writer: &sqlx::SqlitePool, uuid: &str) {
+    sqlx::query(
+        "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, \
+         created_offset, conversation_uuid, entire_chat, text, qmd_path, markdown_uuid, is_document) \
+         VALUES (?1,'claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
+                 '2026-04-01T10:00:00.000000Z','+00:00',?1,'/chat/x','summary','chats/x.md',?1,1)",
+    )
+    .bind(uuid)
+    .execute(writer)
+    .await
+    .expect("insert chat row");
+}
+
+/// The repo reads what the step committed, never what it is writing: a
+/// row that has reached the working set but not a commit is not there,
+/// and appears at the commit. Under streaming the working set holds a
+/// whole batch between the step's SQL `COMMIT` and its `dolt_commit`
+/// (`doltlite_two_process_test` measures that window), and this is what
+/// keeps the grid from serving it.
+#[tokio::test]
+async fn a_row_the_step_has_not_committed_is_not_served() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let writer = writer(&root).await;
+    create_grid_tables(&writer).await;
+    commit(&writer, "schema").await;
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+
+    insert_chat_row(&writer, "c-1").await;
+    let before = repo.search(&parse_query(""), 100).await.unwrap();
+    assert!(before.is_empty(), "served an uncommitted row: {before:?}");
+    assert!(repo.chat_meta("c-1").await.unwrap().is_none());
+
+    commit(&writer, "rows").await;
+    let after = repo.search(&parse_query(""), 100).await.unwrap();
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert!(repo.chat_meta("c-1").await.unwrap().is_some());
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}
+
+/// The order a fresh root has: the applet is up and answering before the
+/// step's first pass creates the tables and commits them. A read-only
+/// handle opened between the `CREATE TABLE` and that commit has no
+/// `dolt_at_` module for the tables — doltlite registers those at open —
+/// so the repo has to notice and reopen rather than answer "no rows" for
+/// the rest of its life.
+#[tokio::test]
+async fn a_repo_opened_before_the_first_commit_reads_after_it() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let writer = writer(&root).await;
+    create_grid_tables(&writer).await;
+    // Opens the handle: the file exists, the tables are not committed.
+    assert!(repo.search(&parse_query(""), 100).await.unwrap().is_empty());
+
+    insert_chat_row(&writer, "c-1").await;
+    commit(&writer, "first pass").await;
+    let rows = repo.search(&parse_query(""), 100).await.unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+
+    // And a table that arrives later — a newer build adding one — the
+    // same way.
+    sqlx::query(
+        "CREATE TABLE edges (edge_uuid TEXT PRIMARY KEY, src_markdown_uuid TEXT, \
+                 src_anchor_uuid TEXT, dst_markdown_uuid TEXT, dst_anchor_uuid TEXT, label TEXT)",
+    )
+    .execute(&writer)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO edges VALUES ('e-1','c-1',NULL,'c-2',NULL,'cites')")
+        .execute(&writer)
+        .await
+        .unwrap();
+    commit(&writer, "edges").await;
+    let edges = repo.outgoing_edges("c-1").await.unwrap();
+    assert_eq!(edges.len(), 1, "{edges:?}");
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}
+
 /// A source's storage report is written into that source's own
 /// `render_markdown/` tree, so the first segment of its `qmd_path` is
 /// the measured source. It must not be filed there: `source_id:` has
@@ -209,7 +305,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
             .await
             .expect("create grid_rows");
     }
-    commit_schema(&writer).await;
+    commit(&writer, "schema").await;
     // Both rows sit under `claude-work/render_markdown/`: the chat is
     // that source's data, the measurement is datalib describing it.
     sqlx::query(
@@ -235,6 +331,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     .execute(&writer)
     .await
     .expect("insert storage row");
+    commit(&writer, "rows").await;
 
     let all = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(all.len(), 2, "{all:?}");
@@ -280,7 +377,7 @@ async fn every_wire_field_survives_the_round_trip() {
     for (_t, ddl) in GRID_DDL {
         sqlx::query(*ddl).execute(&writer).await.unwrap();
     }
-    commit_schema(&writer).await;
+    commit(&writer, "schema").await;
 
     let row = GridRow::builder()
         .uuid("row-1")
@@ -329,6 +426,7 @@ async fn every_wire_field_survives_the_round_trip() {
         .execute(&writer)
         .await
         .unwrap();
+    commit(&writer, "rows").await;
 
     let rows = repo.search(&parse_query(""), 10).await.unwrap();
     assert_eq!(rows.len(), 1);
