@@ -8,429 +8,93 @@ custom step), start with [`agent_user.md`](docs/agent_user.md) instead.
 
 ## Doc map
 
-Start here when a task touches an area you don't already know. All paths
-are relative to the repo root.
-
-**Only the docs directly under `docs/dev/` describe the tree.** Three
-subdirectories hold things that do not, and each says so in its own
-banner:
-
-| | |
-|---|---|
-| [`plans/`](docs/dev/plans/) | intended, not built |
-| [`plans/completed/`](docs/dev/plans/completed/) | landed, kept as the record of what was decided |
-
-A plan that lands moves to `plans/completed/`. The exception is a plan
-somebody would read to *learn how the system works*: rewrite that one
-as reference and put it directly under `docs/dev/`. When a completed
-plan stops being worth keeping, **delete it** — git has it, and a
-directory of obsolete prose is a liability here rather than an asset.
-The entries below stay grouped by topic, so a plan sits beside the
-reference doc it relates to.
+One line per doc. Each doc's own banner says how current it is; read
+that rather than a summary here. Only the docs directly under `docs/dev/`
+describe the tree: [`plans/`](docs/dev/plans/) is intended work and
+[`plans/completed/`](docs/dev/plans/completed/) is landed work kept as the
+record of what was decided. A landed plan moves to `completed/`, or is
+rewritten as reference under `docs/dev/` if someone would read it to learn
+how the system works; when a completed plan stops being worth keeping,
+**delete it** — git has it.
 
 **Pipeline / sync engine**
 
-- [`datalib/backend/dag/README.md`](datalib/backend/dag/README.md) — the
-  runner's current rules: how the graph is built and what gets dropped
-  from it, what makes a step stale, why versions are reported by the step
-  rather than measured by the runner, what each diagnostic severity
-  costs, and the two locks.
-- [`docs/dev/pipeline_dag_architecture.md`](docs/dev/pipeline_dag_architecture.md)
-  — the design history behind that: why a DAG at all, the node contract
-  as it was proposed, the implementation decisions and the open
-  questions.
-- [`docs/dev/plans/completed/step_identity.md`](docs/dev/plans/completed/step_identity.md)
-  — **built (2026-08-31)**: a step's `id` *is* the one tree it writes,
-  `inputs` name step ids, and `outputs` is gone from the config
-  entirely. Read it for why; it was written as the design and kept as
-  the explanation.
-- [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md)
-  — *agreed design (2026-09-09); built in full (2026-09-09 and
-  2026-09-10)*: one row per source in the
-  Manage screen, done by making the grouping a config entity. A
-  `[[groups]]` table with `id`/`name`/`type`; a step is `(group,
-  function)` with its id composed and never written; `datalib-step`
-  dispatches on the function and the group's type from the environment
-  and writes the tree its id names, so a built-in step carries no
-  `command`; the trees are named after the functions (`ingest`,
-  `render_markdown`, `grid_index`, `qmd_index`) — **that much is in the
-  tree** (the loader, the runner's environment, the fingerprint rule,
-  `datalib-step`, every config and fixture), **and so is the UI**: the
-  Manage screen is a tree, one row per group with its steps and applets
-  under a chevron, the group row reading status, last-synced and bytes
-  off its own folder and its children (`http/src/manage/group.rs`
-  holds the rules), and the wizard is one dialog that writes and edits
-  a source as a group plus both its steps — the group's `name` and
-  its `description` (free text nothing reads yet; #409 says why not
-  qmd) edited in place — with the render step's settings under a
-  "Rendering" heading (`SourceWizard.vue`,
-  `ui/src/config/sourceSteps.ts`). Nothing in the UI splits a step id
-  any more: phase is read off `function`, the source column off the
-  group. Every ingest method a provider accepts declares itself
-  `Origin` or `Local` (`IngestMethods` in `datalib_source_common`,
-  mirrored into `ui/src/config/ingestMethods.json` by a generator),
-  which is what makes a step's row read "Download" or "Import" and
-  what makes `datalib-step` refuse an ingest step that names no
-  method. A group's `type` names the thing mirrored (`slack`,
-  `claude`, `contacts`), never the way it is reached; where the data
-  comes from is one table on the ingest step, whose name is read
-  under the type — `api` is that product's own API, `export` an
-  unpacked export, `backup` a phone backup — and only a type that is
-  not one product qualifies its sources (email's `jmap`, `gmail`,
-  `mbox`). A table that reads files carries its own `path`. There is
-  no global list of these names: each type has its own two or three.
-  That is the shape `datalib-migrate-config` rewrites any earlier one
-  into. Every slice is built; the plan is complete.
-  Read it before touching step ids, the wizard, or `datalib-step`'s
-  dispatch. It reverses the "ungrouping" section of `step_identity.md`.
-- [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md) —
-  *proposal*, nothing built: letting a consumer step start before its
-  producer finishes. Splits the two meanings an edge carries today
-  ("B consumes A's output" and "B may assume A is finished"). The
-  doltlite side is verified — `dolt_at_<t>('<hash>')` is the `AS OF`
-  we thought we didn't have, and a plain `SELECT` reads the *working
-  set*, not HEAD. Reproducer: `hack/doltlite_concurrent_reader/`.
-- [`docs/dev/plans/completed/logs_and_metrics.md`](docs/dev/plans/completed/logs_and_metrics.md)
-  — *agreed plan (2026-09-11), built in full (2026-09-14)*: one
-  plain-SQLite run store (`system/runs.sqlite`, tables in
-  `app_schema::runs`) holding every run's step states, log lines and
-  metrics; progress reported as absolute `metric` events rather than
-  a percentage; queue depth per step from the rows each producer
-  seals; rates and stall detection derived from the samples. Read it
-  before touching how a step reports progress, how the Manage screen
-  shows a run, or `datalib_runs`. Since 2026-09-15 the `log` table is
-  also the app server's own log: `datalib-http` installs
-  `datalib_runs::StoreLayer`, a `tracing` layer that writes every
-  event as a row with no `run_id` and `process = http` (the runner's
-  rows say `dag`), and the Manage screen's **Server log** button is
-  the same grid as a step's log opened on `process:http`. Both
-  processes record down to `debug` by default
-  (`datalib_runs::DEFAULT_LOG_FILTER`; `RUST_LOG` overrides), and the
-  server's lines have their own, shorter retention
-  (`[run_history] process_log_days` / `process_log_lines`). The store
-  also counts its own writes per part (`store_changes`), which is how
-  `watch.rs` tells a run's progress from the server's log lines when
-  the one file moves — see `data_centric_ui.md` §5 under **UI**.
-- [`docs/dev/plans/streaming_steps_plan.md`](docs/dev/plans/streaming_steps_plan.md)
-  — *plan*, partly built: how to build the above, measured against the
-  tree, with each step marked done or not. Read it before touching how
-  any consumer reads a store — its §"The hazard" is the one to know,
-  because the cursor scans are already safe under a live writer and
-  every *content* read is not. §"The sink contract" is the one to know
-  before writing anything that *deletes* on an empty read: a sink that
-  cannot tell "absent" from "empty" gets its whole source swept, which
-  has happened here twice. It also inventories what already exists
-  (more than the proposal above implies) and overturns two of that
-  proposal's conclusions.
-- [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs)
-  — **read before changing how a config is validated**: why the loader
-  returns a list of diagnostics rather than an `Err`, and what
-  separates the four severities (blast radius — how much of the file
-  one problem costs). The rules themselves sit beside them in
-  `config.rs::accept_steps` and `graph.rs::build_graded`.
-- [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — **how to
-  write a custom step command**: the config entry, the `--params` /
-  `--inputs` / `--outputs` flags, `DATALIB_DAG_*` env vars, the
-  NDJSON progress/outcome protocol, failure classification, and
-  cancellation. Any executable can be a step; `datalib-step` is the
-  reference implementation.
-- [`docs/dev/plans/data_lib_as_a_library/`](docs/dev/plans/data_lib_as_a_library/)
-  — two linked *proposals* (nothing built) about datalib as something
-  others build on, prompted by the `data-pipeline-builder` skill in
-  `imbue-ai/default-workspace-template#534`, plus
-  [`render_audit_2026_09_03.md`](docs/dev/plans/data_lib_as_a_library/render_audit_2026_09_03.md)
-  — the first of those proposals' audit actually run, and the one file
-  here that is measurement rather than intent (read it before believing
-  any claim about what render does today).
-  [`data_handling_practices.md`](docs/dev/plans/data_lib_as_a_library/data_handling_practices.md)
-  is the one to read first and the one that touches this repo: the
-  seven things that skill does better than we do, the four audit
-  passes over the providers we already shipped, and what a new
-  provider has to do from now on. Its §1 scorecard is the honest
-  version — we are behind on **everything about the record we cannot
-  store**.
-  [`toolchain_for_agents.md`](docs/dev/plans/data_lib_as_a_library/toolchain_for_agents.md)
-  is downstream of it; its §1 inventories what the five file-backed
-  providers already share (`fswalk`, `file_checkpoint`, `input_path`,
-  the content-vs-path identity split) — read that before concluding
-  datalib only mirrors web APIs, and its §2 before claiming it can
-  ingest arbitrary records, which it can't yet.
-- [`configs/dag_example.toml`](configs/dag_example.toml) — a complete,
-  commented steps-format config, including the recipe for running
-  `datalib-dag` from a bazel build.
+- [`datalib/backend/dag/README.md`](datalib/backend/dag/README.md) — the runner's rules: graph, staleness, versions, diagnostics, locks. **Start here.**
+- [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — how to write a custom step command; `datalib-step` is the reference implementation.
+- [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs) — why config validation returns diagnostics, not an error; read before changing validation.
+- [`configs/dag_example.toml`](configs/dag_example.toml) — a complete, commented config.
+- [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md) — built: a step is `(group, function)`, its id is the tree it writes. Read before touching step ids, the wizard, or `datalib-step`'s dispatch.
+- [`docs/dev/plans/completed/step_identity.md`](docs/dev/plans/completed/step_identity.md) — why a step's id is its one output tree.
+- [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md), [`streaming_steps_plan.md`](docs/dev/plans/streaming_steps_plan.md) — a consumer starting before its producer finishes; partly built. Read §"The hazard" and §"The sink contract" before any consumer reads a store or deletes on an empty read.
+- [`docs/dev/plans/completed/logs_and_metrics.md`](docs/dev/plans/completed/logs_and_metrics.md) — built: the run store `system/runs.sqlite`, also the app server's log.
+- [`docs/dev/pipeline_dag_architecture.md`](docs/dev/pipeline_dag_architecture.md) — design history; the runner README is current.
+- [`docs/dev/plans/data_lib_as_a_library/`](docs/dev/plans/data_lib_as_a_library/) — proposals about datalib as something others build on; `data_handling_practices.md` first.
 
 **Data architecture**
 
-- [`datalib/backend/etl/README.md`](datalib/backend/etl/README.md) — the
-  rules for the shared ingest machinery: raw-store primary keys, the
-  bookkeeping sidecar, volatile fields, JSONB payloads, why every doltlite
-  pool is size 1, and why the DDL runs in two passes.
-- [`datalib/backend/etl/macros/README.md`](datalib/backend/etl/macros/README.md)
-  — the four table derives (`WirePayloadRow`, `RawTable`, `CasEdgeRow`,
-  `PortableTable`): required struct shape, attributes, and the Rust→SQL
-  type mapping.
-- [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md)
-  — the download (ingestion) architecture: raw stores, incrementality,
-  resumability, wire tape. Companion:
-  [`data_architecture_ingestion_practices.md`](docs/dev/data_architecture_ingestion_practices.md)
-  (how to build a new provider). The two split along a
-  principles/practitioner line in `dab2c3d9`; both are scoped to
-  **download**.
-- [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md)
-  — the **parse and render** stage, the third sibling: deserializing a
-  stored payload, projecting it to `GridRow` + markdown, the
-  data-quality rules (§4 — adopted in principle, *not implemented*),
-  incrementality, and the `GridRow.created_at` policy. Read it before
-  adding a renderer or changing a projection. There is no "parse
-  step": a record that "fails to parse" is one **render** could not
-  deserialize, and the fix is always a re-render, never a re-fetch.
-- [`datalib/backend/etl/providers/media/INGEST.md`](datalib/backend/etl/providers/media/INGEST.md)
-  — the `media` source: local music/photos/video/playlists. Read it
-  before touching anything about **`payload_blake3`**, the
-  metadata-excluding second hash (per-container recipes, why an
-  unparsable container gets NULL rather than the file hash, why the
-  scheme name is stored beside the digest). Also covers the
-  audio-vs-visual table split, why playlists keep their unresolvable
-  entries, and the one place this repo's timestamp convention is
-  deliberately deviated from.
-- [`datalib/backend/etl/providers/lightroom/INGEST.md`](datalib/backend/etl/providers/lightroom/INGEST.md)
-  — the SQLite→doltlite **mirror engine**
-  (`datalib/backend/etl/sqlite_mirror/`), explained through its first
-  user: drop and refill every table each run and let doltlite's
-  content-addressed storage make that an incremental, versioned backup.
-  Read it before touching how any SQLite-backed application's data is
-  mirrored — the stable-key rule, what is deliberately not mirrored,
-  and the doltlite blob bug it found.
-  [`apple_photos/INGEST.md`](datalib/backend/etl/providers/apple_photos/INGEST.md)
-  is the second user and covers only what Photos adds: `ZUUID` without
-  a UNIQUE index, the `skip_history` preset and the churn it was
-  measured against, the R-tree and its shadow tables, and the macOS
-  permission the library sits behind. It also records why Apple Music
-  is *not* the same case (`Library.musicdb` is not SQLite).
-  [`apple_messages/INGEST.md`](datalib/backend/etl/providers/apple_messages/INGEST.md)
-  is the fourth and the smallest — read it for the one thing it adds,
-  the body that is not in `message.text` but in a `typedstream` blob,
-  and for why it copies no attachment bytes.
-  [`whatsapp/INGEST.md`](datalib/backend/etl/providers/whatsapp/INGEST.md)
-  is the third, and the first that renders: why the mirror keys on
-  rowids (measured stable between backups of one phone), the
-  `skip_churn` preset, the `Media/` registry the engine does not do,
-  and how render resolves the rowid graph to the natural keys the
-  uuids are minted from.
-- [`datalib/backend/etl/providers/airvisual/INGEST.md`](datalib/backend/etl/providers/airvisual/INGEST.md)
-  — the `airvisual` source: an IQAir AirVisual Pro's own history files,
-  read off its Samba share. **Read before touching how a time-series
-  provider stores samples**: one row per logged line with a REAL column
-  per measurement (not yolink's long form), what the share holds
-  (archives per clock change, `corrupt_`/`restored_` pairs, the 1970
-  file), and why pre-clock lines get their own table.
-  [`docs/dev/plans/airvisual.md`](docs/dev/plans/airvisual.md) is the
-  investigation behind it: the cloud routes measured on 2026-09-14
-  (the no-credential device API keeps only trailing windows — **the
-  windows are the retention** — and is closed to private devices), and
-  the `api` method still to build for a published outdoor unit.
-  `datalib/backend/etl/timeseries_render/` is what its render and
-  yolink's share.
-- [`datalib/backend/etl/providers/facebook/INGEST.md`](datalib/backend/etl/providers/facebook/INGEST.md)
-  — the `facebook` source: a "Download your information" export in
-  its JSON format. Read it before touching any export-shaped provider
-  that keeps every file: one table per JSON file named for its path,
-  one row per record, the media each record points at in the CAS, and
-  the `\u00XX`-per-byte encoding bug every string has to be run
-  through first. It also says why comments and reactions are bucketed
-  by month rather than threaded per post, and that Messenger is not
-  built because the account we have never sent a message.
-- [`datalib/backend/etl/providers/claude_code/INGEST.md`](datalib/backend/etl/providers/claude_code/INGEST.md)
-  — the `claude_code` source: Claude Code's own transcripts under
-  `~/.claude/projects`, one raw row per record. **Read before adding
-  any agent-transcript source** (Codex, Gemini CLI, Cowork are next):
-  what a transcript line is, which lines are rows and which fold into
-  the session, how a subagent keys on `(sessionId, agentId)`, and why
-  the tables have no bookkeeping sidecar.
-  [`docs/dev/plans/agent_sessions.md`](docs/dev/plans/agent_sessions.md)
-  is the investigation behind it (2026-09-16) and the plan for the
-  rest: Claude Code cloud via the CLI's own OAuth route on
-  `api.anthropic.com`, Cowork, Codex local and cloud, the ChatGPT
-  bulk export the `chatgpt` source still lacks, and Gemini CLI — and
-  the `email` argument for why each is its own type.
-- [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md)
-  — the `email` source's three download modes (JMAP, Gmail API, mbox),
-  what keeps them writing one deduped schema, and why an IMAP mode was
-  built and removed.
-- [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows`
-  union table behind the grid UI. Its per-provider mapping tables name
-  raw-store tables and columns; check those against the
-  `schema_inventory` golden
-  (`datalib/backend/schema_inventory/`), which is generated from the
-  DDL and so is the one list that cannot be stale. Prose here has been
-  wrong before — it named `openai_conversations`, `claude_conversations`
-  and `slack_workspaces`, none of which have ever existed.
-  Its last two sections cover the **storage rows** every source emits
-  (what a mirror weighs, and the row counts inside it) — read those
-  before changing `datalib_step/src/introspect.rs`, and in particular
-  before moving the measurement *history* into `grid_rows`, which was
-  considered and rejected for four reasons written down there.
-- [`docs/dev/edges.md`](docs/dev/edges.md) — the cross-document `edges`
-  table.
-- [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — **read before
-  adding a provider or touching any `*_uuid` recipe**: the one rule for
-  minting `grid_rows.uuid`, why the scope is never our `source_id`
-  (nor `source_type`), the `source_native_id` backpointer, and the
-  per-provider porting status.
-- [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting
-  `.doltlite_db` files (CLI, `dolt_*` vtabs, rescue commits); tutorial in
-  [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
-- [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md)
-  — the live recipe for porting the remaining providers to CAS blobs +
-  incremental render.
-- [`docs/dev/plans/diff_renderer.md`](docs/dev/plans/diff_renderer.md)
-  — *proposal*, nothing built: showing how one document changed
-  between two commits of its render store. **Read before asking a
-  store which commits changed a row**: the answer is `dolt_diff_<t>`
-  with no ref filter, and the measured reason `dolt_history_<t>` and
-  `dolt_blame_<t>` are the wrong tool on our text-keyed tables (their
-  key pushdown is integer-only; 20s against ~1s on 200k rows).
-- [`docs/dev/plans/multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md)
-  — *proposal*, nothing built: replacing the `qmd_index` step with a
-  retrieval layer that takes an arbitrary `grid_rows` metadata
-  prefilter and holds more than one vector space. Read §4 ("bytes at
-  rest") before touching how text is stored anywhere — it measures a
-  real data root and finds the same text kept **five** times (raw,
-  rendered `.md`, `grid_rows.text`, and *twice* inside qmd, whose FTS5
-  is declared without `content=`), attachment bytes kept twice, and
-  nothing compressed at rest.
+- [`datalib/backend/etl/README.md`](datalib/backend/etl/README.md) — the shared ingest machinery: keys, sidecars, volatile fields, **the doltlite pool rules**, the blob CAS. Read before opening any store.
+- [`datalib/backend/etl/macros/README.md`](datalib/backend/etl/macros/README.md) — the four table derives.
+- [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md), [`…_practices.md`](docs/dev/data_architecture_ingestion_practices.md) — download: principles, then how to build a provider.
+- [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md) — render: projection to `GridRow` + markdown, incrementality. There is no parse step; a record that "fails to parse" is re-rendered, never re-fetched.
+- Provider notes: [`media`](datalib/backend/etl/providers/media/INGEST.md) (`payload_blake3`), [`lightroom`](datalib/backend/etl/providers/lightroom/INGEST.md) (the SQLite mirror engine), [`apple_photos`](datalib/backend/etl/providers/apple_photos/INGEST.md), [`apple_messages`](datalib/backend/etl/providers/apple_messages/INGEST.md), [`whatsapp`](datalib/backend/etl/providers/whatsapp/INGEST.md), [`airvisual`](datalib/backend/etl/providers/airvisual/INGEST.md) (time series), [`facebook`](datalib/backend/etl/providers/facebook/INGEST.md) (export-shaped), [`claude_code`](datalib/backend/etl/providers/claude_code/INGEST.md) (agent transcripts), [`claude`](datalib/backend/etl/providers/claude/INGEST.md) (api and export methods share one store).
+- [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
+- [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column. Check its mapping tables against the `schema_inventory` golden, which is generated and so cannot be stale.
+- [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).
+- [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
+- [`docs/dev/app_stores.md`](docs/dev/app_stores.md) — the stores `datalib-http` owns (feedback, jobs, usage) and where every store lives under a data root.
+- [`docs/dev/plans/diff_renderer.md`](docs/dev/plans/diff_renderer.md), [`multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md) — proposals; the second measures bytes at rest (§4) before you touch how text is stored.
+- [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md) — the finished CAS-blob + incremental-render port; edge cases still apply.
 
 **UI**
 
-- [`docs/dev/cards.md`](docs/dev/cards.md) — the card system (custom
-  views, component library); [`docs/dev/dactal.md`](docs/dev/dactal.md)
-  — the dactal view bridge.
-- [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md)
-  — **read before changing how a chat message looks**: the one markdown
-  layout all ten chat providers render through. Why the message
-  header has to stay an `h2` (qmd cuts its chunks there), how a run of
-  tool calls folds into one collapsed `<details>`, and `LAYOUT_VERSION`
-  — the one number to bump so all eight re-render. It also points at
-  `bazelisk run //datalib/ui:render_preview`, which rewrites
-  `datalib/ui/tests/goldens/render_preview.html`: **every** provider's
-  rendered markdown — the TNG fixture's real output, plus chat-common's
-  synthetic corpus — drawn through the app's own markdown-it, card CSS
-  and decoration module, so a rendering change is reviewed by opening a
-  file rather than by building a data root.
-- [`docs/dev/plans/completed/data_centric_ui.md`](docs/dev/plans/completed/data_centric_ui.md)
-  — **built (2026-09-15, §5 on 2026-09-16)**: one typed table viewer
-  beside the markdown one, with column types declared by whoever
-  serves the rows, and live updates named by dataset — a `root` frame
-  is `{kind: "table_changed", table: "manage.rows"}` (`watch::Table`,
-  mirrored in `ui/src/live.ts`), and a card refetches only what it
-  reads. The row join is
-  `GET /api/manage/rows` (`http/src/manage/`), the vocabulary is
-  `datalib/backend/columns` (mirrored by hand in `ui/src/api.ts`),
-  `cards/typedColumns.ts` turns declared columns into grid column
-  definitions, `cards/TableGrid.ce.vue` is a thin grid over it for a
-  card that wants only a table, and the Manage screen is the
-  `sourcesView()` + `configView()` cards (`Manager2View.vue` is gone).
-  The search grid declares its columns in the `unified_index` applet
-  and draws them through `typedColumns`, keeping its own grid. Read
-  the checkpoint at the end of its §"Sequencing" before adding a
-  table: it names the three client-side escape hatches the port
-  left, and why the vocabulary is a function rather than a component
-  — a host that already owns a grid is handed definitions, not a
-  second grid.
-- [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md)
-  — **read before adding a source to the Add/Edit wizard**: a field
-  that asks for a file or folder must offer a native OS picker, not a
-  text box. How the three layers fit (Tauri capability → `pickPath` →
-  the button), the checklist for a new path field, and why the
-  browser-served case can't have one. The wizard's own design is
-  [`docs/dev/plans/source_wizard.md`](docs/dev/plans/source_wizard.md) (a
-  proposal, only partly built — read its banner); the descriptors you
-  actually edit are `datalib/ui/src/config/catalog.ts`.
-- [`docs/dev/plans/qmd_index_ui.md`](docs/dev/plans/qmd_index_ui.md) — the grid's
-  `Indexed` / `Embedded` columns and the `qmd_state` endpoint behind
-  them (built), plus the design for selective re-indexing and live
-  index progress (proposal — the file marks which is which).
-- [`docs/dev/applets.md`](docs/dev/applets.md) — **how to write an
-  applet**: the second kind of config entry, a server contributing card
-  components plus the endpoints behind them. Covers the
-  one-invocation contract (`-p 0` + `--frontend-dir`: write, bind,
-  then announce the port on stdout),
-  the `system/frontend/<namespace>/` store that any program (or person)
-  can write into, and why two instances of one command share a
-  component but not its arguments.
-
-**Audits**
-
-- [`docs/dev/audit_2026-09-17.md`](docs/dev/audit_2026-09-17.md) — a
-  dated whole-repo audit (architecture, security, supply chain, hygiene,
-  docs) with what #504 fixed and what is still open. A record, not
-  reference.
+- [`docs/dev/cards.md`](docs/dev/cards.md), [`docs/dev/dactal.md`](docs/dev/dactal.md) — the card system; the dactal view bridge.
+- [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md) — the one chat layout, `LAYOUT_VERSION`, the render preview golden, and the sanitizer allowlist every emitted tag must be in. Read before changing how a message looks.
+- [`docs/dev/plans/completed/data_centric_ui.md`](docs/dev/plans/completed/data_centric_ui.md) — built: the typed table viewer and live `table_changed` frames.
+- [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md) — a path field offers a native picker; read before adding a source to the wizard. Its design is [`plans/source_wizard.md`](docs/dev/plans/source_wizard.md) (partly built).
+- [`docs/dev/plans/qmd_index_ui.md`](docs/dev/plans/qmd_index_ui.md) — the grid's index-state columns (built) and selective re-indexing (proposal).
+- [`docs/dev/applets.md`](docs/dev/applets.md) — how to write an applet, and the secret every applet requires.
 
 **Dev workflow**
 
-- [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and
-  run from source.
-- [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the
-  Chrome-impersonating curl that Cloudflare-fronted hosts are fetched
-  through: upstream `curl-impersonate`, built from source by our own
-  workflow and pinned by sha256. **Read before touching
-  `latchkey_curl_dispatch.rs`, `LATCHKEY_CURL` in any doc, or the pin**:
-  why `LATCHKEY_CURL` must point at the dispatch and never at the
-  impersonator, and the bump procedure (read the upstream patch diff
-  first — it is the whole delta over curl and BoringSSL).
-- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites;
-  [`docs/dev/coverage.md`](docs/dev/coverage.md) — coverage runs.
-- [`docs/dev/ci.md`](docs/dev/ci.md) — **read before touching
-  `test.yml`, `devcontainer.yml`, `.bazelrc`'s CI configs or the
-  BuildBuddy setup**: how they fit together, what every cache is for
-  (and the Bazel 9 contents-cache trap that made a pre-fetched image
-  no faster until its user root was pinned), how to read a run down
-  to the per-action profile, what has been measured with run ids, and
-  what was tried and rejected.
+- [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
+- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md).
+- [`docs/dev/ci.md`](docs/dev/ci.md) — **read before touching `test.yml`, `devcontainer.yml`, `.bazelrc`'s CI configs or BuildBuddy**: how they fit, what each cache is for, reading a run, what has been measured, flaky tests.
+- [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the Chrome-impersonating curl; read before touching `latchkey_curl_dispatch.rs` or the pin.
+- [`docs/dev/qmd_vendored.md`](docs/dev/qmd_vendored.md) — `third-party/qmd` is a reference snapshot, not what we run.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
-- [`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md)
-  — **built**: download and render are separate crates, so a
-  render-schema change no longer rebuilds every downloader (105 test
-  targets downstream of `datalib_schema`, now 79). Read it for the
-  measurements and for the three things the proposal got wrong; the
-  rules it leaves behind are in §"Download and render are separate
-  crates" below.
+- [`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md) — built: download and render are separate crates.
+
+**Audits**
+
+- [`docs/dev/audit_2026-09-17.md`](docs/dev/audit_2026-09-17.md) — a dated whole-repo audit with what #504 fixed and what is still open. A record, not reference.
 
 **User-facing**
 
-- [`docs/user/first_time_user.md`](docs/user/first_time_user.md),
-  [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md),
-  and [`docs/user/config_examples/`](docs/user/config_examples/) (one
-  commented group with its `ingest` + `render_markdown` step pair per
-  source).
+- [`docs/user/first_time_user.md`](docs/user/first_time_user.md), [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md), [`docs/user/config_examples/`](docs/user/config_examples/).
 
 ## Breaking changes are fine
 
 **There are no real users yet, so nothing here has to stay
 backward-compatible.** A rename that costs a re-index, a config shape
 that stops loading, a stored column that changes name — all of these are
-cheaper now than they will ever be again, and far cheaper than leaving a
-confusing pattern in place for someone to trip over later. When you find
-a name that lies or a shape that fights you, fix it properly rather than
-layering a compatibility shim over it.
+cheaper now than they will ever be again. When you find a name that lies
+or a shape that fights you, fix it properly rather than layering a
+compatibility shim over it.
 
 Two things this does *not* license. Keep a compatibility path where the
 input comes from a **person** rather than from our own code — a filter
 somebody typed into the search bar lives in their fingers and in their
 saved queries, and an alias costs one line. And say what breaks: a
 change that invalidates a store or a config belongs in the commit
-message, so whoever hits it knows it was deliberate.
+message.
 
 ## Prose can be stale — verify claims against the tree
 
-The docs above, `TODO.md`, and this repo's commit messages are unusually
-detailed and well-argued. That is exactly what makes a wrong one
-dangerous: a well-reasoned paragraph reads as evidence, so an incorrect
-claim tends to get repeated rather than checked.
-
-**Before reporting any "we now do X" or "X still needs doing" claim as
-current fact, verify it against the tree or the diff.** The checks are
-cheap:
+The docs, `TODO.md`, and this repo's commit messages are detailed and
+well-argued, and that is what makes a wrong one dangerous: a
+well-reasoned paragraph reads as evidence. **Before reporting any "we
+now do X" or "X still needs doing" claim as current fact, verify it
+against the tree or the diff:**
 
 ```sh
 git show --stat <sha>                    # did that commit touch what its message says?
@@ -438,1082 +102,345 @@ git log --diff-filter=A -- <path>        # was this file ever actually added?
 grep -rn <thing-said-to-exist> <subtree> # is the thing there at all?
 ```
 
-Two confirmed instances, both found 2026-08-17:
+**Test-quality claims are the highest-risk category**, because a false
+one is self-concealing. Treat "now covered by a test" as unverified until
+you have read the assertion — and for a test whose job is to catch a
+silent no-op, until you have watched it fail against the broken behavior.
 
-- `TODO.md` led with "expunge the manual-e2e test data from git HISTORY"
-  as a pending pre-open-sourcing blocker. The purge had already been done.
-  `git filter-repo` preserves commit messages and the working tree, so the
-  instruction outlived its own completion — and `docs/dev/testing.md`
-  carried a second copy citing `TODO.md` as its source (#112, #120).
-- `b27039d0` states it gave a toothless slack test teeth with a "poison
-  fixture". Its diff touches 20 files, none of them the test file, and the
-  comment the message itself calls out as false is still there verbatim
-  (#123).
-
-**Test-quality claims are the highest-risk category**, because a false one
-is self-concealing: if a test cannot fail, nothing downstream will ever
-reveal that the claim was wrong. Treat "now covered by a test" as
-unverified until you have read the assertion — and for a test whose job is
-to catch a silent no-op, until you have watched it fail against the broken
-behavior.
-
-When prose and the tree disagree, the tree wins. Fix the prose in the same
-change.
+When prose and the tree disagree, the tree wins. Fix the prose in the
+same change.
 
 ## Write plainspoken
 
 In docs — and in the few comments you keep — be clear and unhurried,
 explain a term the first time it appears, and don't assume the reader
-already shares your context. A lot of the prose already here is terser and
-more jargony than it should be, so the surrounding text is not the register
-to match. Plainspoken means *clear*, not *long*: see the next section for
-how little of it belongs in the code itself.
+already shares your context. Plainspoken means *clear*, not *long*.
 
 ## Comments: few, short, and about *why*
 
 **Write the code as if comments did not exist.** A comment is the fallback
 for what you could not say in a name or a shape. Reach for a better name,
-a smaller function, or a named intermediate variable first; add the comment
-only when you have run out of code to say it with.
+a smaller function, or a named intermediate variable first.
 
-Keep these:
+Keep: a **file header** (one to three sentences: what this file is for,
+what belongs here); a **type header** where a struct or trait is not
+self-evident; a **why the code cannot carry** — a non-obvious constraint,
+a workaround for someone else's bug, a trap the next person will fall
+into. State the rule rather than narrating how we arrived at it.
 
-- **A file header.** One to three sentences or bullets: what this file is
-  for, what belongs here, and — where it is not obvious — what does not.
-- **A type header.** Same shape, for a struct/enum/trait/class that is not
-  self-evident from its name and fields.
-- **A *why* that the code cannot carry.** A non-obvious constraint, a
-  workaround for someone else's bug, a trap the next person will fall into.
-  Say it in a sentence or two, and prefer stating the rule over narrating
-  how we arrived at it.
+Delete on sight: **function-level doc blocks** (rename or split instead);
+**restatement** (`// increment the counter`); **changelog** ("used to",
+"before #209", "as of 2026-08-31" — git knows, and a comment that dates
+itself is a comment that will be wrong); **essays** (if it is worth
+several paragraphs it is a document — put it in a `README.md` beside the
+code and link it in one line).
 
-Delete these on sight:
+Tests are the one place a short doc comment on a function earns its
+keep: a sentence or two naming the regression it guards.
 
-- **Function-level doc blocks.** If a function needs a paragraph to explain
-  what it does, rename it or split it. The name should give it all away.
-- **Restatement.** `// increment the counter` above `counter += 1`.
-- **Changelog.** "used to", "before #209", "this replaced the old…",
-  "as of 2026-08-31 we…". Git already knows. So does the issue tracker.
-  A comment that dates itself is a comment that will be wrong.
-- **Essays.** Section banners, numbered arguments, transcripts of a
-  decision. If it is genuinely worth several paragraphs it is documentation,
-  not a comment — put it in a `README.md` beside the code (or under `docs/`)
-  and, if the reader really needs the pointer, link it in one line.
-
-Tests are the one place a short doc comment on a function earns its keep: a
-sentence or two naming the regression it guards, especially where the test
-would otherwise look like it asserts nothing interesting. Still a sentence or
-two — not the incident report.
-
-Rule of thumb: if you are about to write a fourth consecutive comment line,
-you are writing a document. Stop and decide where it belongs.
-
-Every comment is a claim that has to be re-verified on every edit, and an
-unverified claim in this repo has already burned us more than once — see
-[Prose can be stale](#prose-can-be-stale--verify-claims-against-the-tree).
-Fewer, truer comments beat more of them.
+Every comment is a claim that has to be re-verified on every edit. Fewer,
+truer comments beat more of them.
 
 ## Repo layout
 
 ```
 datalib/
   backend/     Rust workspace.
-    dag/           `datalib-dag`: the DAG runner (scheduler, step
-                   contract, subprocess driver, NDJSON event stream).
-                   `//datalib/backend:bin` stages it plus every other
-                   shipped binary under their public `datalib-*` names
-                   in one directory (`:dist`, laid out as installed) —
-                   build that, not the individual targets, whenever you
-                   need to actually run a pipeline.
+    dag/           `datalib-dag`: the DAG runner. `//datalib/backend:bin`
+                   stages every shipped binary under its public
+                   `datalib-*` name in one directory (`:dist`); build
+                   that whenever you need to actually run a pipeline.
     datalib_step/  `datalib-step`: the built-in step program. A step
-                   with no `command` runs it; it reads its function
-                   (ingest, render_markdown, grid_index, qmd_index) and
+                   with no `command` runs it; it reads its function and
                    its group's type from the environment.
-    etl/           shared ingest machinery (raw stores, blob CAS,
-                   render cursors) — the download side, and the one
-                   place a downloader's dependencies stop.
+    etl/           shared ingest machinery (raw stores, blob CAS, render
+                   cursors) — the download side, and where a
+                   downloader's dependencies stop.
     etl/render/    `datalib_etl_render`: the render store, the
-                   unified-index load, and `RenderCtx`. Everything in
-                   the tree that knows `datalib_schema` sits here or
-                   above; see "Download and render are separate crates".
-    etl/timeseries_render/ what the time-series providers' render
-                   crates (yolink, airvisual) share: the Plotly page,
-                   the quantity/metric vocabulary, the series type.
-    etl/providers/ <p>/ (ingest) + <p>_render/ (render) per provider,
-                   plus a <p>_config/ crate for the config schema.
-                   Three providers scan local trees and share
-                   etl/src/fswalk.rs (blake3 + Unison's rescan cursor):
-                   fsindex (path-keyed, no render), pdf and media (both
-                   content-keyed; media has no render side either).
-                   Four mirror a SQLite file through etl/sqlite_mirror/
-                   (lightroom, apple_photos, apple_messages, whatsapp —
-                   the last after decrypting it). Two are sensor time series (yolink
-                   over a signed-URL CSV API, airvisual off a device's
-                   Samba share) and render through etl/timeseries_render/.
-                   fsindex, media, lightroom and apple_photos have no
-                   <p>_render.
-    etl/sqlite_mirror/ `datalib_etl_sqlite_mirror`: the table-for-table
-                   SQLite→doltlite mirror engine behind lightroom,
-                   apple_photos, apple_messages and whatsapp. Its own
-                   crate, not part of datalib_etl, so an engine change
-                   rebuilds four providers rather than everything
-                   downstream of the shared crate.
-    table/         `datalib_table`: the `BulkUpsertable` row-write
-                   contract, alone, with `sqlx` as its only dependency.
-    probe/         `datalib_probe`: the "Test connection" report shape,
-                   alone (serde + strum). Taken only by providers that
-                   implement a probe, so the wire format can change
-                   without rebuilding every `<p>_config` crate.
-    migrate_config/ `datalib-migrate-config`: rewrites a `config.toml`
-                   from a shape nothing writes any more into the one the
-                   wizard writes. One rewrite at a time (today: ungrouped
-                   steps → `[[groups]]`). The runner still *loads* the
-                   old shape, with a warning naming this tool; the editor
-                   cannot change it. Nothing pre-TOML is convertible any
-                   more.
-    runtime/       the data-root layout, the bundled-Node/npx resolver,
-                   and the qmd version pin + spawn helper. Has NO
-                   dependencies, deliberately: `qmd_indexer_bin` is a
-                   bazel `tools=` input to the fixture's ~90s embedding
-                   action, so whatever it links is the set of crates
-                   whose next edit re-runs that embed on CI. `core` and
-                   `unified_index` re-export from here, so the old
-                   `datalib_core::layout::…` paths still resolve.
-    core/          the feedback + job stores, plus re-exports of
-                   `runtime`'s layout and host-runtime helpers. Knows
-                   nothing about the index.
-    query/         `datalib_query`: the search-bar grammar every grid
-                   shares — `key:value`, `-` to negate, quotes, free
-                   text — and nothing about what a key means. No
-                   dependencies. `unified_index` reads keys as
-                   `grid_rows` fields; `runs` reads them as `log`
-                   columns (`GET /api/log?q=`); the UI's
-                   `ui/src/grid/query.ts` is the same grammar's
-                   writer, which is what makes right-click "Keep only"
-                   / "Exclude all" one control on both grids.
-    unified_index/ the grid index, the qmd index, the query language
-                   over them, and the repo that reads them. Linked by
-                   datalib-step (writes it) and datalib-applet (serves
-                   it) — never by datalib-http or datalib-dag.
-    applets/       `datalib-applet`: the applet host, one subcommand
-                   per applet (slack, unified_index). An applet
-                   contributes card components and/or the endpoints
-                   behind them.
-    history/       `datalib_history`: a doltlite store's commit log —
-                   `dolt_log` walked from HEAD with what each commit did
-                   to each table. Third-party deps only (Bazel-only, no
-                   `Cargo.toml`), so `datalib-http` serves it at
-                   `GET /api/pipeline/history` without linking `etl`,
-                   and the two-process doltlite test runs its statements
-                   against a live writer.
+                   unified-index load, `RenderCtx`. Everything that knows
+                   `datalib_schema` sits here or above.
+    etl/timeseries_render/ what the time-series render crates share.
+    etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
+                   (config schema) per provider. Five scan local trees
+                   through etl/src/fswalk.rs; four mirror a SQLite file
+                   through etl/sqlite_mirror/; two are sensor time
+                   series. fsindex, media, lightroom and apple_photos
+                   have no <p>_render.
+    etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
+    table/         `BulkUpsertable`, alone.
+    probe/         the "Test connection" report shape, alone.
+    migrate_config/ `datalib-migrate-config`: rewrites the one retired
+                   config shape into the current one.
+    runtime/       the data-root layout and the bundled-Node/npx
+                   resolver. Has NO dependencies, deliberately: it is a
+                   `tools=` input to the fixture's ~90s embedding action,
+                   so anything it links re-runs that embed on CI.
+    core/          the app stores plus re-exports of `runtime`.
+    query/         the search-bar grammar every grid shares; no deps.
+    unified_index/ the grid index, the qmd index, the query language over
+                   them. Linked by datalib-step and datalib-applet —
+                   never by datalib-http or datalib-dag.
+    applets/       `datalib-applet`: the applet host.
+    history/       a doltlite store's commit log, third-party deps only,
+                   so datalib-http can serve it without linking `etl`.
     http/          `datalib-http`: API server + sync worker + UI host +
-                   the applet gateway (src/applets.rs). Every route is
-                   behind a per-process API token (src/auth.rs) — read
-                   it from <root>/system/api-token and send
+                   applet gateway. Every route is behind a per-process
+                   API token (src/auth.rs): read
+                   `<root>/system/api-token`, send
                    `Authorization: Bearer <token>`.
-    schema/        hand-written row structs (grid_rows/edges/markdowns)
-    app_schema/    (feedback/sync_jobs), each deriving CREATE TABLE DDL
-                   via #[derive(PortableTable)].
+    schema/        `grid_rows`/`edges`/`markdowns` row structs;
+    app_schema/    feedback/sync_jobs/runs; both derive DDL via
+                   `#[derive(PortableTable)]`.
   ui/          Vue + AG Grid frontend.
-tests/         goldens under tests/__snapshots__/ (Bazel-driven).
-tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
-docs/          dev/ architecture notes; user/ guides + config_examples/;
-               dev/plans/ intended work, dev/plans/completed/ landed.
-third-party/   vendored upstream code (see below).
+  tauri/       the desktop shell (out of Bazel).
+tests/fixtures/  TNG-themed source data + the cached `ingested/` artifact.
+docs/          dev/ architecture notes; user/ guides; dev/plans/.
+third-party/   vendored upstream code.
 ```
 
-### Why each provider has a `<p>_config` crate
+A provider's config schema is its own crate (`<p>_config`, serde
+structs and nothing else) so anything that needs to *understand* a
+config can link it without the machinery. Those crates are Bazel-only
+by design — no `Cargo.toml` — because a first-party crate with only
+third-party deps needs just a `BUILD.bazel`. The `<p>_render` split is
+the same move (see §"Ingest and render are separate crates").
 
-A provider's config schema lives in its own crate, holding the serde
-structs and nothing else — no download code, no render code. That lets
-anything needing to *understand* a config link the schema without
-linking the machinery that acts on it, and it keeps the dependency rule
-structural rather than merely intended.
+## The sync pipeline
 
-They are **Bazel-only by design — no `Cargo.toml`**. A first-party
-crate that uses only third-party dependencies the workspace already has
-needs just a `BUILD.bazel` under `rules_rust`, so the crate
-proliferation is close to free.
+`datalib-dag <config.toml>` runs a DAG of subprocess steps. A `[[groups]]`
+entry is one thing on the Manage screen (a source is a group with a
+`type`; the unified index is a group without one); a `[[steps]]` entry is
+`group` + `function`, its id composed as `<group>/<function>` — the one
+tree it writes; `inputs` name steps by that id and are the edges; an
+`[[applets]]` entry is a server the gateway spawns. A built-in step has
+no `command` and runs `datalib-step`.
 
-Three of them (`chatgpt_config`, `perseus_config`, `slack_config`) are
-missing the comment their siblings carry; the convention applies to
-them just the same.
-
-The `<p>_render` split below is the same move for the same reason —
-see §"Download and render are separate crates". Those crates *do*
-carry a `Cargo.toml`, because unlike the config crates they depend on
-first-party crates, so they are the ordinary case rather than the
-free one.
-
-## The sync pipeline in one paragraph
-
-`datalib-dag <config.toml>` runs a DAG of subprocess steps. The config
-has three kinds of entry: a `[[groups]]` entry is one thing on the
-Manage screen (a source is a group with a `type`; the unified index is
-a group without one); a `[[steps]]` entry is `group` + `function`, with
-its id composed as `<group>/<function>` — the tree it writes — and
-never written; an `[[applets]]` entry is a server the gateway spawns.
-Edges are the declared `inputs`, which name steps by that composed id.
-A built-in step writes no `command`: it runs `datalib-step`, which
-reads its function and its group's `type` from the environment and
-writes the tree its id names. Each source is a group with an `ingest`
-step (bring the data in, from an origin or from files on disk) and a
-`render_markdown` step, and two shared fan-in steps under the
-`unified_index` group index every source's `render_markdown` tree:
-`grid_index` (the SQL index at `unified_index/grid_index/db.doltlite_db`)
-and `qmd_index` (semantic search at `unified_index/qmd_index/`, one qmd
-collection per group so a `source_id:` search scopes retrieval instead
-of filtering its results). Both
-are read by
-the `unified_index` applet, which serves the grid — `datalib-http` does
-not open them. A render store is readable at every commit: the
-documents between two checkpoints share one SQL transaction, each
-written whole inside it, and the end-of-run sweep with its cursor is
-one more, so a checkpoint, a Ctrl-C or a rescue commit never publishes
-a fraction of a document. The
-streaming ingests already write that way; the ones that truncate before
-they refill do not yet — `docs/dev/plans/one_mode.md` is the rule and
-says which is which. Scheduler state lives at `system/dag_state.json`. A config entry the
-loader cannot use costs that entry and nothing else — it is dropped,
-the rest of the pipeline runs, and `datalib-dag --check <config>` (or
-`diagnostics` on `GET /api/config`) says what went and why. A config
-the app cannot serve anything from — not TOML at all, or carrying no
-`unified_index` applet — comes back as `app_ready: false` and blocks
-the UI behind `ConfigErrorView`, live in both directions, so a
-hand-edit that breaks or fixes the file takes effect with no reload.
-The http server's sync worker shells out
-to `datalib-dag`; the UI's Manage tab edits the config. A root with no
-config at all is the new-user case: the desktop shell's launcher
-(`datalib/tauri/launcher-dist/`) offers recent roots, a folder picker,
-and "create an empty one", and the app's own first-run screen
-(`ui/src/views/FirstRunView.vue`) explains what `POST /api/config/init`
-will write before writing it. Without that config there is no
-`unified_index` applet, so the grid answers `no applet "unified_index"`
-— which is what the two screens exist to prevent.
-A `config.toml` written before `[[groups]]` existed is rewritten out of
-band by `datalib-migrate-config`, the only place that shape is still
-understood; a pre-TOML `config.yaml` root is set up again from the
-app. Any executable
-speaking the step protocol can be a step — see
-`docs/dev/step_protocol.md`. The same config file also holds
-`[[applets]]`: servers the http gateway spawns on demand to serve the
-app's own components and endpoints, which the scheduler never sees
-(`docs/dev/applets.md`).
-
-## Vendored upstream: `third-party/qmd`
-
-`third-party/qmd/` is a checked-in snapshot of
-[`github.com/tobi/qmd`](https://github.com/tobi/qmd), pinned to **v2.5.3**
-(see `third-party/qmd/package.json` for the authoritative version).
-It exists as a **reference for the qmd format** — we don't build or ship
-from it; treat it as read-only documentation in code form. Our runtime
-still consumes `@tobilu/qmd` via the registry pin (`DEFAULT_QMD_VERSION`
-in `datalib/backend/runtime/src/qmd.rs`): the Tauri app
-bundles a pinned Node runtime plus `latchkey`/`qmd` package trees.
-All three come out of Bazel — `//datalib/tauri:bundled_node`,
-`//third-party/qmd/runtime:qmd_tree` and
-`//third-party/latchkey/runtime:latchkey_tree` — so what the signed
-app ships is what those lockfiles name; `datalib/tauri/stage-runtime.sh`
-only copies them into place, and `datalib_core::node_runtime` resolves
-them at run time. Every other environment — and
-the app, when a pinned version isn't staged — falls back to
-`npx -y @tobilu/qmd@<version>`.
-
-### Why we don't run from the vendored tree
-
-It looks tempting to point the indexer at `third-party/qmd/bin/qmd` for
-hermeticity, but the win is smaller than it looks and was deliberately
-deferred:
-
-- The vendored tree is source-only. Running it requires `pnpm install`
-  (or `bun install`) **and** `pnpm run build` to produce `dist/`. The
-  install step compiles native deps (`better-sqlite3`, `node-llama-cpp`,
-  `sqlite-vec`, several `tree-sitter-*`) — that's the real network and
-  build cost, not the qmd fetch itself.
-- We'd still need node ≥22 and a working C toolchain on the host, so
-  it's not actually hermetic in the Bazel sense — just "npx-free".
-- `npx`'s cache already makes repeat invocations cheap.
-
-If we want better isolation later, the more likely direction is to
-**re-implement the bits of qmd we actually use** (indexing + retrieval
-against our markdown tree) in Rust inside `datalib/backend/`, using
-this vendored tree purely as the format/behavior reference. That keeps
-runtime deps inside the Cargo workspace and avoids growing a node
-toolchain footprint.
-
-Pulled in via `git subtree add --squash`, so the upstream tree is one
-squashed commit + a merge commit in our history (no full upstream log).
-To bump the pin:
-
-```sh
-git subtree pull --prefix=third-party/qmd \
-  https://github.com/tobi/qmd.git <new-tag> --squash
-```
-
-Do **not** edit files under `third-party/qmd/` — they will be overwritten
-on the next pull. If you need local patches, layer them outside the
-subtree and document why.
+Each source has an `ingest` step and a `render_markdown` step, and two
+fan-in steps under `unified_index` index every render tree their
+`inputs` name: `grid_index` (the SQL index the grid reads) and
+`qmd_index` (semantic search, one collection per group). Both are read
+by the `unified_index` applet; `datalib-http` never opens them. A render
+store is readable at every commit: the documents between two checkpoints
+share one transaction. Scheduler state is `system/dag_state.json`. A
+config entry the loader cannot use costs that entry and nothing else;
+`datalib-dag --check <config>` says what went and why. A config the app
+cannot serve anything from comes back as `app_ready: false` and the UI
+shows `ConfigErrorView`, live in both directions. The http server's sync
+worker shells out to `datalib-dag`; the Manage tab edits the config; a
+root with no config gets the launcher and the first-run screen. See
+`docs/dev/step_protocol.md` for writing a step and `docs/dev/applets.md`
+for applets.
 
 ## Ingest and render are separate crates
 
-A provider is three crates: `datalib_etl_<p>_config` holds the config
-schema (§"Why each provider has a `<p>_config` crate"),
-`datalib_etl_<p>` fetches, and `datalib_etl_<p>_render` turns what was
-fetched into markdown and `grid_rows`. The framework splits the same
-way — `datalib_etl` below, `datalib_etl_render` above it.
+A provider is three crates: `datalib_etl_<p>_config`, `datalib_etl_<p>`
+(fetches), and `datalib_etl_<p>_render` (markdown + `grid_rows`). The
+framework splits the same way — `datalib_etl` below, `datalib_etl_render`
+above. **The render schema stops at that line:** `datalib_schema` is
+reachable from render crates and from nothing on the ingest side, which
+Rust's acyclic crate graph enforces by itself.
 
-**The render schema stops at that line.** `datalib_schema` — `GridRow`,
-`edges`, `markdowns` — is reachable from the render crates and from
-nothing on the ingest side. That is what the split is for: moving a
-`grid_rows` column used to rebuild and re-run every downloader in the
-tree, including `chatgpt_live`, `claude_reset_and_redownload` and every
-other test that cannot be affected by it.
+- **Anything an ingest needs lives on the ingest side.** The uuid recipes
+  are minted during download and read again during render, so they
+  belong in `ingest/schema_raw.rs` and the render crate names them
+  through the download crate.
+- **A source that renders nothing has no `_render` crate.** `ingest_only!`
+  in `datalib_step/src/dispatch.rs` says so once.
 
-The direction is enforced by Rust itself: crate dependencies are
-acyclic, so an ingest crate *cannot* depend on its render crate even
-by accident. Nothing else is needed to keep it that way, and no bazel
-visibility rule is doing this job.
-
-Two rules follow:
-
-- **Anything an ingest needs must live on the ingest side.** The
-  uuid recipes are the usual case: they are minted during download and
-  read again during render, so they belong in `ingest/schema_raw.rs`
-  and the render crate names them through the download crate. Before
-  the split, beeper's downloader reached three of them through a
-  re-export in `render/mod.rs` — which read as a render dependency and
-  would now not compile.
-- **A source that renders nothing has no `_render` crate at all.**
-  fsindex, media, lightroom and apple_photos are download-only, and
-  `ingest_only!` in `datalib_step/src/dispatch.rs` says so once rather
-  than four providers each carrying a `plan_render` stub — and, with
-  it, a dependency on a framework they have no use for.
-
-The measurement that motivated the split is the one that checks it:
+The measurement that checks it:
 
 ```sh
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-79 as of the split (105 before it). If that number climbs, something
-took a dependency it should not have; the arithmetic is in
-[`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md).
+79 as of the split. If that number climbs, something took a dependency
+it should not have.
 
 ## The grid_rows union table
 
-The Vue grid is backed by a single denormalized table, `grid_rows`,
-populated by the `grid_index` step, which stacks every source's render
-store (`<name>/render_markdown/indexed_markdown.doltlite_db`) into it —
-asking each store `dolt_diff` since the commit the index last consumed,
-so a steady-state run reads nothing. The Rust backend
-(`datalib/backend/core/src/db.rs`) issues *one* SELECT against
-`grid_rows` to render the grid — no per-provider branches in the query
-path. The schema (column names, types, per-provider mappings) is the
-hand-written `GridRow` struct in
-`datalib/backend/schema/src/grid_rows.rs`; `#[derive(PortableTable)]`
-produces the `CREATE TABLE` DDL from it. See `docs/dev/grid_rows.md` for
-the full architecture.
-
-When you add or change a `grid_rows` column:
-
-1. Add the field to the `GridRow` struct in
-   `datalib/backend/schema/src/grid_rows.rs` with a `#[col(sql = "…")]`
-   portable type (keep the per-provider mapping in the field's doc
-   comment). Index-time-derived columns use `#[derived(…)]`.
-2. Update each provider's `render/grid_rows.rs` to populate the new
-   column from that provider's parsed data.
-3. Update the row mapper in
-   `datalib/backend/unified_index/src/dolt_repo.rs` — both
-   `SEARCH_ROW_COLUMNS` and `search_row_from` — plus `SearchRow` in
-   `unified_index/src/search.rs` if the column reaches the API.
-4. If it should be a grid column, add it to the `SearchRow` type in
-   `datalib/ui/src/api.ts` and declare it in `columns()` in
-   `datalib/backend/applets/src/unified_index/columns.rs`, with its
-   type from `datalib_columns`. The applet declares the columns and
-   the grid draws them by type (`cards/typedColumns.ts`); a width or a
-   hover the type cannot know goes in `GridCard`'s `columnOverrides`.
-5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
+The grid is backed by one denormalized table, `grid_rows`, populated by
+the `grid_index` step from every source's render store, and read by the
+`unified_index` applet with one SELECT — no per-provider branches in the
+query path. The schema is the `GridRow` struct in
+`datalib/backend/schema/src/grid_rows.rs`; `docs/dev/grid_rows.md` has
+the architecture and the checklist for adding a column.
 
 ## QMDs are write-only
 
-The render step emits QMD markdown files for human/Quarto consumption.
-The backend serves those files **verbatim** (frontmatter stripped) at
-`/applet/unified_index/chat/{uuid}` — it never parses them back. Structured fields
-(name, account, project, channel, created_at, source_label) come from
-`grid_rows` in Dolt. Per-section anchors used by the UI
-(scroll-to-message, highlight, per-section feedback, copy-id) come from
-`<div id="m-{uuid}" data-section-uuid="{uuid}" class="msg
-msg--{provider}">` wrappers the renderer emits in the body. The UI walks
-`id^="m-"` **and** `data-section-uuid` together
-(`ui/src/feedback/context.ts::messageAncestor`) — those two are the
-load-bearing attributes. `data-msg-index` is vestigial on the consumer
-side: `DocCard.ce.vue` passes a hardcoded `0` where the feedback schema
-still requires an index. Signal's renderer is the only one that still
-emits the attribute. A new renderer needs the id + `data-section-uuid`
-pair and nothing else. If you find yourself writing a QMD parser in the
-backend, stop — add the field to `grid_rows` instead.
+The render step emits markdown files; the backend serves them
+**verbatim** and never parses them back. Structured fields come from
+`grid_rows`. Per-section anchors come from the
+`<div id="m-{uuid}" data-section-uuid="{uuid}" class="msg …">` wrappers
+the renderer emits — those two attributes are load-bearing
+(`ui/src/feedback/context.ts::messageAncestor`). A new renderer needs
+that pair and nothing else. If you find yourself writing a QMD parser in
+the backend, stop — add the field to `grid_rows` instead.
 
-## Feedback persistence (doltlite)
+## Doltlite: one writer per file, readers pinned
 
-`datalib-http` opens `<data_root>/system/feedback.doltlite_db` via
-`sqlx::sqlite::SqlitePool` and wraps it — together with the jobs and
-usage stores, one file each — in `AppStore`
-(`datalib/backend/core/src/app_store.rs`), the implementation of the
-`AppRepo` trait in `repo.rs`. The same pool serves reads and writes.
-
-Every UUID-bearing UI surface has a "Feedback…" path. Right-click on
-the grid emits `grid_cell` / `grid_row`; the search input emits
-`filter_chip`; column headers emit `column_header`; the preview pane
-cascades selection (`preview_selection`) → message (`preview_message`)
-→ whole-thread (`page_header`); the page-header
-`FeedbackButton` is `page_header`. The producer-side types and DOM
-breadcrumb walker live in `datalib/ui/src/feedback/context.ts`;
-the backend-side row + discriminated payload schema is the hand-written
-`FeedbackRow` (+ `FeedbackContext` variants) in
-`datalib/backend/app_schema/src/feedback.rs`.
-
-Each `POST /api/feedback` inserts a row **and** runs
-`SELECT dolt_commit('-Am', 'feedback: <uuid>')` on the same pooled
-connection, so the commit covers exactly the row just written.
-
-What makes that true is the **file**, not the connection. Doltlite's
-working set is per-file and shared across processes, so `-Am` commits
-whatever else is dirty in the same file — while `feedback` lived in the
-index database that the `grid_index` step also writes, a submission
-during a sync had its row swept into the step's commit and its own
-commit then failed `nothing to commit`. `system/feedback.doltlite_db`
-has one writer, which is what the exactness rests on. The
-same-connection discipline only keeps the INSERT and the commit on one
-HEAD; it isolates nothing by itself.
-
-Bazel stamps the binary with the git hash via
-`tools/workspace_status.sh` (referenced from `.bazelrc`); cargo builds
-get the same value from `datalib/backend/core/build.rs`. Read-back of
-feedback rows is out of scope — query the store directly with the CLI
-below.
-
-## Inspecting doltlite stores
-
-**Stock `sqlite3` cannot open these files.** doltlite's on-disk format
-is not sqlite-file-compatible; a `.doltlite_db` is a prolly-tree store
-that only a doltlite-linked binary can read. Reaching for the system
-`sqlite3` and concluding the database is corrupt is a well-worn dead
-end.
-
-That is about the *file*, not about getting the data out — one pipe
-turns any store into a plain SQLite database that every SQLite tool
-reads, and a user has the shell to do it with, because
-`datalib-doltlite` ships in the release tarball:
+**Stock `sqlite3` cannot open a `.doltlite_db`**; it is a prolly-tree
+store only a doltlite-linked binary reads. Any store turns into a plain
+SQLite file with one pipe (say this whenever you say the warning):
 
 ```sh
 datalib-doltlite -readonly <store>.doltlite_db .dump | sqlite3 out.sqlite
 ```
 
-Say that alongside the warning whenever you write the warning down.
-Stating the limit without the escape hatch is what made a reviewer
-call the format a re-siloing of the data; the full recipe, and what
-the snapshot does and doesn't carry, is in
-[`docs/dev/doltlite.md`](docs/dev/doltlite.md).
+In a checkout use `bazelisk build //third-party/doltlite:doltlite`, a
+sqlite3-shell drop-in version-locked to the tree; from a test take it as
+a `data` dep. `docs/dev/doltlite.md` has the recipes, `docs/dev/app_stores.md`
+the map of which store lives where and who owns it.
 
-For work inside a checkout, use the Bazel-built shell, which links the
-same amalgamation the Rust binaries do:
+The rules, none optional; the reasons and measurements are in
+`datalib/backend/etl/README.md` §"Connection pools":
 
-```sh
-bazelisk build //third-party/doltlite:doltlite
-dl=bazel-bin/third-party/doltlite/doltlite
+- **One writer per file.** Doltlite's working set lives in the *file*
+  and is shared across processes, so a second writer commits the first's
+  in-flight rows. The `grid_index` step owns the index; `datalib-http`
+  owns feedback, jobs and usage; the applet only reads. A download takes
+  its store as an input (`FetchOptions.db: RawDb`) and never opens one.
+- **Every pool is `max_connections(1)`** with recycling off, and there is
+  one open per file per pass. `close().await` before the next open, on
+  the error path too — dropping the handle only schedules the close.
+- **A reader opens read-only and pins a commit** (`open_reader`, then
+  `pin`, then `pinned_<t>` views). Render reads its raw store that way and
+  `grid_index` reads every render store that way.
+- **A reader never runs `dolt_status`.** From a read-only connection it
+  fails the writer's commit and loses the rows behind it (#400). Any
+  other statement a reader adds is presumed guilty until
+  `doltlite_two_process_test` has run with it.
+- **Never run a store call on a runtime you are about to drop**;
+  `indexed_markdown::blocking` keeps one process-wide runtime for that.
 
-$dl path/to/db.doltlite_db ".tables"
-$dl path/to/db.doltlite_db ".schema grid_rows"
-$dl path/to/db.doltlite_db "SELECT provider, COUNT(*) FROM grid_rows GROUP BY provider;"
-$dl path/to/db.doltlite_db "SELECT COUNT(*) FROM dolt_log;"   # commit history
-```
-
-It is a sqlite3-shell drop-in, so dot-commands, `-json`, `-csv` and an
-interactive REPL all work, plus the dolt SQL surface
-(`dolt_commit`, `dolt_log`, `dolt_diff`, …).
-
-Where the stores live under a data root:
-
-```
-<data_root>/<group>/ingest/entities.doltlite_db  per-source entities + sync bookkeeping
-<data_root>/<group>/ingest/blobs.doltlite_db     content-addressed blobs
-<data_root>/<group>/render_markdown/…            the rendered tree + its render store
-<data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges
-<data_root>/system/feedback.doltlite_db         filed feedback
-<data_root>/system/jobs.doltlite_db             the sync job queue
-<data_root>/system/usage.doltlite_db            bytes-on-disk over time
-<data_root>/system/runs.sqlite                  every run's step states, log lines and
-                                                metrics, plus the app server's own log
-                                                (plain SQLite, not doltlite — any
-                                                sqlite3 opens it)
-```
-
-One writer per file, and it is load-bearing: doltlite's working set is
-per *file* and shared across processes, so two writers on one file
-commit each other's in-flight rows. The `grid_index` step owns the
-index; `datalib-http` owns feedback, jobs and usage; the applet only
-reads. `runs.sqlite` is the exception because it is not doltlite: it
-is plain SQLite in WAL mode, and the runner and `datalib-http` both
-write it (the runner its runs, the server its own log), which SQLite's
-own locking makes ordinary.
-
-`usage.doltlite_db` is the one store nothing ever commits. It is a
-timeseries — `datalib-http` walks the root every five seconds *while a
-run holds it* and appends a row per tree whose size moved — so the rows
-*are* the history, and a `dolt_commit` per sample would flood
-`dolt_log` with nothing the table doesn't already say. The gate matters
-when you read it: between runs nothing writes the root, so the series
-deliberately has no samples there, and a change made from outside
-datalib carries the instant it was next *measured* rather than the
-instant it happened. It has its own file for exactly
-the reason the others do: a `-Am` commit from the job store would
-otherwise sweep whatever samples happened to be dirty into it. Reading
-it is `SELECT path, measured_at_utc, bytes FROM disk_usage`; note it is
-compacted (no repeated value, nothing closer than five seconds), so
-carry the last value forward rather than assuming a fixed interval.
-
-Two other copies of the same shell exist. `datalib-doltlite` is the one
-a released install has (it is in `:dist`), and there is a host
-`/usr/local/bin/doltlite` on some machines. When you are working in a
-checkout, prefer the Bazel target over both: it is version-locked to
-`MODULE.bazel`'s pin, so it can't silently disagree with what the tree
-you are editing writes.
-
-**From a test**, take it as a `data` dep and pass `$(rootpath ...)`
-rather than shelling out to a host binary — that keeps the test
-hermetic. `//tests/fixtures:ingested_tng_test` is the worked example:
-it opens the stores the pipeline just wrote and asserts row counts and
-per-provider coverage. Prefer that over grepping tracing events out of
-stderr; a log line tells you what the code *said*, the store tells you
-what it *did*.
-
-## One open per doltlite file, and close it before the next
-
-Every pool against a `.doltlite_db` is `max_connections(1)`, and doltlite's
-working set lives in the **file** rather than in the connection. A second
-pool is therefore not a second view of the store; it is a second handle on
-one shared uncommitted tree, and a `dolt_commit('-Am')` through either one
-sweeps up whatever the other has in flight.
-
-**The open itself does not wait.** Measured on macOS with doltlite 0.50.3
-by `//datalib/backend/etl:doltlite_two_process_test`: a second read-write
-pool on an already-open file opens in ~2ms and both pools then commit, and
-a read-only pool alongside a live writer — opened in either order — costs
-each other nothing. What overlap costs you is the shared working set above,
-plus contention while two pools are actually mid-write. So a hang here is
-not the open blocking; it is two writers on one tree.
-
-**Two writers mid-write is the second face, and it errors rather than
-waits.** Those measurements commit through each pool in turn. Commit
-through both *at once* and one of them fails outright with `commit
-conflict: another connection committed to this branch` — naming a commit
-that need not have happened; read it as "someone else has this store open
-right now". The asymmetry is in the source: ordinary DML retries under a
-busy handler (`btreeBeginTrans` loops on `prollyInvokeBusyHandler`) and
-rides the overlap out, while `dolt_commit` takes the store's lock once
-(`csFileLockNB`, via `RefreshAndConfirmHead`) and gives up if a peer holds
-it. `doltlite_raw::open` commits three times on the way in, so an
-overlapping *open* fails inside `open` itself, reported as `commit schema
-after DDL`. `two_live_pools_on_one_store_break_each_others_commits` in
-`doltlite_raw.rs` pins this half.
-
-**A reader can be the peer.** "Read-only costs the writer nothing" is
-measured for what a pinned pass issues — `dolt_hashof`, `sqlite_master`,
-`pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_` views,
-`dolt_diff_*` — and for what the commit-history panel issues —
-`dolt_log()`, `dolt_commit_ancestors`, `dolt_diff_summary`,
-`dolt_diff_stat`, a `COUNT(*)` per table
-(`a_history_reader_never_makes_the_writers_commit_fail`) — and is false
-for `dolt_status`. Issued from a read-only
-connection while the writer commits, it fails that commit with the same
-`commit conflict` for as long as the statement is running, and the rows
-the writer inserted before each failed commit are gone afterwards
-(dolthub/doltlite#2832, with a stock-CLI reproducer: 1500 inserts, 772
-rows left). `a_churning_reader_never_makes_the_writers_commit_fail` sees
-about one commit in a hundred only because its reader is fast. That was
-#400: `grid_index` asking every render store whether it was dirty, each
-streaming pass, while a render step was sealing. **So a consumer never
-runs `dolt_status`**, and the same goes for a hand-run
-`datalib-doltlite -readonly … dolt_status` against a store a sync is
-writing. Any other statement a reader adds is presumed guilty until that
-test has run with it.
-
-Three rules follow, and none is optional:
-
-- **Open the store once per pass.** If a stage needs to load rows, run a
-  `dolt_diff` scan and probe for missing ids, all three go on the one
-  pool. Reaching for a fresh `open_reader` per question reads as harmless
-  and is not.
-- **`close().await` before the next open**, on the error path too.
-  Dropping the handle only *schedules* the disconnect, so a `?` between
-  two opens leaves them overlapping.
-- **Never run a store call on a runtime you are about to drop.** sqlx
-  returns a checked-out connection to its pool from a task spawned at
-  drop; a per-call `Runtime::new().block_on(..)` dies before that task
-  runs, the pool forgets the connection, and the next call opens a
-  second one to the same file while the first is still closing — seen
-  as `database is locked` about once in thirty parallel test runs.
-  `indexed_markdown::blocking` keeps one process-wide runtime for the
-  no-runtime case for exactly this reason.
-- **A download takes the store as an input.** Every provider's
-  `FetchOptions` carries `pub db: RawDb`; `fetch` never opens one, and
-  whoever opened it closes it. `lint_repo.py`'s check 6 enforces this.
-  See `datalib/backend/etl/README.md` for what the `Option<RawDb>` this
-  replaced actually cost.
-
-Render additionally reads through `open_reader`, never `open`: the write
-path rescue-commits, reconciles the schema and commits with `-Am`, which
-is three writes to a store the render step does not own. `lint_repo.py`'s
-check 5 enforces that half; nothing enforces the first two rules above.
-
-**Expect this to pass locally and fail on CI.** Whether overlapping pools
-actually collide depends on timing and on the filesystem's locking, so a
-mac laptop and a Linux CI container disagree readily. A render path that
-opened three pools per pass ran in 10s here and hit the 300s timeout on
-`//tests/fixtures:ingested_tng_test` there (#311). A download that opened
-its own pool and never closed it produced intermittent `commit conflict`
-failures across the doltlite-heavy targets (#327). The measurements above
-are macOS only, and that is exactly the platform this warning says not to
-trust: if a doltlite-touching change is green locally and red or slow in
-CI, count the opens first.
+**Expect this to pass locally and fail on CI.** Overlapping pools collide
+by timing and filesystem locking, and a mac laptop and a Linux container
+disagree readily. If a doltlite-touching change is green locally and red
+or slow in CI, count the opens first.
 
 ## Git: prefer merges over rebases
 
-When integrating remote changes into a local branch (e.g. `git pull` after
-a rejected push), **prefer a merge commit over a rebase**. Rebasing
-rewrites local commit hashes, which loses the "what actually happened"
-history and can surprise other clones. A merge commit keeps both sides of
-the history intact and is cheap to read with `git log --first-parent`.
-
-In practice: `git pull` (default merge), not `git pull --rebase`. Force-
-push is off the table on shared branches.
+`git pull` (default merge), not `git pull --rebase`. Rebasing rewrites
+local hashes and loses what actually happened; force-push is off the
+table on shared branches.
 
 ## Push early, open the PR early, and watch CI
 
-**Push the branch and open a PR as soon as there is something to test,
-even if nobody asked for one** — CI's runners are free and a full
-`//...` run takes minutes, so starting it early is starting it for free.
-Push again as the work goes; each push restarts the run.
-
-After pushing, check that the PR is mergeable (`gh pr view <n> --json
-mergeable,mergeStateStatus`) and follow the run to its end rather than
-leaving it. If it fails, read the failure and fix it; if the failed
-target looks like a flake (the doltlite-timing ones above, or anything
-`scripts/flaky_tests.py` already lists), re-run the failed jobs once
-before digging in. Before pushing a follow-up, confirm the PR is still
-open — a merged PR does not reopen for a later push, and the commit
-reaches nobody.
+Push the branch and open a PR as soon as there is something to test —
+CI's runners are free. After pushing, check `gh pr view <n> --json
+mergeable,mergeStateStatus` and follow the run to its end. If it fails,
+read the failure; if the failed target looks like a flake (the
+doltlite-timing ones, or anything `scripts/flaky_tests.py` lists),
+re-run the failed jobs once before digging in. Before pushing a
+follow-up, confirm the PR is still open — a merged PR does not reopen.
 
 ## Python deps: pyproject.toml → requirements.txt → Bazel
 
-`uv` and Bazel read **different** files for Python deps:
-
-- `uv run …` reads `pyproject.toml` + `uv.lock`.
-- Bazel's `pip.parse` in `MODULE.bazel` reads `requirements.txt` (the
-  hub is `@py_pip`, consumed via `requirement("…")` in BUILD files).
-
-`requirements.txt` is a generated artifact — it must be regenerated
-after any `pyproject.toml` dep change, or Bazel targets that try to
-`requirement("newpkg")` will fail with
-`no such package '@@…py_pip//newpkg': BUILD file not found`:
+`uv run` reads `pyproject.toml` + `uv.lock`; Bazel's `pip.parse` reads
+`requirements.txt`, a generated file. After any `pyproject.toml` change:
 
 ```sh
 uv export --no-emit-project --no-emit-workspace --format requirements-txt -o requirements.txt
 ```
 
-Then add `requirement("newpkg")` to the relevant `BUILD.bazel` `deps`.
-A `uv run` smoke test won't catch a missing Bazel dep — the venv has it.
-Run `bazelisk build //…` to verify. Python is only used for fixture /
-test-pipeline tooling (`tests/fixtures/`) and scripts; everything in the
-shipping path is Rust.
+then add `requirement("newpkg")` to the relevant `BUILD.bazel`. Python is
+only used for fixture / test tooling and scripts; everything shipping is
+Rust.
 
 ## Running tests
 
 **"Build green" means `bazelisk test //...` passes — nothing less.** A
-narrower *bazel* invocation (`bazelisk test //some/subtree/...`, a single
-target's tests) is fine for inner-loop iteration, but don't call the tree
-green based on one of those. If you report "build green" without having run
-`bazelisk test //...`, say what you actually ran instead.
-
-**But `bazelisk test //...` is not the whole CI gate.** The `bazel test`
-job runs a **repo hygiene lint step first** and skips the tests entirely
-if it fails — so a tree can be green by the paragraph above and still get
-a red cross, with the test results never printed. It cannot be a Bazel
-*test*: `scripts/lint_repo.py` has to enumerate every tracked file via
-`git ls-files`, which is exactly what a sandbox exists to prevent. Its two checks are that every `no-sandbox` tag is
-allowlisted, and that every first-party `*.py` sits under a Python lint
-root so ruff and pyright actually see it.
-
-So the complete local gate is the hygiene lint **and** the test suite:
+narrower invocation is fine for the inner loop, but don't call the tree
+green based on one; say what you actually ran. The CI gate is that plus
+the repo hygiene lint, which runs first and skips the tests if it fails:
 
 ```bash
-bazelisk run //:lint_repo && bazelisk test //...
+bazelisk run //:precommit          # the one command to run before pushing
 ```
 
-**The one command to run before pushing is `bazelisk run //:precommit`.**
-It is the hygiene lint, `//:lint`, a `bazelisk build //...` (which is
-what runs the rustfmt and clippy aspects over every crate), and every
-hermetic test. Both wrappers go through
-[`//:lint_repo`](BUILD.bazel), a `py_binary` — deliberately, so the
-script runs on Bazel's pinned Python rather than the host's. It needs
-`tomllib` (Python ≥3.11) and macOS still ships 3.9 as `python3`, which
-used to make `//:precommit` die with a bare `ModuleNotFoundError` on
-every Mac.
-
-**Bazel is the only supported build/test driver — don't shell out to
-`cargo test` / `cargo build` / `pnpm test` for the inner loop.** They
-bypass Bazel's action cache (so they neither use nor warm it) and its
-sandboxing, and risk producing artifacts that disagree with what CI sees.
-If your inner loop feels slow, narrow the bazel invocation or fix the
-slow target — don't drop to cargo.
-
-**Coverage** uses `bazelisk coverage` with a one-shot wrapper that
-captures Rust-subprocess hit counts too — see
-[`docs/dev/coverage.md`](/docs/dev/coverage.md). The short form:
-
-```bash
-tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \
-  //datalib/backend/dag:datalib_dag_bin \
-  //datalib/backend/datalib_step:datalib_step \
-  //datalib/backend/signal-backup:signal_make_fixture
-```
-
-**Run the cheap tests locally; let CI run the full suite.** `bazelisk
-test //...` is still the source of truth, but this repo is public, so
-CI's runners are free and unmetered while your laptop's are not. **A
-green CI run of `//...` satisfies that rule; a narrower local run does
-not.** Measured on one warm mac:
+That is `//:lint_repo`, `//:lint`, a `bazelisk build //...` (which runs
+the rustfmt and clippy aspects over every crate) and every hermetic
+test. Measured on one warm mac:
 
 | loop | command | cost |
 |---|---|---|
-| lint + typecheck | `bazelisk test //:lint` | **~3s** |
-| everything a laptop can check | `bazelisk run //:precommit` | the row below plus a `build //...` for the fmt/clippy aspects |
-| every hermetic test | `bazelisk test //... --build_tests_only --test_tag_filters=-no-sandbox,-requires-network,-external,-manual` | **~106s** after edits to a shared crate, **~2s** when nothing moved; 133 of 146 targets |
+| lint + typecheck | `bazelisk test //:lint` | ~3s |
+| every hermetic test | `bazelisk test //... --build_tests_only --test_tag_filters=-no-sandbox,-requires-network,-external,-manual` | ~106s after a shared-crate edit, ~2s when nothing moved |
 | the package you're editing | `bazelisk test //datalib/backend/etl/...` | varies |
 | the whole gate, e2e included | push, and read CI | ~3 min warm / ~20 min cold |
 
-Reach for `//:precommit` before pushing. The test line under it drops
-the 13 targets that need a host, and `--build_tests_only` stops it
-building the rest of the tree to run them — **which is also why it
-does not check formatting**: the rustfmt and clippy aspects run only on
-the targets named on the command line, and with `--build_tests_only`
-those are the tests, not the libraries they link. A misformatted
-`worker.rs` passed that line and failed CI (2026-09-14); `//:precommit`'s
-`build //...` is the step that catches it. **Those tag filters belong
-on that line and nowhere else** — never on the full run; the paragraph
-below says why.
+The filtered line skips formatting: with `--build_tests_only` the
+aspects run only on the tests named, not the libraries they link.
+**Those tag filters belong on that line and nowhere else** — on the full
+run, `-external` silently drops the Playwright suite.
 
-Don't shell out to `cargo` / `pnpm` for any of these — they bypass the
-cache and can disagree with CI.
-
-The disk cache is shared by every worktree (one absolute path, see
-`.bazelrc`), so size its cap against how many you keep live. Below their
-sum they evict each other and every worktree switch recompiles. Check
-`du -sh ~/Library/Caches/bazel-disk-cache`; sitting *at* the cap is the
-symptom.
-
-**Do not add `--test_tag_filters=-manual,-external` to the FULL run**
-(the last row of the table above — the one whose green is what "build
-green" means). The canonical line is the bare `bazelisk test //...`. Filtering on
-`-external` silently drops `//datalib/ui:e2e_test` (Playwright), which
-lets UI regressions through. (The lint/typecheck gate — `//:lint`, i.e.
-ruff + pyright + vue-tsc — is fully hermetic and carries no tags, so no
-filter can drop it; clippy, fmt and the unused-dependency check ride
-the always-on rustfmt aspect, the always-on clippy aspect and
-`per_crate_rustc_flag` respectively — see the `.bazelrc` comments.) If a test is host- or
-network-dependent it's tagged `requires-network` and/or `no-sandbox`,
-which Bazel respects on its own — `external` is reserved for tests
-that hit third-party services you don't want CI talking to. Prefer
-`bazelisk` over `bazel` so the workspace's pinned Bazel version wins.
-
-**Beware consuming Bazel outputs from outside Bazel**: anything that
-reads `bazel-bin/tests/fixtures/ingested/*` is reading a genrule output.
-Tools outside Bazel don't know how to rebuild it, so if you change any
-download/render/schema code and re-run outside Bazel, you'll compare
-fresh results against a stale artifact and chase phantom failures. Go
-through bazel (`bazelisk test //tests/fixtures:ingested_tng_test`, or
-`//...`) so the fixture is rebuilt first.
-
-There is no `//tests:test_snapshots` target — this paragraph used to
-send you to one, and to a `dump.sql` that the fixture stopped producing.
-`tests/` holds only `fixtures/` (checked 2026-08-20). Provider-level
-insta snapshots are the golden tests that do exist; see the
-`.update` targets below.
-
-### Updating insta snapshots (`.update` targets)
-
-`bazel test` runs each action in a sandbox, so plain
-`--test_env=INSTA_UPDATE=always` lands new `*.snap` files inside the
-sandbox where they can't be reviewed. The standard fix is to invoke
-the update via `bazel run` against a sibling `.update` target. Every
-insta-using `rust_test` in this tree has one declared via the
-`insta_update` macro in `//tools:insta.bzl`. The same wrapper is how a
-generated golden that is not an insta snapshot gets regenerated: a
-test that writes its file when `INSTA_UPDATE=always` is set, under
-`INSTA_WORKSPACE_ROOT`, and compares against it otherwise
-(`//datalib/backend/datalib_step:ingest_methods.update` is one).
-
-```bash
-# Hermetic snapshot tests — no host prereqs.
-bazel run //datalib/backend/unified_index:fixture_db_snapshot_test.update
-bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_render.update
-bazel run //datalib/backend/etl/providers/slack:slack_translate.update
-
-# Live tests — need LATCHKEY_CURL on the host (same as cargo), pointed
-# at the dispatch curl (never at the impersonator itself — see
-# docs/dev/curl_impersonate.md). Builds both once:
-bazel build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch"
-bazel run //datalib/backend/etl/providers/claude:claude_live.update
-```
-
-The wrapper sets `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`,
-which only exists under `bazel run` and resolves to the source tree
-(not the sandbox), so insta writes — including brand-new `.snap`
-files — land where `git status` will show them. Always review the
-diff before committing.
-
-When adding a new insta-using test, declare a sibling `.update`:
-
-```python
-load("//tools:insta.bzl", "insta_update")
-
-rust_test(
-    name = "my_render_test",
-    data = [":tng_fixture"],
-    env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
-    ...
-)
-
-insta_update(
-    name = "my_render_test.update",
-    test = ":my_render_test",
-    test_args = ["--ignored"],  # only if the test is #[ignore]'d
-    # `data` and `env` on rust_test DO NOT propagate through the
-    # sibling sh_binary wrapper — mirror every fixture / env-var dep
-    # here or `bazel run …update` will panic with "fixture not found".
-    extra_data = [":tng_fixture"],
-    extra_env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
-)
-```
-
-### "Why was CI slow?" — read the run, then `docs/dev/ci.md`
-
-[`docs/dev/ci.md`](docs/dev/ci.md) is the reference: how the workflows,
-the image and BuildBuddy fit together, every cache and what it is for,
-the recipes for reading a run down to the per-action profile, what has
-been measured (with run ids), and what was tried and rejected. The
-rules that come up daily:
-
-- **Three lines in the job log are usually the diagnosis** —
-  `grep -E 'INFO: Elapsed time|processes:|Executed [0-9]+ out of'`.
-  The `processwrapper-sandbox` count is what actually ran; a warm
-  `main` run executes 0 tests. Check the run's `created_at` against
-  the job's `started_at` first: a queued run is not a slow build.
-- **Runs are bimodal.** Warm ≈ 2.5 min, cold (a shared crate changed)
-  ≈ 20; a rising median means more cold runs. Blast radius is the only
-  lever on a cold run: `bazelisk query 'kind(".*_test", rdeps(//...,
-  <crate>))'` is the price tag before pushing.
-- **A `pull_request` run builds the merge of the PR into current
-  `main`**, not the branch head, so a moved `main` re-runs what is
-  unique to the PR downstream of the change. A dispatch builds the
-  branch head.
-- **A `[for tool]` suffix on a `Compiling Rust …` line is a second
-  copy** of the crate in the exec configuration. A pipeline binary a
-  genrule runs goes in `srcs`, not `tools` (#484).
-- **Locally you are probably not on the remote cache**, and even with
-  the key a mac shares nothing with CI's linux actions — the setup and
-  the tell are in `ci.md`.
-- **Flaky tests**: `scripts/flaky_tests.py --limit 400` names the
-  targets from re-run commits.
+**Bazel is the only supported driver.** `cargo test` / `pnpm test` bypass
+its cache and sandbox and can disagree with CI. Anything that reads
+`bazel-bin/tests/fixtures/ingested/*` is reading a genrule output; go
+through bazel so the fixture is rebuilt first. Insta snapshots are
+updated through sibling `.update` targets (`docs/dev/testing.md`).
+Coverage: `docs/dev/coverage.md`. Why a run was slow: `docs/dev/ci.md`.
 
 ## Common commands
 
 ```bash
-# Source of truth — run this before claiming tests pass
-bazelisk test //...
-
-# Narrower inner loop (faster) — still bazel, so the cache stays warm
-bazelisk test //datalib/backend/...
-
-# Rebuild the fixture ingest (dump.sql + qmd.tar)
-bazelisk build //tests/fixtures:ingested_tng
-
-# Stage every shipped binary under its public dash-separated name, then
-# run a pipeline against a data root's config (no --binary-dir needed:
-# datalib-dag falls back to its own directory to find datalib-step)
-bazelisk build //datalib/backend:bin
+bazelisk test //...                                   # source of truth
+bazelisk test //datalib/backend/...                   # narrower, still bazel
+bazelisk build //tests/fixtures:ingested_tng          # rebuild the fixture ingest
+bazelisk build //datalib/backend:bin                  # stage every shipped binary
 bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 ```
 
-## Provenance: Claude's `api` and `export` methods
+## "Claude", not "Anthropic"
 
-Claude data can come from the live web API or an unpacked bulk export.
-Both are the one `claude` type; which one an ingest step uses is the
-method table in its params, `[steps.params.api]` or
-`[steps.params.export] path = …`, and the step refuses both at once.
-
-**They write the same raw store.** The `api` method walks the API and
-the `export` method reads the export's JSON off its `path`, and both
-land rows in the same six tables of `<name>/ingest`, so the render step
-has exactly one input shape. The API downloader gets there by
-normalizing every response into the bulk-export on-disk shape
-(`normalize_to_export_shape` in
-`datalib/backend/etl/providers/claude/src/ingest/normalize.rs`,
-stamping `_source: { via: "claude.ai/api", org_uuid }` provenance); the
-export ingest stores what the export already said, with the org columns
-NULL — which is how the renderer tells the two apart and knows not to
-normalize an already-normalized payload a second time.
-
-Until #207 the export had no ingest wave at all: the renderer read
-the export tree in place through a second parser, and the source had no
-raw store, no `sync_runs` row and no way to notice a deleted
-conversation. If you find prose calling the export "render-only", or
-naming a `claude_export` *type*, it predates that fix or the method
-tables.
-
-Because the two methods share a store, seeding one from an export and
-then keeping it fresh with the API nearly works today — and has one
-destructive edge (the export ingest prunes to its own snapshot, so
-re-running it over an API-extended store deletes what the API added).
-Read INGEST.md's "Bootstrapping from an export" section before trying
-it. See `datalib/backend/etl/providers/claude/INGEST.md`.
-
-### "Claude", not "Anthropic"
-
-**Claude is the product; that is the name we use.** The provider crate is
-`datalib_etl_claude` under `providers/claude/`, the source type is
-`claude`, the `grid_rows.provider` tag is `claude`, the tables are
-`claude_attachments`, processor ids are `claude/<name>/…`, and tracing
-events are `claude_*`.
-
-The rule that settled it is the sibling comparison, not a headcount:
-**every source type in this tree is named for the product a person
-recognizes, never for the vendor** — `chatgpt`, not `openai`;
-`lightroom`, not `adobe_catalog`. And never for the way it is reached:
-`claude` whether over the API or from an export, `contacts` whether
-over CardDAV or from `.vcf` files — the method is a table on the ingest
-step, not part of the type. The provider directory was the single
-exception until #269, where `anthropic` sat next to `chatgpt` and named
-the company instead of the thing.
-
-Write **Anthropic** only where you mean the company or something it
-issues, because there the distinction is real and load-bearing:
-
-- "Anthropic issues stable UUIDs for every entity" — a fact about
-  upstream, and the reason `Scope::ProviderGlobal` is safe here.
-- "the owning Anthropic organization" — `org_uuid` is an org *in
-  Anthropic's account system*, not in ours.
-- "if Anthropic ever ships attachment bytes inside the export".
-
-The one deliberate survivor of the rename is the `anthropic` **search
-keyword** in `ui/src/config/catalog.ts`: someone who thinks of the
-company should still find the source in the picker.
+**Every source type is named for the product a person recognizes, never
+for the vendor or the way it is reached**: `claude` (api or export),
+`chatgpt` not `openai`, `contacts` whether CardDAV or `.vcf`. Write
+**Anthropic** only where you mean the company or something it issues (an
+org in Anthropic's account system, the UUIDs it mints). The one
+survivor is the `anthropic` search keyword in `ui/src/config/catalog.ts`.
 
 ## A source's id is not its name
 
-A source has two identifiers and they are different things:
-
 | | |
 |---|---|
-| **id** | its group id — the directory under the data root, the stem of its step ids, the first segment of every `qmd_path`. Path-safe, unique, changing it is a migration. |
-| **name** | what a person typed in the wizard. Free text, mutable, and two sources may share one. |
+| **id** | its group id — the directory under the data root, the stem of its step ids. Path-safe, unique; changing it is a migration. |
+| **name** | what a person typed in the wizard. Free text, mutable, may repeat. |
 
-**Everything that identifies, filters or joins uses the id**, and the
-Rust/TypeScript field for it is called `source_id`: `SearchRow.source_id`,
-the `source_id:` search filter, `Field::SourceId`. The grid's "Source"
-column shows the *name*, joined client-side from `config.toml` — which is
-what keeps renaming a source free of a re-index.
-
-Every stored column moved with the code — `markdowns.source_id`,
-`source_cursors.source_id`, `render_problems.source_id` — so there is no
-gap between what a field is called and what its column is called. The
-cost was one re-index — the trade
-[Breaking changes are fine](#breaking-changes-are-fine) describes.
-`sync_jobs.source_ids` is the one plural: it holds a comma-separated
-list of step ids, so the old singular was wrong twice over.
-
-`source_name` survives in exactly two places, and both are inputs a
-**person** types rather than names we chose: `source_name:` in the
-search bar parses to `Field::SourceId`, and `POST /api/sync/jobs` takes
-`source_name` as a serde alias for `source_ids`. Each was the only
-spelling for as long as a source had nothing but an id, so both are in
-saved queries and in people's fingers. New callers emit `source_id:` and
-`source_ids`.
-
-Background: [#279](https://github.com/imbue-ai/datalib/issues/279).
+Everything that identifies, filters or joins uses the id, and the field
+is `source_id` everywhere. `source_name` survives in two places because a
+**person** types them: the `source_name:` search filter and the
+`source_name` alias on `POST /api/sync/jobs`.
 
 ## A cursor is only valid under the config that set it
 
 A provider that resumes from a stored cursor never re-reads the config
-that narrowed its first walk, so *widening* that config (removing a
-label filter, moving `since` back) is a silent no-op unless the
-provider records the scope beside the cursor and diffs it next run —
-`datalib_etl::scope_config`, and the convention is written up in
-[`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md#when-the-cursor-swallows-a-config-change)
-§ "When the cursor swallows a config change", with the table of who
-records what. Slack hit this first, then Gmail, added after the sweep
-that fixed everyone else; `lint_repo.py` check 8 now catches a new
-provider that keeps a cursor without the record.
+that narrowed its first walk, so *widening* it is a silent no-op unless
+the provider records the scope beside the cursor and diffs it next run —
+`datalib_etl::scope_config`, written up in
+`docs/dev/data_architecture_ingestion.md` § "When the cursor swallows a
+config change". `lint_repo.py` check 8 catches a new provider that keeps
+a cursor without the record.
 
 ## Unordered collections: give a bag an order before storing it
 
-**A JSON array is not necessarily a list.** When an API returns a *set*
-— capabilities, permissions, tags, member ids, labels — the array order
-is whatever the server happened to emit, and nothing promises it is
-stable between fetches. Sort it before it goes into a content payload.
-
-This is an architectural rule, not tidiness: the whole pipeline's
-incrementality rests on an unchanged record serializing identically to
-itself. The argument is in
-[`data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md#efficiently-incremental).
-
-Left unsorted, a re-fetch of an unchanged object serializes differently
-from itself, and everything downstream believes it changed:
-`dolt_diff_<table>` reports a modification, the entity re-renders, and
-the manual-e2e golden's `--reset-and-redownload` stability check fails
-on content that never moved. Found this way on 2026-08-31 — claude.ai
-returns a project's eight `permissions` strings in a different order on
-different fetches (`canonicalize_project_payload` in the Claude
-downloader now sorts them).
-
-**Sort; don't declare it volatile.** The two look interchangeable and
-are not. `*_VOLATILE_PATHS` says *"this field's value carries no
-information"* and drops it from the content payload — right for a
-per-fetch `updated` stamp. For a bag the contents are content — losing
-a permission is a real change you want to see — and it is only the
-order that means nothing. Sorting keeps the signal and removes the
-noise; declaring it volatile throws the signal away too.
-
-Applies to nested arrays as well, and the sort has to be total: sort by
-the rendered string rather than by `as_str()`, so a mixed-type array
-gets an order instead of a panic.
+When an API returns a *set* as a JSON array — capabilities, permissions,
+tags, labels — sort it by the rendered string before it goes into a
+content payload. The pipeline's incrementality rests on an unchanged
+record serializing identically to itself. **Sort; don't declare it
+volatile**: volatile drops the field, and losing a permission is a real
+change you want to see.
 
 ## Name a closed set of strings
 
-**If a string can only be one of a handful of values, it should be an
-enum.** A bare `&str` or `String` in that position gives you nothing: no
-list of what the values are, no place to say what one *means*, no
-compile error when a `match` misses one, and "find references" returns
-every unrelated use of the same word.
-
-Rust has no `StrEnum`, so use [`strum`](https://docs.rs/strum) — it is
-already a workspace dependency:
+**If a string can only be one of a handful of values, it is an enum.**
+Use `strum`:
 
 ```rust
-use strum::{EnumString, IntoStaticStr, VariantArray};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[derive(EnumString, IntoStaticStr, VariantArray)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum RunState {
-    /// Invoked, and the scheduler is waiting on it.
-    Running,
-    /// In the runnable subgraph, but up to date. Checked, and current.
-    SkippedUpToDate,
-    …
-}
+pub enum RunState { Running, SkippedUpToDate, … }
 
 impl RunState {
     pub fn as_str(self) -> &'static str { self.into() }
@@ -1522,174 +449,75 @@ impl RunState {
 }
 ```
 
-`VariantArray` gives `RunState::VARIANTS`, so nothing has to re-list the
-values — that list *is* the enum, and it cannot silently miss one. The
-two thin `as_str` / `parse` wrappers are the house idiom; keep them so
-call sites read as `RunState::Failed.as_str()` rather than a bare
-`.into()`.
-
-Two rules for the boundary:
-
-- **`parse` returns `Option`, never a guess.** A store written by a
-  newer build, or a third-party step, can name a value this binary does
-  not have. The caller decides what that means — the Manage screen
-  shows a status word it does not know as the bare word, deliberately,
-  rather than drawing nothing (`TableGrid.ce.vue`'s status renderer
-  says why).
-- **Add a test that strum and serde agree** when a type derives both.
-  They are independent derives producing independent strings, so the
-  agreement is a real check, not a tautology. One `#[test]` over
-  `VARIANTS` covers it.
-
-Where the value is already stored as a `VARCHAR` or a JSON string, leave
-the storage type alone and route every read and write through the enum.
-In SQL that means **binding** the value, not interpolating it — the
-statement stays a `&'static str` and needs no `AssertSqlSafe`:
-
-```rust
-sqlx::query("UPDATE sync_jobs SET state = ? WHERE id = ? AND state = ?")
-    .bind(JobState::Canceled.as_str())
-    .bind(job_id)
-    .bind(JobState::Pending.as_str())
-```
-
-### When a string really is a string
-
-Don't reach for an enum when the set is not closed and not ours:
-
-- **Values that come from upstream.** Notion block types, MIME types,
-  Matrix event types. Match on them at the boundary and convert to
-  something of ours; the arms are a parser, not a vocabulary.
-- **Free-form display text.** `grid_rows.kind` is a per-provider label
-  (`"Slack Message"`, `"Notion Page"`, `format!("Chapter ({id})")`).
-  Deliberately open.
-- **JSON keys and SQL identifiers.** `"uuid"`, `"created_at"`. A name,
-  not a value.
-
-### Where the vocabularies are
-
-One enum per vocabulary, living with whoever mints it:
+`parse` returns `Option`, never a guess — a store written by a newer
+build can name a value this binary lacks, and the caller decides.
+**Add a test that strum and serde agree** when a type derives both. Leave
+the stored `VARCHAR` alone and **bind** the value in SQL rather than
+interpolating it. Don't reach for an enum for values that come from
+upstream (block types, MIME types), free-form display text
+(`grid_rows.kind`), or JSON keys.
 
 | vocabulary | type | home |
 |---|---|---|
 | what a step is doing in a run | `RunState` | `dag/src/run_state.rs` |
 | why a step failed | `FailureKind` | `dag/src/step.rs` |
-| what the run store itself names | `LiveState` | `runs/src/lib.rs` |
-| a log line's severity, and which pipe it came from | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |
+| what the run store names | `LiveState` | `runs/src/lib.rs` |
+| a log line's severity and pipe | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |
 | a sync job's lifecycle | `JobState`, `JobKind` | `app_schema/src/sync_jobs.rs` |
 | a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what render could not do | `Outcome`, `Reason`, `ScopeKind`, `Stage` | `schema/src/render_problems.rs` |
-| a config's `[[steps]]` source type | `SourceType` | `datalib_step/src/source_type.rs` |
-| whether an ingest method reaches a live service or reads files on disk | `Reach` | `source_common/src/lib.rs`, declared per method by each `<p>_config` crate |
+| a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
+| whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
 
 The TypeScript side mirrors these as string-literal unions in
-`datalib/ui/src/api.ts` (`DagRunState`, `SyncJobState`,
-`ConnectState`). They are hand-kept in step with the Rust — there is no
-generator — so change both halves together.
+`datalib/ui/src/api.ts`, hand-kept — change both halves together.
 
 ## A `deps` entry you don't use is a build error
 
-Every `deps` / `proc_macro_deps` entry under `datalib/` must actually be
-used by the crate that names it. rustc is handed the exact `--extern`
-set by bazel and knows which ones it resolved a path through, so this
-needs no separate tool — one `.bazelrc` line turns it on, and the
-comment there explains why it must be `per_crate_rustc_flag` rather
-than `extra_rustc_flag` (the global form also lands on third-party
-crates, whose dep lists we cannot fix).
-
-Two things to know when it fires:
-
-- **A dep used only under `#[cfg(test)]` is reported unused on the
-  library**, because the library build never compiles that code. Move
-  it from the `rust_library`'s `deps` to the `rust_test` that names the
-  library with `crate = `. That is where it was really needed, so the
-  graph gets more accurate rather than merely shorter.
-- **A dep that is genuinely needed but never named** — a linker
-  artifact, say — is kept with `use <crate> as _;` in the crate root,
-  which is what rustc's own help text suggests. Nothing here needs that
-  today.
+Every `deps` / `proc_macro_deps` entry under `datalib/` must be used by
+the crate that names it (`.bazelrc` turns the rustc lint on per crate). A
+dep used only under `#[cfg(test)]` goes on the `rust_test`, not the
+library. A dep needed but never named is kept with `use <crate> as _;`.
 
 ## Fallbacks: prefer failing loudly to succeeding quietly
 
 **Avoid fallbacks.** The dangerous ones *succeed*: a correct answer
-reached the slow or lossy way raises no error, so an assumption that
-expired weeks ago hides behind a vague "feels slow". If you add one
-anyway, log when it fires. Worked example: #225 — the DAG runner spent
-40s hashing 3.4GB to version a step it had already skipped, on every
-run, for two weeks, before anyone noticed.
+reached the slow or lossy way raises no error. If you add one anyway,
+log when it fires.
 
 ## Dynamic SQL needs `AssertSqlSafe` and a reason
 
-sqlx 0.9 only accepts `&'static str` as a query string. Anything built
-at runtime — a `?,?,?` run sized from a chunk, a `{table}` interpolated
-as an identifier — has to be wrapped in `sqlx::AssertSqlSafe(...)`,
-which is an assertion *you* are making, not a check sqlx performs.
-
-Wrap it with a comment saying why it is safe, the way the existing
-sites do. Two patterns cover almost everything here: placeholders built
-from a count with every value bound, and table/column names that are
-`&'static str` at every callsite. If yours is neither — you are
-interpolating something that came from upstream data — quote it
-(`lightroom`'s `plan::quote_ident`) or bind it instead.
+sqlx 0.9 only accepts `&'static str` as a query string. Anything built at
+runtime is wrapped in `sqlx::AssertSqlSafe(...)` — an assertion *you*
+make — with a comment saying why it is safe. Two patterns cover almost
+everything: placeholders built from a count with every value bound, and
+table/column names that are `&'static str` at every callsite. Anything
+from upstream data is quoted (`lightroom`'s `plan::quote_ident`) or
+bound.
 
 ## Timestamp convention
 
-Two rules, one for a timestamp that is *ours* and one for a timestamp
-that is the *record's*.
+**A stamp we mint goes in a column named `<x>_at_utc`, in UTC, with one
+`tz_offset` column per table** holding the offset the clock was in. Text
+order is then instant order. In memory and on the wire it is one
+offset-bearing string (`IsoOffsetTimestamp::now_local()`; `DATALIB_DAG_NOW`
+is the run-pinned now every step should prefer); the split happens at
+the write (`to_utc_and_offset()`, `datalib_time::split_stamp`). JSON files
+keep the single string.
 
-**A stamp we mint goes in a column named `<x>_at_utc`, in UTC, with a
-`tz_offset` column beside it.** `fetched_at_utc`, `last_attempt_at_utc`,
-`sync_runs.started_at_utc`, `cas_objects.first_seen_at_utc`,
-`markdowns.rendered_at_utc`, `sync_jobs.created_at_utc`,
-`disk_usage.measured_at_utc` — every one is `…+00:00` at microsecond
-precision, and the table's `tz_offset` (`+02:00`) holds the offset the
-clock was in when it made the latest of them. Same information as one
-offset-bearing string, split so that **text order is instant order**:
-`ORDER BY started_at_utc` is right, a `<` in SQL is right, and no reader
-has to parse before comparing. The name says UTC so nobody has to
-check.
-
-- In memory and on the wire the stamp is still one string carrying its
-  offset — `IsoOffsetTimestamp::now_local()` is the "now", and
-  `DATALIB_DAG_NOW` (the run-pinned now every step should prefer over
-  its own clock) is that string. The split happens at the write:
-  `to_utc_and_offset()` for a value in hand, `datalib_time::split_stamp`
-  for one that arrived as a string. `bulk_upsert_in_tx` takes the
-  `IsoOffsetTimestamp` itself and does the split for the bookkeeping
-  sidecar.
-- One `tz_offset` per table, not per stamp. `sync_jobs` has three
-  stamps and one offset, refreshed on each write.
-- A JSON file (the event tapes, the NDJSON run events,
-  `dag_state.json`) keeps the single offset-bearing string. Nothing
-  sorts a column there, and one string is the transport form.
-
-**A stamp that belongs to the record stays as the source wrote it.**
-`grid_rows.created_at` / `modified_at`, `markdowns.created_at` / `modified_at`,
-`emails.received_at`, a payload's `created_time` — an ISO-8601 string
-preserving the offset the source gave it, because that offset is
-information (it is how the moment read to the person who saw it) and
-once dropped it cannot be recovered. A `Z` stays `Z`; a unix epoch
-renders as UTC with `+00:00`. Where such a column needs to sort, it gets
-a derived UTC twin rather than being rewritten: `grid_rows.created_at_utc`
-+ `created_offset`, split from `created_at` at index time, is what the grid
-sorts and filters on, and `created_at` itself is the record and feeds the
-fingerprint.
-
-`system/runs.sqlite` follows the same rule (`started_at_utc`, `log.ts_utc`,
-one `tz_offset` per table). The one JSON-backed exception on the API is
-`GET /api/dag`'s `run` / `last_run`, which mirror `dag_state.json` and
-so keep that file's `started_at` / `finished_at`. If you find yourself
-writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop — `isoformat()` on the
-Python side, `to_rfc3339()` here.
+**A stamp that belongs to the record stays as the source wrote it**
+(`grid_rows.created_at`, `emails.received_at`): the offset is information.
+Where such a column needs to sort it gets a derived UTC twin
+(`created_at_utc` + `created_offset`) rather than being rewritten. If you
+find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop —
+`isoformat()` in Python, `to_rfc3339()` here.
 
 ## Auth (web API)
 
-The Rust downloaders under `datalib/backend/etl/providers/*/src/ingest/`
-read the `sessionKey` cookie out of `latchkey curl -v` stderr and then
-issue the actual requests via `latchkey-curl-dispatch`, which routes
-Cloudflare-fronted hosts to the bundled `curl-impersonate` so the
-TLS-fingerprint wall passes (`docs/dev/curl_impersonate.md`). If the
-cookie is missing or expired,
-`latchkey auth set claude-ai` fixes it; if Cloudflare still 403s, the
-IP/UA may be flagged — wait it out or swap networks.
+Downloaders reach Cloudflare-fronted hosts through `latchkey curl`, which
+injects the session credential, routed via `latchkey-curl-dispatch` to
+the bundled `curl-impersonate` (`docs/dev/curl_impersonate.md`). If the
+credential is missing or expired, `latchkey auth set <service>` fixes
+it; if Cloudflare still 403s, the IP/UA may be flagged — wait it out or
+swap networks.

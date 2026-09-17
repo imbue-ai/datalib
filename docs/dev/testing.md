@@ -14,9 +14,12 @@ tight inner loop narrow the *bazel* invocation to what you're touching
 supported build/test driver — don't shell out to `cargo` / `pnpm`, which
 bypass (and never warm) the cache and can disagree with CI.
 
-See [`/AGENTS.md`](/AGENTS.md) § "Running tests" for the details (don't filter
-on `-manual,-external` — it silently drops fmt/UI checks) and
-[`/docs/dev/coverage.md`](/docs/dev/coverage.md) for coverage.
+The complete local gate is `bazelisk run //:precommit` (the hygiene lint,
+`//:lint`, a `build //...` for the fmt and clippy aspects, and every
+hermetic test). Never put `--test_tag_filters=-manual,-external` on the
+full run: `-external` silently drops `//datalib/ui:e2e_test`. Coverage:
+[`/docs/dev/coverage.md`](/docs/dev/coverage.md); why a run was slow:
+[`/docs/dev/ci.md`](/docs/dev/ci.md).
 
 ## Updating insta goldens (`.update` targets)
 
@@ -30,10 +33,37 @@ bazel run //datalib/backend/unified_index:fixture_db_snapshot_test.update
 bazel run //datalib/backend/etl/providers/slack:slack_translate.update
 ```
 
-These land the new snapshots in the source tree where `git status` shows them.
-Always review the diff before committing. See [`/AGENTS.md`](/AGENTS.md)
-§ "Updating insta snapshots" for the full pattern, including how to declare a
-`.update` for a new test.
+The wrapper sets `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`, which
+only exists under `bazel run` and resolves to the source tree, so new
+`.snap` files land where `git status` shows them. Always review the diff
+before committing. The same wrapper regenerates a golden that is not an
+insta snapshot: a test that writes its file when `INSTA_UPDATE=always` is
+set and compares otherwise (`//datalib/backend/datalib_step:ingest_methods.update`
+is one). The live tests need `LATCHKEY_CURL` pointed at the dispatch curl,
+never the impersonator (`docs/dev/curl_impersonate.md`).
+
+When adding an insta-using test, declare a sibling `.update`:
+
+```python
+load("//tools:insta.bzl", "insta_update")
+
+rust_test(
+    name = "my_render_test",
+    data = [":tng_fixture"],
+    env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
+    ...
+)
+
+insta_update(
+    name = "my_render_test.update",
+    test = ":my_render_test",
+    test_args = ["--ignored"],  # only if the test is #[ignore]'d
+    # `data` and `env` on rust_test do NOT propagate through the sibling
+    # sh_binary wrapper — mirror every fixture / env-var dep here.
+    extra_data = [":tng_fixture"],
+    extra_env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
+)
+```
 
 ## The Playwright suite runs in two engines
 
