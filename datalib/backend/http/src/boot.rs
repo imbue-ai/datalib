@@ -25,10 +25,8 @@ pub async fn build_state(
     binary_dir: Option<PathBuf>,
     api_token: ApiToken,
 ) -> anyhow::Result<AppState> {
-    if !root.exists() {
-        std::fs::create_dir_all(&root)
-            .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
-    }
+    datalib_core::layout::create_data_root(&root)
+        .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
     let root = Arc::new(root);
 
     // Publish the token now that the root is on disk: anything running

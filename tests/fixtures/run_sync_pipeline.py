@@ -301,6 +301,9 @@ def main() -> int:
             # The photo fetch is linkedin's one HTTP path; the synth
             # gate checks this flag.
             source["export"] = {"fetch_photos": True}
+        playback.mkdir(exist_ok=True)
+        params_file = playback / f"synthesize-{name}.params.json"
+        params_file.write_text(json.dumps(source))
         _run(
             [
                 str(step_bin),
@@ -308,8 +311,8 @@ def main() -> int:
                 type_str,
                 "--name",
                 name,
-                "--params",
-                json.dumps(source),
+                "--params-file",
+                str(params_file),
                 "--out",
                 str(playback),
             ],

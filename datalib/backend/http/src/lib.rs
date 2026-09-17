@@ -836,7 +836,7 @@ async fn put_config(
     }
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
+        datalib_core::layout::create_data_root(parent).map_err(|e| {
             tracing::error!("put_config: mkdir {}: {e}", parent.display());
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
@@ -852,7 +852,7 @@ async fn put_config(
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    if let Err(e) = std::fs::write(&tmp, req.text.as_bytes()) {
+    if let Err(e) = write_owner_only(&tmp, req.text.as_bytes()) {
         tracing::error!("put_config: write {}: {e}", tmp.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -893,7 +893,7 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
     let path = s.config_path();
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
+        datalib_core::layout::create_data_root(parent).map_err(|e| {
             tracing::error!("init_config: mkdir {}: {e}", parent.display());
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
@@ -903,11 +903,7 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
     // `create_new` is the whole point: the existence check and the
     // write are one syscall, so this can never overwrite a config that
     // arrived between them.
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
+    match owner_only_options().create_new(true).open(&path) {
         Ok(mut f) => {
             use std::io::Write;
             f.write_all(text.as_bytes()).map_err(|e| {
@@ -934,6 +930,30 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+/// `OpenOptions` for a file only this user may read. The config holds
+/// every source's credentials, so it is never left at the umask's mercy.
+fn owner_only_options() -> std::fs::OpenOptions {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts
+}
+
+/// Create (or truncate) `path` owner-only and write `bytes` to it. A
+/// file that already exists keeps its mode: `mode` applies at creation.
+fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = owner_only_options()
+        .create(true)
+        .truncate(true)
+        .open(path)?;
+    f.write_all(bytes)
 }
 
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
