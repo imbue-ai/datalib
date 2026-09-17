@@ -1,0 +1,29 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Reading a doltlite store at one commit: the pin, HEAD, and the read-only
+# open. Its own crate — third-party deps only, so Bazel-only like the
+# `<p>_config` crates — so that the search applet and the app server, which
+# must not link the ingest framework, read a store the same way render and
+# `grid_index` do.
+rust_library(
+    name = "datalib_pin",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_pin",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "pin_unittests",
+    size = "small",
+    crate = ":datalib_pin",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

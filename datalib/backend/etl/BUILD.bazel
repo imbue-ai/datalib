@@ -30,6 +30,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/table:datalib_table",
