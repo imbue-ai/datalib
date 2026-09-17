@@ -528,7 +528,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
 dependencies = [
  "find-msvc-tools",
- "shlex 2.0.1",
+ "shlex",
 ]
 
 [[package]]
@@ -983,7 +983,7 @@ dependencies = [
  "runfiles",
  "serde",
  "serde_json",
- "shlex 1.3.0",
+ "shlex",
  "sqlx",
  "strum",
  "tempfile",
@@ -2256,7 +2256,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "shlex 1.3.0",
+ "shlex",
  "sqlx",
  "strum",
  "tempfile",
@@ -5547,12 +5547,6 @@ checksum = "32824fab5e16e6c4d86dc1ba84489390419a39f97699852b66480bb87d297ed8"
 dependencies = [
  "dirs",
 ]
-
-[[package]]
-name = "shlex"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shlex"
