@@ -1290,7 +1290,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "SELECT dolt_commit('-Am', 'test: upstream dropped a pull request');",
         )
         self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
-        self._run_step("unified_index", "grid_index", inputs=("github/render_markdown",))
+        self._run_step(
+            "unified_index", "grid_index", inputs=("github/render_markdown",)
+        )
 
         github_docs_after = set(
             self._query(
