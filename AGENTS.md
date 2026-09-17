@@ -58,7 +58,7 @@ how the system works; when a completed plan stops being worth keeping,
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md).
-- [`docs/dev/ci.md`](docs/dev/ci.md) — reading a slow CI run, the BuildBuddy cache, flaky tests.
+- [`docs/dev/ci.md`](docs/dev/ci.md) — **read before touching `test.yml`, `devcontainer.yml`, `.bazelrc`'s CI configs or BuildBuddy**: how they fit, what each cache is for, reading a run, what has been measured, flaky tests.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the Chrome-impersonating curl; read before touching `latchkey_curl_dispatch.rs` or the pin.
 - [`docs/dev/qmd_vendored.md`](docs/dev/qmd_vendored.md) — `third-party/qmd` is a reference snapshot, not what we run.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.

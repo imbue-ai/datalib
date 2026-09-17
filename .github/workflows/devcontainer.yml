@@ -6,33 +6,22 @@
 #
 # Runs on every `v*` tag — the same cadence the image always had, but
 # on its own, not as a job at the end of `release.yml` that a failing
-# prod-image check could skip — and when the Dockerfile itself changes
-# (a push to `main`, or a pull request, which builds and smoke-tests
-# without moving `latest`), and on demand. NOT on lockfile changes: the
-# image carries a pre-fetched output base, but a stale one degrades
-# gracefully — bazel fetches only what the lockfiles added since — while
-# the lockfiles change on most PRs. Every build is tagged
-# `:sha-<commit>`, a tag build also `:X.Y.Z`; `:latest` — the tag
-# `test.yml` pulls — moves from a tag or `main`, or when a dispatch
-# asks, and only after the image has proved it can analyse the tree.
-# To try a PR's image, dispatch `test.yml` with its `sha-` tag. Old
-# `sha-` versions are pruned after each push so GHCR holds a handful.
+# prod-image check could skip — and on demand. Not on pushes or pull
+# requests: a build is ~8 min and ~2.5 GB, and the image carries a
+# pre-fetched output base that degrades gracefully when stale (bazel
+# fetches only what the lockfiles added since), so a release's worth of
+# drift costs seconds. Every build is tagged `:sha-<commit>`, a tag
+# build also `:X.Y.Z`; `:latest` — the tag `test.yml` pulls — moves from
+# a tag, or when a dispatch asks, and only after the image has proved
+# it can analyse the tree. To try a Dockerfile change before a release,
+# dispatch this workflow on the branch, then `test.yml` with the `sha-`
+# tag it prints. Old `sha-` versions are pruned after each push.
 name: devcontainer
 
 on:
   push:
     tags:
       - "v*"
-    branches:
-      - main
-    paths:
-      - .devcontainer/**
-      - .github/workflows/devcontainer.yml
-      - .bazelversion
-  pull_request:
-    paths:
-      - .devcontainer/**
-      - .github/workflows/devcontainer.yml
   workflow_dispatch:
     inputs:
       publish_latest:
@@ -46,7 +35,7 @@ permissions:
 
 concurrency:
   group: devcontainer-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -113,20 +102,36 @@ jobs:
           docker run --rm -v "${PWD}:/src" -w /src -e HOME=/tmp/not-root "${IMAGE}:sha-${GITHUB_SHA::12}" \
               bash .devcontainer/smoke_test.sh
 
+      # Pushed as a second export from the layers the build just cached,
+      # compressed with zstd rather than the gzip `docker push` would use:
+      # the runner spends the pull decompressing, and zstd decompresses
+      # several times faster. `--load` above is still the gzip form,
+      # because the smoke test needs the image in the local daemon.
       - name: Push
+        env:
+          BUILDKIT_PROGRESS: plain
         run: |
           set -euo pipefail
-          docker push "${IMAGE}:sha-${GITHUB_SHA::12}"
+          tags=("${IMAGE}:sha-${GITHUB_SHA::12}")
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-              version="${GITHUB_REF#refs/tags/v}"
-              docker tag "${IMAGE}:sha-${GITHUB_SHA::12}" "${IMAGE}:${version}"
-              docker push "${IMAGE}:${version}"
+              tags+=("${IMAGE}:${GITHUB_REF#refs/tags/v}")
           fi
-          if [[ "${{ github.event_name }}" == "push" || "${{ inputs.publish_latest }}" == "true" ]]; then
-              docker tag "${IMAGE}:sha-${GITHUB_SHA::12}" "${IMAGE}:latest"
-              docker push "${IMAGE}:latest"
-              echo "moved :latest to sha-${GITHUB_SHA::12}"
+          if [[ "${GITHUB_REF}" == refs/tags/v* || "${{ inputs.publish_latest }}" == "true" ]]; then
+              tags+=("${IMAGE}:latest")
           fi
+          names=$(IFS=,; echo "${tags[*]}")
+          docker buildx build \
+              --file .devcontainer/Dockerfile \
+              --platform linux/amd64 \
+              --build-arg PREFETCH_OUTPUT_BASE=true \
+              --build-arg WARM_BAZEL_CACHE=false \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --cache-from type=gha,scope=devcontainer,version=3 \
+              --output "type=image,\"name=${names}\",push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true" \
+              .
+          printf 'pushed %s\n' "${tags[@]}"
+          [[ " ${tags[*]} " == *" ${IMAGE}:latest "* ]] && echo "moved :latest to sha-${GITHUB_SHA::12}" || true
 
       # GHCR keeps every pushed version. Keep the newest few `sha-` builds
       # (enough to roll `latest` back by hand) and drop the rest; the

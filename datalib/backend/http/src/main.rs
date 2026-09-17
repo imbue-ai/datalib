@@ -161,6 +161,13 @@ async fn terminated(parent_gone: tokio::sync::oneshot::Receiver<()>) {
     };
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
+    // `Err` is the sender dropped without firing: the watch was never
+    // armed (no `DATALIB_PARENT_PIPE`), so there is no parent to outlive.
+    let parent_gone = async {
+        if parent_gone.await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
 
     tokio::select! {
         _ = interrupt => {}
