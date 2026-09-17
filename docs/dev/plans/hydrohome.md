@@ -309,7 +309,7 @@ question below), run the bootstrap calls to learn `customerId` /
 and mirror the `{timeStamp, totalUnit, cost}` points into a doltlite
 raw store keyed per reading (`meter#ts_ms#granularity`, the way
 `yolink_readings` keys `device#ts_ms#metric` — see
-[`providers/yolink/INGEST.md`](../../datalib/backend/etl/providers/yolink/INGEST.md)).
+[`providers/yolink/INGEST.md`](../../../datalib/backend/etl/providers/yolink/INGEST.md)).
 Because the same endpoint serves day and week granularities too, one
 provider covers the whole Usage screen.
 

@@ -112,7 +112,7 @@ The rules are the ones `pipelineStatus.ts` and `groupRows.ts` held,
 ported to Rust with their tests (`manage/status.rs`, `manage/group.rs`);
 the assembly is `Manager2View`'s old `entryRow`/`groupRow`
 (`manage/mod.rs`). The aggregation table in
-[`groups_and_functions.md`](groups_and_functions.md) is the spec for
+[`config_model.md`](../../config_model.md) is the spec for
 the group row. A row carries the entry's id and kind, its `path` in
 the tree, its group, its name, its type, status with reason, last
 synced, bytes with the measured series, what a sync of it starts at,

@@ -12,7 +12,7 @@ schema-first, bulk-upsert chokepoints, commit lifecycle,
 bookkeeping sidecars, `--reset-and-redownload` semantics —
 see [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
 For the row-level schema, see
-[`src/extract/schema_raw.rs`](src/ingest/schema_raw.rs).
+[`src/ingest/schema_raw.rs`](src/ingest/schema_raw.rs).
 
 ## Why two entity tables: `files` and `dirs`
 

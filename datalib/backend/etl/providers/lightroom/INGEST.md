@@ -72,7 +72,7 @@ URI parameter `doltlite_engine=sqlite` selects the stock engine for a
 new empty file (it is read with `sqlite3_uri_parameter`, so the name has
 to be `file:`-shaped, and it is ignored once the file has content).
 `datalib/backend/runs/src/store.rs` uses it, and
-`progress/tests/stock_sqlite_engine.rs` asserts the resulting magic
+`runs/tests/stock_sqlite_engine.rs` asserts the resulting magic
 bytes against a control that omits the parameter and gets `CTLD`.
 
 The test fixture is still minted by

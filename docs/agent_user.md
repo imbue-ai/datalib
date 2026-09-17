@@ -244,9 +244,9 @@ Pick the surface that fits the question:
   classification. **Read
   [`docs/dev/step_protocol.md`](dev/step_protocol.md)** — it is
   the complete contract, with minimal shell and Python examples. The
-  design behind the scheduler (edge derivation, skipping, subtree
-  poisoning) is
-  [`docs/dev/pipeline_dag_architecture.md`](dev/pipeline_dag_architecture.md).
+  rules behind the scheduler (what makes a step stale, what a dropped
+  entry costs) are in
+  [`datalib/backend/dag/README.md`](../datalib/backend/dag/README.md).
 - **Custom UI cards** — the web UI can host agent-authored views
   ("cards", small JS view factories, `PUT /api/lib/{name}`). The
   server serves its own guide for this at **`GET /agent/cards.md`**
