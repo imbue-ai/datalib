@@ -358,13 +358,22 @@ function rowKey(row: SearchRow): string {
   return row.uuid;
 }
 
+/// The record at a grid row, or null where the row is a group header
+/// or its totals — the data view hands those out as items too.
+function rowData(row: number): SearchRow | null {
+  const item = vueGrid?.dataView.getItem(row) as
+    | (SearchRow & { __group?: boolean; __groupTotals?: boolean })
+    | undefined;
+  if (!item || item.__group || item.__groupTotals) return null;
+  return item;
+}
+
 /// The rows the grid has selected, in grid order.
 function selectedRows(): SearchRow[] {
   if (!vueGrid) return [];
-  const { slickGrid, dataView } = vueGrid;
-  return slickGrid
+  return vueGrid.slickGrid
     .getSelectedRows()
-    .map((i) => dataView.getItem(i) as SearchRow | undefined)
+    .map(rowData)
     .filter((r): r is SearchRow => r != null);
 }
 
@@ -968,7 +977,7 @@ type MenuScope = {
 const linkOf = (r: SearchRow): string => r.source_url || r.slack_link || "";
 
 function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
-  const anchor = (args.dataContext as SearchRow | undefined) ?? null;
+  const anchor = args.row != null ? rowData(args.row) : null;
   const colId = String((args.column as Column | undefined)?.id ?? "");
   const el =
     args.row != null && args.cell != null ? (args.grid.getCellNode(args.row, args.cell) ?? null) : null;
@@ -1137,7 +1146,10 @@ function gridOptions(): GridOption {
     darkMode: isDark(),
     enableAutoResize: true,
     autoResize: {
-      container: boxEl.value!,
+      // The frame around the box, not the box: the resizer sizes the
+      // box to what it measures, and a box it also measured would then
+      // stop following the card. The frame is what the card sizes.
+      container: boxEl.value!.parentElement!,
       calculateAvailableSizeBy: "container",
       resizeDetection: "container",
       autoHeight: false,
@@ -1146,7 +1158,6 @@ function gridOptions(): GridOption {
     },
     // Tall enough for two lines of clamped snippet text plus padding.
     rowHeight: 52,
-    headerRowHeight: 32,
     enableTextSelectionOnCells: true,
     // Rows select on click, several with a modifier — so right-click
     // "Copy UUID(s)" can target several rows, like Lightroom. The
@@ -1155,6 +1166,13 @@ function gridOptions(): GridOption {
     enableSelection: true,
     multiSelect: true,
     selectionOptions: { selectActiveRow: true },
+    // Per-column filters in a row under the header; the query bar is
+    // the one the server answers, these narrow what it returned.
+    enableFiltering: true,
+    showHeaderRow: true,
+    headerRowHeight: 28,
+    defaultFilterPlaceholder: "",
+    filterTypingDebounce: 250,
     enableSorting: true,
     multiColumnSort: false,
     enableColumnReorder: true,
@@ -1220,6 +1238,7 @@ function createGrid() {
     rowIndexOf: (uuid: string) => bundle.dataView.getRowById(uuid) ?? null,
     uuidAt: (row: number) => (bundle.dataView.getItem(row) as SearchRow | undefined)?.uuid ?? null,
     rows: () => bundle.dataView.getItems() as SearchRow[],
+    filteredRows: () => bundle.dataView.getFilteredItems() as SearchRow[],
     scrollToRow: (row: number) => grid.scrollRowIntoView(row),
     scrollToColumn: (id: string) => {
       const idx = grid.getColumnIndex(id);
@@ -1253,7 +1272,7 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   const previous = new Set(args.previousSelectedRows ?? []);
   const added = args.rows.filter((r) => !previous.has(r));
   if (added.length === 0) return;
-  const data = vueGrid.dataView.getItem(added[added.length - 1]) as SearchRow | undefined;
+  const data = rowData(added[added.length - 1]);
   if (!data) return;
   selectedRow.value = data;
   sel.value = rowKey(data);
@@ -1270,7 +1289,7 @@ function onClick(_e: SlickEventData, args: OnClickEventArgs) {
   // A data row that is already the one selected selects again as far
   // as the reader is concerned, though the selection model sees no
   // change: keep the persisted selection on it.
-  const data = vueGrid?.dataView.getItem(args.row) as SearchRow | undefined;
+  const data = rowData(args.row);
   const selected = selectedRows();
   if (data && selected.length === 1 && selected[0].uuid === data.uuid) {
     selectedRow.value = data;
@@ -1280,7 +1299,7 @@ function onClick(_e: SlickEventData, args: OnClickEventArgs) {
 }
 
 function onDblClick(_e: SlickEventData, args: OnDblClickEventArgs) {
-  const data = vueGrid?.dataView.getItem(args.row) as SearchRow | undefined;
+  const data = rowData(args.row);
   if (data) openRow(data);
 }
 

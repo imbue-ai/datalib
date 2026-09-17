@@ -479,6 +479,7 @@ export default defineConfig({
       testMatch: [
         // Explore / GridCard — the search grid.
         /grid-populated\.spec\.ts/,
+        /grid-card-fit\.spec\.ts/,
         /grid-context-menu\.spec\.ts/,
         /contents-cell-clamp\.spec\.ts/,
         /row-click-scroll\.spec\.ts/,

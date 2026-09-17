@@ -220,6 +220,10 @@
    not a thing to outline. */
 .slick-cell.active { box-shadow: none; border-color: transparent; }
 .slick-cell.tg-right { text-align: right; }
+/* A group row spans the grid in one cell that borrows the first
+   column's class; a number column first would push the title off the
+   right edge. */
+.slick-row.slick-group .slick-cell { text-align: left; }
 .slick-cell.tg-center { text-align: center; }
 .tg-group-count { color: var(--datalib-muted); }
 /* Text selection and a two-line clamp both want the cell's box to be

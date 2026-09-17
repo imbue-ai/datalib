@@ -4,7 +4,8 @@
 // moved to slickgrid. Pure, like its sibling: it knows nothing about
 // what the rows are and owns no grid. The two files exist side by side
 // only while both grids are in the tree; this one is what stays.
-import type { Column, Formatter, GroupingFormatterItem } from "slickgrid-vue";
+import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
+import { Filters } from "@slickgrid-universal/common";
 import type { ColumnSpec, Identity, StatusView, Chip, Timeseries } from "@/api";
 import {
   WIDTH,
@@ -104,6 +105,10 @@ export function typedSlickColumns<T extends Record<string, unknown>>(
       // column it is in, the way AG Grid's markup let them.
       cellAttrs: { "col-id": f },
       headerCellAttrs: { "col-id": f },
+      // A filter row under the header, one text box per column, with
+      // the grid's operator shorthand (`>5`, `a*`, `<>x`) in it.
+      filterable: true,
+      filter: { model: Filters.input },
       formatter: plain,
       sortComparer: (a, b, dir) => compareText(a, b, dir ?? 1),
       ...(opts.groupable
@@ -117,6 +122,8 @@ export function typedSlickColumns<T extends Record<string, unknown>>(
           return {
             formatter: (_r, _c, value) => renderIdentity(value as Identity | null, false, false),
             sortComparer: (a, b, dir) => compareText(label(a), label(b), dir ?? 1),
+            // The filter reads the label, not the object.
+            queryFieldFilter: `${f}.label`,
             ...(opts.groupable
               ? {
                   grouping: {
@@ -167,6 +174,8 @@ export function typedSlickColumns<T extends Record<string, unknown>>(
         case "bytes":
           return {
             cssClass: "tg-right",
+            type: "number",
+            filter: { model: Filters.compoundInputNumber },
             formatter: (_r, _c, value) => ({
               text: typeof value === "number" ? formatBytes(value) : "",
               toolTip: typeof value === "number" ? `${value.toLocaleString()} bytes` : "",
@@ -176,6 +185,8 @@ export function typedSlickColumns<T extends Record<string, unknown>>(
         case "count":
           return {
             cssClass: "tg-right",
+            type: "number",
+            filter: { model: Filters.compoundInputNumber },
             formatter: (_r, _c, value) => ({
               text: typeof value === "number" ? value.toLocaleString() : "",
             }),
@@ -184,6 +195,8 @@ export function typedSlickColumns<T extends Record<string, unknown>>(
         case "number":
           return {
             cssClass: "tg-right",
+            type: "number",
+            filter: { model: Filters.compoundInputNumber },
             formatter: (_r, _c, value) => ({
               text:
                 typeof value === "number"

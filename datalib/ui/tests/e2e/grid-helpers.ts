@@ -26,6 +26,7 @@ export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
   uuidAt: (row: number) => string | null;
   rows: () => Record<string, unknown>[];
+  filteredRows: () => Record<string, unknown>[];
   scrollToRow: (row: number) => void;
   scrollToColumn: (id: string) => void;
   isSelected: (uuid: string) => boolean;
