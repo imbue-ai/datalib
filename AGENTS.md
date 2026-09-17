@@ -359,6 +359,13 @@ reference doc it relates to.
   can write into, and why two instances of one command share a
   component but not its arguments.
 
+**Audits**
+
+- [`docs/dev/audit_2026-09-17.md`](docs/dev/audit_2026-09-17.md) — a
+  dated whole-repo audit (architecture, security, supply chain, hygiene,
+  docs) with what #504 fixed and what is still open. A record, not
+  reference.
+
 **Dev workflow**
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and
