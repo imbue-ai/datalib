@@ -277,7 +277,7 @@ and multi-step composition. Four things to package it:
 1. A page — "datalib-dag as a pipeline harness" — opening with a config
    containing no datalib providers at all.
 2. A ~40-line stdlib `dag_step.py` a skill vendors rather than reading
-   a spec for: parse `--params`/`--inputs`, read
+   a spec for: read `--params-file`, parse `--inputs`, read
    `DATALIB_DAG_CHANGED_INPUTS`, emit progress/outcome, hash a tree for
    the fallback version.
 3. A one-screen primitives index — `fswalk`, `file_checkpoint`,

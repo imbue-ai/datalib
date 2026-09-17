@@ -105,7 +105,7 @@ service latchkey holds without a browser login is not converted behind
 the person's back: the dialog shows the `auth clear` / `deregister` /
 `register` commands and leaves running them to the owner.
 
-`datalib-step probe <type> --params <json>` takes the ingest params
+`datalib-step probe <type> --params-file <path>` takes the ingest params
 and answers one question — what account is this and what can it reach.
 There is no `--op`; one report serves as the auth check and the list.
 Probes exist for **email, Claude, ChatGPT and Slack**

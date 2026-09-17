@@ -123,20 +123,65 @@ async fn unauthenticated_requests_are_refused() {
         StatusCode::UNAUTHORIZED
     );
 
-    // The SPA itself, and the DACTAL page that shares its origin.
+    // The SPA itself.
     assert_eq!(
         status(&app, Request::get("/").body(Body::empty()).unwrap()).await,
         StatusCode::UNAUTHORIZED
     );
+}
+
+/// The DACTAL page and its scripts are the one static exception: they
+/// load without a session because the page runs in an opaque origin
+/// (`sandbox` in the CSP header), where a session would be unusable —
+/// and the fetch a sandboxed frame makes for its module carries none.
+/// What must hold instead: the sandbox is on the wire, and an unknown
+/// path under the prefix is a 404, never the app shell.
+#[tokio::test]
+async fn the_dactal_page_is_public_and_sandboxed() {
+    let (app, _) = app().await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/dactal/index.html")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let csp = resp
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        csp.split(';')
+            .any(|d| d.trim().starts_with("sandbox") && d.contains("allow-scripts")),
+        "the DACTAL document must be sandboxed by header, got {csp:?}"
+    );
+    assert!(
+        !csp.contains("allow-same-origin"),
+        "allow-same-origin would undo the sandbox: {csp:?}"
+    );
     assert_eq!(
         status(
             &app,
-            Request::get("/dactal/index.html")
+            Request::get("/dactal/vendor/dactal.js")
                 .body(Body::empty())
                 .unwrap()
         )
         .await,
-        StatusCode::UNAUTHORIZED
+        StatusCode::OK
+    );
+    assert_eq!(
+        status(
+            &app,
+            Request::get("/dactal/not-a-file")
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await,
+        StatusCode::NOT_FOUND
     );
 }
 

@@ -172,7 +172,9 @@ class RenderContractTest(unittest.TestCase):
         }
         argv = [str(self.cwd / self.step_bin)]
         if step.get("params"):
-            argv += ["--params", json.dumps(step["params"])]
+            params_file = data_root / f"{group}.render.params.json"
+            params_file.write_text(json.dumps(step["params"]))
+            argv += ["--params-file", str(params_file)]
         result = subprocess.run(
             argv,
             check=False,

@@ -204,9 +204,8 @@ directly with the two variables set and a short cadence in the config:
 ```bash
 bazelisk build //datalib/backend:bin //datalib/backend/datalib_step:datalib_step
 step=bazel-bin/datalib/backend/datalib_step/datalib_step
-$step synthesize chatgpt --name chatgpt \
-  --params '{"fixture_path": "'$PWD'/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api"}' \
-  --out /tmp/tapes
+echo '{"fixture_path": "'$PWD'/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api"}' > /tmp/synth.json
+$step synthesize chatgpt --name chatgpt --params-file /tmp/synth.json --out /tmp/tapes
 DATALIB_HTTP_PLAYBACK=/tmp/tapes DATALIB_HTTP_PLAYBACK_DELAY_MS=1500 \
   bazel-bin/datalib/backend/bin/datalib-dag <root>/config.toml
 ```

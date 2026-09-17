@@ -37,10 +37,11 @@ walkdir = { workspace = true }
 libc = "0.2"
 datalib-time = { path = "../time" }
 strum = { workspace = true }
+# Owner-only params files for step subprocesses (subprocess.rs).
+tempfile = "3"
 uuid = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
 # The manual-e2e live golden (tests/manual_e2e_live_sync_golden.rs) is
 # BAZEL-ONLY — it needs `datalib-step`, which has no cargo target — but cargo
 # auto-discovers tests/*.rs, so these have to be declared or `cargo check`

@@ -1,5 +1,5 @@
 //! The `synthesize` subcommand: build HTTP playback fixtures for one
-//! source, reading a checked-in raw fixture tree (`--params` may name it
+//! source, reading a checked-in raw fixture tree (the params file may name it
 //! as `fixture_path`; else the group's ingest tree) and writing replay
 //! tapes into `--out`. A dev utility, not a step: it takes the group id
 //! from `--name`, not the environment.
