@@ -380,6 +380,13 @@ reference doc it relates to.
   first — it is the whole delta over curl and BoringSSL).
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites;
   [`docs/dev/coverage.md`](docs/dev/coverage.md) — coverage runs.
+- [`docs/dev/ci.md`](docs/dev/ci.md) — **read before touching
+  `test.yml`, `devcontainer.yml`, `.bazelrc`'s CI configs or the
+  BuildBuddy setup**: how they fit together, what every cache is for
+  (and the Bazel 9 contents-cache trap that made a pre-fetched image
+  no faster until its user root was pinned), how to read a run down
+  to the per-action profile, what has been measured with run ids, and
+  what was tried and rejected.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
 - [`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md)
   — **built**: download and render are separate crates, so a
@@ -1290,194 +1297,35 @@ insta_update(
 )
 ```
 
-### "Why was CI slow?" — read the BuildBuddy invocation
+### "Why was CI slow?" — read the run, then `docs/dev/ci.md`
 
-Both `test.yml` jobs post to our BuildBuddy org at `imbue.buildbuddy.io`
-(configured by `.github/actions/prepare-bazel`; the key lands in the
-gitignored `.bazelrc.user`, and `--config=buildbuddy` in `.bazelrc`
-turns it on). **On `main` the whole build is essentially a cache
-replay** — so any run that takes noticeably longer is telling you what
-it had to rebuild, and that is the question worth asking.
+[`docs/dev/ci.md`](docs/dev/ci.md) is the reference: how the workflows,
+the image and BuildBuddy fit together, every cache and what it is for,
+the recipes for reading a run down to the per-action profile, what has
+been measured (with run ids), and what was tried and rejected. The
+rules that come up daily:
 
-Every bazel invocation prints its own dashboard link. Pull it out of
-the job log:
-
-```bash
-gh api "repos/imbue-ai/datalib/actions/runs/<run-id>/jobs" \
-  --jq '.jobs[] | select(.name=="bazel test //...") | .id'
-gh api "repos/imbue-ai/datalib/actions/jobs/<job-id>/logs" > /tmp/ci.log
-grep -oE 'https://imbue\.buildbuddy\.io/invocation/[a-f0-9-]+' /tmp/ci.log | sort -u
-```
-
-The log is only served **after the job finishes** — while it is running
-the API returns "still in progress", so poll
-`gh api repos/imbue-ai/datalib/actions/jobs/<id> --jq .status` in the
-background rather than blocking on it.
-
-Three lines in that log answer "what work was actually done", and
-comparing them against a `main` run is usually the whole diagnosis:
-
-```bash
-grep -E 'INFO: Elapsed time|processes:|Executed [0-9]+ out of' /tmp/ci.log
-```
-
-  * `N processes: A remote cache hit, B internal, C local, D
-    processwrapper-sandbox` — **`D` is the real signal.** Sandboxed
-    actions are the ones that actually compiled or ran; cache hits and
-    `internal` are free.
-  * `Executed N out of M tests` — how many tests really ran. On a warm
-    `main` this is **0**.
-  * `Critical Path` — the serial floor. Wall-clock can't go below it.
-
-Worked example, the three runs compared while diagnosing #208:
-
-| run | elapsed | critical path | sandboxed | tests executed |
-|---|---|---|---|---|
-| `main` @ `d01e30b8` | 175s | 46s | 0 | **0 of 114** |
-| a one-provider PR | 142s | 74s | 27 | **8 of 114** |
-| #208 (touched shared `datalib_etl`) | **1016s** | **310s** | **322** | **59 of 115** |
-
-The cause is blast radius, and you can measure it before pushing —
-which is the point of writing this down. `rdeps` says how much of the
-tree a file's crate is upstream of:
-
-```bash
-bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))'   # 80 test targets
-bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'  # 96 — two thirds of the suite
-bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl/providers/slack:datalib_etl_slack))'  # 12
-bazelisk query 'kind(".*_test", rdeps(//..., //tests/fixtures:ingested_tng))'       # 3, incl. the 42s e2e suite
-```
-
-#208 added a 20-line helper to `datalib/backend/etl/src/doltlite_raw.rs`
-— the crate 130 targets depend on — so ~300 actions that are normally
-cache hits had to be rebuilt and 59 test targets re-run. **This is a
-one-time cost, not a regression:** once the commit is on `main` the
-cache is warm and later PRs drop back to ~3m. It is worth knowing about
-mainly so you can (a) not panic, and (b) decide deliberately whether a
-small helper really belongs in a shared crate — the `rdeps` number is
-the price tag.
-
-**A `[for tool]` suffix on a `Compiling Rust …` line is a second copy.**
-It means the crate is being built in the exec configuration as well as
-the target one, and nothing is shared between the two. A `genrule` puts
-its `tools` there, so one that names a pipeline binary drags the whole
-backend along (#484 measured 51 duplicate compiles and −19% on a cold
-run when it stopped). A pipeline binary a genrule runs goes in `srcs`,
-not `tools` — same files the tests link, no second copy (see the
-comment on `//tests/fixtures:ingested_tng`); `aquery 'mnemonic("Rustc",
-//...)'` grouped by `Configuration:` is the check, and the only
-exec-config Rustc actions left should be the dependency-free
-`qmd_indexer` chain.
-
-**Runs are bimodal, so ask which mode you are in first.** A warm run
-executes 0 tests and takes ~3 min; a cold one rebuilds ~345 actions and
-takes ~20, with almost nothing in between. A rising *median* therefore
-usually means cold runs got more frequent, not that anything got slower.
-It is **not** the e2e suite: on a 1254s cold run every executed test
-together came to 200s. The rest is opt-mode Rust, and blast radius is
-the only lever on it.
-
-**A `pull_request` run builds the merge of the PR into `main` as it is
-at that moment** (`HEAD is now at … Merge <pr> into <main>` in the
-checkout step), not the branch head. So when `main` moves, the PR's
-next run re-executes whatever is unique to the PR *and* downstream of
-what `main` changed — a new fixture rule re-runs the fixture, and with
-it the e2e suite — even though the PR itself did not change. A
-`workflow_dispatch` run builds the bare branch head; compare like with
-like before calling a cache key unstable.
-
-A run can also be slow without compiling anything — check whether the
-job *started* late (`created_at` vs the job's `started_at`) before
-reading any of the numbers above. That is runner queueing, and none of
-this applies to it.
-
-`--config=remote` (`.bazelrc`) sends the compiles to BuildBuddy remote
-execution instead of the runner's 4 vCPUs; `test.yml` takes it via a
-`remote_execution` dispatch input. It is a **trial switch, not the merge
-gate** — #324 holds the measurements and the open decision.
-
-Not exercised here, so treat as a pointer rather than a recipe:
-BuildBuddy also has a REST API and a side-by-side invocation compare in
-its web UI. Both need an API key (`https://imbue.buildbuddy.io/settings`),
-which CI has and a local checkout does not by default.
-
-#### Locally you are probably *not* on the remote cache
-
-Two things hide this, so check rather than assume:
-
-  * `.bazelrc` gives everyone a **machine-wide disk cache**
-    (`build --disk_cache=~/Library/Caches/bazel-disk-cache`). It is an
-    absolute path, so every checkout and every worktree shares it, and
-    it makes local builds feel fast — but only for actions *you* have
-    built before. Nothing CI built ever lands in it.
-  * The remote cache needs `.bazelrc.user`, which is **gitignored and
-    per-workspace**. `try-import %workspace%/.bazelrc.user` resolves to
-    the *worktree* root, not the main checkout, so a file you created
-    once in `datalib/` is invisible to every `.claude/worktrees/*`
-    clone. Both facts together mean a tree can look configured and not
-    be. Confirm with:
-
-```bash
-grep -c buildbuddy .bazelrc.user 2>/dev/null || echo "no .bazelrc.user in THIS workspace"
-```
-
-**Even with the key, a mac shares almost nothing with CI.** An action's
-cache key covers its toolchain and target, so a darwin-arm64 rustc
-action and CI's linux-x86_64 one are different actions and neither can
-hit the other's entry. Locally the remote cache buys you sharing with
-your *own* other worktrees and machines, plus repository fetches through
-the remote downloader — not a replay of CI's work. For the same reason
-`.bazelrc`'s `remote` config (BuildBuddy remote *execution*) is CI-only:
-the autodetected cc toolchain is generated from the client host, so
-driving Linux executors from a mac hands them a darwin toolchain.
-
-The `processes:` line settles it either way. A run on the remote cache
-names it — CI's reads `4070 remote cache hit, …`. A local run without
-`.bazelrc.user` never does; it reports only local buckets, e.g.
-`1 process: 63 action cache hit, 1 internal` or `… 2 disk cache hit,
-26 darwin-sandbox`. **The tell is the absence of `remote cache hit`,
-not the presence of any particular local bucket** — which of them
-appears varies with what the run had to do.
-
-Keep one real file outside the repo and symlink it in, so a new
-worktree is one command rather than a re-paste of the key:
-
-```bash
-mkdir -p ~/.config/datalib && chmod 700 ~/.config/datalib
-cat > ~/.config/datalib/bazelrc.user <<'EOF'
-common --remote_header=x-buildbuddy-api-key=<your-key>
-build --config=buildbuddy
-EOF
-chmod 600 ~/.config/datalib/bazelrc.user
-
-# link it into the main checkout and every worktree
-for d in . .claude/worktrees/*/; do
-    ln -sfn ~/.config/datalib/bazelrc.user "$d/.bazelrc.user"
-done
-```
-
-Don't put `build --config=buildbuddy` in `$HOME/.bazelrc`: the home rc
-applies to *every* bazel workspace on the machine, and the
-`buildbuddy` config is only defined in this repo's `.bazelrc`, so
-unrelated projects would fail with "Config value 'buildbuddy' is not
-defined in any .rc file".
-
-### "Which tests are flaky?" — read the reruns
-
-Hitting "re-run failed jobs" replays the same commit, so a commit that
-carries both a failure and a success flaked. `scripts/flaky_tests.py`
-groups GitHub Actions runs by commit, keeps the mixed ones, and reads
-the failed attempt's log for bazel's `FAILED` summary, so you get target
-names and a BuildBuddy link per episode rather than "CI was red":
-
-```bash
-scripts/flaky_tests.py --limit 400
-```
-
-It only sees flakes somebody actually re-ran — a red PR that got an
-empty commit pushed at it instead leaves no trace — and GitHub deletes
-run logs after 90 days, past which an episode still counts but its
-target names are gone.
+- **Three lines in the job log are usually the diagnosis** —
+  `grep -E 'INFO: Elapsed time|processes:|Executed [0-9]+ out of'`.
+  The `processwrapper-sandbox` count is what actually ran; a warm
+  `main` run executes 0 tests. Check the run's `created_at` against
+  the job's `started_at` first: a queued run is not a slow build.
+- **Runs are bimodal.** Warm ≈ 2.5 min, cold (a shared crate changed)
+  ≈ 20; a rising median means more cold runs. Blast radius is the only
+  lever on a cold run: `bazelisk query 'kind(".*_test", rdeps(//...,
+  <crate>))'` is the price tag before pushing.
+- **A `pull_request` run builds the merge of the PR into current
+  `main`**, not the branch head, so a moved `main` re-runs what is
+  unique to the PR downstream of the change. A dispatch builds the
+  branch head.
+- **A `[for tool]` suffix on a `Compiling Rust …` line is a second
+  copy** of the crate in the exec configuration. A pipeline binary a
+  genrule runs goes in `srcs`, not `tools` (#484).
+- **Locally you are probably not on the remote cache**, and even with
+  the key a mac shares nothing with CI's linux actions — the setup and
+  the tell are in `ci.md`.
+- **Flaky tests**: `scripts/flaky_tests.py --limit 400` names the
+  targets from re-run commits.
 
 ## Common commands
 

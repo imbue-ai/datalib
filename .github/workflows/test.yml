@@ -20,8 +20,8 @@
 # pulling the pre-built image is closer to ~30s.
 #
 # The devcontainer image is published by `devcontainer.yml` — on every
-# `v*` tag, when the Dockerfile changes, and on demand — on its own
-# rather than as a job inside `release.yml`.
+# `v*` tag, and on demand — on its own rather than as a job inside
+# `release.yml`.
 # It carries a pre-fetched bazel output base, which `prepare-bazel`
 # points bazel at.
 name: test
