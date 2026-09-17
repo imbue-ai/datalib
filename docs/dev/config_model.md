@@ -67,8 +67,9 @@ mirrors nothing itself and renders what changed in the `source` group's
 raw store between two commits, as documents with the changes marked and
 `grid_rows` with a `diff_status`. Its one step is `render_markdown`,
 reading `<source>/ingest`, with the two commits under `params.diff`
-(`from` and `to`, both required); the rest of `params` is the source
-type's render config. The fan-ins name it like any render step. The
+(`from` and `to`, both required, and `max_documents`, the most
+documents a side may render before the step fails, default 1000); the
+rest of `params` is the source type's render config. The fan-ins name it like any render step. The
 source's id and type reach the step as `DATALIB_DAG_SOURCE_GROUP` and
 `DATALIB_DAG_SOURCE_GROUP_TYPE`, set by the loader in the step's `env`. `docs/dev/plans/diff_renderer.md`
 has the design; `configs/dag_example.toml` has one.

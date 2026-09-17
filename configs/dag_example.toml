@@ -138,6 +138,9 @@ inputs = ["slack/ingest"]
 [steps.params.diff]
 from = "8f1c2b0d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c"
 to = "3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c"
+# The most documents a side may render before the step fails instead —
+# a diff a person expected to be small and is not. Default 1000.
+max_documents = 200
 
 # ── shared fan-in steps ────────────────────────────────────────────
 # `inputs` names the steps these read, by composed id. Adding a source

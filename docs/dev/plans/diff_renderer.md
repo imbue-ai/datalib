@@ -49,7 +49,11 @@ to = "<raw commit>"            # never standing
 
 The pair sits under `params.diff` so the rest of `params` is the
 source type's own render config, parsed as strictly as on the source's
-step (`render_diff::split_params`).
+step (`render_diff::split_params`). `params.diff.max_documents`
+(default 1000) is the most documents either side may render: a pair a
+person expected to be small and is not fails the step on the document
+past the cap — costing that many renders and no more — with a message
+saying to pick closer commits or raise the cap.
 
 The step renders the source's raw store at two commits, subtracts one
 render from the other, and writes the result as an ordinary render tree

@@ -34,7 +34,15 @@ use crate::source::StepEnv;
 pub struct DiffPair {
     pub from: String,
     pub to: String,
+    /// The most documents either side may render before the step
+    /// fails instead — for a pair a person expected to be small and is
+    /// not. `params.diff.max_documents`, else [`DEFAULT_MAX_DOCUMENTS`].
+    pub max_documents: usize,
 }
+
+/// What a diff renders at most, per side, when the config does not say:
+/// enough for a week of a busy source, and far short of "everything".
+pub const DEFAULT_MAX_DOCUMENTS: usize = 1000;
 
 /// Take `diff` out of the step's params; what is left is the source
 /// type's own render config, parsed as strictly as on the source's step.
@@ -49,9 +57,23 @@ pub fn split_params(mut params: serde_json::Value) -> Result<(DiffPair, serde_js
     let table = diff
         .as_object()
         .context("parse params.diff: expected a table with `from` and `to`")?;
-    if let Some(stray) = table.keys().find(|k| *k != "from" && *k != "to") {
-        anyhow::bail!("parse params.diff: unknown field {stray:?}; only `from` and `to` are read");
+    if let Some(stray) = table
+        .keys()
+        .find(|k| !matches!(k.as_str(), "from" | "to" | "max_documents"))
+    {
+        anyhow::bail!(
+            "parse params.diff: unknown field {stray:?}; only `from`, `to` and \
+             `max_documents` are read"
+        );
     }
+    let max_documents = match table.get("max_documents") {
+        None => DEFAULT_MAX_DOCUMENTS,
+        Some(v) => v
+            .as_u64()
+            .filter(|n| *n > 0)
+            .and_then(|n| usize::try_from(n).ok())
+            .context("parse params.diff: `max_documents` is a positive whole number")?,
+    };
     let commit = |key: &str| -> Result<String> {
         let value = table
             .get(key)
@@ -66,6 +88,7 @@ pub fn split_params(mut params: serde_json::Value) -> Result<(DiffPair, serde_js
     let pair = DiffPair {
         from: commit("from")?,
         to: commit("to")?,
+        max_documents,
     };
     anyhow::ensure!(
         pair.from != pair.to,
@@ -189,6 +212,7 @@ pub fn render_diff_source(
         Some(&pair.from),
         &pair.to,
         &none_stale,
+        pair.max_documents,
     )
     .context("render the `to` side")?;
     let from_side = collect(
@@ -200,6 +224,7 @@ pub fn render_diff_source(
         Some(&pair.to),
         &pair.from,
         &none_stale,
+        pair.max_documents,
     )
     .context("render the `from` side")?;
     tracing::info!(
@@ -445,7 +470,9 @@ fn rekeyed(
 /// what it emitted rather than storing it. The renderer still writes
 /// its `.md` and blobs to their real paths; the file is read back at
 /// once when the renderer declared no sections, and overwritten by the
-/// subtraction's result later.
+/// subtraction's result later. The side stops at `max_documents`: a
+/// diff that big was not the one asked for, and failing on the
+/// document after the cap costs that many renders and no more.
 #[allow(clippy::too_many_arguments)]
 fn collect(
     processors: &[Box<dyn RenderProcessor>],
@@ -456,10 +483,18 @@ fn collect(
     cursor: Option<&str>,
     pin: &str,
     stale: &HashSet<String>,
+    max_documents: usize,
 ) -> Result<Side> {
     let mut side = Side::default();
     let mut sectionless_sources: BTreeSet<String> = BTreeSet::new();
     let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
+        if side.docs.len() >= max_documents && !side.docs.contains_key(&md.markdown_uuid) {
+            anyhow::bail!(
+                "the diff at {pin} touches more than {max_documents} document(s). A diff \
+                 this large was probably not the one meant: choose two closer commits, \
+                 or raise `params.diff.max_documents` to say it was"
+            );
+        }
         let sections = if md.sections.is_empty() {
             sectionless_sources.insert(md.source_id.clone());
             whole_document_sections(&md)?
@@ -532,10 +567,81 @@ mod tests {
             pair,
             DiffPair {
                 from: "a".into(),
-                to: "b".into()
+                to: "b".into(),
+                max_documents: DEFAULT_MAX_DOCUMENTS,
             }
         );
         assert_eq!(rest, serde_json::json!({"common": {"x": 1}}));
+        let (pair, _) = split_params(serde_json::json!({
+            "diff": {"from": "a", "to": "b", "max_documents": 7}
+        }))
+        .unwrap();
+        assert_eq!(pair.max_documents, 7);
+        for bad in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!("many"),
+        ] {
+            let err = split_params(
+                serde_json::json!({"diff": {"from": "a", "to": "b", "max_documents": bad}}),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("positive whole number"), "{err}");
+        }
+    }
+
+    /// One processor, `n` documents; the sink refuses the one past the cap.
+    #[test]
+    fn a_side_past_the_cap_fails_the_step() {
+        struct Emits(usize);
+        #[async_trait::async_trait]
+        impl RenderProcessor for Emits {
+            fn id(&self) -> &str {
+                "emits"
+            }
+            async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+                for i in 0..self.0 {
+                    ctx.emit_doc(RenderedMarkdown {
+                        markdown_uuid: format!("d{i}"),
+                        source_id: "s".into(),
+                        upstream_cursor: None,
+                        bucket_key: None,
+                        md_path: std::path::PathBuf::from(format!("/nonexistent/d{i}.md")),
+                        render_version: 1,
+                        rows: vec![],
+                        sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
+                        edges: vec![],
+                        problems: vec![],
+                    })?;
+                }
+                Ok("ok".into())
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let progress = Progress::default();
+        let none: HashSet<String> = HashSet::new();
+        let run = |n: usize, cap: usize| {
+            let procs: Vec<Box<dyn RenderProcessor>> = vec![Box::new(Emits(n))];
+            collect(
+                &procs,
+                "s",
+                dir.path(),
+                "now",
+                &progress,
+                None,
+                "c",
+                &none,
+                cap,
+            )
+        };
+        assert_eq!(run(3, 3).unwrap().docs.len(), 3, "at the cap is fine");
+        let err = match run(4, 3) {
+            Ok(_) => panic!("the fourth document must fail the side"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(err.contains("more than 3 document(s)"), "{err}");
+        assert!(err.contains("max_documents"), "{err}");
     }
 
     #[test]
