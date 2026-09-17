@@ -279,13 +279,23 @@ async fn submit_feedback(
 /// A broken applet is named rather than merely absent, since an empty
 /// gallery looks the same as a config that never saved.
 async fn get_frontend(State(s): State<AppState>) -> Json<applets::FrontendView> {
-    // Pick up a config edit before answering. Cheap when nothing moved (one
-    // `stat`), blocking when it did, since a rebuild execs one child per
-    // applet. That it *reads* the store here is why `crate::watch` must not
-    // treat a read as a change — the two would drive each other.
+    // A read. The applet list is the registry's business: a saved config
+    // reconciles it in the writer, a hand edit through the watcher. What a
+    // read still checks is the store's own files — a `PUT /api/lib`, a
+    // file dropped in by hand — which costs a `stat` and restarts nothing.
+    // That it reads the store is why `crate::watch` must not treat a read
+    // as a change.
     let registry = s.applets.clone();
-    let _ = tokio::task::spawn_blocking(move || registry.refresh_if_config_changed()).await;
+    let _ = tokio::task::spawn_blocking(move || registry.rescan_if_store_changed()).await;
     Json(s.applets.frontend_view())
+}
+
+/// The registry reconciles on the writer's thread, before the writer
+/// answers, so the applets a saved config names are up by the time the
+/// client hears the save succeeded.
+async fn reload_applets(s: &AppState) {
+    let registry = s.applets.clone();
+    let _ = tokio::task::spawn_blocking(move || registry.reload()).await;
 }
 
 async fn get_module(
@@ -352,10 +362,8 @@ async fn proxy_impl(
     let target = format!("{path}{query}");
     let registry = s.applets.clone();
     let result = tokio::task::spawn_blocking(move || {
-        // A card may reference an applet added since boot, and an
-        // applet whose params changed must not keep serving the old
-        // ones — so the same refresh guards the data path.
-        registry.refresh_if_config_changed();
+        // A read: the applet is there or it is not. A config change
+        // reaches the registry through its writers or the watcher.
         registry.proxy(&id, &method, &target, content_type.as_deref(), &body)
     })
     .await;
@@ -853,6 +861,7 @@ async fn put_config(
         tracing::error!("put_config: rename {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
+    reload_applets(&s).await;
     Ok(Json(verdict))
 }
 
@@ -905,6 +914,8 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
                 tracing::error!("init_config: write {}: {e}", path.display());
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
+            drop(f);
+            reload_applets(&s).await;
             Ok(Json(InitConfigResponse {
                 created: true,
                 path: path.display().to_string(),

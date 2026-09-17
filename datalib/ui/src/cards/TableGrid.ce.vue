@@ -50,11 +50,15 @@ const props = withDefaults(
     /// and the column it landed on.
     menu?: (anchor: T, targets: T[], column: string) => MenuEntry[];
     selectable?: boolean;
+    /// Whether rows outside the viewport are left unrendered. Off, every
+    /// row is in the DOM whether or not it is scrolled into view — right
+    /// for a table of tens of rows, wrong for one of thousands.
+    virtualizeRows?: boolean;
     /// Per-field refinements a type cannot know — a width, a formatter
     /// — merged over the typed definition.
     columnOverrides?: Record<string, Partial<Column<T>>>;
   }>(),
-  { rowKey: "key", tree: false, windowSecs: 300, selectable: false },
+  { rowKey: "key", tree: false, windowSecs: 300, selectable: false, virtualizeRows: true },
 );
 
 const emit = defineEmits<{
@@ -215,6 +219,9 @@ function options(): GridOption {
       minHeight: 120,
     },
     rowHeight: 34,
+    // The grid renders the rows in view plus a buffer; a buffer of a
+    // thousand rows is every row of a table this is asked to show whole.
+    ...(props.virtualizeRows ? {} : { minRowBuffer: 1000 }),
     enableTextSelectionOnCells: true,
     enableCellNavigation: true,
     enableSelection: props.selectable,

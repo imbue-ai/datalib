@@ -128,8 +128,8 @@ signalBackupDir();
 type Sandbox = { spec: string; root: string; url: string };
 
 // A root holding nothing but the index group and the applet that serves
-// it: what `materialize_tng_root.sh` writes, minus the pre-built index
-// and markdown trees. The streaming spec needs this rather than the
+// it: the fixture root minus its sources, the pre-built index and the
+// markdown trees. The streaming spec needs this rather than the
 // fixture root because its sources replay the *same* conversations the
 // fixture already indexed under other ids, and entity ids are
 // provider-global — so against the fixture the index sees every one of

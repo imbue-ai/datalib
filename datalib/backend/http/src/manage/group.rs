@@ -2,7 +2,7 @@
 //! applets filed under it: the order they run in, the status the row
 //! shows, the instant it calls "last synced", and the steps a sync of
 //! the group starts at. The rules are the aggregation table in
-//! docs/dev/plans/groups_and_functions.md. Nothing here does arithmetic
+//! docs/dev/config_model.md. Nothing here does arithmetic
 //! across children: a group's bytes come from its own measured series.
 
 use super::status::{compare_stamps, StatusView};

@@ -328,9 +328,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         every source in `markdowns` should also appear as an
         `upstream_scope` on some `provider='datalib'` row.
 
-        The failure this catches is silent and partial. Eight providers
-        declare their whole document set via `RunCtx::retain_documents`,
-        and the sweep that follows deletes anything they did not name —
+        The failure this catches is silent and partial. A full walk ends
+        in a sweep that deletes anything the run did not produce —
         which is every storage report, since a provider's processors
         know nothing about them. `render.rs` exempts the report by id,
         and if that exemption breaks, only those eight sources lose

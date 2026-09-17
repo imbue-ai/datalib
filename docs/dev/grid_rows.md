@@ -17,7 +17,7 @@ Three forces pushed us this direction:
    move. Codegen propagates the change to Rust (both writer and reader
    sides) and TypeScript (consumer side). Drift has historically been
    a recurring bug source.
-2. **One query path on the backend.** `datalib/backend/core/src/db.rs`
+2. **One query path on the backend.** `datalib/backend/unified_index/src/dolt_repo.rs`
    is now a single `SELECT … FROM grid_rows WHERE …` plus a row mapper.
    Adding a provider doesn't add a `push_*` function; it adds rows to the
    table at ingest time. The query/filter/sort logic stays put.

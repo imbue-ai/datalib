@@ -229,7 +229,7 @@ window where the gallery could scan a namespace that is missing.
 exactly why an applet may not take that id. The config loader rejects
 it (`datalib_dag::config::RESERVED_APPLET_ID`); an applet allowed to
 claim `user` would have the user's own work deleted on the next
-refresh.
+reload.
 
 ## Why components come from a directory, not an endpoint
 
@@ -273,27 +273,34 @@ The case the design is built around:
 
 ## When the store is re-read
 
-At server start, and again whenever it changes. Two triggers, kept
-separate because they cost different amounts:
+At server start, and again when the config changes. A change reaches
+the registry from exactly two places, and a request is not one of them:
 
-- **`config.toml` moved** → reconcile the running applets against the
-  new list, then rescan.
-- **the store's own files moved** → rescan only.
+- **the two writers** — `PUT /api/config` and `POST /api/config/init`
+  reconcile before they answer, so the applets a saved config names are
+  up by the time the client hears the save succeeded;
+- **the root watcher** — a hand edit (`vim`, an agent,
+  `datalib-migrate-config`) reaches `watch.rs` as `config_changed`, and
+  `applets::watch_config` reconciles on it.
 
-Conflating them would make a `PUT /api/lib` restart every applet. Both
-checks are `stat`-only when nothing changed, so they sit on
-`GET /api/frontend` itself — which is what turns a saved config, or a
-file dropped in by hand, into a live gallery update without a restart.
+`GET /api/frontend` and the `/applet/` proxy only read: an applet is in
+the registry or it is not. The one thing a read still checks is the
+store's own files — a `PUT /api/lib`, a file dropped into
+`system/frontend/` — which costs a `stat` and restarts nothing.
+Conflating that with a config change would make a `PUT /api/lib`
+restart every applet.
 
-**That reconcile is lazy, and the ordering matters.** A new applet
-writes nothing into `system/frontend/` until it has been *started*, and
-it is only started by this reconcile. So the client cannot wait for
-`system/frontend/` to move before asking: it has to refetch on
-`config_changed` as well as on `frontend_changed`
-(`ui/src/cards/frontendRegistry.ts`). While the UI polled this endpoint
-every four seconds the ordering was invisible — something always asked
-again soon enough. See `backend/http/src/watch.rs` for the push channel
-that replaced the poll.
+Two callers means the writer and the watcher that saw its write can
+arrive together. A reload holds one mutex for its whole length, so the
+second waits and then finds the file already current, rather than
+reconciling from the same baseline and stopping what the first just
+started.
+
+The cost of keeping requests out of it is one window: a hand edit that
+adds an applet, followed within the watcher's debounce by a request for
+that applet, gets "no applet" once. The UI refetches on
+`config_changed` (`ui/src/cards/frontendRegistry.ts`), which is how it
+treats every hand edit.
 
 **Reconciling** compares the new applet list against the one the
 gateway last started, entry by entry:

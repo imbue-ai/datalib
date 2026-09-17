@@ -62,7 +62,7 @@ test("the Source column shows the configured name, and source_id: filters by id"
   // an applet restart and pay a qmd model load — see `SEARCH_SETTLE`.
   test.setTimeout(210_000);
 
-  // --- With no config entry, the column falls back to the id -------
+  // --- With no name in the config, the column falls back to the id --
   // Read off one of the source's own rows, brought into view: the grid
   // paints only the rows in view, and which those are is the sort's
   // business, not this test's.
@@ -113,24 +113,11 @@ test("the Source column shows the configured name, and source_id: filters by id"
   ).toEqual(["Datalib"]);
 
   // --- A name in the config changes the column's text --------------
-  await writeConfig(
-    page,
-    `${original.replace(/\s*$/, "")}\n
-[[groups]]
-id = "slack"
-name = "Work Slack"
-type = "slack"
-
-[[steps]]
-group = "slack"
-function = "ingest"
-
-[[steps]]
-group = "slack"
-function = "render_markdown"
-inputs = ["slack/ingest"]
-`,
-  );
+  // The fixture root already declares `slack` (see
+  // `materialize_tng_root.sh`); this gives that entry a name.
+  const slackGroup = '[[groups]]\nid = "slack"\n';
+  expect(original).toContain(slackGroup);
+  await writeConfig(page, original.replace(slackGroup, `${slackGroup}name = "Work Slack"\n`));
 
   await openGrid(page);
   await searchAndSettle(page, "source_id:slack");

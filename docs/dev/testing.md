@@ -306,13 +306,3 @@ keys, each commented with why it's redacted — carried over verbatim, because i
 operates on the produced data tree and the DAG migration didn't change that
 layout. See the module header of the test for what genuinely had to change.
 
-### Note: the old in-repo copies have been purged from history
-
-This data used to live in-repo (`configs/thad_tiny.yaml` +
-`datalib/backend/sync/tests/snapshots/`). It left the working tree in
-26412853 and was later expunged from git history with `git filter-repo` —
-no reachable commit on `main` or `origin/main` contains either path. What
-remains before the repo is made public is server-side: GitHub still holds
-the pre-rewrite blobs as unreachable objects, and any collaborator who
-never re-cloned still has them locally. See the note at the top of
-[`/TODO.md`](/TODO.md).

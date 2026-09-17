@@ -21,7 +21,7 @@ Practitioner-facing material — how we test, how to add a provider, how the sch
 
 # General pipeline structure
 
-The ETL pipeline currently has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the orchestration design and [`step_protocol.md`](step_protocol.md) for the step contract:
+The ETL pipeline currently has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`datalib/backend/dag/README.md`](/datalib/backend/dag/README.md) for the runner's rules and [`step_protocol.md`](step_protocol.md) for the step contract:
 
 1. **Download** — pull from upstream, UPSERT into `<data_root>/<data_source>/ingest/entities.doltlite_db` (entities) and `<data_root>/<data_source>/ingest/blobs.doltlite_db` (a single `cas_objects` table keyed by blake3 hash).
 2. **Render** — derive `.md` files under `<stanza>/render_markdown/...` plus that source's render store (`indexed_markdown.doltlite_db`) from the raw store, deterministically (indexing with qmd is the separate `qmd_index` step).
@@ -118,7 +118,7 @@ Attachment bytes are split out of the entity database into a sibling content-add
 
 Every provider with attachments owns a small four-column edge table that maps `(owning_id, ref_id) → blake3`. Bytes still live in the shared `cas_objects`; the edge table is provider-specific so providers that happen to use the same upstream id format don't collide, and so per-provider semantics (refetch policies, dolt_diff fanout) don't bleed across sources. The legacy shared `blob_refs` table has been retired entirely.
 
-The four-column shape is universal — `id` (synth PK `{owning}#{ref}`) + owning FK + ref id + nullable blake3 — so the declaration in `schema_raw.rs` is a single `#[derive(CasEdgeRow)]` struct. The derive emits the DDL, the two indices, the synth-PK recipe, and the `BulkUpsertable` impl. See [`provider_migration_dolt_diff_and_cas_edge.md`](/docs/dev/provider_migration_dolt_diff_and_cas_edge.md) for the full recipe.
+The four-column shape is universal — `id` (synth PK `{owning}#{ref}`) + owning FK + ref id + nullable blake3 — so the declaration in `schema_raw.rs` is a single `#[derive(CasEdgeRow)]` struct. The derive emits the DDL, the two indices, the synth-PK recipe, and the `BulkUpsertable` impl. The render side of the same edge — how a document's attachments are loaded and materialized — is in [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md).
 
 ### Shared attachment-flush primitives
 Per-bucket attachment-fetch flow is consolidated into three shared pieces in `datalib_etl::blob_cas`:
@@ -255,7 +255,7 @@ A long chain of incremental syncs can in principle silently drop data (an upstre
 
 The skip-check is keyed by the **upstream identifier** (known before fetch), not by content hash (only known after). The per-provider edge table is the cache index over the CAS, and `--reset-and-redownload` is the "invalidate entity data, keep the cache" path.
 
-`cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. A `blob_cas::gc_orphans()` sweep existed once and was removed, uncalled, in `7f588ba1`; three docs went on recommending it for months. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
+`cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
 
 ## Noticing when the *upstream* loses data
 
@@ -332,17 +332,8 @@ use it. A partial export of a normally-complete source is the same trap.
 
 ### What limits it
 
-**Detection needs a re-enumeration**, and the per-provider audit that
-sentence used to defer is now done. What each source re-enumerates, and
+**Detection needs a re-enumeration.** What each source re-enumerates, and
 therefore what it can see:
-
-**A deletion the download notices now reaches the grid.** That used to
-be a second gap and is not any more — see
-[parse and render](data_architecture_parse_and_render.md), "Two
-mechanisms, because there are two kinds of renderer". It is worth
-keeping the two apart when reading a bug report: "we never noticed"
-(this section) and "we noticed and the grid still shows it" (that one)
-look identical from the UI.
 
 | source | re-enumeration | prunes |
 | --- | --- | --- |
@@ -387,25 +378,23 @@ net, where a plain mirror would have to choose between guessing and
 freezing. What remains is `prune::record`, which WARNs on an unusually
 large prune — a signal to investigate, not a veto.
 
-**A deletion the download notices now reaches the grid.** That used to
-be a second gap and is not any more — see
+**A deletion the download notices reaches the grid** — see
 [parse and render](data_architecture_parse_and_render.md), "Two
-mechanisms, because there are two kinds of renderer". It is worth
-keeping the two apart when reading a bug report: "we never noticed"
-(this section) and "we noticed and the grid still shows it" (that one)
-look identical from the UI.
+mechanisms, because there are two kinds of renderer". Keep the two apart
+when reading a bug report: "we never noticed" (this section) and "we
+noticed and the grid still shows it" (that one) look identical from the
+UI.
 
-**The two lists no longer barely overlap**, which they did when this
-section was written: every provider that records deltas can now also
-detect a deletion, and `media` / `fsindex` / `pdf` still detect
-structurally while recording none. The remaining mismatch is only that
-the structural detectors write no `sync_runs` row.
+Every provider that records deltas can also detect a deletion, and
+`media` / `fsindex` / `pdf` detect structurally while recording none;
+the one mismatch is that the structural detectors write no `sync_runs`
+row.
 
 **`deleted_upstream_at` is specified but not built.** [Transient vs
 non-transient](#transient-vs-non-transient) below says a confirmed 404
-should carry that marker. No such column exists anywhere in the tree
-(checked 2026-09-05). A provider that hard-deletes the row instead keeps
-the fact only in history, not in current state.
+should carry that marker. No such column exists anywhere in the tree. A
+provider that hard-deletes the row instead keeps the fact only in
+history, not in current state.
 
 **False positives track canonicalization.** An unchanged record that
 serializes differently from itself manufactures a `modified`. That is
@@ -417,8 +406,8 @@ changed this" wastes trust.
 
 ### The gap
 
-Nothing reads `summary.deltas` back — zero hits in
-`datalib/backend/http` and `datalib/ui` (checked 2026-09-05). The only
+Nothing reads `summary.deltas` back — nothing in `datalib/backend/http`
+or `datalib/ui` does. The only
 place any of this reaches a human is `fsindex`'s standalone CLI printing
 `vs last scan: N added, M modified, K removed`, which is one provider's
 local convenience rather than a product surface. `sync_runs` also
@@ -426,7 +415,7 @@ records no commit hashes (`run_id`, `started_at`, `finished_at`,
 `config`, `status`, `summary`), so recovering the exact commit range for
 a past run means reading `dolt_log` by hand.
 
-Detection is available, not delivered. See [`TODO.md`](/TODO.md).
+Detection is available, not delivered: #513.
 
 ## Timestamps: one clock, no fabrication
 
@@ -490,7 +479,7 @@ The per-bucket fingerprint pattern has been **replaced with `dolt_diff_<table>` 
 
 Mechanism: on render success, the render step records the doltlite HEAD the provider pinned in the render store's `render_cursor` row, in the same transaction as the run's last document. On the next render, the provider is handed that hash (`RenderCtx::raw_cursor`) and `parse` runs `doltlite_raw::scan_buckets(pool, last_hash, &DiffScanSpec { global_fanout_tables, bucket_query })`, which cold-starts if any `dolt_diff_<global_fanout_table>` row is non-`unchanged` (those fan out to "render everything"), otherwise runs the per-bucket `bucket_query` across the relevant `dolt_diff_*` vtabs. Parse then loads payloads only for the surviving bucket keys.
 
-The `source_fingerprint` compare is gone too (2026-09-14; this paragraph said for a year that it would stay, then that both had shipped and answered different questions). Render got the cursor treatment described here, and once it had, the fingerprint was a second answer to a question doltlite already settles — rewriting an identical row to a content-addressed table is no change, so nothing downstream ever sees it. See [`data_architecture_parse_and_render.md` §2](data_architecture_parse_and_render.md#where-this-is-heading-the-artifact-becomes-a-database) for the record of how it went wrong both ways it was kept. This swap moves the "what's different?" decision from Rust-computed hash trees to doltlite's native diff, which it maintains anyway for `dolt diff`. The per-row `payload_blake3` columns are gone — the `WirePayloadRow` derive no longer emits them.
+There is no `source_fingerprint` compare beside it: once render had the cursor, a fingerprint was a second answer to a question doltlite already settles — rewriting an identical row to a content-addressed table is no change, so nothing downstream ever sees it. This swap moves the "what's different?" decision from Rust-computed hash trees to doltlite's native diff, which it maintains anyway for `dolt diff`. The per-row `payload_blake3` columns are gone — the `WirePayloadRow` derive no longer emits them.
 
 **Rule for new stages.** Any new derivation added to the pipeline (future Annotate step, future index shard, future projection) follows the same recipe: declare what the inputs are (content + dependency hashes), compute a deterministic hash over them, store it alongside the output, compare on re-run. The compare-and-skip loop is what makes the system feel responsive on a laptop with months of accumulated data.
 

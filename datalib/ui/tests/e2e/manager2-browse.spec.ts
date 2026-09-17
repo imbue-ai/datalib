@@ -12,42 +12,13 @@ import { searchAndSettle, SEARCH_ROWS, TABLE_ROWS, searchHeader, type GridApi } 
 const ROWS = TABLE_ROWS;
 const SEARCH = '[data-testid="search-input"]';
 
-/// The fixture root declares the `unified_index` group (as a real root
-/// does) but no sources — the per-source rendered trees arrive as tars,
-/// with nothing in the config describing them. So the sources this spec
-/// browses are declared here first, the way `grid-source-id.spec.ts`
-/// does it.
-///
-/// `media` is the negative case and is the real shape: it is one of the
-/// three download-only providers, so a config for it genuinely has no
-/// `render_markdown` step.
+/// The fixture root declares every rendered source (`slack`, `github`,
+/// … — see `materialize_tng_root.sh`), so the positive cases browse
+/// what is already there. The negative case is not in the fixture and
+/// is the real shape: `media` is one of the download-only
+/// providers, so a config for it genuinely has no `render_markdown`
+/// step.
 const GROUPS = `
-[[groups]]
-id = "slack"
-type = "slack"
-
-[[steps]]
-group = "slack"
-function = "ingest"
-
-[[steps]]
-group = "slack"
-function = "render_markdown"
-inputs = ["slack/ingest"]
-
-[[groups]]
-id = "github"
-type = "github"
-
-[[steps]]
-group = "github"
-function = "ingest"
-
-[[steps]]
-group = "github"
-function = "render_markdown"
-inputs = ["github/ingest"]
-
 [[groups]]
 id = "media"
 type = "media"

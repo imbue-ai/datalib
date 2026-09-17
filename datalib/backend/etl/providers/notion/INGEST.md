@@ -9,6 +9,9 @@ A **personal access token**, stored under the latchkey `notion` service.
 A PAT acts as the person who created it and inherits their permissions,
 so nothing has to be shared with an integration — which is what lets the
 mirror default to the whole workspace with no configured starting point.
+`GET /v1/users/me` answers `type: "bot"` for a PAT and for an internal
+integration alike; `bot.owner.type` is what tells them apart — `user`
+for a PAT, `workspace` for an integration. Nothing here checks it.
 
 The stored credential must carry **both** headers:
 
@@ -47,6 +50,15 @@ monotonic across 12,300 objects and 124 pages of results, with no
 duplicate ids. A steady-state run therefore reads **one page of results**
 rather than the workspace.
 
+The 10,000-result cap in Notion's changelog applies to data-source
+queries, not to search: that walk was stopped by hand with `has_more`
+still true, so search is trusted to enumerate the whole workspace.
+Most of what it returns is database rows — 87% of the objects in a
+measured workspace had a `database_id` parent — and they come back as
+ordinary page objects, so the walk queues nothing but `object: "page"`
+and never queries a data source for its rows. The data-source objects
+search also returns are containers, and are skipped.
+
 It is stored per source as `sync_scope_state.last_seen_at`, alongside a
 config blob, so widening `refresh_window_days` re-examines that window
 instead of being suppressed by a point recorded under the narrower
@@ -77,6 +89,13 @@ against 36 for the same pages now.
 **The block tree is not mirrored.** There is no `blocks` table and no
 block renderer. Notion renders the page; we store what it returns.
 
+What it returns is Notion's *enhanced* markdown, not plain markdown.
+Besides `<unknown>`, `<page>` and `<database>`, which ingest reads, a
+body carries `<callout>`, `<columns>`/`<column>`, `<details>`/
+`<summary>`, `<table>` with `<colgroup>`/`<col>`, `<table_of_contents>`,
+`<span>` and `<br>`. Ingest stores them untouched and render passes
+them through; whatever displays the document has to cope with them.
+
 ## The one rule about stored markdown
 
 **Never store a Notion file URL as returned.** Every Notion-hosted file
@@ -101,6 +120,14 @@ links with meaningful query strings (DoorDash orders, Google Docs
 `gid=`) against 26 real attachments; stripping queries indiscriminately
 would have corrupted all 1,472.
 
+The rewrite covers `page_markdown` only. `pages.payload` is the page
+object as returned, and a Notion-hosted cover or icon — about one page
+in sixty, measured — sits in it as a signed URL. Nothing declares those
+paths volatile. What keeps an unchanged page from rewriting itself is
+`mirror_page` skipping the upsert when `last_edited_time` has not moved
+since the stored row; a run that does write the row writes a different
+payload each time.
+
 ## Truncation: two cases, one attribute tells them apart
 
 A response may set `truncated: true`. Every hole leaves a marker; what
@@ -117,8 +144,11 @@ Unrepresentable types seen so far: `button`, `alias`, `drive`.
 Always read `unresolved_block_ids` rather than inferring the hole set
 from the text: an id can be listed with no marker in the body.
 
-Follow-ups are capped per page (`MAX_HOLE_FOLLOWUPS`) — one measured
+Follow-ups are capped per page (`MAX_HOLE_FOLLOWUPS`, 64) — one measured
 page wanted ~1,385 of them, which would otherwise dominate a run.
+Truncation itself is rare: one page in a random 70, and that one a
+permanent `drive` embed. Size truncation is rarer still and sits in a
+few very large pages, which is why the cap is per page.
 
 ## Most pages have no body
 
@@ -222,7 +252,6 @@ on that reading would destroy a live document.
   what it trashed.
 - Data-source schema, and the `entity_id_str` port (see
   `docs/dev/entity_ids.md`, which still lists notion as pending).
-- Incremental render (`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`).
 
-The design and the measurements behind it are in
-[`docs/dev/plans/completed/notion_redesign.md`](../../../../../docs/dev/plans/completed/notion_redesign.md).
+Every number above was measured against a live workspace, not read off
+Notion's documentation.

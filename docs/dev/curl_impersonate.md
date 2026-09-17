@@ -153,17 +153,3 @@ The release tags start with `curl-impersonate-`, not `v`, so `git
 describe --match 'v[0-9]*'` in `tools/workspace_status.sh` ignores
 them and `datalib-dag --version` keeps reporting datalib's own tag.
 
-## What this replaced
-
-Until 2026-09 the impersonating curl was `latchkey-curl-impersonate`, a
-Rust program over the `wreq` HTTP client and its `boring2` BoringSSL
-fork. Issue #134 has the audit of that stack and the reasons for
-leaving it: a six-crate dependency tree from one author at `rc`
-versions, of which the version pinned here turned out to carry an LGPL
-crate (`wreq-util 3.0.0-rc.11`); and a TLS layer that upstream then
-swapped wholesale (`wreq 0.16` replaced `boring2` with a new binding),
-so keeping up meant a fresh audit rather than a diff. Measured on the
-day of the switch, both presented byte-identical JA4 and HTTP/2
-fingerprints for Chrome 131 and both passed Cloudflare on claude.ai and
-chatgpt.com; curl-impersonate's newest profile additionally matched a
-real Chromium 152 exactly.

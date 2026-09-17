@@ -356,7 +356,7 @@ claude-ingest --out ~/backups/claude_api \
 
 `claude.ai` doesn't 429 us in practice today, so `api::ClaudeClient`
 is a single-shot shell-out without a backoff loop. If that ever
-changes, model the loop on `chatgpt/src/extract/api.rs`.
+changes, model the loop on `chatgpt/src/ingest/api.rs`.
 
 ## Sample data
 

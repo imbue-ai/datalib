@@ -1,11 +1,13 @@
 # `datalib-dag` — the runner
 
 Reads a `config.toml`, builds a DAG from it, and runs the steps. This file
-holds the rules you cannot recover by reading the code; the design history
-and the open questions are in
-[`docs/dev/pipeline_dag_architecture.md`](../../../docs/dev/pipeline_dag_architecture.md),
-and the contract a step author needs is
-[`docs/dev/step_protocol.md`](../../../docs/dev/step_protocol.md).
+holds the rules you cannot recover by reading the code; the contract a
+step author needs is
+[`docs/dev/step_protocol.md`](../../../docs/dev/step_protocol.md). One
+design question is still open: the node set is known before a run
+starts, so a step that *discovers* downstream work (a fan-out per
+conversation, say) lives inside one node rather than expanding the
+graph.
 
 ## A step is (group, function); its id is composed
 

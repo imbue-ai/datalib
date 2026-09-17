@@ -368,24 +368,6 @@ Edits to these docs and their neighbors that we've agreed to do, but
 haven't yet. Each is intentionally not blocking the audit thread —
 they're listed here so they don't get lost.
 
-  - ~~**Move `DOLTLITE_RAW_PORT_GUIDE.md` → `docs/dev/doltlite_patterns.md`**
-    and reframe it as "shape of how we use doltlite."~~ **Done
-    differently: deleted, 2026-09-03.** By the time anyone got to it,
-    the durable content had been written down elsewhere and what
-    remained was wrong — a checklist naming the retired
-    `datalib/backend/sync` crate, `src/extract/` module paths that
-    became `src/ingest/`, the retired `RefStub` / `pre_seed_ref`
-    blob API in its utilities table and code templates, and a
-    `journal_mode=DELETE` snippet that contradicts
-    `doltlite_raw::open()`, which deliberately does not set the pragma
-    because doltlite rejects it. Only §6a survived, inlined into
-    [the JSONB paragraph](data_architecture_ingestion.md#schema_rawrs-per-provider-schema-layout).
-  - **Rename `docs/dev/doltlite.md` → `docs/dev/doltlite_tips.md`** —
-    still open, but the motivation was to disambiguate it against the
-    patterns doc that no longer exists, so it is now optional. Its
-    scope (operational tips, reading dolt history) is already clear
-    from its own opening.
-
   - **VIRTUAL column projection from JSONB payload.** Each
     `WirePayloadRow`-derived row currently stores a small set of
     denormalized columns alongside the payload for cheap predicate

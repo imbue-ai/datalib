@@ -5,6 +5,9 @@ Generates the DAG config `datalib-dag` needs, runs the synth phase
 (per-source `datalib-step synthesize`) and then the pipeline
 (download → render → index) hermetically against playback fixtures,
 and leaves the staged outputs where `tar_qmd.py` can pick them up.
+Beside them it writes `config_body.toml`: the same sources as
+render-only groups, for `materialize_tng_root.sh` to declare in the
+root it builds from the tars.
 
 Splitting the genrule into a python driver keeps the Bazel `cmd =` block
 readable and concentrates the file-layout logic in one place — the
@@ -321,6 +324,7 @@ def main() -> int:
     # `:ingested_tng_qmd` builds the search index separately.
     notion_seed = _first_notion_page_id(notion_fx)
     steps: list[str] = []
+    root_entries: list[str] = []
     for name, (type_str, _synth_input, extract_input) in sources.items():
         # Per-phase params, as a TOML inline table. The source name
         # isn't in either — each step takes it from its group. Ingest gets
@@ -363,13 +367,14 @@ params = {params}
         # step to name, so its render declares no inputs — which also
         # makes it a fringe step the runner always runs.
         inputs_line = "" if name in PRESEEDED_RAW else f'\ninputs = ["{name}/ingest"]'
+        render_block = f'[[steps]]\ngroup = "{name}"\nfunction = "render_markdown"'
         steps.append(
-            group_block
-            + ingest_block
-            + f"""[[steps]]
-group = "{name}"
-function = "render_markdown"{inputs_line}{render_params_line}"""
+            group_block + ingest_block + render_block + inputs_line + render_params_line
         )
+        # The materialized root gets the render tree but not the raw
+        # store, so there every source is shaped like a pre-seeded one:
+        # a group, a render step with no inputs, no ingest step.
+        root_entries.append(group_block + render_block + render_params_line)
     # The fan-in names its inputs; there is no glob to stand in for
     # "every render step".
     rendered = ", ".join(f'"{n}/render_markdown"' for n in sources)
@@ -386,6 +391,26 @@ inputs = [{rendered}]"""
     dag_config.write_text(
         f"data_root = {_toml_value(str(workspace))}\n\n" + "\n\n".join(steps) + "\n"
     )
+    # Everything a materialized root's config needs but `data_root` and
+    # the applet, which only the materializer knows. Both fan-ins are
+    # declared and wired the way a real root's are; the index arrives
+    # pre-built, so neither has to run for the root to be browsable.
+    root_entries.append(
+        f"""[[groups]]
+id = "unified_index"
+name = "Unified Index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = [{rendered}]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = [{rendered}]"""
+    )
+    (workspace / "config_body.toml").write_text("\n\n".join(root_entries) + "\n")
 
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand

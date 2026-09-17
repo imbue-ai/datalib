@@ -9,11 +9,10 @@ measurement, wipe-at-end for ingest, `Policy::Never`,
 `always_clear_before_ingest`, `--start-over`) and 7 (`render_inputs`)
 are still to do; each item below says which. §"Testing it without a
 provider" is how to check the rule without a real source, also not
-built. This is the design that
-[`render_inputs.md`](render_inputs.md) and the
-[deletion-record audit](deletion_record_audit_2026_09_11.md) turned out
-to be reaching for. Read this first; those two are now the mechanism
-for one of its rules and the measurement that motivated it.
+built. This is the design that `render_inputs`
+([`data_architecture_parse_and_render.md`](../data_architecture_parse_and_render.md))
+turned out to be reaching for: that table is the mechanism for one of
+its rules.
 
 ## The problem, in one paragraph
 
@@ -223,7 +222,7 @@ Against the audit, finding by finding:
 | 2.5 wipers protected by omission | nothing to protect |
 | 2.6 streaming ingests already honour it | they are the model for everyone else |
 
-And against `render_inputs.md`: the one route it could not fix — "a
+And against `render_inputs`: the one route it could not fix — "a
 checkpoint taken mid-wipe" — is closed, because there is no mid-wipe.
 Its `render_inputs` table becomes the mechanism for rule 2 on the
 render side: the buckets a run declared are "what I enumerated", and
@@ -516,8 +515,8 @@ for each table T in the raw store, for each row r:
 A failure names the table, the row and the mutation — "changing
 `users.display_name` did not re-render thread X" — which is the fix
 in one line. It needs nothing per provider beyond `plan_render` and
-the raw store the fixture already builds; `render_inputs.md` step 3
-sketches the same loop and, once that lands, the harness compares
+the raw store the fixture already builds; the `render_inputs` design
+sketched the same loop and, once that lands, the harness compares
 against declared inputs rather than bucket queries with no other
 change.
 
