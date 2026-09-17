@@ -42,8 +42,11 @@ if [ -z "${LATCHKEY_ENCRYPTION_KEY:-}" ]; then
         # 32 bytes of /dev/urandom, base64-encoded, no trailing newline.
         # openssl is in the base ubuntu image.
         LATCHKEY_ENCRYPTION_KEY="$(openssl rand -base64 32 | tr -d '\n')"
-        umask 077
-        printf '%s' "${LATCHKEY_ENCRYPTION_KEY}" > "${KEY_FILE}"
+        # The umask is for the key file only. Set in this shell it
+        # would leak through `exec` below, and every directory the
+        # pipeline then wrote into the user's bind mount was 0700 root
+        # — unreadable to them on a Linux host (#469).
+        (umask 077; printf '%s' "${LATCHKEY_ENCRYPTION_KEY}" > "${KEY_FILE}")
         chmod 0600 "${KEY_FILE}" || true
         echo "datalib-entrypoint: provisioned new latchkey encryption key at ${KEY_FILE}" >&2
     else
