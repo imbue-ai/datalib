@@ -64,6 +64,6 @@
   (`DEFAULT_QMD_VERSION` in `runtime/src/qmd.rs`): the digest is
   theirs, changing it orphans every existing index, and the vendored tree
   under `third-party/qmd/` is reference-only. This is a note for whoever
-  does the Rust re-implementation AGENTS.md §"Vendored upstream" already
+  does the Rust re-implementation docs/dev/qmd_vendored.md already
   points at — not a reason to touch the interop code now, where SHA-256 is
   correct and load-bearing.

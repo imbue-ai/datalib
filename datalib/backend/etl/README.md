@@ -136,6 +136,36 @@ runner, always at `commit schema after DDL` inside the second `open`.
 `doltlite_raw.rs` pins the underlying behavior: two pools committing in
 lockstep on one store, and one of them gets `commit conflict`.
 
+### A reader opens read-only, pins a commit, and never asks `dolt_status`
+
+Render reads its raw store through `open_reader`, never `open`: the
+write path rescue-commits, reconciles the schema and commits with `-Am`,
+which is three writes to a store the render step does not own
+(`scripts/lint_repo.py` check 5 enforces it). A reader then takes a
+`Pin` (`pin.rs`; it refuses `HEAD` by name) and reads through the
+`pinned_<t>` views it installs, so every content read names one commit
+however long the pass runs. The two-process test measures what a
+read-only connection may issue beside a live writer — `dolt_hashof`,
+`sqlite_master`, `pragma_module_list`, `CREATE TEMP VIEW`, reads through
+`dolt_at_` views, `dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
+`dolt_diff_summary`, `dolt_diff_stat`, a `COUNT(*)` per table — and that
+list is the allowlist. **`dolt_status` is not on it**: issued from a
+read-only connection while the writer commits, it fails that commit
+and the rows inserted before it are gone (dolthub/doltlite#2832; that
+was #400, `grid_index` asking every render store whether it was dirty).
+The same goes for a hand-run `datalib-doltlite -readonly … dolt_status`
+against a store a sync is writing. Any other statement a reader adds is
+presumed guilty until `doltlite_two_process_test` has run with it.
+
+Open the store once per pass — a stage that needs to load rows, run a
+`dolt_diff` scan and probe for ids does all three on one pool — and
+`close().await` before the next open, on the error path too. And never
+run a store call on a runtime you are about to drop: sqlx returns a
+checked-out connection from a task spawned at drop, and a per-call
+`Runtime::new().block_on(..)` dies before that task runs, leaving the
+next open a second handle on the same file (`indexed_markdown::blocking`
+keeps one process-wide runtime for the no-runtime case).
+
 ## Schema self-healing, and why the DDL runs in two passes
 
 `open` applies `CREATE TABLE`s, reconciles each table against its DDL

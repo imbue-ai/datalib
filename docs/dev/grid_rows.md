@@ -77,10 +77,12 @@ translates each row into a `SearchRow` for the HTTP API.
 3. Update `unified_index/src/dolt_repo.rs` — both the
    `SEARCH_ROW_COLUMNS` constant and `search_row_from` — and `SearchRow`
    in `unified_index/src/search.rs` if the column should reach the API.
-4. If the grid should display it, add it to `default_columns()` in
-   `datalib/backend/applets/src/unified_index/mod.rs` (the applet's wire
-   contract; a test counts the entries) and to the `SearchRow` type in
-   `datalib/ui/src/api.ts`.
+4. If it should be a grid column, add it to the `SearchRow` type in
+   `datalib/ui/src/api.ts` and declare it in `columns()` in
+   `datalib/backend/applets/src/unified_index/columns.rs`, with its type
+   from `datalib_columns`. The applet declares the columns and the grid
+   draws them by type (`cards/typedColumns.ts`); a width or a hover the
+   type cannot know goes in `GridCard`'s `columnOverrides`.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## Adding a provider
@@ -92,8 +94,10 @@ translates each row into a `SearchRow` for the HTTP API.
 2. Wire the new crate into `datalib-step`: add it to the deps of
    `datalib/backend/datalib_step` and to the dispatch table in
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
-   download/render step pair in the config. The grid_index step picks
-   up its render store with no further wiring.
+   ingest/render step pair in the config and name the render step in
+   the two fan-ins' `inputs` (the wizard does this for a source it
+   adds); `grid_index` and `qmd_index` read exactly the stores their
+   inputs name.
 3. Add the source label to the consuming bits as needed (icon
    resolution, etc.) — but the query path itself does not change.
 

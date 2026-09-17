@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # Schema-only config crate for the airvisual source.
 # Bazel-only by design (no Cargo.toml). See
-# AGENTS.md, "Why each provider has a <p>_config crate".
+# AGENTS.md §"Repo layout" (why each provider has a <p>_config crate).
 rust_library(
     name = "datalib_etl_airvisual_config",
     srcs = glob(["src/**/*.rs"]),
