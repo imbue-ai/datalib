@@ -219,9 +219,6 @@ function options(): GridOption {
       minHeight: 120,
     },
     rowHeight: 34,
-    // The grid renders the rows in view plus a buffer; a buffer of a
-    // thousand rows is every row of a table this is asked to show whole.
-    ...(props.virtualizeRows ? {} : { minRowBuffer: 1000 }),
     enableTextSelectionOnCells: true,
     enableCellNavigation: true,
     enableSelection: props.selectable,
@@ -261,6 +258,9 @@ function options(): GridOption {
       : {}),
     enableContextMenu: !!props.menu,
     contextMenu: {
+      // The menu stays put while the grid scrolls: the scroll that
+      // brought a row into view can report after the click on it.
+      hideMenuOnScroll: false,
       hideCopyCellValueCommand: true,
       hideCommands: ["copy", "clear-grouping", "collapse-all-groups", "expand-all-groups"],
       commandItems: menuSlots(24, entriesFor),
@@ -327,6 +327,22 @@ function createGrid() {
   if (root instanceof ShadowRoot) opts.shadowRoot = root;
   const b = new SlickVanillaGridBundle<T>(boxEl.value, buildColumns(), opts, annotate(props.rows)) as Grid;
   bundle = b;
+  // The grid, reachable from its element for anyone debugging in the
+  // inspector.
+  (boxEl.value as HTMLDivElement & { __grid?: unknown }).__grid = b;
+  if (!props.virtualizeRows) {
+    // The grid renders the rows in view plus a viewport's worth beyond,
+    // whatever its buffer options say; a table asked to show every row
+    // gets the whole range.
+    const grid = b.slickGrid;
+    const ranged = grid.getRenderedRange.bind(grid);
+    grid.getRenderedRange = (top?: number, left?: number) => {
+      const range = ranged(top, left);
+      range.top = 0;
+      range.bottom = Math.max(range.bottom, grid.getDataLength() - 1);
+      return range;
+    };
+  }
   for (const r of props.rows) painted.set(keyOf(r), JSON.stringify(r));
   stampRowKeys(b.slickGrid, b.dataView, (item) => keyOf(item as T));
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
