@@ -401,6 +401,7 @@ pub fn render_notion(
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows: doc.rows.clone(),
+            sections: Vec::new(),
             edges: Vec::new(),
             problems: doc.problems.clone(),
         })?;
@@ -450,6 +451,7 @@ pub fn render_notion(
             md_path: p,
             render_version: RENDER_VERSION,
             rows: doc.rows.clone(),
+            sections: Vec::new(),
             edges: Vec::new(),
             problems: doc.problems.clone(),
         })?;

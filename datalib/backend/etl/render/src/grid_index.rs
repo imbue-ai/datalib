@@ -29,6 +29,8 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use tokio::sync::Mutex;
 
+use crate::section::Section;
+
 /// Serializes concurrent writers against one doltlite index pool, and
 /// optionally batches every write into one transaction.
 ///
@@ -505,6 +507,12 @@ pub struct RenderedMarkdown {
     /// Empty means there is no document: the store drops it, `.md` and
     /// all, keeping only its `problems`.
     pub rows: Vec<GridRow>,
+    /// The document piece by piece, in order, each piece keyed by the
+    /// `data-section-uuid` it wraps or unkeyed when it wraps none —
+    /// concatenated they are the `.md`'s bytes. Empty from a renderer
+    /// that has not been taught sections, and when read back from the
+    /// store, which never holds the markdown.
+    pub sections: Vec<Section>,
     /// Outgoing edges (`src_markdown_uuid == markdown_uuid`). Empty for
     /// renderers that don't emit edges; the DELETE still runs, so stale rows
     /// from a previous render get cleaned up.
@@ -1428,6 +1436,7 @@ mod write_lock_tests {
             md_path: PathBuf::from(format!("/tmp/{uuid}.md")),
             render_version: 1,
             rows: vec![row],
+            sections: Vec::new(),
             edges: Vec::new(),
             problems: Vec::new(),
         }
@@ -1909,6 +1918,7 @@ mod source_cursor_tests {
             md_path: rendered_root(root, source).join(format!("{uuid}.md")),
             render_version: 1,
             rows: vec![row],
+            sections: Vec::new(),
             edges: Vec::new(),
             problems: Vec::new(),
         }
