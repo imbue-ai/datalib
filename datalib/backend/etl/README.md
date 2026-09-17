@@ -196,6 +196,15 @@ refs in two queries regardless of how many attachments it has; render then
 consumes an already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn
 blob reader.
 
+**A source that keeps a CAS opens its session with the CAS attached**
+(`RunCtx::open_store_with_blobs`), so every seal commits `blobs.doltlite_db`
+before `entities.doltlite_db`. The order is the point: a reader pinned at an
+entities commit must never find a row naming bytes that are not committed
+yet, and a CAS with no commits can be neither pinned nor versioned. Nothing
+in the CAS uses doltlite's diff or history — a hash is either present or it
+is not — so which container the bytes should live in at all is an open
+question; the `BlobCas` API is narrow enough that changing it is contained.
+
 **Filenames dedupe on the content hash, not on the derived name.** A blob's
 rendered filename has a content-addressed stem and an extension derived from
 *this ref's* metadata, so one payload reaching the bundle under two refs with
