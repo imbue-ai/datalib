@@ -113,10 +113,20 @@ pub async fn run(
     if let Some(d) = models_dir {
         opts.models_dir = d;
     }
-    // run_index shells out to qmd; blocking work.
-    let outcome = tokio::task::spawn_blocking(move || datalib_qmd_indexer::run_index(&opts))
-        .await
-        .context("qmd task panicked")??;
+    // Models first, then the index: qmd finds every pinned GGUF already
+    // in place and never fetches one itself. run_index shells out to
+    // qmd; blocking work.
+    let outcome = tokio::task::spawn_blocking(move || {
+        let effective = datalib_qmd_models::effective_models_dir(
+            &datalib_runtime::qmd::qmd_state_dir(&opts.root),
+            &opts.models_dir,
+        );
+        datalib_qmd_models::ensure_models(&effective, datalib_qmd_models::PINNED_MODELS)
+            .with_context(|| format!("provision qmd models in {}", effective.display()))?;
+        datalib_qmd_indexer::run_index(&opts)
+    })
+    .await
+    .context("qmd task panicked")??;
     tracing::info!(index = %outcome.index_path.display(), "qmd: done");
     // The index rebuilds from the render_markdown trees, so cache-aware
     // backups (`restic --exclude-caches` etc.) may skip it. Tag the

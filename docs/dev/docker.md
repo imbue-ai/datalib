@@ -10,14 +10,19 @@ security model the walkthrough's bind-mount rules rest on.
 
 `ghcr.io/imbue-ai/datalib:<tag>` is Ubuntu 24.04 plus:
 
-- every binary from the release tarball (`datalib-dag`, `datalib-step`,
+- the release tarball, unpacked whole at `/opt/datalib` and linked into
+  `/usr/local/bin`: every binary (`datalib-dag`, `datalib-step`,
   `datalib-http` with the web UI embedded, `datalib-applet`,
   `datalib-migrate-config`, `datalib-doltlite` — also as plain
-  `doltlite` — and the two `latchkey-curl-*` binaries), installed under
-  `/usr/local/bin`;
-- Node 22, the pinned `latchkey` CLI, and the pinned `qmd` with its
-  three models pre-fetched into `/root/.cache/qmd/models`, so a first
-  sync never stalls on a multi-gigabyte download;
+  `doltlite` — and the two `latchkey-curl-*` binaries), the `latchkey`
+  launcher, and `runtime/` — the Node runtime plus the lockfile-pinned
+  `qmd` and `latchkey` package trees the binaries resolve beside
+  themselves. There is no Node, npm or npx in the image; nothing is
+  fetched from a registry at build or run time;
+- qmd's three models pre-fetched into `/root/.cache/qmd/models` by
+  `datalib-step pull-models`, each from its pinned HuggingFace revision
+  and sha256-verified, so a first sync never stalls on a multi-gigabyte
+  download;
 - the demo data library at `/opt/datalib/demo`, ingested and rendered
   at image build time from the TNG fixtures under
   `/opt/datalib/demo-sources` (see below);

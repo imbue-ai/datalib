@@ -1,10 +1,13 @@
 # Datalib — production runtime image.
 #
-# Ships the release binaries (`datalib-dag`, `datalib-step`, `datalib-http`,
-# `datalib-migrate-config`, `datalib-applet`, `datalib-doltlite`,
-# `latchkey-curl-dispatch`, `latchkey-curl-impersonate`) plus Node +
-# `latchkey` so users can register services and run syncs from a single
-# container, and a pre-baked demo data library to try first.
+# Ships the release tarball whole: the binaries (`datalib-dag`,
+# `datalib-step`, `datalib-http`, `datalib-migrate-config`,
+# `datalib-applet`, `datalib-doltlite`, `latchkey-curl-dispatch`,
+# `latchkey-curl-impersonate`), the bundled `runtime/` (Node plus the
+# lockfile-pinned `qmd` and `latchkey` package trees the binaries resolve
+# beside themselves) and the `latchkey` launcher — so users register
+# services and run syncs from a single container with no Node, npm or
+# npx in the image — and a pre-baked demo data library to try first.
 #
 # Not built from source: this image consumes the per-triple Linux tarballs
 # already produced by `.github/workflows/release.yml`. The build context
@@ -50,10 +53,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 #                    impersonation (the others go to our bundled
 #                    `latchkey-curl-impersonate`)
 #   tini             PID 1 that reaps zombies and forwards signals; the
-#                    Rust binaries don't fork, but the pipeline
-#                    spawns `npx`/`node` subprocesses for the qmd indexer
+#                    Rust binaries don't fork, but the pipeline spawns
+#                    the bundled `node` for the qmd indexer and latchkey
 #                    and we want SIGTERM to flow through cleanly
-#   gnupg            required by the NodeSource setup script below
 #   openssl          used by datalib-entrypoint.sh to generate the
 #                    latchkey encryption key on first run
 #
@@ -66,99 +68,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        gnupg \
         openssl \
         tini \
     && rm -rf /var/lib/apt/lists/*
-
-# Node 22 LTS via NodeSource. Two consumers in this image:
-#   1. `latchkey` (installed below) is an npm package.
-#   2. the qmd step shells out to `npx -y @tobilu/qmd@<version>`
-#      to (re)build the qmd search index at sync time. The qmd version
-#      is chosen by the binary, not pinned here.
-ARG NODE_MAJOR=22
-RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && node --version && npm --version && npx --version
-
-# Pinned latchkey. The 7-day burn-in policy in README.md does NOT apply
-# here: latchkey is a first-party Imbue dependency, so just track latest.
-#
-# No `latchkey --version` smoke here: that command initializes the
-# keyring lazily, and inside a minimal Ubuntu image there's no Secret
-# Service running, so latchkey exits non-zero with "No encryption key
-# available." The entrypoint script (datalib-entrypoint.sh) handles
-# this at runtime by setting `LATCHKEY_ENCRYPTION_KEY` before exec.
-ARG LATCHKEY_VERSION=3.11.0
-RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
-
-# Install qmd globally and pre-fetch its three default models
-# (embedding + query-expansion + reranker, ~2.25 GB total). `qmd pull`
-# is qmd's own model-prefetch command — it reads the canonical model
-# URIs out of qmd's source, downloads each one into qmd's default cache
-# (`~/.cache/qmd/models`), and writes the matching `.etag` sidecars
-# that `qmd doctor` later uses to detect cache corruption. Using `qmd
-# pull` rather than curl'ing HuggingFace URLs ourselves means we don't
-# have to track qmd's model-URI / cache-naming conventions — qmd bumps
-# a default model, we just rebuild and the right files land.
-#
-# Pinned to the qmd version that the qmd step invokes via
-# `npx -y @tobilu/qmd@<v>` at runtime — see DEFAULT_QMD_VERSION in
-# datalib/backend/unified_index/src/qmd/mod.rs. The
-# //tools:version_pins_test asserts the values agree.
-#
-# qmd 2.5.3 transitively depends on `tree-sitter-javascript`, which
-# tries to fetch a prebuilt linux binary via `prebuild-install`. There
-# isn't one for our node 22 / glibc combo so npm falls back to
-# `node-gyp build`, which needs `make` + a C compiler + `python3` to
-# compile the `.node` addon from source. We install those build deps
-# here and leave them in the image — purging them after install is
-# fragile (NodeSource's nodejs deb has a hard `Depends: python3`, so
-# aggressive cleanup pulls node out from under us) and the marginal
-# disk-size savings don't matter against the model layer.
-ARG QMD_VERSION=2.8.3
-# `QMD_PREFETCH_MODELS=false` skips `qmd pull`, which is what makes the
-# `:<ver>-slim` variant slim — the three GGUFs are 2.2 GB of a 6.45 GB
-# image. Prod keeps them (default `true`): a first sync would otherwise
-# stall on a multi-GB HuggingFace download.
-#
-# CI genuinely does not need them, though this comment used to say so
-# for a reason that was not true: it claimed the one action that reads
-# them (`//tests/fixtures:ingested_tng_qmd`) "is a remote cache hit on
-# almost every run", and on 2026-09-03 that action executed 15 times
-# against 13 cache hits. What makes the claim true now is that every
-# build-time consumer takes its models as bazel inputs
-# (`//third-party/qmd_models`) and never looks in this directory.
-#
-# The `else` branch still creates the empty directory. Nothing in the
-# build requires it now that `.bazelrc` has no mount pair for it, but a
-# container that runs the app writes models here, and creating it in the
-# image keeps that path owned and present rather than made on the fly.
-#
-# `npm cache clean --force` at the end drops npm's download cache: 512 MB
-# of tarballs neither variant ever reads again. It is pure image weight,
-# so both prod and the slim base shed it.
-ARG QMD_PREFETCH_MODELS=true
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        python3 \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g "@tobilu/qmd@${QMD_VERSION}" \
-    && qmd --version \
-    && if [ "${QMD_PREFETCH_MODELS}" = "true" ]; then \
-           qmd pull && ls -lh /root/.cache/qmd/models; \
-       else \
-           echo "QMD_PREFETCH_MODELS=false - skipping the model prefetch"; \
-           mkdir -p /root/.cache/qmd/models; \
-       fi \
-    && npm cache clean --force
 
 # Pre-create the bind-mount targets so empty-dir mounts behave predictably
 # and so an unmounted run still has somewhere to write.
 RUN mkdir -p /root/.latchkey /data
 
-# Everything below is the release binaries and the entrypoint. A
+# Everything below is the release tarball and the entrypoint. A
 # contributor in the devcontainer builds the binaries from source with
 # Bazel, and `bazelisk build //third-party/doltlite:doltlite` is the
 # shell they should use, so
@@ -173,45 +91,61 @@ RUN mkdir -p /root/.latchkey /data
 # We use a glob in COPY so the caller doesn't have to thread the version
 # string through as another ARG; there is exactly one tarball per arch
 # dir, named with the workspace version that release.yml just built.
+#
+# The tarball's top dir becomes /opt/datalib as-is (binaries, `runtime/`,
+# the `latchkey` launcher), with symlinks onto PATH: the binaries look
+# for `runtime/` beside their canonical path, and the launcher resolves
+# its own link before looking. Nothing here is npm-installed.
 ARG TARGETARCH
 COPY dist/${TARGETARCH}/ /tmp/release/
 RUN set -eux; \
     tar -xzf /tmp/release/datalib-*-linux-gnu.tar.gz -C /tmp/release; \
-    # The tarball's top dir is `datalib-<version>-<triple>/`.
-    staged="$(find /tmp/release -maxdepth 1 -type d -name 'datalib-*-linux-gnu' | head -n1)"; \
+    staged="$(find /tmp/release -maxdepth 1 -type d -name 'datalib-*-linux-gnu' -print -quit)"; \
     test -n "$staged"; \
-    install -m 0755 "$staged/datalib-dag"                       /usr/local/bin/datalib-dag; \
-    install -m 0755 "$staged/datalib-migrate-config"            /usr/local/bin/datalib-migrate-config; \
-    install -m 0755 "$staged/datalib-step"                      /usr/local/bin/datalib-step; \
-    install -m 0755 "$staged/datalib-applet"                    /usr/local/bin/datalib-applet; \
-    install -m 0755 "$staged/datalib-http"                  /usr/local/bin/datalib-http; \
-    install -m 0755 "$staged/latchkey-curl-dispatch"            /usr/local/bin/latchkey-curl-dispatch; \
-    install -m 0755 "$staged/latchkey-curl-impersonate"         /usr/local/bin/latchkey-curl-impersonate; \
+    mv "$staged" /opt/datalib; \
+    rm -rf /tmp/release; \
+    for bin in datalib-dag datalib-migrate-config datalib-step datalib-applet \
+               datalib-http latchkey-curl-dispatch latchkey-curl-impersonate \
+               datalib-doltlite latchkey; do \
+        test -x "/opt/datalib/$bin"; \
+        ln -sfn "/opt/datalib/$bin" "/usr/local/bin/$bin"; \
+    done; \
     # The doltlite shell, for poking at a store by hand:
     #   docker exec -it … doltlite -readonly \
     #       /data/unified_index/grid_index/db.doltlite_db "SELECT * FROM dolt_log();"
-    # It used to be installed from dolthub's `.deb` a few layers up,
-    # which meant a second copy of the same engine (~31 MB, plus its
-    # `libdoltlite0` runtime) and a second version pin to keep in step
-    # with MODULE.bazel's amalgamation. The tarball's copy links that
-    # amalgamation, so the shell and the stores in /data cannot
-    # disagree about the format. The bare `doltlite` name stays as a
-    # symlink: it is what docs/dev/doltlite.md's recipes type, and what
-    # anyone with the old image in their fingers will type.
-    install -m 0755 "$staged/datalib-doltlite"                  /usr/local/bin/datalib-doltlite; \
+    # The tarball's copy links the same amalgamation the pipeline writes
+    # with, so the shell and the stores in /data cannot disagree about
+    # the format. The bare `doltlite` name stays as a symlink: it is
+    # what docs/dev/doltlite.md's recipes type.
     ln -sfn /usr/local/bin/datalib-doltlite /usr/local/bin/doltlite; \
-    rm -rf /tmp/release; \
+    test -x /opt/datalib/runtime/node/bin/node; \
     # Smoke: --version on the one binary that supports it. datalib-http
     # takes a positional DATA_ROOT and clap rejects --version before parsing
     # anything else, so we can't use it the same way here.
     datalib-dag --version; \
-    test -x /usr/local/bin/datalib-step; \
-    test -x /usr/local/bin/datalib-applet; \
-    test -x /usr/local/bin/datalib-http; \
-    test -x /usr/local/bin/latchkey-curl-dispatch; \
-    test -x /usr/local/bin/latchkey-curl-impersonate; \
-    doltlite --version
+    doltlite --version; \
+    /opt/datalib/runtime/node/bin/node --version
 
+# Pre-fetch qmd's three pinned GGUF models (embedding + query-expansion
+# + reranker, ~2.25 GB) into qmd's cache (`~/.cache/qmd/models`), each
+# from its pinned HuggingFace revision and sha256-verified — the same
+# table the `qmd_index` step checks on every sync, so a rebuilt image
+# with the same pins lands the same bytes.
+#
+# `QMD_PREFETCH_MODELS=false` skips it, which is what makes the
+# `:<ver>-slim` variant slim — the three GGUFs are 2.2 GB of the image.
+# Prod keeps them (default `true`): a first sync would otherwise stall
+# on a multi-GB download. The `else` branch still creates the empty
+# directory so a container that runs the app writes models to a path
+# the image owns.
+ARG QMD_PREFETCH_MODELS=true
+RUN set -eux; \
+    if [ "${QMD_PREFETCH_MODELS}" = "true" ]; then \
+        datalib-step pull-models && ls -lh /root/.cache/qmd/models; \
+    else \
+        echo "QMD_PREFETCH_MODELS=false - skipping the model prefetch"; \
+        mkdir -p /root/.cache/qmd/models; \
+    fi
 
 # Entrypoint shim that bootstraps `LATCHKEY_ENCRYPTION_KEY` from a
 # per-bind-mount key file before exec'ing the user's command. See the
@@ -285,8 +219,8 @@ ENV DATALIB_BIND=0.0.0.0:8731
 # on first run — see the script header) so users don't have to remember
 # `-e LATCHKEY_ENCRYPTION_KEY=...` on every `docker run`.
 #
-# tini in front of it reaps zombie subprocesses (qmd-indexer spawns
-# `npx`/`node`) and forwards SIGTERM cleanly to the long-lived
+# tini in front of it reaps zombie subprocesses (the qmd indexer and
+# latchkey run under the bundled `node`) and forwards SIGTERM cleanly to the long-lived
 # `datalib-http` case. Cheap enough to keep for short-lived runs too.
 #
 # No default CMD: this image is multi-entrypoint (`datalib-dag`,

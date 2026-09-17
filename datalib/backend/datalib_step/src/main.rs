@@ -3,7 +3,7 @@
 //! Run with no subcommand it is a step: it reads which function to
 //! perform, which group it is under and what tree to write from the
 //! environment the runner sets (`DATALIB_DAG_FUNCTION`, `DATALIB_DAG_GROUP`,
-//! `DATALIB_DAG_GROUP_TYPE`, `DATALIB_DAG_STEP`). The two subcommands are
+//! `DATALIB_DAG_GROUP_TYPE`, `DATALIB_DAG_STEP`). The subcommands are
 //! utilities that are not steps.
 
 mod dispatch;
@@ -121,6 +121,16 @@ enum Cmd {
         #[arg(long, default_value = "garmin.com")]
         domain: String,
     },
+    /// Utility (not a pipeline step): put qmd's pinned GGUF models in
+    /// place, sha256-verified — what the `qmd_index` step does before
+    /// it indexes, runnable ahead of time (an image build, a first-run
+    /// warmup). Needs no data root.
+    PullModels {
+        /// Where the models go; default is qmd's own cache,
+        /// `$XDG_CACHE_HOME/qmd/models` or `~/.cache/qmd/models`.
+        #[arg(long)]
+        models_dir: Option<PathBuf>,
+    },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
     /// for one source from a raw fixture tree (`--params-file` naming a
     /// `{"fixture_path": …}`), for later replay via `--playback-root`.
@@ -183,6 +193,38 @@ async fn main() {
     // would corrupt the only thing its caller reads.
     if let Some(Cmd::Probe { source_type }) = &cli.cmd {
         probe::run_cli(source_type, cli.params_file.as_deref()).await;
+    }
+    // `pull-models` likewise: nothing here is a step.
+    if let Some(Cmd::PullModels { models_dir }) = &cli.cmd {
+        let dir = models_dir
+            .clone()
+            .unwrap_or_else(datalib_qmd_indexer::default_models_dir);
+        // Off the async runtime: the fetch is blocking I/O, and reqwest's
+        // blocking client refuses to be dropped on a runtime thread.
+        let ensure = {
+            let dir = dir.clone();
+            tokio::task::spawn_blocking(move || {
+                datalib_qmd_models::ensure_models(&dir, datalib_qmd_models::PINNED_MODELS)
+            })
+            .await
+            .expect("pull-models task panicked")
+        };
+        match ensure {
+            Ok(outcomes) => {
+                for (model, outcome) in datalib_qmd_models::PINNED_MODELS.iter().zip(outcomes) {
+                    datalib_obs::status_line!(
+                        "{:?}: {}",
+                        outcome,
+                        dir.join(model.cache_name()).display()
+                    );
+                }
+                std::process::exit(0);
+            }
+            Err(e) => {
+                datalib_obs::status_line!("error: {e:#}");
+                std::process::exit(1);
+            }
+        }
     }
     // `login` likewise: it talks to a terminal, not to the runner.
     if let Some(Cmd::Login {
@@ -285,6 +327,7 @@ async fn run(
         // there for why it cannot come through the outcome path.
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
         Some(Cmd::Login { .. }) => unreachable!("login is answered in main"),
+        Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
         None => {
             let env = StepEnv::from_env()?;
             run_function(

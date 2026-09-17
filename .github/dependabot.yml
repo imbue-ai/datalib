@@ -1,9 +1,74 @@
-# Keeps the commit-SHA pins in .github/workflows current. Every
-# third-party action is pinned to a full SHA (a tag can be moved; a SHA
-# cannot), so without this the pins would only ever move by hand.
+# Dependabot: keeps the pins current, so a fixed advisory reaches us as a
+# PR rather than as a red `deny` job. Every ecosystem that has a lockfile
+# in the tree is here; the `deny` job in test.yml is what fails the build
+# in between.
+#
+# Actions are pinned to full commit SHAs (a tag can be moved; a SHA
+# cannot), and Dependabot keeps the SHA and the `# vN` comment in step.
+#
+# The two npm trees under third-party/ are the packages the shipped
+# binaries run (see MODULE.bazel); a bump there also bumps the Rust
+# version constants (`//tools:version_pins_test` says which), so those
+# PRs need a hand.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: cargo
+    directory: /datalib/backend
+    schedule:
+      interval: weekly
+    # Cargo.lock only: a bump that changes a manifest range is a
+    # decision, a lockfile refresh is maintenance. After merging one,
+    # `CARGO_BAZEL_REPIN=1` (tools/repin_cargo.sh) is what crate_universe
+    # needs to see the new lock.
+    versioning-strategy: lockfile-only
+    groups:
+      cargo-minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: cargo
+    directory: /datalib/tauri
+    schedule:
+      interval: weekly
+    versioning-strategy: lockfile-only
+
+  - package-ecosystem: npm
+    directory: /datalib/ui
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: npm
+    directory: /datalib/tauri
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /tools/lint
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /third-party/qmd/runtime
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /third-party/latchkey/runtime
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /datalib/docker
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /.devcontainer
     schedule:
       interval: weekly

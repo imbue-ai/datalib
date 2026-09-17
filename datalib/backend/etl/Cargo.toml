@@ -19,6 +19,9 @@ name = "latchkey-curl-dispatch"
 path = "src/bin/latchkey_curl_dispatch.rs"
 
 [dependencies]
+# `escape-html`: Google Voice's takeout is XHTML, whose `&nbsp;` and
+# friends are not XML entities. See src/xml.rs.
+quick-xml = { version = "0.41", features = ["escape-html"] }
 datalib-runtime = { path = "../runtime" }
 datalib-obs = { path = "../obs" }
 datalib-time = { path = "../time" }

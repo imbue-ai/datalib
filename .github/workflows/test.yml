@@ -62,7 +62,8 @@ concurrency:
   group: test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Two jobs, deliberately. `bazel-test` and `musl-dist` share nothing at
+# Two bazel jobs, deliberately (`deny` is a third, a one-minute lockfile
+# scan with no bazel in it). `bazel-test` and `musl-dist` share nothing at
 # execution time — different configurations, disjoint action sets — so
 # running them in sequence just parked the musl build (~80s, of which
 # ~45s is a second analysis phase) at the end of the critical path.
@@ -119,6 +120,44 @@ concurrency:
 # locally executed actions): 1183s with --jobs=16 vs 1209s without, no
 # memory pressure.
 jobs:
+  # Vulnerability and policy scan of both cargo lockfiles (the backend
+  # workspace — the lockfile crate_universe resolves every Bazel crate
+  # from, Bazel-only crates included — and the desktop shell). The
+  # policies are datalib/backend/deny.toml and datalib/tauri/deny.toml;
+  # a RustSec advisory against anything in either lock fails this job,
+  # and Dependabot (.github/dependabot.yml) is what brings the fix.
+  #
+  # cargo-deny is a prebuilt release binary, pinned by version and
+  # sha256 rather than installed through a third-party action or a
+  # 3-minute `cargo install`. It needs no toolchain: `cargo metadata`
+  # is all it runs, against the committed lockfiles, and the runner
+  # image's cargo is enough for that.
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install cargo-deny (pinned)
+        env:
+          VERSION: 0.20.2
+          SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+        run: |
+          set -euo pipefail
+          name="cargo-deny-${VERSION}-x86_64-unknown-linux-musl"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "${name}.tar.gz" \
+              "https://github.com/EmbarkStudios/cargo-deny/releases/download/${VERSION}/${name}.tar.gz"
+          echo "${SHA256}  ${name}.tar.gz" | sha256sum -c -
+          tar -xzf "${name}.tar.gz"
+          install -m 0755 "${name}/cargo-deny" /usr/local/bin/cargo-deny
+          cargo deny --version
+
+      - name: cargo deny check (backend)
+        run: cd datalib/backend && cargo deny check
+
+      - name: cargo deny check (tauri shell)
+        run: cd datalib/tauri && cargo deny check
+
   bazel-test:
     name: bazel test //...
     runs-on: ubuntu-latest
@@ -151,9 +190,15 @@ jobs:
           # same repo state this one tested.
           fetch-depth: 0
 
+      # A push here is a commit on `main` (see `on:`), i.e. PR-gated
+      # code: it writes the release group's cache, which is what the
+      # tag build replays. Everything else — PRs, dispatches — uses the
+      # contributor group, which laptops write too and releases never
+      # read. `.bazelrc`'s BuildBuddy block has the reasoning.
       - uses: ./.github/actions/prepare-bazel
         with:
-          buildbuddy-api-key: ${{ secrets.BUILD_BUDDY_API_KEY }}
+          buildbuddy-api-key: ${{ github.event_name == 'push' && secrets.BUILD_BUDDY_RELEASE_API_KEY || secrets.BUILD_BUDDY_API_KEY }}
+          buildbuddy-config: ${{ github.event_name == 'push' && 'buildbuddy-release' || 'buildbuddy' }}
 
       # `-c opt --config=release` mirrors the build mode `release.yml`'s
       # dist build uses, so the BuildBuddy action cache populated here
@@ -358,9 +403,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      # A push here is a commit on `main` (see `on:`), i.e. PR-gated
+      # code: it writes the release group's cache, which is what the
+      # tag build replays. Everything else — PRs, dispatches — uses the
+      # contributor group, which laptops write too and releases never
+      # read. `.bazelrc`'s BuildBuddy block has the reasoning.
       - uses: ./.github/actions/prepare-bazel
         with:
-          buildbuddy-api-key: ${{ secrets.BUILD_BUDDY_API_KEY }}
+          buildbuddy-api-key: ${{ github.event_name == 'push' && secrets.BUILD_BUDDY_RELEASE_API_KEY || secrets.BUILD_BUDDY_API_KEY }}
+          buildbuddy-config: ${{ github.event_name == 'push' && 'buildbuddy-release' || 'buildbuddy' }}
 
       - name: bazel build //datalib/backend:dist (musl static)
         run: |

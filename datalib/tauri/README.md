@@ -41,8 +41,11 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 ./run.sh
 ./run.sh ~/Documents/datalib
 
-# Release bundle → target/release/bundle/macos/Datalib.app.
-pnpm dlx @tauri-apps/cli@^2 build
+# Release bundle → target/release/bundle/macos/Datalib.app. The CLI is
+# pinned by package.json + pnpm-lock.yaml here (never `pnpm dlx`, which
+# resolves from the live registry — the signing job runs this with the
+# Developer ID certificate in its environment).
+pnpm install --frozen-lockfile --ignore-scripts && pnpm exec tauri build
 
 # Signed + notarized release build (.app + .dmg) — the same script the
 # release workflow's macos-app job runs in CI. Signing secrets come from
@@ -102,7 +105,7 @@ the bundle puts them. The spawned backend logs to
 startup failures quote the log tail in the error dialog.
 
 `icons/` is generated from `app-icon.png` (placeholder) via
-`pnpm dlx @tauri-apps/cli icon app-icon.png -o icons`.
+`pnpm exec tauri icon app-icon.png -o icons`.
 
 ## v0 status
 

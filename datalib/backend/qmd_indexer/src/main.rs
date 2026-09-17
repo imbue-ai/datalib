@@ -20,7 +20,6 @@ fn parse_args() -> Result<IndexOptions> {
     let mut qmd_version: Option<String> = None;
     let mut groups: Vec<String> = Vec::new();
     let mut models_dir: Option<PathBuf> = None;
-    let mut pull: Option<bool> = None;
 
     let mut it = std::env::args_os().skip(1);
     while let Some(raw) = it.next() {
@@ -34,10 +33,6 @@ fn parse_args() -> Result<IndexOptions> {
             "--models-dir" => {
                 models_dir = Some(PathBuf::from(next_value(&mut it, "--models-dir")?))
             }
-            // For a caller that has already put the embedding model in
-            // `--models-dir` and never queries: `pull` would delete it
-            // again. See `IndexOptions::pull`.
-            "--no-pull" => pull = Some(false),
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -65,9 +60,6 @@ fn parse_args() -> Result<IndexOptions> {
     if let Some(v) = models_dir {
         o.models_dir = v;
     }
-    if let Some(v) = pull {
-        o.pull = v;
-    }
     Ok(o)
 }
 
@@ -82,7 +74,7 @@ fn print_help() {
     eprintln!(
         "datalib-qmd-indexer --root <DIR> [--no-embed] \
          [--qmd-version <V>] [--group <GROUP>]... \
-         [--models-dir <DIR>] [--no-pull]"
+         [--models-dir <DIR>]"
     );
 }
 

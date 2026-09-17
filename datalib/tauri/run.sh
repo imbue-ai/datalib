@@ -24,8 +24,10 @@ cd "$here"
 source "$here/../../scripts/ensure_pnpm.sh"
 
 # Incremental: recompiles only what changed, re-runs the (bazel-cached)
-# beforeBuildCommand, re-bundles. Seconds when nothing changed.
-pnpm dlx @tauri-apps/cli@2 build --debug
+# beforeBuildCommand, re-bundles. Seconds when nothing changed. The CLI
+# comes from pnpm-lock.yaml (same pin the signing build uses).
+pnpm install --frozen-lockfile --ignore-scripts
+pnpm exec tauri build --debug
 
 # macOS: launch through LaunchServices (`open`), NOT by exec'ing the
 # binary inside the bundle. A bundle binary run directly gets NSBundle
