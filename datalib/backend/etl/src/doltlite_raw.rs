@@ -11,10 +11,9 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use datalib_flock::{FileLock, LockError};
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
@@ -229,13 +228,15 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 /// active branch are all per-connection, and a replacement connection starts
 /// on `main` with a clean tree. See the README.
 ///
-/// A writer's pool also holds the file's writer lock, for exactly as long
-/// as the pool lives: the lock is captured by the pool's `after_connect`
-/// hook, which the pool keeps until its last clone is gone. So there is
-/// no handle that can commit without holding the lock, and a second
-/// writer — another process, or a second pool in this one — is refused
-/// at open with the holder named, instead of committing the first one's
-/// half-written batch (the README's "one writer per file").
+/// A writer's connection also holds the file's writer lock, for exactly
+/// as long as the connection lives: the lock is handed to the connection
+/// in the pool's `after_connect` hook and released by SQLite when the
+/// connection closes ([`attach_writer_lock`]). So there is no handle that
+/// can commit without holding the lock, and a second writer — another
+/// process, or a second pool in this one — is refused at open with the
+/// holder named, instead of committing the first one's half-written
+/// batch (the README's "one writer per file"). `close().await` waits for
+/// the connection to close, so it is also the moment the lock is free.
 ///
 /// `acquire_timeout` is far past sqlx's 30s default because cold opens of
 /// multi-GB stores legitimately take 4-10s inside `sqlite3_open_v2`; 5min is
@@ -252,10 +253,25 @@ async fn connect_pool(db_path: &Path, access: Access) -> Result<SqlitePool> {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
-        let lock = Arc::new(take_writer_lock(db_path)?);
-        options = options.after_connect(move |_conn, _meta| {
-            let _held_for_the_pools_life = &lock;
-            Box::pin(async { Ok(()) })
+        // Taken here, before the connection, so a refusal is this open's
+        // error rather than a connect failure inside sqlx.
+        let lock = std::sync::Mutex::new(Some(take_writer_lock(db_path)?));
+        let db_path = db_path.to_path_buf();
+        options = options.after_connect(move |conn, _meta| {
+            let taken = lock.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let db_path = db_path.clone();
+            Box::pin(async move {
+                // The first connection gets the lock taken at open; a
+                // replacement — sqlx re-connecting after the first broke —
+                // takes it afresh, and is refused like anyone else if the
+                // old connection is still closing.
+                let lock = match taken {
+                    Some(lock) => lock,
+                    None => take_writer_lock(&db_path)
+                        .map_err(|e| sqlx::Error::Configuration(e.into()))?,
+                };
+                attach_writer_lock(conn, lock).await
+            })
         });
     }
     // No `journal_mode` pragma: doltlite manages its own storage and rejects
@@ -269,22 +285,113 @@ async fn connect_pool(db_path: &Path, access: Access) -> Result<SqlitePool> {
     options.connect_with(opts).await.context("open sqlite pool")
 }
 
+/// Give the lock to the connection, to be released when the connection
+/// closes. SQLite has no user-data slot on a connection, but a function
+/// registered with a destructor has its destructor run at
+/// `sqlite3_close` — the call `Pool::close()` waits on — so a no-op
+/// function whose "application data" is the lock ties the two lifetimes
+/// together. Doltlite is the SQLite API, so the C entry point is
+/// declared here rather than through `libsqlite3-sys`, which is not a
+/// direct dependency.
+async fn attach_writer_lock(
+    conn: &mut sqlx::sqlite::SqliteConnection,
+    lock: FileLock,
+) -> std::result::Result<(), sqlx::Error> {
+    use std::ffi::{c_char, c_int, c_void};
+
+    extern "C" {
+        fn sqlite3_create_function_v2(
+            db: *mut c_void,
+            name: *const c_char,
+            n_arg: c_int,
+            text_rep: c_int,
+            app: *mut c_void,
+            x_func: Option<unsafe extern "C" fn(*mut c_void, c_int, *mut *mut c_void)>,
+            x_step: Option<unsafe extern "C" fn(*mut c_void, c_int, *mut *mut c_void)>,
+            x_final: Option<unsafe extern "C" fn(*mut c_void)>,
+            x_destroy: Option<unsafe extern "C" fn(*mut c_void)>,
+        ) -> c_int;
+    }
+    unsafe extern "C" fn holds(_ctx: *mut c_void, _n: c_int, _args: *mut *mut c_void) {}
+    unsafe extern "C" fn release(app: *mut c_void) {
+        // Safety: `app` is the `Box<FileLock>` leaked below, and SQLite
+        // calls this exactly once, when the connection closes.
+        drop(unsafe { Box::from_raw(app as *mut FileLock) });
+    }
+    const SQLITE_UTF8: c_int = 1;
+
+    let mut handle = conn.lock_handle().await?;
+    let db = handle.as_raw_handle().as_ptr() as *mut c_void;
+    let app = Box::into_raw(Box::new(lock)) as *mut c_void;
+    // Safety: `db` is the live connection sqlx just handed us, the name is
+    // a NUL-terminated literal, and the callbacks match SQLite's
+    // signatures (the argument types are opaque pointers on both sides).
+    let rc = unsafe {
+        sqlite3_create_function_v2(
+            db,
+            c"datalib_writer_lock".as_ptr(),
+            0,
+            SQLITE_UTF8,
+            app,
+            Some(holds),
+            None,
+            None,
+            Some(release),
+        )
+    };
+    if rc != 0 {
+        // SQLite does not run the destructor on a failed registration.
+        drop(unsafe { Box::from_raw(app as *mut FileLock) });
+        return Err(sqlx::Error::Configuration(
+            format!("register the writer-lock holder on the connection: sqlite rc {rc}").into(),
+        ));
+    }
+    Ok(())
+}
+
+/// How long a writer waits for a lock its own process still holds. A
+/// dropped handle's connection closes on sqlx's worker thread a moment
+/// after the drop, and that moment is the whole reason the README says
+/// close, not drop; waiting it out keeps a stray drop from becoming a
+/// refusal that depends on the machine's speed. A second *live* writer
+/// in this process is still refused, a little later.
+const OWN_CLOSE_GRACE: Duration = Duration::from_secs(2);
+
 fn take_writer_lock(db_path: &Path) -> Result<FileLock> {
     let lock_path = lock_path_for(db_path);
-    let mut lock = FileLock::acquire(&lock_path).map_err(|e| match e {
-        LockError::Held { holder, .. } => anyhow!(
-            "{} already has a writer: {}. One writer per doltlite file — wait for it, \
-             or open read-only (datalib/backend/etl/README.md, \"Connection pools\")",
-            db_path.display(),
-            holder.unwrap_or_else(|| "(holder unknown)".to_string())
-        ),
-        other => anyhow!("{other}"),
-    })?;
+    let mine = format!("(pid {})", std::process::id());
+    let started = std::time::Instant::now();
+    let mut lock = loop {
+        match FileLock::acquire(&lock_path) {
+            Ok(lock) => break lock,
+            Err(LockError::Held { holder, .. })
+                if holder.as_deref().is_some_and(|h| h.ends_with(&mine))
+                    && started.elapsed() < OWN_CLOSE_GRACE =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(LockError::Held { holder, .. }) => bail!(
+                "{} already has a writer: {}. One writer per doltlite file — wait for it, \
+                 or open read-only (datalib/backend/etl/README.md, \"Connection pools\")",
+                db_path.display(),
+                holder.unwrap_or_else(|| "(holder unknown)".to_string())
+            ),
+            Err(other) => return Err(anyhow!("{other}")),
+        }
+    };
+    if started.elapsed() > Duration::from_millis(50) {
+        tracing::warn!(
+            path = %db_path.display(),
+            waited_ms = started.elapsed().as_millis() as u64,
+            "a previous writer in this process was still closing; a handle was \
+             dropped where it should have been close().await-ed"
+        );
+    }
     let program = std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "?".to_string());
-    lock.describe(&format!("{program} (pid {})", std::process::id()));
+    lock.describe(&format!("{program} {mine}"));
     Ok(lock)
 }
 
@@ -1597,11 +1704,11 @@ mod tests {
     /// Two writers on one store used to make each other's `dolt_commit`
     /// fail with `commit conflict` — a timing bug, because the second
     /// open itself succeeded. Now the second open is the failure: the
-    /// first holds the file's writer lock for as long as its pool lives,
-    /// and the refusal names it. A reader is not a writer and opens
-    /// beside it; and once the writer has closed *and let go of the
-    /// handle* — `close()` alone keeps the pool, and the pool keeps the
-    /// lock — the store is free again.
+    /// first's connection holds the file's writer lock for as long as it
+    /// lives, and the refusal names it. A reader is not a writer and
+    /// opens beside it; and once the writer has `close().await`ed the
+    /// store is free again — that call waits for the connection to
+    /// close, and the connection is what held the lock.
     #[tokio::test]
     async fn a_second_writer_on_a_live_store_is_refused_and_names_the_holder() {
         let dir = tempdir().unwrap();
@@ -1626,14 +1733,12 @@ mod tests {
 
         first.close().await;
         assert!(
-            FileLock::is_held(&lock_path_for(&db)),
-            "close() alone keeps the handle, and the handle the lock"
+            !FileLock::is_held(&lock_path_for(&db)),
+            "close() waited for the connection, and the connection held the lock"
         );
-        drop(first);
-        assert!(!FileLock::is_held(&lock_path_for(&db)));
         let again = open(&db, &slices)
             .await
-            .expect("free once the writer let go");
+            .expect("free once the writer closed");
         again.close().await;
     }
 
@@ -1686,7 +1791,6 @@ mod tests {
         commit_run(&pool, "first").await.unwrap();
         let v1 = head_commit(&pool).await.unwrap().expect("doltlite HEAD");
         pool.close().await;
-        drop(pool);
 
         // A wave that pulls nothing new: commit_run finds a clean tree and
         // returns None, but HEAD — and so the version — holds.
@@ -1694,7 +1798,6 @@ mod tests {
         assert!(commit_run(&pool, "second").await.unwrap().is_none());
         let v2 = head_commit(&pool).await.unwrap().expect("doltlite HEAD");
         pool.close().await;
-        drop(pool);
         assert_eq!(
             v1, v2,
             "an unchanged store must report an unchanged version"
@@ -2627,7 +2730,6 @@ mod tests {
             .await
             .unwrap();
         a.close().await;
-        drop(a);
 
         let b = open(&path, &[]).await.unwrap();
         let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
@@ -2669,7 +2771,6 @@ mod tests {
             .unwrap();
         assert_eq!(active, "elsewhere");
         first.close().await;
-        drop(first);
 
         let second = open(&path, &[]).await.unwrap();
         let active: String = sqlx::query_scalar("SELECT active_branch()")

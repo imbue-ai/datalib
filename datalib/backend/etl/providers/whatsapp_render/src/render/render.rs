@@ -428,7 +428,6 @@ mod tests {
             .expect("commit_run")
             .expect("doltlite returned no hash");
         pool.close().await;
-        drop(pool);
 
         // First render — cold start (no cursor). Both chats should
         // render, and the pass hands back the commit it consumed.
@@ -462,7 +461,6 @@ mod tests {
             .expect("commit_run")
             .expect("doltlite returned no hash on modify");
         pool.close().await;
-        drop(pool);
 
         // Third render — only alice's chat should be in the changed set.
         let (docs3, gone3, third_cursor) =
@@ -505,7 +503,6 @@ mod tests {
             .expect("commit_run")
             .expect("doltlite returned no hash on delete");
         pool.close().await;
-        drop(pool);
 
         let (docs4, gone4, _) = render_capture(&raw_dir, &out_dir, Some(&third_cursor)).await;
         assert!(

@@ -96,24 +96,25 @@ writing to `main` after 30 minutes and report success.
 
 `open` and `open_derived` are the only ways to a handle that can commit,
 and each takes the file's writer lock — `flock(2)` on the sibling
-`<store>.doltlite_db.lock`, `datalib_flock` — and holds it for the life
-of the pool. A second writer on the same file, in another process or in
-this one, is refused at open with the holder named (`<program> (pid N)`)
-instead of sharing the first's working set: an `-Am` commit through
-either pool sweeps up whatever the other has in flight, and two
-mid-write pools contend for a lock `dolt_commit` takes without waiting.
-The kernel releases the lock when the holder dies, so a killed run
-leaves no stale claim; the next `open` finds its dirty rows and seals
-them into a rescue commit.
+`<store>.doltlite_db.lock`, `datalib_flock` — and gives it to the
+connection, which holds it until it closes. A second writer on the same
+file, in another process or in this one, is refused at open with the
+holder named (`<program> (pid N)`) instead of sharing the first's
+working set: an `-Am` commit through either pool sweeps up whatever the
+other has in flight, and two mid-write pools contend for a lock
+`dolt_commit` takes without waiting. The kernel releases the lock when
+the holder dies, so a killed run leaves no stale claim; the next `open`
+finds its dirty rows and seals them into a rescue commit.
 
-The lock lives exactly as long as the pool: `close().await` and then
-let the handle go. `close()` alone keeps the pool, and the pool keeps
-the lock — a test that closes a store and reopens it under a shadowed
-binding is refused by itself. `RawDb::close(self)`, `BlobCas::close(self)`
-and `IndexedMarkdownStore::close(self)` consume their handle, which is
-the shape production code has. A dropped-but-never-closed pool holds
-the lock until sqlx's return-to-pool task has run, which is a moment
-later than the drop; that window is why the rule is close, not drop.
+The lock lives exactly as long as the connection: `close().await` waits
+for the connection to close, and that is the moment the store is free.
+A dropped-but-never-closed handle keeps its connection, and so the lock,
+until sqlx's worker thread gets to it a moment later — the window the
+rule "close, not drop" has always been about. A writer that finds its
+own process still holding the lock waits up to two seconds for that
+close and logs that it had to, so a stray drop is a warning rather than
+a refusal that depends on the machine's speed; a second *live* writer in
+the same process is refused after the wait.
 
 Per file, not per root, so two sources with nothing in common can be
 written by two runners at once (#247): the lock says who owns *this*

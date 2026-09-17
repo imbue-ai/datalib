@@ -625,7 +625,6 @@ mod view_tests {
             assert_eq!(n, 1, "every later query on this pool sees the views");
         }
         a.close().await;
-        drop(a);
 
         let b = crate::doltlite_raw::open(&path, &[]).await.unwrap();
         let err = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pinned_notes")

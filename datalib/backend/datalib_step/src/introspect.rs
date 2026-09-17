@@ -850,7 +850,6 @@ mod tests {
         // The scan counts committed rows, as the ingest step leaves them.
         commit(&pool).await;
         pool.close().await;
-        drop(pool);
         let first = scan(td.path(), "src/ingest").await.unwrap();
 
         // A second run: another `sync_runs` row, no new content.
@@ -864,7 +863,6 @@ mod tests {
         // The scan counts committed rows, as the ingest step leaves them.
         commit(&pool).await;
         pool.close().await;
-        drop(pool);
         let second = scan(td.path(), "src/ingest").await.unwrap();
         assert!(
             counts_unchanged(&previous(&first), &samples(&second)),
