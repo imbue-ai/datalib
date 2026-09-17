@@ -16,7 +16,7 @@ package = false
 [dependency-groups]
 dev = [
     "ruff>=0.14.0",
-    "pyright>=1.1.400",
+    "pyright>=1.1.414",
 ]
 
 [tool.ruff]
