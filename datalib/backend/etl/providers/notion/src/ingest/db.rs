@@ -115,18 +115,13 @@ impl RawDb {
     /// A reader pinned at `commit`, or at HEAD when `None`; `None` back
     /// when nothing is committed.
     pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
-        let pin = match commit {
-            Some(commit) => Some(datalib_etl::pin::Pin::at(commit)?),
-            None => datalib_etl::pin::head(&pool).await?,
-        };
-        let Some(pin) = pin else {
-            pool.close().await;
+        // Pinned at open, views installed: a reader cannot read the
+        // working set by forgetting to.
+        let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {
             return Ok(None);
         };
-        datalib_etl::pin::install_views(&pool, &pin)
-            .await
-            .context("pin the notion raw store for render")?;
+        let pin = reader.pin().clone();
+        let pool = reader.pool().clone();
         Ok(Some(Self {
             pool,
             cas: BlobCas::open_reader(&blob_cas::cas_path_for(db_path)).await?,

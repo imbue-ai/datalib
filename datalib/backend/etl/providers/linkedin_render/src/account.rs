@@ -28,12 +28,12 @@ pub fn load_account(raw_dir: &Path, range: RawRange<'_>) -> Result<Account> {
     }
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open_reader(&db_path).await?;
-            let Some(pin) = range.pin(db.pool()).await? else {
-                db.close().await;
+            // Read at a commit: this store belongs to the download step, and
+            // nothing committed means nothing to render from.
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
                 return Ok(Account::default());
             };
-            datalib_etl::pin::install_views(db.pool(), &pin).await?;
+            let pin = db.pin().expect("a reader is pinned at open").clone();
             // Either file can be absent from an export; a missing table
             // is "unknown", not a failed render.
             let emails = datalib_etl::doltlite_raw::load_payloads_with_id(

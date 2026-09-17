@@ -38,10 +38,10 @@ async fn run(raw: &Path, api: &GarminApi) -> FetchSummary {
     summary.unwrap()
 }
 
+/// The test's own store, read back bare after its own run: unpinned is
+/// fine here, and what the literal table names in the SQL expect.
 async fn count(raw: &Path, sql: &'static str) -> i64 {
-    let pool = datalib_etl::doltlite_raw::open_reader(&db_path_for(raw))
-        .await
-        .unwrap();
+    let pool = datalib_pin::open_reader(&db_path_for(raw)).await.unwrap();
     let n: i64 = sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap();
     pool.close().await;
     n
@@ -152,9 +152,7 @@ async fn garmin_synth_playback_ingest_roundtrip() {
         )
         .await
         .unwrap();
-        let pool = datalib_etl::doltlite_raw::open_reader(&db_path_for(&raw))
-            .await
-            .unwrap();
+        let pool = datalib_pin::open_reader(&db_path_for(&raw)).await.unwrap();
         let row = sqlx::query(
             "SELECT blake3 FROM garmin_activity_files WHERE activity_id = '17010414002'",
         )

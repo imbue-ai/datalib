@@ -104,11 +104,15 @@ pub fn render(
     }
     let (all_chats, forward, new_head) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let pool = doltlite_raw::open_reader(&db_path).await?;
-            let loaded = load(&pool, period, range).await;
+            // No commit means nothing has been committed to render, which
+            // is emptiness rather than a reason to read the working set.
+            let Some(reader) = doltlite_raw::open_reader(&db_path, range.pin).await? else {
+                return Ok((Vec::new(), None, None));
+            };
+            let loaded = load(reader.pool(), period, range, reader.pin()).await;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
-            pool.close().await;
+            reader.close().await;
             loaded
         })
     })?;
@@ -165,16 +169,12 @@ type Loaded = (Vec<NormalizedChat>, Option<HashSet<String>>, Option<String>);
 
 /// Every chat at the pinned commit, the guids of the chats the diff
 /// since the cursor names (`None` renders everything), and the commit.
-async fn load(pool: &SqlitePool, period: Period, range: RawRange<'_>) -> Result<Loaded> {
-    // No commit means nothing has been committed to render, which is
-    // emptiness rather than a reason to read the working set.
-    let Some(pin) = range.pin(pool).await? else {
-        return Ok((Vec::new(), None, None));
-    };
-    datalib_etl::pin::install_views(pool, &pin)
-        .await
-        .context("pin the apple_messages raw store for render")?;
-
+async fn load(
+    pool: &SqlitePool,
+    period: Period,
+    range: RawRange<'_>,
+    pin: &datalib_etl::pin::Pin,
+) -> Result<Loaded> {
     let handles: HashMap<i64, String> = sqlx::query("SELECT ROWID, id FROM pinned_handle")
         .fetch_all(pool)
         .await
@@ -357,7 +357,7 @@ async fn load(pool: &SqlitePool, period: Period, range: RawRange<'_>) -> Result<
         });
     }
 
-    let forward = changed_rows(pool, range, &pin, FORWARD_TABLES)
+    let forward = changed_rows(pool, range, pin, FORWARD_TABLES)
         .await?
         .map(|changed| forward_chats(&changed, &chats, &chat_idx, &chat_of_message));
     let out = chats.into_iter().map(|c| c.finish(period)).collect();

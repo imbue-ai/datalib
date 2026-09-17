@@ -47,14 +47,12 @@ pub fn render_connections(
     }
     let Some((rows, photos, changed, new_head)) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open_reader(&db_path).await?;
             // Read at a commit: this store belongs to the download step, and
             // nothing committed means nothing to render from.
-            let Some(pin) = range.pin(db.pool()).await? else {
-                db.close().await;
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
                 return Ok(None);
             };
-            datalib_etl::pin::install_views(db.pool(), &pin).await?;
+            let pin = db.pin().expect("a reader is pinned at open").clone();
             // A user who excluded connections has no table; treat a load
             // error as "absent" rather than failing the whole render.
             let rows = datalib_etl::doltlite_raw::load_payloads_with_id(

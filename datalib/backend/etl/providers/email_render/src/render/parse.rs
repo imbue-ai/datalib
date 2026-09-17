@@ -106,32 +106,29 @@ async fn parse_async(
     range: RawRange<'_>,
     label_filter: bool,
 ) -> Result<ParsedEmail> {
-    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
+    // Pinned at open — at the driver's commit, else HEAD — with the views
+    // installed before anything reads. No commit means nothing has been
+    // committed here to render: emptiness, not a reason to read the
+    // working set.
+    let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
-        .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?;
+        .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?
+    else {
+        return Ok(ParsedEmail::default());
+    };
+    let pool = reader.pool().clone();
+    let pin = reader.pin().clone();
 
     let cas_path = blob_cas::cas_path_for(db_path);
     let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
         Some(
-            datalib_etl::doltlite_raw::open_reader(&cas_path)
+            datalib_etl::blob_cas::open_cas_reader(&cas_path)
                 .await
                 .with_context(|| format!("open CAS for render at {}", cas_path.display()))?,
         )
     } else {
         None
     };
-
-    // Pin before anything reads this store. The diff below and the rows
-    // behind it have to name one commit, and the `pinned_<table>` views must
-    // already exist when the diff runs — its bucket query joins live tables.
-    // No commit at all means nothing has been committed here to render, which
-    // is emptiness, not a reason to read the working set.
-    let Some(pin) = range.pin(&pool).await? else {
-        return Ok(ParsedEmail::default());
-    };
-    datalib_etl::pin::install_views(&pool, &pin)
-        .await
-        .context("pin the email raw store for render")?;
 
     let accounts = load_accounts(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
     let mailboxes = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "mailboxes").await?;

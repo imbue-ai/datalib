@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Bucket, Buckets, RenderProfile,
@@ -56,15 +56,12 @@ pub fn render(
     }
     let (transcripts, records, scan) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open_reader(&db_path).await?;
-            let pin = range.pin(db.pool()).await?;
+            // Pinned at open; no commit means nothing committed to render.
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
+                return Ok(Default::default());
+            };
+            let pin = db.pin().expect("a reader is pinned at open").clone();
             let loaded = async {
-                let Some(pin) = pin else {
-                    return anyhow::Ok(Default::default());
-                };
-                datalib_etl::pin::install_views(db.pool(), &pin)
-                    .await
-                    .context("pin the claude_code raw store for render")?;
                 let transcripts = datalib_etl::doltlite_raw::load_payloads_with_id(
                     db.pool(),
                     datalib_etl::pin::Reads::At(&pin),

@@ -156,7 +156,7 @@ async fn main() -> Result<()> {
     let graph = checked.graph;
 
     // One runner per data root, taken before anything is written.
-    let _lock = datalib_dag::lock::FileLock::acquire_runner(&data_root).map_err(|e| {
+    let _lock = datalib_dag::lock::acquire_runner(&data_root).map_err(|e| {
         if e.is_held() {
             anyhow::anyhow!(
                 "another datalib-dag is already running against {}{}.\n\

@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# An exclusive `flock(2)` claim on a file, for the life of a process. Its
+# own crate — third-party deps only, so Bazel-only like the `<p>_config`
+# crates — because the runner, the app server and every doltlite writer
+# claim a file this way, and `datalib_etl` cannot link the runner.
+rust_library(
+    name = "datalib_flock",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_flock",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:libc",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "flock_unittests",
+    size = "small",
+    crate = ":datalib_flock",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)

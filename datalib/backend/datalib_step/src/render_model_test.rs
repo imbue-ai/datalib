@@ -16,7 +16,7 @@ use std::sync::Mutex;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use datalib_etl::doltlite_raw::{self, DiffScanSpec};
-use datalib_etl::pin::{self, Reads};
+use datalib_etl::pin::Reads;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::{build_grid_index, init_schema, RenderedMarkdown};
 use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
@@ -202,19 +202,16 @@ impl RenderProcessor for SynthRender {
     }
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
-        let pool = blocking(doltlite_raw::open_reader(&self.raw_db)).context("open raw")?;
-        // Pin what the driver diffed against, so the rows loaded are the
-        // rows the stale set was computed from; HEAD only on a run the
+        // Pinned at what the driver diffed against, so the rows loaded are
+        // the rows the stale set was computed from; HEAD only on a run the
         // driver did not pin.
-        let pin = match ctx.raw_pin {
-            Some(commit) => Some(pin::Pin::at(commit)?),
-            None => blocking(pin::head(&pool))?,
-        };
-        let Some(pin) = pin else {
-            blocking(pool.close());
+        let Some(reader) =
+            blocking(doltlite_raw::open_reader(&self.raw_db, ctx.raw_pin)).context("open raw")?
+        else {
             return Ok("nothing committed".into());
         };
-        blocking(pin::install_views(&pool, &pin))?;
+        let pool = reader.pool().clone();
+        let pin = reader.pin().clone();
         // The forward projection: only what a *new* row of a primary or
         // child table maps to. A changed author reaches its parents
         // through the inputs they declared; a removed row names its
@@ -595,11 +592,10 @@ fn render_store_at(
     commit: Option<&str>,
 ) -> (BTreeMap<String, Doc>, BTreeSet<String>, Vec<u32>) {
     let root = datalib_etl::layout::render_markdown_root(data_root, SOURCE);
-    let store = IndexedMarkdownStore::open_for_reading(&root).expect("open for reading");
-    let pin = match commit {
-        Some(c) => store.pin_at(c).expect("pin"),
-        None => store.pin_for_reading().expect("pin").expect("a commit"),
-    };
+    let store = IndexedMarkdownStore::open_for_reading(&root, commit)
+        .expect("open for reading")
+        .expect("a commit");
+    let pin = store.pin().unwrap().clone();
     let rendered = store.documents(data_root, &pin).expect("documents");
     let versions = rendered.iter().map(|d| d.render_version).collect();
     store.close();
@@ -855,7 +851,9 @@ fn log_of(world: &World) -> Vec<(String, String)> {
     if !datalib_etl_render::indexed_markdown::path_for(&root).exists() {
         return Vec::new();
     }
-    let store = IndexedMarkdownStore::open_for_reading(&root).unwrap();
+    let Some(store) = IndexedMarkdownStore::open_for_reading(&root, None).unwrap() else {
+        return Vec::new();
+    };
     let c = store.log().unwrap();
     store.close();
     c

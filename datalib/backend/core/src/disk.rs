@@ -21,6 +21,14 @@ pub struct TreeSize {
     pub files: u64,
 }
 
+/// A doltlite writer's lock file (`<store>.doltlite_db.lock`,
+/// `datalib_etl::doltlite_raw::lock_path_for`): a few bytes of machinery
+/// beside the store, not part of what the tree holds. Counted, every
+/// source would read as one file larger than its data.
+pub fn is_store_lock(name: &str) -> bool {
+    name.ends_with(".doltlite_db.lock")
+}
+
 pub fn measure(dir: &Path) -> TreeSize {
     measure_subtrees(dir, &mut |_, _| {})
 }
@@ -59,7 +67,7 @@ where
                 let sub = walk(&path, &child, subtree);
                 total.bytes += sub.bytes;
                 total.files += sub.files;
-            } else {
+            } else if !is_store_lock(&entry.file_name().to_string_lossy()) {
                 total.bytes += meta.len();
                 total.files += 1;
             }
@@ -85,9 +93,11 @@ mod tests {
         std::fs::write(root.join("a/b/two"), vec![0u8; 20]).unwrap();
         std::fs::write(root.join("c/three"), vec![0u8; 30]).unwrap();
         std::fs::write(root.join("four"), vec![0u8; 40]).unwrap();
+        std::fs::write(root.join("a/entities.doltlite_db.lock"), b"held by pid 1\n").unwrap();
         td
     }
 
+    /// Every file but the writer's lock file, which is not data.
     #[test]
     fn totals_every_file_under_the_root() {
         let td = fixture();

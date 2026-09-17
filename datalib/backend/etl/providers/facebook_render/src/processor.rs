@@ -142,12 +142,12 @@ pub fn render_source(
     // `dolt_commit` fail.
     let loaded = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open_reader(&db_path).await?;
-            let Some(pin) = range.pin(db.pool()).await? else {
-                db.close().await;
+            // Read at a commit: this store belongs to the download step, and
+            // nothing committed means nothing to render from.
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
                 return Ok(None);
             };
-            datalib_etl::pin::install_views(db.pool(), &pin).await?;
+            let pin = db.pin().expect("a reader is pinned at open").clone();
             // A table the export did not carry does not exist; that is
             // "no rows", not a failed render.
             let mut tables: HashMap<&str, Vec<(String, Value)>> = HashMap::new();
