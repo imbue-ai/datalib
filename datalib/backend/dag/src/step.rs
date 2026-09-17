@@ -32,7 +32,8 @@ pub struct StepSpec {
     /// for steps whose output can change without their command line
     /// changing — a renderer whose formatting was reworked, say. It
     /// feeds the fingerprint, so bumping it re-runs the step once.
-    /// Most steps leave this `None`: argv already covers `params`.
+    /// Most steps leave this `None`: `params` is already in the
+    /// fingerprint.
     pub code_version: Option<String>,
     /// Whether a consumer may read this step's output *while it is still
     /// being written* — P2 of the sink contract in
@@ -64,9 +65,10 @@ pub struct StepSpec {
 impl StepSpec {
     /// Everything about this step except the *contents* of what it
     /// reads, as the bytes its fingerprint is taken over: its id (which
-    /// is also the tree it writes), the command it runs, its
-    /// environment overrides, and the step ids it declares as inputs —
-    /// since editing an `inputs =` line changes what the step is.
+    /// is also the tree it writes), the command it runs and the params
+    /// it gets, its environment overrides, and the step ids it declares
+    /// as inputs — since editing an `inputs =` line changes what the
+    /// step is.
     pub fn fingerprint_material(&self) -> String {
         let mut m = String::new();
         m.push_str(&self.id);
@@ -82,11 +84,13 @@ impl StepSpec {
         m.push('\u{1}');
         match &self.run {
             StepRun::InProcess(_) => m.push_str("in-process"),
-            StepRun::Subprocess { argv, env } => {
+            StepRun::Subprocess { argv, env, params } => {
                 for a in argv {
                     m.push_str(a);
                     m.push('\u{2}');
                 }
+                m.push('\u{1}');
+                m.push_str(params.as_deref().unwrap_or(""));
                 m.push('\u{1}');
                 for (k, v) in env {
                     m.push_str(k);
@@ -148,6 +152,11 @@ pub enum StepRun {
     Subprocess {
         argv: Vec<String>,
         env: BTreeMap<String, String>,
+        /// The entry's `params` subtree as JSON. Handed to the child in
+        /// a file only its owner can read, never on argv: params carry
+        /// tokens and device ids, and argv is visible to every user on
+        /// the machine through `ps`.
+        params: Option<String>,
     },
 }
 

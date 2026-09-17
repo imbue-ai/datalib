@@ -278,9 +278,10 @@ for pair in \
   "claude:_main/datalib/backend/etl/providers/claude/tests/fixtures/claude_export/conversations.json"; do
   type="${pair%%:*}"
   anchor="$(need_runfile "${pair#*:}" -f)"
+  printf '{"fixture_path": "%s"}' "$(dirname "$anchor")" > "$PLAYBACK_STAGE/synthesize-$type.params.json"
   "$STEP_BIN_RUNFILE" synthesize "$type" \
     --name "$type" \
-    --params "{\"fixture_path\": \"$(dirname "$anchor")\"}" \
+    --params-file "$PLAYBACK_STAGE/synthesize-$type.params.json" \
     --out "$PLAYBACK_STAGE" > "$PLAYBACK_STAGE/synthesize-$type.log" 2>&1 \
     || { echo "ERROR: datalib-step synthesize $type failed; see $PLAYBACK_STAGE/synthesize-$type.log" >&2; exit 1; }
 done

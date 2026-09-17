@@ -191,7 +191,8 @@ pub struct AppletEntry {
     /// The command to run, split shell-style, resolved the same way a step's
     /// is (`binary_dir`, then `PATH`).
     pub command: String,
-    /// Arbitrary applet parameters, forwarded verbatim as JSON via `--params`.
+    /// Arbitrary applet parameters, forwarded verbatim as the JSON in the
+    /// applet's `--params-file`.
     #[serde(default)]
     pub params: Option<toml::Value>,
     /// Extra environment for the child process.
@@ -239,8 +240,8 @@ pub struct StepEntry {
     /// resolves against the data root; use a bare name or an absolute path
     /// for binaries elsewhere.
     pub command: Option<String>,
-    /// Arbitrary step parameters, forwarded verbatim as JSON via
-    /// `--params`.
+    /// Arbitrary step parameters, forwarded verbatim as the JSON in the
+    /// step's `--params-file`.
     pub params: Option<toml::Value>,
     /// Extra environment for the child process.
     pub env: BTreeMap<String, String>,
@@ -448,7 +449,8 @@ pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
     Ok(accepted.steps.into_iter().map(|(_, spec)| spec).collect())
 }
 
-/// A step's `params` subtree as the JSON the child gets on `--params`.
+/// A step's `params` subtree as the JSON the child reads from its
+/// `--params-file`.
 ///
 /// Walks the tree rather than serializing through serde, because TOML's
 /// date/time types have no JSON counterpart and the `toml` crate smuggles
@@ -1072,12 +1074,12 @@ fn spec_of(e: &StepEntry, group_type: Option<&str>) -> Result<StepSpec> {
     if argv.is_empty() {
         bail!("empty command");
     }
-    if let Some(params) = &e.params {
-        let json =
-            serde_json::to_string(&params_to_json(params, &e.id)?).context("params → JSON")?;
-        argv.push("--params".to_string());
-        argv.push(json);
-    }
+    let params = match &e.params {
+        Some(params) => {
+            Some(serde_json::to_string(&params_to_json(params, &e.id)?).context("params → JSON")?)
+        }
+        None => None,
+    };
     if !e.inputs.is_empty() {
         argv.push("--inputs".to_string());
         argv.push(serde_json::to_string(&e.inputs).expect("string vec → JSON"));
@@ -1088,6 +1090,7 @@ fn spec_of(e: &StepEntry, group_type: Option<&str>) -> Result<StepSpec> {
         StepRun::Subprocess {
             argv,
             env: e.env.clone(),
+            params,
         },
     );
     spec.code_version = e.code_version.clone();
@@ -1602,35 +1605,39 @@ mod tests {
         let specs = to_specs(&cfg).unwrap();
         assert_eq!(specs.len(), 3);
 
-        let argv = |i: usize| match &specs[i].run {
-            StepRun::Subprocess { argv, .. } => argv.clone(),
+        let run = |i: usize| match &specs[i].run {
+            StepRun::Subprocess { argv, params, .. } => (argv.clone(), params.clone()),
             other => panic!("expected subprocess, got {other:?}"),
         };
-        let dl = argv(0);
+        let (dl, dl_params) = run(0);
         assert_eq!(dl[0], BUILTIN_STEP_PROGRAM);
-        assert_eq!(dl[1], "--params");
-        let params: serde_json::Value = serde_json::from_str(&dl[2]).unwrap();
+        let params: serde_json::Value =
+            serde_json::from_str(dl_params.as_deref().unwrap()).unwrap();
         assert_eq!(params["api"]["channels"][0], "chat-qi");
-        // No inputs declared → no --inputs, and nothing else: the one tree
-        // a step writes is its id, which it reads from the environment,
-        // and so are the function and the provider.
-        assert_eq!(dl.len(), 3);
+        // Params never reach argv (they hold tokens, and argv is public
+        // to every user through `ps`); with no inputs declared there is
+        // nothing else: the one tree a step writes is its id, which it
+        // reads from the environment, and so are the function and the
+        // provider.
+        assert_eq!(dl.len(), 1);
 
         // TOML has no anchors, so the render step repeats the subtree —
         // and must produce byte-identical JSON for it.
-        let rn = argv(1);
-        assert_eq!(rn[2], dl[2]);
-        assert_eq!(&rn[3..], &["--inputs", r#"["slack/ingest"]"#]);
+        let (rn, rn_params) = run(1);
+        assert_eq!(rn_params, dl_params);
+        assert_eq!(&rn[1..], &["--inputs", r#"["slack/ingest"]"#]);
 
-        // Param-less step: just inputs.
+        // Param-less step: just inputs, and no params file to read.
+        let (ix, ix_params) = run(2);
         assert_eq!(
-            argv(2),
+            ix,
             vec![
                 BUILTIN_STEP_PROGRAM,
                 "--inputs",
                 r#"["slack/render_markdown"]"#,
             ]
         );
+        assert_eq!(ix_params, None);
 
         // The composed ids are what everything downstream sees.
         assert_eq!(specs[0].id, "slack/ingest");
@@ -1930,10 +1937,10 @@ mod tests {
         )
         .unwrap();
         let specs = to_specs(&cfg).unwrap();
-        let StepRun::Subprocess { argv, .. } = &specs[0].run else {
+        let StepRun::Subprocess { params, .. } = &specs[0].run else {
             panic!("expected subprocess");
         };
-        let params: serde_json::Value = serde_json::from_str(&argv[2]).unwrap();
+        let params: serde_json::Value = serde_json::from_str(params.as_deref().unwrap()).unwrap();
         assert_eq!(params["api"]["since"], "2026-06-15");
         assert_eq!(params["api"]["at"], "2026-06-15T10:30:00Z");
     }

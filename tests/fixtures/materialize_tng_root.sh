@@ -12,9 +12,10 @@
 #   unified_index/qmd_models/          the three qmd GGUFs, linked in from
 #                                      bazel outputs (`:qmd_models`).
 #   unified_index/qmd_index/qmd/models -> ../../qmd_models
-#   config.toml                        { data_root } plus the
-#                                      `unified_index` applet the grid
-#                                      is served by.
+#   config.toml                        { data_root }, every source as a
+#                                      render-only group, the two fan-ins,
+#                                      and the `unified_index` applet the
+#                                      grid is served by.
 #
 # Usage: materialize_tng_root.sh <out-root>
 #
@@ -44,10 +45,12 @@ APPLET_BIN="$(rlocation _main/datalib/backend/applets/datalib_applet)"
 DB_FILE="$(rlocation _main/tests/fixtures/ingested/backend_index.doltlite_db)"
 QMD_TAR="$(rlocation _main/tests/fixtures/ingested/qmd.tar)"
 QMD_INDEX_TAR="$(rlocation _main/tests/fixtures/ingested/qmd-index.tar)"
+CONFIG_BODY="$(rlocation _main/tests/fixtures/ingested/config_body.toml)"
 [[ -x "$APPLET_BIN" ]]    || { echo "ERROR: datalib_applet not found at $APPLET_BIN" >&2; exit 1; }
 [[ -f "$DB_FILE" ]]       || { echo "ERROR: backend_index.doltlite_db not found at $DB_FILE" >&2; exit 1; }
 [[ -f "$QMD_TAR" ]]       || { echo "ERROR: qmd.tar not found at $QMD_TAR" >&2; exit 1; }
 [[ -f "$QMD_INDEX_TAR" ]] || { echo "ERROR: qmd-index.tar not found at $QMD_INDEX_TAR" >&2; exit 1; }
+[[ -f "$CONFIG_BODY" ]]   || { echo "ERROR: config_body.toml not found at $CONFIG_BODY" >&2; exit 1; }
 
 command -v python3 >/dev/null || { echo "ERROR: python3 not on PATH" >&2; exit 1; }
 
@@ -78,35 +81,26 @@ chmod u+w "$OUT_ROOT/unified_index/grid_index/db.doltlite_db"
 # a space-free cache dir, so this only bites the `bazelisk run
 # //datalib:dev_tng` path, which resolves through the source tree.
 #
-# The `unified_index` group is declared for the same reason a real root
-# declares it (see `scaffold_toml` in datalib-http): a group is one row
-# on the Manage screen, and the storage endpoint measures one tree per
-# *declared* group and step. Without the group the index is invisible
-# there — no row, and no way to see that it is the second-largest thing
-# in the root. The two steps are declared but not run here; the index
-# itself arrives pre-built in the tars above.
-cat > "$OUT_ROOT/config.toml" <<EOF
-data_root = "$OUT_ROOT"
-
-[[groups]]
-id = "unified_index"
-name = "Unified Index"
-
-[[steps]]
-group = "unified_index"
-function = "grid_index"
-inputs = []
-
-[[steps]]
-group = "unified_index"
-function = "qmd_index"
-inputs = []
+# The groups come from the pipeline that rendered the trees
+# (`config_body.toml`): every source, and the `unified_index` group, for
+# the same reason a real root declares them — a group is one row on the
+# Manage screen, the storage endpoint measures one tree per *declared*
+# group and step, and Browse needs a row to start from. Each source is
+# render-only with no raw store behind it: the steps are declared so the
+# rows exist, and the index arrives pre-built in the tars above. Syncing
+# one of them fails on the missing store.
+{
+  echo "data_root = \"$OUT_ROOT\""
+  echo
+  cat "$CONFIG_BODY"
+  cat <<EOF
 
 [[applets]]
 group = "unified_index"
 id = "unified_index"
 command = "'$APPLET_BIN' unified_index"
 EOF
+} > "$OUT_ROOT/config.toml"
 
 # qmd's GGUF models. They arrive as bazel inputs (`:qmd_models`, fetched
 # by //third-party/qmd_models), so this no longer depends on the developer having run

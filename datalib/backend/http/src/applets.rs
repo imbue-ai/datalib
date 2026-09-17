@@ -2,7 +2,7 @@
 //! that write their frontend components into the store.
 //!
 //! An applet is run **once**, as
-//! `<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params …]`,
+//! `<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params-file …]`,
 //! and owes three things in that order: write its components, bind a port,
 //! then print `DATALIB_APPLET_PORT=<port>` to stdout. The gateway waits for
 //! that line and only then scans the store, so **the line is the signal that
@@ -592,6 +592,9 @@ fn load_entries(
 struct Running {
     port: u16,
     child: Child,
+    /// The applet's params, in a file only this user can read. Kept
+    /// for as long as the child runs; dropping it deletes the file.
+    _params_file: Option<tempfile::NamedTempFile>,
 }
 
 /// The applet servers, all of them, started at boot and kept running.
@@ -617,15 +620,27 @@ impl Supervisor {
             .arg("0")
             .arg("--frontend-dir")
             .arg(frontend_dir);
-        if let Some(params) = entry
+        // Params go in an owner-only file, the same way the runner hands
+        // a step its params: they can hold tokens, and argv is public.
+        let params_file = match entry
             .params_json()
             .map_err(|e| format!("applet {:?}: params: {e:#}", entry.id))?
         {
-            cmd.arg("--params").arg(
-                serde_json::to_string(&params)
-                    .map_err(|e| format!("applet {:?}: params → JSON: {e}", entry.id))?,
-            );
-        }
+            Some(params) => {
+                let json = serde_json::to_string(&params)
+                    .map_err(|e| format!("applet {:?}: params → JSON: {e}", entry.id))?;
+                let file = datalib_dag::subprocess::write_params_file(
+                    data_root,
+                    &format!("applet_{}", entry.id),
+                    &json,
+                )
+                .map_err(|e| format!("applet {:?}: params file: {e:#}", entry.id))?;
+                cmd.arg(datalib_dag::subprocess::PARAMS_FILE_FLAG)
+                    .arg(file.path());
+                Some(file)
+            }
+            None => None,
+        };
         // stdin is not an input channel — nothing is ever written to it. It is
         // a liveness pipe: whatever ends us, including a SIGKILL that runs no
         // code at all, the kernel closes the write end and the applet's read
@@ -750,7 +765,14 @@ impl Supervisor {
         };
 
         if let Ok(mut map) = self.running.lock() {
-            map.insert(entry.id.clone(), Running { port, child });
+            map.insert(
+                entry.id.clone(),
+                Running {
+                    port,
+                    child,
+                    _params_file: params_file,
+                },
+            );
         }
         Ok(port)
     }
