@@ -53,8 +53,9 @@ strum = { workspace = true }
 # `datalib_runs::StoreLayer`, to the run store (src/logging.rs).
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Owner-only params files for the applets and probes this server spawns.
+tempfile = "3"
 
 [dev-dependencies]
 sqlx = { workspace = true }
-tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

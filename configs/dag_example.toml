@@ -9,9 +9,10 @@
 # entry is a server the app spawns, filed under a group for display.
 #
 # A step may name a `command` (see docs/dev/step_protocol.md); the
-# runner appends `params` and `inputs` as `--params` / `--inputs` JSON
-# flags and passes the composed id, the group, its type and the
-# function in the environment. A step with no `command` is a built-in
+# runner writes `params` to an owner-only JSON file it names with
+# `--params-file`, appends `inputs` as a `--inputs` JSON flag, and
+# passes the composed id, the group, its type and the function in the
+# environment. A step with no `command` is a built-in
 # one: it runs `datalib-step`, which reads the function and the group's
 # `type` from that environment. The built-in functions are `ingest`
 # (bring the data in), `render_markdown` (turn the raw store into

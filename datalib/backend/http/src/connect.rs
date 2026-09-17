@@ -511,7 +511,7 @@ pub struct ProbeRequest {
 }
 
 pub async fn probe(
-    State(_s): State<AppState>,
+    State(s): State<AppState>,
     Json(req): Json<ProbeRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let source_type = validated_type(&req.source_type)?;
@@ -524,12 +524,25 @@ pub async fn probe(
         )
     })?;
     let params = serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
+    // The wizard's typed credentials are in here; an owner-only file
+    // keeps them off argv, where `ps` would show them to every user.
+    let params_file = datalib_dag::subprocess::write_params_file(
+        &s.root,
+        &format!("probe_{source_type}"),
+        &params,
+    )
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("params file: {e:#}"),
+        )
+    })?;
 
     let mut cmd = Command::new(step_bin);
     cmd.arg("probe")
         .arg(&source_type)
-        .arg("--params")
-        .arg(params)
+        .arg(datalib_dag::subprocess::PARAMS_FILE_FLAG)
+        .arg(params_file.path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
