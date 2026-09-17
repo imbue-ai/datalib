@@ -157,6 +157,17 @@ The same goes for a hand-run `datalib-doltlite -readonly … dolt_status`
 against a store a sync is writing. Any other statement a reader adds is
 presumed guilty until `doltlite_two_process_test` has run with it.
 
+Two traps for a reader that holds its connection across another
+process's commits, both measured in `datalib_pin`'s tests. A scalar
+function answers from the session's last view of the store, so a bare
+`dolt_hashof('HEAD')` keeps reporting the HEAD the connection opened at;
+`datalib_pin::head` reads `sqlite_master` first, which reloads the root.
+And the `dolt_at_<table>` modules are registered when the connection
+opens, from the commits that exist then: a table another process commits
+later has no module on this connection, and never will. A long-lived
+reader — the search applet — checks `has_unpinnable_tables` and reopens.
+Everything that opens per pass sees neither.
+
 Open the store once per pass — a stage that needs to load rows, run a
 `dolt_diff` scan and probe for ids does all three on one pool — and
 `close().await` before the next open, on the error path too. And never

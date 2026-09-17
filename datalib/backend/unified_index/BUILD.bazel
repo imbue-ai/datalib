@@ -24,6 +24,7 @@ rust_library(
         "//datalib/backend/columns:datalib_columns",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",

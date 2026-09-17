@@ -221,11 +221,18 @@ fn read_rows(
         // The render step owns this store; a reader that opened it
         // writably would rescue-commit its in-flight rows and fail its
         // commits (datalib/backend/etl/README.md, "Connection pools").
+        // And it reads at HEAD, not the working set, so a render pass in
+        // flight is not half-served.
         let pool = datalib_etl::doltlite_raw::open_reader(store).await?;
+        let Some(pin) = datalib_etl::pin::head(&pool).await? else {
+            pool.close().await;
+            return Ok(Vec::new());
+        };
+        datalib_etl::pin::install_views(&pool, &pin).await?;
         let rows = sqlx::query(
             "SELECT channel, markdown_uuid, message_index, \
                         IFNULL(created_at, ''), IFNULL(author, ''), text \
-                 FROM grid_rows \
+                 FROM pinned_grid_rows \
                  WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL",
         )
         .fetch_all(&pool)
@@ -530,6 +537,8 @@ mod tests {
                 },
             )
             .unwrap();
+        // The applet reads at HEAD, as the render step leaves it.
+        store.commit("test").unwrap();
         store.close();
     }
 
@@ -593,6 +602,8 @@ mod tests {
                 },
             )
             .unwrap();
+        // The applet reads at HEAD, as the render step leaves it.
+        store.commit("test").unwrap();
         store.close();
     }
 
