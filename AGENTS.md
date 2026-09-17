@@ -1033,6 +1033,14 @@ Three rules follow, and none is optional:
 - **`close().await` before the next open**, on the error path too.
   Dropping the handle only *schedules* the disconnect, so a `?` between
   two opens leaves them overlapping.
+- **Never run a store call on a runtime you are about to drop.** sqlx
+  returns a checked-out connection to its pool from a task spawned at
+  drop; a per-call `Runtime::new().block_on(..)` dies before that task
+  runs, the pool forgets the connection, and the next call opens a
+  second one to the same file while the first is still closing — seen
+  as `database is locked` about once in thirty parallel test runs.
+  `indexed_markdown::blocking` keeps one process-wide runtime for the
+  no-runtime case for exactly this reason.
 - **A download takes the store as an input.** Every provider's
   `FetchOptions` carries `pub db: RawDb`; `fetch` never opens one, and
   whoever opened it closes it. `lint_repo.py`'s check 6 enforces this.
