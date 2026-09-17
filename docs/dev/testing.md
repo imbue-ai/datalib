@@ -87,9 +87,8 @@ image carrying it). Anyone acting on it would have dropped the
 exclusion and gotten a red gate, because the actual blockers were two
 things the note never mentioned.
 
-* **The qmd GGUFs are not in the image.** The published devcontainer is
-  built on the `-slim` prod image (`QMD_PREFETCH_MODELS=false`), which
-  creates `/root/.cache/qmd/models` empty, and
+* **The qmd GGUFs are not in the image.** The devcontainer image has no
+  `/root/.cache/qmd/models` at all, and
   `materialize_tng_root.sh` used to require that directory to hold them
   — `exit 3` if not, deliberately, so a multi-GB HuggingFace download
   could not masquerade as a hang. CI filled it with a `qmd pull` behind

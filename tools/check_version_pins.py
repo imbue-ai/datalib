@@ -39,9 +39,9 @@ Deliberately NOT in scope
   prebuilt URLs; qmd 2.8.3 moved to better-sqlite3 13, whose prebuilts
   ship inside the npm tarball and are selected by platform rather than
   by ABI, so both the URLs and the test are gone.
-* `.devcontainer/Dockerfile`'s qmd and latchkey: it inherits both from
-  the prod image via `FROM ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}`,
-  so it has no pin of its own to drift.
+* `.devcontainer/Dockerfile`'s qmd: the devcontainer does not install
+  it — Bazel's own tree (`//third-party/qmd/runtime`) is what the build
+  and the tests run, and the app's `npx` fallback names the pin itself.
 """
 
 from __future__ import annotations
@@ -111,6 +111,7 @@ FAMILIES: list[Family] = [
                 r'^pub const LATCHKEY_VERSION: &str = "([^"]+)"',
             ),
             ("datalib/docker/Dockerfile", r"^ARG LATCHKEY_VERSION=(\S+)"),
+            (".devcontainer/Dockerfile", r"^ARG LATCHKEY_VERSION=(\S+)"),
             # The Bazel-managed package tree the .app bundles. The Rust
             # constant names the directory stage-runtime.sh stages into,
             # so a drift here stages a tree the resolver never looks in
@@ -185,6 +186,7 @@ FAMILIES: list[Family] = [
             # that has to agree.
             ("MODULE.bazel", r'^NODE_VERSION = "(\d+)\.'),
             ("datalib/docker/Dockerfile", r"^ARG NODE_MAJOR=(\d+)"),
+            (".devcontainer/Dockerfile", r"^ARG NODE_MAJOR=(\d+)"),
         ],
     ),
 ]

@@ -25,8 +25,9 @@ security model the walkthrough's bind-mount rules rest on.
   which provisions latchkey's encryption key.
 
 The `:<version>-slim` variant is the same image without the qmd
-models; the devcontainer builds on it. It is amd64 only and not tagged
-`latest`.
+models. It is amd64 only and not tagged `latest`. The devcontainer CI
+runs in is a separate image (`.devcontainer/Dockerfile`, published by
+`devcontainer.yml`) and does not build on either.
 
 Published for `linux/amd64` and `linux/arm64` from
 [`datalib/docker/Dockerfile`](../../datalib/docker/Dockerfile) by the
