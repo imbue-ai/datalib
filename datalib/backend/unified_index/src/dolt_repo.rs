@@ -14,14 +14,18 @@ use crate::query::ParsedQuery;
 use crate::repo::{DocRow, EdgeRowOut, IndexRepo};
 use crate::search::SearchRow;
 use datalib_core::repo::RepoError;
-use datalib_core::store::{is_missing_table, open_pool};
+use datalib_core::store::{is_missing_table, open_pool_read_only};
 use datalib_schema::edges::EdgeRow;
 
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
 pub struct DoltRepo {
-    /// The grid index: `grid_rows`, `markdowns`, `edges`. Read-only from
-    /// here — the `grid_index` step is its only writer.
-    pool: SqlitePool,
+    /// The grid index: `grid_rows`, `markdowns`, `edges`. The
+    /// `grid_index` step is its only writer, and this handle cannot be
+    /// a second one: it is opened `read_only`, and only once the file
+    /// exists — a root that has never synced has none, and a reader must
+    /// not be the thing that creates it. Filled on first use.
+    pool: tokio::sync::RwLock<Option<SqlitePool>>,
+    db_path: PathBuf,
     root: Arc<PathBuf>,
 }
 
@@ -116,17 +120,44 @@ fn source_id_from_qmd_path(qmd_path: &str) -> String {
 }
 
 impl DoltRepo {
+    /// A repo over a pool the caller already holds. Tests use it to read
+    /// back through the same handle they wrote with.
     pub fn from_pool(pool: SqlitePool, root: Arc<PathBuf>) -> Self {
-        Self { pool, root }
+        Self {
+            pool: tokio::sync::RwLock::new(Some(pool)),
+            db_path: datalib_core::layout::grid_index_db(&root),
+            root,
+        }
     }
 
+    /// Cannot fail today; the `Result` is kept so the open can grow a
+    /// check without every caller changing.
     pub async fn open(root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
-        let pool = open_pool(&datalib_core::layout::grid_index_db(&root)).await?;
-        Ok(Self::from_pool(pool, root))
+        Ok(Self {
+            pool: tokio::sync::RwLock::new(None),
+            db_path: datalib_core::layout::grid_index_db(&root),
+            root,
+        })
     }
 
-    pub fn index_pool(&self) -> &SqlitePool {
-        &self.pool
+    /// The store, or `None` while the `grid_index` step has yet to
+    /// create it — the same answer every read gives for a missing table.
+    async fn pool(&self) -> Result<Option<SqlitePool>, RepoError> {
+        if let Some(pool) = self.pool.read().await.as_ref() {
+            return Ok(Some(pool.clone()));
+        }
+        if !self.db_path.is_file() {
+            return Ok(None);
+        }
+        let mut slot = self.pool.write().await;
+        if let Some(pool) = slot.as_ref() {
+            return Ok(Some(pool.clone()));
+        }
+        let pool = open_pool_read_only(&self.db_path)
+            .await
+            .map_err(|e| RepoError::Internal(format!("open the grid index read-only: {e}")))?;
+        *slot = Some(pool.clone());
+        Ok(Some(pool))
     }
 }
 
@@ -155,7 +186,10 @@ impl IndexRepo for DoltRepo {
         }
         query = query.bind(limit as i64);
 
-        let rows = match query.fetch_all(&self.pool).await {
+        let Some(pool) = self.pool().await? else {
+            return Ok(Vec::new());
+        };
+        let rows = match query.fetch_all(&pool).await {
             Ok(rows) => rows,
             Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
@@ -180,9 +214,12 @@ impl IndexRepo for DoltRepo {
                    WHERE markdown_uuid = ? \
                    ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
                    LIMIT 1";
+        let Some(pool) = self.pool().await? else {
+            return Ok(None);
+        };
         let row = match sqlx::query(sql)
             .bind(markdown_uuid)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&pool)
             .await
         {
             Ok(row) => row,
@@ -210,11 +247,10 @@ impl IndexRepo for DoltRepo {
                    FROM markdowns \
                    ORDER BY created_at IS NULL, created_at DESC \
                    LIMIT ?";
-        let rows = match sqlx::query(sql)
-            .bind(limit as i64)
-            .fetch_all(&self.pool)
-            .await
-        {
+        let Some(pool) = self.pool().await? else {
+            return Ok(Vec::new());
+        };
+        let rows = match sqlx::query(sql).bind(limit as i64).fetch_all(&pool).await {
             Ok(rows) => rows,
             Err(e) if is_missing_table(&e, "markdowns") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
@@ -232,11 +268,14 @@ impl IndexRepo for DoltRepo {
     }
 
     async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError> {
+        let Some(pool) = self.pool().await? else {
+            return Ok(Vec::new());
+        };
         let rows = match sqlx::query(
             "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider, is_document \
              FROM grid_rows",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&pool)
         .await
         {
             Ok(rows) => rows,
@@ -281,7 +320,10 @@ impl IndexRepo for DoltRepo {
         for p in &params {
             query = query.bind(p);
         }
-        let rows = match query.fetch_all(&self.pool).await {
+        let Some(pool) = self.pool().await? else {
+            return Ok(Vec::new());
+        };
+        let rows = match query.fetch_all(&pool).await {
             Ok(rows) => rows,
             Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
@@ -314,11 +356,10 @@ impl IndexRepo for DoltRepo {
                    FROM edges e \
                    LEFT JOIN markdowns m ON m.markdown_uuid = e.dst_markdown_uuid \
                    WHERE e.src_markdown_uuid = ?";
-        let rows = match sqlx::query(sql)
-            .bind(markdown_uuid)
-            .fetch_all(&self.pool)
-            .await
-        {
+        let Some(pool) = self.pool().await? else {
+            return Ok(Vec::new());
+        };
+        let rows = match sqlx::query(sql).bind(markdown_uuid).fetch_all(&pool).await {
             Ok(rs) => rs,
             Err(_) => return Ok(Vec::new()),
         };
@@ -358,6 +399,9 @@ impl IndexRepo for DoltRepo {
         markdown_uuids: &[String],
     ) -> Result<std::collections::HashMap<String, PathBuf>, RepoError> {
         let mut out = std::collections::HashMap::with_capacity(markdown_uuids.len());
+        let Some(pool) = self.pool().await? else {
+            return Ok(out);
+        };
         // Chunked to stay under SQLite's bind-variable ceiling; the
         // grid asks about one batch per result set, not per row.
         for chunk in markdown_uuids.chunks(400) {
@@ -370,7 +414,7 @@ impl IndexRepo for DoltRepo {
             for u in chunk {
                 q = q.bind(u);
             }
-            let rows = match q.fetch_all(&self.pool).await {
+            let rows = match q.fetch_all(&pool).await {
                 Ok(rows) => rows,
                 // A data root whose renderers have never run has no
                 // `markdowns` table; that is "nothing rendered yet",
@@ -397,11 +441,14 @@ impl IndexRepo for DoltRepo {
         &self,
         markdown_uuid: &str,
     ) -> Result<Option<PathBuf>, RepoError> {
+        let Some(pool) = self.pool().await? else {
+            return Ok(None);
+        };
         let row = match sqlx::query(
             "SELECT md_path FROM markdowns WHERE markdown_uuid = ? AND md_path IS NOT NULL LIMIT 1",
         )
         .bind(markdown_uuid)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&pool)
         .await
         {
             Ok(row) => row,

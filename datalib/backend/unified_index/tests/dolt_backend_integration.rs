@@ -7,8 +7,26 @@ use datalib_table::BulkUpsertable;
 use datalib_unified_index::dolt_repo::DoltRepo;
 use datalib_unified_index::query::parse_query;
 use datalib_unified_index::repo::IndexRepo;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// The `grid_index` step's handle on the root's index, for seeding. The
+/// repo under test opens its own, read-only, once the file exists —
+/// which is exactly how the applet reads what the step wrote.
+async fn writer(root: &Path) -> sqlx::SqlitePool {
+    datalib_core::store::open_pool(&datalib_core::layout::grid_index_db(root))
+        .await
+        .expect("open a writer on the grid index")
+}
+
+/// What the step does after its DDL: a read-only handle takes its schema
+/// from HEAD, so a table that was never committed is not there to read.
+async fn commit_schema(writer: &sqlx::SqlitePool) {
+    sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', 'schema')")
+        .fetch_one(writer)
+        .await
+        .expect("commit the schema");
+}
 
 fn unique_db_path() -> PathBuf {
     tempfile::TempDir::with_prefix("datalib-dolt-itest-")
@@ -28,6 +46,7 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
     let repo = DoltRepo::open(root.clone())
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
+    let writer = writer(&root).await;
 
     // No GRID_DDL / MARKDOWNS_DDL: this is the pre-first-sync state.
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
@@ -50,9 +69,10 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
     // exists but lacks the queried columns) must still be an error, not
     // read as "no data yet".
     sqlx::query("CREATE TABLE grid_rows (only_column TEXT)")
-        .execute(repo.index_pool())
+        .execute(&writer)
         .await
         .expect("create decoy grid_rows");
+    commit_schema(&writer).await;
     let err = repo.search(&parse_query(""), 100).await.unwrap_err();
     assert!(
         err.to_string().contains("no such column"),
@@ -70,19 +90,21 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     let repo = DoltRepo::open(root.clone())
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
+    let writer = writer(&root).await;
 
     for (_t, ddl) in GRID_DDL {
         sqlx::query(*ddl)
-            .execute(repo.index_pool())
+            .execute(&writer)
             .await
             .expect("create grid_rows");
     }
     for (_t, ddl) in MARKDOWNS_DDL {
         sqlx::query(*ddl)
-            .execute(repo.index_pool())
+            .execute(&writer)
             .await
             .expect("create markdowns");
     }
+    commit_schema(&writer).await;
     // For Anthropic chats the rendered file is 1:1 with the
     // conversation, so markdown_uuid == conversation_uuid here.
     sqlx::query(
@@ -95,7 +117,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
                  NULL,'acct-a',NULL,NULL,'Test conv','c-1',NULL,'/chat/c-1', \
                  'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1', 1)",
     )
-    .execute(repo.index_pool())
+    .execute(&writer)
     .await
     .expect("insert chat row");
     sqlx::query(
@@ -106,7 +128,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
                  '2026-04-01T10:01:00.000000Z','+00:00', \
                  'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','','c-1', 0)",
     )
-    .execute(repo.index_pool())
+    .execute(&writer)
     .await
     .expect("insert message row");
     sqlx::query(
@@ -114,7 +136,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
          renderer_version) \
          VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1')",
     )
-    .execute(repo.index_pool())
+    .execute(&writer)
     .await
     .expect("insert markdown row");
 
@@ -175,13 +197,15 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.expect("open doltlite");
+    let writer = writer(&root).await;
 
     for (_t, ddl) in GRID_DDL {
         sqlx::query(*ddl)
-            .execute(repo.index_pool())
+            .execute(&writer)
             .await
             .expect("create grid_rows");
     }
+    commit_schema(&writer).await;
     // Both rows sit under `claude-work/render_markdown/`: the chat is
     // that source's data, the measurement is datalib describing it.
     sqlx::query(
@@ -192,7 +216,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
                  '2026-04-01T10:00:00.000000Z','+00:00','c-1','/chat/c-1','summary', \
                  'claude-work/render_markdown/chats/c-1.md','c-1', 1)",
     )
-    .execute(repo.index_pool())
+    .execute(&writer)
     .await
     .expect("insert chat row");
     sqlx::query(
@@ -204,7 +228,7 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
                  'claude-work/ingest/entities.doltlite_db', \
                  'claude-work/render_markdown/_datalib/storage.md','s-1', 0)",
     )
-    .execute(repo.index_pool())
+    .execute(&writer)
     .await
     .expect("insert storage row");
 
@@ -248,9 +272,11 @@ async fn every_wire_field_survives_the_round_trip() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let writer = writer(&root).await;
     for (_t, ddl) in GRID_DDL {
-        sqlx::query(*ddl).execute(repo.index_pool()).await.unwrap();
+        sqlx::query(*ddl).execute(&writer).await.unwrap();
     }
+    commit_schema(&writer).await;
 
     let row = GridRow::builder()
         .uuid("row-1")
@@ -296,7 +322,7 @@ async fn every_wire_field_survives_the_round_trip() {
         columns.join(", ")
     );
     row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
-        .execute(repo.index_pool())
+        .execute(&writer)
         .await
         .unwrap();
 
