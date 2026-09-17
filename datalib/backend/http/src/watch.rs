@@ -314,11 +314,12 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             while let Ok(Some(moved)) = tokio::time::timeout_at(deadline, raw_rx.recv()).await {
                 pending.insert(moved);
             }
-            // The grid index's directory appears partway through the
-            // first sync, and a watch on a path that did not exist was
-            // never registered. The runner's record moves throughout a
-            // run, so arming on it converges within that run.
-            if !index_watched && pending.contains(&Moved::DagState) {
+            // The grid index's directory may not exist at boot, and a
+            // watch on a path that did not exist was never registered.
+            // Try again on every burst until it takes: a `watch` call on
+            // an absent path is cheap, and the alternative is a first
+            // pass nobody hears about.
+            if !index_watched {
                 index_watched = watcher
                     .watch(&grid_index, RecursiveMode::NonRecursive)
                     .is_ok();

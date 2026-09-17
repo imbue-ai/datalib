@@ -78,7 +78,13 @@ impl DataProcessor for ContactsIngest {
         // opaque interrupt-commit hook, do the work, commit, close.
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
+        let session = ctx
+            .open_store_with_blobs(
+                db.pool().clone(),
+                db.cas().map(|cas| cas.pool().clone()),
+                entity_db,
+            )
+            .await;
 
         let summary = match &self.mode {
             DownloadMode::Server(sync) => {

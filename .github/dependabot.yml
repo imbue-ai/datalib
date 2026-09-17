@@ -1,0 +1,9 @@
+# Keeps the commit-SHA pins in .github/workflows current. Every
+# third-party action is pinned to a full SHA (a tag can be moved; a SHA
+# cannot), so without this the pins would only ever move by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

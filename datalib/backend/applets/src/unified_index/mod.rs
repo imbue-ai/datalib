@@ -10,6 +10,7 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{header, Response, StatusCode},
+    middleware::{self, Next},
     response::Json,
     routing::{get, post},
     Router,
@@ -70,6 +71,14 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
             repo: Arc::new(repo),
             root,
         };
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("bind {addr}"))?;
+        // `port` may be 0 ("any"), so the bound one is the listener's.
+        let bound = listener.local_addr().context("read the bound address")?;
+        // Outermost, so every route is behind it, `/health` included.
+        let gate = Arc::new(crate::gate::Gate::from_env(bound.port())?);
         let app = Router::new()
             .route("/search", get(search_handler))
             .route("/qmd_state", post(qmd_state))
@@ -80,19 +89,37 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
                 "/health",
                 get(|| async { Json(serde_json::json!({"ok": true})) }),
             )
-            .with_state(state);
-        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .with_context(|| format!("bind {addr}"))?;
-        // `port` may be 0 ("any"), so the bound one is the listener's.
-        let bound = listener.local_addr().context("read the bound address")?;
+            .with_state(state)
+            .layer(middleware::from_fn_with_state(gate, require_gateway));
         eprintln!("datalib-applet unified_index: listening on {bound}");
         // There was nothing to write first, so binding is all this one
         // owes before the gateway may look.
         crate::announce_port(bound.port());
         axum::serve(listener, app).await.context("serve")
     })
+}
+
+async fn require_gateway(
+    State(gate): State<Arc<crate::gate::Gate>>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response<Body> {
+    // Decided in its own block: a borrow of `req` alive across the
+    // `.await` below would make this future `!Send`.
+    let admitted = {
+        let header = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok());
+        gate.admits(header("host"), header(crate::gate::SECRET_HEADER))
+    };
+    if admitted {
+        return next.run(req).await;
+    }
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            r#"{"error":"this port answers only to the datalib gateway"}"#,
+        ))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
 fn ensure_models(root: &std::path::Path) {

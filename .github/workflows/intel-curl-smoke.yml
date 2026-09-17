@@ -30,13 +30,13 @@ jobs:
     name: build (x86_64-apple-darwin, curl-only)
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # Match release.yml: workspace_status runs `git describe --tags`.
           fetch-depth: 0
 
       # Same cache layering rationale as release.yml's build job.
-      - uses: bazel-contrib/setup-bazel@0.19.0
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: false
           disk-cache: false

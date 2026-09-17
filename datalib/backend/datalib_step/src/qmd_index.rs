@@ -33,7 +33,7 @@ pub fn out_rel() -> String {
 /// Taking the list from the graph rather than from a directory scan means
 /// a source dropped from the config stops being indexed on the next run,
 /// even while its rendered tree is still on disk.
-fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
+pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
     for input in inputs {
         if let Some(group) = input.split('/').next() {

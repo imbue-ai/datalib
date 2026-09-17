@@ -85,8 +85,7 @@ there is no codegen step.
     │   ├── datalib_step/     datalib-step built-in step commands
     │   └── http/             axum binary
     ├── ui/                   Vue 3 + Vite + Pinia + Vue Router + Vitest
-    ├── tauri/                Tauri shell (out of Bazel)
-    └── openhost/             Dockerfile + openhost.toml stubs
+    └── tauri/                Tauri shell (out of Bazel)
 ```
 
 ## Building & testing

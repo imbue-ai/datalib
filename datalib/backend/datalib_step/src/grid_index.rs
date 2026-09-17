@@ -5,10 +5,11 @@ use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use datalib_etl_render::grid_index::{build_grid_index, init_schema};
+use datalib_etl_render::grid_index::{build_grid_index_for, init_schema};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use crate::events::{Emitter, OutputClaim};
+use crate::source::StepEnv;
 
 /// The one tree this step writes, `unified_index/grid_index`, as the
 /// applet that reads it resolves it from the data root.
@@ -22,6 +23,7 @@ pub fn out_rel() -> String {
 
 pub async fn run(
     data_root: &Path,
+    env: &StepEnv,
     now: Option<&str>,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
@@ -50,10 +52,16 @@ pub async fn run(
         .with_context(|| format!("open doltlite at {}", db_path.display()))?;
     init_schema(&pool).await?;
 
+    // The stores to read come from the graph, not from a directory scan:
+    // the same rule the qmd step follows, so the two indexes agree on
+    // what a source is.
+    let sources = crate::qmd_index::groups_from_inputs(&env.inputs);
+    tracing::info!(sources = ?sources, "grid_index: the render stores the graph names");
     let progress = emitter.progress();
-    let summary = build_grid_index(&pool, data_root, |m| progress.set_message(m), now)
-        .await
-        .context("stack the per-source render stores")?;
+    let summary =
+        build_grid_index_for(&pool, data_root, &sources, |m| progress.set_message(m), now)
+            .await
+            .context("stack the per-source render stores")?;
     tracing::info!(
         // `read` is the one that says whether the cursors are working:
         // it is how many documents were pulled out of the per-source
@@ -124,8 +132,16 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let data_root = td.path();
 
+        let env = StepEnv {
+            step: "unified_index/grid_index".into(),
+            group: "unified_index".into(),
+            group_type: None,
+            function: crate::function::Function::GridIndex,
+            inputs: Vec::new(),
+        };
         run(
             data_root,
+            &env,
             Some("2026-01-01T00:00:00+00:00"),
             &Emitter::new("test".into()),
         )
